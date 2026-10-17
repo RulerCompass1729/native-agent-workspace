@@ -23,7 +23,7 @@ DeepSeek Harness is the first integration candidate. This repository is independ
 | [Architecture](docs/architecture.md) | Session ownership, native adapters, routing, privacy, and recovery |
 | [Foundation decision](docs/foundation.md) | What to reuse from DeepSeek Harness and what remains unproved |
 | [Competitors](docs/competitors.md) | Relevant overlap and focused reference products |
-| [Licensing](docs/licensing.md) | Upstream permissions, commercial use, attribution, and open decisions |
+| [Licensing](docs/licensing.md) | Apache-2.0, attribution, commercial use, and upstream boundaries |
 | [Naming](docs/naming.md) | Naming directions; no brand selected or cleared |
 | [Preparation and next steps](docs/readiness.md) | Current deliverables and the first technical proof |
 | [Source register](docs/sources.json) | Dated evidence and pinned source references |
@@ -42,6 +42,8 @@ These are acceptance requirements, not claims about a finished product.
 
 ## Rights and independence
 
-The license for this repository's original material is **not yet selected**. Public visibility does not constitute an Apache-2.0 or MIT grant. See [COPYRIGHT](COPYRIGHT) and [licensing](docs/licensing.md).
+Except where otherwise noted, this repository's original material is licensed under **[Apache-2.0](LICENSE)**. Commercial use, modification, and redistribution are permitted subject to its terms. See [COPYRIGHT](COPYRIGHT), [NOTICE](NOTICE), and the [licensing decision](docs/licensing.md).
+
+The license does not generally grant rights to product names, trademarks, or logos; see Section 6. Product naming remains in progress.
 
 Provider names identify intended compatibility. This project is not affiliated with, endorsed by, or an official product of Anthropic, OpenAI, or DeepSeek. Their software, services, and brands retain their respective terms.
