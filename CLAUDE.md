@@ -30,9 +30,21 @@ editing these documents.
   paths, and raw debugging exports outside Git.
 - Before every commit, scan staged content with gitleaks and the maintainer's PII
   rules. Before every push, also scan all outgoing commits, patches, authors, and
-  commit messages. Review findings before publishing.
+  commit messages, ref names, and annotated tags. Run the local publication guard
+  proactively, show its result, and review findings before committing or pushing;
+  hooks are a second check. See `docs/publication.md` for the commands.
+- Never bypass a publication block, suppress a matching private rule, or switch
+  to GitHub API/UI, an archive, a release asset, or another upload path to evade
+  checks. A failed or unavailable scan is not a pass. Keep private patterns outside
+  the repository and never echo matched values into logs, issues, or comments.
+- Treat personal, financial, identity, health, customer, employer, and native
+  session data as private. Use synthetic fixtures; do not reuse private research
+  or real user conversations in examples, screenshots, or test artifacts.
 - Never upload private task content for analytics or error reporting by default.
 - Keep provider credentials under their native authentication mechanisms.
+- Before adding a dependency or network destination, inspect its telemetry,
+  authentication, data handling, and applicable terms. Privacy requirements in
+  `docs/privacy.md` are release conditions, not claims that an app is already safe.
 
 Use only checks appropriate to the changed surface. Documentation checks do not
 prove runtime compatibility. Record untested requirements explicitly.

@@ -10,7 +10,7 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 ## Status
 
-This is a **planning repository**, not an installable application. It contains product requirements, interaction proposals, architecture decisions, source-backed comparisons, and implementation gates. No agent integration, native session migration, or performance claim has passed runtime acceptance yet.
+This is a **preparation repository**, not an installable application. It contains product requirements, interaction proposals, architecture decisions, source-backed comparisons, implementation gates, and local publication safeguards. No agent integration, native session migration, or performance claim has passed runtime acceptance yet.
 
 DeepSeek Harness is the first integration candidate. This repository is independent; it does not currently contain or depend on DeepSeek Harness or competitor implementation code.
 
@@ -27,6 +27,9 @@ DeepSeek Harness is the first integration candidate. This repository is independ
 | [Naming](docs/naming.md) | Naming directions; no brand selected or cleared |
 | [Preparation and next steps](docs/readiness.md) | Current deliverables and the first technical proof |
 | [Source register](docs/sources.json) | Dated evidence and pinned source references |
+| [Publication safeguards](docs/publication.md) | Local commit/push checks and contributor setup |
+| [Privacy requirements](docs/privacy.md) | Data boundaries and conditions before an application release |
+| [Security reporting](SECURITY.md) | Report a vulnerability without posting sensitive data publicly |
 
 ## Product commitments
 

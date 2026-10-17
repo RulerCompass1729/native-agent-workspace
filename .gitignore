@@ -16,6 +16,21 @@ coverage/
 .codex/
 __pycache__/
 .venv/
+local-only/
+private/
+transcripts/
+screenshots/
+*.private.*
+*.db
+*.sqlite
+*.sqlite3
+*.jsonl
+*.csv
+*.tsv
+*.p12
+*.pfx
+auth.json
+credentials.json
 
 # Keep native transcripts, credentials, downloaded source archives, and
 # personal research outside this public repository.
