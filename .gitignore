@@ -1,0 +1,21 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+build/
+coverage/
+*.log
+*.pem
+*.key
+.local/
+.scratch/
+.runtime/
+.claude/
+.codex/
+__pycache__/
+.venv/
+
+# Keep native transcripts, credentials, downloaded source archives, and
+# personal research outside this public repository.

@@ -1,0 +1,386 @@
+{
+  "as_of": "2026-10-17",
+  "scope": "Selected primary sources for architecture and licensing. Research references are not shipped dependencies. Competitor source permalinks are in competitors.md.",
+  "limits": [
+    "No native runtime acceptance or cost benchmark",
+    "No exhaustive dependency closure or trademark clearance",
+    "Mutable official pages must be rechecked before distribution"
+  ],
+  "sources": [
+    {
+      "path": "README.md",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/README.md",
+      "sha256": "0f5516be2acde776f05572cbc8c3093c90549afe04ce118e11157d073d5d15f4",
+      "bytes": 2673,
+      "accessed_at": "2026-10-17T22:31:15.876577+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/LICENSE",
+      "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "bytes": 1065,
+      "accessed_at": "2026-10-17T22:31:15.874553+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/README.md",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/README.md",
+      "sha256": "e55e7288792ac3eae5119e58ab5d96a8d4a249fd0c2c6c03ec2d89454623ae1e",
+      "bytes": 8437,
+      "accessed_at": "2026-10-17T22:31:16.284985+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/core/agent/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/core/agent/src/index.ts",
+      "sha256": "218b30227cdc55d4c193112495a852507d12070028572ac95e6f9d1f954d1077",
+      "bytes": 31398,
+      "accessed_at": "2026-10-17T22:31:15.928201+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/core/agent-loop/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/core/agent-loop/src/index.ts",
+      "sha256": "3ea0262656c8ddcaa3be315c150bdc2af09371031c3c471d4ded511e21c6e86b",
+      "bytes": 39200,
+      "accessed_at": "2026-10-17T22:31:16.308510+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/llm/llm-pi-ai/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/llm/llm-pi-ai/src/index.ts",
+      "sha256": "aa8e003584d7e2215609ce503f6d5d0c1eb7d8d65eadab39180c665e7e44b939",
+      "bytes": 14529,
+      "accessed_at": "2026-10-17T22:31:15.894654+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/subagent/subagent-claude-code/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/subagent/subagent-claude-code/src/index.ts",
+      "sha256": "8212098a44df69696a90bcfacafdeb03ae6972875b0c369d1248eae0e2cd93e4",
+      "bytes": 5186,
+      "accessed_at": "2026-10-17T22:31:16.275145+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/subagent/subagent-claude-code/src/process.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/subagent/subagent-claude-code/src/process.ts",
+      "sha256": "cff37d31564cd9cd7b16bea4a2cbeac69edaf196ad7ee01739809a9f3d7f8e01",
+      "bytes": 5059,
+      "accessed_at": "2026-10-17T22:31:16.308448+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/subagent/subagent-claude-code/src/run.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/subagent/subagent-claude-code/src/run.ts",
+      "sha256": "123f28c726feb2ad488c8db0152b47051428919745d39f04d3c38b45d9506c69",
+      "bytes": 18907,
+      "accessed_at": "2026-10-17T22:31:16.018604+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/subagent/subagent-codex/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/subagent/subagent-codex/src/index.ts",
+      "sha256": "177d094a5c6426efa5353c11df54d34f405ad56a78b2f75f79f3fa3a3aedf460",
+      "bytes": 4350,
+      "accessed_at": "2026-10-17T22:31:16.327063+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/subagent/subagent-codex/src/run.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/subagent/subagent-codex/src/run.ts",
+      "sha256": "b1630b87fd3ab253a77537f3b0a8301dd0317eaa40b604d62f862762f442b86f",
+      "bytes": 14854,
+      "accessed_at": "2026-10-17T22:31:16.316452+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/subagent/subagent-codex/src/wire.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/subagent/subagent-codex/src/wire.ts",
+      "sha256": "f3efbdd78526264767331f5a06eb2c04c9d3fb715fbed713ddd77d6d513ccb9e",
+      "bytes": 24498,
+      "accessed_at": "2026-10-17T22:31:16.074294+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/terminal/terminal/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/terminal/terminal/src/index.ts",
+      "sha256": "0264b62850764a5e32f1e2da93540cdcbe6e0e6442314f72b25a8ee2da6d2995",
+      "bytes": 17458,
+      "accessed_at": "2026-10-17T22:31:16.169699+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/terminal/terminal-bash/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/terminal/terminal-bash/src/index.ts",
+      "sha256": "4e9c6e601275c51be71add010fdff1cd32b18034d0cd67a7d0ccf41b30a1772a",
+      "bytes": 10176,
+      "accessed_at": "2026-10-17T22:31:16.327106+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/api/session-controller/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/api/session-controller/src/index.ts",
+      "sha256": "a85ee64c5e5cb20bfa40d3a7f07cdd2f490c82268f08cfc53df6fd72458574c4",
+      "bytes": 27153,
+      "accessed_at": "2026-10-17T22:31:16.299241+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/apps/desktop/package.json",
+      "sha256": "913095d3048ad424335acccf8e3193bb9523961604709062a430f57c4ac22479",
+      "bytes": 3904,
+      "accessed_at": "2026-10-17T22:31:16.393900+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/client/ui-layout/src/client/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/client/ui-layout/src/client/index.ts",
+      "sha256": "ab1cdd016582d3f2b7c978ec0afa994a8636390cc18cef800d8301d239d46b9e",
+      "bytes": 10824,
+      "accessed_at": "2026-10-17T22:32:14.428825+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/client/ui-chat/src/client/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/client/ui-chat/src/client/index.ts",
+      "sha256": "be28c8c23ce71cacf5791b6067c973b4b2b7c99598093a73969f75233fc95083",
+      "bytes": 3860,
+      "accessed_at": "2026-10-17T22:32:14.410119+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/client/ui-session/src/client/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/client/ui-session/src/client/index.ts",
+      "sha256": "eb49a2c3239e47a11642a8ac8d91d70dae116a4f88389c436eb867a23f039477",
+      "bytes": 27223,
+      "accessed_at": "2026-10-17T22:32:14.425539+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/experimental/hooks-claude-code/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/experimental/hooks-claude-code/src/index.ts",
+      "sha256": "bab56bc3686904e1488bdec323d112948f7b877a22ec458f8dab708c130ee6e4",
+      "bytes": 18180,
+      "accessed_at": "2026-10-17T22:32:14.439769+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/experimental/hooks-codex/src/index.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/experimental/hooks-codex/src/index.ts",
+      "sha256": "d5ad1117eecdee234732a1e35d335ae24f3d6c139b0e92b1bc35dc2e78a94ff2",
+      "bytes": 15215,
+      "accessed_at": "2026-10-17T22:32:14.444160+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "packages/core/agent/src/types.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/core/agent/src/types.ts",
+      "sha256": "b237d5d00d9b549cc32c7d91e08aaf83004d14d2bfa0179eeebc3fbfe18fed62",
+      "bytes": 3887,
+      "accessed_at": "2026-10-17T22:32:14.436022+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "path": "apps/desktop/src/main.ts",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/apps/desktop/src/main.ts",
+      "sha256": "e345eda0425f2df795d20413bb87bb9a3ddc46e71ceb1cec0755ad1cca3fb847",
+      "bytes": 68435,
+      "accessed_at": "2026-10-17T22:32:14.425502+00:00",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "BRAND_GUIDELINES.md",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/BRAND_GUIDELINES.md",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "0f3e1150bfa3d4887c50ff8dc9a01895184e7a80336546617b07f7d86a542f40",
+      "bytes": 1986,
+      "accessed_at": "2026-10-17T22:50:16.529213+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "THIRD_PARTY_NOTICES.md",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/THIRD_PARTY_NOTICES.md",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "aeea7aa256ede5349cc7903f56a859d54f10b82a45fba7dcce667eb69916dab0",
+      "bytes": 25003,
+      "accessed_at": "2026-10-17T22:50:16.534965+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "package.json",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/package.json",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "12bb41cd8212021a784b33a20c2b84372189a9505b42081d5e3869e21ff5cffc",
+      "bytes": 18994,
+      "accessed_at": "2026-10-17T22:50:16.483033+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "packages/client/ui-layout/package.json",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/client/ui-layout/package.json",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "e9e57caed05a9479405e30dfca2eabff082ce59c934b8f72e2c9b0a68bbb9e9e",
+      "bytes": 1928,
+      "accessed_at": "2026-10-17T22:50:16.531804+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "packages/core/agent/package.json",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/core/agent/package.json",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "6e45fa159ea9f0d8cbe4554be5be8fbb4e820bdcff16498a15240b0f339ff00b",
+      "bytes": 2006,
+      "accessed_at": "2026-10-17T22:50:16.627910+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "packages/terminal/terminal-bash/package.json",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/terminal/terminal-bash/package.json",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "a060a365bab182276295e45100d359e1f4d4ff835216393c17875d788e29b8e7",
+      "bytes": 2010,
+      "accessed_at": "2026-10-17T22:50:16.637865+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "packages/subagent/subagent-claude-code/package.json",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/subagent/subagent-claude-code/package.json",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "5e089f040937959681fac30fcd253696c1d6d7f664bfbfb3982b94b028994e16",
+      "bytes": 2500,
+      "accessed_at": "2026-10-17T22:50:16.615658+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "packages/subagent/subagent-codex/package.json",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/packages/subagent/subagent-codex/package.json",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "a19773c3704929f60db9a6ae70e898a2afd5863eb2ed53d004e7bdee3b76aa83",
+      "bytes": 2372,
+      "accessed_at": "2026-10-17T22:50:16.663685+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "project": "deepseek-ai/deepseek-harness",
+      "path": "pnpm-workspace.yaml",
+      "url": "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/687f282e8625c6b8d11ff58211a90524be2e4317/pnpm-workspace.yaml",
+      "revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "sha256": "3c624c26e58ab02ffc8d653bb8a9e8767a63fe0576bc0dbfaa3a5e43f88d973b",
+      "bytes": 5952,
+      "accessed_at": "2026-10-17T22:50:16.665841+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "claude-legal",
+      "url": "https://code.claude.com/docs/en/legal-and-compliance.md",
+      "sha256": "4a5e4b4aff6f0e0525d41d2321a78049e886465f5c6686260d8c8bce67232f4c",
+      "bytes": 7009,
+      "accessed_at": "2026-10-17T22:52:09.484402+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "claude-license",
+      "url": "https://raw.githubusercontent.com/anthropics/claude-code/main/LICENSE.md",
+      "sha256": "728158fd1037143fad6907e8fa34804177e598b7326519503fe83cafdef849e6",
+      "bytes": 150,
+      "accessed_at": "2026-10-17T22:52:09.419055+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "claude-sdk-terms",
+      "url": "https://raw.githubusercontent.com/anthropics/claude-agent-sdk-typescript/main/README.md",
+      "sha256": "d7f8965afea6198e0448bb8a3f3e0806d4dd6cfb3696cab21b1ee36faaef2065",
+      "bytes": 2502,
+      "accessed_at": "2026-10-17T22:52:09.386308+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "codex-license",
+      "url": "https://raw.githubusercontent.com/openai/codex/main/LICENSE",
+      "sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+      "bytes": 10926,
+      "accessed_at": "2026-10-17T22:52:09.347513+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358,
+      "accessed_at": "2026-10-17T22:52:09.304471+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "public-no-license",
+      "url": "https://choosealicense.com/no-permission/",
+      "sha256": "6513c2201c93c2642819071e4869e669e9d8530d26a479349429a5b30d5a0c9e",
+      "bytes": 12479,
+      "accessed_at": "2026-10-17T22:52:09.428116+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "sidefold-name",
+      "url": "https://sidefold.co/about",
+      "sha256": "6adecc291e55a9c427ad870d944e7a2a4a9fb60227dacf9a8b0bafbccb8c1c21",
+      "bytes": 38724,
+      "accessed_at": "2026-10-17T22:52:09.633526+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "kinleaf-name",
+      "url": "https://www.kinleaf.app/",
+      "sha256": "78370cd8e604e77de7df44b495ea6e7564f001e54aad8928d516958e1e5e0502",
+      "bytes": 1440,
+      "accessed_at": "2026-10-17T22:52:09.684608+00:00",
+      "evidence": "Archived primary source; inspection depth and supported conclusions are specified in the linked documents."
+    },
+    {
+      "title": "agent-teams.md",
+      "url": "https://code.claude.com/docs/en/agent-teams.md",
+      "sha256": "e09abc4e91fd29fc83e308ee66c7386d8de71f399b606e081c629673361d1250",
+      "bytes": 40432,
+      "accessed_at": "2026-10-17T22:07:48.776730+00:00"
+    },
+    {
+      "title": "app-server.md",
+      "url": "https://learn.chatgpt.com/docs/app-server.md",
+      "sha256": "f879715bb0d440db60b71e7a5bfe1258d045520feabe3fc6b11847100c8d064b",
+      "bytes": 102656,
+      "accessed_at": "2026-10-17T22:07:48.785855+00:00"
+    }
+  ]
+}
