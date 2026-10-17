@@ -13,8 +13,8 @@ As of 2026-10-17。当前阶段：**仓库与架构准备**。未开始产品功
 - [x] 独立本地 Git 仓库及共享 agent 项目说明建立。
 - [x] 文档与引用一致性检查完成：16 个本地链接无缺失，42 条来源记录可解析；Codex debug 确认项目说明已加载。
 - [x] staged 内容通过 gitleaks 与有效 PII 规则检查；提交前变更会重新检查。
-- [ ] 完整初始历史的 secret/PII、作者及 commit message 检查通过。
-- [ ] 用指定 GitHub 账号创建 public 远端并核对发布内容。
+- [x] 完整初始历史的 secret/PII、作者及 commit message 检查通过；无敏感命中，作者为公开账号的 noreply 身份。
+- [x] `RulerCompass1729/native-agent-workspace` public 远端已创建；首次发布 17 个文件，远端 commit 与文件清单已核对。
 - [ ] 自有开源许可选择完成；当前版权保留，不误标 Apache-2.0。
 
 未选最终品牌不妨碍工作名仓库。许可未定时可公开规划，不能自称已经开源授权或接受许可不明的实现贡献。
