@@ -12,7 +12,7 @@ is still a working name.
 2. Follow the [complete download/install steps](../README.md#run-locally): clone
    or download this public repository, enter its folder, run `npm ci`, then
    `npm start`. Building requires Node.js 22.19+ on 22.x, or 24+.
-3. On an Apple Silicon Mac, `npm run package:mac` builds an app/zip in `dist/`.
+3. On an Apple Silicon Mac, `npm run package:mac` builds an app/DMG/zip in `dist/`.
    The app uses Electron's bundled Node runtime; no separate Node/npm is needed
    to launch the app. The installed provider may have its own runtime needs.
 4. Open **检查安装与版本**, then create a session. The terminal handles native
@@ -23,6 +23,31 @@ The local build is ad-hoc signed, **not notarized**. There is no automatic binar
 upload or auto-updater. Do not disable Gatekeeper globally. Before distributing
 a downloaded app, review its exact artifact, licensing/provider conditions and
 platform signing plan; a successful local build is not that approval.
+
+For an already-built matching app, `node scripts/package-dmg.cjs` creates only the
+DMG without rebuilding the application. Open the DMG, drag the app to Applications,
+eject the image, then open the installed copy. Keep the same app data directory
+when replacing an older copy. The DMG does not install Python or provider CLIs;
+the setup screen still checks them. A locally copied app launching successfully
+does not prove an internet-downloaded, quarantined app will pass Gatekeeper.
+
+Normal public distribution needs a Developer ID certificate and Apple notarization.
+The current machine has no valid code-signing identity. This is a maintainer setup
+requirement; users should not need to enroll or run signing commands themselves.
+See [Apple Developer ID](https://developer.apple.com/developer-id/) and
+[Electron signing guidance](https://www.electronjs.org/docs/latest/tutorial/code-signing).
+Before choosing a signing account, review the public identity it will expose.
+Developer ID certificates carry the subscriber's individual or organization name;
+a GitHub alias does not make this certificate anonymous. See Apple's
+[Developer ID CPS, section 4.2](https://images.apple.com/certificateauthority/pdf/Apple_Developer_ID_CPS_v5.0.pdf).
+
+The local DMG was verified, mounted read-only and copied to Applications. All
+9,169 file/link entries matched the source app, and the installed copy passed
+signature verification and opened its actual setup screen with a fresh profile
+and system-only PATH. The test used filesystem copying and visible-app automation,
+not a physical Finder drag or an internet download. The empty test service exited;
+the existing workspace returned to one window with its session IDs, native PIDs,
+view, draft and dispatch count unchanged. No model task was sent for this check.
 
 ## Continuing your work
 

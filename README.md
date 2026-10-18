@@ -79,11 +79,16 @@ Use **加入协作 / 脱出协作** to change membership without replacing the n
 
 ## Local macOS app build
 
-`npm run package:mac` produces an Apple Silicon `.app` and zip in `dist/`, using
+`npm run package:mac` produces an Apple Silicon `.app`, drag-to-install `.dmg`,
+and zip in `dist/`, using
 Electron Packager and a clean production dependency tree. The app itself does not
 need a separate Node/npm installation; native CLI and Python prerequisites remain.
 The local artifact is ad-hoc signed, not notarized or automatically published.
 See [alpha trial instructions](docs/alpha.md) for startup, recovery and limits.
+The DMG contains the app and an Applications shortcut. It removes Git/npm from
+the user's installation path, but does not install Python or provider runtimes.
+Public downloads still need Developer ID signing and Apple notarization;
+packaging a DMG alone does not satisfy Gatekeeper.
 
 ## Start here
 

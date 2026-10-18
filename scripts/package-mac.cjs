@@ -72,6 +72,7 @@ async function build() {
     run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', app, archive]);
     const digest = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
     fs.writeFileSync(`${archive}.sha256`, `${digest}  ${path.basename(archive)}\n`);
+    require('./package-dmg.cjs').buildDmg(app);
     console.log(`Built ${path.basename(archive)}; ${inventory.length} production packages. Not notarized; publication requires artifact review.`);
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }
