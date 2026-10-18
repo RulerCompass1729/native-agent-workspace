@@ -79,7 +79,24 @@ class Workspace extends EventEmitter {
     runtime.on('usage', usage => { s.usage = usage; this.changed(); });
     runtime.on('fleet', item => { s.fleet.push({ ...item, time: Date.now() }); s.fleet = s.fleet.slice(-80); this.changed(); });
     runtime.on('approval', approval => { s.approval = approval; this.pause('等待原生权限确认'); this.changed(); });
-    runtime.on('nativeInput', text => { this.pause('真人在原生终端输入'); s.controlRevision++; s.messages.push({ id: randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' }); this.changed(); });
+    runtime.on('nativeInput', (text, item) => {
+      this.pause('真人在原生终端输入'); s.controlRevision++;
+      if (!item?.id || !s.messages.some(m => m.id === item.id)) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
+      this.changed();
+    });
+    runtime.on('history', items => {
+      const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set();
+      for (const item of items) {
+        const own = item.type === 'userMessage' && item.clientId && existing.get(item.clientId)?.role === 'user' ? existing.get(item.clientId) : existing.get(item.id);
+        const m = own || (item.type === 'userMessage'
+          ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
+          : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+        if (!used.has(m.id)) { imported.push(m); used.add(m.id); }
+      }
+      // Keep live content and GUI submission status; only history supplies order.
+      // No complete/nativeInput events: hydration cannot route or pause a task.
+      s.messages = imported.concat(s.messages.filter(m => !used.has(m.id))); this.changed();
+    });
     runtime.on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.changed(); });
     runtime.on('delta', item => {
       let message = s.messages.find(m => m.id === item.id);
@@ -139,7 +156,7 @@ class Workspace extends EventEmitter {
     s.messages.push({ id: tag, role: 'user', text, origin: route ? 'room' : 'human', status: 'awaiting-native' });
     if (forward) {
       this.forwards.set(tag, { ...forward, control });
-      this.room.messages.push({ id: tag, role: 'human', name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now() });
+      this.room.messages.push({ id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now() });
     }
     this.versions.dispatches++;
     if (route) route.awaiting = { sessionId: id, tag, member, control };

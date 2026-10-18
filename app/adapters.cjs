@@ -175,7 +175,7 @@ class Rpc extends EventEmitter {
 }
 
 class Codex extends EventEmitter {
-  constructor(record, host) { super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = record.view !== 'terminal'; this.stopped = false; }
+  constructor(record, host) { super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = record.view !== 'terminal'; this.stopped = false; this.eventRevision = 0; this.inputItems = new Set(); this.liveMessageItems = new Set(); this.historyMessageItems = new Set(); }
   async start() {
     await this.host.startCodex();
     if (this.record.recovering) {
@@ -229,22 +229,46 @@ class Codex extends EventEmitter {
     while (!this.stopped && !this.chatAvailable) {
       await delay(1000);
       if (this.stopped) return;
+      const revision = this.eventRevision;
       const { thread } = await this.host.rpc.call('thread/read', { threadId: this.record.nativeId, includeTurns: false });
       if (this.stopped) return;
       const nativeState = thread.status?.type;
-      this.emit('state', nativeState === 'active' ? 'working' : nativeState === 'idle' ? 'idle' : 'starting');
+      if (revision === this.eventRevision) this.emit('state', nativeState === 'active' ? 'working' : nativeState === 'idle' ? 'idle' : 'starting');
       if (!thread.preview || nativeState !== 'idle') continue;
       await this.host.rpc.call('thread/resume', { threadId: thread.id, excludeTurns: true });
       if (this.stopped) return;
-      const items = await this.host.rpc.call('thread/items/list', { threadId: thread.id, limit: 100 });
-      if (this.stopped) return;
-      for (const entry of items.data || []) {
-        const item = entry.item || entry;
-        if (item.type === 'agentMessage') this.emit('messageItem', { id: item.id, text: item.text, phase: item.phase });
-        if (item.type === 'userMessage') this.emit('nativeInput', (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'));
-      }
-      this.chatAvailable = true; this.hasHistory = true; this.emit('state', 'idle');
+      if (!await this.hydrateHistory(thread.id)) return;
+      this.chatAvailable = true; this.hasHistory = true; this.emit('capability');
     }
+  }
+  async hydrateHistory(threadId) {
+    // Read all pages before committing a history snapshot. Live input/approval
+    // still takes effect immediately; history itself must never take control.
+    const items = new Map(), cursors = new Set(); let cursor;
+    for (let page = 0; page < 1000; page++) {
+      if (this.stopped) return false;
+      const result = await this.host.rpc.call('thread/items/list', { threadId, limit: 100, sortDirection: 'asc', ...(cursor ? { cursor } : {}) });
+      if (this.stopped) return false;
+      if (!Array.isArray(result.data)) throw new Error('原生历史格式未能确认；请在原生终端继续。');
+      for (const entry of result.data) {
+        const item = entry.item || entry;
+        if (!item || typeof item.id !== 'string' || !item.id) throw new Error('原生历史缺少消息标识；请在原生终端继续。');
+        if (['agentMessage', 'userMessage'].includes(item.type)) items.set(item.id, { ...item, turnId: entry.turnId });
+      }
+      cursor = result.nextCursor;
+      if (cursor == null) {
+        for (const item of items.values()) {
+          // A history snapshot has no delta watermark. If no live stream was
+          // observed, wait for the authoritative completed item instead of
+          // appending potentially overlapping deltas to that snapshot.
+          if (item.type === 'agentMessage' && !this.liveMessageItems.has(item.id)) this.historyMessageItems.add(item.id);
+        }
+        this.emit('history', [...items.values()]); return true;
+      }
+      if (typeof cursor !== 'string' || !cursor || cursors.has(cursor)) throw new Error('原生历史分页未能确认；请在原生终端继续。');
+      cursors.add(cursor);
+    }
+    throw new Error('原生历史超过本次读取上限；请在原生终端查看完整记录。');
   }
   makeTerminal(argv) {
     this.terminal = new Terminal(argv, this.record.cwd);
@@ -255,6 +279,7 @@ class Codex extends EventEmitter {
   }
   event(message) {
     const p = message.params || {};
+    this.eventRevision++;
     if (message.method === 'thread/closed') {
       this.closed = true; this.stopped = true; this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
     }
@@ -262,16 +287,21 @@ class Codex extends EventEmitter {
     if (message.id !== undefined) { this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); return; }
     switch (message.method) {
       case 'turn/started': this.turnId = p.turn.id; this.emit('state', 'working'); break;
-      case 'item/agentMessage/delta': this.emit('delta', { id: p.itemId, text: p.delta }); break;
+      case 'item/agentMessage/delta':
+        if (!this.historyMessageItems.has(p.itemId)) { this.liveMessageItems.add(p.itemId); this.emit('delta', { id: p.itemId, text: p.delta }); }
+        break;
       case 'item/started':
         if (p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) this.emit('activity', p.item.type);
         if (/collab|agent/i.test(p.item?.type || '') && p.item.type !== 'agentMessage') this.emit('fleet', { event: p.item.type, id: p.item.id, name: 'Codex 原生子 agent' });
         break;
       case 'item/completed':
-        if (p.item?.type === 'agentMessage') { this.turn(p.turnId).text = p.item.text || ''; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase }); }
+        if (p.item?.type === 'agentMessage') { this.liveMessageItems.add(p.item.id); this.turn(p.turnId).text = p.item.text || ''; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase }); }
         // A human may steer an active GUI turn from the native terminal. Only
         // our explicitly identified echo is redundant; matching text is not ID.
-        if (p.item?.type === 'userMessage' && !this.ownInputs.has(p.item.clientId)) this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'));
+        if (p.item?.type === 'userMessage' && !this.ownInputs.has(p.item.clientId) && (!p.item.id || !this.inputItems.has(p.item.id))) {
+          if (p.item.id) this.inputItems.add(p.item.id);
+          this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), { id: p.item.id });
+        }
         break;
       case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage); break;
       case 'turn/completed': {
@@ -400,4 +430,4 @@ class NativeHost {
   close() { for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
-module.exports = { NativeHost, Terminal, Claude, executable, delay };
+module.exports = { NativeHost, Terminal, Claude, Codex, executable, delay };

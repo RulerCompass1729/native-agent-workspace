@@ -690,3 +690,62 @@ confirmed that its three existing native sessions retained IDs/PIDs, full histor
 drafts, names, membership and dispatch counters. The saved view and shared
 recipient were unchanged, and one normal app window remained visible. Independent
 review verified the installed change and closed A12-F1.
+
+## Complete local daily-use checkpoint
+
+Alpha.15 was installed from its local read-only-mounted DMG and checked as one
+continuous workflow: setup appearance and themes; solo conversation/terminal
+use; invite two sessions; direct a task and share one reply for verification;
+detach and continue; rename; repeat launch; quit/reopen with session identity,
+private/shared GUI drafts, membership and intended recipient retained. The
+privacy/usage panel and compact window were checked in the same run.
+
+The headed check loads the installed renderer, daemon, workspace and Codex
+adapter. Provider startup/terminal transport and Claude replies are synthetic:
+three exact fixture submissions, zero model requests, one UI window and no page
+errors. It does not prove native login, live PTY draft fidelity or model/fleet
+behavior. The previously documented native results retain their original scope.
+A single test-process resource sample is retained privately as a baseline; it
+is not a claim of zero overhead or steady-state cost parity.
+
+The workflow closes two reproduced product defects:
+
+- First Codex terminal attachment previously stopped at 100 items, including
+  tool items. The new backend reads pages in ascending order, then merges history
+  once by stable item IDs while preserving newer live content. History does not
+  simulate user input, trigger a handoff, or overwrite working/approval state.
+  A first live human-input notification still takes control even if its message
+  already appeared in a history page. Only repeated live notifications are ignored.
+- Shared-message attribution now follows current local session names using stable
+  sender/recipient IDs. Stored names and message bodies remain unchanged. Old
+  directed records without recipient IDs retain their saved labels; identity is
+  never guessed from text.
+
+Fifteen added protocol/workspace cases and the full 117-check local suite passed
+with no skips. The desktop fixture imports 105 history messages, including a
+live overlap, and verifies rendered replies and exact recipient/payload/count.
+A separate real Codex CLI 0.163.0 metadata process read a prior synthetic test
+record over nine pages, importing 14 unique chat items. Its RPC allowlist permits
+initialization and read methods only: no resume, turn/start or model task.
+The protocol is documented in [Codex App Server](https://learn.chatgpt.com/docs/app-server#list-thread-items).
+
+When a history item has no live delta watermark, the app shows its snapshot and
+waits for the authoritative completed item rather than appending possibly
+overlapping deltas. Failed/malformed/cyclic pagination imports no partial history
+and leaves graphical sending unavailable; the native terminal remains the way
+to continue. A 1,000-page bound also fails explicitly rather than silently
+truncating. This change applies to first attachment on the new backend. Existing
+retained backends are not hot-patched; cold history recovery remains separate.
+
+All 9,177 installed file/link entries matched the mounted DMG, affected source
+and generated UI matched, and the ad-hoc signature verified. After reopening the
+normal profile, all three existing native sessions kept their IDs/PIDs, full
+history, drafts, names, membership, dispatch counters and saved view. One normal
+window remained visible.
+
+Independent review of the installed code, full logs, screenshots and preserved
+user state closes this local workflow checkpoint, not the external first-install gate.
+The DMG remains unnotarized and unpublished. Exact public artifact review,
+download/Gatekeeper and a clean Mac with missing prerequisites remain outstanding.
+Physical IME/VoiceOver, full egress audit, equal-task cost comparison and active
+fleet/unattended completion also retain their documented acceptance gaps.

@@ -49,6 +49,27 @@ Codex uses explicit RPC input. Alpha.11 verifies unsent-draft preservation and o
 in-flight terminal steering scenario, with visible input and private reply isolation.
 This is not a full native concurrency guarantee.
 
+## Current delivery checkpoint: one complete daily-use path
+
+Small fixes are work within this checkpoint, not separate product milestones.
+The checkpoint bundles first open/setup visibility, solo GUI/TUI use, two-agent
+human-directed verification, detach/continue, rename, duplicate-launch prevention,
+reopen with both drafts and recipient, and privacy/usage disclosure. Keep one
+independent reviewer across the change and the installed-app evidence.
+
+Alpha.15 source and installed acceptance exercise this whole path with the real desktop,
+IPC, workspace and Codex history/submission adapter, using synthetic transport.
+The 105-item history fixture covers first attachment beyond a page and live-event
+overlap. This is not native login, physical IME, fleet or model-task acceptance.
+A separate read-only native probe validates the real pagination contract without
+sending a task. Existing native evidence is reused only for unchanged behavior.
+
+External first-install acceptance remains a distinct unfinished gate: exact public
+artifact review/download, Gatekeeper and a clean Mac with missing prerequisites.
+The clean-system test is still deferred for storage availability; a new app
+profile on the maintainer's Mac does not substitute for it. Do not mark that gate
+complete or call this a general consumer release when the local checkpoint passes.
+
 ## Next milestone
 
 The product is a unified Desktop + TUI workspace. TUI daily use remains the first
@@ -68,9 +89,9 @@ native configuration differences are explicitly listed in alpha.md. Alpha.8 now
 routes new sessions to the current backend while preserving old native sessions. Local upgrade, control/lifecycle and rename checks are recorded
 in alpha.md and review.md. Alpha.10 protects new GUI drafts from late acceptance. Alpha.11 closes the
 reproduced Codex missing-steer input issue and preserves the terminal view during
-sharing/interrupt; its native and local evidence is recorded in alpha.md. Broader
-native concurrency, first-turn history synchronization and authoritative fleet
-status remain separate gates. The next user-facing acceptance is the existing
+sharing/interrupt; its native and local evidence is recorded in alpha.md. First-turn history synchronization is addressed in alpha.15; broader
+native concurrency, cold-history recovery and authoritative fleet status remain
+separate gates. The next user-facing acceptance is the existing
 solo/shared TUI daily-use path; it does not require adding new orchestration UI.
 
 The maintainer's current milestone is the complete installation/use path, focused

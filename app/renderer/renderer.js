@@ -204,7 +204,9 @@ function messageList(el, messages, room = false) {
   for (const m of messages) {
     const item = node('article', undefined, `message ${m.role}`); item.dataset.messageId = m.id;
     const heading = node('div', undefined, 'message-heading');
-    heading.append(node('strong', m.name || (m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex')));
+    const participant = room && state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
+    const name = participant ? (m.role === 'human' ? `你 → ${participant.name}` : participant.name) : m.name;
+    heading.append(node('strong', name || (m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex')));
     if (['awaiting-native', 'unconfirmed', 'streaming', 'reply-private'].includes(m.status)) heading.append(node('span', { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '正在回复', 'reply-private': '分享已失效，回复保留在原会话' }[m.status]));
     const body = node('div', undefined, 'message-body'); item.append(heading, body);
     if (m.role === 'assistant') ui.markdown(body, m.text, m.status === 'streaming'); else body.textContent = m.text;
@@ -310,7 +312,7 @@ function render() {
       $('run-status').textContent = run ? `${{ running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '选择材料和接收方，开始一次有边界的协作。';
       const next = state.sessions.find(m => m.id === run?.awaiting?.sessionId);
       if (run?.status === 'running' && next) $('run-status').textContent += ` · 等待 ${next.name}`;
-      const signature = JSON.stringify(state.room.messages);
+      const signature = JSON.stringify([state.room.messages, state.sessions.map(s => [s.id, s.name])]);
       if (signature !== lastRoomMessages) { messageList($('room-messages'), state.room.messages, true); lastRoomMessages = signature; }
       $('members').replaceChildren(...members().map(m => {
         const card = node('div', undefined, 'member-card'); const heading = node('div', undefined, 'member-name'); heading.append(icon(m.provider), node('strong', m.name));

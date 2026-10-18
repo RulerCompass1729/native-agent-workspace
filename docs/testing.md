@@ -156,3 +156,28 @@ failure/retry and a simulated competing owner. It opens one window and makes no
 native provider or model requests; the owner scenario is not a native two-window
 concurrency or permission test. The existing `test:terminal` readiness cases
 remain separate coverage for delayed/stale/failed snapshots.
+
+## Complete daily-use regression
+
+`npm run test:daily` uses one visible desktop window and an isolated profile.
+It exercises setup appearance, both themes, Codex first-attachment history across
+pages, solo conversation/terminal switching, exact input and GUI drafts, rename,
+directed two-agent sharing, detach/continue, repeated launch and reopen, privacy
+and usage disclosure, and a compact window. Assertions cover actual rendered
+replies as well as recipients, message identity, dispatch counts and persistence.
+The Codex adapter/Workspace/IPC are real; provider startup, terminal transport and
+Claude replies are synthetic. It creates no native provider or model task.
+
+For an installed build, set both `NAW_APP_EXECUTABLE` to the app executable and
+`NAW_TEST_APP_ROOT` to its `Contents/Resources/app` directory: the fixture then
+loads the packaged daemon and adapters too. Optional `NAW_EVIDENCE_DIR` stores
+private screenshots. Run desktop scripts sequentially and preserve the person's
+normal UI/session state. This runner reports a single owned-process RSS/CPU sample
+and launch timings, not a steady-state or native-agent performance guarantee.
+Observed renderer requests are not a complete egress/privacy audit.
+
+`codex-history.test.cjs` separately covers paging, live/history arrival in both
+orders, same text with distinct identity, own GUI echoes, overlapping deltas,
+working/approval races, closed/stopped reads, malformed data and failed/cyclic
+pagination. History imports neither dispatch work nor impersonate human input;
+a real human notification must still take precedence even if already displayed.
