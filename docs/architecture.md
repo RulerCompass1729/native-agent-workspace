@@ -1,6 +1,6 @@
 # 架构与边界
 
-As of 2026-10-17。领域关系是设计决定；provider 连接路径仍待运行验证。
+As of 2026-10-17。领域关系是设计决定；Codex 空闲连接已有[限定实测](native-continuity.md)，完整 provider 连续性仍待验证。
 
 ## 核心对象
 

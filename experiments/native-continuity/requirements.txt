@@ -1,0 +1,2 @@
+# Experiment tooling only; not an application runtime dependency.
+websockets==16.0

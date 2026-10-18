@@ -2,7 +2,7 @@
   "as_of": "2026-10-17",
   "scope": "Selected primary sources for architecture and licensing. Research references are not shipped dependencies. Competitor source permalinks are in competitors.md.",
   "limits": [
-    "No native runtime acceptance or cost benchmark",
+    "Only a limited idle Codex connection check; no full runtime acceptance or cost benchmark",
     "No exhaustive dependency closure or trademark clearance",
     "Mutable official pages must be rechecked before distribution"
   ],
@@ -381,6 +381,39 @@
       "sha256": "f879715bb0d440db60b71e7a5bfe1258d045520feabe3fc6b11847100c8d064b",
       "bytes": 102656,
       "accessed_at": "2026-10-17T22:07:48.785855+00:00"
+    },
+    {
+      "path": "agent-view.html",
+      "url": "https://code.claude.com/docs/en/agent-view",
+      "sha256": "83a3dbb72ad633475c97010093fa2e177721b757c1d196deb8da5df400264b53",
+      "bytes": 1083343,
+      "accessed_at": "2026-10-18T00:34:37.366991+00:00",
+      "evidence": "Official source archived locally; scope and runtime limits are recorded in native-continuity.md."
+    },
+    {
+      "path": "agent-teams.html",
+      "url": "https://code.claude.com/docs/en/agent-teams",
+      "sha256": "4f7ec5e3c201559d591959063b541cfdaece15f03ffd1233aa198c24faacdeca",
+      "bytes": 722497,
+      "accessed_at": "2026-10-18T00:34:37.367492+00:00",
+      "evidence": "Official source archived locally; scope and runtime limits are recorded in native-continuity.md."
+    },
+    {
+      "path": "codex-app-server.html",
+      "url": "https://learn.chatgpt.com/docs/app-server",
+      "sha256": "ce7de82f4c4f170171330da86493da45a1533ff80f8d2addf497d633bdd98a01",
+      "bytes": 976611,
+      "accessed_at": "2026-10-18T00:34:37.367949+00:00",
+      "evidence": "Official source archived locally; scope and runtime limits are recorded in native-continuity.md."
+    },
+    {
+      "path": "websockets-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/python-websockets/websockets/16.0/LICENSE",
+      "sha256": "3d6a0c050d8bec52fabad502e45fb25bd02bcadbd70dea34d447b6a0ff4e6da8",
+      "bytes": 1514,
+      "accessed_at": "2026-10-18T00:34:37.367996+00:00",
+      "evidence": "Official source archived locally; scope and runtime limits are recorded in native-continuity.md.",
+      "revision": "16.0"
     }
   ]
 }

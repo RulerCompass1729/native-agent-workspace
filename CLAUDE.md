@@ -3,7 +3,7 @@
 This file is shared by Claude Code and Codex. `AGENTS.md` points to this file.
 
 Read `README.md`, `docs/product.md`, and `docs/readiness.md` before changing scope.
-The current phase is preparation. Do not present planned integrations as working
+The current phase is bounded feasibility testing. Do not present planned integrations as working
 features, install provider runtimes, or start paid model runs as a side effect of
 editing these documents.
 

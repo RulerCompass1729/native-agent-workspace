@@ -10,7 +10,7 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 ## Status
 
-This is a **preparation repository**, not an installable application. It contains product requirements, interaction proposals, architecture decisions, source-backed comparisons, implementation gates, and local publication safeguards. No agent integration, native session migration, or performance claim has passed runtime acceptance yet.
+This is an **early feasibility repository**, not an installable application. It contains product requirements, architecture decisions, source-backed comparisons, publication safeguards, and a small native-connection diagnostic. An idle Codex thread has passed a limited real-terminal connection check; full Claude/Codex collaboration, fleet preservation, GUI continuity, and performance remain unverified. See the [first continuity result](docs/native-continuity.md).
 
 DeepSeek Harness is the first integration candidate. This repository is independent; it does not currently contain or depend on DeepSeek Harness or competitor implementation code.
 
@@ -26,6 +26,7 @@ DeepSeek Harness is the first integration candidate. This repository is independ
 | [Licensing](docs/licensing.md) | Apache-2.0, attribution, commercial use, and upstream boundaries |
 | [Naming](docs/naming.md) | Naming directions; no brand selected or cleared |
 | [Preparation and next steps](docs/readiness.md) | Current deliverables and the first technical proof |
+| [Native continuity experiment](experiments/native-continuity/README.md) | Runnable diagnostic and the limits of the first runtime evidence |
 | [Source register](docs/sources.json) | Dated evidence and pinned source references |
 | [Publication safeguards](docs/publication.md) | Local commit/push checks and contributor setup |
 | [Privacy requirements](docs/privacy.md) | Data boundaries and conditions before an application release |

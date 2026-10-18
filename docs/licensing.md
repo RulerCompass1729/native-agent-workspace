@@ -56,6 +56,12 @@ MIT 同样允许商业使用并要求保留版权/许可通知，更简洁；Apa
 
 不混入私人调研、会话、凭据或本机路径。每次公开提交与推送前仍执行 secret 与 PII 检查。
 
+## 已引入的试验工具依赖
+
+原生连续性探针仅声明 `websockets==16.0`，作为开发试验工具，不是桌面产品 runtime。已读取安装包的完整 BSD-3-Clause 许可，版权人为 Aymeric Augustin and contributors；未复制其源码或二进制入仓库。未来分发含该包的产物时保留对应版权、条件与免责声明。[上游许可](https://github.com/python-websockets/websockets/blob/16.0/LICENSE)
+
+探针只通过该包连接用户明确指定的本机 Unix socket，不读取认证文件或上传报告；原生 Codex 的认证、模型服务与网络行为仍归原生机制。这不替代未来桌面分发的完整依赖及隐私检查。
+
 ## 证据
 
 - [DSH MIT](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/LICENSE)
