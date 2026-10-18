@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { _electron } = require('playwright');
 const { connect } = require('../app/service-client.cjs');
 const { checkTui, verifyTui, restoreTui } = require('./check-tui.cjs');
+const { checkRoom, verifyRoom, restoreRoom } = require('./check-room.cjs');
 const root = path.resolve(__dirname, '..');
 const executablePath = process.env.NAW_APP_EXECUTABLE || require('electron');
 const launchArgs = process.env.NAW_APP_EXECUTABLE ? [] : [root];
@@ -21,7 +22,7 @@ async function until(predicate, message, timeout = 6000) {
   while (Date.now() < deadline) { if (await predicate()) return; await delay(100); }
   throw new Error(message);
 }
-let application, page, ownsLock = false, stopping = false, testDraft, tuiCheck;
+let application, page, ownsLock = false, stopping = false, testDraft, tuiCheck, roomCheck;
 const draftText = 'Lifecycle test draft\n中文草稿：不发送，不调用模型。';
 async function launch(earlyQuit = false) {
   if (application) throw new Error('Close the existing test UI before launching another.');
@@ -55,6 +56,7 @@ async function cleanup() {
         const s = await workspace.initial();
         if (s.sessions.find(record => record.id === id)?.liveDraft === expected) await workspace.draft(id, '');
       }, { id: testDraft, expected: draftText });
+      if (page && application && roomCheck) await restoreRoom(page, roomCheck);
       if (page && application && tuiCheck) await restoreTui(page, tuiCheck);
     } finally { await closeUI(); }
   }
@@ -103,6 +105,7 @@ async function run() {
   console.log('PASS: packaged/source UI composition and setup screen render.');
   tuiCheck = { original: before.viewState };
   tuiCheck = await checkTui(page);
+  roomCheck = {}; await checkRoom(page, application, roomCheck);
   before = await page.evaluate(() => workspace.initial());
   console.log(`PASS: privacy/usage disclosure, shared draft and input validation${tuiCheck.controlled ? ', live terminal settings and focus' : ' (no live terminal in this profile)'}.`);
   const selected = before.sessions.find(s => s.id === before.viewState.selected);
@@ -151,6 +154,7 @@ async function run() {
   await until(() => !alive(host.pid), 'DSH host survived normal UI exit');
   const reopened = await launch();
   await verifyTui(page, tuiCheck);
+  await verifyRoom(page, roomCheck);
   assert.deepEqual(identity(reopened), identity(before));
   assert.equal(reopened.viewState.selected, savedView.selected);
   assert.equal(reopened.viewState.mode, savedView.mode);
@@ -162,6 +166,7 @@ async function run() {
   await until(() => !alive(crashedHost.pid), 'DSH host survived desktop crash');
   const recovered = await launch();
   await verifyTui(page, tuiCheck);
+  await verifyRoom(page, roomCheck);
   assert.deepEqual(identity(recovered), identity(before));
   assert.equal(recovered.viewState.selected, savedView.selected);
   assert.equal(recovered.viewState.mode, savedView.mode);
@@ -178,4 +183,4 @@ async function run() {
   console.log('PASS: quitting during page load closes cleanly without a fatal dialog.');
 }
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => cleanup().finally(() => process.exit(130)));
-run().catch(error => { console.error(error.message); process.exitCode = 1; }).finally(cleanup);
+run().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; }).finally(cleanup);

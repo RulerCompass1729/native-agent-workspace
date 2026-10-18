@@ -73,7 +73,10 @@ not need to run `npm ci` again unless dependencies changed. Keep the project fol
 while its source-launched sessions are running. Quitting the interface leaves
 those native sessions running; see [how to stop or fully exit](docs/alpha.md).
 
-Use **加入协作 / 脱出协作** to change membership without replacing the native session. **开始一轮核查** permits up to three replies within ten minutes; native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
+Use **加入协作 / 脱出协作** to change membership without replacing the native session.
+Inside **共同工作**, switch between **共享记录** and each member’s original terminal;
+**参与者…** manages invitations, and **暂停交接** remains visible. Detaching returns
+to independent use of that same session. **开始一轮核查** permits up to three replies within ten minutes; native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
 
 `npm test` runs local regression checks without model calls. `npm run test:desktop` runs a visible UI lifecycle check without sending prompts; it reuses a single private test profile and refuses a second test runner. See [test policy](docs/testing.md).
 

@@ -11,13 +11,13 @@
 <body>
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">◒</span><div>Native Workspace<small>本地桌面 · Alpha</small></div></div>
-    <button class="new-button" id="new-session">＋ 新会话 <kbd>⌘N</kbd></button>
+    <button class="new-button" id="new-session" aria-label="新会话" title="新会话"><span class="rail-icon" aria-hidden="true">＋</span><span class="rail-label">＋ 新会话</span><kbd>⌘N</kbd></button>
     <div class="nav-label">我的会话</div>
     <nav id="session-list" aria-label="会话列表"></nav>
-    <button class="room-nav" id="room-nav"><span>◉ 共同工作</span><span id="member-count">0</span></button>
+    <button class="room-nav" id="room-nav" aria-label="共同工作" title="共同工作"><span class="rail-icon" aria-hidden="true">◉</span><span class="rail-label">◉ 共同工作</span><span id="member-count">0</span></button>
     <p class="drop-hint">把会话拖到这里，或用“加入协作”</p>
-    <button id="setup-button" class="subtle">检查安装与版本</button>
-    <div class="sidebar-bottom"><span class="local-dot"></span> 本地运行<button id="privacy-button" aria-label="查看隐私与用量">隐私与用量</button></div>
+    <button id="setup-button" class="subtle" aria-label="检查安装与版本" title="检查安装与版本"><span class="rail-icon" aria-hidden="true">⚙</span><span class="rail-label">检查安装与版本</span></button>
+    <div class="sidebar-bottom"><span class="local-status"><span class="local-dot"></span> 本地运行</span><button id="privacy-button" aria-label="查看隐私与用量" title="隐私与用量"><span class="rail-icon" aria-hidden="true">ⓘ</span><span class="rail-label">隐私与用量</span></button></div>
   </aside>
   <main>
     <header id="header"><div><h1 id="title">你的工作空间</h1><p id="subtitle">从一个会话开始，需要时再邀请另一个。</p></div><div id="header-actions"></div></header>
@@ -29,6 +29,7 @@
       <div class="start-cards"><button id="start-claude"><span class="agent-icon claude">C</span><strong>与 Claude 开始</strong><small>原生会话与 Agent Teams</small></button><button id="start-codex"><span class="agent-icon codex">C</span><strong>与 Codex 开始</strong><small>原生会话与子 agent</small></button></div>
       <p class="quiet">登录与模型用量由原生服务管理；界面不自动生成标题或摘要。</p>
     </section>
+    <div id="solo-session" class="session-slot">
     <section id="session-view" hidden>
       <div class="session-toolbar"><div class="segmented"><button id="chat-tab">对话</button><button id="terminal-tab" class="active">原生终端</button></div><div id="terminal-controls" hidden><button id="terminal-copy">复制</button><button id="terminal-paste">粘贴</button><button id="terminal-display">显示…</button></div><span id="session-status" aria-live="polite"></span><button id="take-control" hidden>接管此窗口</button></div>
       <div id="approval" hidden></div>
@@ -37,14 +38,20 @@
       <div id="composer-wrap"><form id="composer"><textarea id="message-input" rows="3" placeholder="直接说你想做什么…" aria-label="发送给当前 agent 的消息"></textarea><div class="composer-footer"><span id="compose-hint">Enter 发送 · Shift Enter 换行</span><button type="button" id="interrupt" class="subtle" hidden>中断回复</button><button type="submit" id="send-button" class="primary">发送 ↑</button></div></form></div>
       <details id="advanced"><summary>会话与原生团队</summary><div id="advanced-content"></div></details>
     </section>
+    </div>
     <section id="room-view" hidden>
-      <div class="room-layout"><div class="room-main"><div id="run-status" class="run-status">选择材料和接收方，开始一次有边界的协作。</div><div id="room-messages" class="messages" aria-label="共同工作记录"></div>
-      <form id="room-composer"><label for="shared-input">本次任务与共享材料</label><textarea id="shared-input" rows="4" maxlength="16000" placeholder="只有这里的内容和本轮回复会交给参与者。之前的私人对话不会自动发送。"></textarea><div class="room-controls"><select id="recipient" aria-label="接收方"></select><button id="forward-button" type="button">定向发送</button><button id="run-button" type="submit" class="primary">开始一轮核查</button><button id="pause-button" type="button">暂停交接</button></div><p class="quiet">一轮：首位成员 → 第二位核查 → 首位完成，最多 3 次回复、10 分钟。原生子 agent 的用量另计。</p></form></div>
-      <aside class="members"><h2>参与者</h2><p>加入不会共享私人历史。<br>脱出后仍可独立继续。</p><div id="members"></div><button id="invite-button">＋ 邀请已有会话</button><div class="room-note">你可以随时介入。直接向任一会话输入，或点击“暂停交接”，都会暂停后续自动交接。</div></aside></div>
+      <div class="room-status-bar"><div id="run-status" class="run-status" role="status"></div><button id="pause-button" type="button" title="暂停后续交接；当前原生任务仍可能继续">暂停交接</button></div>
+      <nav id="room-tabs" aria-label="共同工作视图"><button id="room-record" aria-pressed="true">共享记录</button><div id="room-member-tabs"></div><button id="manage-members">参与者…</button></nav>
+      <p id="room-scope" hidden>成员的原生会话 · 查看不会新增共享；本轮已授权的回复仍会交接。输入会暂停后续交接。</p>
+      <div id="room-session" class="session-slot" hidden></div>
+      <div id="room-record-view" class="room-main"><div id="room-messages" class="messages" aria-label="共同工作记录"></div>
+        <form id="room-composer"><label for="shared-input">本次任务与共享材料</label><textarea id="shared-input" rows="4" maxlength="16000" placeholder="只有这里的内容和本轮回复会交给参与者。之前的私人对话不会自动发送。"></textarea><div class="room-controls"><select id="recipient" aria-label="接收方"></select><button id="forward-button" type="button">定向发送</button><button id="run-button" type="submit" class="primary">开始一轮核查</button></div><p class="quiet">一轮：首位成员 → 第二位核查 → 首位完成，最多 3 次回复、10 分钟。原生子 agent 的用量另计。</p></form>
+      </div>
     </section>
   </main>
   <dialog id="create-dialog"><form id="create-form"><h2>开始一个会话</h2><p>使用已安装的原生 agent 和你的原生登录。</p><div class="provider-choice"><label><input type="radio" name="provider" value="claude" checked> Claude</label><label><input type="radio" name="provider" value="codex"> Codex</label></div><label for="initial-view">开始使用</label><select id="initial-view"><option value="chat">对话界面</option><option value="terminal">原生终端</option></select><label for="session-name">名称（可选）</label><input id="session-name" maxlength="60" placeholder="例如：学习笔记"><label>工作目录</label><div class="folder-field"><span id="chosen-folder"></span><button type="button" id="choose-folder">选择…</button></div><p class="quiet">默认是独立的空目录。原生文件和命令权限仍由原生确认。</p><p id="create-readiness" role="status"></p><div class="dialog-actions"><button type="button" id="create-setup">检查安装</button><button type="button" id="cancel-create">取消</button><button type="submit" id="confirm-create" class="primary">创建会话</button></div></form></dialog>
   <dialog id="setup-dialog"><h2>开始前的准备</h2><p>本试用版使用你自己安装的 Claude Code 或 Codex，以及 Python 3。登录在原生终端中完成。</p><div id="setup-status"></div><div class="dialog-actions"><button id="refresh-setup">重新检查</button><button id="close-setup">完成</button></div><p class="quiet" id="version-info"></p></dialog>
+  <dialog id="members-dialog"><h2>共同工作的参与者</h2><p>加入不会共享私人历史。脱出后仍可独立继续；已经分享的内容会保留。</p><div id="members"></div><button id="invite-button">＋ 邀请已有会话</button><div class="dialog-actions"><button id="close-members">完成</button></div></dialog>
   <dialog id="invite-dialog"><h2>邀请已有会话</h2><p>只建立成员关系；不复制会话、不发送历史。</p><div id="invite-list"></div><button id="close-invite">完成</button></dialog>
   <dialog id="share-dialog"><h2>分享选定内容</h2><p>检查内容，选择共同工作中的接收方。</p><textarea id="share-text" rows="8" aria-label="即将分享的内容"></textarea><select id="share-recipient" aria-label="分享接收方"></select><div class="dialog-actions"><button id="cancel-share">取消</button><button id="confirm-share" class="primary">发送这段内容</button></div></dialog>
   <dialog id="terminal-display-dialog"><h2>终端显示</h2><p>只调整这个窗口的显示，原生会话继续运行。</p><label for="terminal-font-size">字号</label><input id="terminal-font-size" type="number" min="10" max="24" step="1"><label for="terminal-palette">配色</label><select id="terminal-palette"><option value="dark">中性深色</option><option value="green">柔和绿色</option></select><p class="quiet">原生程序自己的主题与快捷键继续由原生程序管理。</p><div class="dialog-actions"><button id="reset-terminal-display">恢复默认</button><button id="close-terminal-display" class="primary">完成</button></div></dialog>

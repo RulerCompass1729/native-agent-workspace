@@ -15,6 +15,7 @@ async function checkTui(page) {
   await page.locator('#close-privacy').click();
 
   await page.locator('#room-nav').click();
+  await page.locator('#room-record').click();
   await page.locator('#shared-input').fill(sharedDraft);
   await page.waitForFunction(async value => (await workspace.initial()).viewState.sharedDraft === value, sharedDraft);
   const controlled = initial.sessions.find(s => s.id === initial.viewState.selected && s.owner === initial.owner && s.state === 'idle' && s.terminalAvailable);
@@ -38,7 +39,7 @@ async function checkTui(page) {
   assert.equal(after.diagnostics.dispatches, initial.diagnostics.dispatches);
   assert.deepEqual(after.sessions.map(s => [s.id, s.nativeId, s.pid, s.messages.length]), initial.sessions.map(s => [s.id, s.nativeId, s.pid, s.messages.length]));
   // Exercise the IPC boundary, not a duplicate validation implementation.
-  for (const patch of [{ sharedDraft: 'x'.repeat(16001) }, { terminalDisplay: { fontSize: 0, palette: 'dark' } }]) {
+  for (const patch of [{ roomSession: 42 }, { roomSession: 'x'.repeat(101) }, { sharedDraft: 'x'.repeat(16001) }, { terminalDisplay: { fontSize: 0, palette: 'dark' } }]) {
     assert.equal(await page.evaluate(async patch => { const s = await workspace.initial(); try { await workspace.viewState({ ...s.viewState, ...patch }); return false; } catch { return true; } }, patch), true);
   }
   return { original: initial.viewState, controlled: controlled?.id, saved: after.viewState };
@@ -64,7 +65,7 @@ async function restoreTui(page, result) {
     const snapshot = await workspace.initial();
     const current = snapshot.viewState;
     if (snapshot.sessions.some(s => s.id === original.selected && s.owner === snapshot.owner)) await workspace.claim(original.selected, original.mode);
-    await workspace.viewState({ ...current, selected: original.selected, mode: original.mode, preference: original.preference, sharedDraft: original.sharedDraft || '', terminalDisplay: original.terminalDisplay || { fontSize: 14, palette: 'dark' } });
+    await workspace.viewState({ ...current, selected: original.selected, mode: original.mode, preference: original.preference, roomSession: original.roomSession || '', sharedDraft: original.sharedDraft || '', terminalDisplay: original.terminalDisplay || { fontSize: 14, palette: 'dark' } });
   }, original);
 }
 module.exports = { checkTui, verifyTui, restoreTui };

@@ -47,7 +47,7 @@ window.__ModuleLoader__.load({
             if (mounted === 2) cleanup = mountWorkspace(ui);
             return () => { cleanup?.(); cleanup = undefined; mounted--; };
           }, [kind]);
-          return React.createElement('div', { ref, className: 'naw', 'data-native-surface': kind, style: collapsed ? { overflow: 'hidden' } : undefined });
+          return React.createElement('div', { ref, className: 'naw', 'data-native-surface': kind, 'data-collapsed': Boolean(collapsed), style: collapsed ? { overflow: 'hidden' } : undefined });
         }
         ctx.effect(() => {
           const style = document.createElement('style'); style.textContent = styles; document.head.append(style);

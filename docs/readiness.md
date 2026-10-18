@@ -1,6 +1,6 @@
 # Demo readiness and milestones
 
-As of 2026-10-17. Current phase: **macOS source alpha and locally tested Apple Silicon app/DMG build**, with DSH as the UI
+As of 2026-10-18. Current phase: **macOS source alpha and locally tested Apple Silicon app/DMG build**, with DSH as the UI
 foundation. The maintainer authorized implementation and real use, then explicitly
 limited Claude/Codex tests to important unresolved native behavior.
 
@@ -93,6 +93,12 @@ draft retention. The privacy/usage panel exposes scoped dispatch counts, reporte
 native tokens and explicit unknowns. These are not proof of complete cost parity,
 network privacy or the outstanding clean-machine installation path.
 
+Alpha.4 adds shared-record/member-terminal switching within the room, a persistent
+pause entry, same-session detach, room/member restoration, and a compact sidebar
+for small windows. View focus no longer counts as human terminal input. These
+checks used two idle native sessions without model prompts. Active native work,
+fleet shutdown and fresh-machine installation remain separate acceptance gaps.
+
 These are workstreams within the existing installation/use milestone, not
 parallel new products. Finish one testable user path before widening scope.
 
@@ -101,8 +107,8 @@ parallel new products. Finish one testable user path before widening scope.
 | Download and first open | Local DMG copy/launch passed; public download, quarantine and clean-machine first open remain unverified | The exact reviewed release artifact is downloaded and opened on a clean Mac/VM following the user guide; no maintainer environment or credentials are copied in |
 | First-use setup | Discovery checks executable presence in PATH and conventional locations; it does not establish provider version, login or successful startup | Missing agent, unusable installation and native login/trust each have a clear next action; a user with only one agent can start; unusual install locations have an explicit fallback |
 | Prerequisites | Python is still needed for the PTY bridge; current setup sends users to installation instructions | Complete the missing-Python path on the clean system. Evaluate a reviewed bundled helper/runtime only if required to remove the blocker; do not blindly replace the session architecture |
-| Single-session interface | Conversation and terminal share a session, but large stacked toolbars and a fixed green terminal consume space and impose styling | A compact header, readable light/dark themes, adjustable terminal text size, stable focus, selection, paste and Chinese input; no agent recreation on view changes |
-| Collaboration interface | One shared room, explicit forwarding and a fixed three-reply UI flow exist; controls and explanatory prose are spread across the page | Invite an existing managed session, choose the material and recipient, observe handoffs, pause, detach and continue independently without needing a verbal explanation |
+| Single-session interface | Terminal display/copy/paste/focus and the compact small-window sidebar are checked; physical IME, screen reader and daily-use feedback remain open | A compact header, readable light/dark themes, adjustable terminal text size, stable focus, selection, paste and Chinese input; no agent recreation on view changes |
+| Collaboration interface | Shared-record/member terminals, visible pause, explicit takeover and detach are checked; the three-reply handoff remains bounded, not general goal completion | Invite an existing managed session, choose the material and recipient, observe handoffs, pause, detach and continue independently without needing a verbal explanation |
 | Continuity and failure | Window reopen and some recovery paths are tested; alpha.3 saves the per-window shared-task draft; cold backend recovery differs from reopening a live UI | Preserve unsent input; distinguish waiting for login, disconnect, recovery and confirmed termination; never auto-replay an uncertain send |
 | Release confidence | Source privacy guard and packaging allowlist exist; these do not prove full binary/network privacy | Review the exact binary/notices; use synthetic data for startup, sharing and deletion checks; retain no unexpected upload; record a small shell CPU/RSS/startup/interaction baseline rather than claiming zero overhead |
 

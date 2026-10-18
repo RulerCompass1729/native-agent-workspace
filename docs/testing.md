@@ -78,3 +78,13 @@ session; an empty profile does not prove those native-terminal checks. Test-only
 shared drafts and display settings are restored on cleanup. Native clipboard
 typing/selection is a separate bounded check on an inspected empty prompt, using
 synthetic unsubmitted text and restoring the original clipboard.
+
+The room check runs only with exactly two controlled, empty idle terminals and an
+unused room. Otherwise it reports SKIP, never native coverage. It joins through
+the UI, switches both member terminals, checks that viewing does not change
+collaboration/control revisions, opens one intentional read-only second view,
+exercises explicit takeover and detaches/rejoins the same session. Native identity,
+history and dispatch counts must remain unchanged. Room/member selection survives
+reopening; cleanup restores original membership and view settings. A small-window
+check also verifies that sidebar and pause controls remain usable. Screenshots
+are optional via `NAW_EVIDENCE_DIR` and must stay outside the public repository.

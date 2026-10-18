@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-17. Version 0.1.0-alpha.3. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.4. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -87,6 +87,43 @@ material is explicit; three replies/ten minutes bounds handoffs, not every tool,
 teammate or provider charge. See [privacy and deletion](privacy.md).
 
 ## Verified in this increment
+
+### Alpha.4: native terminals inside collaboration
+
+**共同工作** now has **共享记录** and member buttons. Member buttons show that
+member's original terminal, with copy/paste/display and explicit takeover controls.
+The pause control stays visible. **参与者…** opens membership management;
+**脱出协作** returns to the same session for independent work. Reopening restores
+the selected room/member view. Viewing does not share more history or start a task.
+Pausing stops future handoffs; a current native task may continue.
+
+The visible source-app check used two existing empty, idle native sessions. It
+verified both member terminals, mouse/keyboard navigation, explicit control transfer
+between two intentional windows, detach/rejoin, and normal/crash reopening. Native
+IDs/PIDs, history and dispatch counts stayed unchanged; no model prompts were sent.
+Window-local terminal focus notifications previously reached the input stream and
+invalidated collaboration control. They are now filtered alongside device queries;
+these observer focus notifications are not forwarded to the native runtime.
+Real user keystrokes still use the existing input/priority path.
+Detaching also clears the cached room-member selection immediately after native
+membership confirmation, so a fast rejoin does not navigate back to a stale view.
+
+The 850×600 window check exposed DSH's collapsed sidebar rendering full labels in a
+narrow rail. Compact controls now retain session selection, new session, room,
+setup and privacy entry points with accessible names and hover labels. Light/dark
+contrast sampling and screenshots accompany the interaction checks; they are not
+a full accessibility certification. Existing reply and fleet evidence is reused
+because the runtime/adapter and routing code did not change.
+
+The alpha.4 DMG was mounted and copied to Applications; its 9,169 file/link entries
+matched and ad-hoc signature verification passed. The installed app passed the
+same room, small-window, theme and lifecycle checks against the two live native
+sessions. A separate installed-terminal check typed and erased one synthetic
+unsubmitted marker without Enter: native input worked, no error appeared and
+history/dispatch counts stayed unchanged. The backend intentionally remains on
+alpha.2 while those original sessions are alive. No public binary was uploaded;
+clean-machine onboarding and downloaded-app Gatekeeper checks are still open.
+
 
 ### Alpha.3: daily TUI use and inspectable privacy/usage
 
