@@ -9,7 +9,7 @@ async function checkTheme(page) {
       await page.emulateMedia({ colorScheme: scheme });
       await page.waitForFunction(dark => document.body.hasAttribute('data-ds-dark-theme') === dark, scheme === 'dark');
       const samples = await page.evaluate(() => {
-        const selectors = ['.brand', '#new-session', '#setup-button', '#room-nav', '#subtitle', '#start-claude', '#start-codex', '#setup-dialog h2', '#setup-status p', '#close-setup', '#create-dialog h2', '#session-name', '#cancel-create', '#run-status', '#room-scope', '#room-record', '#manage-members', '#members-dialog h2', '#shared-input', '#forward-button'];
+        const selectors = ['.brand', '#new-session', '#setup-button', '#room-nav', '#subtitle', '#start-claude', '#start-codex', '#setup-dialog h2', '#setup-status p', '#close-setup', '#create-dialog h2', '#session-name', '#cancel-create', '#run-status', '#room-scope', '#room-record', '#manage-members', '#members-dialog h2', '#shared-input', '#forward-button', '.session-more', '[role="menuitem"]', '#rename-name'];
         const rgba = text => {
           const parts = text.match(/[\d.]+/g).map(Number);
           return [parts[0], parts[1], parts[2], parts[3] ?? 1];

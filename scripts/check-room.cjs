@@ -46,7 +46,8 @@ async function checkRoom(page, application, result) {
   // Intentional second view: viewing is read-only until explicit takeover.
   const person = people.at(-1);
   const windowEvent = application.waitForEvent('window');
-  await page.locator('#header-actions').getByRole('button', { name: '独立窗口', exact: true }).click();
+  await page.locator(`[data-session-menu="${person.id}"]`).click();
+  await page.getByRole('menuitem', { name: '在独立窗口打开', exact: true }).click();
   const second = await windowEvent;
   try {
     await second.locator('#take-control').waitFor({ state: 'visible' });

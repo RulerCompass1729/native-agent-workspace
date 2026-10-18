@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.7. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.9. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -438,7 +438,9 @@ not sudden power loss or a complete CPU/memory overhead guarantee.
 
 ## Renaming a session
 
-Select a session, then **重命名…** beside its title. The field starts with the
+Open **⋯** beside a session, or right-click the row, then **重命名…**. The same
+menu offers **在独立窗口打开**; opening the menu does not switch or take control
+of that session. The field starts with the
 current name; save with Enter or the button, or cancel with Escape. Empty names
 are rejected and the limit is 60 characters. Duplicate names are allowed without
 merging sessions. Names are stored privately on this Mac and survive reopening.
@@ -466,3 +468,20 @@ restoring the original name passed. Original IDs/PIDs, membership, message count
 dispatch count and saved view remained unchanged; no native model prompt was sent.
 This is local installation evidence, not public-download/Gatekeeper or clean-Mac
 setup acceptance. The binary remains unnotarized and was not uploaded.
+
+Alpha.9 moves rename and independent-window actions into one session-row menu,
+available by ⋯ or right-click, using the existing DSH menu component. Headed
+source and installed-app checks cover duplicate names, an unselected target,
+mouse/keyboard opening, repeated-trigger closing, Tab/Escape/outside dismissal,
+focus across a state broadcast, name validation, another window, room names,
+long-label layout, both themes and reopening. The menu's initial portal-focus
+failure was reproduced and fixed before this passing result. The fixtures are
+synthetic ended records; no provider prompt or native session was created.
+
+The alpha.9 DMG was mounted read-only, copied to Applications, and matched across
+9,177 files/links plus the generated UI bundle; its ad-hoc signature verified.
+The installed app also opened a menu on an unselected existing live session and
+canceled renaming: all three retained sessions kept their native IDs/PIDs,
+membership, history counts, labels and current view, with no additional dispatch.
+The native terminal did not steal menu focus. This remains local-app evidence;
+physical IME/VoiceOver, clean-Mac setup and public-download acceptance are separate.

@@ -99,3 +99,13 @@ history and dispatch counts must remain unchanged. Room/member selection survive
 reopening; cleanup restores original membership and view settings. A small-window
 check also verifies that sidebar and pause controls remain usable. Screenshots
 are optional via `NAW_EVIDENCE_DIR` and must stay outside the public repository.
+
+`npm run build:ui && node scripts/test-session-menu.cjs` checks the session menu
+in a visible Electron window with a new private fixture of two ended records.
+It creates no native session and sends no provider task. The check covers an
+unselected target with duplicate names, click/right-click/keyboard, focus across
+a real service state update, cancellation, rename validation, another window,
+room names, light/dark contrast, small-window positioning and reopen persistence.
+`NAW_APP_EXECUTABLE` also selects an installed build; `NAW_EVIDENCE_DIR` captures
+screenshots outside Git. Ended synthetic records prove UI behavior, not live
+native input, fleet lifecycle, physical IME or VoiceOver behavior.

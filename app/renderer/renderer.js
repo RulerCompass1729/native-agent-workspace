@@ -7,6 +7,8 @@ const states = { starting: '正在启动', idle: '就绪', working: '正在工�
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let roomSession = '', selectionRevision = 0;
 let renamingId = '', renaming = false;
+let sessionMenu;
+const sessionRows = new Map();
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
 const terminalThemes = {
   dark: { background: '#191b1e', foreground: '#e6e8eb', cursor: '#e6e8eb', selectionBackground: '#53677b88' },
@@ -43,7 +45,7 @@ async function detach(id) {
   const s = current(); if (s?.owner === owner && s.view !== nextMode) await api.claim(id, nextMode);
 }
 function focusTerminal(id = activeSessionId()) {
-  if (id === activeSessionId() && mode === 'terminal' && !document.querySelector('dialog[open]')) terminals.get(id)?.term.focus();
+  if (id === activeSessionId() && mode === 'terminal' && !sessionMenu && !document.querySelector('dialog[open]')) terminals.get(id)?.term.focus();
 }
 function applyTerminalDisplay() {
   const theme = terminalThemes[terminalDisplay.palette];
@@ -83,11 +85,57 @@ function openCreate(provider = 'claude') {
   $('initial-view').value = preference; $('session-name').value = '';
   $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
 }
-function openRename() {
-  const record = current(); if (!record) return;
+function openRename(id) {
+  const record = state.sessions.find(s => s.id === id); if (!record) return;
   renamingId = record.id; $('rename-name').value = record.name;
   $('rename-error').hidden = true; $('rename-error').textContent = '';
   $('rename-dialog').showModal(); $('rename-name').focus(); $('rename-name').select();
+}
+function focusSessionAction(id) { sessionRows.get(id)?.more.focus(); }
+function openSessionMenu(id, point) {
+  if (disconnected || !state.sessions.some(s => s.id === id)) return;
+  if (!point && sessionMenu?.id === id) { sessionMenu.close(); return; }
+  sessionMenu?.close();
+  const row = sessionRows.get(id); if (!row) return;
+  row.more.focus(); row.more.setAttribute('aria-expanded', 'true');
+  const close = ui.menu({
+    items: [{ id: 'rename', label: '重命名…' }, { id: 'window', label: '在独立窗口打开' }],
+    getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : row.more.getBoundingClientRect(),
+    onClose: () => { sessionMenu = null; row.more.setAttribute('aria-expanded', 'false'); focusSessionAction(id); },
+    onSelect: action => { if (action === 'rename') openRename(id); else if (action === 'window') attempt(() => api.newWindow(id)); },
+  });
+  sessionMenu = { id, close };
+}
+function renderSessions() {
+  const ids = new Set(state.sessions.map(s => s.id));
+  if (sessionMenu && (!ids.has(sessionMenu.id) || disconnected)) sessionMenu.close();
+  for (const [id, row] of sessionRows) if (!ids.has(id)) { row.element.remove(); sessionRows.delete(id); }
+  state.sessions.forEach((record, index) => {
+    let row = sessionRows.get(record.id);
+    if (!row) {
+      const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id;
+      const link = button('', () => select(record.id), 'session-link'); link.dataset.sessionId = record.id; link.draggable = true;
+      link.addEventListener('dragstart', e => e.dataTransfer.setData('application/x-native-session', record.id));
+      const label = node('span', undefined, 'label'), name = node('span'), status = node('small'), dot = node('span');
+      label.append(name, status); link.append(icon(record.provider), label, dot);
+      const more = button('⋯', () => openSessionMenu(record.id), 'session-more'); more.dataset.sessionMenu = record.id;
+      more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
+      // Treat the external trigger as part of DSH's menu: let its click toggle
+      // the menu instead of outside-dismiss followed by an accidental reopen.
+      more.addEventListener('pointerdown', event => { if (sessionMenu?.id === record.id) event.stopPropagation(); });
+      element.addEventListener('contextmenu', event => { event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }); });
+      element.addEventListener('keydown', event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openSessionMenu(record.id); } });
+      element.append(link, more); row = { element, link, more, name, status, dot }; sessionRows.set(record.id, row);
+    }
+    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[record.state]}`;
+    row.link.setAttribute('aria-label', label); row.link.title = label;
+    row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
+    row.more.setAttribute('aria-label', `会话操作：${record.name}`); row.more.title = `会话操作：${record.name}`; row.more.disabled = disconnected;
+    row.name.textContent = record.name; row.status.textContent = `${states[record.state]}${record.roomId ? ' · 协作中' : ''}`; row.dot.className = `state-dot ${record.state}`;
+    // Keep existing DOM nodes: native state updates must not remove a focused
+    // row or its open menu anchor every 35 ms.
+    const slot = $('session-list').children[index]; if (slot !== row.element) $('session-list').insertBefore(row.element, slot || null);
+  });
 }
 function createReadiness() {
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
@@ -114,9 +162,11 @@ function populateSelect(el, items) {
   const old = el.value;
   const signature = JSON.stringify(items.map(s => [s.id, s.name]));
   if (el.dataset.signature === signature) return;
+  if (!el.dataset.signature) el.addEventListener('change', () => { el.title = el.selectedOptions[0]?.textContent || ''; });
   el.replaceChildren(...items.map(s => { const option = node('option', s.name); option.value = s.id; return option; }));
   el.dataset.signature = signature;
   if (items.some(s => s.id === old)) el.value = old;
+  el.title = el.selectedOptions[0]?.textContent || '';
 }
 function messageList(el, messages, room = false) {
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -161,21 +211,10 @@ function render() {
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('title').textContent = inRoom ? '共同工作' : s?.name || '你的工作空间';
     $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${s.model} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
-    $('rename-session').hidden = !s;
-    $('rename-session').disabled = disconnected;
-    $('rename-session').setAttribute('aria-label', s ? `重命名会话：${s.name}` : '重命名会话');
     const warning = disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
-    $('session-list').replaceChildren(...state.sessions.map(record => {
-      const link = button('', () => select(record.id), `session-link${record.id === selected ? ' active' : ''}`);
-      link.dataset.sessionId = record.id; link.draggable = true;
-      const labelText = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[record.state]}`;
-      link.setAttribute('aria-label', labelText); link.title = labelText;
-      link.addEventListener('dragstart', e => e.dataTransfer.setData('application/x-native-session', record.id));
-      const label = node('span', record.name, 'label'); label.append(node('small', `${states[record.state]}${record.roomId ? ' · 协作中' : ''}`));
-      link.append(icon(record.provider), label, node('span', undefined, `state-dot ${record.state}`)); return link;
-    }));
+    renderSessions();
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
     if ($('share-dialog').open) populateSelect($('share-recipient'), members());
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
@@ -185,7 +224,7 @@ function render() {
     $('header-actions').replaceChildren();
     if (s) {
       const own = s.owner === owner; const alive = !['ended', 'error', 'stopping', 'disconnected', 'recoverable'].includes(s.state);
-      $('header-actions').append(button(s.roomId ? '脱出协作' : '加入协作', () => s.roomId ? detach(s.id) : api.join(s.id, true)), button('独立窗口', () => api.newWindow(s.id)), button('分享选中内容', () => { const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString(); text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。'); }));
+      $('header-actions').append(button(s.roomId ? '脱出协作' : '加入协作', () => s.roomId ? detach(s.id) : api.join(s.id, true)), button('分享选中内容', () => { const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString(); text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。'); }));
       $('session-status').textContent = `${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}`;
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
@@ -229,7 +268,7 @@ function render() {
       const tabSignature = JSON.stringify(people.map(m => [m.id, m.name]));
       if (tabs.dataset.signature !== tabSignature) {
         tabs.replaceChildren(...people.map(m => {
-          const tab = button(m.name, () => selectRoom(m.id)); tab.dataset.roomSession = m.id; return tab;
+          const tab = button(m.name, () => selectRoom(m.id)); tab.dataset.roomSession = m.id; tab.title = m.name; return tab;
         }));
         tabs.dataset.signature = tabSignature;
       }
@@ -318,10 +357,9 @@ const disposers = [
 const observer = new ResizeObserver(() => { if (activeSessionId()) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
 $('new-session').onclick = () => openCreate(); $('start-claude').onclick = () => openCreate('claude'); $('start-codex').onclick = () => openCreate('codex');
 $('cancel-create').onclick = () => $('create-dialog').close();
-$('rename-session').onclick = openRename;
 $('cancel-rename').onclick = () => $('rename-dialog').close();
 $('rename-dialog').oncancel = event => { if (renaming) event.preventDefault(); };
-$('rename-dialog').onclose = () => { renamingId = ''; $('rename-session').focus(); };
+$('rename-dialog').onclose = () => { const id = renamingId; renamingId = ''; focusSessionAction(id); };
 $('rename-name').onkeydown = event => { if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault(); };
 $('rename-form').onsubmit = async event => {
   event.preventDefault(); if (renaming) return;
@@ -387,4 +425,4 @@ attempt(async () => {
   if (saved && (!saved.owner || saved.owner === owner)) { saved.liveDraft = draft.text; await api.draft(saved.id, draft.text); }
   select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { sessionMenu?.close(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

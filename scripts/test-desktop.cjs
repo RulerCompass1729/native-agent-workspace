@@ -140,7 +140,8 @@ async function run() {
   } finally { if (duplicate.exitCode === null && duplicate.signalCode === null) duplicate.kill('SIGTERM'); }
   if (selected) {
     const opened = application.waitForEvent('window');
-    await page.locator('#header-actions').getByRole('button', { name: '独立窗口', exact: true }).click();
+    await page.locator(`[data-session-menu="${selected.id}"]`).click();
+    await page.getByRole('menuitem', { name: '在独立窗口打开', exact: true }).click();
     const second = await opened;
     await second.locator('#terminal-tab').waitFor({ state: 'visible' });
     assert.equal(application.windows().length, 2);

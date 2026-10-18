@@ -28,14 +28,20 @@ header { min-height: 74px; padding: 14px 24px; }
 #room-tabs button { font-size: 12px; padding: 7px 10px; white-space: nowrap; }
 #room-tabs button[aria-pressed="true"] { background: var(--selected); border-color: var(--muted); }
 #room-member-tabs { overflow-x: auto; min-width: 0; }
+#room-member-tabs button { max-width: 200px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+#recipient { max-width: min(260px, 100%); min-width: 0; text-overflow: ellipsis; }
 #manage-members { margin-left: auto; }
 #room-scope { font-size: 11px; color: var(--muted); margin: 0; padding: 7px 20px; border-bottom: 1px solid var(--border); }
 #room-session .session-toolbar { padding-top: 6px; padding-bottom: 6px; }
 #members-dialog { max-height: 85vh; overflow: auto; }
 header > div:first-child { min-width: 0; }
-.title-row { display: flex; align-items: center; gap: 10px; }
-.title-row h1 { min-width: 0; }
-#rename-session { flex-shrink: 0; }
+.session-row { display: flex; align-items: center; margin: 3px 0; border-radius: 8px; }
+.session-row.active { background: var(--selected); }
+.session-row .session-link { flex: 1; min-width: 0; width: auto; margin: 0; padding-right: 5px; }
+.session-row .session-link.active { background: transparent; }
+.session-link .label > span { display: block; overflow: hidden; text-overflow: ellipsis; }
+.session-more { flex: none; width: 28px; height: 32px; padding: 0; margin-right: 4px; border: 0; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; }
+.session-more:hover, .session-more[aria-expanded="true"] { color: var(--ink); background: var(--hover); }
 #rename-error { color: var(--dsw-alias-state-danger-label, #a03525); }
 header h1, header p { overflow-wrap: anywhere; }
 @media(max-width:1050px) { #header-actions { flex-wrap: wrap; justify-content: flex-end; } #room-composer { padding: 12px 20px; } }
@@ -49,6 +55,8 @@ header h1, header p { overflow-wrap: anywhere; }
   .rail-icon { display: inline; font-size: 20px; }
   .new-button, .room-nav, #setup-button, #privacy-button { padding: 5px; width: 38px; height: 38px; margin: 0; justify-content: center; }
   #session-list { min-height: 40px; }
-  .session-link { padding: 4px; justify-content: center; }
+  .session-row { flex-direction: column; }
+  .session-row .session-link { padding: 4px; justify-content: center; }
+  .session-more { width: 32px; height: 24px; margin: 0 0 2px; }
   .sidebar-bottom { display: block; }
 }

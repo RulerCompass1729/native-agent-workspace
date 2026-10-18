@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react');
     const ReactDOM = require('react-dom/client');
-    const { MarkdownText, MarkdownDelegateProvider } = require('@deepseek-ai/dsh-client-ui-primitives');
+    const { MarkdownText, MarkdownDelegateProvider, Menu } = require('@deepseek-ai/dsh-client-ui-primitives');
     const templates = { sidebar: /* SIDEBAR_TEMPLATE */, main: /* MAIN_TEMPLATE */ };
     const styles = /* LOCAL_STYLES */;
     function mountWorkspace(ui) {
@@ -29,6 +29,39 @@ window.__ModuleLoader__.load({
         let mounted = 0, cleanup;
         const markdownRoots = new Map();
         const ui = {
+          // Reuse the pinned DSH menu's positioning, theme and arrow navigation.
+          menu({ items, getAnchorRect, onSelect, onClose }) {
+            const opener = document.activeElement;
+            const host = document.createElement('div'); document.body.append(host);
+            const root = ReactDOM.createRoot(host); let closed = false;
+            const close = () => {
+              if (closed) return; closed = true;
+              document.removeEventListener('keydown', tab, true);
+              root.unmount(); host.remove(); onClose();
+            };
+            // DSH currently activates the focused item on Tab. In a session
+            // menu Tab should leave without renaming or opening a window.
+            const tab = event => { if (event.key === 'Tab') { event.stopPropagation(); close(); } };
+            document.addEventListener('keydown', tab, true);
+            function SessionMenu() {
+              React.useEffect(() => {
+                // A newly mounted portal starts hidden until DSH positions it.
+                // Its first autofocus can run too early; retry after layout,
+                // only if the person has not already moved focus elsewhere.
+                const frame = requestAnimationFrame(() => {
+                  if (!closed && document.activeElement === opener) document.querySelector('.naw-session-menu [role="menuitem"]')?.focus();
+                });
+                return () => cancelAnimationFrame(frame);
+              }, []);
+              return React.createElement(Menu, {
+                open: true, portal: true, autoFocus: true, items, getAnchorRect,
+                listClassName: 'naw-session-menu', onClose: close,
+                onSelect: action => { close(); onSelect(action); },
+              });
+            }
+            root.render(React.createElement(SessionMenu));
+            return close;
+          },
           markdown(el, text, streaming) {
             let root = markdownRoots.get(el);
             if (!root) { root = ReactDOM.createRoot(el); markdownRoots.set(el, root); }

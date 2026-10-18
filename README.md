@@ -75,8 +75,9 @@ the conversation view. No model prompt is sent merely by opening the workspace;
 messages you send use your provider's own plan or billing.
 
 New sessions inherit native permission defaults for their working directory.
-Select a session and choose **重命名…** beside its title to change its local
-display name. The sidebar, room tabs and other windows update together. The name
+Open **⋯** beside a session, or right-click its row, then choose **重命名…**
+to change its local display name. The same menu offers **在独立窗口打开**.
+The sidebar, room tabs and other windows update together. The name
 is saved on this Mac; renaming does not call a model or change native history.
 
 After an update, new sessions use the current backend while existing sessions
