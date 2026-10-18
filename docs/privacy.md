@@ -23,8 +23,15 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   The independent service keeps its private connection/token files and a
   versioned runtime copy. Tokens are not displayed in startup failures.
 - session-labels.json holds display names keyed by stable application session ID.
-  Names remain local, use an owner-only file and are not sent to a model. Native
-  titles, history and already-shared author labels are not renamed.
+  Names use an owner-only file and are not automatically sent to a model.
+  Explicitly shared background can include visible room/session names; its text
+  can be reviewed and edited before sending. Native titles, history and stored
+  original author labels are not renamed; the UI can display current aliases.
+- room-state.json contains the room name, human-written shared notes and their
+  saved versions, confirmed membership events, archive indexes and the original
+  member IDs for explicit restoration. Its file is owner-only. These are local
+  records; note/background text reaches a provider only when explicitly sent.
+  Clearing a current note does not delete its older timeline versions.
 - services.json records relative backend directories. After an update, retained
   backends keep their own workspace/connection files under this same private
   application data directory. The UI combines their records in memory; it does
@@ -34,6 +41,11 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   移除本应用记录**. This also removes matching saved window drafts. Shared-room
   records are separate: pause handoffs, then use **隐私与用量 → 清理与完全退出 → 清除共同工作记录**.
   Clearing shared records does not cancel a native task already in progress.
+  It also clears the local membership timeline and all saved note versions;
+  a concurrent newer edit is preserved and reported instead of silently erased.
+  Room names and archive indexes remain. Archiving only hides retained records
+  and pauses future collaboration; it is not deletion, redaction or native-task
+  termination. The archive list shows reported native state and supports restore.
 - For complete local removal, first end/disconnect native sessions and confirm
   their state, open the data directory, then choose **隐私与用量 → 清理与完全退出 → 所有会话结束后完全退出**.
   This refuses while any session remains active or uncertain. After the service

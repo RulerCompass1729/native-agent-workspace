@@ -29,17 +29,17 @@ async function launch() {
 }
 async function run() {
   console.log('Fixture profile:', profile); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon'); client = await connect(profile, 'room-test'); await launch();
-  const a = await create('claude'); await page.locator('#shared-input').fill('单一接收方');
+  const a = await create('claude'); await page.locator('#recipient').selectOption(a); await page.locator('#shared-input').fill('单一接收方');
   // Test the HTML form default contract separately from real pointer/keyboard activation.
   await page.locator('#room-composer').evaluate(form => form.requestSubmit()); await sent(1, a, '单一接收方'); assert.equal((await snapshot()).room.run, null); await complete('FIRST-REPLY');
   assert.equal(await page.locator('#run-button').isDisabled(), true); passed.push('One member: default form sends only to its recipient, without starting a run');
-  const b = await create('codex'); await page.locator('#recipient').selectOption(b); await page.locator('#shared-input').fill('只分享这段'); await page.locator('#shared-input').press('Enter');
+  const b = await create('codex'); await page.locator('#recipient').selectOption(b); await page.locator('#shared-input').fill('只分享这段'); await page.locator('#shared-input').press('Shift+Enter');
   assert.equal(await page.locator('#shared-input').inputValue(), '只分享这段\n'); assert.equal((await native('stats')).sends.length, 1);
   await page.locator('#forward-button').click(); await sent(2, b, '只分享这段'); assert.equal((await snapshot()).room.run, null); await complete('SECOND-REPLY');
   const s = await snapshot(); assert.ok(s.room.messages.some(m => m.text === 'SECOND-REPLY')); assert.equal(s.sessions.find(x => x.id === a).messages.filter(m => m.role === 'user').length, 1);
   await page.locator('#recipient').selectOption(a); await page.locator('#shared-input').fill('键盘发送'); await page.locator('#forward-button').focus(); await page.keyboard.press('Enter'); await sent(3, a, '键盘发送'); assert.equal((await snapshot()).room.run, null); await complete('KEYBOARD-REPLY');
-  passed.push('Pointer and keyboard send once to selected recipient; textarea Enter remains a newline');
-  await page.locator('#shared-input').fill('显式自动核查'); await page.locator('#run-button').click(); await sent(4, a, '显式自动核查');
+  passed.push('Pointer and keyboard send once to selected recipient; Shift Enter remains a newline');
+  await page.locator('#shared-input').fill('显式自动核查'); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click(); await sent(4, a, '显式自动核查');
   const running = (await snapshot()).room.run; assert.equal(running.status, 'running'); assert.deepEqual(running.ids, [a, b]); assert.equal(running.maxSteps, 3); await complete('UNKNOWN-FLEET-REPLY');
   await until(async () => (await snapshot()).room.run.status === 'paused', 'Unknown fleet pauses'); await delay(150); assert.equal((await native('stats')).sends.length, 4); assert.ok((await snapshot()).room.messages.some(m => m.text === 'UNKNOWN-FLEET-REPLY'));
   passed.push('Only explicit automatic action starts a run; unknown native state keeps reply and stops further handoff');

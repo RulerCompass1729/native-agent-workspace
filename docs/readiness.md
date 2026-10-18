@@ -51,6 +51,13 @@ This is not a full native concurrency guarantee.
 
 ## Current delivery checkpoint: one complete daily-use path
 
+The 2026-10-18 collaboration feedback narrows this former checkpoint: alpha.15
+proved selected mechanical paths, not a finished daily collaboration experience.
+It did not prove mouse dragging, agent awareness of membership, room naming,
+shared memory or a searchable team timeline. Alpha.16 addresses this as one
+coherent interaction increment, including the newly requested archive/restore.
+Its installed acceptance and remaining limits are recorded in review.md and alpha.md.
+
 Small fixes are work within this checkpoint, not separate product milestones.
 The checkpoint bundles first open/setup visibility, solo GUI/TUI use, two-agent
 human-directed verification, detach/continue, rename, duplicate-launch prevention,

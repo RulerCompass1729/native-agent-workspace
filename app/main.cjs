@@ -9,6 +9,7 @@ const { preflight } = require('./preflight.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
+const { RoomState } = require('./room-state.cjs');
 
 app.setName('Native Agent Workspace');
 process.env.NAW_APP_VERSION = app.getVersion();
@@ -27,18 +28,32 @@ if (!primary) app.quit();
 const windows = new Map();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 const startupFile = path.join(__dirname, 'startup.html');
 function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, minWidth: 850, minHeight: 600, backgroundColor: '#f8f8f5', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
 function bindClient(context) {
   const { win, client } = context;
+  // Rechecked by the router after awaited pauses as well as at IPC entry.
+  // A task already accepted natively is not retroactively cancelled.
+  client.authorizeOperation = (method, args) => {
+    if (['send', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'draft', 'resume'].includes(method)) {
+      for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'run'].includes(method));
+    }
+  };
   const send = (channel, data) => { if (!win.isDestroyed()) win.webContents.send(channel, data); };
   client.on('state', data => send('workspace:state', displayState(data, context)));
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
 }
-function displayState(snapshot, context) { return sessionLabels.apply(submissionState(snapshot)); }
+function displayState(snapshot, context) { return roomState.apply(sessionLabels.apply(submissionState(snapshot))); }
+async function broadcastRoom() {
+  await Promise.allSettled([...windows.values()].map(async context => {
+    if (context.win.isDestroyed() || context.client.socket.destroyed) return;
+    const snapshot = await context.client.call('initial');
+    if (!context.win.isDestroyed()) context.win.webContents.send('workspace:state', displayState(snapshot, context));
+  }));
+}
 function broadcastName(id, name) {
   for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:session-name', { id, name });
 }
@@ -89,6 +104,7 @@ function register(name, handler) {
 async function boot() {
   dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.chmodSync(dataDir, 0o700);
   sessionLabels = new SessionLabels(dataDir);
+  roomState = new RoomState(dataDir);
   await ensureService(dataDir, process.execPath);
   if (quitting) return;
   dsh = await startDsh(dataDir); entry = dsh.url;
@@ -99,7 +115,23 @@ async function boot() {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   if (!wired) {
   wired = true;
-  for (const name of ['join', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
+  for (const name of ['claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => {
+    if (['claim', 'terminal', 'input', 'approve'].includes(name)) roomState.assertAvailable(args[0]);
+    return c.client.call(name, ...args);
+  });
+  register('join', async (c, id, join) => {
+    try { await roomState.membership(c.client, id, join, sessionLabels.labels.get(id)); }
+    finally { await broadcastRoom(); }
+  });
+  register('roomRename', async (_c, name) => { roomState.rename(name); await broadcastRoom(); });
+  register('roomNotes', async (_c, text, revision) => { roomState.notes(text, revision); await broadcastRoom(); });
+  register('archiveSession', async (c, id) => { try { await roomState.archiveSession(c.client, id, sessionLabels.labels.get(id)); } finally { await broadcastRoom(); } });
+  register('restoreSession', async (c, id) => {
+    const state = await c.client.call('initial'); if (!state.sessions.some(s => s.id === id)) throw Error('原生会话记录不可用。');
+    roomState.restoreSession(id); await broadcastRoom();
+  });
+  register('archiveRoom', async c => { try { await roomState.archiveRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
+  register('restoreRoom', async c => { try { await roomState.restoreRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('create', async (c, ...args) => { assertNativeCreation(await c.client.call('initial')); return c.client.call('create', ...args); });
   register('rename', async (c, id, name) => {
     const snapshot = await c.client.call('initial');
@@ -110,7 +142,10 @@ async function boot() {
   });
   // The workspace router registers human/run intent before its first await and
   // applies the same capability gates for one or several retained services.
-  const submit = (c, method, ...args) => c.client.call(method, ...args);
+  const submit = (c, method, ...args) => {
+    for (const id of (method === 'run' ? args[0] : [args[0]])) roomState.assertAvailable(id, method !== 'send');
+    return c.client.call(method, ...args);
+  };
   for (const method of ['run', 'forward']) register(method, (c, ...args) => submit(c, method, ...args));
   register('uiReady', c => c.ready?.());
   register('send', async (c, id, text) => {
@@ -127,12 +162,18 @@ async function boot() {
   register('dataDirectory', () => shell.openPath(dataDir));
   register('quitService', async c => { await c.client.call('shutdown'); app.quit(); });
   register('clearSharedHistory', async c => {
-    const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: '清除共同工作记录？', detail: '清除本应用里的共享记录，并停止尚未完成的分享回写。不会删除各个会话、原生历史或撤回其他 agent 已收到的内容。正在执行的原生任务不会因此取消。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
-    if (answer.response === 1) return c.client.call('clearSharedHistory');
+    const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: '清除共同工作记录？', detail: '清除本应用里的共享消息、成员时间线和共享笔记，并停止尚未完成的分享回写。名称与各个原生会话保留，不能撤回其他 agent 已收到的内容。正在执行的原生任务不会因此取消。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
+    if (answer.response === 1) {
+      const revision = roomState.value.revision;
+      await c.client.call('clearSharedHistory');
+      try { roomState.clear(revision); } catch (error) { throw Error(`共享消息已清除，时间线和笔记已保留。${error.message}`); }
+      await broadcastRoom(); return true;
+    }
   });
   register('draft', async (c, id, text) => {
     if (typeof text !== 'string' || text.length > 16000) throw new Error('草稿过长。');
     c.view.draft = { id, text }; saveViews();
+    roomState.assertAvailable(id);
     await c.client.call('draft', id, text);
   });
   register('reconnect', async c => {
@@ -175,12 +216,16 @@ async function boot() {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
     if (next.roomSession !== undefined && (typeof next.roomSession !== 'string' || next.roomSession.length > 100)) throw new Error('无效协作视图。');
     if (next.roomRecipient !== undefined && (typeof next.roomRecipient !== 'string' || next.roomRecipient.length > 100)) throw new Error('无效协作接收方。');
+    if (next.roomFilter !== undefined && (typeof next.roomFilter !== 'string' || next.roomFilter.length > 100)) throw new Error('无效成员筛选。');
+    if (next.roomSearch !== undefined && (typeof next.roomSearch !== 'string' || next.roomSearch.length > 1000)) throw new Error('搜索词过长。');
     if (next.sharedDraft !== undefined && (typeof next.sharedDraft !== 'string' || next.sharedDraft.length > 16000)) throw new Error('协作草稿过长。');
     if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw new Error('无效终端显示设置。');
     Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference });
     if (next.sharedDraft !== undefined) c.view.sharedDraft = next.sharedDraft;
     if (next.roomSession !== undefined) c.view.roomSession = next.roomSession;
     if (next.roomRecipient !== undefined) c.view.roomRecipient = next.roomRecipient;
+    if (next.roomFilter !== undefined) c.view.roomFilter = next.roomFilter;
+    if (next.roomSearch !== undefined) c.view.roomSearch = next.roomSearch;
     if (next.terminalDisplay !== undefined) c.view.terminalDisplay = { fontSize: next.terminalDisplay.fontSize, palette: next.terminalDisplay.palette };
     saveViews();
   });

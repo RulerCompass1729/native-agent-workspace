@@ -1,8 +1,57 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.11. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.16. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.16 collaboration and archive checkpoint
+
+The installed DMG now provides room/session menus, room naming, real application
+drag into/out of collaboration, single-recipient @ selection with duplicate-name
+disambiguation, a searchable shared timeline with member filters, manual shared
+notes, explicit context preview, and archive/restore for sessions and the room.
+The sidebar is more compact; advanced automatic collaboration is under the
+composer's more menu. This is a local interaction checkpoint, not evidence that
+every provider capability or unattended collaboration works.
+
+`npm test` passed 130 checks with no skips. The installed collaboration runner
+passed six groups covering pointer drag/cancellation, exact recipient and payload,
+local notes, departure and late private replies, cross-window revision conflicts,
+archive/reopen/restore including unsent drafts, and explicit shared-history
+clearing. Four synthetic submissions, zero native provider processes and zero
+model calls were used in that run. The separate installed daily-use regression
+also passed all five groups, including GUI/TUI continuity, repeated launch and an
+880×660 window, with three synthetic submissions and no model calls. These tests
+use the packaged daemon, workspace, IPC and UI with synthetic provider transport;
+they do not establish physical IME, native fleet or cold-resume behavior.
+
+Archive means retain and hide, not terminate. It pauses further room handoffs and
+preserves the original member IDs; separately archived sessions are excluded from
+room restoration. New input to an archived session is blocked until restored.
+Already accepted native tasks may continue, and their reported status remains
+visible in the archive list. Restoration never replays tasks. There is currently
+one shared workspace; this does not yet provide multiple archived workspaces.
+
+Membership events and notes are local records, not model memory. A user must
+explicitly send selected background for an agent to receive it; private history
+is never auto-included. Already received context remains in the native session
+after departure. Timeline search covers shared records, not all private/tool
+activity. Sharing background consumes normal model context when sent.
+
+Independent review found and closed concurrent-note clearing, stale-owner draft
+insertion and observer-disconnect error-reporting issues. Local regressions also
+cover partial archive/restore failure and cold retry. Actual pointer testing found
+a dragstart layout shift, which was removed and retested. Private screenshots and
+logs remain outside the repository. See [the issue record](review.md) for the
+scope of each closure and the remaining release gates.
+
+The DMG was mounted read-only and copied into Applications; all 9,178 files and
+links matched, relevant installed modules and generated UI matched the source,
+and ad-hoc signature verification passed. Existing local sessions retained their
+native IDs, PIDs, full displayed histories, drafts, names, membership and usage
+diagnostics against a fresh pre-upgrade baseline. Their saved view was restored
+with one normal visible app window. This does not establish clean-machine setup
+or downloaded-app Gatekeeper behavior; the artifact is still unnotarized.
 
 ## Start
 

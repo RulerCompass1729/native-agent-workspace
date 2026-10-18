@@ -4,6 +4,15 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+test('portal archive authorization is checked again after a delayed pause for already queued input and sharing', async () => {
+  for (const method of ['input', 'send', 'forward']) {
+    const { c, next } = fixture(); let archived = false, release;
+    c.authorizeOperation = () => { if (archived) throw Error('Archived'); };
+    c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+    const pending = c.call(method, 'new', 'older queued action'); archived = true; release();
+    await assert.rejects(pending, /Archived/); assert.equal(next.calls.some(([m]) => m === method), false); c.close();
+  }
+});
 function fixture() {
   const scope = Symbol();
   const make = (key, capabilities, sessions) => {

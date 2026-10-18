@@ -91,13 +91,34 @@ not need to run `npm ci` again unless dependencies changed. Keep the project fol
 while its source-launched sessions are running. Quitting the interface leaves
 those native sessions running; see [how to stop or fully exit](docs/alpha.md).
 
-Use **加入协作 / 脱出协作** to change membership without replacing the native session.
-Inside **共同工作**, switch between **共享记录** and each member’s original terminal;
-**参与者…** manages invitations, and **暂停交接** remains visible. Detaching returns
-to independent use of that same session. The default **定向发送** action sends only
-to the selected member. The draft and recipient survive reopening; if the
+Use **加入协作 / 脱出协作**, or drag a session into the workspace and a member back
+to the session list, without replacing its native identity. Inside the workspace,
+switch between **共享记录** and each member’s original terminal. Type **@** to
+choose one specific recipient; duplicate names show the provider and short ID.
+The visible recipient controls delivery; pasted @ text does not broadcast a task.
+Enter sends, Shift Enter inserts a newline. Search and member filters only change
+what you read, never the recipient. Shared messages and confirmed membership
+changes form a local timeline; old events are not invented retroactively.
+
+The workspace **⋯** menu supports rename and archive. Session menus also support
+archive. **归档** in the sidebar restores the same records. Session archive detaches
+it; room archive pauses routing and detaches its members, preserving its name,
+messages and notes. Restore reconnects saved membership except separately archived
+or missing sessions. No task is replayed and no native process is stopped by
+archiving. Native work may continue; the archive list exposes reported state.
+The alpha still has one shared workspace, not multiple independent rooms.
+
+**共享笔记** stores human-edited goals and decisions locally, including saved versions
+in the timeline. Saving does not notify a model. **附上背景…** previews only the room
+name, current roster and those notes, then inserts editable text into the room
+draft. In a solo session, **会话与原生团队 → 带上协作背景…** offers copy for explicit
+paste. Only sending that text gives it to the native agent and uses context tokens;
+leaving does not erase what an agent already received. There is no automatic
+summary, background notification turn or private-history replay.
+
+The default **发送** action sends only to the selected member. The draft and recipient survive reopening; if the
 recipient is no longer available, choose one explicitly before sending.
-The separate **开始一轮核查** action has a ceiling of three replies within ten minutes. Automatic handoffs require complete native background/team status. Current adapters cannot certify this, so a run pauses after its first reply; use **选择并分享** or **定向发送** to continue with human control. A reply limit does not mean the task or its descendants finished. Native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
+The separate **开始一轮核查** action under the composer’s **⋯** has a ceiling of three replies within ten minutes. Automatic handoffs require complete native background/team status. Current adapters cannot certify this, so a run pauses after its first reply; use **选择并分享** or **发送** to continue with human control. A reply limit does not mean the task or its descendants finished. Native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
 
 `npm test` runs local regression checks without model calls. `npm run test:desktop` runs a visible UI lifecycle check without sending prompts; it reuses a single private test profile and refuses a second test runner. See [test policy](docs/testing.md).
 

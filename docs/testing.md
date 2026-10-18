@@ -144,7 +144,8 @@ verifies default form submission, pointer/keyboard activation, explicit automati
 runs, unknown-fleet pauses, pending/blank/ended-recipient guards, late failure and
 reopening without replay, saved/legacy/invalid recipients on restart, and
 recipient departure in both sharing selectors.
-The textarea keeps Enter as a newline; focused buttons support Enter normally.
+The composer sends with Enter and inserts a newline with Shift+Enter. While the
+mention picker is open, Enter selects its highlighted recipient instead.
 Set `NAW_APP_EXECUTABLE` to verify a packaged app; do not run desktop runners in
 parallel. Synthetic provider labels do not constitute native model/fleet proof.
 
@@ -175,6 +176,29 @@ private screenshots. Run desktop scripts sequentially and preserve the person's
 normal UI/session state. This runner reports a single owned-process RSS/CPU sample
 and launch timings, not a steady-state or native-agent performance guarantee.
 Observed renderer requests are not a complete egress/privacy audit.
+
+## Collaboration, context and archive regression
+
+`npm run test:collaboration` runs a headed Electron/DSH window with the production
+workspace, IPC and Codex history adapter, using synthetic provider transport.
+It exercises real pointer drag into/out of the room, invalid/cancelled/repeated
+drops, duplicate-name mention selection by stable ID, exact outgoing text,
+timeline search/filter, explicit shared background, local notes and conflicts,
+late replies after departure, rename persistence and archive/restore after reopen.
+Two windows are intentional only for the concurrent edit/ownership cases, and
+the observer is closed afterward. It makes no native provider or model request.
+
+Archive checks include an active native-status fixture, blocked new input,
+unchanged IDs/drafts/history, room roster restoration excluding separately
+archived members, and no replay. Unit checks additionally simulate partial
+archive/restore failure and cold retry, failed disk writes, stale clear requests,
+and pending input invalidated while awaiting authorization. These are not proof
+of native process recovery after reboot or active fleet lifecycle.
+
+Use both `NAW_APP_EXECUTABLE` and `NAW_TEST_APP_ROOT` as above to test the installed
+artifact, not a packaged UI against source-only service code. Evidence stays
+outside Git. Run sequentially; this is application pointer-input verification,
+not physical trackpad, IME, VoiceOver or external-application drag certification.
 
 `codex-history.test.cjs` separately covers paging, live/history arrival in both
 orders, same text with distinct identity, own GUI echoes, overlapping deltas,

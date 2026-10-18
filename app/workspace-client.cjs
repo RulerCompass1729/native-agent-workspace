@@ -108,6 +108,7 @@ class WorkspaceClient extends EventEmitter {
   }
   async call(method, ...args) {
     if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
+    this.authorizeOperation?.(method, args);
     if (method === 'initial') return this.refresh();
     if (method === 'pause') return this.intervene(() => {
       const entries = new Map(this.entries.map(e => [e.key, e]));
@@ -146,6 +147,7 @@ class WorkspaceClient extends EventEmitter {
       const previousPause = this.control.armed.get(targets[0].key)?.pause;
       if (previousPause) await previousPause;
       if (revision !== this.control.revision || this.socket.destroyed) throw new Error('真人操作已使这次交接失效；请重新确认任务。');
+      this.authorizeOperation?.(method, args);
       const arm = this.control.armed.get(targets[0].key) || { entry: targets[0] };
       this.control.armed.set(targets[0].key, arm);
       return arm.entry.client.call(method, ...args);
@@ -158,7 +160,7 @@ class WorkspaceClient extends EventEmitter {
     const ownView = ['claim', 'terminal'].includes(method) && typeof target.state.owner === 'string' && target.state.sessions.find(s => s.id === args[0])?.owner === target.state.owner;
     if (ownView) return target.client.call(method, ...args);
     if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && !isTerminalResponse(args[1]))) return this.intervene(async () => {
-      await this.pauseExcept(null); return target.client.call(method, ...args);
+      await this.pauseExcept(null); this.authorizeOperation?.(method, args); return target.client.call(method, ...args);
     });
     return target.client.call(method, ...args);
   }

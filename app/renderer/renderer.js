@@ -9,6 +9,9 @@ let roomSession = '', selectionRevision = 0;
 let roomSubmitting = false;
 let renamingId = '', renaming = false;
 let sessionMenu;
+let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, notesRevision, contextTarget = null;
+let roomDraftRevision = 0;
+let pendingRoomFilter = '';
 const sessionRows = new Map();
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
 const terminalThemes = {
@@ -20,10 +23,10 @@ const terminals = new Map();
 const draftRevisions = new Map();
 const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
-const members = () => state?.sessions.filter(s => s.roomId === 'shared') || [];
+const members = () => state?.room.archived ? [] : state?.sessions.filter(s => s.roomId === 'shared' && !s.archived) || [];
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
-function persistView() { return api.viewState({ selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: $('recipient').value }); }
+function persistView() { return api.viewState({ selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: $('recipient').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 function select(id, requestedMode) {
   selectionRevision++;
@@ -58,11 +61,11 @@ async function detach(id) {
   const s = current(); if (s?.owner === owner && s.view !== nextMode) await api.claim(id, nextMode);
 }
 function focusTerminal(id = activeSessionId()) {
-  if (terminalCanInput(id) && !sessionMenu && !document.querySelector('dialog[open]')) terminals.get(id).term.focus();
+  if (terminalCanInput(id) && !sessionMenu && !roomMenu && !document.querySelector('dialog[open]')) terminals.get(id).term.focus();
 }
 function terminalCanInput(id) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
-  return Boolean(entry?.ready && id === activeSessionId() && mode === 'terminal' && record?.owner === owner && record?.view === 'terminal' && !disconnected);
+  return Boolean(entry?.ready && id === activeSessionId() && mode === 'terminal' && record?.owner === owner && record?.view === 'terminal' && !record?.archived && !state?.roomStorageWarning && !disconnected);
 }
 function clearFailedTerminal(id) {
   const entry = terminals.get(id);
@@ -107,36 +110,49 @@ function openCreate(provider = 'claude') {
   $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
 }
 function openRename(id) {
-  const record = state.sessions.find(s => s.id === id); if (!record) return;
+  const record = id === 'room' ? { id, name: state.room.name } : state.sessions.find(s => s.id === id); if (!record) return;
   renamingId = record.id; $('rename-name').value = record.name;
+  $('rename-heading').textContent = id === 'room' ? '重命名工作区' : '重命名会话';
   $('rename-error').hidden = true; $('rename-error').textContent = '';
   $('rename-dialog').showModal(); $('rename-name').focus(); $('rename-name').select();
 }
-function focusSessionAction(id) { sessionRows.get(id)?.more.focus(); }
+function focusSessionAction(id) { if (id === 'room') $('room-more').focus(); else sessionRows.get(id)?.more.focus(); }
+function openRoomMenu(point) {
+  if (disconnected) return;
+  if (!point && roomMenu) { roomMenu(); return; }
+  roomMenu?.(); sessionMenu?.close(); $('room-more').focus(); $('room-more').setAttribute('aria-expanded', 'true');
+  roomMenu = ui.menu({
+    items: [{ id: 'rename', label: '重命名…' }, { id: 'notes', label: '共享笔记' }, { id: 'archive', label: '归档工作区' }],
+    getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : $('room-more').getBoundingClientRect(),
+    onClose: () => { roomMenu = null; $('room-more').setAttribute('aria-expanded', 'false'); $('room-more').focus(); },
+    onSelect: action => { if (action === 'rename') openRename('room'); else if (action === 'notes') openNotes(); else attempt(async () => { await api.archiveRoom(); toast('工作区已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
+  });
+}
 function openSessionMenu(id, point) {
   if (disconnected || !state.sessions.some(s => s.id === id)) return;
   if (!point && sessionMenu?.id === id) { sessionMenu.close(); return; }
-  sessionMenu?.close();
+  sessionMenu?.close(); roomMenu?.();
   const row = sessionRows.get(id); if (!row) return;
   row.more.focus(); row.more.setAttribute('aria-expanded', 'true');
   const close = ui.menu({
-    items: [{ id: 'rename', label: '重命名…' }, { id: 'window', label: '在独立窗口打开' }],
+    items: [{ id: 'rename', label: '重命名…' }, { id: 'membership', label: state.sessions.find(s => s.id === id).roomId ? '脱出协作' : '加入协作' }, { id: 'window', label: '在独立窗口打开' }, { id: 'archive', label: '归档会话' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : row.more.getBoundingClientRect(),
     onClose: () => { sessionMenu = null; row.more.setAttribute('aria-expanded', 'false'); focusSessionAction(id); },
-    onSelect: action => { if (action === 'rename') openRename(id); else if (action === 'window') attempt(() => api.newWindow(id)); },
+    onSelect: action => { if (action === 'rename') openRename(id); else if (action === 'window') attempt(() => api.newWindow(id)); else if (action === 'membership') attempt(() => state.sessions.find(s => s.id === id)?.roomId ? detach(id) : api.join(id, true)); else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
   });
   sessionMenu = { id, close };
 }
 function renderSessions() {
-  const ids = new Set(state.sessions.map(s => s.id));
+  const visible = state.sessions.filter(s => !s.archived);
+  const ids = new Set(visible.map(s => s.id));
   if (sessionMenu && (!ids.has(sessionMenu.id) || disconnected)) sessionMenu.close();
   for (const [id, row] of sessionRows) if (!ids.has(id)) { row.element.remove(); sessionRows.delete(id); }
-  state.sessions.forEach((record, index) => {
+  visible.forEach((record, index) => {
     let row = sessionRows.get(record.id);
     if (!row) {
       const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id;
       const link = button('', () => select(record.id), 'session-link'); link.dataset.sessionId = record.id; link.draggable = true;
-      link.addEventListener('dragstart', e => e.dataTransfer.setData('application/x-native-session', record.id));
+      draggableSession(link, record.id);
       const label = node('span', undefined, 'label'), name = node('span'), status = node('small'), dot = node('span');
       label.append(name, status); link.append(icon(record.provider), label, dot);
       const more = button('⋯', () => openSessionMenu(record.id), 'session-more'); more.dataset.sessionMenu = record.id;
@@ -169,6 +185,30 @@ function createReadiness() {
   $('confirm-create').disabled = !ready;
   $('create-readiness').textContent = ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
 }
+function renderArchives() {
+  const records = state.sessions.filter(s => s.archived), count = records.length + Number(Boolean(state.room.archived));
+  const running = records.filter(s => ['working', 'approval', 'starting', 'stopping', 'disconnected'].includes(s.state)).length;
+  $('archive-label').textContent = `归档${count ? ` · ${count}` : ''}${running ? ` · ${running} 个待查看` : ''}`;
+  $('archive-button').title = `归档 ${count} 项${running ? `，${running} 个原生会话仍需查看状态` : ''}`;
+  if (!$('archive-dialog').open) return;
+  const list = $('archive-list');
+  const signature = JSON.stringify([state.room.archived, state.room.name, records.map(s => [s.id, s.name, s.state])]);
+  if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
+  if (state.room.archived) {
+    const row = node('div', undefined, 'archive-item'); row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', async () => { await api.restoreRoom(); state = await api.initial(); $('archive-dialog').close(); selectRoom(); })); list.append(row);
+  }
+  for (const s of records) {
+    const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
+    row.append(node('strong', s.name), node('small', `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[s.state]}${['ended', 'recoverable'].includes(s.state) ? ' · 需继续原生历史' : ' · 归档未结束原生进程'}`), button('恢复会话', () => restoreArchivedSession(s.id))); list.append(row);
+  }
+  if (!count) list.append(node('p', '还没有归档内容。使用会话或工作区旁的 ⋯ 菜单归档。'));
+}
+async function restoreArchivedSession(id) {
+  await api.restoreSession(id); state = await api.initial();
+  const record = state.sessions.find(s => s.id === id), draft = state.viewState?.draft;
+  if (record && record.owner === owner && draft?.id === id) record.liveDraft = draft.text;
+  $('archive-dialog').close(); select(id);
+}
 async function showSetup() {
   state.preflight = await api.preflight();
   const entries = [['claude', 'Claude Code', 'https://code.claude.com/docs/en/setup'], ['codex', 'Codex CLI', 'https://developers.openai.com/codex/cli/'], ['python', 'Python 3', 'https://www.python.org/downloads/macos/']];
@@ -185,7 +225,7 @@ function populateSelect(el, items) {
   const signature = JSON.stringify(items.map(s => [s.id, s.name]));
   if (el.dataset.signature === signature) return;
   if (!el.dataset.signature) el.addEventListener('change', () => { el.title = el.selectedOptions[0]?.textContent || ''; });
-  el.replaceChildren(...items.map(s => { const option = node('option', s.name); option.value = s.id; return option; }));
+  el.replaceChildren(...items.map(s => { const option = node('option', participantLabel(s, items)); option.value = s.id; return option; }));
   el.dataset.signature = signature;
   if (items.length) el.dataset.hadChoices = 'true';
   if (items.some(s => s.id === old)) el.value = old;
@@ -196,25 +236,125 @@ function populateSelect(el, items) {
   }
   el.title = el.selectedOptions[0]?.textContent || '';
 }
+function participantLabel(session, people = members()) {
+  return people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${session.id.slice(0, 6)}` : session.name;
+}
 function messageList(el, messages, room = false) {
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   ui.clearMarkdown(el);
   el.replaceChildren();
-  if (!messages.length) { el.append(node('p', room ? '选择需要一起完成的任务。这里只显示共享的内容。' : '从这里开始。你也可以随时使用同一个会话的原生终端。', 'message empty')); return; }
+  if (!messages.length) { el.append(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : '从这里开始。你也可以随时使用同一个会话的原生终端。', 'message empty')); return; }
+  let lastDay = '';
   for (const m of messages) {
+    if (room) {
+      const day = Number.isFinite(m.time) ? new Date(m.time).toLocaleDateString() : '时间未记录';
+      if (day !== lastDay) { el.append(node('div', day, 'timeline-day')); lastDay = day; }
+    }
     const item = node('article', undefined, `message ${m.role}`); item.dataset.messageId = m.id;
     const heading = node('div', undefined, 'message-heading');
     const participant = room && state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
-    const name = participant ? (m.role === 'human' ? `你 → ${participant.name}` : participant.name) : m.name;
+    const name = participant ? (m.role === 'human' ? `你 → ${participantLabel(participant, state.sessions)}` : participantLabel(participant, state.sessions)) : m.name;
     heading.append(node('strong', name || (m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex')));
+    if (m.role === 'system' && !m.sessionId) heading.firstChild.textContent = '工作区';
+    if (room && Number.isFinite(m.time)) { const time = node('time', new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); time.title = new Date(m.time).toLocaleString(); heading.append(time); }
     if (['awaiting-native', 'unconfirmed', 'streaming', 'reply-private'].includes(m.status)) heading.append(node('span', { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '正在回复', 'reply-private': '分享已失效，回复保留在原会话' }[m.status]));
     const body = node('div', undefined, 'message-body'); item.append(heading, body);
     if (m.role === 'assistant') ui.markdown(body, m.text, m.status === 'streaming'); else body.textContent = m.text;
     const actions = node('div', undefined, 'message-actions');
-    actions.append(button('复制', () => api.copy(m.text)), button('选择并分享', () => share(m.text)));
+    actions.append(button('复制', () => api.copy(m.text)));
+    if (m.role !== 'system') actions.append(button('选择并分享', () => share(m.text)));
+    if (room && ($('room-search').value || $('room-filter').value)) actions.append(button('查看上下文', () => {
+      $('room-search').value = ''; $('room-filter').value = ''; renderTimeline(); attempt(persistView);
+      const original = [...$('room-messages').children].find(el => el.dataset.messageId === m.id);
+      if (original) { original.tabIndex = -1; original.scrollIntoView({ block: 'center' }); original.focus({ preventScroll: true }); }
+    }));
     item.append(actions); el.append(item);
   }
   if (atBottom) el.scrollTop = el.scrollHeight;
+}
+function timeline() {
+  return [...state.room.messages, ...(state.room.events || [])].sort((a, b) => (a.time || 0) - (b.time || 0));
+}
+function filteredTimeline() {
+  const id = $('room-filter').value, query = $('room-search').value.trim().toLocaleLowerCase();
+  return timeline().filter(m => (!id || m.sessionId === id || m.recipientId === id) && (!query || m.text.toLocaleLowerCase().includes(query)));
+}
+function renderTimeline() {
+  const candidates = new Map();
+  for (const s of members()) candidates.set(s.id, s.name);
+  for (const m of timeline()) {
+    const id = m.sessionId || m.recipientId;
+    if (id && !candidates.has(id)) candidates.set(id, state.sessions.find(s => s.id === id)?.name || m.name || '历史成员');
+  }
+  const filter = $('room-filter'), chosen = filter.value || pendingRoomFilter; pendingRoomFilter = '';
+  const filterSignature = JSON.stringify([...candidates]);
+  if (filter.dataset.signature !== filterSignature) {
+    filter.replaceChildren(node('option', '全部成员'));
+    filter.firstChild.value = '';
+    for (const [id, name] of candidates) { const option = node('option', `${name}${members().some(s => s.id === id) ? '' : ' · 已脱出'} · ${id.slice(0, 6)}`); option.value = id; filter.append(option); }
+    filter.value = candidates.has(chosen) ? chosen : ''; filter.dataset.signature = filterSignature;
+  }
+  const messages = filteredTimeline();
+  const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name]), filter.value, $('room-search').value]);
+  if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true); lastRoomMessages = signature; }
+  $('timeline-count').textContent = `${messages.length} 条`; $('copy-timeline').disabled = !messages.length;
+}
+function draggableSession(element, id) {
+  element.draggable = true;
+  element.addEventListener('dragstart', event => {
+    event.dataTransfer.setData('application/x-native-session', id); event.dataTransfer.effectAllowed = 'move';
+    document.querySelector('.sidebar').classList.add('dragging-session');
+  });
+  element.addEventListener('dragend', () => { document.querySelector('.sidebar').classList.remove('dragging-session'); document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over')); });
+}
+function dropTarget(element, join) {
+  element.addEventListener('dragover', event => { if (event.dataTransfer.types.includes('application/x-native-session')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; element.classList.add('drag-over'); } });
+  element.addEventListener('dragleave', event => { if (!element.contains(event.relatedTarget)) element.classList.remove('drag-over'); });
+  element.addEventListener('drop', event => {
+    event.preventDefault(); element.classList.remove('drag-over');
+    const id = event.dataTransfer.getData('application/x-native-session');
+    if (state.sessions.some(s => s.id === id)) attempt(() => join ? api.join(id, true) : detach(id));
+  });
+}
+function openNotes() {
+  notesRevision = state.room.metadataRevision;
+  $('room-notes-text').value = state.room.notes || ''; $('notes-error').hidden = true; $('notes-dialog').showModal();
+}
+function openContext() {
+  const s = selected === 'room' ? null : current();
+  contextTarget = s ? { id: s.id, mode } : { room: true };
+  const roster = members().map(m => `${m.name} (${m.provider}, ${m.id.slice(0, 6)})`).join('、') || '暂无成员';
+  $('context-text').value = `协作背景：${state.room.name}\n当前参与会话：${roster}\n${s ? (s.roomId ? `本会话仍参与该工作区。` : '本会话已独立使用，不再接收该工作区的新任务。') : '本条消息仅交给界面选定的接收者；其他成员不会自动收到。'}\n以真人当前指示为准，成员变化不代表新的执行指令。${state.room.notes ? `\n\n共享笔记：\n${state.room.notes}` : ''}`;
+  // Solo drafts are owned by the native session's active window. Copying lets
+  // the person paste into that window without racing a concurrent takeover.
+  $('context-error').hidden = true; $('insert-context').hidden = Boolean(s);
+  $('context-dialog').showModal();
+}
+function closeMentions() { mentionOptions = []; mentionRange = null; $('mention-list').hidden = true; $('shared-input').setAttribute('aria-expanded', 'false'); $('shared-input').removeAttribute('aria-activedescendant'); }
+function showMentions(force = false) {
+  const input = $('shared-input'), before = input.value.slice(0, input.selectionStart);
+  const match = before.match(/(?:^|\s)@([^\s@]*)$/u);
+  if (!force && !match) return closeMentions();
+  mentionRange = match ? { start: before.lastIndexOf('@'), end: input.selectionStart } : null;
+  const query = match ? match[1].toLocaleLowerCase() : '';
+  mentionOptions = members().filter(s => `${s.name} ${s.provider}`.toLocaleLowerCase().includes(query)); mentionIndex = 0;
+  $('mention-list').replaceChildren(...mentionOptions.map((s, i) => {
+    const entry = button(`${s.name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${s.id.slice(0, 6)}`, () => chooseMention(s.id), 'mention-option');
+    entry.id = `mention-${i}`; entry.setAttribute('role', 'option'); entry.dataset.mentionId = s.id;
+    entry.addEventListener('mousedown', event => event.preventDefault()); return entry;
+  }));
+  if (!mentionOptions.length) $('mention-list').append(node('p', '没有匹配的成员。先邀请会话加入工作区。'));
+  $('mention-list').hidden = false; input.setAttribute('aria-expanded', 'true'); highlightMention();
+}
+function highlightMention() {
+  [...$('mention-list').querySelectorAll('[role="option"]')].forEach((el, i) => el.setAttribute('aria-selected', String(i === mentionIndex)));
+  if (mentionOptions.length) $('shared-input').setAttribute('aria-activedescendant', `mention-${mentionIndex}`);
+}
+function chooseMention(id) {
+  if (!members().some(s => s.id === id)) { closeMentions(); return toast('这个会话已离开，请重新选择接收者。'); }
+  $('recipient').value = id;
+  if (mentionRange) { const input = $('shared-input'); input.setRangeText('', mentionRange.start, mentionRange.end, 'end'); roomDraftRevision++; }
+  closeMentions(); attempt(persistView); render(); $('shared-input').focus();
 }
 function share(text) {
   if (!members().length) return toast('先把接收方加入共同工作，再分享选定内容。');
@@ -229,6 +369,7 @@ function render() {
   if (!state || rendering) return;
   rendering = true;
   try {
+    if (selected === 'room' && state.room.archived) { selected = ''; roomSession = ''; attempt(persistView); }
     // A member may leave in another window. Keep its existing session in view.
     if (selected === 'room' && roomSession && !members().some(s => s.id === roomSession)) {
       selected = state.sessions.some(s => s.id === roomSession) ? roomSession : 'room';
@@ -244,30 +385,34 @@ function render() {
     $('chat-tab').parentElement.hidden = inRoom;
     document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
-    $('title').textContent = inRoom ? '共同工作' : s?.name || '你的工作空间';
+    $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
     $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${s.model} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
-    const warning = disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning].filter(Boolean).join(' ');
+    const warning = disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
     renderSessions();
+    renderArchives(); $('room-nav').parentElement.hidden = Boolean(state.room.archived); document.querySelector('.drop-hint').hidden = Boolean(state.room.archived);
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
+    $('room-nav-name').textContent = `◉ ${state.room.name}`; $('room-nav').title = state.room.name; $('room-nav').setAttribute('aria-label', state.room.name);
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
       if (record) entry.textContent = `加入 ${record.name}`;
     }
     $('header-actions').replaceChildren();
+    if (inRoom && !s) { const more = button('⋯', () => openRoomMenu()); more.setAttribute('aria-label', '工作区菜单'); $('header-actions').append(more); }
     if (s) {
-      const own = s.owner === owner; const alive = !['ended', 'error', 'stopping', 'disconnected', 'recoverable'].includes(s.state);
-      $('header-actions').append(button(s.roomId ? '脱出协作' : '加入协作', () => s.roomId ? detach(s.id) : api.join(s.id, true)), button('分享选中内容', () => { const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString(); text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。'); }));
-      $('session-status').textContent = `${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}`;
+      const own = s.owner === owner; const alive = !s.archived && !['ended', 'error', 'stopping', 'disconnected', 'recoverable'].includes(s.state);
+      if (s.archived) $('header-actions').append(button('恢复会话', () => restoreArchivedSession(s.id), 'primary'));
+      else $('header-actions').append(button(s.roomId ? '脱出协作' : '加入协作', () => s.roomId ? detach(s.id) : api.join(s.id, true)), button('分享选中内容', () => { const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString(); text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。'); }));
+      $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}`;
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
       $('terminal-controls').hidden = mode !== 'terminal';
       $('terminal-paste').disabled = !terminalCanInput(s.id) || !alive;
       $('messages').hidden = mode !== 'chat'; $('terminal-area').hidden = mode !== 'terminal'; $('composer-wrap').hidden = mode !== 'chat';
       $('message-input').disabled = !own || !alive || disconnected;
-      $('send-button').disabled = !own || s.state !== 'idle' || Boolean(s.pendingTag) || disconnected || s.chatAvailable === false;
+      $('send-button').disabled = s.archived || !own || s.state !== 'idle' || Boolean(s.pendingTag) || disconnected || s.chatAvailable === false;
       $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
       $('compose-hint').textContent = s.state === 'starting' ? '首次信任与登录请在原生终端完成' : s.chatAvailable === false ? (s.submissionNotice || (s.provider === 'claude' ? '安全发送尚未连接；请在原生终端继续。草稿会保留。' : '请先在原生终端完成第一条消息')) : s.provider === 'claude' ? 'Enter 发送 · 实时工具过程在原生终端' : 'Enter 发送 · Shift Enter 换行';
       const signature = JSON.stringify(s.messages);
@@ -287,6 +432,7 @@ function render() {
       }
       $('advanced-content').replaceChildren(node('div', `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`));
       if (s.usage) $('advanced-content').append(node('div', `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}`));
+      $('advanced-content').append(button('查看协作笔记', openNotes, 'small'), button('带上协作背景…', openContext, 'small'));
       for (const event of s.fleet.slice(-8)) $('advanced-content').append(node('div', `${event.event} · ${event.name}`));
       if (!['ended', 'stopping', 'recoverable'].includes(s.state)) $('advanced-content').append(button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small'));
       if (['ended', 'recoverable', 'error'].includes(s.state) && (s.serviceCapabilities || state.capabilities)?.includes('resume')) {
@@ -303,23 +449,24 @@ function render() {
       const tabSignature = JSON.stringify(people.map(m => [m.id, m.name]));
       if (tabs.dataset.signature !== tabSignature) {
         tabs.replaceChildren(...people.map(m => {
-          const tab = button(m.name, () => selectRoom(m.id)); tab.dataset.roomSession = m.id; tab.title = m.name; return tab;
+          const tab = button(participantLabel(m, people), () => selectRoom(m.id)); tab.dataset.roomSession = m.id; tab.title = `${participantLabel(m, people)} · 拖回左侧独立使用`; draggableSession(tab, m.id); return tab;
         }));
         tabs.dataset.signature = tabSignature;
       }
       $('room-record').setAttribute('aria-pressed', String(!roomSession));
       for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.roomSession === roomSession));
-      $('run-status').textContent = run ? `${{ running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '选择材料和接收方，开始一次有边界的协作。';
+      $('run-status').textContent = run ? `${{ running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
+      $('run-status').parentElement.hidden = !run;
       const next = state.sessions.find(m => m.id === run?.awaiting?.sessionId);
       if (run?.status === 'running' && next) $('run-status').textContent += ` · 等待 ${next.name}`;
-      const signature = JSON.stringify([state.room.messages, state.sessions.map(s => [s.id, s.name])]);
-      if (signature !== lastRoomMessages) { messageList($('room-messages'), state.room.messages, true); lastRoomMessages = signature; }
+      renderTimeline();
       $('members').replaceChildren(...members().map(m => {
         const card = node('div', undefined, 'member-card'); const heading = node('div', undefined, 'member-name'); heading.append(icon(m.provider), node('strong', m.name));
         const actions = node('div', undefined, 'actions'); actions.append(button('查看终端', () => { $('members-dialog').close(); selectRoom(m.id); }), button('脱出', async () => { await detach(m.id); $('members-dialog').close(); }));
         card.append(heading, node('p', states[m.state]), actions); return card;
       }));
       const previousRecipient = $('recipient').value;
+      $('recipient').dataset.hadChoices = 'true';
       populateSelect($('recipient'), members());
       if (previousRecipient && !$('recipient').value) attempt(persistView);
       const safeHandoffs = state.capabilities?.includes('verifiedHandoffs');
@@ -328,9 +475,11 @@ function render() {
       const ready = s => s && s.state === 'idle' && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
       $('forward-button').disabled = unavailable || !ready(recipient);
       $('run-button').disabled = unavailable || !recipient || people.length !== 2 || !people.every(ready) || run?.status === 'running' || !safeHandoffs;
-      $('run-help').textContent = '定向发送只交给选定的会话。' + (safeHandoffs ? '自动核查最多 3 次回复、10 分钟；原生后台或团队状态未报告时暂停。原生子 agent 的用量另计。' : state.handoffNotice || '旧版后台仍在保留原生会话，自动核查暂不可用。新建会话会使用新版后台。');
+      $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
+      $('run-button').title = safeHandoffs ? '最多 3 次回复、10 分钟；原生后台或团队状态未报告时暂停。子 agent 的用量另计。' : state.handoffNotice || '现有后台暂不支持自动核查，原生会话继续保留。';
       if (recipient?.sharingNotice || recipient?.submissionNotice) $('run-help').textContent = recipient.sharingNotice || recipient.submissionNotice;
       $('pause-button').disabled = run?.status !== 'running';
+      if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
     }
   } finally { rendering = false; }
 }
@@ -416,7 +565,7 @@ $('rename-name').onkeydown = event => { if (event.key === 'Enter' && (event.isCo
 $('rename-form').onsubmit = async event => {
   event.preventDefault(); if (renaming) return;
   renaming = true; $('confirm-rename').disabled = true; $('cancel-rename').disabled = true;
-  try { await api.rename(renamingId, $('rename-name').value); $('rename-dialog').close(); toast('名称已保存。'); }
+  try { await (renamingId === 'room' ? api.roomRename($('rename-name').value) : api.rename(renamingId, $('rename-name').value)); $('rename-dialog').close(); toast('名称已保存。'); }
   catch (error) { $('rename-error').textContent = error.message || '名称未能保存，请重试。'; $('rename-error').hidden = false; $('rename-name').focus(); }
   finally { renaming = false; $('confirm-rename').disabled = false; $('cancel-rename').disabled = false; }
 };
@@ -427,12 +576,16 @@ $('create-form').onsubmit = event => { event.preventDefault(); attempt(async () 
   finally { $('confirm-create').disabled = false; }
 }); };
 $('room-nav').onclick = () => select('room');
+$('archive-button').onclick = () => { $('archive-dialog').showModal(); renderArchives(); };
+$('close-archive').onclick = () => $('archive-dialog').close();
+$('room-more').onclick = () => openRoomMenu();
+$('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
+$('room-nav').oncontextmenu = event => { event.preventDefault(); openRoomMenu({ x: event.clientX, y: event.clientY }); };
+$('room-nav').onkeydown = event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openRoomMenu(); } };
 $('room-record').onclick = () => selectRoom();
 $('manage-members').onclick = () => $('members-dialog').showModal();
 $('close-members').onclick = () => { $('members-dialog').close(); focusTerminal(); };
-$('room-nav').ondragover = event => { if (event.dataTransfer.types.includes('application/x-native-session')) { event.preventDefault(); $('room-nav').classList.add('drag-over'); } };
-$('room-nav').ondragleave = () => $('room-nav').classList.remove('drag-over');
-$('room-nav').ondrop = event => { event.preventDefault(); $('room-nav').classList.remove('drag-over'); const id = event.dataTransfer.getData('application/x-native-session'); if (state.sessions.some(s => s.id === id)) attempt(() => api.join(id, true)); };
+dropTarget($('room-nav'), true); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
 $('chat-tab').onclick = () => attempt(() => switchMode('chat')); $('terminal-tab').onclick = () => attempt(() => switchMode('terminal'));
 $('take-control').onclick = () => attempt(async () => { await api.claim(activeSessionId(), mode); state = await api.initial(); render(); fitTerminal(activeSessionId()); focusTerminal(); });
 $('terminal-copy').onclick = () => attempt(async () => { const text = terminals.get(activeSessionId())?.term.getSelection(); if (!text) return toast('先选择文字；原生程序占用鼠标时，按住 ⌥ Option 拖选，再点复制。'); await api.copy(text); focusTerminal(); });
@@ -463,21 +616,56 @@ $('composer').onsubmit = event => {
   });
 };
 $('interrupt').onclick = () => attempt(() => api.interrupt(activeSessionId()));
-$('shared-input').oninput = () => { attempt(persistView); render(); };
+$('shared-input').oninput = event => { roomDraftRevision++; attempt(persistView); render(); if (event.inputType === 'insertText' && !event.isComposing) showMentions(); else closeMentions(); };
+$('shared-input').onkeydown = event => {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (!$('mention-list').hidden) {
+    if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); mentionIndex = (mentionIndex + (event.key === 'ArrowDown' ? 1 : -1) + mentionOptions.length) % (mentionOptions.length || 1); highlightMention(); return; }
+    if (event.key === 'Escape') { event.preventDefault(); closeMentions(); return; }
+    if (event.key === 'Enter') { event.preventDefault(); if (mentionOptions[mentionIndex]) chooseMention(mentionOptions[mentionIndex].id); return; }
+  }
+  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!$('forward-button').disabled) $('room-composer').requestSubmit(); }
+};
+$('mention-button').onclick = () => { showMentions(true); $('shared-input').focus(); };
+$('shared-input').onblur = event => { if (!event.relatedTarget?.closest('#mention-list') && event.relatedTarget?.id !== 'mention-button') closeMentions(); };
 async function submitRoom(automatic) {
   if (roomSubmitting || $(automatic ? 'run-button' : 'forward-button').disabled) return;
-  const first = $('recipient').value, text = $('shared-input').value;
+  const first = $('recipient').value, text = $('shared-input').value, revision = roomDraftRevision;
   const ids = [first, ...members().filter(s => s.id !== first).map(s => s.id)];
   roomSubmitting = true; render();
-  try { await (automatic ? api.run(ids, text, 3) : api.forward(first, text)); }
+  try {
+    await (automatic ? api.run(ids, text, 3) : api.forward(first, text));
+    if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
+  }
   finally { roomSubmitting = false; render(); }
 }
 $('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => submitRoom(false)); };
 $('run-button').onclick = () => attempt(() => submitRoom(true));
-$('recipient').onchange = () => { attempt(persistView); render(); };
+$('recipient').onchange = () => { closeMentions(); attempt(persistView); render(); };
+$('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };
+$('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString() : '时间未记录'} · ${state.sessions.find(s => s.id === (m.recipientId || m.sessionId))?.name || m.name || '工作区'}${m.recipientId ? '（接收）' : ''}\n${m.text}`).join('\n\n')));
+$('room-notes').onclick = openNotes; $('cancel-notes').onclick = () => $('notes-dialog').close();
+$('notes-form').onsubmit = async event => {
+  event.preventDefault(); $('save-notes').disabled = true;
+  try { await api.roomNotes($('room-notes-text').value, notesRevision); $('notes-dialog').close(); }
+  catch (error) { $('notes-error').textContent = error.message; $('notes-error').hidden = false; }
+  finally { $('save-notes').disabled = false; }
+};
+$('attach-context').onclick = openContext; $('close-context').onclick = () => $('context-dialog').close();
+$('copy-context').onclick = () => attempt(async () => { await api.copy($('context-text').value); toast('已复制，尚未发送给 agent。'); });
+$('insert-context').onclick = () => attempt(async () => {
+  const target = contextTarget, text = $('context-text').value;
+  if (!target?.room || selected !== 'room') throw Error('当前视图已变化，请重新打开协作背景。');
+  const input = $('shared-input');
+  const next = [input.value, text].filter(Boolean).join('\n\n');
+  if (next.length > 16000) { $('context-error').textContent = '合并后的草稿超过 16000 字符，请先缩短。'; $('context-error').hidden = false; return; }
+  input.value = next;
+  roomDraftRevision++; await persistView();
+  $('context-dialog').close(); render(); input.focus();
+});
 $('share-recipient').onchange = updateSharingControls;
 $('pause-button').onclick = () => attempt(() => api.pause());
-$('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && s.state !== 'ended').map(s => { const entry = button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
+$('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && !s.archived && s.state !== 'ended').map(s => { const entry = button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
 $('confirm-share').onclick = () => attempt(async () => { await api.forward($('share-recipient').value, $('share-text').value); $('share-dialog').close(); toast('已定向发送。'); });
@@ -496,6 +684,7 @@ attempt(async () => {
   const display = state.viewState.terminalDisplay;
   if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;
   $('shared-input').value = typeof state.viewState.sharedDraft === 'string' ? state.viewState.sharedDraft : '';
+  $('room-search').value = state.viewState.roomSearch || ''; pendingRoomFilter = state.viewState.roomFilter || '';
   const savedRecipient = state.viewState.roomRecipient;
   if (typeof savedRecipient === 'string' || $('shared-input').value.trim()) {
     // Older views have a draft but no recipient: require an explicit choice.
@@ -504,7 +693,7 @@ attempt(async () => {
     $('recipient').title = $('recipient').selectedOptions[0]?.textContent || '';
   }
   const draft = state.viewState.draft, saved = state.sessions.find(s => s.id === draft?.id);
-  if (saved && (!saved.owner || saved.owner === owner)) { saved.liveDraft = draft.text; await api.draft(saved.id, draft.text); }
+  if (saved && (!saved.owner || saved.owner === owner)) { saved.liveDraft = draft.text; if (!saved.archived && !state.roomStorageWarning) await api.draft(saved.id, draft.text); }
   select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { sessionMenu?.close(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
