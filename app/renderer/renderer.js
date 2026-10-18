@@ -126,7 +126,7 @@ function render() {
         $('advanced-content').append(button('移除本应用记录…', () => api.forget(s.id), 'small'));
       }
       for (const [id, entry] of terminals) entry.element.hidden = id !== s.id;
-      if (mode === 'terminal' && alive) attempt(() => ensureTerminal(s.id));
+      if (mode === 'terminal' && (alive || (s.state === 'error' && s.terminalAvailable))) attempt(() => ensureTerminal(s.id));
     }
     if (inRoom) {
       const run = state.room.run;

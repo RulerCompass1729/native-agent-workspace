@@ -9,8 +9,11 @@ const sidebarEnd = body.indexOf('</aside>') + '</aside>'.length;
 const sidebar = body.slice(0, sidebarEnd);
 const main = body.slice(sidebarEnd);
 let css = read('app/renderer/styles.css');
+// Keep the original palette declarations for both the standalone document and
+// DSH surfaces. Foreground and background must follow the same theme snapshot.
+const palette = css.match(/:root\{([^}]*)\}/)[1];
 css = css.replace(/:root\{[^}]*\}/, '').replace(/body\{[^}]*\}/, '');
-css = `.naw{font:14px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--dsw-alias-label-primary,#232723);--border:var(--dsw-alias-border-l1,#e1e5dc);--muted:var(--dsw-alias-label-secondary,#777e73);--green:#365744;--soft:#eef2e9;height:100%;min-height:0;overflow:hidden;${css}}\n.naw>.sidebar{width:100%;height:100%}.naw>main{height:100%}.naw .message-body:has(.dsh-markdown){white-space:normal}`;
+css = `.naw{${palette};font-size:14px;height:100%;min-height:0;overflow:hidden;${css}}\n.naw>.sidebar{width:100%;height:100%}.naw>main{height:100%}.naw .message-body:has(.dsh-markdown){white-space:normal}`;
 const bootstrap = read('app/dsh/bootstrap.js');
 const renderer = read('app/renderer/renderer.js');
 const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\n*/\n${read(`node_modules/${name}/${entry}`)}`;

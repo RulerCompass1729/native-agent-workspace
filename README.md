@@ -87,8 +87,10 @@ The local artifact is ad-hoc signed, not notarized or automatically published.
 See [alpha trial instructions](docs/alpha.md) for startup, recovery and limits.
 The DMG contains the app and an Applications shortcut. It removes Git/npm from
 the user's installation path, but does not install Python or provider runtimes.
-Public downloads still need Developer ID signing and Apple notarization;
-packaging a DMG alone does not satisfy Gatekeeper.
+The current trial uses the free, unnotarized route. A downloaded copy can trigger
+Gatekeeper and may need an app-specific **Open Anyway** confirmation; managed Macs
+may block it. Developer ID signing/notarization is a later distribution option,
+not a prerequisite for building this DMG. No public binary is published yet.
 
 ## Start here
 

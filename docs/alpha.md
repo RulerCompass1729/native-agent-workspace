@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-17. Version 0.1.0-alpha.1. Suitable for a small technical trial with
+As of 2026-10-17. Version 0.1.0-alpha.2. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -31,9 +31,15 @@ when replacing an older copy. The DMG does not install Python or provider CLIs;
 the setup screen still checks them. A locally copied app launching successfully
 does not prove an internet-downloaded, quarantined app will pass Gatekeeper.
 
-Normal public distribution needs a Developer ID certificate and Apple notarization.
-The current machine has no valid code-signing identity. This is a maintainer setup
-requirement; users should not need to enroll or run signing commands themselves.
+The maintainer chose the free, unnotarized route for the current trial. A downloaded
+copy can trigger Gatekeeper. After checking the app's source, macOS may offer an
+app-specific **Open Anyway** action in Privacy & Security; managed Macs may block
+it. Do not disable Gatekeeper globally. This downloaded-app path has not yet been
+verified for our artifact. See [Apple's opening guidance](https://support.apple.com/en-us/102445).
+
+Developer ID signing and notarization are a later option for smoother public
+installation. The current machine has no valid signing identity. These are
+maintainer credentials; users do not enroll or run signing commands themselves.
 See [Apple Developer ID](https://developer.apple.com/developer-id/) and
 [Electron signing guidance](https://www.electronjs.org/docs/latest/tutorial/code-signing).
 Before choosing a signing account, review the public identity it will expose.
@@ -100,6 +106,41 @@ No new model task was sent during these checks. The native recovery/stop actions
 used the service control interface; their OS confirmation dialogs were not
 mouse-tested. Earlier native reply/Teams evidence is reused within its original
 scope; it is not a new active-fleet recovery test.
+
+## Alpha.2 startup corrections
+
+The original DSH integration inherited light text from the system dark theme while
+keeping fixed pale panels and buttons. The workspace now uses paired foreground
+and background tokens on its sidebar, cards, dialogs and collaboration surfaces.
+The rendered contrast check switches both themes and rejects text below 4.5:1;
+it caught the original sidebar at about 1.08:1. Background-only button animation
+was also removed because it briefly combined the new text with the old background.
+
+The installer walkthrough also exposed a native setup issue: taking more than two
+minutes to answer Codex's folder-trust prompt discarded its initialization
+callback. Setup now waits for the human decision, releases the creation slot on
+terminal exit, and permits canceling that uninitialized terminal. A live terminal
+remains viewable when the session reports an error. Local regression checks cover
+delayed confirmation and cancellation without issuing a model request.
+
+The installed alpha.2 app was opened through macOS LaunchServices using its normal
+data directory. Welcome, setup, creation and collaboration screens passed the
+light/dark contrast samples (lowest sampled text ratio above 5.7:1). In the actual
+Codex TUI, folder trust was left unanswered for 133 seconds, then confirmed with
+the keyboard: the same terminal established its native thread and became ready.
+Claude also opened its native terminal. Joining/leaving changed membership while
+preserving the processes. These installation checks sent zero model tasks; they
+do not replace the earlier three-reply collaboration evidence or prove fresh
+provider account setup. Screenshots and native output remain local.
+
+The final DMG was mounted and installed again; its 9,169 file/link entries matched
+the installed app and signature verification passed. Reopening kept both native
+IDs/PIDs, membership, selected terminal view, drafts and zero dispatches. The
+installed app also passed the separate empty-profile lifecycle runner, including
+duplicate launch, crash recovery and quitting during load. Only one normal app
+window is left open; test-only profiles do not substitute for this live continuity
+check. The old app copies are recoverable from Trash; source and native histories
+were not deleted.
 
 ## Fresh-install walkthrough
 

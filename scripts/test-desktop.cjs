@@ -79,6 +79,8 @@ async function run() {
   await page.locator('#setup-button').click();
   await page.locator('#setup-dialog').waitFor({ state: 'visible' });
   assert.match(await page.locator('#version-info').innerText(), /应用/);
+  await require('./check-theme.cjs').checkTheme(page);
+  console.log('PASS: light/dark workspace and setup-dialog text contrast.');
   await page.locator('#close-setup').click();
   console.log('PASS: packaged/source UI composition and setup screen render.');
   const selected = before.sessions.find(s => s.id === before.viewState.selected);

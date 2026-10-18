@@ -43,7 +43,7 @@ explicitly requested fresh-install walkthrough used one bounded Claude request
 to verify the first reply after installation, then stopped model testing. It
 observed no tool or teammate activity; see [the walkthrough](alpha.md#fresh-install-walkthrough).
 
-Seventeen local state/lifetime checks and the six-case visible lifecycle regression
+Nineteen local state/lifetime checks and the visible lifecycle regression
 passed. They consume no model tokens. The native fleet coverage remains limited
 as described in [demo](../demo.md); a synthetic test is never labelled native proof.
 
@@ -65,3 +65,8 @@ set `NAW_APP_EXECUTABLE` to the built app's executable and run
 `node scripts/test-desktop.cjs`. It uses its own stable test profile and launches
 no model tasks. A fresh profile has no native sessions; identity/draft assertions
 on that empty profile do not replace the separate live-session evidence in alpha.md.
+
+The runner now checks rendered foreground/background contrast in both light and
+dark themes. Playwright's default light appearance previously hid a real system
+dark-mode failure; the check explicitly switches themes and then restores the
+system preference. It sends no native inputs or model prompts.

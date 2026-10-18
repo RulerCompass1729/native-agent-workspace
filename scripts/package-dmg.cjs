@@ -34,7 +34,7 @@ function buildDmg(app) {
     run('/usr/bin/hdiutil', ['create', '-volname', appName, '-srcfolder', contents, '-fs', 'HFS+', '-format', 'UDZO', '-ov', image]);
     run('/usr/bin/hdiutil', ['verify', image]);
     fs.writeFileSync(`${image}.sha256`, `${createHash('sha256').update(fs.readFileSync(image)).digest('hex')}  ${path.basename(image)}\n`);
-    console.log(`Built ${path.basename(image)}. Local alpha only; Developer ID signing and notarization are still required for normal public distribution.`);
+    console.log(`Built ${path.basename(image)}. Unnotarized alpha: downloaded copies may need app-specific Gatekeeper approval; publication requires artifact review.`);
     return image;
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }

@@ -46,9 +46,10 @@ on **individual and collaborative native TUI use**:
 5. Quit/reopen the interface and retain sessions, selected view and saved draft
    without duplicate instances or replayed prompts.
 
-The local DMG copy/launch path is verified; public binary download and Gatekeeper
-acceptance remain open pending a reviewed signing identity, notarization and
-exact-artifact review. First use on a Mac without Python/provider installation
+The local DMG copy/launch path is verified. The current trial deliberately uses
+free, unnotarized distribution; public binary download, exact-artifact publication
+review and the app-specific Gatekeeper opening path remain unverified. Signing and
+notarization are a later option. First use on a Mac without Python/provider installation
 also remains open: current setup links to official instructions. Earlier native
 single-session replies and bounded collaboration may be reused only where the
 runtime/adapter behavior is unchanged; they do not prove fresh-machine setup.

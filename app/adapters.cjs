@@ -182,7 +182,7 @@ class Codex extends EventEmitter {
       return;
     }
     if (this.record.view === 'terminal') {
-      this.host.createCodex(() => this.startFromTerminal()).catch(error => { this.emit('activity', error.message); this.emit('state', 'error'); });
+      this.host.createCodex(() => this.startFromTerminal()).catch(error => { if (!this.stopped) { this.emit('activity', error.message); this.emit('state', 'error'); } });
       return;
     }
     await this.host.createCodex(async () => {
@@ -196,14 +196,25 @@ class Codex extends EventEmitter {
   async startFromTerminal() {
     if (this.stopped) return;
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => { this.host.pendingCodex = null; reject(new Error('原生初始化尚未确认，请查看终端。')); }, 120000);
-      this.host.pendingCodex = thread => {
-        clearTimeout(timeout); this.host.pendingCodex = null;
+      // Login/trust is a human decision, not a timed model request. Keep the
+      // creation slot until that terminal starts a thread or actually exits.
+      const timeout = setTimeout(() => this.emit('activity', '等待原生登录或文件夹确认，请在终端继续。'), 120000);
+      const cleanup = () => {
+        clearTimeout(timeout);
+        if (this.host.pendingCodex === started) this.host.pendingCodex = null;
+        this.terminal?.off('closed', closed);
+      };
+      const closed = () => { cleanup(); reject(new Error('原生初始化已退出；未发送模型任务。')); };
+      const started = thread => {
+        cleanup();
         this.record.nativeId = thread.id; this.host.codexTargets.set(thread.id, this);
-        this.emit('model', thread.model || '原生默认'); this.emit('state', 'idle'); resolve();
+        this.emit('activity', ''); this.emit('model', thread.model || '原生默认'); this.emit('state', 'idle'); resolve();
         this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', '原生终端可继续；对话连接未确认。'); });
       };
-      this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${this.host.codexSocket}`, '-C', this.record.cwd, '-s', 'workspace-write', '-a', 'on-request']);
+      this.host.pendingCodex = started;
+      try {
+        this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${this.host.codexSocket}`, '-C', this.record.cwd, '-s', 'workspace-write', '-a', 'on-request']).once('closed', closed);
+      } catch (error) { cleanup(); reject(error); }
     });
   }
   async observeFirstTurn() {
@@ -283,10 +294,15 @@ class Codex extends EventEmitter {
     return this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
   }
   async stop() {
-    if (!this.record.nativeId) throw new Error('原生线程身份尚未确认，请在原生终端检查初始化。');
     const previouslyStopped = this.stopped;
     this.stopped = true;
     try {
+      if (!this.record.nativeId) {
+        // Stop only this uninitialized terminal. If a thread started during
+        // shutdown, follow the normal unsubscribe path below.
+        await this.terminal?.stop();
+        if (!this.record.nativeId) { this.emit('state', 'ended'); return { state: 'ended' }; }
+      }
       await this.observing;
       if (this.turnId) await this.interrupt();
       await this.terminal?.stop();
