@@ -12,6 +12,7 @@ limited Claude/Codex tests to important unresolved native behavior.
 | Intentional multi-window, no accidental duplicate app | Same-profile lock, one DSH UI host, exclusive test launcher and owned-process cleanup checked |
 | Honest stop/disconnect state | Claude waits for process exit; Codex unsubscribe remains disconnected until native closure. Empty-session checks and local failure tests passed without model prompts; live services retain their loaded version |
 | Two agents and human-directed collaboration | Join/leave and explicit sharing implemented; real three-reply check stopped at its limit; local control/race checks passed |
+| Cross-view draft/submission safety | Release blocker found in alpha.4 source: Claude GUI/room sends do not establish that its native composer is empty. An inert-terminal source-function probe confirms the path accepts a send after synthetic native input; no native-editor reproduction or fix yet |
 | Native fleets | Claude single teammate/shared task/messages observed; idle team retained across room changes/UI reopen without a new model prompt. Active Codex fleet and full failure/termination semantics remain unverified |
 | Single-session alpha delivery | Implemented: local app packaging, prerequisite/version screen, safe startup retry, explicit history recovery, draft retention and safe backend replacement; tested details in alpha.md |
 | Broad consumer release | Not yet: notarized distribution, broader input/accessibility/network/native fleet coverage and release-specific provider terms remain |
@@ -32,13 +33,31 @@ service deliberately outlives its windows. Updating frontend source does not
 silently replace a live backend. Service loss preserves records for explicit native-history recovery, not running
 fleets. No interrupted prompt or collaboration is automatically replayed.
 
+**Known mixed-input limitation:** do not leave an unsent Claude terminal draft
+and then send from the conversation view or a collaboration. The current adapter
+inserts text into that native composer and submits it without proving the composer
+is empty. Keep that session's input in its native terminal until this boundary is
+fixed and verified. This is a source-level safety finding, not evidence of an
+observed disclosure. Codex uses explicit RPC input and needs separate draft
+continuity verification; the Claude concatenation finding does not apply to it by
+assumption.
+
 ## Next milestone
 
-Latest maintainer ordering: first make native TUI use comfortable for the
-maintainer's daily work. Begin the complete conversation-first Desktop experience
-after that daily-use feedback confirms the TUI path is sound. Keep the current DSH
-desktop shell and session service; this is a delivery order, not a new TUI-only
-architecture. Clean-machine installation testing still waits for disk space.
+The product is a unified Desktop + TUI workspace. TUI daily use remains the first
+delivery path, while both interfaces share session identity, input safety,
+permissions, control and recovery acceptance. Keep the DSH foundation and native
+service. A complete conversation-first experience follows daily-use feedback;
+its needs already constrain today's architecture and tests. Clean-machine
+installation testing still waits for disk space.
+
+The next bounded engineering item is **cross-view draft/submission safety**, before
+expanding trials. Cover direct conversation sends, explicit forwarding, the first
+room send and later handoffs at their shared boundary. Preserve both drafts;
+unknown native editor state must not authorize paste-and-submit. Do not clear the
+editor blindly, infer emptiness from inactivity, or create a replacement session.
+First use local synthetic checks; only unresolved native behavior justifies a
+bounded real-provider test. See [the exact acceptance scenario](interaction.md#当前首要断点).
 
 The maintainer's current milestone is the complete installation/use path, focused
 on **individual and collaborative native TUI use**:
@@ -62,8 +81,10 @@ runtime/adapter behavior is unchanged; they do not prove fresh-machine setup.
 See [alpha evidence](alpha.md).
 
 Do not expand this milestone into new providers, extra chat features, or iTerm2
-embedding. Preferred-terminal integration below is a follow-up after this path
-works; it must not replace finishing installation and basic TUI use.
+embedding. The [unified experience criteria](interaction.md#统一体验验收与反馈依据)
+guide improvements to existing flows. Preferred-terminal integration below is a
+follow-up after this path works; it must not displace installation, input safety
+and basic use.
 
 Every commit/push still requires proactive secret/PII scans and review, including
 outgoing history, author identities and commit messages. Raw test evidence stays
