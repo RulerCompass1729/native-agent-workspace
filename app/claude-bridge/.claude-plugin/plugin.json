@@ -1,0 +1,6 @@
+{
+  "name": "native-workspace-submit",
+  "version": "0.1.0",
+  "description": "Submit explicit workspace messages without writing into the native prompt editor",
+  "author": { "name": "Native Agent Workspace contributors" }
+}

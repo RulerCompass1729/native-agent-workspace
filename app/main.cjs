@@ -7,6 +7,7 @@ const { startDsh } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
 const { preflight } = require('./preflight.cjs');
 const { pathToFileURL } = require('node:url');
+const { submissionState, assertSubmission } = require('./submission-policy.cjs');
 
 app.setName('Native Agent Workspace');
 process.env.NAW_APP_VERSION = app.getVersion();
@@ -32,7 +33,7 @@ function windowOptions(view = {}) { return { title: 'Native Agent Workspace', wi
 function bindClient(context) {
   const { win, client } = context;
   const send = (channel, data) => { if (!win.isDestroyed()) win.webContents.send(channel, data); };
-  client.on('state', data => send('workspace:state', data));
+  client.on('state', data => send('workspace:state', submissionState(data, context.structuredSubmit)));
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
 }
@@ -52,7 +53,7 @@ async function openWindow(saved) {
   const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : new BrowserWindow(windowOptions(view));
   startupWindow = null;
   if (view.bounds) win.setBounds(view.bounds);
-  const context = { win, client, view, failed: false };
+  const context = { win, client, view, failed: false, structuredSubmit: (await client.call('initial')).capabilities?.includes('structuredClaudeSubmit') === true };
   windows.set(win.webContents.id, context); bindClient(context);
   const ready = new Promise((resolve, reject) => { context.ready = resolve; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 25000); });
   ready.catch(() => {}); // loadURL may fail before the readiness timer fires.
@@ -92,9 +93,14 @@ async function boot() {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   if (!wired) {
   wired = true;
-  for (const name of ['create', 'join', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
+  for (const name of ['create', 'join', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
+  const submit = async (c, method, ...args) => {
+    if (!c.structuredSubmit) assertSubmission(await c.client.call('initial'), method === 'run' ? args[0] : [args[0]]);
+    return c.client.call(method, ...args);
+  };
+  for (const method of ['run', 'forward']) register(method, (c, ...args) => submit(c, method, ...args));
   register('uiReady', c => c.ready?.());
-  register('send', async (c, id, text) => { const result = await c.client.call('send', id, text); if (c.view.draft?.id === id && c.view.draft.text.trim() === text.trim()) { c.view.draft.text = ''; saveViews(); } return result; });
+  register('send', async (c, id, text) => { const result = await submit(c, 'send', id, text); if (c.view.draft?.id === id && c.view.draft.text.trim() === text.trim()) { c.view.draft.text = ''; saveViews(); } return result; });
   register('preflight', () => preflight());
   register('dataDirectory', () => shell.openPath(dataDir));
   register('quitService', async c => { await c.client.call('shutdown'); app.quit(); });
@@ -110,6 +116,7 @@ async function boot() {
   register('reconnect', async c => {
     await ensureService(dataDir, process.execPath);
     const client = await connect(dataDir, c.view.owner), old = c.client;
+    c.structuredSubmit = (await client.call('initial')).capabilities?.includes('structuredClaudeSubmit') === true;
     c.client = client; bindClient(c); old.close(); await c.win.reload();
   });
   for (const action of ['resume', 'forget']) register(action, async (c, id) => {
@@ -134,7 +141,7 @@ async function boot() {
     if (answer.response === 1) return c.client.call('stop', id);
   });
   register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接类型不支持。'); return shell.openExternal(url.href); });
-  register('initial', async c => ({ ...await c.client.call('initial'), viewState: c.view, appVersion: app.getVersion(), preflight: preflight() }));
+  register('initial', async c => ({ ...submissionState(await c.client.call('initial'), c.structuredSubmit), viewState: c.view, appVersion: app.getVersion(), preflight: preflight() }));
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
     if (next.roomSession !== undefined && (typeof next.roomSession !== 'string' || next.roomSession.length > 100)) throw new Error('无效协作视图。');

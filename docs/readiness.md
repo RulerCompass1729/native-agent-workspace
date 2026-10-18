@@ -12,7 +12,7 @@ limited Claude/Codex tests to important unresolved native behavior.
 | Intentional multi-window, no accidental duplicate app | Same-profile lock, one DSH UI host, exclusive test launcher and owned-process cleanup checked |
 | Honest stop/disconnect state | Claude waits for process exit; Codex unsubscribe remains disconnected until native closure. Empty-session checks and local failure tests passed without model prompts; live services retain their loaded version |
 | Two agents and human-directed collaboration | Join/leave and explicit sharing implemented; real three-reply check stopped at its limit; local control/race checks passed |
-| Cross-view draft/submission safety | Release blocker found in alpha.4 source: Claude GUI/room sends do not establish that its native composer is empty. An inert-terminal source-function probe confirms the path accepts a send after synthetic native input; no native-editor reproduction or fix yet |
+| Cross-view draft/submission safety | Alpha.5 replaces Claude paste/Enter with a structured native API. Visible draft-blocking and exact-payload reply checks passed on Claude 2.1.302; cancellation/replay checks passed locally. Codex mixed-draft and full concurrency coverage remain |
 | Native fleets | Claude single teammate/shared task/messages observed; idle team retained across room changes/UI reopen without a new model prompt. Active Codex fleet and full failure/termination semantics remain unverified |
 | Single-session alpha delivery | Implemented: local app packaging, prerequisite/version screen, safe startup retry, explicit history recovery, draft retention and safe backend replacement; tested details in alpha.md |
 | Broad consumer release | Not yet: notarized distribution, broader input/accessibility/network/native fleet coverage and release-specific provider terms remain |
@@ -33,14 +33,18 @@ service deliberately outlives its windows. Updating frontend source does not
 silently replace a live backend. Service loss preserves records for explicit native-history recovery, not running
 fleets. No interrupted prompt or collaboration is automatically replayed.
 
-**Known mixed-input limitation:** do not leave an unsent Claude terminal draft
-and then send from the conversation view or a collaboration. The current adapter
-inserts text into that native composer and submits it without proving the composer
-is empty. Keep that session's input in its native terminal until this boundary is
-fixed and verified. This is a source-level safety finding, not evidence of an
-observed disclosure. Codex uses explicit RPC input and needs separate draft
-continuity verification; the Claude concatenation finding does not apply to it by
-assumption.
+**Claude submission boundary:** a session-local mod checks the native draft and
+requests a current control/membership authorization before explicitly submitting
+text. It never writes the terminal editor. A draft, missing mod, unsupported
+version or disconnected bridge blocks graphical sends. Existing live sessions
+on an older backend remain usable in their native terminal; end them and reopen
+the app to start the updated backend. Do not assume a UI restart updates a live
+service. An uncertain acknowledgement is never automatically retried.
+
+The local authorization is the dispatch boundary. Later human input can interrupt
+native work; it cannot retract an already accepted submission. This does not prove
+an atomic cancellation across native queues or termination of all descendants.
+Codex uses explicit RPC input and still needs its own mixed-draft verification.
 
 ## Next milestone
 
@@ -51,13 +55,12 @@ service. A complete conversation-first experience follows daily-use feedback;
 its needs already constrain today's architecture and tests. Clean-machine
 installation testing still waits for disk space.
 
-The next bounded engineering item is **cross-view draft/submission safety**, before
-expanding trials. Cover direct conversation sends, explicit forwarding, the first
-room send and later handoffs at their shared boundary. Preserve both drafts;
-unknown native editor state must not authorize paste-and-submit. Do not clear the
-editor blindly, infer emptiness from inactivity, or create a replacement session.
-First use local synthetic checks; only unresolved native behavior justifies a
-bounded real-provider test. See [the exact acceptance scenario](interaction.md#当前首要断点).
+The cross-view Claude submission change is locally verified as described in
+[alpha evidence](alpha.md#structured-claude-submission). The next bounded item is
+to make collaboration pause when native background/teammate state is unknown,
+rather than treating missing information as zero. Do not add new orchestration
+surfaces. Effective native permission/config inheritance remains a separate gate;
+the current adapters still set some modes explicitly.
 
 The maintainer's current milestone is the complete installation/use path, focused
 on **individual and collaborative native TUI use**:

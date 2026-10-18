@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.4. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.5. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -254,3 +254,58 @@ content. Do not attach raw transcripts, account screens, full logs, credentials 
 financial/personal information. [Private vulnerability reporting](../SECURITY.md)
 is available for security issues. External iTerm2/Terminal integration is a tracked
 follow-up, not implemented in this alpha; see [readiness](readiness.md).
+
+## Structured Claude submission
+
+As of 2026-10-18, alpha.5 uses an original session-local mod against Claude Code's
+public API, not the agent SDK and not terminal key injection. Tested CLI: 2.1.302.
+The bridge accepts 2.1.302+; other versions and disabled/unavailable mods leave
+native terminal use available but block graphical sending. Future versions still
+need compatibility checks. No provider binary or SDK source is redistributed.
+
+The bridge waits on a private Unix socket; it adds no model call, title, summary,
+context replay or TCP listener. It checks the native draft, gets a current local
+control/membership grant, checks the draft again and submits the explicit text
+with `asUser: true`. That flag preserves provenance without adding a plugin-name
+prompt prefix. Graphical input is plain text: native slash commands, attachment
+expansion and `@file` behavior belong in the native terminal for now.
+
+Visible Electron + native Claude evidence:
+
+- Unsent synthetic native text blocked direct conversation sends and explicit
+  room sharing, preserving both drafts and the native session. These blocked
+  attempts created no native model turn.
+- The first positive trial revealed incorrect acknowledgement: the native reply
+  completed, but the app showed unconfirmed. The native mod test kit reproduced
+  that a background call did not re-enter this mod's own submission hook.
+  Authorization now runs before the API call. A second positive trial on the
+  fresh backend confirmed submitted → complete and cleared only the sent draft.
+- Native history contained exactly the explicit prompt, without the private
+  draft or an extra wrapper, and one `OK` response in each positive trial.
+- The corrected view transition delivered the first key immediately after
+  switching to the terminal; the native editor visibly cleared on that key.
+- Total live test budget used: two short Sonnet 5.5 low-effort requests, zero
+  observed tools/subagents/teammates, zero Codex model requests. No global model
+  setting changed. This is not an invoice or a full cost-parity benchmark.
+
+The alpha.5 DMG was mounted read-only and its app copied into Applications.
+Ad-hoc signature verification and all 9,174 file/link comparisons passed. The
+installed UI reconnected to the same test native session, blocked another draft
+collision without a model turn, and preserved the existing user sessions on the
+old backend with the legacy-send restriction visible to the UI.
+
+Twenty-four Node tests and two native mod-engine tests passed. The local checks
+cover stale grants, timeout/late replies, no replay after reconnect, malformed
+socket requests, session isolation, changing drafts, old-backend compatibility,
+manual interruption and room departure. An acknowledgement timeout remains
+uncertain, never permission to retry. Native prompt hooks chosen by the user may
+still transform or reject a prompt, just as they can outside this app.
+
+A UI update keeps an older live backend alive. The updated UI disables that
+backend's Claude conversation/room sends and pauses its pending collaboration;
+it does not replace native processes. End those sessions and reopen the app when
+ready to move the backend forward. Native history remains under the provider.
+
+Limits: atomic cancellation after native dispatch/queueing, active fleets, Codex
+mixed drafts, physical IME/VoiceOver and clean-machine installation are not proved
+by these checks. Private screenshots and transcripts are not shipped in Git.

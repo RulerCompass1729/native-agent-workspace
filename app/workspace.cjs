@@ -63,6 +63,7 @@ class Workspace extends EventEmitter {
     } catch (error) { record.state = 'error'; record.activity = error.message; this.changed(); throw error; }
   }
   bind(s, runtime) {
+    runtime.on('capability', () => this.changed());
     runtime.on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
     runtime.on('model', model => { s.model = model; this.changed(); });
     runtime.on('state', state => {
@@ -123,8 +124,9 @@ class Workspace extends EventEmitter {
     text = cleanText(text); const s = this.get(id); const runtime = this.runtime(id);
     if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); this.pause('真人输入优先'); }
     if (s.state !== 'idle' || s.pendingTag || s.approval) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
+    if (runtime.chatAvailable === false) throw new Error(s.provider === 'claude' ? '安全发送接口尚未连接；请在原生终端继续，草稿已保留。' : '请先在原生终端完成第一条消息；草稿已保留。');
     const control = s.controlRevision; const member = s.memberRevision;
-    const guard = () => s.state !== 'ended' && s.controlRevision === control && (!route || (s.roomId === 'shared' && s.memberRevision === member && this.room.run?.id === route.id && this.room.run.status === 'running'));
+    const guard = () => s.state !== 'ended' && s.controlRevision === control && (!(route || forward) || (s.roomId === 'shared' && s.memberRevision === member)) && (!route || (this.room.run?.id === route.id && this.room.run.status === 'running'));
     if (!guard()) throw new Error('交接已经失效。');
     const tag = randomUUID(); s.pendingTag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
@@ -163,7 +165,7 @@ class Workspace extends EventEmitter {
     const t = this.runtime(id).terminal; if (!t?.alive) throw new Error('终端尚未连接。'); t.input(data);
   }
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }
-  async interrupt(id, owner) { this.claim(id, owner); this.pause('真人中断当前回复'); await this.runtime(id).interrupt(); this.get(id).activity = '已请求原生中断；团队任务请在原生终端确认。'; this.changed(); }
+  async interrupt(id, owner) { this.claim(id, owner); this.get(id).controlRevision++; this.pause('真人中断当前回复'); await this.runtime(id).interrupt(); this.get(id).activity = '已请求原生中断；团队任务请在原生终端确认。'; this.changed(); }
   pause(reason = '已暂停交接') {
     const run = this.room.run;
     if (run?.status === 'running') { run.status = 'paused'; run.reason = reason; this.room.revision++; this.changed(); }
@@ -172,6 +174,7 @@ class Workspace extends EventEmitter {
     if (!Array.isArray(ids) || ids.length !== 2 || new Set(ids).size !== 2 || ![2, 3, 4, 5, 6].includes(maxSteps)) throw new Error('请选择两个不同会话和 2–6 次回复上限。');
     if (this.room.run?.status === 'running') throw new Error('已有协作正在运行。');
     for (const id of ids) { const s = this.get(id); if (s.roomId !== 'shared' || s.state !== 'idle' || s.pendingTag || s.approval) throw new Error('两个成员都需就绪，并加入共同工作。'); }
+    if (ids.some(id => this.runtime(id).chatAvailable === false)) throw new Error('有成员的安全发送接口尚未连接，请先在原生终端检查。');
     const run = { id: randomUUID(), ids, goal: cleanText(goal, 6000), maxSteps, steps: 0, status: 'running', reason: '', startedAt: Date.now(), deadline: Date.now() + 10 * 60 * 1000, awaiting: null };
     this.room.run = run; this.room.messages.push({ id: randomUUID(), role: 'human', name: '你', text: goal, time: Date.now() }); this.changed();
     await this.send(ids[0], goal, null, run);

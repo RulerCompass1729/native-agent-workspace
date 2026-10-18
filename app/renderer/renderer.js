@@ -175,7 +175,7 @@ function render() {
       $('message-input').disabled = !own || !alive || disconnected;
       $('send-button').disabled = !own || s.state !== 'idle' || Boolean(s.pendingTag) || disconnected || s.chatAvailable === false;
       $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
-      $('compose-hint').textContent = s.state === 'starting' ? '首次信任与登录请在原生终端完成' : s.chatAvailable === false ? '请先在原生终端完成第一条消息' : s.provider === 'claude' ? 'Enter 发送 · 实时工具过程在原生终端' : 'Enter 发送 · Shift Enter 换行';
+      $('compose-hint').textContent = s.state === 'starting' ? '首次信任与登录请在原生终端完成' : s.chatAvailable === false ? (s.submissionNotice || (s.provider === 'claude' ? '安全发送尚未连接；请在原生终端继续。草稿会保留。' : '请先在原生终端完成第一条消息')) : s.provider === 'claude' ? 'Enter 发送 · 实时工具过程在原生终端' : 'Enter 发送 · Shift Enter 换行';
       const signature = JSON.stringify(s.messages);
       if (signature !== lastMessages) { messageList($('messages'), s.messages); lastMessages = signature; }
       $('approval').hidden = s.state !== 'approval';
@@ -233,7 +233,10 @@ function render() {
 }
 async function switchMode(next) {
   const s = current(); if (!s) return;
-  await api.claim(s.id, next); mode = next; preference = next; await persistView(); render();
+  await api.claim(s.id, next);
+  // The change stream is batched. Fetch the acknowledged control state before
+  // exposing the input, or the first key after switching can be discarded.
+  state = await api.initial(); mode = next; preference = next; await persistView(); render();
   if (next === 'terminal') { await ensureTerminal(s.id); focusTerminal(s.id); }
   else $('message-input').focus();
 }

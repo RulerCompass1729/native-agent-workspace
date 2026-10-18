@@ -16,6 +16,17 @@ No status prompts, automatic resubmission, repeat acknowledgements or multi-agen
 debates just to make a test feel thorough. Native subagent/tool work must be counted
 as usage too; root-turn limits are not provider token/cost limits.
 
+Use the cheapest suitable model currently available for isolated Codex tests,
+and Sonnet for Claude. Apply model/effort overrides only to test sessions, never
+to the person's normal configuration. Verify availability and current pricing
+before selecting a model; a fixed alias is not a permanent cheapest-model claim.
+
+For changes to the Claude bridge, run `claude plugin test app/claude-bridge`
+and `claude plugin validate app/claude-bridge` as well. The native test kit executes
+the real mod dispatcher with mocked external boundaries, without login, network
+or a model turn. Node mocks alone missed a native dispatch difference during
+alpha.5 development. Neither kind of local check replaces a visible native test.
+
 ## Reuse and retest
 
 An unchanged provider does not need another marker response for a CSS, window,
@@ -43,7 +54,7 @@ explicitly requested fresh-install walkthrough used one bounded Claude request
 to verify the first reply after installation, then stopped model testing. It
 observed no tool or teammate activity; see [the walkthrough](alpha.md#fresh-install-walkthrough).
 
-Nineteen local state/lifetime checks and the visible lifecycle regression
+Twenty-four local state/lifetime/submission checks and the visible lifecycle regression
 passed. They consume no model tokens. The native fleet coverage remains limited
 as described in [demo](../demo.md); a synthetic test is never labelled native proof.
 

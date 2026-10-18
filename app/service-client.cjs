@@ -53,6 +53,7 @@ async function ensureService(dataDir, executablePath) {
     const c = await connect(dataDir, 'bootstrap');
     try {
       const state = await c.call('initial');
+      if (!state.capabilities?.includes('structuredClaudeSubmit') && state.room.run?.status === 'running' && state.sessions.some(s => s.provider === 'claude' && state.room.run.ids.includes(s.id))) await c.call('pause');
       if (!process.env.NAW_APP_VERSION || state.runtimeVersion === process.env.NAW_APP_VERSION || state.sessions.some(s => s.state !== 'ended')) return;
       // Install a newer backend only after every native session has confirmed
       // its end. An active/unknown fleet never becomes an update casualty.
@@ -68,10 +69,13 @@ async function ensureService(dataDir, executablePath) {
     if (alive) throw new Error('已有运行服务仍存在但无法连接；为保住会话，不启动替代进程。');
     fs.rmSync(lock); // Dead PID only; never kill or replace a live owner.
   }
-  const names = ['daemon.cjs', 'adapters.cjs', 'workspace.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs'];
+  const names = ['daemon.cjs', 'adapters.cjs', 'workspace.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'claude-submit.cjs'];
+  const pluginFiles = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js'];
   const hash = crypto.createHash('sha256'); for (const name of names) hash.update(fs.readFileSync(path.join(__dirname, name)));
+  for (const name of pluginFiles) hash.update(fs.readFileSync(path.join(__dirname, 'claude-bridge', name)));
   const runtime = path.join(dataDir, 'runtimes', hash.digest('hex').slice(0, 16)); fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
   for (const name of names) fs.copyFileSync(path.join(__dirname, name), path.join(runtime, name));
+  for (const name of pluginFiles) { const destination = path.join(runtime, 'claude-bridge', name); fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 }); fs.copyFileSync(path.join(__dirname, 'claude-bridge', name), destination); }
   for (const name of ['ws', '@xterm/headless', '@xterm/addon-serialize']) {
     const source = path.dirname(require.resolve(`${name}/package.json`));
     const target = path.join(runtime, 'node_modules', name);

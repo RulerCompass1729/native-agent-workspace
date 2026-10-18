@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const WebSocket = require('ws');
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
+const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -72,7 +73,9 @@ class Terminal extends EventEmitter {
 
 class Claude extends EventEmitter {
   constructor(record, host) {
-    super(); this.record = record; this.host = host; this.pending = null; this.ready = false;
+    super(); this.record = record; this.host = host; this.pending = null; this.ready = false; this.chatAvailable = false;
+    this.submission = new SubmissionChannel();
+    this.submission.on('change', () => { this.chatAvailable = this.submission.connected; this.emit('capability'); });
     this.token = crypto.randomBytes(32).toString('hex');
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
@@ -82,8 +85,8 @@ class Claude extends EventEmitter {
     }
     const settings = path.join(host.privateDir, `${record.id}.settings.json`);
     fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', hooks }), { mode: 0o600 });
-    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--permission-mode', 'manual', '--prompt-suggestions', 'false', '--settings', settings], record.cwd, {
-      NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket,
+    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--permission-mode', 'manual', '--prompt-suggestions', 'false', '--settings', settings, '--plugin-dir', path.join(__dirname, 'claude-bridge')], record.cwd, {
+      NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
@@ -91,7 +94,7 @@ class Claude extends EventEmitter {
     this.terminal.on('data', data => this.emit('terminal', data));
     this.terminal.on('started', pid => this.emit('pid', pid));
     this.terminal.on('closed', result => {
-      this.ready = false;
+      this.ready = false; this.submission.close();
       if (result.confirmed) this.host.hookTargets.delete(this.token);
       else this.emit('activity', '终端连接断开，原生进程退出未确认。');
       this.emit('state', result.confirmed ? 'ended' : 'error');
@@ -108,9 +111,9 @@ class Claude extends EventEmitter {
     switch (event.hook_event_name) {
       case 'SessionStart': this.ready = true; this.emit('state', 'idle'); this.emit('model', event.model || '原生默认'); break;
       case 'UserPromptSubmit':
-        this.emit('state', 'working');
-        if (this.pending) this.emit('submitted', this.pending.tag);
-        else this.emit('nativeInput', event.prompt || '原生输入');
+        // A settings hook observing a prompt is not its acceptance. The native
+        // structured submission result acknowledges our own sends separately.
+        if (!this.pending || event.prompt !== this.pending.text) { this.pending = null; this.emit('state', 'working'); this.emit('nativeInput', event.prompt || '原生输入'); }
         break;
       case 'PermissionRequest': this.emit('state', 'approval'); break;
       case 'Notification':
@@ -133,11 +136,12 @@ class Claude extends EventEmitter {
   async send(text, tag, guard) {
     if (!this.ready || this.pending) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
     if (!guard()) throw new Error('这条交接已撤销。');
-    this.pending = { tag };
-    this.terminal.input(`\x1b[200~${text}\x1b[201~`);
-    await delay(80);
-    if (!guard()) { this.pending = null; throw new Error('提交前已暂停；文字留在原生输入框，请检查后继续。'); }
-    this.terminal.input('\r');
+    this.pending = { tag, text };
+    try {
+      await this.submission.request(text, tag, guard);
+      this.emit('submitted', tag);
+      if (this.pending?.tag === tag) this.emit('state', 'working');
+    } catch (error) { if (this.pending?.tag === tag) this.pending = null; throw error; }
   }
   interrupt() { this.pending = null; this.terminal.input('\x1b'); }
   async openTerminal() { return this.terminal; }
@@ -324,7 +328,9 @@ class Codex extends EventEmitter {
 class NativeHost {
   constructor(privateDir) {
     this.privateDir = privateDir; this.hookSocket = path.join(privateDir, 'hooks.sock');
+    this.submitSocket = path.join(privateDir, 'submit.sock');
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
+    this.submissions = createSubmissionServer(this.submitSocket, this.hookTargets);
     this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
     this.hooks = net.createServer(socket => {
       socket.setEncoding('utf8');
@@ -338,7 +344,7 @@ class NativeHost {
       });
     });
   }
-  async start() { await new Promise((resolve, reject) => { this.hooks.once('error', reject); this.hooks.listen(this.hookSocket, resolve); }); fs.chmodSync(this.hookSocket, 0o600); }
+  async start() { await new Promise((resolve, reject) => { this.hooks.once('error', reject); this.hooks.listen(this.hookSocket, resolve); }); fs.chmodSync(this.hookSocket, 0o600); await this.submissions.start(); }
   createCodex(operation) { const next = (this.creationQueue || Promise.resolve()).then(operation); this.creationQueue = next.catch(() => {}); return next; }
   async startCodex() {
     if (this.rpc) return;
@@ -369,7 +375,7 @@ class NativeHost {
     if (!this.binaries[record.provider] || !this.binaries.python) throw new Error('未找到原生 CLI 或 Python 3，请先安装并完成原生登录。');
     return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);
   }
-  close() { for (const target of this.hookTargets.values()) target.stop().catch(() => {}); for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); }
+  close() { for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
 module.exports = { NativeHost, Terminal, executable, delay };

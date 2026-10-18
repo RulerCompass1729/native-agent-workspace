@@ -68,6 +68,16 @@ test('bounded routing sends only the goal and current answer, and stops at the r
   assert.equal(sends.length, 3); assert.equal(w.room.run.status, 'completed');
   assert.deepEqual(sends.map(s => s.index), [0, 1, 0]);
 });
+test('leaving cancels pending explicit sharing; human interrupt cancels pending direct submission', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  let guard;
+  r.send = async (_text, _tag, allowed) => { guard = allowed; };
+  r.interrupt = async () => {};
+  w.join(id, true); await w.forward(id, 'only shared text', 'owner');
+  assert.equal(guard(), true); w.join(id, false); assert.equal(guard(), false);
+  w.get(id).pendingTag = null; await w.send(id, 'direct text', 'owner');
+  assert.equal(guard(), true); await w.interrupt(id, 'owner'); assert.equal(guard(), false);
+});
 test('a reply completed during send is captured in order and does not erase a private draft', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   w.join(id, true); w.setDraft(id, 'private draft');

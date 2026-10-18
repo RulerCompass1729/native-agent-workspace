@@ -35,3 +35,10 @@ Generated bundles, dependency trees, local application builds, provider historie
 and test evidence are excluded from Git. A local build does not authorize an
 unreviewed binary upload: scan and review the exact distribution separately.
 See docs/licensing.md and docs/publication.md.
+
+The original `app/claude-bridge` integration uses the public Claude Code Mods
+API ([reference](https://code.claude.com/docs/en/plugins/mods/api)), verified
+against the installed 2.1.302 type definitions. Those generated definitions,
+provider binaries, credentials and native test kit are not redistributed. The
+bridge is loaded with a session-local plugin directory; it does not install a
+global plugin or change the provider's license. No dependency was added for it.
