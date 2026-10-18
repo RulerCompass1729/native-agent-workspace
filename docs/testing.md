@@ -109,3 +109,14 @@ room names, light/dark contrast, small-window positioning and reopen persistence
 `NAW_APP_EXECUTABLE` also selects an installed build; `NAW_EVIDENCE_DIR` captures
 screenshots outside Git. Ended synthetic records prove UI behavior, not live
 native input, fleet lifecycle, physical IME or VoiceOver behavior.
+
+## Late send acceptance and GUI drafts
+
+Run `npm run test:drafts` for a headed desktop regression. It uses one isolated
+profile and a delayed synthetic provider transport; the DSH UI, Electron IPC,
+service and draft persistence are production code. No provider process or model
+request is started. Both provider labels cover retyping identical text, whitespace
+edits, failed acceptance, unchanged-draft clearing, switching sessions and UI
+reopen. The runner stops only its own fixture service. `NAW_APP_EXECUTABLE` can
+select an installed matching app, and `NAW_EVIDENCE_DIR` stores private screenshots.
+This verifies the desktop draft boundary, not native TUI draft or turn ordering.

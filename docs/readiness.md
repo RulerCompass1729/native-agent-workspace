@@ -66,7 +66,10 @@ native configuration differences are explicitly listed in alpha.md. Alpha.8 now
 routes new sessions to the current backend while preserving old native sessions. Local upgrade, control/lifecycle and rename checks are recorded
 in alpha.md and review.md. The next bounded input-safety item is Codex cross-view
 drafts: determine whether graphical sends can conflict with an unsent terminal
-draft, beginning with no-model reproduction. Authoritative fleet status remains
+draft. The initial no-model check found a separate shared GUI draft race: a late
+acceptance could clear a newly edited identical draft. Alpha.10 adds revision
+checks in the desktop and recovery-copy handlers; its headed local checks do not
+close the native Codex concurrency acceptance. Authoritative fleet status remains
 a subsequent gate.
 
 The maintainer's current milestone is the complete installation/use path, focused

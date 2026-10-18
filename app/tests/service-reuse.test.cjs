@@ -228,18 +228,33 @@ test('returning to a retained live version reuses its existing slot even if acti
 });
 test('an acknowledged shutdown rejects new work during its delayed process-close window', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shutdown-gate-')), oldVersion = process.env.NAW_APP_VERSION;
-  let client;
+  let client, pid, acknowledged = false;
   try {
     process.env.NAW_APP_VERSION = 'shutdown-fixture'; await ensureService(directory, process.execPath);
     client = await connectService(directory, 'test');
+    pid = (await client.call('initial')).servicePid;
     const closing = client.call('shutdown');
     // An invalid provider would fail before any native launch even if the gate
     // regressed. The expected error must instead be the shutdown barrier.
     const rejected = assert.rejects(client.call('create', { provider: 'invalid-fixture', cwd: directory }), /后台正在关闭/);
-    await closing; await rejected;
+    await closing; acknowledged = true; await rejected;
     if (!client.socket.destroyed) await new Promise(resolve => client.socket.once('close', resolve));
   } finally {
-    client?.close(); await stopOwnEmptyService(directory);
+    client?.close();
+    if (!acknowledged) await stopOwnEmptyService(directory);
+    else {
+      // Socket close can precede connection/lock deletion. Do not reconnect to
+      // an already acknowledged shutdown just to clean up this fixture.
+      let exited = false;
+      for (let i = 0; i < 60; i++) {
+        let alive = true;
+        try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') alive = false; else throw error; }
+        exited = !alive && !fs.existsSync(path.join(directory, 'connection.json')) && !fs.existsSync(path.join(directory, 'service.lock'));
+        if (exited) break;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      assert.ok(exited, 'The owned shutdown fixture must release its process and files');
+    }
     if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
     fs.rmSync(directory, { recursive: true, force: true });
   }

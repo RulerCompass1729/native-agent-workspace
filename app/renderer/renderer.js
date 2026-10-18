@@ -16,6 +16,7 @@ const terminalThemes = {
 };
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
 const terminals = new Map();
+const draftRevisions = new Map();
 const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = () => state?.sessions.filter(s => s.roomId === 'shared') || [];
@@ -394,9 +395,22 @@ const saveTerminalDisplay = () => attempt(async () => {
 $('terminal-font-size').onchange = $('terminal-palette').onchange = saveTerminalDisplay;
 $('reset-terminal-display').onclick = () => { $('terminal-font-size').value = 14; $('terminal-palette').value = 'dark'; saveTerminalDisplay(); };
 $('close-terminal-display').onclick = () => { $('terminal-display-dialog').close(); focusTerminal(); };
-$('message-input').oninput = () => { const s = current(); if (s) { s.liveDraft = $('message-input').value; attempt(() => api.draft(s.id, s.liveDraft)); } };
+$('message-input').oninput = () => {
+  const s = current();
+  if (s) {
+    draftRevisions.set(s.id, (draftRevisions.get(s.id) || 0) + 1);
+    s.liveDraft = $('message-input').value; attempt(() => api.draft(s.id, s.liveDraft));
+  }
+};
 $('message-input').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!$('send-button').disabled) $('composer').requestSubmit(); } };
-$('composer').onsubmit = event => { event.preventDefault(); attempt(async () => { const id = activeSessionId(), text = $('message-input').value; await api.send(id, text); if (activeSessionId() === id && $('message-input').value === text) $('message-input').value = ''; }); };
+$('composer').onsubmit = event => {
+  event.preventDefault();
+  attempt(async () => {
+    const id = activeSessionId(), text = $('message-input').value, revision = draftRevisions.get(id);
+    await api.send(id, text);
+    if (activeSessionId() === id && draftRevisions.get(id) === revision && $('message-input').value === text) $('message-input').value = '';
+  });
+};
 $('interrupt').onclick = () => attempt(() => api.interrupt(activeSessionId()));
 $('shared-input').oninput = () => attempt(persistView);
 $('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => { const first = $('recipient').value; return api.run([first, ...members().filter(s => s.id !== first).map(s => s.id)], $('shared-input').value, 3); }); };

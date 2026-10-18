@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.9. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.10. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -485,3 +485,25 @@ canceled renaming: all three retained sessions kept their native IDs/PIDs,
 membership, history counts, labels and current view, with no additional dispatch.
 The native terminal did not steal menu focus. This remains local-app evidence;
 physical IME/VoiceOver, clean-Mac setup and public-download acceptance are separate.
+
+Alpha.10 fixes a reproduced GUI draft-loss race. If a person retypes the same
+text while a previous send awaits acceptance, the late reply no longer clears
+the newer visible or recovery draft. The service's existing revision guard is
+now preserved through the desktop IPC and renderer. Both provider labels passed
+headed source and installed-app checks for identical/whitespace edits, failure,
+session switching, unchanged-draft clearing and UI reopen. These checks use a
+delayed synthetic provider transport with real DSH UI, IPC, service and storage;
+they make no model calls and do not establish native TUI event ordering.
+
+The initial full suite exposed a cleanup race in an existing shutdown test:
+after confirming shutdown, it reconnected before the daemon deleted its socket
+record. A diagnostic delay reproduced failure after the actual shutdown/rejection
+assertions passed. Cleanup now waits for that owned process and its files to exit,
+without hiding connection errors. The delayed check and final 90/90 suite passed.
+
+The alpha.10 DMG was mounted read-only and copied to Applications; 9,177 file/link
+entries, key modules and generated UI matched, with ad-hoc signature verification.
+The installed app retained all three existing sessions' native IDs/PIDs, history,
+drafts, names, membership and selected view, with no additional dispatch and one
+window. Clean-Mac installation and downloaded-app Gatekeeper remain unverified;
+this local unnotarized binary has not been uploaded.

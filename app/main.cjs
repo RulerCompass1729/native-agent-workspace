@@ -113,7 +113,16 @@ async function boot() {
   const submit = (c, method, ...args) => c.client.call(method, ...args);
   for (const method of ['run', 'forward']) register(method, (c, ...args) => submit(c, method, ...args));
   register('uiReady', c => c.ready?.());
-  register('send', async (c, id, text) => { const result = await submit(c, 'send', id, text); if (c.view.draft?.id === id && c.view.draft.text.trim() === text.trim()) { c.view.draft.text = ''; saveViews(); } return result; });
+  register('send', async (c, id, text) => {
+    const draft = c.view.draft;
+    const result = await submit(c, 'send', id, text);
+    // Every draft edit replaces this object, including retyping identical text.
+    // A late acceptance must not clear a newer recovery copy.
+    if (c.view.draft === draft && draft?.id === id && draft.text.trim() === text.trim()) {
+      c.view.draft = { id, text: '' }; saveViews();
+    }
+    return result;
+  });
   register('preflight', () => preflight());
   register('dataDirectory', () => shell.openPath(dataDir));
   register('quitService', async c => { await c.client.call('shutdown'); app.quit(); });
