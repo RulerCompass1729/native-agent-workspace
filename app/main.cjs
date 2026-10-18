@@ -7,7 +7,7 @@ const { startDsh } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
 const { preflight } = require('./preflight.cjs');
 const { pathToFileURL } = require('node:url');
-const { submissionState, assertSubmission, assertAutomaticRun } = require('./submission-policy.cjs');
+const { submissionState, assertSubmission, assertAutomaticRun, assertNativeCreation } = require('./submission-policy.cjs');
 
 app.setName('Native Agent Workspace');
 process.env.NAW_APP_VERSION = app.getVersion();
@@ -93,7 +93,8 @@ async function boot() {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   if (!wired) {
   wired = true;
-  for (const name of ['create', 'join', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
+  for (const name of ['join', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
+  register('create', async (c, ...args) => { assertNativeCreation(await c.client.call('initial')); return c.client.call('create', ...args); });
   const submit = async (c, method, ...args) => {
     if (method === 'run') assertAutomaticRun(await c.client.call('initial'));
     if (!c.structuredSubmit) assertSubmission(await c.client.call('initial'), method === 'run' ? args[0] : [args[0]]);
@@ -122,6 +123,7 @@ async function boot() {
   });
   for (const action of ['resume', 'forget']) register(action, async (c, id) => {
     const snapshot = await c.client.call('initial');
+    if (action === 'resume') assertNativeCreation(snapshot);
     if (!snapshot.capabilities?.includes(action)) throw new Error('当前后台仍在保留旧版会话。结束会话后重新打开应用以使用此功能。');
     const answer = await dialog.showMessageBox(c.win, {
       type: 'question', message: action === 'resume' ? '继续这个原生会话？' : '移除此应用中的会话记录？',

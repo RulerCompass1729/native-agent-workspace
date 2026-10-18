@@ -11,4 +11,7 @@ function assertSubmission(snapshot, ids) {
 function assertAutomaticRun(snapshot) {
   if (!snapshot.capabilities?.includes('verifiedHandoffs')) throw new Error('旧版后台无法核实自动交接状态；原生会话已保留，请用原生终端或定向发送。结束会话并重新打开应用后可更新后台。');
 }
-module.exports = { submissionState, assertSubmission, assertAutomaticRun };
+function assertNativeCreation(snapshot) {
+  if (!snapshot.capabilities?.includes('nativePermissionDefaults')) throw new Error('后台仍在保留旧版会话，暂不能新建。请在原生终端继续使用；结束旧会话并重开应用后，新会话才会沿用原生权限配置。');
+}
+module.exports = { submissionState, assertSubmission, assertAutomaticRun, assertNativeCreation };

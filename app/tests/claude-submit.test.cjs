@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const { EventEmitter } = require('node:events');
 const { SubmissionChannel, createSubmissionServer } = require('../claude-submit.cjs');
-const { submissionState, assertSubmission, assertAutomaticRun } = require('../submission-policy.cjs');
+const { submissionState, assertSubmission, assertAutomaticRun, assertNativeCreation } = require('../submission-policy.cjs');
 
 function poll(channel) {
   const response = new EventEmitter();
@@ -105,4 +105,8 @@ test('an updated UI cannot use an older Claude submission path, while Codex and 
 test('a retained backend cannot start automatic routing without verified handoff checks', () => {
   for (const capabilities of [undefined, [], ['structuredClaudeSubmit']]) assert.throws(() => assertAutomaticRun({ capabilities }), /旧版后台/);
   assert.doesNotThrow(() => assertAutomaticRun({ capabilities: ['verifiedHandoffs'] }));
+});
+test('an older retained service cannot create or recover sessions with forced permission overrides', () => {
+  for (const capabilities of [undefined, [], ['verifiedHandoffs', 'structuredClaudeSubmit']]) assert.throws(() => assertNativeCreation({ capabilities }), /旧版会话/);
+  assert.doesNotThrow(() => assertNativeCreation({ capabilities: ['nativePermissionDefaults'] }));
 });

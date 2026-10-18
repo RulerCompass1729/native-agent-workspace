@@ -74,6 +74,11 @@ For a new Codex terminal session, complete the first message there before using
 the conversation view. No model prompt is sent merely by opening the workspace;
 messages you send use your provider's own plan or billing.
 
+New sessions inherit native permission defaults for their working directory.
+An older retained backend cannot create or recover sessions through the updated
+UI until its existing sessions end and the app reopens. Existing native terminals
+remain available; see [permission inheritance and limits](docs/alpha.md#native-permission-defaults).
+
 Next time, open a terminal in the same project folder and run `npm start`; you do
 not need to run `npm ci` again unless dependencies changed. Keep the project folder
 while its source-launched sessions are running. Quitting the interface leaves

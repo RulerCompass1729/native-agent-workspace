@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.6. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.7. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -344,3 +344,50 @@ the same synthetic handoff workflow. A fresh production backend advertised the
 new check without native prompts. The normal profile retained three native
 sessions on its older backend; the installed UI blocked automatic runs through
 both the button and IPC, with session identities and dispatch counts unchanged.
+
+## Native permission defaults
+
+Alpha.7 stops forcing Claude's permission mode and Codex's sandbox/approval policy
+in both conversation and terminal creation. Providers resolve the permissions for
+the selected directory from their own configuration and managed requirements.
+The app does not edit those files, grant a bypass, or automatically approve a
+native tool request. Resume continues through the provider's own resume behavior.
+
+A real Codex 0.163.0 configuration-only check reproduced the previous bug: a
+synthetic user configuration requested read-only, but the app's conversation
+startup returned workspace-write. After removing the override, the same native
+startup returned read-only. No model turn or file operation was submitted.
+The locally generated schema still lists an obsolete approval value which this
+runtime rejects at startup; schema presence alone is not runtime compatibility.
+
+Visible native terminals in the actual desktop also passed: Claude 2.1.302 kept
+the synthetic project's Plan mode, and Codex 0.163.0 `/status` showed Read Only
+with zero tokens. The Codex check used an isolated configuration with an unused
+local provider; it did not copy credentials or call a model. Both folder-trust
+prompts were handled in the terminal for test-owned directories. Sixty-three
+local checks passed. This verifies startup configuration, not every native tool's
+approval/denial path or managed-policy combination.
+
+Old live backends retain their already-running sessions. Updated windows block
+new creation and history recovery through those backends, rather than letting
+their forced permission settings silently apply again. Existing native sessions
+remain usable. End them and reopen when ready to load the new backend.
+
+This is permission inheritance, not a claim of complete native configuration
+parity. Session-local observation hooks and the Claude submission mod remain;
+Claude teams use in-process display, prompt suggestions are disabled, and the
+adapters retain their traffic/analytics suppression settings. Native auto-review,
+if selected by native configuration, may itself use a model. The app neither
+adds that reviewer nor proves its billing matches a different permission mode.
+Shell aliases or custom CLI flags are not automatically imported.
+
+The local alpha.7 DMG passed signature verification and 9,174 file/link comparisons
+when copied into Applications. The installed UI refused old-backend creation
+through the button and IPC while retaining the three existing native sessions;
+a fresh installed backend loaded the new capability and enabled creation without
+sending a model task. The temporary need to end old sessions before creating new
+ones is an open update-experience gap, not the intended final workflow.
+
+References: [Codex configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic),
+[Codex App Server](https://learn.chatgpt.com/docs/app-server), and
+[Claude starting permission mode](https://code.claude.com/docs/en/permission-modes#which-mode-a-session-starts-in).

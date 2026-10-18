@@ -83,6 +83,11 @@ function openCreate(provider = 'claude') {
   $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
 }
 function createReadiness() {
+  if (!state.capabilities?.includes('nativePermissionDefaults')) {
+    $('confirm-create').disabled = true;
+    $('create-readiness').textContent = '后台仍在保留旧版会话，暂不能新建。原生终端可继续使用；结束旧会话并重开应用后，新会话才会沿用原生权限配置。';
+    return;
+  }
   const provider = document.querySelector('input[name="provider"]:checked').value;
   const ready = state.preflight?.python && state.preflight?.[provider];
   $('confirm-create').disabled = !ready;

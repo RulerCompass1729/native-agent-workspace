@@ -85,7 +85,7 @@ class Claude extends EventEmitter {
     }
     const settings = path.join(host.privateDir, `${record.id}.settings.json`);
     fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', hooks }), { mode: 0o600 });
-    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--permission-mode', 'manual', '--prompt-suggestions', 'false', '--settings', settings, '--plugin-dir', path.join(__dirname, 'claude-bridge')], record.cwd, {
+    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--plugin-dir', path.join(__dirname, 'claude-bridge')], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -191,7 +191,8 @@ class Codex extends EventEmitter {
       return;
     }
     await this.host.createCodex(async () => {
-    const r = await this.host.rpc.call('thread/start', { cwd: this.record.cwd, sandbox: 'workspace-write', approvalPolicy: 'on-request', ephemeral: false, experimentalRawEvents: false });
+    // Let native configuration/requirements choose permissions for this cwd.
+    const r = await this.host.rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false });
     this.record.nativeId = r.thread.id;
     this.host.codexTargets.set(this.record.nativeId, this);
     this.emit('model', r.model || r.thread.model || '原生默认');
@@ -218,7 +219,7 @@ class Codex extends EventEmitter {
       };
       this.host.pendingCodex = started;
       try {
-        this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${this.host.codexSocket}`, '-C', this.record.cwd, '-s', 'workspace-write', '-a', 'on-request']).once('closed', closed);
+        this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${this.host.codexSocket}`, '-C', this.record.cwd]).once('closed', closed);
       } catch (error) { cleanup(); reject(error); }
     });
   }

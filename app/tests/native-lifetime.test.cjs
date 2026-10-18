@@ -11,7 +11,11 @@ test('Codex can finish human setup after two minutes without a model call', asyn
   const record = { provider: 'codex', nativeId: null, view: 'terminal', cwd: os.tmpdir() };
   const runtime = host.create(record);
   const terminal = new (require('node:events').EventEmitter)();
-  runtime.makeTerminal = () => (runtime.terminal = terminal);
+  runtime.makeTerminal = argv => {
+    assert.ok(argv.includes(record.cwd));
+    assert.ok(!argv.some(arg => ['-a', '--ask-for-approval', '-s', '--sandbox'].includes(arg)));
+    return (runtime.terminal = terminal);
+  };
   runtime.observeFirstTurn = async () => {};
   const states = []; runtime.on('state', state => states.push(state));
   const pending = runtime.startFromTerminal();
@@ -87,6 +91,19 @@ test('Codex unsubscribe acknowledgement is not thread termination', async () => 
     assert.equal(host.codexTargets.has('synthetic-thread'), false);
     assert.ok(calls.every(method => method === 'thread/unsubscribe'));
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+test('new Codex conversation delegates permission selection to native configuration for its directory', async () => {
+  const host = new NativeHost(os.tmpdir());
+  const record = { provider: 'codex', nativeId: null, view: 'chat', cwd: os.tmpdir() };
+  const runtime = host.create(record), calls = [];
+  host.startCodex = async () => {}; host.codexProcess = { pid: 123 };
+  host.rpc = { call: async (method, params) => { calls.push({ method, params }); return { thread: { id: 'configured-native-thread' }, model: 'synthetic' }; } };
+  await runtime.start();
+  assert.equal(calls.length, 1); assert.equal(calls[0].method, 'thread/start');
+  assert.equal(calls[0].params.cwd, record.cwd);
+  for (const key of ['approvalPolicy', 'sandbox', 'permissions', 'config']) assert.equal(Object.hasOwn(calls[0].params, key), false);
+  assert.equal(record.nativeId, 'configured-native-thread');
+  assert.equal(host.codexTargets.get(record.nativeId), runtime);
 });
 
 test('failed Codex disconnect retains event observation and ownership for recovery', async () => {
