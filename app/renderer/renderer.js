@@ -226,7 +226,9 @@ function render() {
         card.append(heading, node('p', states[m.state]), actions); return card;
       }));
       populateSelect($('recipient'), members());
-      $('run-button').disabled = members().length !== 2 || run?.status === 'running';
+      const safeHandoffs = state.capabilities?.includes('verifiedHandoffs');
+      $('run-button').disabled = members().length !== 2 || run?.status === 'running' || !safeHandoffs;
+      $('run-help').textContent = safeHandoffs ? '最多 3 次回复、10 分钟。原生后台或团队状态未报告时，保留回复并暂停；可确认后定向发送。原生子 agent 的用量另计。' : '旧版后台仍在保留原生会话，自动核查暂不可用；请用原生终端或定向发送。结束会话并重开应用后可更新后台。';
       $('forward-button').disabled = !members().length; $('pause-button').disabled = run?.status !== 'running';
     }
   } finally { rendering = false; }

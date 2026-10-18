@@ -1,6 +1,6 @@
 # Local desktop demo
 
-As of 2026-10-17. The product name is still a working name.
+As of 2026-10-18. The product name is still a working name.
 
 ## What to use
 
@@ -17,9 +17,12 @@ not a signed app download.
    becomes available; the app does not send a bootstrap model prompt for you.
 3. Use **加入协作**, or drag a sidebar session onto **共同工作**. Joining alone
    does not publish its private history. Select material and a recipient to share.
-4. With two members, **开始一轮核查** sends the task to the first member, the
-   response to the second, then back to the first: at most three replies and ten
-   minutes. Pause or directly intervene to stop subsequent automatic handoffs.
+4. With two members, **开始一轮核查** sends the task to the first member, with a
+   ceiling of three replies and ten minutes. Current adapters cannot certify
+   complete native fleet status, so alpha.6 pauses after the first reply and
+   retains it for **选择并分享** or **定向发送**. Automatic continuation requires
+   authoritative state; missing information is not zero. Pause or directly
+   intervene to stop subsequent automatic handoffs.
    An already delivered task is not recalled. Native teammate/tool usage is extra
    work inside the provider, not bounded by the room's root reply count.
 5. **脱出协作** retains the native session. **独立窗口** adds a view; it does not
@@ -62,7 +65,7 @@ preserved; disconnecting one session does not kill the shared server.
 | Behavior | Observed result |
 | --- | --- |
 | Claude and Codex native terminal input and conversation input | Real responses received through both views, with original native identities retained |
-| Bounded two-agent handoff | Three real replies in the requested order, then stopped; private history marker not routed |
+| Bounded two-agent handoff | Historical three-reply native check passed before alpha.6. The stricter unknown-state gate now pauses after the first reply; human-directed sharing remains available |
 | Join/leave | Native IDs and PIDs unchanged; detached Claude continued independently |
 | Claude native team | One named teammate, one claimed/completed shared task, and mailbox exchange observed in native UI/hooks/history; named team creation was unsupported by the tested build |
 | Idle team across room changes and UI reopen | Root native ID/PID and captured fleet events retained, terminal view restored, zero additional dispatches; no post-reopen teammate model prompt was sent |
@@ -88,8 +91,9 @@ desktop GUIs has not been certified. Claude Desktop Chat and Claude Code are not
 assumed to share all sessions.
 
 Machine reboot or session-service failure does not restore live native fleets.
-There is no installer, automatic update system, full cost/latency parity benchmark,
-or completed binary-distribution/privacy compliance audit. Unknown usage is not
+Local app/DMG packaging exists. Public binary delivery, automatic updates, a full
+cost/latency parity benchmark and a completed distribution/privacy audit remain
+unverified. Unknown usage is not
 reported as zero. See [privacy](docs/privacy.md) and [licensing](docs/licensing.md).
 
 ## Test without spending model tokens

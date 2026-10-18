@@ -11,7 +11,7 @@ limited Claude/Codex tests to important unresolved native behavior.
 | UI reopen without re-login/session replacement | Normal exit, crash recovery and loading-window exit checked with live native sessions; view/draft/identity retained while the service remains alive |
 | Intentional multi-window, no accidental duplicate app | Same-profile lock, one DSH UI host, exclusive test launcher and owned-process cleanup checked |
 | Honest stop/disconnect state | Claude waits for process exit; Codex unsubscribe remains disconnected until native closure. Empty-session checks and local failure tests passed without model prompts; live services retain their loaded version |
-| Two agents and human-directed collaboration | Join/leave and explicit sharing implemented; real three-reply check stopped at its limit; local control/race checks passed |
+| Two agents and human-directed collaboration | Join/leave and explicit sharing implemented; alpha.6 retains replies and pauses automatic routing on unknown native state. Current adapters cannot certify fleet idleness, so automatic runs pause after the first reply. Earlier three-reply evidence predates this stricter gate |
 | Cross-view draft/submission safety | Alpha.5 replaces Claude paste/Enter with a structured native API. Visible draft-blocking and exact-payload reply checks passed on Claude 2.1.302; cancellation/replay checks passed locally. Codex mixed-draft and full concurrency coverage remain |
 | Native fleets | Claude single teammate/shared task/messages observed; idle team retained across room changes/UI reopen without a new model prompt. Active Codex fleet and full failure/termination semantics remain unverified |
 | Single-session alpha delivery | Implemented: local app packaging, prerequisite/version screen, safe startup retry, explicit history recovery, draft retention and safe backend replacement; tested details in alpha.md |
@@ -55,12 +55,13 @@ service. A complete conversation-first experience follows daily-use feedback;
 its needs already constrain today's architecture and tests. Clean-machine
 installation testing still waits for disk space.
 
-The cross-view Claude submission change is locally verified as described in
-[alpha evidence](alpha.md#structured-claude-submission). The next bounded item is
-to make collaboration pause when native background/teammate state is unknown,
-rather than treating missing information as zero. Do not add new orchestration
-surfaces. Effective native permission/config inheritance remains a separate gate;
-the current adapters still set some modes explicitly.
+The cross-view Claude submission and conservative handoff changes are locally
+verified as described in [alpha evidence](alpha.md). Unknown native state now
+pauses automatic routing while preserving the reply and human-directed sharing.
+Unattended multi-agent completion remains gated on authoritative native fleet
+state; observing child events or a root reply is insufficient. Do not add new
+orchestration surfaces. Next bounded item: verify effective native permission and
+configuration inheritance; the current adapters still set some modes explicitly.
 
 The maintainer's current milestone is the complete installation/use path, focused
 on **individual and collaborative native TUI use**:

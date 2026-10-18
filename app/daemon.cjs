@@ -25,7 +25,7 @@ async function main() {
   workspace.on('terminal', data => broadcast('terminal', data));
   const dispatch = async (owner, method, args) => {
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view);
       case 'join': if (typeof args[1] !== 'boolean') throw new Error('无效成员操作。'); return workspace.join(...args);
       case 'claim': return workspace.claim(args[0], owner, args[1]);

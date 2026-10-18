@@ -82,7 +82,7 @@ those native sessions running; see [how to stop or fully exit](docs/alpha.md).
 Use **加入协作 / 脱出协作** to change membership without replacing the native session.
 Inside **共同工作**, switch between **共享记录** and each member’s original terminal;
 **参与者…** manages invitations, and **暂停交接** remains visible. Detaching returns
-to independent use of that same session. **开始一轮核查** permits up to three replies within ten minutes; native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
+to independent use of that same session. **开始一轮核查** has a ceiling of three replies within ten minutes. Automatic handoffs require complete native background/team status. Current adapters cannot certify this, so a run pauses after its first reply; use **选择并分享** or **定向发送** to continue with human control. A reply limit does not mean the task or its descendants finished. Native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
 
 `npm test` runs local regression checks without model calls. `npm run test:desktop` runs a visible UI lifecycle check without sending prompts; it reuses a single private test profile and refuses a second test runner. See [test policy](docs/testing.md).
 

@@ -8,4 +8,7 @@ function submissionState(snapshot, supported) {
 function assertSubmission(snapshot, ids) {
   if (!snapshot.capabilities?.includes('structuredClaudeSubmit') && snapshot.sessions.some(s => s.provider === 'claude' && ids.includes(s.id))) throw new Error(legacyNotice);
 }
-module.exports = { submissionState, assertSubmission };
+function assertAutomaticRun(snapshot) {
+  if (!snapshot.capabilities?.includes('verifiedHandoffs')) throw new Error('旧版后台无法核实自动交接状态；原生会话已保留，请用原生终端或定向发送。结束会话并重新打开应用后可更新后台。');
+}
+module.exports = { submissionState, assertSubmission, assertAutomaticRun };

@@ -183,10 +183,14 @@ class Workspace extends EventEmitter {
     const run = this.room.run; const a = run?.awaiting;
     if (!run || run.status !== 'running' || a?.sessionId !== s.id || a.tag !== info.tag || s.memberRevision !== a.member || s.controlRevision !== a.control || s.roomId !== 'shared') return;
     run.awaiting = null;
-    if (!info.text.trim()) return this.pause('原生没有提供可交接的回复，请人工查看。');
-    if (info.stopHookActive || (info.background ?? 0) > 0 || (info.scheduled ?? 0) > 0) return this.pause('原生还有后台工作或继续执行的 hooks，请人工确认后启动新一轮。');
+    if (typeof info.text !== 'string' || !info.text.trim()) return this.pause('原生没有提供可交接的回复，请人工查看。');
     run.steps++;
     this.room.messages.push({ id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, text: info.text, time: Date.now(), runId: run.id });
+    // Keep the reply even when it cannot be handed off. A root Stop/turn end
+    // and a list of observed fleet events are not a complete fleet inventory.
+    const counts = [info.background, info.scheduled, info.fleetPending];
+    if (info.stopHookActive === true || counts.some(n => Number.isSafeInteger(n) && n > 0)) return this.pause('原生仍有后台、团队或定时工作，或继续执行的 hooks。回复已保留；请查看原生终端，确认后可定向发送。');
+    if (info.stopHookActive !== false || counts.some(n => !Number.isSafeInteger(n) || n < 0)) return this.pause('原生未完整报告后台、团队或定时工作状态，已暂停自动交接。回复已保留；请查看原生终端，确认后可定向发送。');
     if (run.steps >= run.maxSteps) { run.status = 'completed'; run.reason = '已达到本轮回复上限，交接结束。'; this.changed(); return; }
     if (Date.now() > run.deadline) return this.pause('达到本轮 10 分钟期限。');
     const next = run.ids[run.steps % run.ids.length];

@@ -45,7 +45,7 @@
       <p id="room-scope" hidden>成员的原生会话 · 查看不会新增共享；本轮已授权的回复仍会交接。输入会暂停后续交接。</p>
       <div id="room-session" class="session-slot" hidden></div>
       <div id="room-record-view" class="room-main"><div id="room-messages" class="messages" aria-label="共同工作记录"></div>
-        <form id="room-composer"><label for="shared-input">本次任务与共享材料</label><textarea id="shared-input" rows="4" maxlength="16000" placeholder="只有这里的内容和本轮回复会交给参与者。之前的私人对话不会自动发送。"></textarea><div class="room-controls"><select id="recipient" aria-label="接收方"></select><button id="forward-button" type="button">定向发送</button><button id="run-button" type="submit" class="primary">开始一轮核查</button></div><p class="quiet">一轮：首位成员 → 第二位核查 → 首位完成，最多 3 次回复、10 分钟。原生子 agent 的用量另计。</p></form>
+        <form id="room-composer"><label for="shared-input">本次任务与共享材料</label><textarea id="shared-input" rows="4" maxlength="16000" placeholder="只有这里的内容和本轮回复会交给参与者。之前的私人对话不会自动发送。"></textarea><div class="room-controls"><select id="recipient" aria-label="接收方"></select><button id="forward-button" type="button">定向发送</button><button id="run-button" type="submit" class="primary">开始一轮核查</button></div><p id="run-help" class="quiet"></p></form>
       </div>
     </section>
   </main>

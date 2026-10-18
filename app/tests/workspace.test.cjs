@@ -63,10 +63,51 @@ test('bounded routing sends only the goal and current answer, and stops at the r
   await w.startRun(ids, 'Check 17 + 25', 3);
   for (let i = 0; i < 3; i++) {
     const sent = sends[i]; assert.ok(sent); assert.ok(!sent.text.includes('PRIVATE_HISTORY_MARKER'));
-    runtimes[sent.index].emit('complete', { tag: sent.tag, text: '42', background: 0, scheduled: 0 }); await tick();
+    runtimes[sent.index].emit('complete', { tag: sent.tag, text: '42', background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false }); await tick();
   }
   assert.equal(sends.length, 3); assert.equal(w.room.run.status, 'completed');
   assert.deepEqual(sends.map(s => s.index), [0, 1, 0]);
+});
+test('unknown or active native work pauses routing without losing the reply or blocking explicit sharing', async t => {
+  const clear = { background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false };
+  const cases = [
+    {}, { background: null, scheduled: null, fleetPending: null, stopHookActive: null },
+    ...['background', 'scheduled', 'fleetPending'].flatMap(key => [undefined, null, -1, '0', false, NaN, Infinity, 0.5, 1].map(value => ({ ...clear, [key]: value }))),
+    { ...clear, stopHookActive: undefined }, { ...clear, stopHookActive: true },
+  ];
+  for (const [index, info] of cases.entries()) await t.test(`state case ${index}`, async t => {
+    const { workspace: w, runtimes, ids } = await fixture(t, 2);
+    const sends = [];
+    ids.forEach(id => w.join(id, true));
+    runtimes.forEach((r, i) => { r.send = async (text, tag) => sends.push({ i, text, tag }); });
+    await w.startRun(ids, 'check shared material', 2);
+    const event = { ...info, text: 'answer to review', tag: sends[0].tag };
+    runtimes[0].emit('complete', event); await tick();
+    assert.equal(sends.length, 1); assert.equal(w.room.run.status, 'paused');
+    assert.equal(w.room.run.steps, 1); assert.equal(w.room.run.awaiting, null);
+    assert.match(w.room.run.reason, /原生/);
+    assert.equal(w.room.messages.at(-1).text, event.text);
+    // Neither a duplicate completion nor later state observations resume work.
+    runtimes[0].emit('complete', event);
+    runtimes[0].emit('background', { count: 0, scheduled: 0 }); await tick();
+    assert.equal(sends.length, 1); assert.equal(w.room.messages.length, 2);
+    w.persist(); assert.equal(JSON.parse(fs.readFileSync(path.join(w.dataDir, 'workspace.json'))).room.messages.at(-1).text, event.text);
+    await w.forward(ids[1], 'only this human-selected text', 'owner');
+    assert.equal(sends.length, 2); assert.equal(sends[1].text, 'only this human-selected text');
+    assert.equal(w.room.run.status, 'paused');
+  });
+});
+test('unknown fleet state at the reply cap is paused, never presented as confirmed completion', async t => {
+  const { workspace: w, runtimes, ids } = await fixture(t, 2);
+  const sends = []; ids.forEach(id => w.join(id, true));
+  runtimes.forEach((r, i) => { r.send = async (text, tag) => sends.push({ i, tag }); });
+  await w.startRun(ids, 'shared check', 2);
+  runtimes[0].emit('complete', { tag: 'unrelated', text: 'unrelated reply' }); await tick();
+  assert.equal(w.room.run.steps, 0); assert.equal(sends.length, 1);
+  runtimes[0].emit('complete', { tag: sends[0].tag, text: 'first reply', background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false }); await tick();
+  runtimes[1].emit('complete', { tag: sends[1].tag, text: 'last root reply', background: 0, scheduled: 0, fleetPending: null, stopHookActive: false }); await tick();
+  assert.equal(sends.length, 2); assert.equal(w.room.run.status, 'paused'); assert.equal(w.room.run.steps, 2);
+  assert.equal(w.room.messages.at(-1).text, 'last root reply');
 });
 test('leaving cancels pending explicit sharing; human interrupt cancels pending direct submission', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
@@ -81,7 +122,7 @@ test('leaving cancels pending explicit sharing; human interrupt cancels pending 
 test('a reply completed during send is captured in order and does not erase a private draft', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   w.join(id, true); w.setDraft(id, 'private draft');
-  r.send = async (_text, tag) => { r.emit('submitted', tag); r.emit('complete', { tag, text: '42', background: 0, scheduled: 0 }); };
+  r.send = async (_text, tag) => { r.emit('submitted', tag); r.emit('complete', { tag, text: '42', background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false }); };
   await w.forward(id, 'check the shared sum', 'owner');
   assert.deepEqual(w.room.messages.map(m => m.role), ['human', 'assistant']);
   assert.equal(w.room.messages[1].text, '42'); assert.equal(w.snapshot().sessions[0].liveDraft, 'private draft');
@@ -148,7 +189,7 @@ test('clearing shared history refuses an active run and prevents late shared rep
   w.room.run = null; let tag; r.send = async (_text, sentTag) => { tag = sentTag; };
   await w.forward(id, 'synthetic shared material', 'owner');
   w.setDraft(id, 'private draft'); w.clearSharedHistory();
-  r.emit('complete', { tag, text: 'late answer', background: 0, scheduled: 0 });
+  r.emit('complete', { tag, text: 'late answer', background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false });
   assert.equal(w.room.messages.length, 0);
   assert.equal(w.get(id).messages.at(-1).text, 'late answer');
   assert.equal(w.snapshot().sessions[0].liveDraft, 'private draft');

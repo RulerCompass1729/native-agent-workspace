@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.5. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.6. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -309,3 +309,38 @@ ready to move the backend forward. Native history remains under the provider.
 Limits: atomic cancellation after native dispatch/queueing, active fleets, Codex
 mixed drafts, physical IME/VoiceOver and clean-machine installation are not proved
 by these checks. Private screenshots and transcripts are not shipped in Git.
+
+## Conservative automatic handoffs
+
+Alpha.6 records the root reply before checking whether it can be handed off.
+Missing, null, malformed or active background/scheduled/fleet counts pause routing;
+an unknown or active continuation hook does too. This applies even at the reply
+cap. The reply remains in the shared record and its counter reflects that it was
+received. Duplicate events and later status observations do not restart routing.
+
+Current Claude and Codex adapters do not provide a complete, authoritative fleet
+inventory. They explicitly report it as unknown. Thus current automatic runs
+pause after the first root reply; **选择并分享** and **定向发送** remain available.
+This is a deliberate restriction, not evidence of unattended multi-agent completion.
+No model-based state checker, summary, polling prompt or automatic retry was added.
+
+An updated UI also refuses automatic runs on retained services without this check
+and pauses their existing run on reconnection. The service and native identities
+stay alive. End sessions and reopen when ready to update the backend; native
+terminal use remains available in the meantime. Earlier Claude submission
+restrictions on old backends still apply.
+
+Local regressions cover invalid/unknown/active state, the reply cap, duplicate and
+unrelated events, persisted shared replies, explicit sharing, and old-service reuse.
+A visible Electron run exercised the production daemon, IPC and workspace with
+synthetic native transports: pause explanation, retained reply, selecting and
+sharing exact text, unchanged session identities, and UI reopen without replay.
+These tests made zero native model calls. They do not certify active provider
+fleets, native cost parity or the deferred clean-machine installation path.
+
+The alpha.6 DMG was mounted read-only, copied into Applications and verified with
+an ad-hoc signature check and 9,174 file/link comparisons. The installed UI passed
+the same synthetic handoff workflow. A fresh production backend advertised the
+new check without native prompts. The normal profile retained three native
+sessions on its older backend; the installed UI blocked automatic runs through
+both the button and IPC, with session identities and dispatch counts unchanged.

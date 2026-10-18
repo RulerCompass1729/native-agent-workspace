@@ -126,7 +126,8 @@ class Claude extends EventEmitter {
         const scheduled = Array.isArray(event.session_crons) ? event.session_crons.length : null;
         this.emit('background', { count: background, scheduled });
         this.emit('state', 'idle');
-        this.emit('complete', { tag: pending?.tag, text: event.last_assistant_message || '', background, scheduled, stopHookActive: Boolean(event.stop_hook_active) });
+        // Observed child hooks cannot certify that all descendants are idle.
+        this.emit('complete', { tag: pending?.tag, text: event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
         break;
       }
       case 'StopFailure': this.pending = null; this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请在原生终端查看。'); break;
@@ -273,7 +274,7 @@ class Codex extends EventEmitter {
       case 'turn/completed': {
         const pending = this.pending; this.pending = null; this.turnId = null; this.hasHistory = true;
         if (p.turn.status !== 'completed') { this.emit('state', 'idle'); this.emit('failed', '原生回合中断或失败；协作已暂停。'); }
-        else { this.emit('state', 'idle'); this.emit('complete', { tag: pending?.tag, text: this.last, background: null, scheduled: null }); }
+        else { this.emit('state', 'idle'); this.emit('complete', { tag: pending?.tag, text: this.last, background: null, scheduled: null, fleetPending: null, stopHookActive: null }); }
         break;
       }
       case 'error': this.emit('failed', '原生会话返回错误，请检查终端。'); break;

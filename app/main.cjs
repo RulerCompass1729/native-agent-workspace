@@ -7,7 +7,7 @@ const { startDsh } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
 const { preflight } = require('./preflight.cjs');
 const { pathToFileURL } = require('node:url');
-const { submissionState, assertSubmission } = require('./submission-policy.cjs');
+const { submissionState, assertSubmission, assertAutomaticRun } = require('./submission-policy.cjs');
 
 app.setName('Native Agent Workspace');
 process.env.NAW_APP_VERSION = app.getVersion();
@@ -95,6 +95,7 @@ async function boot() {
   wired = true;
   for (const name of ['create', 'join', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
   const submit = async (c, method, ...args) => {
+    if (method === 'run') assertAutomaticRun(await c.client.call('initial'));
     if (!c.structuredSubmit) assertSubmission(await c.client.call('initial'), method === 'run' ? args[0] : [args[0]]);
     return c.client.call(method, ...args);
   };
