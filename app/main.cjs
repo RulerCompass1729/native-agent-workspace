@@ -44,7 +44,7 @@ function saveViews() {
 }
 async function openWindow(saved) {
   if (quitting) return;
-  const view = saved || { owner: randomUUID(), selected: '', mode: 'chat', preference: 'chat', active: true };
+  const view = saved || { owner: randomUUID(), selected: '', mode: 'terminal', preference: 'terminal', active: true };
   if (!views.includes(view)) views.push(view);
   view.active = true; saveViews();
   const client = await connect(dataDir, view.owner);
@@ -137,11 +137,18 @@ async function boot() {
   register('initial', async c => ({ ...await c.client.call('initial'), viewState: c.view, appVersion: app.getVersion(), preflight: preflight() }));
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
-    Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference }); saveViews();
+    if (next.sharedDraft !== undefined && (typeof next.sharedDraft !== 'string' || next.sharedDraft.length > 16000)) throw new Error('协作草稿过长。');
+    if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw new Error('无效终端显示设置。');
+    Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference });
+    if (next.sharedDraft !== undefined) c.view.sharedDraft = next.sharedDraft;
+    if (next.terminalDisplay !== undefined) c.view.terminalDisplay = { fontSize: next.terminalDisplay.fontSize, palette: next.terminalDisplay.palette };
+    saveViews();
   });
   register('chooseFolder', async c => { const result = await dialog.showOpenDialog(c.win, { title: '选择这个会话可以工作的目录', properties: ['openDirectory', 'createDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
   register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw new Error('找不到会话。'); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });
-  register('copy', (_c, text) => { if (typeof text !== 'string' || text.length > 100000) throw new Error('复制内容无效。'); clipboard.writeText(text); });
+  register('copy', (_c, text) => { if (typeof text !== 'string' || text.length > 100000) throw new Error('复制内容无效。'); return clipboard.writeText(text); });
+  // Read only when the person presses Paste; never watch or persist clipboard content.
+  register('pasteText', async () => { const text = await clipboard.readText(); if (text.length > 65500) throw new Error('粘贴内容过长，请分段粘贴。'); return text; });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { label: '退出界面（会话继续运行）', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }] },
     { label: '文件', submenu: [{ label: '新窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => openWindow() }, { label: '新会话', accelerator: 'CmdOrCtrl+N', click: () => BrowserWindow.getFocusedWindow()?.webContents.send('workspace:new') }, { role: 'close' }] },

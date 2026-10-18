@@ -17,7 +17,7 @@
     <button class="room-nav" id="room-nav"><span>◉ 共同工作</span><span id="member-count">0</span></button>
     <p class="drop-hint">把会话拖到这里，或用“加入协作”</p>
     <button id="setup-button" class="subtle">检查安装与版本</button>
-    <div class="sidebar-bottom"><span class="local-dot"></span> 本地运行<button id="privacy-button" aria-label="查看隐私与数据说明">隐私与数据</button></div>
+    <div class="sidebar-bottom"><span class="local-dot"></span> 本地运行<button id="privacy-button" aria-label="查看隐私与用量">隐私与用量</button></div>
   </aside>
   <main>
     <header id="header"><div><h1 id="title">你的工作空间</h1><p id="subtitle">从一个会话开始，需要时再邀请另一个。</p></div><div id="header-actions"></div></header>
@@ -30,7 +30,7 @@
       <p class="quiet">登录与模型用量由原生服务管理；界面不自动生成标题或摘要。</p>
     </section>
     <section id="session-view" hidden>
-      <div class="session-toolbar"><div class="segmented"><button id="chat-tab" class="active">对话</button><button id="terminal-tab">原生终端</button></div><span id="session-status" aria-live="polite"></span><button id="take-control" hidden>接管此窗口</button></div>
+      <div class="session-toolbar"><div class="segmented"><button id="chat-tab">对话</button><button id="terminal-tab" class="active">原生终端</button></div><div id="terminal-controls" hidden><button id="terminal-copy">复制</button><button id="terminal-paste">粘贴</button><button id="terminal-display">显示…</button></div><span id="session-status" aria-live="polite"></span><button id="take-control" hidden>接管此窗口</button></div>
       <div id="approval" hidden></div>
       <div id="messages" class="messages" aria-label="会话内容" aria-live="polite"></div>
       <div id="terminal-area" hidden aria-label="原生终端"></div>
@@ -39,7 +39,7 @@
     </section>
     <section id="room-view" hidden>
       <div class="room-layout"><div class="room-main"><div id="run-status" class="run-status">选择材料和接收方，开始一次有边界的协作。</div><div id="room-messages" class="messages" aria-label="共同工作记录"></div>
-      <form id="room-composer"><label for="shared-input">本次任务与共享材料</label><textarea id="shared-input" rows="4" placeholder="只有这里的内容和本轮回复会交给参与者。之前的私人对话不会自动发送。"></textarea><div class="room-controls"><select id="recipient" aria-label="接收方"></select><button id="forward-button" type="button">定向发送</button><button id="run-button" type="submit" class="primary">开始一轮核查</button><button id="pause-button" type="button">暂停交接</button></div><p class="quiet">一轮：首位成员 → 第二位核查 → 首位完成，最多 3 次回复、10 分钟。原生子 agent 的用量另计。</p></form></div>
+      <form id="room-composer"><label for="shared-input">本次任务与共享材料</label><textarea id="shared-input" rows="4" maxlength="16000" placeholder="只有这里的内容和本轮回复会交给参与者。之前的私人对话不会自动发送。"></textarea><div class="room-controls"><select id="recipient" aria-label="接收方"></select><button id="forward-button" type="button">定向发送</button><button id="run-button" type="submit" class="primary">开始一轮核查</button><button id="pause-button" type="button">暂停交接</button></div><p class="quiet">一轮：首位成员 → 第二位核查 → 首位完成，最多 3 次回复、10 分钟。原生子 agent 的用量另计。</p></form></div>
       <aside class="members"><h2>参与者</h2><p>加入不会共享私人历史。<br>脱出后仍可独立继续。</p><div id="members"></div><button id="invite-button">＋ 邀请已有会话</button><div class="room-note">你可以随时介入。直接向任一会话输入，或点击“暂停交接”，都会暂停后续自动交接。</div></aside></div>
     </section>
   </main>
@@ -47,7 +47,8 @@
   <dialog id="setup-dialog"><h2>开始前的准备</h2><p>本试用版使用你自己安装的 Claude Code 或 Codex，以及 Python 3。登录在原生终端中完成。</p><div id="setup-status"></div><div class="dialog-actions"><button id="refresh-setup">重新检查</button><button id="close-setup">完成</button></div><p class="quiet" id="version-info"></p></dialog>
   <dialog id="invite-dialog"><h2>邀请已有会话</h2><p>只建立成员关系；不复制会话、不发送历史。</p><div id="invite-list"></div><button id="close-invite">完成</button></dialog>
   <dialog id="share-dialog"><h2>分享选定内容</h2><p>检查内容，选择共同工作中的接收方。</p><textarea id="share-text" rows="8" aria-label="即将分享的内容"></textarea><select id="share-recipient" aria-label="分享接收方"></select><div class="dialog-actions"><button id="cancel-share">取消</button><button id="confirm-share" class="primary">发送这段内容</button></div></dialog>
-  <dialog id="privacy-dialog"><h2>隐私与数据</h2><p>本应用的对话记录和草稿保存在本机，不提供云同步、遥测或自动上传。</p><p>登录凭据由原生 Claude / Codex 管理。本应用不读取或复制它们。发给模型的内容仍会经过相应原生服务。</p><p>加入共同工作不会自动转发历史。自动核查仅交接本次任务和本轮回复；你可以随时暂停。</p><p>关闭或退出界面后，原生会话继续由本机运行服务托管。重开会恢复界面并重新连接，不自动重发任务。重启电脑或运行服务崩溃不等于界面重开；原生活跃团队无法保证恢复。</p><p>删除本应用的数据不等于删除原生 agent 的历史。本地记录没有应用层加密；能读取当前系统账户文件的程序也可能读取它们。</p><p>记录默认保留在本机，直到你移除。结束会话后可在“会话与原生团队”中移除本应用记录。共同工作记录需单独清除。</p><div class="dialog-actions"><button id="data-directory">打开本机数据目录</button><button id="quit-service">所有会话结束后完全退出</button><button id="clear-shared-history">清除共同工作记录…</button><button id="close-privacy">知道了</button></div></dialog>
+  <dialog id="terminal-display-dialog"><h2>终端显示</h2><p>只调整这个窗口的显示，原生会话继续运行。</p><label for="terminal-font-size">字号</label><input id="terminal-font-size" type="number" min="10" max="24" step="1"><label for="terminal-palette">配色</label><select id="terminal-palette"><option value="dark">中性深色</option><option value="green">柔和绿色</option></select><p class="quiet">原生程序自己的主题与快捷键继续由原生程序管理。</p><div class="dialog-actions"><button id="reset-terminal-display">恢复默认</button><button id="close-terminal-display" class="primary">完成</button></div></dialog>
+  <dialog id="privacy-dialog"><h2>隐私与用量</h2><p>这里展示当前本机状态及其边界。应用的说明和计数不能替代独立安全审计或原生账单。</p><div id="trust-status"></div><details><summary>数据、权限与退出</summary><p>本应用保存对话副本、草稿和会话信息，不提供云同步、遥测或远程崩溃上传。UI 网络请求限定为本机服务；原生 agent 可以连接其模型服务，并按原生权限运行工具。</p><p>登录由原生 Claude / Codex 管理，本应用不复制它们的凭据文件。原生权限继续生效；加入或脱出协作不改变工具已有的文件访问权。</p><p>剪贴板只在你使用粘贴时读取，不监听剪贴板。退出协作不能撤回已经分享的内容。</p><p>关闭界面后，原生会话继续运行。重开界面不会自动重发任务；电脑重启或原生进程丢失后，活跃团队无法保证恢复。</p><p>本地副本没有应用层加密；同一系统账户下有文件访问权的程序可能读取它们。记录保留到你移除，删除本应用记录不会删除原生历史或提供商端记录。</p><p>结束会话后，可在“会话与原生团队”中移除本应用记录；共享记录需单独清除。</p></details><div class="dialog-actions"><button id="data-directory">查看本机数据</button><button id="privacy-source">查看公开实现</button><button id="refresh-trust">刷新状态</button><button id="close-privacy" class="primary">完成</button></div><details><summary>清理与完全退出</summary><div class="dialog-actions"><button id="quit-service">所有会话结束后完全退出</button><button id="clear-shared-history">清除共同工作记录…</button></div></details></dialog>
   <div id="toast" role="status" hidden></div>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>

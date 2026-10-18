@@ -11,22 +11,23 @@ GitHub independently processes repository visitors and contributions.
 
 The default location is the current account's Application Support directory under
 Native Agent Workspace. Development/test profiles may override it. The in-app
-**隐私与数据 → 打开本机数据目录** opens the actual location.
+**隐私与用量 → 查看本机数据** opens the actual location.
 
 - workspace.json contains displayed conversation copies, selected working paths,
   native IDs, process identity for safe recovery, team-event metadata, explicit
   shared messages and drafts. It does not contain raw terminal scrollback,
   provider credential files, full environment dumps or raw protocol traces.
-- views.json stores window/layout selection and a local draft recovery copy.
+- views.json stores window/layout selection, terminal display preferences,
+  a per-window shared-task draft and a local private-session draft recovery copy.
   Electron/DSH keep local UI preferences/cache and a local UI access token.
   The independent service keeps its private connection/token files and a
   versioned runtime copy. Tokens are not displayed in startup failures.
 - Records stay until removed. After a session ends, use **会话与原生团队 →
   移除本应用记录**. This also removes matching saved window drafts. Shared-room
-  records are separate: pause handoffs, then use **隐私与数据 → 清除共同工作记录**.
+  records are separate: pause handoffs, then use **隐私与用量 → 清理与完全退出 → 清除共同工作记录**.
   Clearing shared records does not cancel a native task already in progress.
 - For complete local removal, first end/disconnect native sessions and confirm
-  their state, open the data directory, then choose **隐私与数据 → 所有会话结束后完全退出**.
+  their state, open the data directory, then choose **隐私与用量 → 清理与完全退出 → 所有会话结束后完全退出**.
   This refuses while any session remains active or uncertain. After the service
   has exited, remove this application data directory.
   Never remove a live service's directory to try to stop its processes. Native
@@ -38,6 +39,43 @@ the current OS account; state/connection files use owner-only modes. Conversatio
 copies have **no application-layer encryption**. Another process with access to
 this account can read them, even on an unlocked encrypted disk. Sensitive or
 regulated information is not an appropriate first alpha test fixture.
+
+## Inspecting privacy and usage
+
+The **隐私与用量** panel shows current application/backend versions, the number
+of managed sessions not confirmed ended, application dispatches since backend
+startup, and native token reports where available. Refresh is a local state read;
+it sends no model prompt. Opening the local data directory or public source is an
+explicit action. Clipboard text is read only for a user-initiated paste, never
+polled or saved as clipboard history.
+
+The dispatch count includes application sends and collaboration handoffs. It does
+not include direct native TUI input, every underlying model request, tools or
+teammates, and it resets when the backend restarts. A failed/unconfirmed dispatch
+can still be counted. Native tokens can be missing, stale or incomplete for a
+fleet. Unknown values say **未报告**, not zero. The app does not calculate a dollar
+charge or claim equal cost to direct native use; verify charges in the provider's
+own account. A limit on handoffs is not a hard provider-spend limit.
+
+For a reproducible check with synthetic content:
+
+1. Record the installed app/backend versions and the provider version in its
+   native terminal. The public source is inspectable, but a version label alone
+   does not verify the binary's signature or provenance.
+2. Inspect the data directory before/after a private message, an explicitly shared
+   message, and removal. Check the separate native history as well. Do not upload
+   these files as a diagnostic bundle.
+3. Check that app opening, view switching and room membership changes do not send
+   prompts. Use native history/usage alongside the narrowly scoped app counter;
+   the counter alone cannot prove the absence of all model activity.
+4. Inspect process/network behavior independently if needed. The panel does not
+   currently measure CPU/RSS or complete subprocess network egress. An idle network
+   trace cannot establish what every future native tool will do.
+
+The checked source disables automatic shell title/summary/model-routing features.
+This is an implementation property, not an independent privacy certification.
+Full egress auditing, equal-task token/cost comparisons and independent security
+review remain open. Do not turn missing measurements into a green “all safe” badge.
 
 ## Data boundaries
 

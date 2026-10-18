@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { _electron } = require('playwright');
 const { connect } = require('../app/service-client.cjs');
+const { checkTui, verifyTui, restoreTui } = require('./check-tui.cjs');
 const root = path.resolve(__dirname, '..');
 const executablePath = process.env.NAW_APP_EXECUTABLE || require('electron');
 const launchArgs = process.env.NAW_APP_EXECUTABLE ? [] : [root];
@@ -20,7 +21,7 @@ async function until(predicate, message, timeout = 6000) {
   while (Date.now() < deadline) { if (await predicate()) return; await delay(100); }
   throw new Error(message);
 }
-let application, page, ownsLock = false, stopping = false, testDraft;
+let application, page, ownsLock = false, stopping = false, testDraft, tuiCheck;
 const draftText = 'Lifecycle test draft\n中文草稿：不发送，不调用模型。';
 async function launch(earlyQuit = false) {
   if (application) throw new Error('Close the existing test UI before launching another.');
@@ -48,7 +49,15 @@ function drafts(state) { return state.sessions.map(s => ({ id: s.id, text: s.liv
 async function cleanup() {
   if (stopping) return; stopping = true;
   if (!ownsLock) return;
-  try { await closeUI(); }
+  try {
+    try {
+      if (page && application && testDraft) await page.evaluate(async ({ id, expected }) => {
+        const s = await workspace.initial();
+        if (s.sessions.find(record => record.id === id)?.liveDraft === expected) await workspace.draft(id, '');
+      }, { id: testDraft, expected: draftText });
+      if (page && application && tuiCheck) await restoreTui(page, tuiCheck);
+    } finally { await closeUI(); }
+  }
   finally {
     // The service enforces that shutdown cannot terminate any live native session.
     try {
@@ -60,6 +69,15 @@ async function cleanup() {
         else console.log('Kept the existing native sessions running.');
       } finally { c.close(); }
     } catch (e) { if (e.code !== 'ENOENT') console.log('Native service cleanup was not confirmed; no PID was killed.'); }
+    // A failed/closed renderer may retain its recovery copy even after the
+    // service draft was cleared. Remove only this runner's exact fixture.
+    if (testDraft) {
+      const file = path.join(dataDir, 'views.json');
+      const views = JSON.parse(fs.readFileSync(file, 'utf8'));
+      let changed = false;
+      for (const view of views) if (view.draft?.id === testDraft && view.draft.text === draftText) { delete view.draft; changed = true; }
+      if (changed) { fs.writeFileSync(`${file}.tmp`, JSON.stringify(views), { mode: 0o600 }); fs.renameSync(`${file}.tmp`, file); }
+    }
     if (ownsLock) {
       try { if (JSON.parse(fs.readFileSync(lock, 'utf8')).pid === process.pid) fs.rmSync(lock); } catch {}
     }
@@ -83,13 +101,20 @@ async function run() {
   console.log('PASS: light/dark workspace and setup-dialog text contrast.');
   await page.locator('#close-setup').click();
   console.log('PASS: packaged/source UI composition and setup screen render.');
+  tuiCheck = { original: before.viewState };
+  tuiCheck = await checkTui(page);
+  before = await page.evaluate(() => workspace.initial());
+  console.log(`PASS: privacy/usage disclosure, shared draft and input validation${tuiCheck.controlled ? ', live terminal settings and focus' : ' (no live terminal in this profile)'}.`);
   const selected = before.sessions.find(s => s.id === before.viewState.selected);
   if (selected && selected.owner === before.owner && selected.state === 'idle' && !selected.liveDraft && !before.room.run) {
     testDraft = selected.id;
     await page.locator('#chat-tab').click();
     await page.locator('#message-input').fill(draftText);
     await until(async () => (await page.evaluate(() => workspace.initial())).sessions.find(s => s.id === testDraft).liveDraft === draftText, 'Draft was not saved');
-    if (before.viewState.mode === 'terminal') await page.locator('#terminal-tab').click();
+    if (before.viewState.mode === 'terminal') {
+      await page.locator('#terminal-tab').click();
+      await page.waitForFunction(async () => (await workspace.initial()).viewState.mode === 'terminal' && !document.querySelector('#terminal-area').hidden);
+    }
     before = await page.evaluate(() => workspace.initial());
   }
   const savedView = before.viewState;
@@ -125,6 +150,7 @@ async function run() {
   await closeUI();
   await until(() => !alive(host.pid), 'DSH host survived normal UI exit');
   const reopened = await launch();
+  await verifyTui(page, tuiCheck);
   assert.deepEqual(identity(reopened), identity(before));
   assert.equal(reopened.viewState.selected, savedView.selected);
   assert.equal(reopened.viewState.mode, savedView.mode);
@@ -135,6 +161,7 @@ async function run() {
   crashed.process().kill('SIGKILL');
   await until(() => !alive(crashedHost.pid), 'DSH host survived desktop crash');
   const recovered = await launch();
+  await verifyTui(page, tuiCheck);
   assert.deepEqual(identity(recovered), identity(before));
   assert.equal(recovered.viewState.selected, savedView.selected);
   assert.equal(recovered.viewState.mode, savedView.mode);

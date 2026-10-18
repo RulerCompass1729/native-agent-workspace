@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-17. Version 0.1.0-alpha.2. Suitable for a small technical trial with
+As of 2026-10-17. Version 0.1.0-alpha.3. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -64,7 +64,7 @@ Repeated launch focuses the existing instance. An explicit **独立窗口** is a
 To end a Claude session, expand **会话与原生团队** and choose **结束这个原生会话…**.
 Review the native confirmation and wait for **已结束**. For Codex, **断开本应用连接…**
 is a disconnect request, not proof that native work ended. Once all sessions are
-confirmed ended, **隐私与数据 → 所有会话结束后完全退出** also stops the local service.
+confirmed ended, **隐私与用量 → 清理与完全退出 → 所有会话结束后完全退出** also stops the local service.
 Do not delete the source directory or application data to force a running session
 to stop.
 
@@ -87,6 +87,48 @@ material is explicit; three replies/ten minutes bounds handoffs, not every tool,
 teammate or provider charge. See [privacy and deletion](privacy.md).
 
 ## Verified in this increment
+
+### Alpha.3: daily TUI use and inspectable privacy/usage
+
+New windows default to the native terminal; existing conversation/terminal
+preferences remain. In **显示…**, choose a 10–24 point font size and a neutral dark
+or green palette. Settings are per window and survive reopening. Returning from
+another view restores terminal input focus without replacing the native agent.
+
+Select terminal text and use **复制** or Command-C. If the native program has
+enabled mouse tracking, hold **Option while dragging** to select text without
+sending those mouse actions to the native program. **粘贴** reads the clipboard on
+request, respects bracketed-paste mode and does not append Enter. Multiline paste
+is refused when the native terminal has not enabled bracketed-paste protection.
+Clipboard operations use the pinned Electron version's asynchronous API.
+
+The shared-task input is now saved per window. Clearing shared history does not
+clear this unsent draft; clear the input separately if it is no longer needed.
+
+**隐私与用量** shows local data/sharing boundaries, narrowly scoped dispatch counts,
+available native token reports, backend/session state and app/backend versions.
+Missing usage is **未报告**, not zero. The panel is not a billing meter, egress
+monitor or independent audit. See [how to verify and its limits](privacy.md#inspecting-privacy-and-usage).
+
+The visible source-app check passed settings/shared-draft persistence across
+normal reopen and UI crash, terminal focus, unchanged native identities, invalid
+preference rejection, theme contrast and single-instance behavior. A real idle
+Claude TUI received a synthetic two-line Chinese paste without submission;
+Option-drag and the Copy button returned exactly the selected marker. Backspace
+removed the test input, the original clipboard was restored, both native histories
+remained empty and application dispatches remained zero. Oversized clipboard text
+was rejected before terminal input. No model task or native teammate was started.
+This is not physical IME or broad accessibility acceptance.
+
+The alpha.3 DMG was then mounted read-only and installed into Applications;
+all 9,169 file/link entries matched, and the installed app passed ad-hoc signature
+verification. The same visible settings/draft/focus, theme and lifecycle checks
+passed on that installed copy with both existing native sessions retained. Its
+live backend intentionally remained on alpha.2; the runtime/adapter code was not
+changed. This is local installation evidence, not internet-download quarantine or
+clean-machine onboarding acceptance. No new provider response was requested.
+
+### Earlier installation and recovery checks
 
 - Actual Apple Silicon app launch with a system-only PATH and no external Node/npm
   required by the shell; DSH client modules and setup screen rendered.

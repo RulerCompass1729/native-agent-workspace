@@ -70,3 +70,11 @@ The runner now checks rendered foreground/background contrast in both light and
 dark themes. Playwright's default light appearance previously hid a real system
 dark-mode failure; the check explicitly switches themes and then restores the
 system preference. It sends no native inputs or model prompts.
+
+The runner also checks the privacy/usage panel, unknown-usage wording, shared-task
+drafts and preference validation. With an existing idle terminal owned by the
+test view, it verifies font/palette persistence and focus on returning to that
+session; an empty profile does not prove those native-terminal checks. Test-only
+shared drafts and display settings are restored on cleanup. Native clipboard
+typing/selection is a separate bounded check on an inspected empty prompt, using
+synthetic unsubmitted text and restoring the original clipboard.

@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const api = {};
-for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve', 'stop', 'resume', 'forget', 'reconnect', 'preflight', 'dataDirectory', 'quitService', 'clearSharedHistory', 'newWindow', 'copy', 'openExternal']) {
+for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve', 'stop', 'resume', 'forget', 'reconnect', 'preflight', 'dataDirectory', 'quitService', 'clearSharedHistory', 'newWindow', 'copy', 'pasteText', 'openExternal']) {
   api[name] = async (...args) => {
     const result = await ipcRenderer.invoke(`workspace:${name}`, ...args);
     if (!result.ok) throw new Error(result.error);

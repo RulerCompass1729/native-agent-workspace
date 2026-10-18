@@ -34,6 +34,12 @@ fleets. No interrupted prompt or collaboration is automatically replayed.
 
 ## Next milestone
 
+Latest maintainer ordering: first make native TUI use comfortable for the
+maintainer's daily work. Begin the complete conversation-first Desktop experience
+after that daily-use feedback confirms the TUI path is sound. Keep the current DSH
+desktop shell and session service; this is a delivery order, not a new TUI-only
+architecture. Clean-machine installation testing still waits for disk space.
+
 The maintainer's current milestone is the complete installation/use path, focused
 on **individual and collaborative native TUI use**:
 
@@ -63,6 +69,107 @@ Every commit/push still requires proactive secret/PII scans and review, includin
 outgoing history, author identities and commit messages. Raw test evidence stays
 local. The guard and written privacy requirements are not a global compliance
 certification. See [publication](publication.md) and [privacy](privacy.md).
+
+## Delivery order and interface review
+
+Reviewed 2026-10-17 against alpha.2 source and its saved installed-app screenshots.
+This section is a plan, not a new runtime acceptance result. No model calls or new
+desktop instances were needed for this review. The clean macOS VM trial is paused
+until the maintainer frees system-disk space; no VM image has been installed.
+
+问题：下一步有哪些工作，以及如何改善当前界面的质感和操作。
+现有机制：`renderer/index.html`、`renderer/renderer.js`、`renderer/styles.css`、
+`preflight.cjs`、`platform.cjs`、`workspace.cjs`、`adapters.cjs` 和
+`service-client.cjs` 已读；现有 DSH 视图和独立原生会话服务继续保留。
+最小增量：先推进维护者可日常使用的 TUI 版本，随后验收朋友试用的完整安装路径；完整对话式 Desktop 体验等 TUI 使用反馈通过后开始。
+不做会坏什么：用户仍可能卡在环境准备，或混淆查看会话、脱出协作与停止原生任务。
+
+### Current milestone: a usable TUI trial
+
+Alpha.3 adds a TUI-focused increment: terminal-first new windows, persisted text
+size/palette, paste/copy controls, macOS Option-drag selection when native mouse
+tracking is active, terminal focus on session return, and per-window shared-task
+draft retention. The privacy/usage panel exposes scoped dispatch counts, reported
+native tokens and explicit unknowns. These are not proof of complete cost parity,
+network privacy or the outstanding clean-machine installation path.
+
+These are workstreams within the existing installation/use milestone, not
+parallel new products. Finish one testable user path before widening scope.
+
+| Workstream | Verified starting point / gap | Exit condition |
+| --- | --- | --- |
+| Download and first open | Local DMG copy/launch passed; public download, quarantine and clean-machine first open remain unverified | The exact reviewed release artifact is downloaded and opened on a clean Mac/VM following the user guide; no maintainer environment or credentials are copied in |
+| First-use setup | Discovery checks executable presence in PATH and conventional locations; it does not establish provider version, login or successful startup | Missing agent, unusable installation and native login/trust each have a clear next action; a user with only one agent can start; unusual install locations have an explicit fallback |
+| Prerequisites | Python is still needed for the PTY bridge; current setup sends users to installation instructions | Complete the missing-Python path on the clean system. Evaluate a reviewed bundled helper/runtime only if required to remove the blocker; do not blindly replace the session architecture |
+| Single-session interface | Conversation and terminal share a session, but large stacked toolbars and a fixed green terminal consume space and impose styling | A compact header, readable light/dark themes, adjustable terminal text size, stable focus, selection, paste and Chinese input; no agent recreation on view changes |
+| Collaboration interface | One shared room, explicit forwarding and a fixed three-reply UI flow exist; controls and explanatory prose are spread across the page | Invite an existing managed session, choose the material and recipient, observe handoffs, pause, detach and continue independently without needing a verbal explanation |
+| Continuity and failure | Window reopen and some recovery paths are tested; alpha.3 saves the per-window shared-task draft; cold backend recovery differs from reopening a live UI | Preserve unsent input; distinguish waiting for login, disconnect, recovery and confirmed termination; never auto-replay an uncertain send |
+| Release confidence | Source privacy guard and packaging allowlist exist; these do not prove full binary/network privacy | Review the exact binary/notices; use synthetic data for startup, sharing and deletion checks; retain no unexpected upload; record a small shell CPU/RSS/startup/interaction baseline rather than claiming zero overhead |
+
+The initial clean-machine matrix is: neither provider installed; only Claude;
+only Codex; both providers. Reuse a clean baseline and separate OS/setup checks
+from model use. Include normal Finder launch, native sign-in, install-path fallback,
+an app-only reopen and a separate system/service-recovery case. A second person's
+physical Mac is an additional compatibility/usability check, not replaced by a VM.
+
+The planned clean-machine live-model allowance is at most five short top-level
+replies (one per provider plus a three-reply handoff), no spawned teammates, and
+no automatic retries. Setup, appearance, input, lifecycle and missing-dependency
+checks use no model prompts. Reuse unchanged native evidence. This reply cap is
+not a guaranteed token/cost cap; native usage is reported as available.
+
+### Interface direction for this milestone
+
+The desired quality comes from hierarchy, spacing, readable type and predictable
+behavior. Preserve DSH composition, theme primitives and the session service.
+
+- **First use:** a short “choose agent → connect → start” path. Show already
+  available agents first. Move installation diagnostics behind details; make a
+  missing requirement actionable where it blocks the next step.
+- **Single session:** a collapsible session sidebar and one compact context bar
+  containing the session name, conversation/terminal switch, status and invitation
+  action. Put independent-window and infrequent actions in a labelled menu.
+  Give terminal/content the main area; keep advanced native diagnostics optional.
+- **Collaboration:** keep the same shell. Offer shared record and participant
+  tabs; selecting a participant views its private session without implying it is
+  shared. Show who receives the next handoff and keep pause/takeover visible.
+  Put member management and sharing details in an on-demand panel. A two-terminal
+  side-by-side layout is optional and follows feedback, not the default redesign.
+- **Appearance:** use coordinated neutral surfaces and one restrained accent,
+  consistent typography, controls, borders and focus states. Both providers
+  currently use a “C” icon; give them distinguishable, licence-reviewed labels or
+  symbols. Keep the terminal palette separately selectable. Remove repeated
+  marketing/explanatory text from ongoing work; keep disclosure at decisions.
+- **Interaction:** provide mouse/menu equivalents for drag and shortcuts, preserve
+  focus/selection/scroll position, and verify small-window layouts, IME and
+  accessibility. A screenshot alone is not acceptance evidence.
+
+Review three representative views first: setup, a real single-session TUI, and a
+two-agent collaboration with messages and a pending human decision. Use synthetic
+content for design fixtures. Do not spend model turns to populate mockups.
+
+### Later work, with explicit triggers
+
+| Trigger | Follow-up | Completion standard |
+| --- | --- | --- |
+| The installation/TUI trial passes and daily-use feedback arrives | Session naming/search/archive, long-session performance, terminal preferences and the preferred-terminal connector below; update/recovery polish | Daily work survives reopening and an app replacement without duplicate owners or lost input; slow paths are measured before optimizing |
+| The TUI trial is stable and the next audience needs conversation-first use | Complete the GUI path: native progress/permissions, files/images and supported model/configuration controls | Routine work can be completed without an unexplained terminal detour; unavailable native capabilities retain an explicit native entry, not a simulated equivalent |
+| The basic human-directed handoff is reliable | Goal-based unattended collaboration with completion, permission, repetition and usage boundaries; active fleet lifecycle validation | Human intervention invalidates queued handoffs; task completion and descendant termination are separately evidenced; unknown usage/state is not reported as zero/stopped |
+| A supported provider attachment contract and an actual migration need are established | External-session discovery/selection and attach/resume distinctions | Live attachment, history recovery and imported reference text are labelled accurately; do not create a concurrent resume of an already running session |
+| Two-provider capabilities and adapters are stable | More agents/rooms, Windows/Linux; broader installer distribution and update automation | Capability-specific adapters preserve upstream behavior and cross-platform lifecycle tests pass |
+
+Native fleets are an existing product requirement, not an optional add-on.
+Before claiming full support, close the remaining active Codex fleet and
+stop/recovery gaps. UI-only changes should not rerun a fleet task without a
+specific unresolved behavior. Current adapters also choose explicit permission,
+teammate and traffic settings: audit and disclose these choices instead of
+claiming every native preference is inherited unchanged.
+
+The current “one round” is a bounded handoff ending at a reply limit, not proof
+that an arbitrary goal is finished. The source has no general external-session
+import UI. Long-session performance is not yet benchmarked: the service currently
+broadcasts full snapshots and the renderer rebuilds message lists on changes.
+Those are measured-risk candidates, not evidence of an observed performance bug.
 
 ## Follow-up: use the person’s preferred terminal
 

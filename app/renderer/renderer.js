@@ -4,20 +4,62 @@ const $ = id => document.getElementById(id);
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 const button = (text, action, cls) => { const el = node('button', text, cls); el.type = 'button'; el.addEventListener('click', () => attempt(action)); return el; };
 const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', error: '需要检查' };
-let state, owner, selected = '', mode = 'chat', preference = 'chat', folder = '', disconnected = false;
+let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
+let terminalDisplay = { fontSize: 14, palette: 'dark' };
+const terminalThemes = {
+  dark: { background: '#191b1e', foreground: '#e6e8eb', cursor: '#e6e8eb', selectionBackground: '#53677b88' },
+  green: { background: '#20261f', foreground: '#eef2e8', cursor: '#e0edc9', selectionBackground: '#637a5988' },
+};
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
 const terminals = new Map();
 const current = () => state?.sessions.find(s => s.id === selected);
 const members = () => state?.sessions.filter(s => s.roomId === 'shared') || [];
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
-function persistView() { return api.viewState({ selected, mode, preference }); }
+function persistView() { return api.viewState({ selected, mode, preference, terminalDisplay, sharedDraft: $('shared-input').value }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'C' : 'C', `agent-icon ${provider}`); }
 function select(id, requestedMode) {
   selected = id; const s = current();
   if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
   $('message-input').value = s?.liveDraft || '';
   lastMessages = ''; lastRoomMessages = ''; render(); attempt(persistView);
+  if (s && mode === 'terminal' && !['ended', 'stopping', 'disconnected', 'recoverable'].includes(s.state)) attempt(async () => { await ensureTerminal(id); focusTerminal(id); });
+}
+function focusTerminal(id = selected) {
+  if (id === selected && mode === 'terminal' && !document.querySelector('dialog[open]')) terminals.get(id)?.term.focus();
+}
+function applyTerminalDisplay() {
+  const theme = terminalThemes[terminalDisplay.palette];
+  $('terminal-area').style.backgroundColor = theme.background;
+  for (const entry of terminals.values()) { entry.term.options.fontSize = terminalDisplay.fontSize; entry.term.options.theme = { ...theme }; }
+  fitTerminal(selected);
+}
+function pasteTerminal(text) {
+  const s = current(), entry = terminals.get(selected);
+  if (!s || s.owner !== owner || !entry?.ready || disconnected) throw new Error('请先连接并接管这个终端。');
+  if (!text) return;
+  if (text.length > 65500) throw new Error('粘贴内容过长，请分段粘贴。');
+  if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw new Error('原生程序尚未启用多行粘贴保护，请先分行粘贴。');
+  entry.term.paste(text); focusTerminal();
+}
+async function showTrust() {
+  const snapshot = await api.initial();
+  const content = $('trust-status'); content.replaceChildren();
+  const section = (title, text) => { const item = node('section'); item.append(node('h3', title), node('p', text)); content.append(item); return item; };
+  section('数据去向', '会话副本和草稿保存在本机。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
+  section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。一轮核查最多交接 3 次回复；原生工具和子 agent 的用量不受这个次数上限限制。');
+  const dispatches = snapshot.diagnostics?.dispatches;
+  section('本次后台运行的派发计数', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。只计通过应用发送与交接的消息，不含原生终端直接输入，也不代表总模型调用或费用；后台重启后重新计数。`);
+  const usage = section('原生报告的用量', '以下是原生接口报告的累计 token；可能延迟或缺少子任务，不是账单。金额请在原生提供商账户核对。');
+  for (const s of snapshot.sessions) {
+    const total = s.usage?.total;
+    const count = key => Number.isFinite(total?.[key]) ? total[key].toLocaleString() : '未报告';
+    usage.append(node('p', `${s.name}：${total ? `输入 ${count('inputTokens')} · 缓存输入 ${count('cachedInputTokens')} · 输出 ${count('outputTokens')}` : '未报告；不能据此判断为零'}`));
+  }
+  if (!snapshot.sessions.length) usage.append(node('p', '尚无会话。'));
+  section('后台与权限', `${snapshot.sessions.filter(s => !['ended', 'recoverable'].includes(s.state)).length} 个会话尚未确认结束。关闭窗口仍可能继续执行。原生进程、团队状态与权限请在终端核对；此处未测量 CPU、内存或完整网络出口。`);
+  section('版本与核查', `应用 ${snapshot.appVersion || '未报告'} · 后台 ${snapshot.runtimeVersion || '未报告'}。可查看本机数据和公开实现。本地版本号不是签名验证；独立安全审计、完整流量与费用对账尚未完成。`);
+  if (!$('privacy-dialog').open) $('privacy-dialog').showModal();
 }
 function openCreate(provider = 'claude') {
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
@@ -97,6 +139,8 @@ function render() {
       $('session-status').textContent = `${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}`;
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
+      $('terminal-controls').hidden = mode !== 'terminal';
+      $('terminal-paste').disabled = !own || !alive || disconnected;
       $('messages').hidden = mode !== 'chat'; $('terminal-area').hidden = mode !== 'terminal'; $('composer-wrap').hidden = mode !== 'chat';
       $('message-input').disabled = !own || !alive || disconnected;
       $('send-button').disabled = !own || s.state !== 'idle' || Boolean(s.pendingTag) || disconnected || s.chatAvailable === false;
@@ -125,7 +169,7 @@ function render() {
         $('header-actions').prepend(button('继续原生会话', () => api.resume(s.id), 'primary'));
         $('advanced-content').append(button('移除本应用记录…', () => api.forget(s.id), 'small'));
       }
-      for (const [id, entry] of terminals) entry.element.hidden = id !== s.id;
+      for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = state.sessions.find(record => record.id === id)?.owner !== owner || disconnected; }
       if (mode === 'terminal' && (alive || (s.state === 'error' && s.terminalAvailable))) attempt(() => ensureTerminal(s.id));
     }
     if (inRoom) {
@@ -156,9 +200,12 @@ async function ensureTerminal(id) {
   if (old && old.generation !== generation) { old.term.dispose(); old.element.remove(); terminals.delete(id); }
   if (terminals.has(id)) { const existing = terminals.get(id); if (existing.ready) fitTerminal(id); return existing.pending; }
   const element = node('div', undefined, 'terminal-host'); element.dataset.terminalId = id; $('terminal-area').append(element);
-  const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: 13, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, theme: { background: '#20261f', foreground: '#eef2e8', cursor: '#e0edc9', selectionBackground: '#637a5988' } });
+  const theme = terminalThemes[terminalDisplay.palette];
+  $('terminal-area').style.backgroundColor = theme.background;
+  const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: state.sessions.find(s => s.id === id)?.owner !== owner || disconnected, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(element);
   const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [] }; terminals.set(id, entry);
+  element.addEventListener('paste', event => { event.preventDefault(); event.stopPropagation(); attempt(() => { if (selected === id) pasteTerminal(event.clipboardData?.getData('text/plain') || ''); }); }, true);
   term.onData(data => {
     // The service's canonical terminal answers device queries, once.
     if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\]/.test(data)) return;
@@ -177,7 +224,7 @@ async function ensureTerminal(id) {
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
       entry.sequence = snapshot.sequence; entry.ready = true;
       for (const event of entry.queued) writeTerminal(entry, event);
-      entry.queued = []; fitTerminal(id); if (selected === id && mode === 'terminal') term.focus();
+      entry.queued = []; fitTerminal(id); focusTerminal(id);
     } catch (error) { if (terminals.get(id) === entry) { terminals.delete(id); term.dispose(); element.remove(); throw error; } }
   })();
   return entry.pending;
@@ -208,11 +255,23 @@ $('room-nav').ondragover = event => { if (event.dataTransfer.types.includes('app
 $('room-nav').ondragleave = () => $('room-nav').classList.remove('drag-over');
 $('room-nav').ondrop = event => { event.preventDefault(); $('room-nav').classList.remove('drag-over'); const id = event.dataTransfer.getData('application/x-native-session'); if (state.sessions.some(s => s.id === id)) attempt(() => api.join(id, true)); };
 $('chat-tab').onclick = () => attempt(() => switchMode('chat')); $('terminal-tab').onclick = () => attempt(() => switchMode('terminal'));
-$('take-control').onclick = () => attempt(async () => { await api.claim(selected, mode); state = await api.initial(); render(); fitTerminal(selected); });
+$('take-control').onclick = () => attempt(async () => { await api.claim(selected, mode); state = await api.initial(); render(); fitTerminal(selected); focusTerminal(); });
+$('terminal-copy').onclick = () => attempt(async () => { const text = terminals.get(selected)?.term.getSelection(); if (!text) return toast('先选择文字；原生程序占用鼠标时，按住 ⌥ Option 拖选，再点复制。'); await api.copy(text); focusTerminal(); });
+$('terminal-paste').onclick = () => attempt(async () => { const id = selected; const text = await api.pasteText(); if (selected === id && mode === 'terminal') pasteTerminal(text); });
+$('terminal-display').onclick = () => { $('terminal-font-size').value = terminalDisplay.fontSize; $('terminal-palette').value = terminalDisplay.palette; $('terminal-display-dialog').showModal(); };
+const saveTerminalDisplay = () => attempt(async () => {
+  const fontSize = Number($('terminal-font-size').value);
+  if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 24) throw new Error('字号请设为 10–24。');
+  terminalDisplay = { fontSize, palette: $('terminal-palette').value }; applyTerminalDisplay(); await persistView();
+});
+$('terminal-font-size').onchange = $('terminal-palette').onchange = saveTerminalDisplay;
+$('reset-terminal-display').onclick = () => { $('terminal-font-size').value = 14; $('terminal-palette').value = 'dark'; saveTerminalDisplay(); };
+$('close-terminal-display').onclick = () => { $('terminal-display-dialog').close(); focusTerminal(); };
 $('message-input').oninput = () => { const s = current(); if (s) { s.liveDraft = $('message-input').value; attempt(() => api.draft(s.id, s.liveDraft)); } };
 $('message-input').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); if (!$('send-button').disabled) $('composer').requestSubmit(); } };
 $('composer').onsubmit = event => { event.preventDefault(); attempt(async () => { const id = selected, text = $('message-input').value; await api.send(id, text); if (selected === id && $('message-input').value === text) $('message-input').value = ''; }); };
 $('interrupt').onclick = () => attempt(() => api.interrupt(selected));
+$('shared-input').oninput = () => attempt(persistView);
 $('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => { const first = $('recipient').value; return api.run([first, ...members().filter(s => s.id !== first).map(s => s.id)], $('shared-input').value, 3); }); };
 $('forward-button').onclick = () => attempt(() => api.forward($('recipient').value, $('shared-input').value));
 $('pause-button').onclick = () => attempt(() => api.pause());
@@ -220,16 +279,20 @@ $('invite-button').onclick = () => { $('invite-list').replaceChildren(...state.s
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
 $('confirm-share').onclick = () => attempt(async () => { await api.forward($('share-recipient').value, $('share-text').value); $('share-dialog').close(); toast('已定向发送。'); });
-$('privacy-button').onclick = () => $('privacy-dialog').showModal(); $('quit-service').onclick = () => attempt(() => api.quitService());
+$('privacy-button').onclick = $('refresh-trust').onclick = () => attempt(showTrust); $('quit-service').onclick = () => attempt(() => api.quitService());
+$('privacy-source').onclick = () => attempt(() => api.openExternal('https://github.com/RulerCompass1729/native-agent-workspace/blob/main/docs/privacy.md'));
 $('data-directory').onclick = () => attempt(() => api.dataDirectory());
 $('clear-shared-history').onclick = () => attempt(() => { if (!state.capabilities?.includes('clearSharedHistory')) throw new Error('后台仍在保留旧版会话；结束它们并重开应用后可使用此功能。'); return api.clearSharedHistory(); });
-$('close-privacy').onclick = () => $('privacy-dialog').close();
+$('close-privacy').onclick = () => { $('privacy-dialog').close(); focusTerminal(); };
 $('reconnect-button').onclick = () => attempt(async () => { $('reconnect-button').disabled = true; try { await api.reconnect(); } finally { $('reconnect-button').disabled = false; } });
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
 attempt(async () => {
-  state = await api.initial(); owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'chat'; mode = state.viewState.mode || preference;
+  state = await api.initial(); owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;
+  const display = state.viewState.terminalDisplay;
+  if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;
+  $('shared-input').value = typeof state.viewState.sharedDraft === 'string' ? state.viewState.sharedDraft : '';
   const draft = state.viewState.draft, saved = state.sessions.find(s => s.id === draft?.id);
   if (saved && (!saved.owner || saved.owner === owner)) { saved.liveDraft = draft.text; await api.draft(saved.id, draft.text); }
   select(state.viewState.selected || '', mode); await api.uiReady();
