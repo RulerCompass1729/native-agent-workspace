@@ -16,7 +16,7 @@ const { executable, nativeEnvironment } = require('./platform.cjs');
 class Terminal extends EventEmitter {
   constructor(argv, cwd, env = {}) {
     super();
-    this.pid = null; this.alive = true; this.sequence = 0;
+    this.pid = null; this.alive = true; this.sequence = 0; this.nativeExited = false;
     this.screen = new HeadlessTerminal({ cols: 100, rows: 30, scrollback: 5000, allowProposedApi: true });
     this.serialize = new SerializeAddon(); this.screen.loadAddon(this.serialize);
     this.decoder = new StringDecoder('utf8');
@@ -29,6 +29,7 @@ class Terminal extends EventEmitter {
         const line = lines.slice(0, at); lines = lines.slice(at + 1);
         let message; try { message = JSON.parse(line); } catch { continue; }
         if (message.type === 'started') { this.pid = message.pid; this.emit('started', this.pid); }
+        if (message.type === 'exit' && Number.isInteger(message.code)) this.nativeExited = true;
         if (message.type === 'data') {
           const data = this.decoder.write(Buffer.from(message.data, 'base64'));
           this.screen.write(data, () => this.emit('data', { data, sequence: ++this.sequence }));
@@ -37,8 +38,9 @@ class Terminal extends EventEmitter {
     });
     // Native diagnostics stay in the terminal; do not persist or upload stderr.
     this.worker.stderr.on('data', () => {});
-    this.worker.on('error', () => { this.alive = false; this.emit('closed'); });
-    this.worker.on('exit', () => { this.alive = false; this.emit('closed'); });
+    this.worker.on('error', () => {});
+    // close follows stdout drainage, including the worker's waitpid result.
+    this.worker.on('close', () => { this.alive = false; this.emit('closed', { confirmed: this.nativeExited }); });
     this.worker.stdin.on('error', () => {});
     this.worker.stdin.write(JSON.stringify({ argv, cwd, env: { ...env, PWD: cwd } }) + '\n');
     // Only the canonical screen answers device queries, even with no GUI open.
@@ -54,7 +56,18 @@ class Terminal extends EventEmitter {
     if (this.alive && (cols !== this.screen.cols || rows !== this.screen.rows)) { this.screen.resize(cols, rows); this.command({ type: 'resize', cols, rows }); }
   }
   snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serialize.serialize(), sequence: this.sequence, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid }))); }
-  stop() { if (this.alive) this.command({ type: 'stop' }); }
+  stop(timeout = 5000) {
+    if (this.stopPending) return this.stopPending;
+    if (!this.alive) return this.nativeExited ? Promise.resolve() : Promise.reject(new Error('原生进程退出未获确认；请检查原生会话。'));
+    this.stopPending = new Promise((resolve, reject) => {
+      const finish = error => { clearTimeout(timer); this.off('closed', closed); error ? reject(error) : resolve(); };
+      const closed = result => finish(result.confirmed ? null : new Error('终端连接断开，但原生进程退出未获确认。'));
+      const timer = setTimeout(() => finish(new Error('原生进程仍未确认退出；保留状态，请检查后重试。')), timeout);
+      this.once('closed', closed);
+      try { this.command({ type: 'stop' }); } catch (error) { finish(error); }
+    }).finally(() => { this.stopPending = null; });
+    return this.stopPending;
+  }
 }
 
 class Claude extends EventEmitter {
@@ -77,7 +90,12 @@ class Claude extends EventEmitter {
     });
     this.terminal.on('data', data => this.emit('terminal', data));
     this.terminal.on('started', pid => this.emit('pid', pid));
-    this.terminal.on('closed', () => { this.ready = false; this.emit('state', 'ended'); });
+    this.terminal.on('closed', result => {
+      this.ready = false;
+      if (result.confirmed) this.host.hookTargets.delete(this.token);
+      else this.emit('activity', '终端连接断开，原生进程退出未确认。');
+      this.emit('state', result.confirmed ? 'ended' : 'error');
+    });
   }
   hook(event) {
     // Teammates inherit hooks. Never attribute a child's final reply to its lead.
@@ -109,7 +127,7 @@ class Claude extends EventEmitter {
         break;
       }
       case 'StopFailure': this.pending = null; this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请在原生终端查看。'); break;
-      case 'SessionEnd': this.ready = false; this.emit('state', 'ended'); break;
+      case 'SessionEnd': this.ready = false; this.emit('state', 'stopping'); break;
     }
   }
   async send(text, tag, guard) {
@@ -123,7 +141,7 @@ class Claude extends EventEmitter {
   }
   interrupt() { this.pending = null; this.terminal.input('\x1b'); }
   async openTerminal() { return this.terminal; }
-  stop() { this.terminal.stop(); this.host.hookTargets.delete(this.token); }
+  async stop() { await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
 }
 
 class Rpc extends EventEmitter {
@@ -175,7 +193,7 @@ class Codex extends EventEmitter {
         clearTimeout(timeout); this.host.pendingCodex = null;
         this.record.nativeId = thread.id; this.host.codexTargets.set(thread.id, this);
         this.emit('model', thread.model || '原生默认'); this.emit('state', 'idle'); resolve();
-        this.observeFirstTurn().catch(() => this.emit('activity', '原生终端可继续；对话连接未确认。'));
+        this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', '原生终端可继续；对话连接未确认。'); });
       };
       this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${this.host.codexSocket}`, '-C', this.record.cwd, '-s', 'workspace-write', '-a', 'on-request']);
     });
@@ -185,12 +203,16 @@ class Codex extends EventEmitter {
     // never spend a model call to manufacture history for an attachment.
     while (!this.stopped && !this.chatAvailable) {
       await delay(1000);
+      if (this.stopped) return;
       const { thread } = await this.host.rpc.call('thread/read', { threadId: this.record.nativeId, includeTurns: false });
+      if (this.stopped) return;
       const nativeState = thread.status?.type;
       this.emit('state', nativeState === 'active' ? 'working' : nativeState === 'idle' ? 'idle' : 'starting');
       if (!thread.preview || nativeState !== 'idle') continue;
       await this.host.rpc.call('thread/resume', { threadId: thread.id, excludeTurns: true });
+      if (this.stopped) return;
       const items = await this.host.rpc.call('thread/items/list', { threadId: thread.id, limit: 100 });
+      if (this.stopped) return;
       for (const entry of items.data || []) {
         const item = entry.item || entry;
         if (item.type === 'agentMessage') this.emit('messageItem', { id: item.id, text: item.text, phase: item.phase });
@@ -208,6 +230,10 @@ class Codex extends EventEmitter {
   }
   event(message) {
     const p = message.params || {};
+    if (message.method === 'thread/closed') {
+      this.closed = true; this.stopped = true; this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
+    }
+    if (this.stopped) return;
     if (message.id !== undefined) { this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); return; }
     switch (message.method) {
       case 'turn/started': this.turnId = p.turn.id; this.last = ''; this.emit('state', 'working'); break;
@@ -242,19 +268,32 @@ class Codex extends EventEmitter {
     if (this.turnId) await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId: this.turnId });
   }
   async openTerminal() {
+    if (this.stopped) throw new Error('本应用已断开该会话；原生历史仍保留。');
     if (this.terminal?.alive) return this.terminal;
     if (!this.record.nativeId) { for (let i = 0; i < 100 && !this.terminal; i++) await delay(50); if (this.terminal) return this.terminal; }
     if (!this.hasHistory) throw new Error('请先完成一条对话，再打开同一会话的原生终端。');
     return this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
   }
-  stop() {
+  async stop() {
+    if (!this.record.nativeId) throw new Error('原生线程身份尚未确认，请在原生终端检查初始化。');
+    const previouslyStopped = this.stopped;
     this.stopped = true;
-    this.terminal?.stop();
-    if (this.turnId) this.interrupt().catch(() => {});
-    this.host.codexTargets.delete(this.record.nativeId);
-    // Unsubscribe unloads only this session; it does not terminate the shared server.
-    this.host.rpc?.call('thread/unsubscribe', { threadId: this.record.nativeId }).catch(() => {});
-    this.emit('state', 'ended');
+    try {
+      await this.observing;
+      if (this.turnId) await this.interrupt();
+      await this.terminal?.stop();
+      const result = await this.host.rpc.call('thread/unsubscribe', { threadId: this.record.nativeId });
+      if (!['notLoaded', 'notSubscribed', 'unsubscribed'].includes(result.status)) throw new Error('原生返回了未知的断开状态。');
+      // An unsubscribe acknowledgement is not thread termination. The server may
+      // retain its thread or other subscribers; never kill the shared app-server.
+      const state = this.closed || result.status === 'notLoaded' ? 'ended' : 'disconnected';
+      if (state === 'ended') this.host.codexTargets.delete(this.record.nativeId);
+      this.emit('state', state);
+      return { state };
+    } catch (error) {
+      this.stopped = previouslyStopped;
+      throw error;
+    }
   }
 }
 
@@ -305,7 +344,7 @@ class NativeHost {
     if (!this.binaries[record.provider] || !this.binaries.python) throw new Error('未找到原生 CLI 或 Python 3，请先安装并完成原生登录。');
     return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);
   }
-  close() { for (const target of this.hookTargets.values()) target.stop(); for (const target of this.codexTargets.values()) target.terminal?.stop(); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); }
+  close() { for (const target of this.hookTargets.values()) target.stop().catch(() => {}); for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); }
 }
 
 module.exports = { NativeHost, Terminal, executable, delay };

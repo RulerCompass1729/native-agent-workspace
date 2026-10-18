@@ -74,7 +74,17 @@ async function boot() {
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   for (const name of ['create', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
-  register('stop', async (c, id) => { const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: '结束这个原生会话？', detail: '这会停止本应用托管的该会话。只关闭窗口或脱出协作不会结束它。原生后台团队的状态仍需在原生界面确认。', buttons: ['保留会话', '结束会话'], defaultId: 0, cancelId: 0 }); if (answer.response === 1) return c.client.call('stop', id); });
+  register('stop', async (c, id) => {
+    const record = (await c.client.call('initial')).sessions.find(s => s.id === id);
+    if (!record) throw new Error('找不到这个会话。');
+    const codex = record.provider === 'codex';
+    const answer = await dialog.showMessageBox(c.win, {
+      type: 'warning', message: codex ? '断开这个 Codex 会话？' : '结束这个原生会话？',
+      detail: codex ? '关闭本应用终端连接，并请求中断已知的当前回合。原生线程及后台任务可能仍在运行或缓存，确认释放前不会标记已结束。原生历史保留。' : '这会停止本应用托管的原生主进程，并等待退出确认。原生后台团队的状态仍需在原生界面确认。只关闭窗口或脱出协作不会结束它。',
+      buttons: ['保留会话', codex ? '断开连接' : '结束会话'], defaultId: 0, cancelId: 0,
+    });
+    if (answer.response === 1) return c.client.call('stop', id);
+  });
   register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接类型不支持。'); return shell.openExternal(url.href); });
   register('initial', async c => ({ ...await c.client.call('initial'), viewState: c.view }));
   register('viewState', (c, next) => {

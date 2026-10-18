@@ -3,7 +3,7 @@ const api = window.workspace;
 const $ = id => document.getElementById(id);
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 const button = (text, action, cls) => { const el = node('button', text, cls); el.type = 'button'; el.addEventListener('click', () => attempt(action)); return el; };
-const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', ended: '已结束', error: '需要检查' };
+const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', ended: '已结束', error: '需要检查' };
 let state, owner, selected = '', mode = 'chat', preference = 'chat', folder = '', disconnected = false;
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
 const terminals = new Map();
@@ -75,7 +75,7 @@ function render() {
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
     $('header-actions').replaceChildren();
     if (s) {
-      const own = s.owner === owner; const alive = !['ended', 'error'].includes(s.state);
+      const own = s.owner === owner; const alive = !['ended', 'error', 'stopping', 'disconnected'].includes(s.state);
       $('header-actions').append(button(s.roomId ? '脱出协作' : '加入协作', () => api.join(s.id, !s.roomId)), button('独立窗口', () => api.newWindow(s.id)), button('分享选中内容', () => { const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString(); text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。'); }));
       $('session-status').textContent = `${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${own ? '' : ' · 另一个窗口控制'}`;
       $('take-control').hidden = own || !alive;
@@ -103,7 +103,7 @@ function render() {
       $('advanced-content').replaceChildren(node('div', `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`));
       if (s.usage) $('advanced-content').append(node('div', `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}`));
       for (const event of s.fleet.slice(-8)) $('advanced-content').append(node('div', `${event.event} · ${event.name}`));
-      if (alive) $('advanced-content').append(button('结束这个原生会话…', () => api.stop(s.id), 'small'));
+      if (!['ended', 'stopping'].includes(s.state)) $('advanced-content').append(button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small'));
       for (const [id, entry] of terminals) entry.element.hidden = id !== s.id;
       if (mode === 'terminal' && alive) attempt(() => ensureTerminal(s.id));
     }

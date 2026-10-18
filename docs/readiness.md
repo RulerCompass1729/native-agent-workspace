@@ -10,6 +10,7 @@ limited Claude/Codex tests to important unresolved native behavior.
 | Single native session with GUI/TUI views | Local demo: both providers have real replies through both surfaces; native trust/login remains native |
 | UI reopen without re-login/session replacement | Normal exit, crash recovery and loading-window exit checked with live native sessions; view/draft/identity retained while the service remains alive |
 | Intentional multi-window, no accidental duplicate app | Same-profile lock, one DSH UI host, exclusive test launcher and owned-process cleanup checked |
+| Honest stop/disconnect state | Claude waits for process exit; Codex unsubscribe remains disconnected until native closure. Empty-session checks and local failure tests passed without model prompts; live services retain their loaded version |
 | Two agents and human-directed collaboration | Join/leave and explicit sharing implemented; real three-reply check stopped at its limit; local control/race checks passed |
 | Native fleets | Claude single teammate/shared task/messages observed; idle team retained across room changes/UI reopen without a new model prompt. Active Codex fleet and full failure/termination semantics remain unverified |
 | Daily-use release | Not ready: installer/update/reboot recovery, complete input/accessibility, privacy/network and native compatibility coverage still required |

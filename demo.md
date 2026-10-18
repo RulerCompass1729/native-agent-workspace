@@ -32,6 +32,14 @@ Use native commands in **原生终端**. Session controls and the native ID are 
 **会话与原生团队**. First-time permission requests remain subject to the native
 provider; an app room is not an operating system sandbox.
 
+For Claude, **结束这个原生会话…** waits for confirmed exit of the owned main
+process. A timeout leaves the session available for inspection/retry; it is not
+reported as ended. This does not certify that every native teammate has stopped.
+For Codex, **断开本应用连接…** closes this app's terminal and unsubscribes it.
+The native server may retain the thread or background work, so the app displays
+**已断开 · 原生尚未释放** until native closure is confirmed. Native history is
+preserved; disconnecting one session does not kill the shared server.
+
 ## Implementation boundaries
 
 - DSH Web profile, UI slots, theme and Markdown are reused through the client
@@ -61,11 +69,16 @@ provider; an app room is not an operating system sandbox.
 | Duplicate UI launch and explicit extra view | Repeated launch focused the existing app; an intentionally opened second view shared the same native service |
 | UI quit, crash, reopening, and quit during loading | Lifecycle regression passed; owned UI host exited, native session/draft/view retained, load cancellation no longer opened a fatal URL dialog |
 | Human takeover, pending send, draft recovery and room routing races | Local synthetic regression checks passed; these are not extra native provider trials |
+| Stop confirmation | A real empty Claude session transitioned through stopping to ended and its process exited; no prompt was sent. The app button was exercised, with the OS confirmation dialog automated rather than manually mouse-tested |
+| Codex disconnect | An empty Codex 0.163.0 thread remained loaded after unsubscribe; the adapter correctly returned disconnected. No model turn was started |
 
-The latest draft/pending-send fixes are covered by local checks. The already
+The latest draft/pending-send and stop/failure fixes are covered by local checks.
+The empty-session lifecycle checks used a separate new service, closed afterward.
+The already
 running test session service retains its older runtime snapshot until safe
-shutdown; its earlier live results do not prove those newer branches in a native
-model run. No redundant paid run was added for that distinction.
+shutdown; its earlier live results do not prove those newer branches. Reopening
+its UI does not hot-patch that service. No redundant paid run was added for that
+distinction.
 
 Not yet verified: active Codex fleet migration, every Claude teammate lifecycle,
 permission-race behavior across all native tools, external running-session attach,

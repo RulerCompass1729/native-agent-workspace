@@ -30,6 +30,7 @@ def main():
     selector.register(fd, selectors.EVENT_READ, "pty")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "input")
     pending = b""
+    reaped = False
 
     def terminate(*_):
         try:
@@ -46,18 +47,18 @@ def main():
                     try:
                         data = os.read(fd, 65536)
                     except OSError:
-                        running = False
-                        break
+                        data = b""
                     if not data:
-                        running = False
-                        break
-                    emit({"type": "data", "data": base64.b64encode(data).decode("ascii")})
+                        # Closing the terminal stream does not prove process exit.
+                        selector.unregister(fd)
+                    else:
+                        emit({"type": "data", "data": base64.b64encode(data).decode("ascii")})
                 else:
                     data = os.read(sys.stdin.fileno(), 65536)
                     if not data:
+                        selector.unregister(sys.stdin.fileno())
                         terminate()
-                        running = False
-                        break
+                        continue
                     pending += data
                     if len(pending) > 2 * 1024 * 1024:
                         raise ValueError("Oversized terminal command")
@@ -76,10 +77,12 @@ def main():
                             terminate()
             finished, status = os.waitpid(pid, os.WNOHANG)
             if finished:
+                reaped = True
                 emit({"type": "exit", "code": os.waitstatus_to_exitcode(status)})
                 return
     finally:
-        terminate()
+        if not reaped:
+            terminate()
         selector.close()
         os.close(fd)
     emit({"type": "exit", "code": None})

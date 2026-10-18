@@ -76,3 +76,29 @@ test('a reply completed during send is captured in order and does not erase a pr
   assert.deepEqual(w.room.messages.map(m => m.role), ['human', 'assistant']);
   assert.equal(w.room.messages[1].text, '42'); assert.equal(w.snapshot().sessions[0].liveDraft, 'private draft');
 });
+
+test('stop waits for confirmation, invalidates queued input, and retains an unsubscribed runtime', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  let guard, release, calls = 0;
+  r.send = async (_text, _tag, allowed) => { guard = allowed; };
+  await w.send(id, 'pending input', 'owner');
+  r.stop = () => { calls++; return new Promise(resolve => { release = resolve; }); };
+  const pending = w.stop(id); assert.equal(w.stop(id), pending); await tick();
+  assert.equal(calls, 1); assert.equal(guard(), false);
+  assert.equal(w.get(id).state, 'stopping'); assert.equal(w.runtime(id), r);
+  r.emit('state', 'idle'); assert.equal(w.get(id).state, 'stopping');
+  release({ state: 'disconnected' }); await pending;
+  assert.equal(w.get(id).state, 'disconnected'); assert.equal(w.runtime(id), r);
+  r.emit('state', 'ended'); assert.equal(w.get(id).state, 'ended');
+});
+
+test('failed stop keeps the runtime and draft available for a confirmed retry', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  w.setDraft(id, 'unsent draft'); r.stop = async () => { throw Error('No native confirmation'); };
+  await assert.rejects(w.stop(id), /No native confirmation/);
+  assert.equal(w.get(id).state, 'error'); assert.equal(w.runtime(id), r);
+  assert.equal(w.snapshot().sessions[0].liveDraft, 'unsent draft');
+  r.stop = async () => ({ state: 'ended' }); await w.stop(id);
+  assert.equal(w.get(id).state, 'ended'); assert.equal(w.runtimes.has(id), false);
+  assert.equal(w.snapshot().sessions[0].liveDraft, 'unsent draft');
+});

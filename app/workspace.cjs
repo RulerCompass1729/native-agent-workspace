@@ -17,6 +17,7 @@ class Workspace extends EventEmitter {
     this.deadlineTimer = setInterval(() => { if (this.room.run?.status === 'running' && Date.now() > this.room.run.deadline) this.pause('达到本轮 10 分钟期限。'); }, 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map();
+    this.stops = new Map();
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
@@ -63,7 +64,12 @@ class Workspace extends EventEmitter {
   bind(s, runtime) {
     runtime.on('pid', pid => { s.pid = pid; this.changed(); });
     runtime.on('model', model => { s.model = model; this.changed(); });
-    runtime.on('state', state => { s.state = state; if (state === 'ended' || state === 'error') this.pause('原生会话不可用'); this.changed(); });
+    runtime.on('state', state => {
+      if (this.stops.has(s.id) && !['ended', 'error', 'disconnected'].includes(state)) return;
+      s.state = state;
+      if (state === 'ended') { s.pid = null; s.pendingTag = null; s.approval = null; this.runtimes.delete(s.id); }
+      if (state === 'ended' || state === 'error') this.pause('原生会话不可用'); this.changed();
+    });
     runtime.on('terminal', event => this.emit('terminal', { id: s.id, ...event }));
     runtime.on('activity', text => { s.activity = text; this.changed(); });
     runtime.on('background', info => { s.background = info.count; s.scheduled = info.scheduled; this.changed(); });
@@ -194,7 +200,21 @@ class Workspace extends EventEmitter {
     if (!['accept', 'decline'].includes(decision)) throw new Error('未知权限决定。');
     this.host.rpc.reply(requestId, { decision }); s.approval = null; s.state = 'working'; this.changed();
   }
-  stop(id) { this.pause('会话已结束'); this.runtime(id).stop(); const s = this.get(id); s.state = 'ended'; s.pendingTag = null; s.approval = null; this.runtimes.delete(id); this.changed(); }
+  stop(id) {
+    if (this.stops.has(id)) return this.stops.get(id);
+    const s = this.get(id);
+    if (s.state === 'ended') return Promise.resolve();
+    const runtime = this.runtime(id);
+    this.pause('正在断开原生会话'); s.controlRevision++; s.state = 'stopping'; s.activity = '等待原生确认'; this.changed();
+    const operation = Promise.resolve().then(() => runtime.stop()).then(result => {
+      if (!['ended', 'disconnected'].includes(result?.state)) throw new Error('原生未确认结束状态。');
+      s.state = result.state; s.pendingTag = null; s.approval = null;
+      s.activity = result.state === 'ended' ? '' : '本应用连接已断开；原生线程或后台任务可能仍在运行。';
+      if (s.state === 'ended') { s.pid = null; this.runtimes.delete(id); }
+    }).catch(error => { s.state = 'error'; s.activity = error.message; throw error; })
+      .finally(() => { this.stops.delete(id); this.changed(); });
+    this.stops.set(id, operation); return operation;
+  }
   close() { clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
 }
 
