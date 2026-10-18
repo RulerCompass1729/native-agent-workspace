@@ -1,6 +1,6 @@
 # Demo readiness and milestones
 
-As of 2026-10-17. Current phase: **macOS source alpha and locally tested Apple Silicon app build**, with DSH as the UI
+As of 2026-10-17. Current phase: **macOS source alpha and locally tested Apple Silicon app/DMG build**, with DSH as the UI
 foundation. The maintainer authorized implementation and real use, then explicitly
 limited Claude/Codex tests to important unresolved native behavior.
 
@@ -34,11 +34,29 @@ fleets. No interrupted prompt or collaboration is automatically replayed.
 
 ## Next milestone
 
-Invite a small technical cohort using the source alpha instructions. Collect
-concrete single-session feedback before adding providers. The next terminal
-increment is the preferred external-terminal connection described below; signed
-public binary distribution remains separately gated by its actual artifact
-review and provider/platform conditions. See [alpha evidence](alpha.md).
+The maintainer's current milestone is the complete installation/use path, focused
+on **individual and collaborative native TUI use**:
+
+1. Download the macOS installer, install and open it without Git/npm commands.
+2. Complete prerequisite detection and native login/trust, then use Claude or
+   Codex alone in its terminal view.
+3. Join the two sessions, explicitly share a task, observe bounded handoffs and
+   retain human pause/takeover controls.
+4. Detach either agent and keep using its original native session.
+5. Quit/reopen the interface and retain sessions, selected view and saved draft
+   without duplicate instances or replayed prompts.
+
+The local DMG copy/launch path is verified; public binary download and Gatekeeper
+acceptance remain open pending a reviewed signing identity, notarization and
+exact-artifact review. First use on a Mac without Python/provider installation
+also remains open: current setup links to official instructions. Earlier native
+single-session replies and bounded collaboration may be reused only where the
+runtime/adapter behavior is unchanged; they do not prove fresh-machine setup.
+See [alpha evidence](alpha.md).
+
+Do not expand this milestone into new providers, extra chat features, or iTerm2
+embedding. Preferred-terminal integration below is a follow-up after this path
+works; it must not replace finishing installation and basic TUI use.
 
 Every commit/push still requires proactive secret/PII scans and review, including
 outgoing history, author identities and commit messages. Raw test evidence stays
@@ -55,10 +73,10 @@ feature parity.
 | Option | Expected effort / fidelity | Decision and trigger |
 | --- | --- | --- |
 | Adjustable embedded terminal; optional font/color profile import | Small–medium; appearance only, not arbitrary shortcut/action parity | Follow actual terminal feedback; import only selected visual fields, never shell commands, SSH entries, triggers or secrets |
-| Open the same managed session in installed iTerm2 / Terminal | Medium; preserves that app’s chosen profile and its own shortcuts | Next terminal milestone after alpha recovery checks. Detect installed apps locally, let user select; retain one input owner and the same native session/fleet. Closing that terminal must only detach the view |
+| Open the same managed session in installed iTerm2 / Terminal | Medium; preserves that app’s chosen profile and its own shortcuts | Follow-up after the complete installation/TUI milestone. Detect installed apps locally, let user select; retain one input owner and the same native session/fleet. Closing that terminal must only detach the view |
 | Embed iTerm2 itself inside Electron | Large; native application/windowing integration and licensing review | Deferred. No supported embeddable-view contract established by the reviewed scripting APIs; do not copy/link GPL implementation into this Apache project without separate review |
 
-The recommended next implementation is the external terminal view, backed by our
+The recommended later terminal integration is the external terminal view, backed by our
 existing persistent PTY/service, not a new agent invocation. Codex’s supported
 remote TUI can be considered separately; Claude must keep its existing PTY and
 Teams, rather than background/resume migration. An arbitrary already-running
