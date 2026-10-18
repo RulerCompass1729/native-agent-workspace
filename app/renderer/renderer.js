@@ -33,7 +33,17 @@ function select(id, requestedMode) {
   clearFailedTerminal(s?.id);
   lastMessages = ''; lastRoomMessages = ''; render(); attempt(persistView);
   if (s && mode === 'terminal' && !['ended', 'stopping', 'disconnected', 'recoverable'].includes(s.state)) attempt(async () => { await ensureTerminal(s.id); focusTerminal(s.id); });
-  if (selected === 'room' && s?.owner === owner && s.view !== 'terminal') attempt(() => api.claim(s.id, 'terminal'));
+  if (selected === 'room' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {
+    const revision = selectionRevision;
+    const stillSelected = () => revision === selectionRevision && selected === 'room' && roomSession === s.id && mode === 'terminal';
+    await api.claim(s.id, 'terminal');
+    if (!stillSelected()) return;
+    const acknowledged = await api.initial();
+    if (!stillSelected()) return;
+    state = acknowledged; render();
+    await ensureTerminal(s.id);
+    if (stillSelected()) focusTerminal(s.id);
+  });
 }
 function selectRoom(id = '') { roomSession = id; select('room'); }
 async function detach(id) {

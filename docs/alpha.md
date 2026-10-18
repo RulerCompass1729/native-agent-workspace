@@ -660,3 +660,33 @@ sessions retained their identity/PIDs, history, drafts, names and membership,
 with no additional dispatch. The original view was restored. Independent review
 verified the recipient-loss and restart counterexamples. This is a local,
 unnotarized alpha; no binary was uploaded and clean-Mac setup remains unverified.
+
+## Room terminal focus after control acknowledgement
+
+Alpha.14 fixes a reproduced timing gap when opening an already-owned conversation
+as a room member terminal: if its terminal snapshot arrived before the control
+state, the picture appeared but keyboard focus was not restored. The room view
+now waits for acknowledged control state before focusing, and verifies that the
+user is still looking at that same member and view. It does not take control from
+another owner or start a native session.
+
+A headed reproduction held the actual workspace claim until after the snapshot;
+the old code failed to focus after release. Source and installed alpha.14 passed
+seven cases: first input after acknowledgement, late acknowledgement after moving
+to another member, an open dialog, another session's menu, editing a shared draft,
+failed claim with explicit retry, and a simulated intervening owner change. The
+original four terminal readiness cases and 102 local checks also passed, without
+skips. Electron/DSH, IPC, workspace state and keyboard input were real; provider
+transport and the competing owner were synthetic. No native provider processes
+or model tasks were started. This does not prove physical IME/VoiceOver or native
+permission/fleet concurrency.
+
+The DMG was mounted read-only and installed: all 9,177 file/link entries matched,
+affected source and the generated UI matched, and ad-hoc signature verification
+passed. This remains a local unnotarized alpha; no binary was uploaded.
+
+The normal profile was reopened after the update. A fresh service connection
+confirmed that its three existing native sessions retained IDs/PIDs, full history,
+drafts, names, membership and dispatch counters. The saved view and shared
+recipient were unchanged, and one normal app window remained visible. Independent
+review verified the installed change and closed A12-F1.

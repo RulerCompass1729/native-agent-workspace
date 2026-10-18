@@ -147,3 +147,12 @@ recipient departure in both sharing selectors.
 The textarea keeps Enter as a newline; focused buttons support Enter normally.
 Set `NAW_APP_EXECUTABLE` to verify a packaged app; do not run desktop runners in
 parallel. Synthetic provider labels do not constitute native model/fleet proof.
+
+`npm run test:focus` controls terminal snapshot and view-control timing with the
+existing synthetic terminal fixture. It verifies the real desktop focus/input
+path when a room snapshot is ready before its control acknowledgement, including
+late responses after selecting another member, menus/dialogs, shared drafts,
+failure/retry and a simulated competing owner. It opens one window and makes no
+native provider or model requests; the owner scenario is not a native two-window
+concurrency or permission test. The existing `test:terminal` readiness cases
+remain separate coverage for delayed/stale/failed snapshots.
