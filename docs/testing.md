@@ -36,9 +36,12 @@ Claude/Codex terminal/conversation replies and a three-reply bounded handoff,
 followed by one Claude native team task with one teammate. The team generated its
 own native work and mailbox turns; eight top-level requests are not eight total
 model calls and are not a token/cost total. An earlier separate Codex continuity
-probe also used one native request. No additional model task was launched after
-the maintainer asked to reduce test spend. Subsequent stop checks opened one empty
-Claude session and one empty Codex metadata thread, without sending prompts.
+probe also used one native request. Subsequent stop checks opened one empty
+Claude session and one empty Codex metadata thread, without sending prompts;
+the alpha packaging/recovery checks likewise sent no model tasks. A later,
+explicitly requested fresh-install walkthrough used one bounded Claude request
+to verify the first reply after installation, then stopped model testing. It
+observed no tool or teammate activity; see [the walkthrough](alpha.md#fresh-install-walkthrough).
 
 Seventeen local state/lifetime checks and the six-case visible lifecycle regression
 passed. They consume no model tokens. The native fleet coverage remains limited

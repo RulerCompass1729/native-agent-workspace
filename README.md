@@ -16,14 +16,62 @@ The interface runs on a pinned, UI-only DeepSeek Harness composition, with this 
 
 ## Run locally
 
-Use macOS with Node.js 22.19+ on the 22.x line or Node.js 24+, Python 3, and your existing native Claude Code/Codex installation and sign-in.
+This source alpha currently needs a terminal for installation. There is no public
+one-click installer yet. You only need **one** supported agent to start.
+
+1. Install [Node.js](https://nodejs.org/en/download) (22.19+ on 22.x, or 24+),
+   [Python 3](https://www.python.org/downloads/macos/), and either
+   [Claude Code](https://code.claude.com/docs/en/setup) or
+   [Codex CLI](https://developers.openai.com/codex/cli/). Complete that agent's
+   own sign-in. This app does not create a provider account for you.
+2. Open Terminal or iTerm2 and check the prerequisites:
+
+```sh
+node --version
+npm --version
+python3 --version
+```
+
+If a command is not found, finish its installation and open a new terminal before
+continuing. On macOS, a developer-tools installation prompt is not confirmation
+that Python is already available.
+
+3. Download this repository. With Git installed:
+
+```sh
+git clone https://github.com/RulerCompass1729/native-agent-workspace.git
+cd native-agent-workspace
+```
+
+Alternatively, use GitHub's **Code → Download ZIP**, extract it, type `cd ` in your
+terminal, drag the extracted folder into the terminal, then press Return.
+
+4. Inside that folder, install and start:
 
 ```sh
 npm ci
 npm start
 ```
 
-Choose **新会话**, a provider, a working folder, and **原生终端** or **对话**. The native terminal handles first-time trust/login. For a new Codex terminal session, complete the first message there before using the conversation view. No model prompt is sent merely by opening the workspace.
+The first run needs network access to download dependencies and Electron. Wait for
+installation to finish before starting. If npm says it cannot find `package.json`,
+you are outside the extracted/cloned project folder. No GitHub login is required
+to download this public source.
+
+5. In the window, open **检查安装与版本**. Then choose **新会话**, your provider,
+   a working folder (or keep the empty default), and **原生终端** or **对话**.
+   If the session says **正在启动**, switch to **原生终端** to check for the native
+   folder-trust or login prompt. Read and answer it there; the app does not approve
+   it for you. Return to **对话** when the session is ready and send your first message.
+
+For a new Codex terminal session, complete the first message there before using
+the conversation view. No model prompt is sent merely by opening the workspace;
+messages you send use your provider's own plan or billing.
+
+Next time, open a terminal in the same project folder and run `npm start`; you do
+not need to run `npm ci` again unless dependencies changed. Keep the project folder
+while its source-launched sessions are running. Quitting the interface leaves
+those native sessions running; see [how to stop or fully exit](docs/alpha.md).
 
 Use **加入协作 / 脱出协作** to change membership without replacing the native session. **开始一轮核查** permits up to three replies within ten minutes; native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
 

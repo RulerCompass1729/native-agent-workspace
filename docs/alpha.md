@@ -9,7 +9,8 @@ is still a working name.
 1. Install and sign in to your own Claude Code or Codex CLI using its official
    native flow. This project does not distribute either provider binary or copy
    their credentials. Install Python 3 as well.
-2. For the public source alpha: clone this repository, run `npm ci`, then
+2. Follow the [complete download/install steps](../README.md#run-locally): clone
+   or download this public repository, enter its folder, run `npm ci`, then
    `npm start`. Building requires Node.js 22.19+ on 22.x, or 24+.
 3. On an Apple Silicon Mac, `npm run package:mac` builds an app/zip in `dist/`.
    The app uses Electron's bundled Node runtime; no separate Node/npm is needed
@@ -28,6 +29,13 @@ platform signing plan; a successful local build is not that approval.
 Closing or quitting the interface leaves managed native processes running. Opening
 the same application/profile again restores selected session, view and saved draft.
 Repeated launch focuses the existing instance. An explicit **独立窗口** is allowed.
+
+To end a Claude session, expand **会话与原生团队** and choose **结束这个原生会话…**.
+Review the native confirmation and wait for **已结束**. For Codex, **断开本应用连接…**
+is a disconnect request, not proof that native work ended. Once all sessions are
+confirmed ended, **隐私与数据 → 所有会话结束后完全退出** also stops the local service.
+Do not delete the source directory or application data to force a running session
+to stop.
 
 To update a local app, quit its interface and replace the app, keeping its data
 directory. A compatible newer frontend reconnects to the existing service; an
@@ -67,6 +75,25 @@ No new model task was sent during these checks. The native recovery/stop actions
 used the service control interface; their OS confirmation dialogs were not
 mouse-tested. Earlier native reply/Teams evidence is reused within its original
 scope; it is not a new active-fleet recovery test.
+
+## Fresh-install walkthrough
+
+A separate 2026-10-17 check cloned the public repository at `df0b749`, used an
+empty npm cache and a fresh application data directory, and ran `npm ci` followed
+by `npm start` from a real iTerm2 window. No existing project dependencies or
+generated UI files were copied into the clone. The actual visible app opened,
+showed the prerequisite screen, created one Claude session, and presented its
+native folder-trust prompt. After answering that prompt through the terminal,
+one bounded synthetic message received its expected reply in both views.
+
+Stopping the source launcher with Ctrl-C and running `npm start` again preserved
+the same native session ID/PID, terminal view and unsent Chinese draft. The
+dispatch count stayed at one; no tools or teammate activity was observed. The
+README now includes download, folder navigation, environment checks and first-use
+instructions. This proves a fresh app installation on an already configured Mac,
+not installation of provider accounts on a new computer. Node/npm and native
+authentication were already available in the normal login shell. Desktop checks
+used a local debugging connection; it is not needed by users.
 
 Skipped: full active-fleet recovery and Claude history resume; verify with a suitable
 ended synthetic history or a separately bounded native trial.
