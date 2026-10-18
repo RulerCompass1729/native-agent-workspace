@@ -22,9 +22,11 @@ or start paid model runs as a side effect of editing documents.
 - Stop after the required evidence arrives. No polling prompts, automatic
   retry, extra acknowledgement loops, or fleet tests merely for completeness.
   Unverified capabilities remain explicitly unverified.
-- Use the least expensive suitable model available in isolated Codex tests
-  (verify current availability/pricing); use Sonnet for Claude tests. Override
-  only the test session, never the person's normal agent settings.
+- For both Claude and Codex, use the least expensive suitable available model
+  in isolated tests. Verify current availability/pricing and the selected model
+  before sending a task. Never silently fall back to a more expensive default;
+  stop the trial if the selected model is unavailable. Override only the test
+  session, never the person's normal agent settings.
 - Use one desktop test profile and one test launcher. Repeated launch must
   focus the existing instance; extra windows require an intentional test case.
   Clean up only processes owned by that test, preserving native user sessions.

@@ -16,10 +16,12 @@ No status prompts, automatic resubmission, repeat acknowledgements or multi-agen
 debates just to make a test feel thorough. Native subagent/tool work must be counted
 as usage too; root-turn limits are not provider token/cost limits.
 
-Use the cheapest suitable model currently available for isolated Codex tests,
-and Sonnet for Claude. Apply model/effort overrides only to test sessions, never
-to the person's normal configuration. Verify availability and current pricing
-before selecting a model; a fixed alias is not a permanent cheapest-model claim.
+Use the cheapest suitable model currently available for both Claude and Codex
+in isolated tests. Verify availability, current pricing and the actual selected
+model before sending a task; a fixed alias is not a permanent cheapest-model
+claim. If that model is unavailable, stop rather than silently falling back to
+a more expensive default. Apply model/effort overrides only to test sessions,
+never to the person's normal configuration.
 
 For changes to the Claude bridge, run `claude plugin test app/claude-bridge`
 and `claude plugin validate app/claude-bridge` as well. The native test kit executes
@@ -132,3 +134,16 @@ activate stale input. Failure stays noninteractive; explicitly selecting the vie
 retries. Room and solo views use the same terminal. No native provider process or
 model request is started. The installed-build and private-screenshot options match
 the draft runner above. Native draft continuity remains separately documented.
+
+## Room composer regression
+
+`npm run test:room` opens one visible Electron/DSH window with an isolated profile,
+real IPC and workspace state, and a delayed synthetic provider transport. It
+starts no native provider processes and makes no model requests. The check
+verifies default form submission, pointer/keyboard activation, explicit automatic
+runs, unknown-fleet pauses, pending/blank/ended-recipient guards, late failure and
+reopening without replay, saved/legacy/invalid recipients on restart, and
+recipient departure in both sharing selectors.
+The textarea keeps Enter as a newline; focused buttons support Enter normally.
+Set `NAW_APP_EXECUTABLE` to verify a packaged app; do not run desktop runners in
+parallel. Synthetic provider labels do not constitute native model/fleet proof.

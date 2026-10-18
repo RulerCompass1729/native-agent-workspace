@@ -6,6 +6,7 @@ const button = (text, action, cls) => { const el = node('button', text, cls); el
 const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', error: '需要检查' };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let roomSession = '', selectionRevision = 0;
+let roomSubmitting = false;
 let renamingId = '', renaming = false;
 let sessionMenu;
 const sessionRows = new Map();
@@ -22,7 +23,7 @@ const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = () => state?.sessions.filter(s => s.roomId === 'shared') || [];
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
-function persistView() { return api.viewState({ selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value }); }
+function persistView() { return api.viewState({ selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: $('recipient').value }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 function select(id, requestedMode) {
   selectionRevision++;
@@ -170,12 +171,19 @@ async function showSetup() {
 }
 function populateSelect(el, items) {
   const old = el.value;
+  const hadChoices = el.dataset.hadChoices === 'true';
   const signature = JSON.stringify(items.map(s => [s.id, s.name]));
   if (el.dataset.signature === signature) return;
   if (!el.dataset.signature) el.addEventListener('change', () => { el.title = el.selectedOptions[0]?.textContent || ''; });
   el.replaceChildren(...items.map(s => { const option = node('option', s.name); option.value = s.id; return option; }));
   el.dataset.signature = signature;
+  if (items.length) el.dataset.hadChoices = 'true';
   if (items.some(s => s.id === old)) el.value = old;
+  else if (hadChoices) {
+    // Losing a recipient must not silently redirect a private draft.
+    const placeholder = node('option', '请选择接收方'); placeholder.value = ''; placeholder.disabled = true;
+    el.prepend(placeholder); el.value = '';
+  }
   el.title = el.selectedOptions[0]?.textContent || '';
 }
 function messageList(el, messages, room = false) {
@@ -299,12 +307,16 @@ function render() {
         const actions = node('div', undefined, 'actions'); actions.append(button('查看终端', () => { $('members-dialog').close(); selectRoom(m.id); }), button('脱出', async () => { await detach(m.id); $('members-dialog').close(); }));
         card.append(heading, node('p', states[m.state]), actions); return card;
       }));
+      const previousRecipient = $('recipient').value;
       populateSelect($('recipient'), members());
+      if (previousRecipient && !$('recipient').value) attempt(persistView);
       const safeHandoffs = state.capabilities?.includes('verifiedHandoffs');
-      $('run-button').disabled = members().length !== 2 || run?.status === 'running' || !safeHandoffs;
-      $('run-help').textContent = safeHandoffs ? '最多 3 次回复、10 分钟。原生后台或团队状态未报告时，保留回复并暂停；可确认后定向发送。原生子 agent 的用量另计。' : state.handoffNotice || '旧版后台仍在保留原生会话，自动核查暂不可用；请用原生终端或定向发送。新建会话会使用新版后台。';
       const recipient = people.find(s => s.id === $('recipient').value);
-      $('forward-button').disabled = !recipient || recipient.shareAvailable === false || recipient.chatAvailable === false || disconnected;
+      const unavailable = roomSubmitting || disconnected || !$('shared-input').value.trim();
+      const ready = s => s && s.state === 'idle' && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
+      $('forward-button').disabled = unavailable || !ready(recipient);
+      $('run-button').disabled = unavailable || !recipient || people.length !== 2 || !people.every(ready) || run?.status === 'running' || !safeHandoffs;
+      $('run-help').textContent = '定向发送只交给选定的会话。' + (safeHandoffs ? '自动核查最多 3 次回复、10 分钟；原生后台或团队状态未报告时暂停。原生子 agent 的用量另计。' : state.handoffNotice || '旧版后台仍在保留原生会话，自动核查暂不可用。新建会话会使用新版后台。');
       if (recipient?.sharingNotice || recipient?.submissionNotice) $('run-help').textContent = recipient.sharingNotice || recipient.submissionNotice;
       $('pause-button').disabled = run?.status !== 'running';
     }
@@ -439,10 +451,18 @@ $('composer').onsubmit = event => {
   });
 };
 $('interrupt').onclick = () => attempt(() => api.interrupt(activeSessionId()));
-$('shared-input').oninput = () => attempt(persistView);
-$('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => { const first = $('recipient').value; return api.run([first, ...members().filter(s => s.id !== first).map(s => s.id)], $('shared-input').value, 3); }); };
-$('forward-button').onclick = () => attempt(() => api.forward($('recipient').value, $('shared-input').value));
-$('recipient').onchange = render;
+$('shared-input').oninput = () => { attempt(persistView); render(); };
+async function submitRoom(automatic) {
+  if (roomSubmitting || $(automatic ? 'run-button' : 'forward-button').disabled) return;
+  const first = $('recipient').value, text = $('shared-input').value;
+  const ids = [first, ...members().filter(s => s.id !== first).map(s => s.id)];
+  roomSubmitting = true; render();
+  try { await (automatic ? api.run(ids, text, 3) : api.forward(first, text)); }
+  finally { roomSubmitting = false; render(); }
+}
+$('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => submitRoom(false)); };
+$('run-button').onclick = () => attempt(() => submitRoom(true));
+$('recipient').onchange = () => { attempt(persistView); render(); };
 $('share-recipient').onchange = updateSharingControls;
 $('pause-button').onclick = () => attempt(() => api.pause());
 $('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && s.state !== 'ended').map(s => { const entry = button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
@@ -464,6 +484,13 @@ attempt(async () => {
   const display = state.viewState.terminalDisplay;
   if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;
   $('shared-input').value = typeof state.viewState.sharedDraft === 'string' ? state.viewState.sharedDraft : '';
+  const savedRecipient = state.viewState.roomRecipient;
+  if (typeof savedRecipient === 'string' || $('shared-input').value.trim()) {
+    // Older views have a draft but no recipient: require an explicit choice.
+    $('recipient').dataset.hadChoices = 'true'; populateSelect($('recipient'), members());
+    $('recipient').value = members().some(s => s.id === savedRecipient) ? savedRecipient : '';
+    $('recipient').title = $('recipient').selectedOptions[0]?.textContent || '';
+  }
   const draft = state.viewState.draft, saved = state.sessions.find(s => s.id === draft?.id);
   if (saved && (!saved.owner || saved.owner === owner)) { saved.liveDraft = draft.text; await api.draft(saved.id, draft.text); }
   select(state.viewState.selected || '', mode); await api.uiReady();

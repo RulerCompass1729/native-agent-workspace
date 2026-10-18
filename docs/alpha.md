@@ -628,3 +628,35 @@ The normal profile's three existing native sessions, messages, drafts, labels,
 membership and selected view were restored unchanged with no new dispatch. Normal
 app activation showed one visible window. The artifact remains a local,
 unnotarized build; no binary was uploaded and clean-Mac setup is still unverified.
+
+## Directed sending is the room default
+
+Alpha.13 makes **定向发送** the primary/default form action. It sends only to the
+selected member; **开始一轮核查** remains a separate explicit action with the same
+three-reply/ten-minute limit and unknown-fleet pause. Enter in the shared textarea
+still inserts a newline. There is no new automatic routing or model request.
+
+The composer blocks blank, pending and unavailable-recipient submissions. A late
+failure keeps the current draft and does not retry. The selected recipient is
+saved alongside the shared draft; reopening restores both. If the recipient has
+left, or an older saved draft has no recipient ID, sending stays disabled until
+the user selects one. Both the room composer and selected-reply sharing dialog
+clear a departed recipient instead of silently selecting someone else.
+
+The old default form failed a one-member headed reproduction. Final source and
+installed checks cover exact payload/recipient and dispatch counts, pointer and
+keyboard activation, the separate automatic action, unknown-state pause, repeated
+submission, late failure, UI reopen, legacy/invalid saved recipients, and removal
+from both selectors. Seven synthetic dispatches per successful run, no native
+provider processes and no model calls. The actual Electron/DSH interface, IPC,
+workspace and storage were exercised; provider transport was synthetic. The
+existing nine-group draft regression and 102 local checks also passed, with no
+skips. These results do not extend the earlier native fleet/IME coverage.
+
+The final alpha.13 DMG was mounted read-only and installed. All 9,177 file/link
+entries matched the mounted app, affected source and generated UI matched, and
+ad-hoc signature verification passed. The normal profile's three existing native
+sessions retained their identity/PIDs, history, drafts, names and membership,
+with no additional dispatch. The original view was restored. Independent review
+verified the recipient-loss and restart counterexamples. This is a local,
+unnotarized alpha; no binary was uploaded and clean-Mac setup remains unverified.

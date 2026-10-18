@@ -10,15 +10,15 @@ NativeHost.prototype.create = function (record) {
   runtime.start = async () => runtime.emit('state', 'idle');
   runtime.stop = async () => ({ state: 'ended' });
   runtime.send = (text, tag, guard) => new Promise((resolve, reject) => {
-    sends.push({ id: record.id, text, settle(fail) {
+    sends.push({ id: record.id, text, settle(fail, reply = '') {
       if (fail || !guard()) { reject(new Error('Synthetic acceptance failure')); return; }
       runtime.emit('submitted', tag); resolve();
-      runtime.emit('state', 'idle'); runtime.emit('complete', { tag, text: '' });
+      runtime.emit('state', 'idle'); runtime.emit('complete', { tag, text: reply });
     } });
   });
   return runtime;
 };
 process.on('message', request => {
-  if (request.method === 'release') sends.at(-1).settle(request.fail);
+  if (request.method === 'release') sends.at(-1).settle(request.fail, request.reply);
   process.send({ requestId: request.id, sends: sends.map(({ id, text }) => ({ id, text })) });
 });
