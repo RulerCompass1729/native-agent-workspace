@@ -8,6 +8,8 @@ header { min-height: 74px; padding: 14px 24px; }
 #terminal-controls button { padding: 6px 9px; font-size: 12px; }
 #session-status { flex: 1; min-width: 120px; text-align: right; overflow-wrap: anywhere; }
 #terminal-area { margin: 0; padding: 12px 16px; border-radius: 0; }
+.terminal-surface { height: 100%; width: 100%; }
+.terminal-loading { color: #e6e8eb; padding: 8px; }
 #terminal-display-dialog { width: 370px; }
 #terminal-display-dialog select { width: 100%; }
 #privacy-dialog { width: 650px; max-height: 88vh; overflow: auto; }

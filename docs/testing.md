@@ -120,3 +120,15 @@ edits, failed acceptance, unchanged-draft clearing, switching sessions and UI
 reopen. The runner stops only its own fixture service. `NAW_APP_EXECUTABLE` can
 select an installed matching app, and `NAW_EVIDENCE_DIR` stores private screenshots.
 This verifies the desktop draft boundary, not native TUI draft or turn ordering.
+
+## Terminal connection readiness
+
+`npm run test:terminal` opens a real desktop window with synthetic terminals whose
+initial snapshots are held by the runner. It verifies that loading never exposes
+an editable terminal or enables paste, including during service state updates.
+After readiness, the first input reaches the intended session exactly once. A
+late snapshot from another member or an older connection cannot steal focus or
+activate stale input. Failure stays noninteractive; explicitly selecting the view
+retries. Room and solo views use the same terminal. No native provider process or
+model request is started. The installed-build and private-screenshot options match
+the draft runner above. Native draft continuity remains separately documented.

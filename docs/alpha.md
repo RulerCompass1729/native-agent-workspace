@@ -574,3 +574,57 @@ uploaded.
 
 Normal LaunchServices reopening and app activation showed one visible workspace
 window. Preserved native services are separate from additional UI instances.
+
+## Two native agents in one shared workspace
+
+On installed alpha.11, a human-directed room task asked Claude Sonnet to read a
+synthetic file containing two sections, with sizes 2 × 7 and 3 × 2. Its native
+Read record contains that file, but its answer was `TOTAL=23`. The test retained
+that incorrect answer; it did not retry or alter it. Using the shared reply's
+“选择并分享” action, the test sent only that answer and an explicit verification
+instruction to the existing Codex Luna session. Codex's native command record
+shows it reading the same file in the same real directory and answering
+`VERIFIED=20`. Both original replies appeared in the room.
+
+This was two user tasks, each involving a native tool read, not a claim of only
+two model calls. One new Claude task and one additional Codex turn were observed;
+there were no native subagent events. Codex received exactly the selected text
+and verification instruction. Earlier private test content remained in its own
+native history and did not enter the room or Claude's submitted task.
+
+After the replies, Codex detached and rejoined with the same native identity and
+PID. Both unsubmitted terminal drafts, the shared-task draft, messages and the
+selected room member survived closing/reopening the UI. Dispatches remained two;
+no task was replayed and only one test window was open at a time. This verifies
+sequential human-directed cooperation, not unattended completion, simultaneous
+file modification, active native teams, or clean-machine installation.
+
+The native counters for this check were 66,261 additional Codex tokens (62,720
+cached input, 66 output) and 43,342 Claude tokens across its two recorded model
+responses (30,964 cache-read input, 12,247 cache-creation input, 4 other input,
+127 output). Counters describe the synthetic test and retained native context;
+they are not a bill or proof of cost parity. Provider-internal activity may not
+be fully exposed by these records. No further model tasks were used for the UI fix.
+
+The same run exposed a first-mount input defect: a terminal's input surface could
+exist before its initial snapshot was applied, and early characters were ignored.
+The first draft assertion failed; retrying only the unsubmitted draft after the
+view settled succeeded. Alpha.12 adds a visible connection state and gates input,
+focus and paste until the current terminal is ready. It does not queue keystrokes
+or send them later. Delayed synthetic snapshots reproduced the old readiness gap
+and now cover state updates, late completion after changing members, connection
+replacement, failure and explicit retry. Failed test logs remain private evidence.
+
+The final alpha.12 DMG was mounted read-only and installed: 9,177 file/link entries
+matched, the generated UI matched current source, and ad-hoc signature verification
+passed. The installed app passed the delayed-terminal fixture, then reopened the
+same two live native sessions on their retained alpha.11 backend. The product
+automatically focused each ready terminal; the first unsubmitted suffix reached
+its intended existing draft. A further UI reopen preserved both drafts, native
+IDs/PIDs, histories, shared draft and selected member, with dispatches still two.
+No paid task was repeated for this frontend-only change. Independent review passed.
+
+The normal profile's three existing native sessions, messages, drafts, labels,
+membership and selected view were restored unchanged with no new dispatch. Normal
+app activation showed one visible window. The artifact remains a local,
+unnotarized build; no binary was uploaded and clean-Mac setup is still unverified.

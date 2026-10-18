@@ -29,6 +29,7 @@ function select(id, requestedMode) {
   selected = id; const s = current();
   if (selected === 'room') mode = 'terminal'; else if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
   $('message-input').value = s?.liveDraft || '';
+  clearFailedTerminal(s?.id);
   lastMessages = ''; lastRoomMessages = ''; render(); attempt(persistView);
   if (s && mode === 'terminal' && !['ended', 'stopping', 'disconnected', 'recoverable'].includes(s.state)) attempt(async () => { await ensureTerminal(s.id); focusTerminal(s.id); });
   if (selected === 'room' && s?.owner === owner && s.view !== 'terminal') attempt(() => api.claim(s.id, 'terminal'));
@@ -46,7 +47,15 @@ async function detach(id) {
   const s = current(); if (s?.owner === owner && s.view !== nextMode) await api.claim(id, nextMode);
 }
 function focusTerminal(id = activeSessionId()) {
-  if (id === activeSessionId() && mode === 'terminal' && !sessionMenu && !document.querySelector('dialog[open]')) terminals.get(id)?.term.focus();
+  if (terminalCanInput(id) && !sessionMenu && !document.querySelector('dialog[open]')) terminals.get(id).term.focus();
+}
+function terminalCanInput(id) {
+  const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
+  return Boolean(entry?.ready && id === activeSessionId() && mode === 'terminal' && record?.owner === owner && record?.view === 'terminal' && !disconnected);
+}
+function clearFailedTerminal(id) {
+  const entry = terminals.get(id);
+  if (entry?.failed) { entry.term.dispose(); entry.element.remove(); terminals.delete(id); }
 }
 function applyTerminalDisplay() {
   const theme = terminalThemes[terminalDisplay.palette];
@@ -55,8 +64,8 @@ function applyTerminalDisplay() {
   fitTerminal(activeSessionId());
 }
 function pasteTerminal(text) {
-  const s = current(), entry = terminals.get(activeSessionId());
-  if (!s || s.owner !== owner || s.view !== 'terminal' || !entry?.ready || disconnected) throw new Error('请先连接并接管这个终端。');
+  const entry = terminals.get(activeSessionId());
+  if (!terminalCanInput(activeSessionId())) throw new Error('请先连接并接管这个终端。');
   if (!text) return;
   if (text.length > 65500) throw new Error('粘贴内容过长，请分段粘贴。');
   if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw new Error('原生程序尚未启用多行粘贴保护，请先分行粘贴。');
@@ -235,7 +244,7 @@ function render() {
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
       $('terminal-controls').hidden = mode !== 'terminal';
-      $('terminal-paste').disabled = !own || s.view !== 'terminal' || !alive || disconnected;
+      $('terminal-paste').disabled = !terminalCanInput(s.id) || !alive;
       $('messages').hidden = mode !== 'chat'; $('terminal-area').hidden = mode !== 'terminal'; $('composer-wrap').hidden = mode !== 'chat';
       $('message-input').disabled = !own || !alive || disconnected;
       $('send-button').disabled = !own || s.state !== 'idle' || Boolean(s.pendingTag) || disconnected || s.chatAvailable === false;
@@ -264,7 +273,7 @@ function render() {
         $('header-actions').prepend(button('继续原生会话', () => api.resume(s.id), 'primary'));
         $('advanced-content').append(button('移除本应用记录…', () => api.forget(s.id), 'small'));
       }
-      for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; const record = state.sessions.find(record => record.id === id); entry.term.options.disableStdin = record?.owner !== owner || record?.view !== 'terminal' || disconnected; }
+      for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !terminalCanInput(id); }
       if (mode === 'terminal' && (alive || (s.state === 'error' && s.terminalAvailable))) attempt(() => ensureTerminal(s.id));
     }
     if (inRoom) {
@@ -306,7 +315,7 @@ async function switchMode(next) {
   await api.claim(s.id, next);
   // The change stream is batched. Fetch the acknowledged control state before
   // exposing the input, or the first key after switching can be discarded.
-  state = await api.initial(); mode = next; preference = next; await persistView(); render();
+  state = await api.initial(); mode = next; preference = next; clearFailedTerminal(s.id); await persistView(); render();
   if (next === 'terminal') { await ensureTerminal(s.id); focusTerminal(s.id); }
   else $('message-input').focus();
 }
@@ -318,8 +327,10 @@ async function ensureTerminal(id) {
   const element = node('div', undefined, 'terminal-host'); element.dataset.terminalId = id; $('terminal-area').append(element);
   const theme = terminalThemes[terminalDisplay.palette];
   $('terminal-area').style.backgroundColor = theme.background;
-  const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: state.sessions.find(s => s.id === id)?.owner !== owner || state.sessions.find(s => s.id === id)?.view !== 'terminal' || disconnected, theme: { ...theme } });
-  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(element);
+  const loading = node('p', '正在连接原生终端…', 'terminal-loading'); loading.setAttribute('role', 'status');
+  const surface = node('div', undefined, 'terminal-surface'); surface.hidden = true; surface.inert = true; element.append(loading, surface);
+  const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
+  const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
   const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [] }; terminals.set(id, entry);
   element.addEventListener('paste', event => { event.preventDefault(); event.stopPropagation(); attempt(() => { if (activeSessionId() === id) pasteTerminal(event.clipboardData?.getData('text/plain') || ''); }); }, true);
   term.onData(data => {
@@ -327,7 +338,7 @@ async function ensureTerminal(id) {
     // reports belong to this observing view, not to the native input stream:
     // changing tabs or windows must not impersonate a human intervention.
     if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\[[IO]$/.test(data) || /^\x1b\]/.test(data)) return;
-    if (!entry.ready || disconnected || activeSessionId() !== id || mode !== 'terminal') return;
+    if (terminals.get(id) !== entry || !terminalCanInput(id)) return;
     attempt(() => api.input(id, data));
   });
   term.attachCustomKeyEventHandler(event => {
@@ -340,10 +351,18 @@ async function ensureTerminal(id) {
       if (terminals.get(id) !== entry) return;
       term.resize(snapshot.cols || 100, snapshot.rows || 30);
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
+      if (terminals.get(id) !== entry) return;
       entry.sequence = snapshot.sequence; entry.ready = true;
       for (const event of entry.queued) writeTerminal(entry, event);
-      entry.queued = []; fitTerminal(id); focusTerminal(id);
-    } catch (error) { if (terminals.get(id) === entry) { terminals.delete(id); term.dispose(); element.remove(); throw error; } }
+      entry.queued = []; loading.remove(); surface.hidden = false; surface.inert = false;
+      render(); fitTerminal(id); focusTerminal(id);
+    } catch (error) {
+      if (terminals.get(id) === entry) {
+        entry.failed = true; entry.ready = false; entry.queued = []; entry.pending = Promise.resolve();
+        loading.textContent = '终端未连接，重新选择此会话或视图可重试。';
+        throw error;
+      }
+    }
   })();
   return entry.pending;
 }
@@ -354,7 +373,7 @@ function fitTerminal(id) {
 }
 function writeTerminal(entry, event) { if (event.sequence > entry.sequence) { entry.term.write(event.data); entry.sequence = event.sequence; } }
 const disposers = [
-  api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
+  api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
   api.onState(next => { state = { ...state, ...next }; render(); }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);
