@@ -75,9 +75,13 @@ the conversation view. No model prompt is sent merely by opening the workspace;
 messages you send use your provider's own plan or billing.
 
 New sessions inherit native permission defaults for their working directory.
-An older retained backend cannot create or recover sessions through the updated
-UI until its existing sessions end and the app reopens. Existing native terminals
-remain available; see [permission inheritance and limits](docs/alpha.md#native-permission-defaults).
+Select a session and choose **重命名…** beside its title to change its local
+display name. The sidebar, room tabs and other windows update together. The name
+is saved on this Mac; renaming does not call a model or change native history.
+
+After an update, new sessions use the current backend while existing sessions
+keep their original processes. Both appear in the same workspace. Older sessions
+retain their actual capability restrictions; see [update continuity](docs/alpha.md#updates-with-live-sessions).
 
 Next time, open a terminal in the same project folder and run `npm start`; you do
 not need to run `npm ci` again unless dependencies changed. Keep the project folder
@@ -122,6 +126,7 @@ not a prerequisite for building this DMG. No public binary is published yet.
 | [Source register](docs/sources.json) | Dated evidence and pinned source references |
 | [Publication safeguards](docs/publication.md) | Local commit/push checks and contributor setup |
 | [Privacy requirements](docs/privacy.md) | Data boundaries and conditions before an application release |
+| [Review and issue record](docs/review.md) | User feedback, independent findings, fixes and remaining evidence gaps |
 | [Security reporting](SECURITY.md) | Report a vulnerability without posting sensitive data publicly |
 
 ## Product commitments

@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');
-const { ensureService } = require('../service-client.cjs');
+const { ensureService, connect, connectService } = require('../service-client.cjs');
+const { readLayout, writeLayout } = require('../service-layout.cjs');
 
 test('reusing an older live service pauses unsafe routing without replacing its native sessions', async t => {
   for (const verified of [false, true]) await t.test(verified ? 'current service' : 'legacy service', async () => {
@@ -35,4 +36,251 @@ test('reusing an older live service pauses unsafe routing without replacing its 
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
+});
+
+test('a live legacy socket survives an update, current service boot and repeated reconnect without replay', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-test-'));
+  const endpoint = path.join(directory, 's.sock'), calls = [], clients = new Set();
+  const oldVersion = process.env.NAW_APP_VERSION;
+  const state = { runtimeVersion: 'previous-fixture', capabilities: ['resume', 'forget', 'clearSharedHistory'], owner: 'test', sessions: [{ id: 'retained', provider: 'claude', state: 'idle', nativeId: 'unchanged', pid: 321, messages: [], roomId: null }], room: { messages: [], run: null }, diagnostics: { dispatches: 0, shellModelCalls: 0 } };
+  const server = net.createServer(socket => {
+    clients.add(socket); socket.on('close', () => clients.delete(socket)); socket.on('error', () => {});
+    let buffer = '', ready = false;
+    socket.on('data', chunk => {
+      buffer += chunk;
+      for (let end; (end = buffer.indexOf('\n')) >= 0;) {
+        const r = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+        if (!ready) { ready = true; socket.write(JSON.stringify({ ready: true }) + '\n'); continue; }
+        calls.push(r.method); socket.write(JSON.stringify({ id: r.id, ok: true, value: r.method === 'initial' ? state : null }) + '\n');
+      }
+    });
+  });
+  let c;
+  try {
+    fs.writeFileSync(path.join(directory, 'connection.json'), JSON.stringify({ protocol: 1, endpoint, token: 'synthetic-local-auth' }), { mode: 0o600 });
+    await new Promise(resolve => server.listen(endpoint, resolve));
+    process.env.NAW_APP_VERSION = 'current-fixture';
+    await ensureService(directory, process.execPath);
+    const layout = readLayout(directory); assert.equal(layout.entries.length, 2); assert.notEqual(layout.active, '.');
+    assert.equal(fs.statSync(path.join(directory, 'services.json')).mode & 0o777, 0o600);
+    c = await connect(directory, 'test'); let snapshot = await c.call('initial');
+    const pid = snapshot.servicePid;
+    assert.equal(snapshot.runtimeVersion, 'current-fixture');
+    assert.equal(snapshot.defaultWorkspace, path.join(directory, 'workspace'));
+    assert.equal(snapshot.sessions[0].nativeId, 'unchanged'); assert.equal(snapshot.sessions[0].pid, 321);
+    assert.ok(snapshot.capabilities.includes('nativePermissionDefaults')); assert.equal(snapshot.sessions[0].chatAvailable, false);
+    c.close(); c = null;
+    await ensureService(directory, process.execPath);
+    assert.deepEqual(readLayout(directory), layout);
+    c = await connect(directory, 'test'); snapshot = await c.call('initial');
+    assert.equal(snapshot.servicePid, pid); assert.equal(snapshot.diagnostics.dispatches, 0);
+    assert.ok(calls.every(method => ['initial', 'pause'].includes(method)));
+    assert.equal(calls.filter(method => method === 'pause').length, 1);
+    await assert.rejects(c.call('shutdown'), /先结束/);
+  } finally {
+    c?.close();
+    const layout = readLayout(directory);
+    for (const key of layout.entries.filter(key => key !== '.')) {
+      const own = await connectService(path.join(directory, key), 'test-cleanup');
+      try { await own.call('shutdown'); await new Promise(resolve => own.socket.once('close', resolve)); } finally { own.close(); }
+    }
+    for (const client of clients) client.destroy(); await new Promise(resolve => server.close(resolve));
+    if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('routing manifests reject unsafe paths, symlinks and public permissions', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'layout-test-')), file = path.join(dir, 'services.json');
+  try {
+    fs.writeFileSync(file, JSON.stringify({ format: 1, active: '../outside', entries: ['../outside'] }), { mode: 0o600 });
+    assert.throws(() => readLayout(dir), /无效/);
+    fs.writeFileSync(file, JSON.stringify({ format: 1, active: '.', entries: ['.'] })); fs.chmodSync(file, 0o644);
+    assert.throws(() => readLayout(dir), /权限/);
+    fs.rmSync(file); const target = path.join(dir, 'test-manifest'); fs.writeFileSync(target, '{}'); fs.symlinkSync(target, file);
+    assert.throws(() => readLayout(dir), /权限/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+async function syntheticService(directory, state) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  // Keep the Unix socket short even when a backend directory is nested.
+  const transport = fs.mkdtempSync(path.join(os.tmpdir(), 'svc-fixture-'));
+  const endpoint = path.join(transport, 's.sock'), sockets = new Set(), calls = [];
+  const service = { state, calls, pauseError: null };
+  const server = net.createServer(socket => {
+    sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {});
+    let buffer = '', ready = false;
+    socket.on('data', chunk => {
+      buffer += chunk;
+      for (let end; (end = buffer.indexOf('\n')) >= 0;) {
+        const request = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+        if (!ready) { ready = true; socket.write(JSON.stringify({ ready: true }) + '\n'); continue; }
+        calls.push(request.method);
+        const error = request.method === 'pause' ? service.pauseError : null;
+        if (!error && request.method === 'pause' && state.room.run) state.room.run.status = 'paused';
+        socket.write(JSON.stringify({ id: request.id, ok: !error, error, value: request.method === 'initial' ? state : true }) + '\n');
+        if (request.method === 'shutdown' && service.onShutdown) setTimeout(service.onShutdown, 10);
+      }
+    });
+  });
+  fs.writeFileSync(path.join(directory, 'connection.json'), JSON.stringify({ protocol: 1, endpoint, token: 'synthetic-local-auth' }), { mode: 0o600 });
+  await new Promise(resolve => server.listen(endpoint, resolve));
+  service.close = async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); fs.rmSync(transport, { recursive: true, force: true }); };
+  return service;
+}
+async function stopOwnEmptyService(directory) {
+  let client;
+  try { client = await connectService(directory, 'test-cleanup'); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  try { await client.call('shutdown'); if (!client.socket.destroyed) await new Promise(resolve => client.socket.once('close', resolve)); }
+  finally { client.close(); }
+}
+test('updates reuse an ended slot, keep its records, and retire it only after explicit record removal', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-slot-'));
+  const key = `backends/${'a'.repeat(20)}`, oldVersion = process.env.NAW_APP_VERSION;
+  let legacy, client;
+  const records = { sessions: [{ id: 'ended-record', nativeId: 'same-native-record', provider: 'claude', state: 'ended', messages: [{ role: 'user', text: 'synthetic private history' }] }], room: { messages: [{ id: 'shared-record', text: 'synthetic shared history' }] }, drafts: { 'ended-record': 'synthetic retained draft' } };
+  try {
+    fs.writeFileSync(path.join(directory, 'workspace.json'), JSON.stringify(records), { mode: 0o600 });
+    process.env.NAW_APP_VERSION = 'slot-v1'; await ensureService(directory, process.execPath);
+    legacy = await syntheticService(path.join(directory, key), { runtimeVersion: 'slot-v1', capabilities: ['verifiedHandoffs'], sessions: [{ id: 'live-native-fixture', state: 'idle' }], room: { messages: [], run: null } });
+    writeLayout(directory, { format: 1, active: key, entries: ['.', key] });
+    for (const version of ['slot-v2', 'slot-v3']) {
+      process.env.NAW_APP_VERSION = version; await ensureService(directory, process.execPath);
+      assert.deepEqual(readLayout(directory), { format: 1, active: '.', entries: ['.', key] });
+      client = await connectService(directory, 'test');
+      const snapshot = await client.call('initial');
+      assert.equal(snapshot.runtimeVersion, version); assert.equal(snapshot.sessions[0].nativeId, 'same-native-record');
+      assert.equal(snapshot.sessions[0].state, 'ended'); assert.equal(snapshot.sessions[0].liveDraft, 'synthetic retained draft');
+      assert.equal(snapshot.sessions[0].messages[0].text, 'synthetic private history');
+      assert.equal(snapshot.room.messages[0].id, 'shared-record'); assert.equal(snapshot.diagnostics.dispatches, 0);
+      client.close(); client = null;
+    }
+    // An ended history service is kept even when it is no longer the active slot.
+    legacy.state.runtimeVersion = 'slot-v3';
+    writeLayout(directory, { format: 1, active: key, entries: ['.', key] });
+    await ensureService(directory, process.execPath); assert.equal(readLayout(directory).entries.length, 2);
+    client = await connectService(directory, 'test');
+    await client.call('forget', 'ended-record'); await client.call('clearSharedHistory'); client.close(); client = null;
+    await ensureService(directory, process.execPath);
+    assert.deepEqual(readLayout(directory), { format: 1, active: key, entries: [key] });
+    assert.equal(fs.existsSync(path.join(directory, 'service.lock')), false);
+    assert.equal(fs.existsSync(path.join(directory, 'workspace.json')), true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'), 'utf8')), { sessions: [], room: { messages: [] }, drafts: {} });
+    assert.ok(legacy.calls.every(method => ['initial', 'pause'].includes(method)));
+  } finally {
+    client?.close(); await stopOwnEmptyService(directory); await legacy?.close();
+    if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('failed activation keeps its new service tracked and retries the same pending slot after another version', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pending-slot-')), oldVersion = process.env.NAW_APP_VERSION;
+  let legacy;
+  try {
+    legacy = await syntheticService(directory, { runtimeVersion: 'previous-fixture', capabilities: ['verifiedHandoffs'], sessions: [{ id: 'retained', state: 'idle' }], room: { messages: [], run: null } });
+    legacy.pauseError = 'synthetic pause acknowledgement failure';
+    process.env.NAW_APP_VERSION = 'pending-v1';
+    await assert.rejects(ensureService(directory, process.execPath), /acknowledgement failure/);
+    const pending = readLayout(directory); assert.equal(pending.entries.length, 1); assert.equal(pending.active, '.'); assert.ok(pending.pending);
+    const child = await connectService(path.join(directory, pending.pending), 'test');
+    try { assert.equal((await child.call('initial')).sessions.length, 0); } finally { child.close(); }
+    legacy.pauseError = null;
+    const rename = fs.renameSync;
+    fs.renameSync = (source, destination) => {
+      if (destination === path.join(directory, 'services.json') && !JSON.parse(fs.readFileSync(source, 'utf8')).pending) throw new Error('synthetic activation write failure');
+      return rename(source, destination);
+    };
+    try { await assert.rejects(ensureService(directory, process.execPath), /activation write failure/); }
+    finally { fs.renameSync = rename; }
+    assert.deepEqual(readLayout(directory), pending);
+    process.env.NAW_APP_VERSION = 'pending-v2'; await ensureService(directory, process.execPath);
+    assert.deepEqual(readLayout(directory), { format: 1, active: pending.pending, entries: ['.', pending.pending] });
+    assert.equal(fs.readdirSync(path.join(directory, 'backends')).length, 1);
+  } finally {
+    const layout = readLayout(directory);
+    for (const key of new Set([...layout.entries, layout.pending].filter(key => key && key !== '.'))) await stopOwnEmptyService(path.join(directory, key));
+    await legacy?.close();
+    if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('returning to a retained live version reuses its existing slot even if activation is interrupted', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rollback-slot-')), oldVersion = process.env.NAW_APP_VERSION;
+  const key = `backends/${'b'.repeat(20)}`;
+  let previous, active;
+  try {
+    const state = version => ({ runtimeVersion: version, capabilities: ['verifiedHandoffs'], sessions: [{ id: version, state: 'idle' }], room: { messages: [], run: null } });
+    previous = await syntheticService(directory, state('rollback-v1')); active = await syntheticService(path.join(directory, key), state('rollback-v2'));
+    const original = { format: 1, active: key, entries: ['.', key] }; writeLayout(directory, original);
+    process.env.NAW_APP_VERSION = 'rollback-v1'; active.pauseError = 'synthetic activation interrupted';
+    await assert.rejects(ensureService(directory, process.execPath), /activation interrupted/);
+    assert.deepEqual(readLayout(directory), original);
+    active.pauseError = null; await ensureService(directory, process.execPath);
+    assert.deepEqual(readLayout(directory), { ...original, active: '.' });
+    assert.equal(fs.readdirSync(path.join(directory, 'backends')).length, 1);
+  } finally {
+    await previous?.close(); await active?.close();
+    if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('an acknowledged shutdown rejects new work during its delayed process-close window', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shutdown-gate-')), oldVersion = process.env.NAW_APP_VERSION;
+  let client;
+  try {
+    process.env.NAW_APP_VERSION = 'shutdown-fixture'; await ensureService(directory, process.execPath);
+    client = await connectService(directory, 'test');
+    const closing = client.call('shutdown');
+    // An invalid provider would fail before any native launch even if the gate
+    // regressed. The expected error must instead be the shutdown barrier.
+    const rejected = assert.rejects(client.call('create', { provider: 'invalid-fixture', cwd: directory }), /后台正在关闭/);
+    await closing; await rejected;
+    if (!client.socket.destroyed) await new Promise(resolve => client.socket.once('close', resolve));
+  } finally {
+    client?.close(); await stopOwnEmptyService(directory);
+    if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('one retained service uses the same guarded workspace client as multiple services', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'single-router-'));
+  let service, client;
+  try {
+    service = await syntheticService(directory, { runtimeVersion: 'legacy-fixture', capabilities: [], sessions: [{ id: 'one', provider: 'claude', state: 'idle', roomId: 'shared' }, { id: 'two', provider: 'codex', state: 'idle', roomId: 'shared' }], room: { messages: [], run: null } });
+    client = await connect(directory, 'view');
+    assert.equal(client.constructor.name, 'WorkspaceClient');
+    await assert.rejects(client.call('create', { provider: 'claude' }), /旧版会话/);
+    await assert.rejects(client.call('send', 'one', 'must not be submitted'), /旧版会话/);
+    await assert.rejects(client.call('run', ['one', 'two'], 'must not run', 3), /旧版后台/);
+    await client.call('input', 'one', 'synthetic terminal key');
+    assert.ok(service.calls.every(method => ['initial', 'input'].includes(method)));
+  } finally { client?.close(); await service?.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+test('an acknowledged ended-service shutdown waits for its lock after the socket has closed', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'shutdown-order-')), oldVersion = process.env.NAW_APP_VERSION;
+  let service, closing, lockReleased = false, releaseTimer;
+  try {
+    service = await syntheticService(directory, { runtimeVersion: 'previous-fixture', capabilities: [], sessions: [], room: { messages: [], run: null } });
+    fs.writeFileSync(path.join(directory, 'service.lock'), String(process.pid));
+    service.onShutdown = () => {
+      closing = service.close();
+      releaseTimer = setTimeout(() => {
+        fs.rmSync(path.join(directory, 'connection.json'), { force: true });
+        fs.rmSync(path.join(directory, 'service.lock'), { force: true }); lockReleased = true;
+      }, 150);
+    };
+    process.env.NAW_APP_VERSION = 'shutdown-order-current'; await ensureService(directory, process.execPath);
+    assert.equal(lockReleased, true);
+    const client = await connectService(directory, 'test');
+    try { const state = await client.call('initial'); assert.equal(state.runtimeVersion, 'shutdown-order-current'); assert.equal(state.sessions.length, 0); }
+    finally { client.close(); }
+  } finally {
+    clearTimeout(releaseTimer);
+    if (closing) await closing; else await service?.close();
+    if (lockReleased) await stopOwnEmptyService(directory);
+    if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

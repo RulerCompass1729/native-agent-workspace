@@ -41,6 +41,19 @@ flowchart LR
 
 这是职责分离，不要求第一版部署成五个服务或维护五套数据库。建议本机一个进程服务与桌面渲染层，以 Electron/TypeScript + React 作为 DSH 试验的优先组合；在技术验证前不安装依赖或锁定全部框架。
 
+### 已实现的升级边界（alpha.8）
+
+DSH 界面和 Electron 窗口继续独立于原生进程。`service-layout.cjs` 保存私有后台路由，
+`service-client.cjs` 启动/连接对应版本，`workspace-client.cjs` 在主进程合并显示并按
+会话归属转发。新会话使用当前后台；存量会话仍由原服务单独写入和管理。
+不在升级时复制 transcript、恢复活会话或重放任务；它不是原生进程迁移协议。
+
+共享视图组合各后台已经明确共享的记录，不把私人历史交给别的 agent。
+跨后台只提供真人定向分享，自动 run 仍属于单个后台，不能跨版本开启。
+能力按每个会话所属后台判断，不能用全局新版本放开旧实现的权限/发送限制。
+该路径的正常升级与已知限制见 [alpha 验证](alpha.md#updates-with-live-sessions)，
+并发、故障和资源问题以 [审查记录](review.md) 的复验状态为准。
+
 ## 身份与输入
 
 本应用 session ID 映射到一个确定的 provider 原生 session。恢复映射需要校验 provider、原生 ID 与运行状态；不以 PID 单独认定身份，不把“相同历史”当作“同一运行实例”。

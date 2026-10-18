@@ -16,9 +16,9 @@ async function build() {
     for (const name of ['package.json', 'package-lock.json', 'LICENSE', 'NOTICE', 'COPYRIGHT', 'THIRD_PARTY_NOTICES.md']) fs.copyFileSync(path.join(root, name), path.join(stage, name));
     const sources = ['main.cjs', 'preload.cjs', 'startup.html', 'startup.js',
       'dsh-host.cjs', 'dsh-server.mjs', 'ui-errors.cjs', 'ui-parent-lease.cjs',
-      'service-client.cjs', 'platform.cjs', 'preflight.cjs', 'daemon.cjs',
+      'service-client.cjs', 'service-layout.cjs', 'workspace-client.cjs', 'platform.cjs', 'preflight.cjs', 'daemon.cjs',
       'adapters.cjs', 'workspace.cjs', 'pty_host.py', 'claude_hook.py',
-      'claude-submit.cjs', 'submission-policy.cjs', 'claude-bridge/.claude-plugin/plugin.json',
+      'claude-submit.cjs', 'submission-policy.cjs', 'session-labels.cjs', 'claude-bridge/.claude-plugin/plugin.json',
       'claude-bridge/hooks/hooks.json', 'claude-bridge/hooks/register.js',
       'dsh/package.json', 'dsh/host.js', 'dsh/client.js'];
     for (const name of sources) {

@@ -44,6 +44,12 @@ or start paid model runs as a side effect of editing documents.
 
 ## Evidence and public boundaries
 
+- Use an independent reviewer for the affected product path. Maintain
+  `docs/review.md` with user feedback, reproduced findings, fixes and evidence;
+  review actual source and raw local evidence, not just the author's summary.
+  Reuse the reviewer after fixes. Keep private evidence outside this public repo,
+  and do not add model tests simply to make a review appear more thorough.
+
 - Read actual implementation files before making source-level claims.
 - Label requirements, design proposals, source findings, and runtime proof separately.
 - Keep third-party code, assets, runtime dependencies, and provider binaries out

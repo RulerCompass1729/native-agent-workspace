@@ -23,7 +23,9 @@ async function main() {
   let scheduled = false;
   workspace.on('change', () => { if (!scheduled) { scheduled = true; setTimeout(() => { scheduled = false; broadcast('state', workspace.snapshot()); }, 35); } });
   workspace.on('terminal', data => broadcast('terminal', data));
+  let shuttingDown = false;
   const dispatch = async (owner, method, args) => {
+    if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
       case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view);
@@ -46,6 +48,7 @@ async function main() {
       case 'forget': return workspace.forget(args[0]);
       case 'shutdown':
         if ([...workspace.sessions.values()].some(s => s.state !== 'ended')) throw new Error('请先结束各原生会话，再关闭运行服务。');
+        shuttingDown = true;
         setTimeout(shutdown, 100); return true;
       default: throw new Error('不支持的本地操作。');
     }
@@ -69,12 +72,12 @@ async function main() {
         Promise.resolve().then(() => dispatch(owner, request.method, request.args)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。' }));
       }
     });
-    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); workspace.release(owner); });
+    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); if (!shuttingDown) workspace.release(owner); });
   });
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);
   const connection = path.join(dataDir, 'connection.json'); const tmp = `${connection}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ protocol: 1, endpoint, token, pid: process.pid }), { mode: 0o600 }); fs.renameSync(tmp, connection);
-  function shutdown() { workspace.close(); server.close(); for (const c of clients) c.destroy(); fs.rmSync(connection, { force: true }); fs.rmSync(lockPath, { force: true }); setTimeout(() => process.exit(0), 500); }
+  function shutdown() { shuttingDown = true; workspace.close(); server.close(); for (const c of clients) c.destroy(); fs.rmSync(connection, { force: true }); fs.rmSync(lockPath, { force: true }); setTimeout(() => process.exit(0), 500); }
   process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
 main().catch(() => process.exit(1));

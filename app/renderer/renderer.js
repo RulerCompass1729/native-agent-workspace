@@ -6,6 +6,7 @@ const button = (text, action, cls) => { const el = node('button', text, cls); el
 const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', error: '需要检查' };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let roomSession = '', selectionRevision = 0;
+let renamingId = '', renaming = false;
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
 const terminalThemes = {
   dark: { background: '#191b1e', foreground: '#e6e8eb', cursor: '#e6e8eb', selectionBackground: '#53677b88' },
@@ -74,7 +75,7 @@ async function showTrust() {
   }
   if (!snapshot.sessions.length) usage.append(node('p', '尚无会话。'));
   section('后台与权限', `${snapshot.sessions.filter(s => !['ended', 'recoverable'].includes(s.state)).length} 个会话尚未确认结束。关闭窗口仍可能继续执行。原生进程、团队状态与权限请在终端核对；此处未测量 CPU、内存或完整网络出口。`);
-  section('版本与核查', `应用 ${snapshot.appVersion || '未报告'} · 后台 ${snapshot.runtimeVersion || '未报告'}。可查看本机数据和公开实现。本地版本号不是签名验证；独立安全审计、完整流量与费用对账尚未完成。`);
+  section('版本与核查', `应用 ${snapshot.appVersion || '未报告'} · 新会话后台 ${snapshot.runtimeVersion || '未报告'}。${snapshot.services?.length > 1 ? `另保留 ${snapshot.services.length - 1} 个后台连接原有会话；没有复制原生会话。` : ''}可查看本机数据和公开实现。本地版本号不是签名验证；独立安全审计、完整流量与费用对账尚未完成。`);
   if (!$('privacy-dialog').open) $('privacy-dialog').showModal();
 }
 function openCreate(provider = 'claude') {
@@ -82,10 +83,16 @@ function openCreate(provider = 'claude') {
   $('initial-view').value = preference; $('session-name').value = '';
   $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
 }
+function openRename() {
+  const record = current(); if (!record) return;
+  renamingId = record.id; $('rename-name').value = record.name;
+  $('rename-error').hidden = true; $('rename-error').textContent = '';
+  $('rename-dialog').showModal(); $('rename-name').focus(); $('rename-name').select();
+}
 function createReadiness() {
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
-    $('create-readiness').textContent = '后台仍在保留旧版会话，暂不能新建。原生终端可继续使用；结束旧会话并重开应用后，新会话才会沿用原生权限配置。';
+    $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';
     return;
   }
   const provider = document.querySelector('input[name="provider"]:checked').value;
@@ -105,7 +112,7 @@ async function showSetup() {
 }
 function populateSelect(el, items) {
   const old = el.value;
-  const signature = items.map(s => s.id + s.name).join('|');
+  const signature = JSON.stringify(items.map(s => [s.id, s.name]));
   if (el.dataset.signature === signature) return;
   el.replaceChildren(...items.map(s => { const option = node('option', s.name); option.value = s.id; return option; }));
   el.dataset.signature = signature;
@@ -154,7 +161,10 @@ function render() {
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('title').textContent = inRoom ? '共同工作' : s?.name || '你的工作空间';
     $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${s.model} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
-    const warning = disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : state.storageWarning;
+    $('rename-session').hidden = !s;
+    $('rename-session').disabled = disconnected;
+    $('rename-session').setAttribute('aria-label', s ? `重命名会话：${s.name}` : '重命名会话');
+    const warning = disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
     $('session-list').replaceChildren(...state.sessions.map(record => {
@@ -167,6 +177,11 @@ function render() {
       link.append(icon(record.provider), label, node('span', undefined, `state-dot ${record.state}`)); return link;
     }));
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
+    if ($('share-dialog').open) populateSelect($('share-recipient'), members());
+    if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
+      const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
+      if (record) entry.textContent = `加入 ${record.name}`;
+    }
     $('header-actions').replaceChildren();
     if (s) {
       const own = s.owner === owner; const alive = !['ended', 'error', 'stopping', 'disconnected', 'recoverable'].includes(s.state);
@@ -196,11 +211,11 @@ function render() {
         }
         $('approval').append(button('在原生终端查看', () => switchMode('terminal')));
       }
-      $('advanced-content').replaceChildren(node('div', `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`));
+      $('advanced-content').replaceChildren(node('div', `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`));
       if (s.usage) $('advanced-content').append(node('div', `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}`));
       for (const event of s.fleet.slice(-8)) $('advanced-content').append(node('div', `${event.event} · ${event.name}`));
       if (!['ended', 'stopping', 'recoverable'].includes(s.state)) $('advanced-content').append(button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small'));
-      if (['ended', 'recoverable', 'error'].includes(s.state) && state.capabilities?.includes('resume')) {
+      if (['ended', 'recoverable', 'error'].includes(s.state) && (s.serviceCapabilities || state.capabilities)?.includes('resume')) {
         $('header-actions').prepend(button('继续原生会话', () => api.resume(s.id), 'primary'));
         $('advanced-content').append(button('移除本应用记录…', () => api.forget(s.id), 'small'));
       }
@@ -233,7 +248,7 @@ function render() {
       populateSelect($('recipient'), members());
       const safeHandoffs = state.capabilities?.includes('verifiedHandoffs');
       $('run-button').disabled = members().length !== 2 || run?.status === 'running' || !safeHandoffs;
-      $('run-help').textContent = safeHandoffs ? '最多 3 次回复、10 分钟。原生后台或团队状态未报告时，保留回复并暂停；可确认后定向发送。原生子 agent 的用量另计。' : '旧版后台仍在保留原生会话，自动核查暂不可用；请用原生终端或定向发送。结束会话并重开应用后可更新后台。';
+      $('run-help').textContent = safeHandoffs ? '最多 3 次回复、10 分钟。原生后台或团队状态未报告时，保留回复并暂停；可确认后定向发送。原生子 agent 的用量另计。' : state.handoffNotice || '旧版后台仍在保留原生会话，自动核查暂不可用；请用原生终端或定向发送。新建会话会使用新版后台。';
       $('forward-button').disabled = !members().length; $('pause-button').disabled = run?.status !== 'running';
     }
   } finally { rendering = false; }
@@ -293,12 +308,28 @@ function writeTerminal(entry, event) { if (event.sequence > entry.sequence) { en
 const disposers = [
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
   api.onState(next => { state = { ...state, ...next }; render(); }),
+  api.onSessionName(({ id, name }) => {
+    const record = state?.sessions.find(s => s.id === id);
+    if (record) { record.name = name; render(); }
+  }),
   api.onDisconnected(message => { disconnected = true; render(); toast(message); }),
   api.onNew(() => openCreate()),
 ];
 const observer = new ResizeObserver(() => { if (activeSessionId()) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
 $('new-session').onclick = () => openCreate(); $('start-claude').onclick = () => openCreate('claude'); $('start-codex').onclick = () => openCreate('codex');
 $('cancel-create').onclick = () => $('create-dialog').close();
+$('rename-session').onclick = openRename;
+$('cancel-rename').onclick = () => $('rename-dialog').close();
+$('rename-dialog').oncancel = event => { if (renaming) event.preventDefault(); };
+$('rename-dialog').onclose = () => { renamingId = ''; $('rename-session').focus(); };
+$('rename-name').onkeydown = event => { if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault(); };
+$('rename-form').onsubmit = async event => {
+  event.preventDefault(); if (renaming) return;
+  renaming = true; $('confirm-rename').disabled = true; $('cancel-rename').disabled = true;
+  try { await api.rename(renamingId, $('rename-name').value); $('rename-dialog').close(); toast('名称已保存。'); }
+  catch (error) { $('rename-error').textContent = error.message || '名称未能保存，请重试。'; $('rename-error').hidden = false; $('rename-name').focus(); }
+  finally { renaming = false; $('confirm-rename').disabled = false; $('cancel-rename').disabled = false; }
+};
 $('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; $('chosen-folder').textContent = folder; } });
 $('create-form').onsubmit = event => { event.preventDefault(); attempt(async () => {
   $('confirm-create').disabled = true;
@@ -333,7 +364,7 @@ $('shared-input').oninput = () => attempt(persistView);
 $('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => { const first = $('recipient').value; return api.run([first, ...members().filter(s => s.id !== first).map(s => s.id)], $('shared-input').value, 3); }); };
 $('forward-button').onclick = () => attempt(() => api.forward($('recipient').value, $('shared-input').value));
 $('pause-button').onclick = () => attempt(() => api.pause());
-$('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && s.state !== 'ended').map(s => button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }))); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
+$('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && s.state !== 'ended').map(s => { const entry = button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
 $('confirm-share').onclick = () => attempt(async () => { await api.forward($('share-recipient').value, $('share-text').value); $('share-dialog').close(); toast('已定向发送。'); });

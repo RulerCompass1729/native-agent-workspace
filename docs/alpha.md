@@ -69,10 +69,11 @@ Do not delete the source directory or application data to force a running sessio
 to stop.
 
 To update a local app, quit its interface and replace the app, keeping its data
-directory. A compatible newer frontend reconnects to the existing service; an
-active session does not get restarted just to upgrade backend code. The version
-screen shows when an older backend is still retained. After **all** native
-sessions are confirmed ended, a subsequent launch can replace the backend.
+directory. A compatible newer frontend reconnects to existing services; an
+active session does not get restarted just to upgrade backend code. Alpha.8 starts
+a current backend for new sessions while retaining older live sessions in the
+same interface. Each session keeps its actual backend capabilities. See
+[update continuity and boundaries](#updates-with-live-sessions).
 A disconnected Codex thread is not automatically treated as ended.
 
 After a service crash/reboot, saved records become **等待恢复**. Use **继续原生会话**
@@ -303,8 +304,8 @@ still transform or reject a prompt, just as they can outside this app.
 
 A UI update keeps an older live backend alive. The updated UI disables that
 backend's Claude conversation/room sends and pauses its pending collaboration;
-it does not replace native processes. End those sessions and reopen the app when
-ready to move the backend forward. Native history remains under the provider.
+it does not replace native processes. Alpha.8 can create separate new sessions
+on the updated backend without ending these. Native history remains under the provider.
 
 Limits: atomic cancellation after native dispatch/queueing, active fleets, Codex
 mixed drafts, physical IME/VoiceOver and clean-machine installation are not proved
@@ -326,8 +327,8 @@ No model-based state checker, summary, polling prompt or automatic retry was add
 
 An updated UI also refuses automatic runs on retained services without this check
 and pauses their existing run on reconnection. The service and native identities
-stay alive. End sessions and reopen when ready to update the backend; native
-terminal use remains available in the meantime. Earlier Claude submission
+stay alive. New sessions can use the updated backend while existing native
+terminals remain available. Earlier Claude submission
 restrictions on old backends still apply.
 
 Local regressions cover invalid/unknown/active state, the reply cap, duplicate and
@@ -368,10 +369,10 @@ prompts were handled in the terminal for test-owned directories. Sixty-three
 local checks passed. This verifies startup configuration, not every native tool's
 approval/denial path or managed-policy combination.
 
-Old live backends retain their already-running sessions. Updated windows block
-new creation and history recovery through those backends, rather than letting
-their forced permission settings silently apply again. Existing native sessions
-remain usable. End them and reopen when ready to load the new backend.
+Old live backends retain their already-running sessions. Windows block creation
+and history recovery through backends lacking the permission-default capability.
+Alpha.8 routes new creation to a current backend instead; existing native sessions
+remain usable with their actual capabilities.
 
 This is permission inheritance, not a claim of complete native configuration
 parity. Session-local observation hooks and the Claude submission mod remain;
@@ -385,9 +386,83 @@ The local alpha.7 DMG passed signature verification and 9,174 file/link comparis
 when copied into Applications. The installed UI refused old-backend creation
 through the button and IPC while retaining the three existing native sessions;
 a fresh installed backend loaded the new capability and enabled creation without
-sending a model task. The temporary need to end old sessions before creating new
-ones is an open update-experience gap, not the intended final workflow.
+sending a model task. This was alpha.7's temporary update restriction; the next
+section describes alpha.8's separate routing for new sessions.
 
 References: [Codex configuration precedence](https://learn.chatgpt.com/docs/config-file/config-basic),
 [Codex App Server](https://learn.chatgpt.com/docs/app-server), and
 [Claude starting permission mode](https://code.claude.com/docs/en/permission-modes#which-mode-a-session-starts-in).
+
+## Updates with live sessions
+
+Alpha.8 keeps a private routing table for retained services. New sessions go to
+the current backend; terminal bytes, drafts, ownership and native actions for
+existing sessions go to their original service. No native process or history is
+copied, resumed or replayed by the upgrade. The default working directory stays
+the same. Each session's actual capabilities remain authoritative: a legacy
+Claude session does not acquire safe graphical submission just because another
+backend supports it.
+
+One sidebar and shared-room view combine the retained and current sessions.
+Joining and leaving still change membership only. Explicit sharing sends only
+the selected text to its chosen recipient, subject to that session's guards.
+Automatic runs cannot span backend generations; the interface explains this.
+Current native fleet uncertainty still pauses same-backend runs after the first
+root reply. This is not unattended completion or live fleet migration.
+
+The initial visible upgrade check used an installed alpha.7 window, a live empty
+Claude session and then the source alpha.8 window. It retained the native ID/PID,
+membership, unsent draft and selected view; created a second native session on
+alpha.8; switched both room terminals; detached the older session; routed unsent
+terminal text only to that session; and reopened to the same identities with one
+window. Both Claude 2.1.302 sessions used Sonnet in Plan mode. No model tasks,
+assistant replies or teammates were requested. Synthetic transport checks cover
+explicit cross-backend sharing; this run did not submit a real shared model task.
+
+Independent review found and drove fixes for delayed-state cancellation and
+backend lifecycle gaps. The final 90 local checks passed, including the real
+registered desktop handler with a synthetic Electron transport, cross-window
+human intervention, a closed run-origin window, failed publication, version
+rollback and delayed shutdown lock release. Full logs and fixes were independently
+reviewed; [the issue record](review.md) distinguishes this proof from native
+model/fleet evidence.
+
+Updates reuse confirmed ended service slots and retire truly empty inactive
+services. Services retaining ended history still remain resident; the six-session
+creation limit is not a hard cap on resumed sessions or total backend processes.
+A pending routing entry is written before launching a new service, so failed
+activation can reconnect it. Shutdown waits for socket, lock and known process
+release; timeout refuses replacement. These checks cover process/operation failure,
+not sudden power loss or a complete CPU/memory overhead guarantee.
+
+
+## Renaming a session
+
+Select a session, then **重命名…** beside its title. The field starts with the
+current name; save with Enter or the button, or cancel with Escape. Empty names
+are rejected and the limit is 60 characters. Duplicate names are allowed without
+merging sessions. Names are stored privately on this Mac and survive reopening.
+
+This changes the workspace display name, including the sidebar, member tabs and
+other windows. It does not rename the provider's native history or rewrite names
+in already-shared messages. No title-generation model call is made. Display
+metadata lives above the backend layer, so retained older sessions can be named
+without restarting them.
+
+The headed desktop check used two ended native test sessions. It verified
+prefill, cancel/Escape, blank validation, trimmed Enter-save, special-character
+text, title/sidebar/member-tab updates, second-window synchronization, duplicate
+names and reopening. Session identity, messages, drafts, membership and dispatch
+counts were unchanged. Storage checks cover failed atomic replacement, retry,
+malformed metadata and unsafe file permissions. Physical IME composition and
+VoiceOver have not yet been verified.
+
+
+The alpha.8 DMG was mounted read-only, copied to Applications and verified with
+an ad-hoc signature check and 9,177 file/link comparisons. The installed app
+retained three live alpha.2 sessions while connecting a current backend for new
+sessions. Renaming one retained live session, reopening with its new name and
+restoring the original name passed. Original IDs/PIDs, membership, message counts,
+dispatch count and saved view remained unchanged; no native model prompt was sent.
+This is local installation evidence, not public-download/Gatekeeper or clean-Mac
+setup acceptance. The binary remains unnotarized and was not uploaded.

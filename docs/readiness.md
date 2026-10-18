@@ -38,9 +38,9 @@ fleets. No interrupted prompt or collaboration is automatically replayed.
 requests a current control/membership authorization before explicitly submitting
 text. It never writes the terminal editor. A draft, missing mod, unsupported
 version or disconnected bridge blocks graphical sends. Existing live sessions
-on an older backend remain usable in their native terminal; end them and reopen
-the app to start the updated backend. Do not assume a UI restart updates a live
-service. An uncertain acknowledgement is never automatically retried.
+on an older backend remain usable in their native terminal; new sessions use the
+current backend while retained sessions keep their original service. Do not assume a UI restart
+updates a live service. An uncertain acknowledgement is never automatically retried.
 
 The local authorization is the dispatch boundary. Later human input can interrupt
 native work; it cannot retract an already accepted submission. This does not prove
@@ -62,12 +62,12 @@ pauses automatic routing while preserving the reply and human-directed sharing.
 Unattended multi-agent completion remains gated on authoritative native fleet
 state; observing child events or a root reply is insufficient. Do not add new
 orchestration surfaces. Alpha.7 removes forced permission defaults; the remaining
-native configuration differences are explicitly listed in alpha.md. Its legacy
-backend protection exposes an update-experience gap: new sessions are blocked
-while older sessions retain the old service. Next bounded item: allow new safe
-sessions after an update without ending the existing sessions, preserving the
-native-service boundary. Codex cross-view drafts and authoritative fleet status
-remain subsequent gates; start with no-model checks.
+native configuration differences are explicitly listed in alpha.md. Alpha.8 now
+routes new sessions to the current backend while preserving old native sessions. Local upgrade, control/lifecycle and rename checks are recorded
+in alpha.md and review.md. The next bounded input-safety item is Codex cross-view
+drafts: determine whether graphical sends can conflict with an unsent terminal
+draft, beginning with no-model reproduction. Authoritative fleet status remains
+a subsequent gate.
 
 The maintainer's current milestone is the complete installation/use path, focused
 on **individual and collaborative native TUI use**:
@@ -189,7 +189,7 @@ content for design fixtures. Do not spend model turns to populate mockups.
 
 | Trigger | Follow-up | Completion standard |
 | --- | --- | --- |
-| The installation/TUI trial passes and daily-use feedback arrives | Session naming/search/archive, long-session performance, terminal preferences and the preferred-terminal connector below; update/recovery polish | Daily work survives reopening and an app replacement without duplicate owners or lost input; slow paths are measured before optimizing |
+| The installation/TUI trial passes and daily-use feedback arrives | Session search/archive (manual renaming shipped in alpha.8), long-session performance, terminal preferences and the preferred-terminal connector below; update/recovery polish | Daily work survives reopening and an app replacement without duplicate owners or lost input; slow paths are measured before optimizing |
 | The TUI trial is stable and the next audience needs conversation-first use | Complete the GUI path: native progress/permissions, files/images and supported model/configuration controls | Routine work can be completed without an unexplained terminal detour; unavailable native capabilities retain an explicit native entry, not a simulated equivalent |
 | The basic human-directed handoff is reliable | Goal-based unattended collaboration with completion, permission, repetition and usage boundaries; active fleet lifecycle validation | Human intervention invalidates queued handoffs; task completion and descendant termination are separately evidenced; unknown usage/state is not reported as zero/stopped |
 | A supported provider attachment contract and an actual migration need are established | External-session discovery/selection and attach/resume distinctions | Live attachment, history recovery and imported reference text are labelled accurately; do not create a concurrent resume of an already running session |

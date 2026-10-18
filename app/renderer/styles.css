@@ -33,6 +33,10 @@ header { min-height: 74px; padding: 14px 24px; }
 #room-session .session-toolbar { padding-top: 6px; padding-bottom: 6px; }
 #members-dialog { max-height: 85vh; overflow: auto; }
 header > div:first-child { min-width: 0; }
+.title-row { display: flex; align-items: center; gap: 10px; }
+.title-row h1 { min-width: 0; }
+#rename-session { flex-shrink: 0; }
+#rename-error { color: var(--dsw-alias-state-danger-label, #a03525); }
 header h1, header p { overflow-wrap: anywhere; }
 @media(max-width:1050px) { #header-actions { flex-wrap: wrap; justify-content: flex-end; } #room-composer { padding: 12px 20px; } }
 

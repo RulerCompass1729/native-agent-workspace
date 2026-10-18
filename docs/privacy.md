@@ -1,6 +1,6 @@
 # Local alpha privacy and release conditions
 
-As of 2026-10-17. The macOS alpha runs locally. There is no product account
+As of 2026-10-18. The macOS alpha runs locally. There is no product account
 system, cloud sync, analytics service, remote crash upload or shell model call.
 The renderer permits network requests only to its local DSH host. The UI host
 mounts an explicit UI composition; model/tool/account/telemetry plugins are not
@@ -22,6 +22,14 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   Electron/DSH keep local UI preferences/cache and a local UI access token.
   The independent service keeps its private connection/token files and a
   versioned runtime copy. Tokens are not displayed in startup failures.
+- session-labels.json holds display names keyed by stable application session ID.
+  Names remain local, use an owner-only file and are not sent to a model. Native
+  titles, history and already-shared author labels are not renamed.
+- services.json records relative backend directories. After an update, retained
+  backends keep their own workspace/connection files under this same private
+  application data directory. The UI combines their records in memory; it does
+  not copy private histories to a new native session. Complete local removal must
+  include these directories after every service has safely exited.
 - Records stay until removed. After a session ends, use **会话与原生团队 →
   移除本应用记录**. This also removes matching saved window drafts. Shared-room
   records are separate: pause handoffs, then use **隐私与用量 → 清理与完全退出 → 清除共同工作记录**.

@@ -8,6 +8,7 @@ const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error('请输入有效文字；一次最多 16,000 个字符。');
   return value.trim();
 };
+const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data);
 
 class Workspace extends EventEmitter {
   constructor(host, dataDir) {
@@ -159,7 +160,7 @@ class Workspace extends EventEmitter {
     if (typeof data !== 'string' || data.length > 65536) throw new Error('终端输入无效。');
     if (s.owner !== owner) throw new Error('另一个窗口正在控制这个会话。');
     // Terminal-generated device/cursor replies are not human instructions.
-    const response = /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data);
+    const response = isTerminalResponse(data);
     if (!response && s.view !== 'terminal') throw new Error('请切换到原生终端后输入。');
     if (!response) { this.pause('真人在原生终端操作'); s.controlRevision++; }
     const t = this.runtime(id).terminal; if (!t?.alive) throw new Error('终端尚未连接。'); t.input(data);
@@ -253,4 +254,4 @@ class Workspace extends EventEmitter {
   close() { clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
 }
 
-module.exports = { Workspace, cleanText };
+module.exports = { Workspace, cleanText, isTerminalResponse };
