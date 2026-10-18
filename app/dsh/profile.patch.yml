@@ -1,0 +1,14 @@
+# Pinned DSH Web composition. Native agents do not enter its model loop.
+- id: desktop-product-telemetry
+  disabled: true
+- id: product-analytics
+  disabled: true
+- id: ui-brand-official
+  disabled: true
+- id: ui-deepseek-model-label-1017
+  disabled: true
+- id: ui-sidebar
+  disabled: true
+- insert:
+    - id: native-workspace
+      name: '@rulercompass/native-workspace'

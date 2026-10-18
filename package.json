@@ -1,0 +1,29 @@
+{
+  "name": "native-agent-workspace",
+  "version": "0.1.0-demo",
+  "private": true,
+  "description": "A local desktop demo for native agent sessions and bounded collaboration",
+  "license": "Apache-2.0",
+  "main": "app/main.cjs",
+  "scripts": {
+    "start": "npm run build:ui && electron .",
+    "test": "node --test app/tests/*.test.cjs",
+    "test:desktop": "npm run build:ui && node scripts/test-desktop.cjs",
+    "build:ui": "node scripts/build-ui.cjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.2",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/headless": "6.0.0",
+    "@xterm/xterm": "6.0.0",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "playwright": "1.64.1"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  }
+}

@@ -34,3 +34,6 @@ credentials.json
 
 # Keep native transcripts, credentials, downloaded source archives, and
 # personal research outside this public repository.
+
+# Generated DSH client bundle (built from reviewed source and npm dependencies)
+app/dsh/client.js

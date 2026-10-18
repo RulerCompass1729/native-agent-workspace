@@ -6,7 +6,7 @@ As of 2026-10-17。本文件是对已读取条款的工程核查与选择记录�
 
 创始人于 2026-10-17 确认采用标准 **Apache-2.0**。除另有说明外，本仓库原创内容按未改写的 [LICENSE](../LICENSE) 授权；[COPYRIGHT](../COPYRIGHT) 记录版权与适用范围，[NOTICE](../NOTICE) 记录项目归属。
 
-独立产品仓库；不搬运竞品实现、品牌素材或 provider 二进制。DSH 为候选，尚未作为依赖或 vendored source 引入。本项目的许可不替代任何第三方材料、服务或品牌的原有条款。
+独立产品仓库；不搬运竞品实现、品牌素材或 provider 二进制。本地源码 demo 通过 npm 依赖固定版本 DSH；未复制其完整源码或发布二进制安装包。本项目的许可不替代任何第三方材料、服务或品牌的原有条款。
 
 创始人的目标是保留自己商用的可能性、尽可能保留贡献与归属，同时扩大产品影响力。public 可见性本身不回答是否允许别人复制、修改和商用。公开 GitHub 仓库仍受平台允许查看和 fork 等条款约束。[GitHub 的说明](https://choosealicense.com/no-permission/)
 
@@ -70,4 +70,12 @@ MIT 同样允许商业使用并要求保留版权/许可通知，更简洁；Apa
 - [Claude Code LICENSE](https://github.com/anthropics/claude-code/blob/main/LICENSE.md)、[SDK 条款](https://github.com/anthropics/claude-agent-sdk-typescript#license-and-terms)
 - [Codex LICENSE](https://github.com/openai/codex/blob/main/LICENSE)
 
-动态官方条款与未固定版本的链接会变化；所有推荐在引入或发行时重查。尚未完成完整依赖树审计、最终商标检索或第三方素材授权；当前未引入这些材料，不把待查项目记成通过。
+动态官方条款与未固定版本的链接会变化；所有推荐在引入或发行时重查。尚未完成完整依赖树审计、最终商标检索或第三方素材授权；当前仅公开原创接入源码与依赖锁文件，不把待查的完整二进制发行范围记成通过。
+
+## 本地桌面 demo 的依赖范围
+
+固定版本见 package-lock.json：DSH 0.2.1-rc.2、xterm/headless 6.0.0、fit 0.11.0、serialize 0.14.0、ws 8.22.0、Electron 44.9.0、Playwright 1.64.1。已读取直接使用包的许可；DSH/xterm/ws/Electron 为 MIT，Playwright 为 Apache-2.0。依赖保持原发行内容，不改原署名。
+
+UI 构建将 xterm 和 fit 的完整 MIT 通知放入本地生成 bundle。运行服务复制 xterm headless/serialize 时补入其 npm 文件清单遗漏的上游完整 MIT 通知；核对来源为 [xterm.js 固定源码 LICENSE](https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/LICENSE)。ws 自带许可随目录复制保留。生成文件、node_modules 和原生 provider 二进制不进公开 Git。
+
+DSH 的传递依赖仍含 MPL/LGPL 等不同条款；这里没有把 691 个锁文件 package 条目逐项认证为可直接打包。正式安装包、自动更新与二进制再分发尚未提供，需按实际发行内容完成对应 notices/source 等义务。源码 demo 不能被描述为已完成全部商业发行法律审计。

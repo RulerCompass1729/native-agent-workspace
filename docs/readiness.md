@@ -1,58 +1,44 @@
-# 准备状态与下一步
+# Demo readiness and milestones
 
-As of 2026-10-17。当前阶段：**有限可行性试验**。已开始原生连接探针，未开始完整桌面产品功能开发。
+As of 2026-10-17. Current phase: **local macOS source demo**, with DSH as the UI
+foundation. The maintainer authorized implementation and real use, then explicitly
+limited Claude/Codex tests to important unresolved native behavior.
 
-## 本阶段交付
-
-- [x] 用户目标与普通人体验原则写入产品框架。
-- [x] 独立 session、room、membership、view 与 native fleet 的关系明确。
-- [x] 加入、退出、窗口移动、外部 attach/resume 的语义分开。
-- [x] 人类接管、旧队列失效、无人值守和隐私边界有具体设计。
-- [x] 竞争关系与 DSH 复用边界有源码引用和未验证范围。
-- [x] 上游许可、品牌及原生认证路径完成与当前选择有关的定点核查。
-- [x] 独立本地 Git 仓库及共享 agent 项目说明建立。
-- [x] 本地文档链接无缺失，42 条来源记录可解析；Codex debug 已确认项目说明加载。
-- [x] staged 内容通过 gitleaks 与有效 PII 规则检查；提交前变更会重新检查。
-- [x] 完整初始历史的 secret/PII、作者及 commit message 检查通过；无敏感命中，作者为公开账号的 noreply 身份。
-- [x] `RulerCompass1729/native-agent-workspace` public 远端已创建；首次发布 17 个文件，远端 commit 与文件清单已核对。
-- [x] 创始人确认原创内容采用标准 Apache-2.0；LICENSE、COPYRIGHT、NOTICE 和贡献条款已配齐。
-- [x] 本仓库安装 Git 提交、提交说明与推送隐私守卫；缺工具/私人规则或扫描失败时阻止操作，私人规则留在仓库外。
-- [x] 20 项真实 Git 回归通过：合成敏感数据被阻止、干净提交和本地推送成功；未向网络推送测试数据。
-- [x] 已发布的 3 条准备提交经完整历史、文件、消息和身份复查无命中；该结果不替代未来每次发布的检查。
-- [ ] 应用的实际网络出口、日志、存储、删除及第三方集成隐私验收；有运行实现时执行，尚未通过。
-
-未选最终品牌不妨碍工作名仓库。原创内容已按 Apache-2.0 授权；第三方材料仍须逐项核查，不能把本项目的许可证套到其他权利人的材料上。
-
-公开开发使用 [publication](publication.md) 的守卫与人工审阅；产品发行须满足 [privacy](privacy.md) 中对应实际实现的条件。文档声明不是运行时隐私证明，也不是全球合规认证。
-
-## 唯一下一项建设：原生会话连续性证明
-
-有限技术试验已开始。[第一轮结果](native-continuity.md)验证了 Codex 空闲主线程的多客户端与真实 TUI 连接，但未验证 fleet、房间或 GUI。Claude 后台化与额外摘要调用的限制已记录。下一检查是持久原生 CLI/PTY 路径能否保住活跃 Teams；完整通过前不铺开产品功能。
-
-| 场景 | 必须观察的真实证据 |
+| Milestone | Status and evidence |
 | --- | --- |
-| 独立 Claude 会话 → 入房 → 脱出 | 原生 session ID/运行句柄一致；不调用 create/resume 伪造移动 |
-| 完整 Claude Teams 活跃时移动 | teammates、共享任务表、成员消息仍工作；不是只看面板有子 agent 图标 |
-| Codex 原生 session 与 fleet | 原生 thread 身份、子 agent 事件及控制范围准确；不用 DSH ephemeral subagent 代替 |
-| GUI ↔ TUI ↔ 第二个视图 | 同一运行实例；输入不交错、不重复发送，草稿/待审批不丢 |
-| 两个主 session 定向交接 | 接收方与材料正确；无全历史广播；一轮核查按规则结束 |
-| 退出与发送并发 | 退出后旧成员修订号不能派发；不确定发送不重试；已发送不伪装撤回 |
-| 真人接管 | 旧队列不再唤醒 agent；停止范围有原生确认；不能只测主进程 |
-| 外部运行会话 | 验证具体 provider attach 能力；无能力就如实标不支持，不并行 resume 活跃会话 |
-| 用量与时间 | 壳层新增模型调用为 0；无重复上下文；记录同等任务基线与计量缺口 |
-| 隐私与权限 | 仅交接授权材料；凭据不进入 UI/房间日志；房间策略不绕过 native 权限 |
-| 故障与输入 | 断线、退出、休眠、输入法、粘贴与审批待办不丢或明确报告限制 |
+| Product boundaries and public repository | Done: session/room/view distinction, Apache-2.0 original work, source register and publication guard |
+| Single native session with GUI/TUI views | Local demo: both providers have real replies through both surfaces; native trust/login remains native |
+| UI reopen without re-login/session replacement | Normal exit, crash recovery and loading-window exit checked with live native sessions; view/draft/identity retained while the service remains alive |
+| Intentional multi-window, no accidental duplicate app | Same-profile lock, one DSH UI host, exclusive test launcher and owned-process cleanup checked |
+| Two agents and human-directed collaboration | Join/leave and explicit sharing implemented; real three-reply check stopped at its limit; local control/race checks passed |
+| Native fleets | Claude single teammate/shared task/messages observed; idle team retained across room changes/UI reopen without a new model prompt. Active Codex fleet and full failure/termination semantics remain unverified |
+| Daily-use release | Not ready: installer/update/reboot recovery, complete input/accessibility, privacy/network and native compatibility coverage still required |
 
-测量前固定原生版本、任务、模型、配置与输入。证据保留在本机，公开报告只放脱敏结果。首轮用一次合成 Codex 任务建立记录，已单独记录原生用量；它不是端到端性能或费用基准。
+See [demo instructions and exact limits](../demo.md), [test policy](testing.md), and
+the historical [first continuity result](native-continuity.md). Do not turn a
+successful root reply into a claim that all descendants finished or stopped.
 
-## 推进或换路的判据
+## What can be tried now
 
-若 DSH 插件/组件边界能托管所需的长期原生 session，就围绕单 agent 的正常使用体验继续。若必须大幅改造核心生命周期、增加必经模型、牺牲 Teams 或复制运行实例，则记录失败点，换薄外壳路线，不把失败检查标为通过。
+Run `npm ci` then `npm start`. Use one session, switch conversation/native terminal,
+invite another session, explicitly share a task, and detach either session without
+replacing it. Native providers must already be installed and authenticated through
+their own mechanisms. No provider binaries are distributed by this repository.
 
-当前概念架构已可评审；运行时集成可行性仍待上述证明。不能把文档写完宣称为全部架构风险已消除。
+The frontend reuses DSH's Web composition and UI components; the separate native
+service deliberately outlives its windows. Updating frontend source does not
+silently replace a live backend. Machine reboot and service loss are outside the
+current continuity guarantee.
 
-## 以后做及触发条件
+## Next milestone
 
-更多 agent：双主 agent 流程完成验收后；Windows/Linux：平台接口在 macOS 证明后；插件市场/账号同步/云执行：出现明确真实需求后；完整可视化成果编辑器：首条任务确实需要且现有文件工具不够时。
+Use this demo for normal single-session work and fix concrete feedback. Before
+publishing an app download, close the actual distribution/license, privacy,
+recovery and accessibility gaps. Retest native integrations only when a relevant
+change or observed failure justifies the model usage. More providers and cloud
+features wait until the two-provider experience is usable.
 
-这些不是本轮建设项。
+Every commit/push still requires proactive secret/PII scans and review, including
+outgoing history, author identities and commit messages. Raw test evidence stays
+local. The guard and written privacy requirements are not a global compliance
+certification. See [publication](publication.md) and [privacy](privacy.md).

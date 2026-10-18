@@ -10,9 +10,24 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 ## Status
 
-This is an **early feasibility repository**, not an installable application. It contains product requirements, architecture decisions, source-backed comparisons, publication safeguards, and a small native-connection diagnostic. An idle Codex thread has passed a limited real-terminal connection check; full Claude/Codex collaboration, fleet preservation, GUI continuity, and performance remain unverified. See the [first continuity result](docs/native-continuity.md).
+This is a **local macOS desktop demo**, run from source. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
-DeepSeek Harness is the first integration candidate. This repository is independent; it does not currently contain or depend on DeepSeek Harness or competitor implementation code.
+The interface runs on the pinned DeepSeek Harness Web composition, with this project's client plugin inside Electron. Persistent native processes belong to a separate local service. There is no intermediate DeepSeek model call. This is an independent project, not an official DeepSeek distribution.
+
+## Run locally
+
+Use macOS with Node.js 22.19+ on the 22.x line or Node.js 24+, Python 3, and your existing native Claude Code/Codex installation and sign-in.
+
+```sh
+npm ci
+npm start
+```
+
+Choose **新会话**, a provider, a working folder, and **原生终端** or **对话**. The native terminal handles first-time trust/login. For a new Codex terminal session, complete the first message there before using the conversation view. No model prompt is sent merely by opening the workspace.
+
+Use **加入协作 / 脱出协作** to change membership without replacing the native session. **开始一轮核查** permits up to three replies within ten minutes; native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. Machine reboot and service loss do not preserve live fleets yet.
+
+`npm test` runs local regression checks without model calls. `npm run test:desktop` runs a visible UI lifecycle check without sending prompts; it reuses a single private test profile and refuses a second test runner. See [test policy](docs/testing.md).
 
 ## Start here
 

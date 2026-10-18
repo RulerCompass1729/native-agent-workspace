@@ -3,9 +3,28 @@
 This file is shared by Claude Code and Codex. `AGENTS.md` points to this file.
 
 Read `README.md`, `docs/product.md`, and `docs/readiness.md` before changing scope.
-The current phase is bounded feasibility testing. Do not present planned integrations as working
-features, install provider runtimes, or start paid model runs as a side effect of
-editing these documents.
+The current phase is a local desktop demo built on DeepSeek Harness. Preserve
+that foundation and the native session service when improving either GUI or TUI.
+Do not present planned integrations as working features, install provider runtimes,
+or start paid model runs as a side effect of editing documents.
+
+## Test costs and instances
+
+- Default to checks that do not call a model. Use real Claude/Codex turns only
+  when a changed critical native capability cannot be verified locally.
+- Reuse an existing passing result when its runtime, adapter, and relevant
+  behavior have not changed. Do not repeat marker replies or test both providers
+  for an unrelated UI change.
+- Before a live test, state the unresolved question, a finite turn/teammate
+  limit, and the stop condition. Use the smallest synthetic task that answers it.
+  Include native teammate activity when reporting usage; root-turn count is not
+  a complete token or cost measurement.
+- Stop after the required evidence arrives. No polling prompts, automatic
+  retry, extra acknowledgement loops, or fleet tests merely for completeness.
+  Unverified capabilities remain explicitly unverified.
+- Use one desktop test profile and one test launcher. Repeated launch must
+  focus the existing instance; extra windows require an intentional test case.
+  Clean up only processes owned by that test, preserving native user sessions.
 
 ## Architectural invariants
 

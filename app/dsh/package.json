@@ -1,0 +1,10 @@
+{
+  "name": "@rulercompass/native-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "host.js",
+  "exports": {".": "./host.js", "./client": "./client.js"},
+  "dsh": {"client": {"platform": "web"}}
+}

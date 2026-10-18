@@ -1,6 +1,6 @@
 # 基础选型决定
 
-As of 2026-10-17。决定：**独立仓库承载产品，DeepSeek Harness 作为首选集成候选**。暂不复制完整上游，不安装 runtime，不声称已完成接入。
+As of 2026-10-17。决定：**独立仓库承载产品，以 DeepSeek Harness 为 UI 基础**。本地 demo 已采用固定版本 `@deepseek-ai/dsh@0.2.1-rc.2` Web composition、client 插件、布局/主题/Markdown；Electron 承载该界面，独立服务持有原生进程。以下源码表记录选型依据，不把上游的现成 subagent 插件冒充本产品主会话。
 
 ## 为什么不直接把 DSH 改名发布
 
@@ -21,7 +21,7 @@ Anthropic 当前说明完整 Teams 的 teammates 需要交互式 session，SDK/p
 
 ## 采用什么边界
 
-本产品自行定义 session、room、membership、共享授权和控制语义。DSH 候选承担桌面/UI 插件与经过审查的底层组件；不让业务身份被 DSH 模型循环拥有。Claude 与 Codex 不必先经过一个 DeepSeek 模型的转述。
+本产品自行定义 session、room、membership、共享授权和控制语义。DSH 承担 UI 插件、布局、主题与 Markdown 等已接入的组件；不让业务身份被 DSH 模型循环拥有。Claude 与 Codex 不必先经过一个 DeepSeek 模型的转述。
 
 优先尝试扩展包或 adapter 接入上游，以版本固定的依赖或可审计补丁维持边界。若确实需要改上游，再创建明确保留来源和许可的 fork；独立仓库不是抹去来源的办法。
 
@@ -33,7 +33,7 @@ Anthropic 当前说明完整 Teams 的 teammates 需要交互式 session，SDK/p
 
 先用真实交互式 Claude 检验最硬限制，再用 Codex 验证同一控制层可扩展。测试不要求完成美术、编辑器或插件市场。
 
-源码检查不能解决仍未验证的原生 GUI 输入、动态 fleet 事件、跨视图单写入者、崩溃恢复和费用计量。进入产品功能开发前必须记录实际通过与失败边界。
+源码检查不能解决仍未验证的原生 GUI 输入、动态 fleet 事件、跨视图单写入者、崩溃恢复和费用计量。实际通过与未测边界见 [demo](../demo.md)；这不是完整 native fleet 或成本等价性的证明。
 
 ## 版权与维护影响
 
