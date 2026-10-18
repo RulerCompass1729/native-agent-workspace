@@ -6,6 +6,6 @@ function startupMessage(error) {
     NAW_UI_BUSY: '上一个界面服务仍在退出；未启动重复服务，请稍后重新打开。',
     NAW_UI_RECORD: '界面进程记录无法读取；未启动重复服务。',
   };
-  return (Object.hasOwn(messages, error?.code) ? messages[error.code] : '本地界面未能完成启动，请重新打开应用。') + '\n原生会话由独立运行服务保留，不会自动重建或重发消息。';
+  return (Object.hasOwn(messages, error?.code) ? messages[error.code] : '本地界面未能完成启动，请点击重试或重新打开应用。') + '\n原生会话由独立运行服务保留，不会自动重建或重发消息。';
 }
 module.exports = { startupMessage };

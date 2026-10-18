@@ -49,10 +49,21 @@ async function connect(dataDir, owner) {
   return client;
 }
 async function ensureService(dataDir, executablePath) {
-  try { const c = await connect(dataDir, 'bootstrap'); c.close(); return; } catch {}
+  try {
+    const c = await connect(dataDir, 'bootstrap');
+    try {
+      const state = await c.call('initial');
+      if (!process.env.NAW_APP_VERSION || state.runtimeVersion === process.env.NAW_APP_VERSION || state.sessions.some(s => s.state !== 'ended')) return;
+      // Install a newer backend only after every native session has confirmed
+      // its end. An active/unknown fleet never becomes an update casualty.
+      await c.call('shutdown');
+      for (let i = 0; i < 30 && !c.socket.destroyed; i++) await new Promise(r => setTimeout(r, 100));
+    } finally { c.close(); }
+  } catch {}
   const lock = path.join(dataDir, 'service.lock');
   if (fs.existsSync(lock)) {
     const pid = Number(fs.readFileSync(lock, 'utf8'));
+    if (!Number.isSafeInteger(pid) || pid < 2) throw new Error('运行服务记录损坏；保留原文件，请检查后再启动。');
     let alive = true; try { process.kill(pid, 0); } catch (error) { alive = error.code !== 'ESRCH'; }
     if (alive) throw new Error('已有运行服务仍存在但无法连接；为保住会话，不启动替代进程。');
     fs.rmSync(lock); // Dead PID only; never kill or replace a live owner.

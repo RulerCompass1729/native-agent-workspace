@@ -2,6 +2,7 @@ const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { processIdentity, processMayBeAlive } = require('./platform.cjs');
 
 const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error('请输入有效文字；一次最多 16,000 个字符。');
@@ -21,7 +22,7 @@ class Workspace extends EventEmitter {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
-      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, state: 'ended', owner: null, approval: null, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '' });
+      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, state: record.state === 'ended' ? 'ended' : 'recoverable', owner: null, approval: null, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
       this.room.messages = stored.room?.messages || [];
       if (stored.drafts) for (const [key, value] of Object.entries(stored.drafts)) this.drafts.set(key, value);
     } catch (error) {
@@ -62,7 +63,7 @@ class Workspace extends EventEmitter {
     } catch (error) { record.state = 'error'; record.activity = error.message; this.changed(); throw error; }
   }
   bind(s, runtime) {
-    runtime.on('pid', pid => { s.pid = pid; this.changed(); });
+    runtime.on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
     runtime.on('model', model => { s.model = model; this.changed(); });
     runtime.on('state', state => {
       if (this.stops.has(s.id) && !['ended', 'error', 'disconnected'].includes(state)) return;
@@ -214,6 +215,33 @@ class Workspace extends EventEmitter {
     }).catch(error => { s.state = 'error'; s.activity = error.message; throw error; })
       .finally(() => { this.stops.delete(id); this.changed(); });
     this.stops.set(id, operation); return operation;
+  }
+  async resume(id, owner) {
+    const s = this.get(id);
+    if (this.runtimes.has(id)) throw new Error('该会话仍有运行连接，请先检查原生状态。');
+    if (!s.nativeId || !['ended', 'recoverable', 'error'].includes(s.state)) throw new Error('这个会话目前不能恢复。');
+    const sameServer = s.provider === 'codex' && s.serverIdentity?.pid === this.host.codexProcess?.pid;
+    if ((!sameServer && processMayBeAlive(s.serverIdentity)) || (processMayBeAlive(s.processIdentity) && !(sameServer && s.processIdentity.pid === s.serverIdentity.pid))) throw new Error('之前的原生进程可能仍在运行。请先在原生界面检查，避免并行恢复同一个会话。');
+    if (!fs.statSync(s.cwd).isDirectory()) throw new Error('原工作目录不可用，请先恢复该目录。');
+    s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.owner = owner; s.recovering = true; s.state = 'starting'; s.activity = '正在连接原生历史';
+    // Membership is retained, but an interrupted automatic run never restarts.
+    this.pause('恢复原生会话后，请重新选择本次协作任务。'); this.changed();
+    try {
+      const runtime = this.host.create(s); this.runtimes.set(id, runtime); this.bind(s, runtime);
+      if (runtime.start) await runtime.start();
+    } catch (error) {
+      if (!this.runtimes.get(id)?.terminal?.alive) this.runtimes.delete(id);
+      s.state = 'error'; s.activity = error.message; this.changed(); throw error;
+    } finally { s.recovering = false; this.changed(); }
+  }
+  clearSharedHistory() {
+    if (this.room.run?.status === 'running') throw new Error('请先暂停本轮交接，再清除共享记录。');
+    this.room.run = null; this.room.messages = []; this.forwards.clear(); this.room.revision++; this.changed(); this.persist();
+  }
+  forget(id) {
+    const s = this.get(id);
+    if (this.runtimes.has(id) || (s.state !== 'ended' && (processMayBeAlive(s.processIdentity) || processMayBeAlive(s.serverIdentity)))) throw new Error('原生连接仍存在，请先结束或检查会话。');
+    this.sessions.delete(id); this.drafts.delete(id); this.draftRevisions.delete(id); this.changed(); this.persist();
   }
   close() { clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
 }

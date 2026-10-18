@@ -1,10 +1,43 @@
-# Privacy requirements and release conditions
+# Local alpha privacy and release conditions
 
-As of 2026-10-17. This document is a design and release constraint, not a claim
-that an implemented app has passed a privacy audit or complies with every law.
-The repository currently contains planning material and local developer checks.
-There is no product account system, telemetry backend, or shipping agent integration.
-GitHub independently processes repository visitors and contributions under its terms.
+As of 2026-10-17. The macOS alpha runs locally. There is no product account
+system, cloud sync, analytics service, remote crash upload or shell model call.
+The renderer permits network requests only to its local DSH host. The UI host
+mounts an explicit UI composition; model/tool/account/telemetry plugins are not
+mounted. These implemented boundaries are not a complete network or legal audit.
+GitHub independently processes repository visitors and contributions.
+
+## What is stored and how to remove it
+
+The default location is the current account's Application Support directory under
+Native Agent Workspace. Development/test profiles may override it. The in-app
+**隐私与数据 → 打开本机数据目录** opens the actual location.
+
+- workspace.json contains displayed conversation copies, selected working paths,
+  native IDs, process identity for safe recovery, team-event metadata, explicit
+  shared messages and drafts. It does not contain raw terminal scrollback,
+  provider credential files, full environment dumps or raw protocol traces.
+- views.json stores window/layout selection and a local draft recovery copy.
+  Electron/DSH keep local UI preferences/cache and a local UI access token.
+  The independent service keeps its private connection/token files and a
+  versioned runtime copy. Tokens are not displayed in startup failures.
+- Records stay until removed. After a session ends, use **会话与原生团队 →
+  移除本应用记录**. This also removes matching saved window drafts. Shared-room
+  records are separate: pause handoffs, then use **隐私与数据 → 清除共同工作记录**.
+  Clearing shared records does not cancel a native task already in progress.
+- For complete local removal, first end/disconnect native sessions and confirm
+  their state, open the data directory, then choose **隐私与数据 → 所有会话结束后完全退出**.
+  This refuses while any session remains active or uncertain. After the service
+  has exited, remove this application data directory.
+  Never remove a live service's directory to try to stop its processes. Native
+  Claude/Codex history, authentication, provider retention and OS backups remain
+  separate; use their own supported controls for those copies.
+
+Top-level data directories and service connection directories are restricted to
+the current OS account; state/connection files use owner-only modes. Conversation
+copies have **no application-layer encryption**. Another process with access to
+this account can read them, even on an unlocked encrypted disk. Sensitive or
+regulated information is not an appropriate first alpha test fixture.
 
 ## Data boundaries
 
@@ -48,8 +81,9 @@ The maintainer must review the actual build, rather than approve this list once:
    Adding analytics, accounts, cloud sync, hosted execution, children as a target
    audience, or regulated uses triggers a new assessment before release.
 
-These conditions are not all completed: no application runtime exists to validate
-yet, and operator/market-specific legal analysis has not been performed. Local-first
+These conditions are not all completed: runtime state and local deletion checks
+exist, but comprehensive subprocess/network coverage, independent privacy review,
+and operator/market-specific legal analysis have not been performed. Local-first
 design and Apache-2.0 do not replace privacy obligations or provider terms.
 
 ## Primary references

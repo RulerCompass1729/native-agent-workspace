@@ -3,7 +3,7 @@ const api = window.workspace;
 const $ = id => document.getElementById(id);
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 const button = (text, action, cls) => { const el = node('button', text, cls); el.type = 'button'; el.addEventListener('click', () => attempt(action)); return el; };
-const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', ended: '已结束', error: '需要检查' };
+const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', error: '需要检查' };
 let state, owner, selected = '', mode = 'chat', preference = 'chat', folder = '', disconnected = false;
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
 const terminals = new Map();
@@ -22,7 +22,23 @@ function select(id, requestedMode) {
 function openCreate(provider = 'claude') {
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
   $('initial-view').value = preference; $('session-name').value = '';
-  $('chosen-folder').textContent = folder; $('create-dialog').showModal();
+  $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
+}
+function createReadiness() {
+  const provider = document.querySelector('input[name="provider"]:checked').value;
+  const ready = state.preflight?.python && state.preflight?.[provider];
+  $('confirm-create').disabled = !ready;
+  $('create-readiness').textContent = ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
+}
+async function showSetup() {
+  state.preflight = await api.preflight();
+  const entries = [['claude', 'Claude Code', 'https://code.claude.com/docs/en/setup'], ['codex', 'Codex CLI', 'https://developers.openai.com/codex/cli/'], ['python', 'Python 3', 'https://www.python.org/downloads/macos/']];
+  $('setup-status').replaceChildren(...entries.map(([key, label, url]) => {
+    const row = node('p', `${label}：${state.preflight[key] ? '已找到' : '尚未找到'} `);
+    row.append(button('官方安装说明', () => api.openExternal(url))); return row;
+  }));
+  $('version-info').textContent = `应用 ${state.appVersion || '开发版'} · 后台 ${state.runtimeVersion || '旧版（会话保留中）'}。安装或替换应用后可点“重新检查”。`;
+  createReadiness(); if (!$('setup-dialog').open) $('setup-dialog').showModal();
 }
 function populateSelect(el, items) {
   const old = el.value;
@@ -65,6 +81,7 @@ function render() {
     $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${s.model} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
     const warning = disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : state.storageWarning;
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
+    $('reconnect-button').hidden = !disconnected;
     $('session-list').replaceChildren(...state.sessions.map(record => {
       const link = button('', () => select(record.id), `session-link${record.id === selected ? ' active' : ''}`);
       link.dataset.sessionId = record.id; link.draggable = true;
@@ -75,9 +92,9 @@ function render() {
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
     $('header-actions').replaceChildren();
     if (s) {
-      const own = s.owner === owner; const alive = !['ended', 'error', 'stopping', 'disconnected'].includes(s.state);
+      const own = s.owner === owner; const alive = !['ended', 'error', 'stopping', 'disconnected', 'recoverable'].includes(s.state);
       $('header-actions').append(button(s.roomId ? '脱出协作' : '加入协作', () => api.join(s.id, !s.roomId)), button('独立窗口', () => api.newWindow(s.id)), button('分享选中内容', () => { const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString(); text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。'); }));
-      $('session-status').textContent = `${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${own ? '' : ' · 另一个窗口控制'}`;
+      $('session-status').textContent = `${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}`;
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
       $('messages').hidden = mode !== 'chat'; $('terminal-area').hidden = mode !== 'terminal'; $('composer-wrap').hidden = mode !== 'chat';
@@ -103,7 +120,11 @@ function render() {
       $('advanced-content').replaceChildren(node('div', `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`));
       if (s.usage) $('advanced-content').append(node('div', `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}`));
       for (const event of s.fleet.slice(-8)) $('advanced-content').append(node('div', `${event.event} · ${event.name}`));
-      if (!['ended', 'stopping'].includes(s.state)) $('advanced-content').append(button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small'));
+      if (!['ended', 'stopping', 'recoverable'].includes(s.state)) $('advanced-content').append(button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small'));
+      if (['ended', 'recoverable', 'error'].includes(s.state) && state.capabilities?.includes('resume')) {
+        $('header-actions').prepend(button('继续原生会话', () => api.resume(s.id), 'primary'));
+        $('advanced-content').append(button('移除本应用记录…', () => api.forget(s.id), 'small'));
+      }
       for (const [id, entry] of terminals) entry.element.hidden = id !== s.id;
       if (mode === 'terminal' && alive) attempt(() => ensureTerminal(s.id));
     }
@@ -130,11 +151,14 @@ async function switchMode(next) {
   else $('message-input').focus();
 }
 async function ensureTerminal(id) {
+  const generation = state.sessions.find(s => s.id === id)?.connectionRevision || 0;
+  const old = terminals.get(id);
+  if (old && old.generation !== generation) { old.term.dispose(); old.element.remove(); terminals.delete(id); }
   if (terminals.has(id)) { const existing = terminals.get(id); if (existing.ready) fitTerminal(id); return existing.pending; }
   const element = node('div', undefined, 'terminal-host'); element.dataset.terminalId = id; $('terminal-area').append(element);
   const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: 13, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, theme: { background: '#20261f', foreground: '#eef2e8', cursor: '#e0edc9', selectionBackground: '#637a5988' } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(element);
-  const entry = { element, term, fit, ready: false, sequence: 0, queued: [] }; terminals.set(id, entry);
+  const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [] }; terminals.set(id, entry);
   term.onData(data => {
     // The service's canonical terminal answers device queries, once.
     if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\]/.test(data)) return;
@@ -148,12 +172,13 @@ async function ensureTerminal(id) {
   entry.pending = (async () => {
     try {
       const snapshot = await api.terminalSnapshot(id);
+      if (terminals.get(id) !== entry) return;
       term.resize(snapshot.cols || 100, snapshot.rows || 30);
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
       entry.sequence = snapshot.sequence; entry.ready = true;
       for (const event of entry.queued) writeTerminal(entry, event);
       entry.queued = []; fitTerminal(id); if (selected === id && mode === 'terminal') term.focus();
-    } catch (error) { terminals.delete(id); term.dispose(); element.remove(); throw error; }
+    } catch (error) { if (terminals.get(id) === entry) { terminals.delete(id); term.dispose(); element.remove(); throw error; } }
   })();
   return entry.pending;
 }
@@ -165,7 +190,7 @@ function fitTerminal(id) {
 function writeTerminal(entry, event) { if (event.sequence > entry.sequence) { entry.term.write(event.data); entry.sequence = event.sequence; } }
 const disposers = [
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
-  api.onState(next => { state = next; render(); }),
+  api.onState(next => { state = { ...state, ...next }; render(); }),
   api.onDisconnected(message => { disconnected = true; render(); toast(message); }),
   api.onNew(() => openCreate()),
 ];
@@ -195,6 +220,18 @@ $('invite-button').onclick = () => { $('invite-list').replaceChildren(...state.s
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
 $('confirm-share').onclick = () => attempt(async () => { await api.forward($('share-recipient').value, $('share-text').value); $('share-dialog').close(); toast('已定向发送。'); });
-$('privacy-button').onclick = () => $('privacy-dialog').showModal(); $('close-privacy').onclick = () => $('privacy-dialog').close();
-attempt(async () => { state = await api.initial(); owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'chat'; mode = state.viewState.mode || preference; select(state.viewState.selected || '', mode); });
+$('privacy-button').onclick = () => $('privacy-dialog').showModal(); $('quit-service').onclick = () => attempt(() => api.quitService());
+$('data-directory').onclick = () => attempt(() => api.dataDirectory());
+$('clear-shared-history').onclick = () => attempt(() => { if (!state.capabilities?.includes('clearSharedHistory')) throw new Error('后台仍在保留旧版会话；结束它们并重开应用后可使用此功能。'); return api.clearSharedHistory(); });
+$('close-privacy').onclick = () => $('privacy-dialog').close();
+$('reconnect-button').onclick = () => attempt(async () => { $('reconnect-button').disabled = true; try { await api.reconnect(); } finally { $('reconnect-button').disabled = false; } });
+$('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
+$('close-setup').onclick = () => $('setup-dialog').close();
+for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
+attempt(async () => {
+  state = await api.initial(); owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'chat'; mode = state.viewState.mode || preference;
+  const draft = state.viewState.draft, saved = state.sessions.find(s => s.id === draft?.id);
+  if (saved && (!saved.owner || saved.owner === owner)) { saved.liveDraft = draft.text; await api.draft(saved.id, draft.text); }
+  select(state.viewState.selected || '', mode); await api.uiReady();
+});
 return () => { for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

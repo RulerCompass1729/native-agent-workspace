@@ -5,8 +5,11 @@ const { randomUUID } = require('node:crypto');
 const { ensureService, connect } = require('./service-client.cjs');
 const { startDsh } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
+const { preflight } = require('./preflight.cjs');
+const { pathToFileURL } = require('node:url');
 
 app.setName('Native Agent Workspace');
+process.env.NAW_APP_VERSION = app.getVersion();
 for (const flag of ['disable-background-networking', 'disable-component-update', 'disable-sync']) app.commandLine.appendSwitch(flag);
 if (process.env.NAW_DATA_DIR) app.setPath('userData', path.resolve(process.env.NAW_DATA_DIR));
 // Headed test runs belong to their launcher, not to a forgotten background job.
@@ -23,6 +26,16 @@ const windows = new Map();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
 let dataDir, views = [], quitting = false;
+let startupWindow, starting = false, wired = false;
+const startupFile = path.join(__dirname, 'startup.html');
+function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, minWidth: 850, minHeight: 600, backgroundColor: '#f8f8f5', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
+function bindClient(context) {
+  const { win, client } = context;
+  const send = (channel, data) => { if (!win.isDestroyed()) win.webContents.send(channel, data); };
+  client.on('state', data => send('workspace:state', data));
+  client.on('terminal', data => send('workspace:terminal', data));
+  client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
+}
 
 function saveViews() {
   const target = path.join(dataDir, 'views.json');
@@ -36,25 +49,27 @@ async function openWindow(saved) {
   view.active = true; saveViews();
   const client = await connect(dataDir, view.owner);
   if (quitting) { client.close(); return; }
-  const win = new BrowserWindow({ title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, minWidth: 850, minHeight: 600, backgroundColor: '#f8f8f5', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } });
-  const send = (channel, data) => { if (!win.isDestroyed()) win.webContents.send(channel, data); };
-  windows.set(win.webContents.id, { win, client, view });
-  client.on('state', data => send('workspace:state', data));
-  client.on('terminal', data => send('workspace:terminal', data));
-  client.on('closed', () => send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'));
+  const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : new BrowserWindow(windowOptions(view));
+  startupWindow = null;
+  if (view.bounds) win.setBounds(view.bounds);
+  const context = { win, client, view, failed: false };
+  windows.set(win.webContents.id, context); bindClient(context);
+  const ready = new Promise((resolve, reject) => { context.ready = resolve; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 25000); });
+  ready.catch(() => {}); // loadURL may fail before the readiness timer fires.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('page-title-updated', event => { event.preventDefault(); win.setTitle('Native Agent Workspace'); });
   win.webContents.on('will-navigate', (event, url) => { if (!trusted(url)) event.preventDefault(); });
   win.webContents.on('will-attach-webview', event => event.preventDefault());
   const id = win.webContents.id;
-  win.on('close', () => { view.bounds = win.getBounds(); if (!quitting) view.active = false; saveViews(); });
+  win.on('close', () => { view.bounds = win.getBounds(); if (!quitting && !context.failed) view.active = false; saveViews(); });
   win.on('closed', () => {
     // A renderer/webContents shutdown can bypass the cancellable close event.
-    if (!quitting) { view.active = false; saveViews(); }
-    windows.delete(id); client.close();
+    if (!quitting && !context.failed) { view.active = false; saveViews(); }
+    windows.delete(id); context.client.close();
   });
-  try { await win.loadURL(entry); }
+  try { await win.loadURL(entry); await ready; }
   catch (error) { if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error)); }
+  finally { clearTimeout(context.readyTimer); }
   return win;
 }
 function register(name, handler) {
@@ -68,12 +83,45 @@ function register(name, handler) {
 async function boot() {
   dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.chmodSync(dataDir, 0o700);
   await ensureService(dataDir, process.execPath);
+  if (quitting) return;
   dsh = await startDsh(dataDir); entry = dsh.url;
+  if (quitting) { dsh.stop(); return; }
   try { views = JSON.parse(fs.readFileSync(path.join(dataDir, 'views.json'), 'utf8')); if (!Array.isArray(views)) views = []; } catch { views = []; }
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
-  for (const name of ['create', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
+  if (!wired) {
+  wired = true;
+  for (const name of ['create', 'join', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve']) register(name, (c, ...args) => c.client.call(name, ...args));
+  register('uiReady', c => c.ready?.());
+  register('send', async (c, id, text) => { const result = await c.client.call('send', id, text); if (c.view.draft?.id === id && c.view.draft.text.trim() === text.trim()) { c.view.draft.text = ''; saveViews(); } return result; });
+  register('preflight', () => preflight());
+  register('dataDirectory', () => shell.openPath(dataDir));
+  register('quitService', async c => { await c.client.call('shutdown'); app.quit(); });
+  register('clearSharedHistory', async c => {
+    const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: '清除共同工作记录？', detail: '清除本应用里的共享记录，并停止尚未完成的分享回写。不会删除各个会话、原生历史或撤回其他 agent 已收到的内容。正在执行的原生任务不会因此取消。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
+    if (answer.response === 1) return c.client.call('clearSharedHistory');
+  });
+  register('draft', async (c, id, text) => {
+    if (typeof text !== 'string' || text.length > 16000) throw new Error('草稿过长。');
+    c.view.draft = { id, text }; saveViews();
+    await c.client.call('draft', id, text);
+  });
+  register('reconnect', async c => {
+    await ensureService(dataDir, process.execPath);
+    const client = await connect(dataDir, c.view.owner), old = c.client;
+    c.client = client; bindClient(c); old.close(); await c.win.reload();
+  });
+  for (const action of ['resume', 'forget']) register(action, async (c, id) => {
+    const snapshot = await c.client.call('initial');
+    if (!snapshot.capabilities?.includes(action)) throw new Error('当前后台仍在保留旧版会话。结束会话后重新打开应用以使用此功能。');
+    const answer = await dialog.showMessageBox(c.win, {
+      type: 'question', message: action === 'resume' ? '继续这个原生会话？' : '移除此应用中的会话记录？',
+      detail: action === 'resume' ? '使用原生历史继续，不重发旧任务。活动中的原生团队不会自动重建；若已在其他应用打开该会话，请先结束那里的连接。' : '移除本应用的会话副本和草稿。原生服务中的历史与共同工作中已分享的内容仍保留。',
+      buttons: ['取消', action === 'resume' ? '继续会话' : '移除记录'], defaultId: 0, cancelId: 0,
+    });
+    if (answer.response === 1) { await c.client.call(action, id); if (action === 'forget') { for (const view of views) { if (view.draft?.id === id) delete view.draft; if (view.selected === id) view.selected = ''; } saveViews(); } }
+  });
   register('stop', async (c, id) => {
     const record = (await c.client.call('initial')).sessions.find(s => s.id === id);
     if (!record) throw new Error('找不到这个会话。');
@@ -86,7 +134,7 @@ async function boot() {
     if (answer.response === 1) return c.client.call('stop', id);
   });
   register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接类型不支持。'); return shell.openExternal(url.href); });
-  register('initial', async c => ({ ...await c.client.call('initial'), viewState: c.view }));
+  register('initial', async c => ({ ...await c.client.call('initial'), viewState: c.view, appVersion: app.getVersion(), preflight: preflight() }));
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
     Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference }); saveViews();
@@ -99,14 +147,36 @@ async function boot() {
     { label: '文件', submenu: [{ label: '新窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => openWindow() }, { label: '新会话', accelerator: 'CmdOrCtrl+N', click: () => BrowserWindow.getFocusedWindow()?.webContents.send('workspace:new') }, { role: 'close' }] },
     { role: 'editMenu' }, { label: '视图', submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' },
   ]));
+  }
   const restore = views.filter(v => v.active);
   if (restore.length) for (const view of restore) await openWindow(view);
   else await openWindow(views.at(-1));
   if (quitting) return;
-  app.on('activate', () => { if (!windows.size) openWindow(views.at(-1)); });
-  app.on('second-instance', () => { const c = windows.values().next().value; if (c) { c.win.show(); c.win.focus(); } else openWindow(views.at(-1)); });
+
 }
-if (primary) app.whenReady().then(boot).catch(error => { if (quitting) return; dsh?.stop(); dialog.showErrorBox('未能启动', startupMessage(error)); app.exit(1); });
+async function start() {
+  if (starting || quitting) return; starting = true;
+  if (!startupWindow || startupWindow.isDestroyed()) { startupWindow = new BrowserWindow(windowOptions()); await startupWindow.loadFile(startupFile); }
+  startupWindow.webContents.send('workspace:startup', { title: '正在打开你的工作空间', detail: '连接本机服务，恢复上次的界面…', retry: false });
+  try { await boot(); }
+  catch (error) {
+    dsh?.stop();
+    for (const c of [...windows.values()]) { c.failed = true; c.client.close(); c.win.destroy(); }
+    if (!quitting && (!startupWindow || startupWindow.isDestroyed())) {
+      startupWindow = new BrowserWindow(windowOptions()); await startupWindow.loadFile(startupFile);
+    }
+    if (!quitting && startupWindow && !startupWindow.isDestroyed()) startupWindow.webContents.send('workspace:startup', { title: '暂时未能打开', detail: startupMessage(error), retry: true });
+  } finally { starting = false; }
+}
+ipcMain.handle('workspace:retry-startup', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href) return start(); });
+function focusOrOpen() {
+  const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : windows.values().next().value?.win;
+  if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+  else if (!starting && !quitting) { if (dsh && wired) openWindow(views.at(-1)).catch(() => start()); else start(); }
+}
+app.on('activate', focusOrOpen);
+app.on('second-instance', focusOrOpen);
+if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
 app.on('before-quit', () => { quitting = true; try { if (dataDir) saveViews(); } finally { dsh?.stop(); } });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.

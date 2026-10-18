@@ -4,7 +4,71 @@
   "limits": [
     "Only a limited idle Codex connection check; no full runtime acceptance or cost benchmark",
     "No exhaustive dependency closure or trademark clearance",
-    "Mutable official pages must be rechecked before distribution"
+    "Mutable official pages must be rechecked before distribution",
+    {
+      "path": "iterm-window.html",
+      "url": "https://iterm2.com/python-api/window.html",
+      "bytes": 50266,
+      "sha256": "bc407b4b6f0a36bb431b65c40b6fcec3b38e74cb1ebccd30de68c1a20c8146d3",
+      "accessed_at": "2026-10-18T03:42:33.136557+00:00",
+      "evidence": "Primary source archived locally for alpha packaging and preferred-terminal feasibility; dated limits in alpha.md and readiness.md."
+    },
+    {
+      "path": "iterm-profile.html",
+      "url": "https://iterm2.com/python-api/profile.html",
+      "bytes": 464074,
+      "sha256": "6f5e38bfcadf8226a328bf8e27460088ea2d78002b0e380fe33202ac5e432644",
+      "accessed_at": "2026-10-18T03:42:32.964500+00:00",
+      "evidence": "Primary source archived locally for alpha packaging and preferred-terminal feasibility; dated limits in alpha.md and readiness.md."
+    },
+    {
+      "path": "iterm-scripting.html",
+      "url": "https://iterm2.com/documentation-scripting.html",
+      "bytes": 20964,
+      "sha256": "8cb867ae71e8479864232c13eea451b1b399bb92ff85b8098124977eb26132bf",
+      "accessed_at": "2026-10-18T03:42:32.814765+00:00",
+      "evidence": "Primary source archived locally for alpha packaging and preferred-terminal feasibility; dated limits in alpha.md and readiness.md."
+    },
+    {
+      "path": "iterm-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/gnachman/iTerm2/master/LICENSE",
+      "bytes": 14818,
+      "sha256": "990f1da86e9f58355fc82b5cd486b70aaeb53ae0ba9722424a0270ff0d458de9",
+      "accessed_at": "2026-10-18T03:42:32.863304+00:00",
+      "evidence": "Primary source archived locally for alpha packaging and preferred-terminal feasibility; dated limits in alpha.md and readiness.md."
+    },
+    {
+      "path": "apple-terminal.html",
+      "url": "https://support.apple.com/en-lamr/guide/terminal/trml1003/mac",
+      "bytes": 556941,
+      "sha256": "9427ad45f1b66176094e35affbc413f9c89f047c8bc43d45d620709f506cef23",
+      "accessed_at": "2026-10-18T03:42:33.633996+00:00",
+      "evidence": "Primary source archived locally for alpha packaging and preferred-terminal feasibility; dated limits in alpha.md and readiness.md."
+    },
+    {
+      "path": "electron-distribution.html",
+      "url": "https://www.electronjs.org/docs/latest/tutorial/application-distribution",
+      "bytes": 39594,
+      "sha256": "6a9e147a982fe0dbfa9b837e64e75e63bf3f6044f37b69779f778f5bb4ac728e",
+      "accessed_at": "2026-10-18T03:42:35.429496+00:00",
+      "evidence": "Primary source archived locally for alpha packaging and preferred-terminal feasibility; dated limits in alpha.md and readiness.md."
+    },
+    {
+      "path": "claude-legal.html",
+      "url": "https://code.claude.com/docs/en/legal-and-compliance",
+      "bytes": 410090,
+      "sha256": "f7fc782029bc4cf253030dfadedb30321e03d830b26d5be8a8fc5783aa24f5ba",
+      "accessed_at": "2026-10-18T03:42:33.294377+00:00",
+      "evidence": "Primary source archived locally for alpha packaging and preferred-terminal feasibility; dated limits in alpha.md and readiness.md."
+    },
+    {
+      "path": "packager-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/electron/packager/v20.3.0/LICENSE",
+      "bytes": 1313,
+      "sha256": "d1c14be05d76cb7894e6a01815996b1ec96a196e9ea9552e1a46b215e9ca7994",
+      "accessed_at": "2026-10-18T03:42:35.770705+00:00",
+      "evidence": "Primary source archived locally for alpha packaging and preferred-terminal feasibility; dated limits in alpha.md and readiness.md."
+    }
   ],
   "sources": [
     {

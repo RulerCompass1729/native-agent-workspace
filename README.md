@@ -10,9 +10,9 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 ## Status
 
-This is a **local macOS desktop demo**, run from source. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
+This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
-The interface runs on the pinned DeepSeek Harness Web composition, with this project's client plugin inside Electron. Persistent native processes belong to a separate local service. There is no intermediate DeepSeek model call. This is an independent project, not an official DeepSeek distribution.
+The interface runs on a pinned, UI-only DeepSeek Harness composition, with this project's client plugin inside Electron. Persistent native processes belong to a separate local service. There is no intermediate DeepSeek model call. This is an independent project, not an official DeepSeek distribution.
 
 ## Run locally
 
@@ -25,9 +25,17 @@ npm start
 
 Choose **新会话**, a provider, a working folder, and **原生终端** or **对话**. The native terminal handles first-time trust/login. For a new Codex terminal session, complete the first message there before using the conversation view. No model prompt is sent merely by opening the workspace.
 
-Use **加入协作 / 脱出协作** to change membership without replacing the native session. **开始一轮核查** permits up to three replies within ten minutes; native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. Machine reboot and service loss do not preserve live fleets yet.
+Use **加入协作 / 脱出协作** to change membership without replacing the native session. **开始一轮核查** permits up to three replies within ten minutes; native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
 
 `npm test` runs local regression checks without model calls. `npm run test:desktop` runs a visible UI lifecycle check without sending prompts; it reuses a single private test profile and refuses a second test runner. See [test policy](docs/testing.md).
+
+## Local macOS app build
+
+`npm run package:mac` produces an Apple Silicon `.app` and zip in `dist/`, using
+Electron Packager and a clean production dependency tree. The app itself does not
+need a separate Node/npm installation; native CLI and Python prerequisites remain.
+The local artifact is ad-hoc signed, not notarized or automatically published.
+See [alpha trial instructions](docs/alpha.md) for startup, recovery and limits.
 
 ## Start here
 

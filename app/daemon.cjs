@@ -25,7 +25,7 @@ async function main() {
   workspace.on('terminal', data => broadcast('terminal', data));
   const dispatch = async (owner, method, args) => {
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1 };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['resume', 'forget', 'clearSharedHistory'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view);
       case 'join': if (typeof args[1] !== 'boolean') throw new Error('无效成员操作。'); return workspace.join(...args);
       case 'claim': return workspace.claim(args[0], owner, args[1]);
@@ -41,6 +41,9 @@ async function main() {
       case 'forward': return workspace.forward(args[0], args[1], owner);
       case 'approve': return workspace.approve(args[0], args[1], args[2], owner);
       case 'stop': return workspace.stop(args[0]);
+      case 'resume': return workspace.resume(args[0], owner);
+      case 'clearSharedHistory': return workspace.clearSharedHistory();
+      case 'forget': return workspace.forget(args[0]);
       case 'shutdown':
         if ([...workspace.sessions.values()].some(s => s.state !== 'ended')) throw new Error('请先结束各原生会话，再关闭运行服务。');
         setTimeout(shutdown, 100); return true;

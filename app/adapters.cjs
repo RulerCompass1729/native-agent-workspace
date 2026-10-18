@@ -11,7 +11,7 @@ const { SerializeAddon } = require('@xterm/addon-serialize');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
-const { executable, nativeEnvironment } = require('./platform.cjs');
+const { executable, pythonExecutable, nativeEnvironment } = require('./platform.cjs');
 
 class Terminal extends EventEmitter {
   constructor(argv, cwd, env = {}) {
@@ -20,7 +20,7 @@ class Terminal extends EventEmitter {
     this.screen = new HeadlessTerminal({ cols: 100, rows: 30, scrollback: 5000, allowProposedApi: true });
     this.serialize = new SerializeAddon(); this.screen.loadAddon(this.serialize);
     this.decoder = new StringDecoder('utf8');
-    this.worker = spawn(executable('python3'), [path.join(__dirname, 'pty_host.py')], { stdio: ['pipe', 'pipe', 'pipe'], env: nativeEnvironment(env) });
+    this.worker = spawn(pythonExecutable(), [path.join(__dirname, 'pty_host.py')], { stdio: ['pipe', 'pipe', 'pipe'], env: nativeEnvironment(env) });
     let lines = '';
     this.worker.stdout.setEncoding('utf8');
     this.worker.stdout.on('data', chunk => {
@@ -75,14 +75,14 @@ class Claude extends EventEmitter {
     super(); this.record = record; this.host = host; this.pending = null; this.ready = false;
     this.token = crypto.randomBytes(32).toString('hex');
     host.hookTargets.set(this.token, this);
-    const command = `${quote(executable('python3'))} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
+    const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};
     for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PermissionRequest', 'PreToolUse', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'SessionEnd']) {
       hooks[event] = [{ hooks: [{ type: 'command', command, timeout: 2 }] }];
     }
     const settings = path.join(host.privateDir, `${record.id}.settings.json`);
     fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', hooks }), { mode: 0o600 });
-    this.terminal = new Terminal([host.binaries.claude, '--session-id', record.nativeId, '--name', record.name, '--permission-mode', 'manual', '--prompt-suggestions', 'false', '--settings', settings], record.cwd, {
+    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--permission-mode', 'manual', '--prompt-suggestions', 'false', '--settings', settings], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -173,6 +173,14 @@ class Codex extends EventEmitter {
   constructor(record, host) { super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.last = ''; this.hasHistory = false; this.chatAvailable = record.view !== 'terminal'; this.stopped = false; }
   async start() {
     await this.host.startCodex();
+    if (this.record.recovering) {
+      await this.host.rpc.call('thread/resume', { threadId: this.record.nativeId, cwd: this.record.cwd, excludeTurns: true });
+      this.host.codexTargets.set(this.record.nativeId, this);
+      this.hasHistory = true; this.chatAvailable = true;
+      this.emit('pid', this.host.codexProcess.pid); this.emit('state', 'idle');
+      if (this.record.view === 'terminal') await this.openTerminal();
+      return;
+    }
     if (this.record.view === 'terminal') {
       this.host.createCodex(() => this.startFromTerminal()).catch(error => { this.emit('activity', error.message); this.emit('state', 'error'); });
       return;
@@ -301,7 +309,7 @@ class NativeHost {
   constructor(privateDir) {
     this.privateDir = privateDir; this.hookSocket = path.join(privateDir, 'hooks.sock');
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
-    this.binaries = { claude: executable('claude'), codex: executable('codex'), python: executable('python3') };
+    this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
     this.hooks = net.createServer(socket => {
       socket.setEncoding('utf8');
       socket.setTimeout(2000, () => socket.destroy()); let data = '';
@@ -341,6 +349,7 @@ class NativeHost {
     return this.starting;
   }
   create(record) {
+    this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
     if (!this.binaries[record.provider] || !this.binaries.python) throw new Error('未找到原生 CLI 或 Python 3，请先安装并完成原生登录。');
     return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);
   }

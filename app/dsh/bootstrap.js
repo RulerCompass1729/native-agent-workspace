@@ -13,6 +13,19 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'layout', 'locale'],
       apply(ctx) {
+        // The workspace occupies a DSH global panel. It has native sessions,
+        // not DSH model-loop sessions; expose explicit absence to the shell.
+        if (!ctx.get('uiSession')) {
+          const empty = { key: undefined, hooks: {}, keyedHooks: {}, props: {} };
+          const source = value => ({ getSnapshot: () => value, subscribe: () => () => {} });
+          const absent = source(empty);
+          ctx.effect(() => ctx.slots.installScope('session', {
+            current: absent,
+            bindingSource: target => { if (target !== undefined) throw new Error('Native sessions belong to the workspace panel.'); return absent; },
+            renderArea: (_binding, options) => options.empty?.() ?? null,
+          }));
+          ctx.effect(() => ctx.slots.provideRoot({ hooks: { sessions: source({ byId: {} }) } }));
+        }
         let mounted = 0, cleanup;
         const markdownRoots = new Map();
         const ui = {

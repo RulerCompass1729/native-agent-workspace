@@ -1,7 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { executable, nativeEnvironment } = require('./platform.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function alive(pid) {
@@ -17,26 +16,16 @@ async function waitForPrevious(filename) {
   if (alive(previous.pid)) throw Object.assign(new Error('Previous UI host is still running'), { code: 'NAW_UI_BUSY' });
 }
 
-// Run the pinned, unmodified DSH Web profile behind the local desktop view.
+// Run the pinned DSH UI composition behind the local desktop view.
 // Its UI may restart; the native session service is a separate owner.
 async function startDsh(dataDir) {
   const registry = path.join(dataDir, 'ui-host.json');
   await waitForPrevious(registry);
   const home = path.join(dataDir, 'dsh');
-  const profile = path.join(home, 'profiles/web');
-  fs.mkdirSync(path.join(profile, 'node_modules/@rulercompass'), { recursive: true, mode: 0o700 });
-  const manifest = path.join(profile, 'package.json');
-  if (!fs.existsSync(manifest)) fs.writeFileSync(manifest, JSON.stringify({ private: true, dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } } }), { mode: 0o600 });
-  const link = path.join(profile, 'node_modules/@rulercompass/native-workspace');
-  try { if (fs.readlinkSync(link) !== path.join(__dirname, 'dsh')) fs.unlinkSync(link); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (!fs.existsSync(link)) fs.symlinkSync(path.join(__dirname, 'dsh'), link);
-  fs.copyFileSync(path.join(__dirname, 'dsh/profile.patch.yml'), path.join(profile, 'cordis.patch.yml'));
-  const bin = path.join(path.dirname(require.resolve('@deepseek-ai/dsh/package.json')), 'lib/bin.js');
-  const node = executable('node');
-  if (!node) throw Object.assign(new Error('Node.js is missing'), { code: 'NAW_NODE_MISSING' });
-  const child = spawn(node, ['--require', path.join(__dirname, 'ui-parent-lease.cjs'), bin, 'web', '--no-open', '--host', '127.0.0.1', '--port', '0'], {
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  const child = spawn(process.execPath, ['--require', path.join(__dirname, 'ui-parent-lease.cjs'), path.join(__dirname, 'dsh-server.mjs'), home], {
     cwd: dataDir, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    env: nativeEnvironment({ DSH_HOME: home }),
+    env: { ...Object.fromEntries(['PATH', 'TMPDIR', 'LANG', 'LC_ALL'].filter(key => process.env[key]).map(key => [key, process.env[key]])), ELECTRON_RUN_AS_NODE: '1', DSH_HOME: home },
   });
   if (child.pid) fs.writeFileSync(registry, JSON.stringify({ pid: child.pid, parentPid: process.pid }), { mode: 0o600 });
   child.once('exit', () => {

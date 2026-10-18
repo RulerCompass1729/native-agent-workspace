@@ -8,6 +8,8 @@ const { spawn } = require('node:child_process');
 const { _electron } = require('playwright');
 const { connect } = require('../app/service-client.cjs');
 const root = path.resolve(__dirname, '..');
+const executablePath = process.env.NAW_APP_EXECUTABLE || require('electron');
+const launchArgs = process.env.NAW_APP_EXECUTABLE ? [] : [root];
 const dataDir = path.resolve(process.env.NAW_DOGFOOD_DIR || path.join(os.tmpdir(), 'native-agent-workspace-dogfood'));
 const lock = path.join(dataDir, 'test-driver.json');
 const hostFile = path.join(dataDir, 'ui-host.json');
@@ -22,7 +24,7 @@ let application, page, ownsLock = false, stopping = false, testDraft;
 const draftText = 'Lifecycle test draft\n中文草稿：不发送，不调用模型。';
 async function launch(earlyQuit = false) {
   if (application) throw new Error('Close the existing test UI before launching another.');
-  application = await _electron.launch({ args: [root], env: { ...process.env, NAW_DATA_DIR: dataDir, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  application = await _electron.launch({ executablePath, args: launchArgs, env: { ...process.env, NAW_DATA_DIR: dataDir, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await application.firstWindow();
   if (earlyQuit) return;
   await page.locator('#start-claude').waitFor({ state: 'attached' });
@@ -74,6 +76,11 @@ async function run() {
   }
   fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }), { flag: 'wx', mode: 0o600 }); ownsLock = true;
   let before = await launch();
+  await page.locator('#setup-button').click();
+  await page.locator('#setup-dialog').waitFor({ state: 'visible' });
+  assert.match(await page.locator('#version-info').innerText(), /应用/);
+  await page.locator('#close-setup').click();
+  console.log('PASS: packaged/source UI composition and setup screen render.');
   const selected = before.sessions.find(s => s.id === before.viewState.selected);
   if (selected && selected.owner === before.owner && selected.state === 'idle' && !selected.liveDraft && !before.room.run) {
     testDraft = selected.id;
@@ -93,7 +100,7 @@ async function run() {
     assert.deepEqual(identity(await page.evaluate(() => workspace.initial())), identity(before));
     console.log('PASS: a second test runner is refused without touching the first.');
   } finally { if (competingTest.exitCode === null && competingTest.signalCode === null) competingTest.kill('SIGTERM'); }
-  const duplicate = spawn(require('electron'), [root], { env: { ...process.env, NAW_DATA_DIR: dataDir }, stdio: 'ignore' });
+  const duplicate = spawn(executablePath, launchArgs, { env: { ...process.env, NAW_DATA_DIR: dataDir }, stdio: 'ignore' });
   try {
     await until(() => duplicate.exitCode !== null, 'Duplicate application did not exit');
     assert.equal(duplicate.exitCode, 0);
@@ -133,9 +140,9 @@ async function run() {
   console.log('PASS: crashed UI host exits; reopening reconnects to the same native sessions.');
   await closeUI();
   await launch(true);
-  const earlyHost = JSON.parse(fs.readFileSync(hostFile, 'utf8'));
+  let earlyHost; try { earlyHost = JSON.parse(fs.readFileSync(hostFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   await closeUI();
-  await until(() => !alive(earlyHost.pid), 'DSH host survived closing a loading window');
+  await until(() => !earlyHost || !alive(earlyHost.pid), 'DSH host survived closing a loading window');
   const final = await launch();
   assert.deepEqual(identity(final), identity(before));
   assert.deepEqual(drafts(final), drafts(before));

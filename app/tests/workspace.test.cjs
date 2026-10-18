@@ -102,3 +102,45 @@ test('failed stop keeps the runtime and draft available for a confirmed retry', 
   assert.equal(w.get(id).state, 'ended'); assert.equal(w.runtimes.has(id), false);
   assert.equal(w.snapshot().sessions[0].liveDraft, 'unsent draft');
 });
+
+test('service restart retains membership and draft without replay; explicit resume reuses native identity', async t => {
+  const { workspace: before, directory, ids: [id] } = await fixture(t);
+  before.join(id, true); before.setDraft(id, 'unsent recovery draft'); before.persist();
+  const nativeId = before.get(id).nativeId; let resumed, sends = 0;
+  const host = { binaries: {}, close() {}, create(record) {
+    resumed = { ...record }; const r = new EventEmitter();
+    r.start = async () => r.emit('state', 'idle'); r.send = async () => sends++; return r;
+  } };
+  const after = new Workspace(host, directory); t.after(() => after.close());
+  assert.equal(after.get(id).state, 'recoverable'); assert.equal(after.get(id).roomId, 'shared');
+  assert.equal(after.snapshot().sessions[0].liveDraft, 'unsent recovery draft');
+  assert.equal(after.room.run, null); assert.equal(after.runtimes.size, 0);
+  await after.resume(id, 'new-view');
+  assert.equal(resumed.nativeId, nativeId); assert.equal(resumed.recovering, true);
+  assert.equal(after.get(id).state, 'idle'); assert.equal(sends, 0);
+});
+
+test('recovery refuses a live previous process and local removal preserves shared history', async t => {
+  const { workspace: w, ids: [id] } = await fixture(t);
+  w.runtimes.delete(id); const s = w.get(id); s.state = 'recoverable'; s.processIdentity = { pid: process.pid };
+  await assert.rejects(w.resume(id, 'owner'), /仍在运行/);
+  assert.throws(() => w.forget(id), /仍存在/);
+  s.processIdentity = null; w.setDraft(id, 'private draft'); w.room.messages.push({ text: 'shared material' });
+  w.forget(id); assert.equal(w.sessions.has(id), false); assert.equal(w.drafts.has(id), false);
+  assert.equal(w.room.messages.length, 1);
+});
+
+
+test('clearing shared history refuses an active run and prevents late shared replies without deleting native history', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  w.join(id, true); w.room.run = { status: 'running' };
+  assert.throws(() => w.clearSharedHistory());
+  w.room.run = null; let tag; r.send = async (_text, sentTag) => { tag = sentTag; };
+  await w.forward(id, 'synthetic shared material', 'owner');
+  w.setDraft(id, 'private draft'); w.clearSharedHistory();
+  r.emit('complete', { tag, text: 'late answer', background: 0, scheduled: 0 });
+  assert.equal(w.room.messages.length, 0);
+  assert.equal(w.get(id).messages.at(-1).text, 'late answer');
+  assert.equal(w.snapshot().sessions[0].liveDraft, 'private draft');
+  assert.ok(w.runtime(id));
+});

@@ -40,7 +40,7 @@ probe also used one native request. No additional model task was launched after
 the maintainer asked to reduce test spend. Subsequent stop checks opened one empty
 Claude session and one empty Codex metadata thread, without sending prompts.
 
-Fourteen local state/lifetime checks and the six-case visible lifecycle regression
+Seventeen local state/lifetime checks and the six-case visible lifecycle regression
 passed. They consume no model tokens. The native fleet coverage remains limited
 as described in [demo](../demo.md); a synthetic test is never labelled native proof.
 
@@ -55,3 +55,10 @@ sessions kept their native IDs/PIDs, with zero new dispatches on UI restoration.
 The protocol distinction follows the official
 [Codex app-server unsubscribe contract](https://learn.chatgpt.com/docs/app-server#unsubscribe-from-a-loaded-thread).
 It does not establish fleet termination or an exact billing total.
+
+
+The alpha build can be exercised by the same visible lifecycle runner:
+set `NAW_APP_EXECUTABLE` to the built app's executable and run
+`node scripts/test-desktop.cjs`. It uses its own stable test profile and launches
+no model tasks. A fresh profile has no native sessions; identity/draft assertions
+on that empty profile do not replace the separate live-session evidence in alpha.md.

@@ -10,17 +10,19 @@
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">◒</span><div>Native Workspace<small>本地桌面 · Demo</small></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">◒</span><div>Native Workspace<small>本地桌面 · Alpha</small></div></div>
     <button class="new-button" id="new-session">＋ 新会话 <kbd>⌘N</kbd></button>
     <div class="nav-label">我的会话</div>
     <nav id="session-list" aria-label="会话列表"></nav>
     <button class="room-nav" id="room-nav"><span>◉ 共同工作</span><span id="member-count">0</span></button>
     <p class="drop-hint">把会话拖到这里，或用“加入协作”</p>
+    <button id="setup-button" class="subtle">检查安装与版本</button>
     <div class="sidebar-bottom"><span class="local-dot"></span> 本地运行<button id="privacy-button" aria-label="查看隐私与数据说明">隐私与数据</button></div>
   </aside>
   <main>
     <header id="header"><div><h1 id="title">你的工作空间</h1><p id="subtitle">从一个会话开始，需要时再邀请另一个。</p></div><div id="header-actions"></div></header>
     <div id="alert" role="status" hidden></div>
+    <button id="reconnect-button" hidden>重新连接本机服务</button>
     <section id="welcome">
       <div class="welcome-icon" aria-hidden="true">◒</div><p class="eyebrow">按你的方式工作</p><h2>一个人提问，<br>也可以一起完成。</h2>
       <p class="welcome-copy">Claude 和 Codex 各自保留原来的会话。<br>需要协作时，再选择分享什么。</p>
@@ -41,10 +43,11 @@
       <aside class="members"><h2>参与者</h2><p>加入不会共享私人历史。<br>脱出后仍可独立继续。</p><div id="members"></div><button id="invite-button">＋ 邀请已有会话</button><div class="room-note">你可以随时介入。直接向任一会话输入，或点击“暂停交接”，都会暂停后续自动交接。</div></aside></div>
     </section>
   </main>
-  <dialog id="create-dialog"><form id="create-form"><h2>开始一个会话</h2><p>使用已安装的原生 agent 和你的原生登录。</p><div class="provider-choice"><label><input type="radio" name="provider" value="claude" checked> Claude</label><label><input type="radio" name="provider" value="codex"> Codex</label></div><label for="initial-view">开始使用</label><select id="initial-view"><option value="chat">对话界面</option><option value="terminal">原生终端</option></select><label for="session-name">名称（可选）</label><input id="session-name" maxlength="60" placeholder="例如：学习笔记"><label>工作目录</label><div class="folder-field"><span id="chosen-folder"></span><button type="button" id="choose-folder">选择…</button></div><p class="quiet">默认是独立的空目录。原生文件和命令权限仍由原生确认。</p><div class="dialog-actions"><button type="button" id="cancel-create">取消</button><button type="submit" id="confirm-create" class="primary">创建会话</button></div></form></dialog>
+  <dialog id="create-dialog"><form id="create-form"><h2>开始一个会话</h2><p>使用已安装的原生 agent 和你的原生登录。</p><div class="provider-choice"><label><input type="radio" name="provider" value="claude" checked> Claude</label><label><input type="radio" name="provider" value="codex"> Codex</label></div><label for="initial-view">开始使用</label><select id="initial-view"><option value="chat">对话界面</option><option value="terminal">原生终端</option></select><label for="session-name">名称（可选）</label><input id="session-name" maxlength="60" placeholder="例如：学习笔记"><label>工作目录</label><div class="folder-field"><span id="chosen-folder"></span><button type="button" id="choose-folder">选择…</button></div><p class="quiet">默认是独立的空目录。原生文件和命令权限仍由原生确认。</p><p id="create-readiness" role="status"></p><div class="dialog-actions"><button type="button" id="create-setup">检查安装</button><button type="button" id="cancel-create">取消</button><button type="submit" id="confirm-create" class="primary">创建会话</button></div></form></dialog>
+  <dialog id="setup-dialog"><h2>开始前的准备</h2><p>本试用版使用你自己安装的 Claude Code 或 Codex，以及 Python 3。登录在原生终端中完成。</p><div id="setup-status"></div><div class="dialog-actions"><button id="refresh-setup">重新检查</button><button id="close-setup">完成</button></div><p class="quiet" id="version-info"></p></dialog>
   <dialog id="invite-dialog"><h2>邀请已有会话</h2><p>只建立成员关系；不复制会话、不发送历史。</p><div id="invite-list"></div><button id="close-invite">完成</button></dialog>
   <dialog id="share-dialog"><h2>分享选定内容</h2><p>检查内容，选择共同工作中的接收方。</p><textarea id="share-text" rows="8" aria-label="即将分享的内容"></textarea><select id="share-recipient" aria-label="分享接收方"></select><div class="dialog-actions"><button id="cancel-share">取消</button><button id="confirm-share" class="primary">发送这段内容</button></div></dialog>
-  <dialog id="privacy-dialog"><h2>隐私与数据</h2><p>本应用的对话记录和草稿保存在本机，不提供云同步、遥测或自动上传。</p><p>登录凭据由原生 Claude / Codex 管理。本应用不读取或复制它们。发给模型的内容仍会经过相应原生服务。</p><p>加入共同工作不会自动转发历史。自动核查仅交接本次任务和本轮回复；你可以随时暂停。</p><p>关闭或退出界面后，原生会话继续由本机运行服务托管。重开会恢复界面并重新连接，不自动重发任务。重启电脑或运行服务崩溃不等于界面重开；原生活跃团队无法保证恢复。</p><p>删除本应用的数据不等于删除原生 agent 的历史。磁盘未加密时，本地记录也可能被本机其他有权限的程序读取。</p><button id="close-privacy">知道了</button></dialog>
+  <dialog id="privacy-dialog"><h2>隐私与数据</h2><p>本应用的对话记录和草稿保存在本机，不提供云同步、遥测或自动上传。</p><p>登录凭据由原生 Claude / Codex 管理。本应用不读取或复制它们。发给模型的内容仍会经过相应原生服务。</p><p>加入共同工作不会自动转发历史。自动核查仅交接本次任务和本轮回复；你可以随时暂停。</p><p>关闭或退出界面后，原生会话继续由本机运行服务托管。重开会恢复界面并重新连接，不自动重发任务。重启电脑或运行服务崩溃不等于界面重开；原生活跃团队无法保证恢复。</p><p>删除本应用的数据不等于删除原生 agent 的历史。本地记录没有应用层加密；能读取当前系统账户文件的程序也可能读取它们。</p><p>记录默认保留在本机，直到你移除。结束会话后可在“会话与原生团队”中移除本应用记录。共同工作记录需单独清除。</p><div class="dialog-actions"><button id="data-directory">打开本机数据目录</button><button id="quit-service">所有会话结束后完全退出</button><button id="clear-shared-history">清除共同工作记录…</button><button id="close-privacy">知道了</button></div></dialog>
   <div id="toast" role="status" hidden></div>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>

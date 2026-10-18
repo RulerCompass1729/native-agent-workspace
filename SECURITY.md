@@ -1,6 +1,7 @@
 # Security and sensitive-data reports
 
-This project is in preparation and has no supported application release yet.
+This project has a source alpha and a local macOS app build, with no production
+support or notarized distribution yet.
 
 Use [GitHub private vulnerability reporting](https://github.com/RulerCompass1729/native-agent-workspace/security/advisories/new)
 for security issues. Do not open a public issue containing credentials, session

@@ -78,4 +78,6 @@ MIT 同样允许商业使用并要求保留版权/许可通知，更简洁；Apa
 
 UI 构建将 xterm 和 fit 的完整 MIT 通知放入本地生成 bundle。运行服务复制 xterm headless/serialize 时补入其 npm 文件清单遗漏的上游完整 MIT 通知；核对来源为 [xterm.js 固定源码 LICENSE](https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/LICENSE)。ws 自带许可随目录复制保留。生成文件、node_modules 和原生 provider 二进制不进公开 Git。
 
-DSH 的传递依赖仍含 MPL/LGPL 等不同条款；这里没有把 691 个锁文件 package 条目逐项认证为可直接打包。正式安装包、自动更新与二进制再分发尚未提供，需按实际发行内容完成对应 notices/source 等义务。源码 demo 不能被描述为已完成全部商业发行法律审计。
+打包范围现已改为 DSH 的 UI-only composition，不再依赖完整 DSH 产品包。构建从锁文件创建干净的生产依赖树，保留逐包许可，并为预编译浏览器代码补充 153 项保守来源闭包中的许可/通知，详见 THIRD_PARTY_NOTICES.md。Electron 的 Chromium 通知也放在 app 内，不只留在 zip 外的构建目录。Packager 20.3.0 是 BSD-2-Clause 构建工具。
+
+这不等于全球商业发行法律审计。当前生成的 app 是本地试用产物，没有自动上传；原生 provider 二进制不打包。正式公开 app 下载前仍须审核确切产物、分发适用条款和签名方案。2026-10-17 复核的 Claude Code 官方页面将把未修改 CLI 用于产品与接受其 Commercial Terms、原生认证和用户直接计费等条件关联；代码的 Apache-2.0 授权不替代该条件，也不替用户接受合同。
