@@ -14,6 +14,73 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('native human input invalidates shared reply return while retaining the private conversation', async t => {
+  const { workspace: w, runtimes, ids } = await fixture(t, 2);
+  for (const [i, id] of ids.entries()) {
+    const r = runtimes[i], s = w.get(id); let tag;
+    r.send = async (_text, value) => { tag = value; };
+    w.join(id, true); await w.forward(id, 'selected shared task', 'owner');
+    const control = s.controlRevision;
+    // Can originate in an external native view, without Workspace.input().
+    r.emit('nativeInput', 'private change of direction');
+    if (s.provider === 'codex') r.emit('messageItem', { id: 'private-answer', text: 'private result' });
+    r.emit('complete', { tag, text: 'private result' }); await tick();
+    assert.equal(s.controlRevision, control + 1);
+    assert.equal(s.messages.at(-2).text, 'private change of direction');
+    assert.equal(s.messages.at(-1).text, 'private result');
+    assert.ok(!w.room.messages.some(m => m.text.includes('private')));
+    assert.equal(s.pendingTag, null); assert.equal(w.forwards.has(tag), false);
+  }
+});
+test('view changes and terminal device replies preserve sharing; unrelated completions preserve the pending task', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  w.get(id).provider = 'codex';
+  let tag; r.send = async (_text, value) => { tag = value; };
+  r.terminal = { alive: true, input() {} };
+  w.join(id, true); await w.forward(id, 'shared task', 'owner');
+  w.claim(id, 'owner', 'terminal'); w.input(id, '\x1b[1;1R', 'owner'); w.claim(id, 'owner', 'chat');
+  r.emit('complete', { tag: 'older-task', text: 'older result' });
+  assert.equal(w.get(id).pendingTag, tag);
+  r.emit('failed', 'older interrupted turn', { tag: undefined });
+  assert.equal(w.get(id).pendingTag, tag);
+  r.emit('complete', { tag, text: 'shared result' }); await tick();
+  assert.equal(w.room.messages.at(-1).text, 'shared result');
+  assert.equal(w.get(id).pendingTag, null);
+});
+test('sharing and interrupt preserve the native terminal view and accept the next human key', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const inputs = []; r.terminal = { alive: true, input: data => inputs.push(data) };
+  w.join(id, true); w.claim(id, 'owner', 'terminal');
+  await w.forward(id, 'shared task', 'owner');
+  assert.equal(w.get(id).view, 'terminal');
+  w.input(id, '\r', 'owner'); assert.deepEqual(inputs, ['\r']);
+  r.interrupt = async () => {};
+  await w.interrupt(id, 'owner'); assert.equal(w.get(id).view, 'terminal');
+  w.input(id, 'next input', 'owner'); assert.deepEqual(inputs, ['\r', 'next input']);
+});
+for (const intervention of ['native input', 'interrupt']) test(`Claude ${intervention} followed by an untagged root Stop releases GUI input without sharing its reply`, async t => {
+  const { workspace: w, ids: [id] } = await fixture(t);
+  const s = w.get(id);
+  const { Claude } = require('../adapters.cjs');
+  // Exercise the actual adapter hook/interrupt semantics, without starting CLI.
+  const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+  runtime.record = s; runtime.ready = true; runtime.chatAvailable = true;
+  runtime.submission = { request: async () => {} };
+  runtime.terminal = { input() {} };
+  w.runtimes.set(id, runtime); w.bind(s, runtime);
+  w.join(id, true); await w.forward(id, 'shared task', 'owner');
+  assert.ok(s.pendingTag);
+  if (intervention === 'native input') runtime.hook({ hook_event_name: 'UserPromptSubmit', session_id: s.nativeId, prompt: 'private change' });
+  else await w.interrupt(id, 'owner');
+  runtime.hook({ hook_event_name: 'Stop', session_id: s.nativeId, last_assistant_message: 'private result' });
+  assert.equal(s.state, 'idle'); assert.equal(s.pendingTag, null);
+  assert.equal(s.messages.at(-1).text, 'private result');
+  assert.ok(!JSON.stringify(w.room.messages).includes('private result'));
+  assert.equal(w.room.messages.at(-1).status, 'reply-private');
+  assert.equal(w.forwards.size, 0);
+  await w.send(id, 'next solo input', 'owner');
+  assert.ok(s.pendingTag);
+});
 test('an unconfirmed send restores its draft, but never overwrites later edits', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   const draft = '  未发送的草稿\n第二行  ';

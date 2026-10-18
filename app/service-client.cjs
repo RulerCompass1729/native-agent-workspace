@@ -77,7 +77,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace) {
     const c = await connectService(dataDir, 'bootstrap');
     try {
       const state = await c.call('initial');
-      if (state.room.run?.status === 'running' && (!state.capabilities?.includes('verifiedHandoffs') || (!state.capabilities?.includes('structuredClaudeSubmit') && state.sessions.some(s => s.provider === 'claude' && state.room.run.ids.includes(s.id))))) await c.call('pause');
+      if (state.room.run?.status === 'running' && (!state.capabilities?.includes('nativeInputIsolation') || !state.capabilities?.includes('verifiedHandoffs') || (!state.capabilities?.includes('structuredClaudeSubmit') && state.sessions.some(s => s.provider === 'claude' && state.room.run.ids.includes(s.id))))) await c.call('pause');
       if (!process.env.NAW_APP_VERSION || state.runtimeVersion === process.env.NAW_APP_VERSION || state.sessions.some(s => s.state !== 'ended')) return state;
       // Install a newer backend only after every native session has confirmed
       // its end. An active/unknown fleet never becomes an update casualty.

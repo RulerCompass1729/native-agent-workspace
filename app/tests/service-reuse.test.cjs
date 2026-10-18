@@ -5,10 +5,11 @@ const { ensureService, connect, connectService } = require('../service-client.cj
 const { readLayout, writeLayout } = require('../service-layout.cjs');
 
 test('reusing an older live service pauses unsafe routing without replacing its native sessions', async t => {
-  for (const verified of [false, true]) await t.test(verified ? 'current service' : 'legacy service', async () => {
+  for (const level of [0, 1, 2]) await t.test(['legacy service', 'previous handoff checks', 'current service'][level], async () => {
+    const verified = level === 2;
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-test-'));
     const endpoint = path.join(directory, 's.sock'), calls = [], clients = new Set();
-    const state = { capabilities: verified ? ['verifiedHandoffs', 'structuredClaudeSubmit'] : ['structuredClaudeSubmit'], sessions: [{ id: 'synthetic-native-session', state: 'idle', provider: 'codex' }], room: { run: { status: 'running', ids: ['synthetic-native-session'] } } };
+    const state = { capabilities: ['structuredClaudeSubmit', ...(level >= 1 ? ['verifiedHandoffs'] : []), ...(verified ? ['nativeInputIsolation'] : [])], sessions: [{ id: 'synthetic-native-session', state: 'idle', provider: 'codex' }], room: { run: { status: 'running', ids: ['synthetic-native-session'] } } };
     const server = net.createServer(socket => {
       clients.add(socket); socket.on('close', () => clients.delete(socket)); socket.on('error', () => {});
       let buffer = '', authorized = false;

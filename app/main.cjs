@@ -38,7 +38,7 @@ function bindClient(context) {
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
 }
-function displayState(snapshot, context) { return sessionLabels.apply(submissionState(snapshot, context.structuredSubmit)); }
+function displayState(snapshot, context) { return sessionLabels.apply(submissionState(snapshot)); }
 function broadcastName(id, name) {
   for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:session-name', { id, name });
 }
@@ -58,7 +58,7 @@ async function openWindow(saved) {
   const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : new BrowserWindow(windowOptions(view));
   startupWindow = null;
   if (view.bounds) win.setBounds(view.bounds);
-  const context = { win, client, view, failed: false, structuredSubmit: (await client.call('initial')).capabilities?.includes('structuredClaudeSubmit') === true };
+  const context = { win, client, view, failed: false };
   windows.set(win.webContents.id, context); bindClient(context);
   const ready = new Promise((resolve, reject) => { context.ready = resolve; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 25000); });
   ready.catch(() => {}); // loadURL may fail before the readiness timer fires.
@@ -138,7 +138,6 @@ async function boot() {
   register('reconnect', async c => {
     await ensureService(dataDir, process.execPath);
     const client = await connect(dataDir, c.view.owner), old = c.client;
-    c.structuredSubmit = (await client.call('initial')).capabilities?.includes('structuredClaudeSubmit') === true;
     c.client = client; bindClient(c); old.close(); await c.win.reload();
   });
   for (const action of ['resume', 'forget']) register(action, async (c, id) => {

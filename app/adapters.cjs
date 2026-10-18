@@ -175,7 +175,7 @@ class Rpc extends EventEmitter {
 }
 
 class Codex extends EventEmitter {
-  constructor(record, host) { super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.last = ''; this.hasHistory = false; this.chatAvailable = record.view !== 'terminal'; this.stopped = false; }
+  constructor(record, host) { super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = record.view !== 'terminal'; this.stopped = false; }
   async start() {
     await this.host.startCodex();
     if (this.record.recovering) {
@@ -261,33 +261,53 @@ class Codex extends EventEmitter {
     if (this.stopped) return;
     if (message.id !== undefined) { this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); return; }
     switch (message.method) {
-      case 'turn/started': this.turnId = p.turn.id; this.last = ''; this.emit('state', 'working'); break;
+      case 'turn/started': this.turnId = p.turn.id; this.emit('state', 'working'); break;
       case 'item/agentMessage/delta': this.emit('delta', { id: p.itemId, text: p.delta }); break;
       case 'item/started':
         if (p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) this.emit('activity', p.item.type);
         if (/collab|agent/i.test(p.item?.type || '') && p.item.type !== 'agentMessage') this.emit('fleet', { event: p.item.type, id: p.item.id, name: 'Codex 原生子 agent' });
         break;
       case 'item/completed':
-        if (p.item?.type === 'agentMessage') { this.last = p.item.text || ''; this.emit('messageItem', { id: p.item.id, text: this.last, phase: p.item.phase }); }
-        if (p.item?.type === 'userMessage' && !this.pending) this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'));
+        if (p.item?.type === 'agentMessage') { this.turn(p.turnId).text = p.item.text || ''; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase }); }
+        // A human may steer an active GUI turn from the native terminal. Only
+        // our explicitly identified echo is redundant; matching text is not ID.
+        if (p.item?.type === 'userMessage' && !this.ownInputs.has(p.item.clientId)) this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'));
         break;
       case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage); break;
       case 'turn/completed': {
-        const pending = this.pending; this.pending = null; this.turnId = null; this.hasHistory = true;
-        if (p.turn.status !== 'completed') { this.emit('state', 'idle'); this.emit('failed', '原生回合中断或失败；协作已暂停。'); }
-        else { this.emit('state', 'idle'); this.emit('complete', { tag: pending?.tag, text: this.last, background: null, scheduled: null, fleetPending: null, stopHookActive: null }); }
+        this.turn(p.turn.id).completed = p.turn;
+        // Events can arrive before the RPC acknowledgement names our turn.
+        // Wait for that identity instead of assigning whichever turn finishes.
+        if (!this.pending || this.pending.turnId) this.finishTurn(p.turn.id);
         break;
       }
       case 'error': this.emit('failed', '原生会话返回错误，请检查终端。'); break;
     }
   }
+  turn(id) { if (!this.turns.has(id)) this.turns.set(id, { text: '' }); return this.turns.get(id); }
+  finishTurn(id) {
+    const turn = this.turns.get(id); if (!turn?.completed) return;
+    const pending = this.pending?.turnId === id ? this.pending : null;
+    if (pending) this.pending = null;
+    this.turns.delete(id); this.hasHistory = true;
+    if (this.turnId === id) { this.turnId = null; this.emit('state', 'idle'); }
+    if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag });
+    else this.emit('complete', { tag: pending?.tag, text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
+  }
   async send(text, tag, guard) {
     if (!this.chatAvailable || this.pending || !guard()) throw new Error('会话忙碌、原生对话接口尚未连接，或交接已失效。');
-    this.pending = { tag }; this.last = '';
+    const pending = this.pending = { tag, turnId: null }; this.ownInputs.add(tag);
     try {
-      const r = await this.host.rpc.call('turn/start', { threadId: this.record.nativeId, input: [{ type: 'text', text, text_elements: [] }] });
-      this.turnId = r.turn.id; this.emit('submitted', tag);
-    } catch (error) { this.pending = null; throw error; }
+      const r = await this.host.rpc.call('turn/start', { threadId: this.record.nativeId, clientUserMessageId: tag, input: [{ type: 'text', text, text_elements: [] }] });
+      pending.turnId = r.turn.id;
+      if (!this.turnId) this.turnId = r.turn.id;
+      this.emit('submitted', tag);
+      for (const id of this.turns.keys()) this.finishTurn(id);
+    } catch (error) {
+      if (this.pending === pending) this.pending = null;
+      for (const id of this.turns.keys()) this.finishTurn(id);
+      throw error;
+    }
   }
   async interrupt() {
     if (this.turnId) await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId: this.turnId });
@@ -380,4 +400,4 @@ class NativeHost {
   close() { for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
-module.exports = { NativeHost, Terminal, executable, delay };
+module.exports = { NativeHost, Terminal, Claude, executable, delay };

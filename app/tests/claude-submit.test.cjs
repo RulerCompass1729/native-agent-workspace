@@ -91,16 +91,17 @@ test('native mod preserves existing and racing drafts; only the authorized expli
   const offline = await modFixture({ failAuthorization: true }); assert.equal(offline.submits, 0); assert.deepEqual(offline.entered, []);
 });
 
-test('an updated UI cannot use an older Claude submission path, while Codex and native sessions remain intact', () => {
+test('an updated UI cannot use an older Claude submission path, while native sessions remain intact', () => {
   const old = { sessions: [{ id: 'c', provider: 'claude', nativeId: 'same' }, { id: 'x', provider: 'codex' }], capabilities: [] };
   const view = submissionState(old, false);
   assert.equal(view.sessions[0].nativeId, 'same'); assert.equal(view.sessions[0].chatAvailable, false);
   assert.equal(old.sessions[0].chatAvailable, undefined);
   assert.throws(() => assertSubmission(old, ['c']), /旧版会话/);
   assert.throws(() => assertSubmission(old, ['x', 'c']), /旧版会话/);
-  assert.doesNotThrow(() => assertSubmission(old, ['x']));
+  assert.throws(() => assertSubmission(old, ['x']), /旧版会话/);
+  assert.equal(view.sessions[1].chatAvailable, false);
   const updated = { ...old, capabilities: ['structuredClaudeSubmit'] };
-  assert.equal(submissionState(updated, true), updated); assert.doesNotThrow(() => assertSubmission(updated, ['c']));
+  assert.notEqual(submissionState(updated).sessions[0].chatAvailable, false); assert.doesNotThrow(() => assertSubmission(updated, ['c']));
 });
 test('a retained backend cannot start automatic routing without verified handoff checks', () => {
   for (const capabilities of [undefined, [], ['structuredClaudeSubmit']]) assert.throws(() => assertAutomaticRun({ capabilities }), /旧版后台/);

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
-const current = ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults'];
+const current = ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
 function fixture() {
   const scope = Symbol();
   const make = (key, capabilities, sessions) => {
@@ -53,6 +53,28 @@ test('current global capabilities never enable legacy Claude send or legacy reco
   for (const method of ['send', 'forward', 'resume']) await assert.rejects(c.call(method, 'old', 'do not dispatch'), /旧版会话/);
   assert.equal(old.calls.length, 0);
   await c.call('send', 'new', 'explicit selected text');
+});
+test('old Codex GUI and old sharing stay blocked while native input and safe Claude solo sends remain usable', async () => {
+  const { old, next, c } = fixture();
+  old.state.capabilities.push('structuredClaudeSubmit', 'verifiedHandoffs');
+  old.real.capabilities = [...old.state.capabilities];
+  for (const method of ['send', 'forward']) await assert.rejects(c.call(method, 'old-codex', 'keep draft'), /旧版会话/);
+  await assert.rejects(c.call('forward', 'old', 'keep draft'), /旧版会话/);
+  assert.equal(old.calls.length, 0);
+  await c.call('send', 'old', 'safe solo input');
+  await c.call('input', 'old-codex', 'native typing');
+  await c.call('forward', 'new', 'explicit text from old session');
+  const view = c.snapshot();
+  assert.equal(view.sessions.find(s => s.id === 'old-codex').chatAvailable, false);
+  assert.equal(view.sessions.find(s => s.id === 'old').shareAvailable, false);
+  assert.equal(view.sessions.find(s => s.id === 'new').shareAvailable, true);
+  assert.equal(next.calls.filter(c => c[0] === 'forward').length, 1);
+  old.real.sessions.forEach(s => { s.roomId = 'shared'; });
+  await c.call('initial');
+  assert.equal(c.snapshot().capabilities.includes('verifiedHandoffs'), false);
+  await assert.rejects(c.call('run', ['old', 'old-codex'], 'no old run', 2), /旧版后台/);
+  assert.equal(old.calls.filter(c => c[0] === 'run').length, 0);
+  c.close();
 });
 test('cross-version membership and explicit sharing keep one view without copying private history', async () => {
   const { old, next, c } = fixture();

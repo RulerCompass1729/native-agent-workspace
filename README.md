@@ -15,7 +15,9 @@ This is a **macOS source alpha** for a small technical trial. It supports native
 Claude conversation/room sends now use its native structured submission API,
 with a draft check and no terminal paste/Enter injection. This requires Claude
 Code 2.1.302+ and enabled session-local mods. An older retained backend keeps its
-native sessions available, while the new UI blocks its unsafe Claude send path.
+native sessions available, while the new UI gates sends by each backend’s actual
+capabilities. Alpha.11 also preserves Codex terminal steering messages and prevents
+a human takeover reply from being returned automatically to an old shared task.
 See [verified behavior and remaining limits](docs/alpha.md#structured-claude-submission).
 
 The interface runs on a pinned, UI-only DeepSeek Harness composition, with this project's client plugin inside Electron. Persistent native processes belong to a separate local service. There is no intermediate DeepSeek model call. This is an independent project, not an official DeepSeek distribution.

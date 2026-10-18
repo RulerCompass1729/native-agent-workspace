@@ -12,7 +12,7 @@ limited Claude/Codex tests to important unresolved native behavior.
 | Intentional multi-window, no accidental duplicate app | Same-profile lock, one DSH UI host, exclusive test launcher and owned-process cleanup checked |
 | Honest stop/disconnect state | Claude waits for process exit; Codex unsubscribe remains disconnected until native closure. Empty-session checks and local failure tests passed without model prompts; live services retain their loaded version |
 | Two agents and human-directed collaboration | Join/leave and explicit sharing implemented; alpha.6 retains replies and pauses automatic routing on unknown native state. Current adapters cannot certify fleet idleness, so automatic runs pause after the first reply. Earlier three-reply evidence predates this stricter gate |
-| Cross-view draft/submission safety | Alpha.5 replaces Claude paste/Enter with a structured native API. Visible draft-blocking and exact-payload reply checks passed on Claude 2.1.302; cancellation/replay checks passed locally. Codex mixed-draft and full concurrency coverage remain |
+| Cross-view draft/submission safety | Alpha.5 replaces Claude paste/Enter with a structured native API. Visible draft-blocking and exact-payload reply checks passed on Claude 2.1.302; cancellation/replay checks passed locally. Alpha.11 verifies Codex unsent-draft preservation and one in-flight terminal steer; broader concurrency remains |
 | Native permission defaults | Alpha.7 removes forced Claude mode and Codex sandbox/approval overrides. Native read-only startup and Claude plan-mode checks are documented in alpha.md; broader configuration parity is not claimed |
 | Native fleets | Claude single teammate/shared task/messages observed; idle team retained across room changes/UI reopen without a new model prompt. Active Codex fleet and full failure/termination semantics remain unverified |
 | Single-session alpha delivery | Implemented: local app packaging, prerequisite/version screen, safe startup retry, explicit history recovery, draft retention and safe backend replacement; tested details in alpha.md |
@@ -45,7 +45,9 @@ updates a live service. An uncertain acknowledgement is never automatically retr
 The local authorization is the dispatch boundary. Later human input can interrupt
 native work; it cannot retract an already accepted submission. This does not prove
 an atomic cancellation across native queues or termination of all descendants.
-Codex uses explicit RPC input and still needs its own mixed-draft verification.
+Codex uses explicit RPC input. Alpha.11 verifies unsent-draft preservation and one
+in-flight terminal steering scenario, with visible input and private reply isolation.
+This is not a full native concurrency guarantee.
 
 ## Next milestone
 
@@ -64,13 +66,12 @@ state; observing child events or a root reply is insufficient. Do not add new
 orchestration surfaces. Alpha.7 removes forced permission defaults; the remaining
 native configuration differences are explicitly listed in alpha.md. Alpha.8 now
 routes new sessions to the current backend while preserving old native sessions. Local upgrade, control/lifecycle and rename checks are recorded
-in alpha.md and review.md. The next bounded input-safety item is Codex cross-view
-drafts: determine whether graphical sends can conflict with an unsent terminal
-draft. The initial no-model check found a separate shared GUI draft race: a late
-acceptance could clear a newly edited identical draft. Alpha.10 adds revision
-checks in the desktop and recovery-copy handlers; its headed local checks do not
-close the native Codex concurrency acceptance. Authoritative fleet status remains
-a subsequent gate.
+in alpha.md and review.md. Alpha.10 protects new GUI drafts from late acceptance. Alpha.11 closes the
+reproduced Codex missing-steer input issue and preserves the terminal view during
+sharing/interrupt; its native and local evidence is recorded in alpha.md. Broader
+native concurrency, first-turn history synchronization and authoritative fleet
+status remain separate gates. The next user-facing acceptance is the existing
+solo/shared TUI daily-use path; it does not require adding new orchestration UI.
 
 The maintainer's current milestone is the complete installation/use path, focused
 on **individual and collaborative native TUI use**:

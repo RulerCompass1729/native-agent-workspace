@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.10. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.11. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -507,3 +507,70 @@ The installed app retained all three existing sessions' native IDs/PIDs, history
 drafts, names, membership and selected view, with no additional dispatch and one
 window. Clean-Mac installation and downloaded-app Gatekeeper remain unverified;
 this local unnotarized binary has not been uploaded.
+
+
+## Codex mixed input and human takeover
+
+Alpha.11 fixes a reproduced native concurrency defect: when a person steered an
+active GUI task from Codex's terminal, the provider received that new input but
+this app omitted it from the conversation view. The adapter now identifies its
+own input echo with `clientUserMessageId` and correlates answers/completion by
+native turn ID. Other native user inputs remain visible, including identical text
+with a different identity. An uncertain acknowledgement is never retried.
+
+Native human input changes the control revision. A directed shared task whose
+control or membership changed cannot automatically return its answer to the room;
+the answer remains in the original session, and the shared request says
+**分享已失效，回复保留在原会话**. This is a local routing boundary, not erasure of
+content already sent or a restriction on native tools and external clients.
+Directed sharing and interrupt preserve the current terminal/conversation view.
+
+A headed Electron/DSH check with Codex CLI 0.163.0 and GPT-6 Luna low verified an
+unsent terminal draft surviving explicit GUI submission. After the fixes, one
+shared GUI task and one terminal steering input occupied the same native turn;
+each appeared once in the conversation, the native identity stayed unchanged,
+and the private reply did not enter the shared record. Raw native events, native
+history and application snapshots agree. This is one bounded steering scenario,
+not complete native concurrency/fleet or physical IME/VoiceOver coverage.
+
+The investigation used seven actual native user submissions across five turns,
+including a failed steering attempt caused by the view-switch defect; no native
+subagent activity was observed. The native session reported 200,754 total tokens,
+including 179,840 cached input tokens and 1,256 output tokens. These are cumulative
+provider-reported counters, not a bill or proof of equal-task cost parity. The
+wrapper added no title, summary or model-routing calls. Model testing stopped
+once the required evidence was obtained.
+
+Local protocol checks cover completion before/after acknowledgement, late unrelated
+turns, unknown client identity and uncertain acknowledgements. Shared-workspace
+checks cover takeover, view/device events and actual Claude hook/interrupt methods: a
+Claude root Stop without a tag still releases GUI input. Independent review caught
+that compatibility regression before native retesting. An initial test fixture
+accidentally constructed two Claude terminals, then failed before any prompt; it
+was corrected to use the adapter prototype without starting the CLI. Failed logs
+are retained privately and are not counted as passing evidence. The final local
+suite passed 102/102 with no skips.
+
+The `nativeInputIsolation` capability describes these backend semantics. Older
+retained services keep their native sessions and TUI. The new UI blocks Codex GUI
+sends and directed/automatic sharing to a backend without this capability; older
+Claude solo GUI sends still depend on `structuredClaudeSubmit`. Users can select
+content from an old session and share it with a capable new receiver. Both sharing
+entry points explain the restriction and retain drafts. Startup pauses unsafe old
+automatic routing without stopping native work. Already accepted old directed
+tasks retain the old backend's semantics; a UI update cannot retrofit that memory.
+The headed source check covered both sharing entry points with synthetic services,
+without provider/model calls.
+
+The alpha.11 DMG was mounted read-only and copied to Applications. All 9,177
+file/link entries, affected backend modules and the generated UI matched; ad-hoc
+signature verification passed. The installed app passed the same two sharing-entry
+checks with synthetic services and no model calls. It also retained the maintainer's
+three existing native sessions, IDs/PIDs, history, drafts, labels, membership and
+selected view, with no additional dispatch. These existing sessions had no pending
+submission or automatic run at the baseline check. This is local installation
+verification, not fresh-Mac or public-download/Gatekeeper acceptance; no binary was
+uploaded.
+
+Normal LaunchServices reopening and app activation showed one visible workspace
+window. Preserved native services are separate from additional UI instances.

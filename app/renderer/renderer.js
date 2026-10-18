@@ -178,7 +178,7 @@ function messageList(el, messages, room = false) {
     const item = node('article', undefined, `message ${m.role}`); item.dataset.messageId = m.id;
     const heading = node('div', undefined, 'message-heading');
     heading.append(node('strong', m.name || (m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex')));
-    if (['awaiting-native', 'unconfirmed', 'streaming'].includes(m.status)) heading.append(node('span', { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '正在回复' }[m.status]));
+    if (['awaiting-native', 'unconfirmed', 'streaming', 'reply-private'].includes(m.status)) heading.append(node('span', { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '正在回复', 'reply-private': '分享已失效，回复保留在原会话' }[m.status]));
     const body = node('div', undefined, 'message-body'); item.append(heading, body);
     if (m.role === 'assistant') ui.markdown(body, m.text, m.status === 'streaming'); else body.textContent = m.text;
     const actions = node('div', undefined, 'message-actions');
@@ -189,7 +189,12 @@ function messageList(el, messages, room = false) {
 }
 function share(text) {
   if (!members().length) return toast('先把接收方加入共同工作，再分享选定内容。');
-  $('share-text').value = text; populateSelect($('share-recipient'), members()); $('share-dialog').showModal();
+  $('share-text').value = text; populateSelect($('share-recipient'), members()); updateSharingControls(); $('share-dialog').showModal();
+}
+function updateSharingControls() {
+  const target = members().find(s => s.id === $('share-recipient').value);
+  $('confirm-share').disabled = !target || target.shareAvailable === false || target.chatAvailable === false || disconnected;
+  $('share-help').textContent = target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
 }
 function render() {
   if (!state || rendering) return;
@@ -217,7 +222,7 @@ function render() {
     $('reconnect-button').hidden = !disconnected;
     renderSessions();
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
-    if ($('share-dialog').open) populateSelect($('share-recipient'), members());
+    if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
       if (record) entry.textContent = `加入 ${record.name}`;
@@ -289,7 +294,10 @@ function render() {
       const safeHandoffs = state.capabilities?.includes('verifiedHandoffs');
       $('run-button').disabled = members().length !== 2 || run?.status === 'running' || !safeHandoffs;
       $('run-help').textContent = safeHandoffs ? '最多 3 次回复、10 分钟。原生后台或团队状态未报告时，保留回复并暂停；可确认后定向发送。原生子 agent 的用量另计。' : state.handoffNotice || '旧版后台仍在保留原生会话，自动核查暂不可用；请用原生终端或定向发送。新建会话会使用新版后台。';
-      $('forward-button').disabled = !members().length; $('pause-button').disabled = run?.status !== 'running';
+      const recipient = people.find(s => s.id === $('recipient').value);
+      $('forward-button').disabled = !recipient || recipient.shareAvailable === false || recipient.chatAvailable === false || disconnected;
+      if (recipient?.sharingNotice || recipient?.submissionNotice) $('run-help').textContent = recipient.sharingNotice || recipient.submissionNotice;
+      $('pause-button').disabled = run?.status !== 'running';
     }
   } finally { rendering = false; }
 }
@@ -415,6 +423,8 @@ $('interrupt').onclick = () => attempt(() => api.interrupt(activeSessionId()));
 $('shared-input').oninput = () => attempt(persistView);
 $('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => { const first = $('recipient').value; return api.run([first, ...members().filter(s => s.id !== first).map(s => s.id)], $('shared-input').value, 3); }); };
 $('forward-button').onclick = () => attempt(() => api.forward($('recipient').value, $('shared-input').value));
+$('recipient').onchange = render;
+$('share-recipient').onchange = updateSharingControls;
 $('pause-button').onclick = () => attempt(() => api.pause());
 $('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && s.state !== 'ended').map(s => { const entry = button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
 $('close-invite').onclick = () => $('invite-dialog').close();

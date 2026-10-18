@@ -1,5 +1,5 @@
 const { EventEmitter } = require('node:events');
-const { submissionState, assertSubmission, assertAutomaticRun, assertNativeCreation } = require('./submission-policy.cjs');
+const { submissionState, assertSubmission, assertSharing, assertAutomaticRun, assertNativeCreation } = require('./submission-policy.cjs');
 const { isTerminalResponse } = require('./workspace.cjs');
 let creationQueue = Promise.resolve();
 const controls = new Map();
@@ -32,7 +32,7 @@ class WorkspaceClient extends EventEmitter {
     const sessions = [], messages = new Map(), runs = [];
     const ids = new Set();
     for (const e of this.entries) {
-      const state = submissionState(e.state, e.state.capabilities?.includes('structuredClaudeSubmit'));
+      const state = submissionState(e.state);
       for (const s of state.sessions) {
         if (ids.has(s.id)) throw new Error('会话归属冲突；未向任何原生会话发送输入。');
         ids.add(s.id); sessions.push({ ...s, serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
@@ -46,7 +46,7 @@ class WorkspaceClient extends EventEmitter {
     const memberServices = this.entries.filter(e => e.state.sessions.some(s => s.roomId === 'shared'));
     const routingService = memberServices.length === 1 ? memberServices[0] : this.active;
     const capabilities = (this.active.state.capabilities || []).filter(cap => {
-      if (cap === 'verifiedHandoffs') return memberServices.length <= 1 && routingService.state.capabilities?.includes(cap);
+      if (cap === 'verifiedHandoffs') return memberServices.length <= 1 && routingService.state.capabilities?.includes(cap) && routingService.state.capabilities?.includes('nativeInputIsolation');
       if (cap === 'clearSharedHistory') return this.entries.every(e => e.state.capabilities?.includes(cap));
       return true;
     });
@@ -138,7 +138,7 @@ class WorkspaceClient extends EventEmitter {
       if (!Array.isArray(args[0]) || args[0].length !== 2) throw new Error('请选择两个不同会话。');
       const targets = args[0].map(id => this.route(id));
       if (targets[0] !== targets[1]) throw new Error('跨版本自动交接暂不可用；请选择内容并定向分享。');
-      assertAutomaticRun(state); assertSubmission(state, args[0]);
+      assertAutomaticRun(state); assertSharing(state, args[0]);
       await Promise.all(interventions);
       await this.pauseExcept(targets[0]);
       const previousArm = this.control.armed.get(targets[0].key);
@@ -154,6 +154,7 @@ class WorkspaceClient extends EventEmitter {
     const target = this.route(args[0]);
     if (method === 'resume') assertNativeCreation(target.state);
     if (['send', 'forward'].includes(method)) assertSubmission(target.state, [args[0]]);
+    if (method === 'forward') assertSharing(target.state, [args[0]]);
     const ownView = ['claim', 'terminal'].includes(method) && typeof target.state.owner === 'string' && target.state.sessions.find(s => s.id === args[0])?.owner === target.state.owner;
     if (ownView) return target.client.call(method, ...args);
     if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && !isTerminalResponse(args[1]))) return this.intervene(async () => {
