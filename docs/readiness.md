@@ -5,6 +5,12 @@ The accepted core increment is defined in [core-milestone.md](core-milestone.md)
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
+**Current high-priority gap:** the 2026-10-19 feedback identifies incomplete
+live progress and trajectory visibility in unified solo/room views. The accepted
+short-task flow does not cover all temporary native output. See [U17](review.md)
+and the [proposed native observation increment](live-progress.md). Do not describe
+the present conversation view as a complete replacement for native visibility.
+
 | Area | Current evidence | Boundary |
 | --- | --- | --- |
 | Single conversation | GUI/TUI use, draft/identity retention, input focus and normal reopen; visible System Pinyin/WeChat evidence from alpha.22 | Controlled guest OS events; no universal terminal or accessibility guarantee |
