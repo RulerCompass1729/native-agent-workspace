@@ -1,8 +1,25 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.16. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.17. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.17 navigation hierarchy
+
+Sessions and collaborative workspaces now have separate labelled sections,
+aligned inset rows and visible dividers. All unarchived sessions remain accessible
+in the session section, including those marked as participating in collaboration.
+The middle area scrolls together; archive, installation and privacy tools remain
+in a separate footer. The narrow icon rail retains section dividers. Archiving
+the workspace leaves a clear note pointing to the archive list for restoration.
+This changes navigation presentation, not native session identity or routing.
+
+The installed build passed daily-flow and keyboard/menu checks, including narrow
+windows, light/dark themes, long names and reopen. Source pointer drag and archive
+regressions also passed. Independent review covered the changed source, complete
+logs and screenshots. Tests used synthetic provider transport with no model tasks;
+the original user sessions and saved views were preserved. Long-list scrolling
+has not been exercised, and this UI change adds no native recovery evidence.
 
 ## Alpha.16 collaboration and archive checkpoint
 

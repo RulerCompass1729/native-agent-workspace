@@ -392,6 +392,7 @@ function render() {
     $('reconnect-button').hidden = !disconnected;
     renderSessions();
     renderArchives(); $('room-nav').parentElement.hidden = Boolean(state.room.archived); document.querySelector('.drop-hint').hidden = Boolean(state.room.archived);
+    $('workspace-empty').hidden = !state.room.archived;
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
     $('room-nav-name').textContent = `◉ ${state.room.name}`; $('room-nav').title = state.room.name; $('room-nav').setAttribute('aria-label', state.room.name);
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }

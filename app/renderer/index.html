@@ -12,13 +12,23 @@
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">◒</span><div>Native Workspace<small>本地桌面 · Alpha</small></div></div>
     <button class="new-button" id="new-session" aria-label="新会话" title="新会话"><span class="rail-icon" aria-hidden="true">＋</span><span class="rail-label">＋ 新会话</span><kbd>⌘N</kbd></button>
-    <div class="nav-label" id="solo-drop" tabindex="0" aria-label="独立使用：把成员拖到这里脱出协作">我的会话 <span class="drag-only">拖到这里独立使用</span></div>
-    <nav id="session-list" aria-label="会话列表"></nav>
-    <div class="room-row"><button class="room-nav" id="room-nav" aria-label="共同工作" title="共同工作"><span class="rail-icon" aria-hidden="true">◉</span><span class="rail-label" id="room-nav-name">◉ 共同工作</span><span id="member-count">0</span></button><button id="room-more" class="session-more" aria-label="工作区操作" aria-haspopup="menu" aria-expanded="false">⋯</button></div>
-    <p class="drop-hint">拖入一起工作 · 拖回会话列表独立使用</p>
+    <div class="sidebar-navigation">
+      <section class="sidebar-group" aria-labelledby="session-group-label">
+        <h2 class="nav-label" id="solo-drop" tabindex="0" aria-label="会话：把成员拖到这里独立使用" title="把协作成员拖回这里，继续独立使用"><span id="session-group-label">会话</span></h2>
+        <nav id="session-list" aria-label="会话列表"></nav>
+      </section>
+      <section class="sidebar-group" id="workspace-group" aria-labelledby="workspace-group-label">
+        <h2 class="nav-label" id="workspace-group-label">协作空间</h2>
+        <div class="room-row"><button class="room-nav" id="room-nav" aria-label="共同工作" title="共同工作"><span class="rail-icon" aria-hidden="true">◉</span><span class="rail-label" id="room-nav-name">◉ 共同工作</span><span id="member-count">0</span></button><button id="room-more" class="session-more" aria-label="工作区操作" aria-haspopup="menu" aria-expanded="false">⋯</button></div>
+        <p class="drop-hint">拖入一起工作 · 拖回会话区独立使用</p>
+        <p id="workspace-empty" class="nav-empty" hidden>工作区已归档，可从下方“归档”恢复。</p>
+      </section>
+    </div>
+    <div class="sidebar-tools">
     <button id="archive-button" class="subtle" aria-label="归档" title="归档"><span class="rail-icon" aria-hidden="true">▤</span><span class="rail-label" id="archive-label">归档</span></button>
     <button id="setup-button" class="subtle" aria-label="检查安装与版本" title="检查安装与版本"><span class="rail-icon" aria-hidden="true">⚙</span><span class="rail-label">检查安装与版本</span></button>
     <div class="sidebar-bottom"><span class="local-status"><span class="local-dot"></span> 本地运行</span><button id="privacy-button" aria-label="查看隐私与用量" title="隐私与用量"><span class="rail-icon" aria-hidden="true">ⓘ</span><span class="rail-label">隐私与用量</span></button></div>
+    </div>
   </aside>
   <main>
     <header id="header"><div><h1 id="title">你的工作空间</h1><p id="subtitle">从一个会话开始，需要时再邀请另一个。</p></div><div id="header-actions"></div></header>

@@ -100,6 +100,9 @@ Enter sends, Shift Enter inserts a newline. Search and member filters only chang
 what you read, never the recipient. Shared messages and confirmed membership
 changes form a local timeline; old events are not invented retroactively.
 
+The sidebar separates **会话** from **协作空间**, with archive and setup tools below.
+A collaborating agent still appears in the session section for individual use.
+
 The workspace **⋯** menu supports rename and archive. Session menus also support
 archive. **归档** in the sidebar restores the same records. Session archive detaches
 it; room archive pauses routing and detaches its members, preserving its name,

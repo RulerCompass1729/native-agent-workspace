@@ -100,7 +100,9 @@ async function run() {
   await page.waitForFunction(() => document.body.hasAttribute('data-ds-dark-theme')); await screenshot('session-menu-dark');
   await page.emulateMedia({ colorScheme: null });
   await page.keyboard.press('End');
-  assert.ok(await item('在独立窗口打开').evaluate(el => el === document.activeElement), 'End focuses the last menu item');
+  assert.ok(await item('归档会话').evaluate(el => el === document.activeElement), 'End focuses the last menu item');
+  await page.keyboard.press('ArrowUp');
+  assert.ok(await item('在独立窗口打开').evaluate(el => el === document.activeElement), 'ArrowUp returns to the window action');
   const opened = application.waitForEvent('window');
   await page.keyboard.press('Enter');
   const second = await opened;
@@ -115,7 +117,7 @@ async function run() {
   assert.equal(await page.locator(`[data-room-session="${b.id}"]`).innerText(), '很长的会话名称'.repeat(7));
   const win = await application.browserWindow(page);
   await win.evaluate(w => w.setSize(850, 600));
-  assert.ok(await page.locator(`[data-room-session="${b.id}"]`).evaluate(el => el.getBoundingClientRect().width <= 200 && el.title === el.textContent));
+  assert.ok(await page.locator(`[data-room-session="${b.id}"]`).evaluate(el => el.getBoundingClientRect().width <= 200 && el.title.startsWith(el.textContent + ' · ')));
   assert.ok(await page.locator('#recipient').evaluate(el => el.getBoundingClientRect().width <= 260 && el.title === el.selectedOptions[0].textContent));
   await more(b.id).click(); await item('重命名…').waitFor({ state: 'visible' });
   await until(async () => page.getByRole('menu').evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; }), 'Menu fits small window');
@@ -132,7 +134,7 @@ async function run() {
   assert.equal(application.windows().length, 1); assert.deepEqual(errors, []);
   console.log('PASS: reopen preserves names and identity/history/membership; no native prompts, dispatches or shell model calls.');
 }
-run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await screenshot('failed'); process.exitCode = 1; }).finally(async () => {
   await close();
   try { const c = await connect(profile, 'menu-test-cleanup'); try { await c.call('shutdown'); } finally { c.close(); } }
   catch (error) { console.error('Owned test service cleanup failed:', error.message); process.exitCode = 1; }
