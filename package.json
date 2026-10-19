@@ -1,6 +1,6 @@
 {
   "name": "native-agent-workspace",
-  "version": "0.1.0-alpha.20",
+  "version": "0.1.0-alpha.21",
   "private": true,
   "description": "A local desktop demo for native agent sessions and bounded collaboration",
   "license": "Apache-2.0",
@@ -19,7 +19,8 @@
     "test:collaboration": "npm run build:ui && node scripts/test-collaboration.cjs",
     "test:solo": "npm run build:ui && node scripts/test-solo-use.cjs",
     "test:input": "npm run build:ui && node scripts/test-terminal-ime.cjs",
-    "test:draft-ownership": "npm run build:ui && node scripts/test-draft-ownership.cjs"
+    "test:draft-ownership": "npm run build:ui && node scripts/test-draft-ownership.cjs",
+    "test:reading": "npm run build:ui && node scripts/test-reading.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",

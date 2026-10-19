@@ -51,6 +51,7 @@ NativeHost.prototype.create = function (record) {
   runtimes.set(record.id, r); return r;
 };
 process.on('message', q => {
+  if (['history', 'delta', 'messageItem', 'terminal'].includes(q.method)) runtimes.get(q.target).emit(q.method, q.value);
   if (q.method === 'hold-input-ack') heldInputAcks.add(q.target);
   if (q.method === 'hold-input') heldInputs.add(q.target);
   if (['release-input', 'fail-input'].includes(q.method)) { const at = waitingInputs.findIndex(c => c.id === q.target); if (at >= 0) waitingInputs.splice(at, 1)[0].release(q.method === 'fail-input'); }

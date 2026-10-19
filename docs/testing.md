@@ -68,6 +68,26 @@ stays hidden and non-focusable while CDP delivers test input. It makes one synth
 and starts no native providers or model tasks. `test:focus`, `test:terminal` and
 `test:drafts` retain the relevant timing and draft regressions.
 
+## Continuous reading and resource samples
+
+`npm run test:reading` uses a hidden real Electron/DSH application and production
+IPC/service with 240 synthetic completed history messages and subsequent output.
+Pointer selection, historical action focus, latest Copy payload, bottom-follow,
+reading older content, GUI/TUI and conversation switching, reopening, and late
+layout isolation are checked. A held main-process disk timer verifies that normal
+quit flushes already-received reading metadata. Invalid geometry is rejected
+without changing the saved view. Only session/message IDs and bounded geometry
+are saved; selected text is never part of reading metadata.
+
+Copy payloads are intercepted inside the test main process: the person's system
+clipboard is untouched, and this does not certify OS clipboard shortcuts. The
+runner samples Electron working-set memory and cumulative CPU plus synthetic
+service RSS/CPU; samples after UI reopen belong to new processes and must not be
+used as a leak or steady-state comparison. The full-snapshot service is unchanged.
+For installed verification use `NAW_APP_EXECUTABLE` and `NAW_TEST_APP_ROOT` as above.
+This test starts zero native providers, makes zero model requests, and does not
+certify physical input methods, foreground focus or visible desktop interaction.
+
 ## Immediate input and composition
 
 `npm run test:input` clicks a session/view and types immediately, without waiting
@@ -245,11 +265,11 @@ Observed renderer requests are not a complete egress/privacy audit.
 
 ## Collaboration, context and archive regression
 
-`npm run test:collaboration` runs a headed Electron/DSH window with the production
+`npm run test:collaboration` runs a hidden Electron/DSH window with the production
 workspace, IPC and Codex history adapter, using synthetic provider transport.
 It exercises real pointer drag into/out of the room, invalid/cancelled/repeated
 drops, duplicate-name mention selection by stable ID, exact outgoing text,
-timeline search/filter, explicit shared background, local notes and conflicts,
+timeline search/filter and context visibility after long Markdown mounts, explicit shared background, local notes and conflicts,
 late replies after departure, rename persistence and archive/restore after reopen.
 Two windows are intentional only for the concurrent edit/ownership cases, and
 the observer is closed afterward. It makes no native provider or model request.

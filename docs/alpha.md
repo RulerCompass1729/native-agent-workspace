@@ -1,8 +1,50 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.20. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.21. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.21 reading continuity
+
+Conversation and shared-timeline updates retain unchanged message rows. Reading
+older content, selecting its text or focusing a Copy action no longer loses that
+position/selection/focus when a different reply streams. Copy actions read the
+latest text. Only readers already at the bottom follow new output automatically.
+
+Each window saves bounded per-conversation reading geometry locally, restoring
+it through GUI/TUI changes, conversation changes and normal UI reopening. The
+main process receives scroll metadata immediately, coalesces disk writes and
+flushes received state on normal close/quit. Only IDs and geometry are retained;
+selected text is not saved. A process kill before event delivery or power loss is
+outside this guarantee. Filtered shared-timeline context jumps keep the target
+visible while preceding Markdown finishes rendering, until the reader interacts.
+
+The installed alpha.21 passes eleven reading checks using actual Electron/DSH,
+IPC and service with synthetic provider transport. The same 240-message workload
+on installed alpha.20 reproduces lost selection, focus, scrolling and reopening.
+Across 24 streamed updates, removed message-list nodes changed from 5,783 to zero.
+In this local run the renderer working-set sample at the end was about 499 MiB
+on alpha.20 and 301 MiB on alpha.21, starting from about 283/285 MiB after history
+loaded. These bounded samples support the specific fix; they are not long-duration
+memory/leak, native-provider performance or equal-task cost guarantees. Full service
+snapshots remain unchanged. Later samples after UI reopening use new processes.
+
+162 local tests and six source collaboration groups pass, including long-Markdown
+context visibility, pointer drag, explicit takeover and archive/resume. The installed
+input regression passes eight groups; ten installed two-window draft/recovery
+checks also pass. No native providers or model requests were
+started in this round. System clipboard contents were left untouched: the reading
+test captures application Copy payloads internally.
+
+The installed app matches all 9,180 files/links in the mounted DMG, matches source
+and passes ad-hoc signature verification. The original three native sessions,
+history, drafts, views and diagnostics remain unchanged. The normal user UI was
+not launched; tests remained hidden and non-focusable. The DMG is unnotarized and
+unpublished. Independent source and final artifact review passed for this bounded repair.
+
+**Not daily-use sign-off:** hidden rendered UI and screenshots do not certify
+visible desktop use, System Pinyin/WeChat IME, OS focus/Spaces, clean-Mac install,
+active fleets or full privacy/cost parity. These remain explicit acceptance gates.
 
 ## Alpha.20 draft continuity
 

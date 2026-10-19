@@ -10,6 +10,7 @@ const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
+const { readingState } = require('./reading-state.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 
 app.setName('Native Agent Workspace');
@@ -84,10 +85,24 @@ function broadcastName(id, name) {
   for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:session-name', { id, name });
 }
 
+let readingSaveTimer, readingSavePromise, finishReadingSave, failReadingSave;
 function saveViews() {
-  const target = path.join(dataDir, 'views.json');
-  fs.writeFileSync(`${target}.tmp`, JSON.stringify(views), { mode: 0o600 });
-  fs.renameSync(`${target}.tmp`, target);
+  clearTimeout(readingSaveTimer);
+  const resolve = finishReadingSave, reject = failReadingSave;
+  readingSavePromise = finishReadingSave = failReadingSave = undefined;
+  try {
+    const target = path.join(dataDir, 'views.json');
+    fs.writeFileSync(`${target}.tmp`, JSON.stringify(views), { mode: 0o600 });
+    fs.renameSync(`${target}.tmp`, target);
+    resolve?.();
+  } catch (error) { reject?.(error); throw error; }
+}
+function saveReadingSoon() {
+  if (!readingSavePromise) {
+    readingSavePromise = new Promise((resolve, reject) => { finishReadingSave = resolve; failReadingSave = reject; });
+    readingSaveTimer = setTimeout(() => { try { saveViews(); } catch { /* Returned through each awaiting IPC call. */ } }, 150);
+  }
+  return readingSavePromise;
 }
 async function openWindow(saved) {
   if (quitting) return;
@@ -137,6 +152,7 @@ async function boot() {
   dsh = await startDsh(dataDir); entry = dsh.url;
   if (quitting) { dsh.stop(); return; }
   try { views = JSON.parse(fs.readFileSync(path.join(dataDir, 'views.json'), 'utf8')); if (!Array.isArray(views)) views = []; } catch { views = []; }
+  for (const view of views) { try { view.readingPositions = readingState(view.readingPositions || {}); } catch { view.readingPositions = {}; } }
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
@@ -227,7 +243,7 @@ async function boot() {
     if (answer.response === 1) {
       await c.client.call(action, id);
       if (action === 'forget') {
-        for (const view of views) { forgetDraft(view, id); if (view.selected === id) view.selected = ''; }
+        for (const view of views) { delete view.readingPositions?.[id]; forgetDraft(view, id); if (view.selected === id) view.selected = ''; }
         saveViews();
         try { sessionLabels.remove(id); } catch { throw new Error('会话记录已移除，但本地显示名未能清理。请检查本机数据权限与磁盘空间。'); }
       }
@@ -246,6 +262,7 @@ async function boot() {
   });
   register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接类型不支持。'); return shell.openExternal(url.href); });
   register('initial', async c => ({ ...displayState(await c.client.call('initial'), c), viewState: c.view, appVersion: app.getVersion(), preflight: preflight() }));
+  register('readingState', (c, positions) => { c.view.readingPositions = readingState(positions); return saveReadingSoon(); });
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
     if (next.roomSession !== undefined && (typeof next.roomSession !== 'string' || next.roomSession.length > 100)) throw new Error('无效协作视图。');
@@ -254,7 +271,9 @@ async function boot() {
     if (next.roomSearch !== undefined && (typeof next.roomSearch !== 'string' || next.roomSearch.length > 1000)) throw new Error('搜索词过长。');
     if (next.sharedDraft !== undefined && (typeof next.sharedDraft !== 'string' || next.sharedDraft.length > 16000)) throw new Error('协作草稿过长。');
     if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw new Error('无效终端显示设置。');
+    const positions = next.readingPositions === undefined ? undefined : readingState(next.readingPositions);
     Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference });
+    if (positions !== undefined) c.view.readingPositions = positions;
     if (next.sharedDraft !== undefined) c.view.sharedDraft = next.sharedDraft;
     if (next.roomSession !== undefined) c.view.roomSession = next.roomSession;
     if (next.roomRecipient !== undefined) c.view.roomRecipient = next.roomRecipient;

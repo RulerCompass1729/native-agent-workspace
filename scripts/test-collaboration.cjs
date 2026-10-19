@@ -1,4 +1,4 @@
-// One visible app, real shipped adapter/workspace/IPC, synthetic providers.
+// One hidden app, real shipped adapter/workspace/IPC, synthetic providers.
 // This tests the complete daily-use path, not native login, models or fleets.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork, spawn, execFileSync } = require('node:child_process');
@@ -79,20 +79,28 @@ async function run() {
   assert.equal(await page.locator('#recipient').inputValue(), b); assert.equal(await page.locator('#shared-input').inputValue(), ''); assert.equal((await fixture()).sends.length, 0);
   await page.locator('#shared-input').fill('请核对这段共享材料'); await page.locator('#shared-input').press('Shift+Enter'); await page.keyboard.type('SECOND-LINE');
   const payload = await page.locator('#shared-input').inputValue(); await page.locator('#shared-input').press('Enter');
-  await until(async () => (await fixture()).sends.length === 1, 'Mention sends exactly once'); assert.deepEqual((await fixture()).sends[0], { id: b, text: payload }); await reply('核查完成：只看到了明确分享的内容。');
+  await until(async () => (await fixture()).sends.length === 1, 'Mention sends exactly once'); assert.deepEqual((await fixture()).sends[0], { id: b, text: payload }); await reply('核查完成：只看到了明确分享的内容。\n\n' + '**长记录布局测试**\n\n'.repeat(80));
   await until(async () => await page.locator('#shared-input').inputValue() === '', 'Accepted input clears');
   assert.equal((await snapshot()).room.messages.some(m => m.text.includes('PRIVATE-HISTORY')), false);
   await page.locator('#room-filter').selectOption(a); assert.equal(await page.locator('#recipient').inputValue(), b, 'Filter never retargets');
   assert.equal(await page.locator('#room-messages article.assistant').count(), 0);
   await page.locator('#room-filter').selectOption(b); await page.locator('#room-search').fill('核查完成'); await until(async () => await page.locator('#room-messages article').count() === 1, 'Filtered reply rendered');
   assert.equal(await page.locator('#room-messages time').count(), 1); await capture('filtered-timeline');
-  await page.locator('#room-search').fill(''); await page.locator('#room-filter').selectOption('');
+  await page.locator('#room-messages').getByRole('button', { name: '查看上下文', exact: true }).click();
+  assert.equal(await page.locator('#room-search').inputValue(), ''); assert.equal(await page.locator('#room-filter').inputValue(), '');
+  assert.equal(await page.locator('#room-messages').evaluate(el => el.contains(document.activeElement) && document.activeElement.tagName === 'ARTICLE'), true, 'Filtered context restores and focuses the original row');
   passed.push('Duplicate labels are disambiguated by provider/ID; keyboard @ selects one recipient, exact explicit send, time and member filtering never reroute');
   await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('共同目标：比较两种学习方法。\n决定：先核对证据，再写结论。'); await page.locator('#save-notes').click();
   assert.equal((await fixture()).sends.length, 1, 'Notes save does not call model');
   await page.locator('#attach-context').click(); const context = await page.locator('#context-text').inputValue(); assert.ok(context.includes('共同目标')); assert.ok(context.includes('当前参与会话')); assert.ok(!context.includes('PRIVATE-'));
   await page.locator('#insert-context').click(); assert.equal(await page.locator('#shared-input').inputValue(), context); assert.equal((await fixture()).sends.length, 1);
   await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 2, 'Explicit context submission'); assert.deepEqual((await fixture()).sends[1], { id: b, text: context }); await reply('本条背景已接收。');
+  await page.locator('#room-search').fill('本条背景已接收');
+  await page.locator('#room-messages').getByRole('button', { name: '查看上下文', exact: true }).click();
+  await until(() => page.locator('#room-messages .message-body p').count().then(n => n >= 80), 'Unfiltered long Markdown committed');
+  await delay(120);
+  const contextTarget = page.locator('#room-messages article').filter({ has: page.getByText('本条背景已接收。', { exact: true }) });
+  assert.equal(await contextTarget.evaluate(el => { const box = el.getBoundingClientRect(), list = el.parentElement.getBoundingClientRect(); return document.activeElement === el && box.top >= list.top && box.top < list.bottom - 30; }), true, 'Context target remains visible after preceding Markdown mounts');
   // A session detaches without erasing its already received context or drafts.
   await drag(page.locator(`[data-room-session="${b}"]`), page.locator('#solo-drop'));
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).roomId === null, 'Mouse drag out');
@@ -126,7 +134,10 @@ async function run() {
   await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
   if (!await page.locator('#advanced').evaluate(el => el.open)) await page.locator('#advanced summary').click();
   await page.getByRole('button', { name: '带上协作背景…', exact: true }).click();
-  await second.locator(`[data-session-id="${b}"]`).click(); await second.locator('#chat-tab').click(); await second.locator('#message-input').fill('TAKEOVER-DRAFT');
+  await second.locator(`[data-session-id="${b}"]`).click(); await second.locator('#chat-tab').click();
+  await second.locator('#send-button').getByText('接管此窗口', { exact: true }).click();
+  await until(() => second.locator('#message-input').evaluate(el => !el.readOnly), 'Explicit graphical takeover');
+  await second.locator('#message-input').fill('TAKEOVER-DRAFT');
   assert.equal(await page.locator('#insert-context').isVisible(), false, 'Solo context is copy-only after ownership transfer');
   assert.equal((await snapshot()).sessions.find(s => s.id === b).liveDraft, 'TAKEOVER-DRAFT'); await page.locator('#close-context').click();
   await second.close(); assert.equal(app.windows().length, 1);
@@ -155,7 +166,10 @@ async function run() {
   assert.equal(restored.sessions.find(s => s.id === b).roomId, 'shared'); assert.equal(restored.sessions.find(s => s.id === a).roomId, null); assert.equal(restored.sessions.find(s => s.id === a).archived, true);
   await page.locator('#archive-button').click(); await page.locator(`[data-archived-session="${a}"]`).getByRole('button', { name: '恢复会话', exact: true }).click(); assert.deepEqual(identities(await snapshot()), ids);
   assert.equal((await fixture()).sends.length, 4); assert.equal((await fixture()).inputs.some(x => x.data === 'MUST-NOT-REACH'), false);
-  await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('ARCHIVED-UNSENT-DRAFT');
+  await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
+  await page.locator('#send-button').getByText('接管此窗口', { exact: true }).click();
+  await until(() => page.locator('#message-input').evaluate(el => !el.readOnly), 'Explicit takeover after observer closes');
+  await page.locator('#message-input').fill('ARCHIVED-UNSENT-DRAFT');
   await page.locator(`[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).archived, 'Current session archived');
   assert.equal(await page.locator('#message-input').inputValue(), 'ARCHIVED-UNSENT-DRAFT'); assert.equal(await page.locator('#send-button').isDisabled(), true);

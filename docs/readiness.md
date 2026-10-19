@@ -37,6 +37,17 @@ regression and installed input regression pass with synthetic provider transport
 no new native model task was needed. See [alpha.20](alpha.md#alpha20-draft-continuity).
 This does not close the physical IME or full daily-use acceptance gaps above.
 
+Alpha.21 preserves historical reading selection/focus during new output and
+restores each conversation's reading position through view/session changes and
+normal reopening. Installed hidden reading and input checks pass with synthetic
+transport; no model tasks were needed. See [alpha.21](alpha.md#alpha21-reading-continuity).
+
+Visible desktop acceptance is separate from hidden Electron/DSH checks. Those
+checks render the actual application and exercise CDP/IPC/storage, but do not
+certify system IME, macOS foreground focus or Spaces. Current test windows stay
+hidden to avoid interrupting the person's fullscreen work; a suitable visible
+Desktop-only environment is still required before daily-use sign-off.
+
 After that path is accepted, revisit collaboration as a coherent communication
 flow: recipient selection, sharing scope, agent awareness, reply visibility and
 explicit human control. Do not add another control for each missing behavior.
@@ -243,9 +254,11 @@ claiming every native preference is inherited unchanged.
 
 The current “one round” is a bounded handoff ending at a reply limit, not proof
 that an arbitrary goal is finished. The source has no general external-session
-import UI. Long-session performance is not yet benchmarked: the service currently
-broadcasts full snapshots and the renderer rebuilds message lists on changes.
-Those are measured-risk candidates, not evidence of an observed performance bug.
+import UI. The service still broadcasts full snapshots. Alpha.21 addresses reproduced
+reading/selection loss by retaining unchanged message rows and saving bounded
+reading geometry. Synthetic resource samples cover the specific output workload;
+long-duration memory, native terminal scrollback and general performance remain
+unbenchmarked. See the reading test and acceptance limits in testing.md.
 
 ## Follow-up: use the person’s preferred terminal
 

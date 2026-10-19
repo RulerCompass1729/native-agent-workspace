@@ -28,6 +28,11 @@ window.__ModuleLoader__.load({
         }
         let mounted = 0, cleanup;
         const markdownRoots = new Map();
+        function MessageMarkdown({ text, streaming, onLayout }) {
+          React.useLayoutEffect(() => { onLayout?.(); });
+          return React.createElement(MarkdownDelegateProvider, { openExternalLink: href => window.workspace.openExternal(href) },
+            React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' } }));
+        }
         const ui = {
           // Reuse the pinned DSH menu's positioning, theme and arrow navigation.
           menu({ items, getAnchorRect, onSelect, onClose }) {
@@ -62,11 +67,10 @@ window.__ModuleLoader__.load({
             root.render(React.createElement(SessionMenu));
             return close;
           },
-          markdown(el, text, streaming) {
+          markdown(el, text, streaming, onLayout) {
             let root = markdownRoots.get(el);
             if (!root) { root = ReactDOM.createRoot(el); markdownRoots.set(el, root); }
-            root.render(React.createElement(MarkdownDelegateProvider, { openExternalLink: href => window.workspace.openExternal(href) },
-              React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' } })));
+            root.render(React.createElement(MessageMarkdown, { text, streaming, onLayout }));
           },
           clearMarkdown(el) { for (const [target, root] of markdownRoots) if (el.contains(target)) { root.unmount(); markdownRoots.delete(target); } },
         };

@@ -129,7 +129,7 @@ The default **发送** action sends only to the selected member. The draft and r
 recipient is no longer available, choose one explicitly before sending.
 The separate **开始一轮核查** action under the composer’s **⋯** has a ceiling of three replies within ten minutes. Automatic handoffs require complete native background/team status. Current adapters cannot certify this, so a run pauses after its first reply; use **选择并分享** or **发送** to continue with human control. A reply limit does not mean the task or its descendants finished. Native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
 
-`npm test` runs local regression checks without model calls. `npm run test:desktop` checks the hidden Electron lifecycle without sending prompts; it reuses a single private test profile and refuses a second test runner. Visible desktop and physical input acceptance remain separate checks. See [test policy](docs/testing.md).
+`npm test` runs local regression checks without model calls. `npm run test:reading` checks selection, scrolling and reading recovery with synthetic output in the actual hidden application. `npm run test:desktop` checks the hidden Electron lifecycle without sending prompts; it reuses a single private test profile and refuses a second test runner. Visible desktop and physical input acceptance remain separate checks. See [test policy](docs/testing.md).
 
 ## Local macOS app build
 

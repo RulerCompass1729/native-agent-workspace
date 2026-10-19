@@ -124,9 +124,10 @@ function renderComposer(s) {
 }
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
-function persistView() { return api.viewState({ selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: $('recipient').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value }); }
+function persistView() { captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: $('recipient').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession) {
+  captureReadingViews();
   const revision = ++selectionRevision;
   const leaving = terminals.get(activeSessionId());
   cancelViewInput(leaving);
@@ -352,39 +353,6 @@ function populateSelect(el, items) {
 function participantLabel(session, people = members()) {
   return people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${session.id.slice(0, 6)}` : session.name;
 }
-function messageList(el, messages, room = false) {
-  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  ui.clearMarkdown(el);
-  el.replaceChildren();
-  if (!messages.length) { el.append(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : '从这里开始。你也可以随时使用同一个会话的原生终端。', 'message empty')); return; }
-  let lastDay = '';
-  for (const m of messages) {
-    if (room) {
-      const day = Number.isFinite(m.time) ? new Date(m.time).toLocaleDateString() : '时间未记录';
-      if (day !== lastDay) { el.append(node('div', day, 'timeline-day')); lastDay = day; }
-    }
-    const item = node('article', undefined, `message ${m.role}`); item.dataset.messageId = m.id;
-    const heading = node('div', undefined, 'message-heading');
-    const participant = room && state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
-    const name = participant ? (m.role === 'human' ? `你 → ${participantLabel(participant, state.sessions)}` : participantLabel(participant, state.sessions)) : m.name;
-    heading.append(node('strong', name || (m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex')));
-    if (m.role === 'system' && !m.sessionId) heading.firstChild.textContent = '工作区';
-    if (room && Number.isFinite(m.time)) { const time = node('time', new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); time.title = new Date(m.time).toLocaleString(); heading.append(time); }
-    if (['awaiting-native', 'unconfirmed', 'streaming', 'reply-private'].includes(m.status)) heading.append(node('span', { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '正在回复', 'reply-private': '分享已失效，回复保留在原会话' }[m.status]));
-    const body = node('div', undefined, 'message-body'); item.append(heading, body);
-    if (m.role === 'assistant') ui.markdown(body, m.text, m.status === 'streaming'); else body.textContent = m.text;
-    const actions = node('div', undefined, 'message-actions');
-    actions.append(button('复制', () => api.copy(m.text)));
-    if (m.role !== 'system') actions.append(button('选择并分享', () => share(m.text)));
-    if (room && ($('room-search').value || $('room-filter').value)) actions.append(button('查看上下文', () => {
-      $('room-search').value = ''; $('room-filter').value = ''; renderTimeline(); attempt(persistView);
-      const original = [...$('room-messages').children].find(el => el.dataset.messageId === m.id);
-      if (original) { original.tabIndex = -1; original.scrollIntoView({ block: 'center' }); original.focus({ preventScroll: true }); }
-    }));
-    item.append(actions); el.append(item);
-  }
-  if (atBottom) el.scrollTop = el.scrollHeight;
-}
 function timeline() {
   return [...state.room.messages, ...(state.room.events || [])].sort((a, b) => (a.time || 0) - (b.time || 0));
 }
@@ -480,6 +448,7 @@ function updateSharingControls() {
 }
 function render() {
   if (!state || rendering) return;
+  captureReadingViews();
   rendering = true;
   try {
     if (selected === 'room' && state.room.archived) { selected = ''; roomSession = ''; attempt(persistView); }
@@ -528,7 +497,7 @@ function render() {
       renderComposer(s);
       $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
       const signature = JSON.stringify(s.messages);
-      if (signature !== lastMessages) { messageList($('messages'), s.messages); lastMessages = signature; }
+      if (mode === 'chat' && (signature !== lastMessages || messageViews.get($('messages'))?.key !== s.id)) { messageList($('messages'), s.messages, false, s.id); lastMessages = signature; }
       $('approval').hidden = s.state !== 'approval';
       $('approval').replaceChildren();
       if (s.state === 'approval') {
@@ -597,9 +566,10 @@ function render() {
       $('pause-button').disabled = run?.status !== 'running';
       if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
     }
-  } finally { rendering = false; }
+  } finally { restoreVisibleReading(); rendering = false; }
 }
 async function switchMode(next, takeControl = false) {
+  captureReadingViews();
   const s = current(); if (!s) return;
   const revision = ++selectionRevision;
   const entry = terminals.get(s.id);
@@ -933,6 +903,7 @@ $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
 attempt(async () => {
   state = await api.initial(); owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;
+  readingPositions = state.viewState.readingPositions || {};
   roomSession = typeof state.viewState.roomSession === 'string' ? state.viewState.roomSession : '';
   const display = state.viewState.terminalDisplay;
   if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;
@@ -955,4 +926,4 @@ attempt(async () => {
   }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
