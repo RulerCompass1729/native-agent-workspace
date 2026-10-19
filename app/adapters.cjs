@@ -175,15 +175,44 @@ class Rpc extends EventEmitter {
 }
 
 class Codex extends EventEmitter {
-  constructor(record, host) { super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = record.view !== 'terminal'; this.stopped = false; this.eventRevision = 0; this.inputItems = new Set(); this.liveMessageItems = new Set(); this.historyMessageItems = new Set(); }
+  constructor(record, host) {
+    super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = !record.recovering && record.view !== 'terminal'; this.stopped = false; this.eventRevision = 0; this.stateRevision = 0; this.on('state', () => this.stateRevision++); this.inputItems = new Set(); this.liveMessageItems = new Set(); this.historyMessageItems = new Set();
+    if (record.recovering) this.recoveryReady = new Promise(resolve => { this.finishRecoveryConnection = resolve; });
+  }
   async start() {
-    await this.host.startCodex();
+    try { await this.host.startCodex(); }
+    catch (error) { this.finishRecoveryConnection?.(false); throw error; }
     if (this.record.recovering) {
-      await this.host.rpc.call('thread/resume', { threadId: this.record.nativeId, cwd: this.record.cwd, excludeTurns: true });
+      // Subscribe locally before the request: native events may precede its ACK.
+      // Persisted text has no delta watermark; wait for authoritative completion
+      // rather than appending an unknown suffix/prefix to an old partial reply.
+      for (const message of this.record.messages || []) {
+        if (message.role === 'assistant') this.historyMessageItems.add(message.id);
+        if (message.role === 'user' && ['human', 'room'].includes(message.origin)) this.ownInputs.add(message.id);
+      }
       this.host.codexTargets.set(this.record.nativeId, this);
-      this.hasHistory = true; this.chatAvailable = true;
-      this.emit('pid', this.host.codexProcess.pid); this.emit('state', 'idle');
+      const revision = this.stateRevision;
+      let result;
+      try {
+        result = await this.host.rpc.call('thread/resume', { threadId: this.record.nativeId, cwd: this.record.cwd, excludeTurns: true });
+        if (result.thread?.id !== this.record.nativeId) throw new Error('原生返回了不同的会话，恢复未确认。');
+      } catch (error) {
+        if (this.host.codexTargets.get(this.record.nativeId) === this) this.host.codexTargets.delete(this.record.nativeId);
+        this.finishRecoveryConnection?.(false);
+        throw error;
+      }
+      if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
+      this.hasHistory = true; this.finishRecoveryConnection?.(true);
+      this.emit('pid', this.host.codexProcess.pid); this.emit('model', result.model || result.thread.model || '原生默认');
+      if (revision === this.stateRevision) this.observeStatus(result.thread.status);
+      // The TUI can display native history while the graphical copy is loading.
       if (this.record.view === 'terminal') await this.openTerminal();
+      try {
+        if (!await this.hydrateHistory(this.record.nativeId)) return;
+        this.chatAvailable = true; this.emit('capability');
+      } catch {
+        if (!this.stopped) this.emit('activity', '对话历史同步未完成；已保存的记录和草稿仍保留，请在原生终端继续。');
+      }
       return;
     }
     if (this.record.view === 'terminal') {
@@ -277,17 +306,25 @@ class Codex extends EventEmitter {
     this.terminal.on('closed', () => this.emit('activity', '原生终端已退出；已连接的会话仍由运行服务管理。'));
     return this.terminal;
   }
+  observeStatus(status) {
+    if (status?.type === 'idle') this.emit('state', 'idle');
+    else if (status?.type === 'active') this.emit('state', status.activeFlags?.some(flag => ['waitingOnApproval', 'waitingOnUserInput'].includes(flag)) ? 'approval' : 'working');
+    else if (status?.type === 'systemError') this.emit('state', 'error');
+    else { this.emit('state', 'starting'); this.emit('activity', '原生状态尚未确认，请在原生终端查看。'); }
+  }
   event(message) {
     const p = message.params || {};
     this.eventRevision++;
     if (message.method === 'thread/closed') {
-      this.closed = true; this.stopped = true; this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
+      this.closed = true; this.stopped = true; this.finishRecoveryConnection?.(false); this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
     }
     if (this.stopped) return;
     if (message.id !== undefined) { this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); return; }
     switch (message.method) {
+      case 'thread/status/changed': this.observeStatus(p.status); break;
       case 'turn/started': this.turnId = p.turn.id; this.emit('state', 'working'); break;
       case 'item/agentMessage/delta':
+        this.stateRevision++; // Live work invalidates an older resume status.
         if (!this.historyMessageItems.has(p.itemId)) { this.liveMessageItems.add(p.itemId); this.emit('delta', { id: p.itemId, text: p.delta }); }
         break;
       case 'item/started':
@@ -295,6 +332,7 @@ class Codex extends EventEmitter {
         if (/collab|agent/i.test(p.item?.type || '') && p.item.type !== 'agentMessage') this.emit('fleet', { event: p.item.type, id: p.item.id, name: 'Codex 原生子 agent' });
         break;
       case 'item/completed':
+        if (['userMessage', 'agentMessage'].includes(p.item?.type)) this.stateRevision++;
         if (p.item?.type === 'agentMessage') { this.liveMessageItems.add(p.item.id); this.turn(p.turnId).text = p.item.text || ''; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase }); }
         // A human may steer an active GUI turn from the native terminal. Only
         // our explicitly identified echo is redundant; matching text is not ID.
@@ -340,9 +378,11 @@ class Codex extends EventEmitter {
     }
   }
   async interrupt() {
-    if (this.turnId) await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId: this.turnId });
+    if (!this.turnId) throw new Error('尚未确认当前原生回合；请在原生终端中断。');
+    await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId: this.turnId });
   }
   async openTerminal() {
+    if (this.recoveryReady && !this.hasHistory && !await this.recoveryReady) throw new Error('原生会话恢复尚未确认，请检查恢复状态后重试。');
     if (this.stopped) throw new Error('本应用已断开该会话；原生历史仍保留。');
     if (this.terminal?.alive) return this.terminal;
     if (!this.record.nativeId) { for (let i = 0; i < 100 && !this.terminal; i++) await delay(50); if (this.terminal) return this.terminal; }

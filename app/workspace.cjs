@@ -70,6 +70,7 @@ class Workspace extends EventEmitter {
     runtime.on('state', state => {
       if (this.stops.has(s.id) && !['ended', 'error', 'disconnected'].includes(state)) return;
       s.state = state;
+      if (state !== 'starting' && s.activity === '正在连接原生历史') s.activity = '';
       if (state === 'ended') { s.pid = null; s.pendingTag = null; s.approval = null; this.runtimes.delete(s.id); }
       if (state === 'ended' || state === 'error') this.pause('原生会话不可用'); this.changed();
     });
@@ -88,6 +89,12 @@ class Workspace extends EventEmitter {
       const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set();
       for (const item of items) {
         const own = item.type === 'userMessage' && item.clientId && existing.get(item.clientId)?.role === 'user' ? existing.get(item.clientId) : existing.get(item.id);
+        // A cold connection's persisted partial text is not newer than native
+        // history. Live items received on this connection still take precedence.
+        if (own && s.recovering && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
+          Object.assign(own, { text: item.text || '', status: item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+        }
+        if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) own.status = 'submitted';
         const m = own || (item.type === 'userMessage'
           ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
           : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
@@ -259,7 +266,7 @@ class Workspace extends EventEmitter {
       const runtime = this.host.create(s); this.runtimes.set(id, runtime); this.bind(s, runtime);
       if (runtime.start) await runtime.start();
     } catch (error) {
-      if (!this.runtimes.get(id)?.terminal?.alive) this.runtimes.delete(id);
+      if (!this.runtimes.get(id)?.terminal?.alive && !this.runtimes.get(id)?.hasHistory) this.runtimes.delete(id);
       s.state = 'error'; s.activity = error.message; this.changed(); throw error;
     } finally { s.recovering = false; this.changed(); }
   }

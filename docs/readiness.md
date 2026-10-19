@@ -4,6 +4,26 @@ As of 2026-10-18. Current phase: **macOS source alpha and locally tested Apple S
 foundation. The maintainer authorized implementation and real use, then explicitly
 limited Claude/Codex tests to important unresolved native behavior.
 
+## Current priority: a dependable single conversation
+
+On 2026-10-18 the maintainer reported that the collaboration composer repeats
+recipient controls and allows drafting for a retained session that cannot receive
+graphical submissions. Pause collaboration feature expansion. Its tested manual
+sharing mechanisms are not a finished agent-team communication experience.
+
+First close the local single-conversation path: usable native input and controls,
+preserved identity/history/drafts across UI reopen, honest recovery after service
+loss, and a clear available action when graphical input is unsupported. Old live
+sessions must not be silently migrated or replayed to make new controls work.
+Physical Chinese IME and ordinary input ergonomics require real acceptance;
+synthetic keystrokes or Chinese paste do not establish that coverage. Clean-Mac
+installation and complete native fleet/configuration parity remain separate gates.
+Do not mark single-conversation daily use complete while these relevant gaps remain.
+
+After that path is accepted, revisit collaboration as a coherent communication
+flow: recipient selection, sharing scope, agent awareness, reply visibility and
+explicit human control. Do not add another control for each missing behavior.
+
 | Milestone | Status and evidence |
 | --- | --- |
 | Product boundaries and public repository | Done: session/room/view distinction, Apache-2.0 original work, source register and publication guard |

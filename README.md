@@ -12,6 +12,10 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Current priority is dependable single-conversation use. Collaboration expansion
+is paused while its communication flow is reconsidered; existing manual sharing
+checks are not a finished agent-team experience. See [acceptance priorities](docs/readiness.md#current-priority-a-dependable-single-conversation).
+
 Claude conversation/room sends now use its native structured submission API,
 with a draft check and no terminal paste/Enter injection. This requires Claude
 Code 2.1.302+ and enabled session-local mods. An older retained backend keeps its

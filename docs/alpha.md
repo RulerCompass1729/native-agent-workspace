@@ -1,8 +1,34 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.17. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.18. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.18 single-session recovery work
+
+Collaboration feature expansion is paused following feedback about redundant
+controls and unavailable sending paths. Existing manual sharing is not a finished
+agent communication experience. The immediate acceptance target is dependable
+single-conversation use; see [current priority](readiness.md#current-priority-a-dependable-single-conversation).
+
+Codex cold recovery now registers event observation before requesting resume,
+keeps the same native identity, reads paginated history and reconciles persisted
+partial replies and explicitly correlated submission echoes. New live events take
+precedence over a late resume status. The native terminal can open while the
+graphical history is synchronizing; a history-read failure preserves the terminal
+and saved drafts without enabling graphical sends. An unknown active turn ID
+produces an explicit terminal instruction instead of falsely claiming an interrupt
+was requested. No interrupted prompt or collaboration is automatically replayed.
+
+Validation: 154 local tests passed with no skips. The installed application
+resumed existing synthetic Claude and Codex native histories, retained both
+terminal and graphical drafts through UI reopen, and kept a single window.
+The first native check exposed an incorrect first-message prompt and stale
+connecting text; the final installed check confirmed both were gone. No new
+model task was sent during these recovery checks. Native active-fleet recovery
+and physical Chinese IME input were not established by this test. Older retained
+backends still expose their original capabilities; this does not complete
+single-conversation daily-use acceptance or the collaboration experience.
 
 ## Alpha.17 navigation hierarchy
 
