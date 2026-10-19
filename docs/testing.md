@@ -349,3 +349,44 @@ Do not use curl-only copying as browser-quarantine proof. The guest test found
 the system Python shim masking a later real installation; the selection-stage
 regression and final guest native startup cover that fix. Native login screens
 are not evidence of completing a new account's authorization.
+
+## Recorded native collaboration trial (2026-10-19)
+
+The installed alpha.23 interface was exercised with OS mouse/keyboard events in
+an isolated macOS guest. A test-only SSH socket bridge connected that interface
+to the production daemon and real native agents in a separate host test profile.
+Provider credentials stayed in their native host stores. This bridge is test
+infrastructure, not a supported remote-session feature or clean-account setup.
+
+One synthetic study-planning task covered both a 90-minute plan and a human
+change to 75 minutes. Claude proposed the first plan; Codex checked it through
+an explicitly authorized two-reply exchange. Claude was dragged out for the
+private revision, then the person explicitly shared the revised constraints and
+answer for Codex to check. An independent local validator checked durations,
+order, uniqueness, internal rests, continuity and the maximum work interval.
+Both plans passed; six malformed counterexamples were rejected.
+
+Exactly four parent submissions were observed: two on Claude Haiku 5.5 and two
+on GPT-6-Luna, both with low effort. Native events/transcripts showed no tool or
+child-agent calls for this task. Native hooks and MCP startup did occur; a parent
+submission count is not a complete cost, network-activity or side-effect audit.
+
+The visible trial also checked:
+
+- Typed `@`, room/session naming, explicit shared context and retained notes.
+- Unchanged Codex and room histories during the private revision, until sharing.
+- GUI/TUI switching, unsent native inputs and separate solo/shared GUI drafts.
+- Two normal UI quits/reopens, including reopening archived records.
+- Room/session archive and restoration, repeated real pointer drag in/out,
+  timeline search/copy and unchanged native identities, histories and dispatches.
+- Removing the selected recipient clears the target and disables sending;
+  the draft is retained without silently choosing another agent.
+
+Fifty-seven targeted local regressions also passed for takeover, permissions,
+late replies and recovery. Those checks are not additional visible native trials.
+Driver synchronization errors around native select-menu closing were retained
+as failed attempts; they did not cause duplicate model submissions. Independent
+review found no blocking product defect in this task. Raw recordings and an
+original-speed excerpt remain private; native status bars contain personal paths
+and quota information. This result does not establish full fleet recovery,
+arbitrary unattended completion, physical-device parity or equal-task cost.

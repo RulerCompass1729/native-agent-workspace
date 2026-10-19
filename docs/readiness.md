@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-18. Version 0.1.0-alpha.23 is a **local macOS technical-trial alpha**.
+As of 2026-10-19. Version 0.1.0-alpha.23 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -20,6 +20,10 @@ See [alpha.23 evidence](alpha.md#alpha23-core-acceptance), [testing](testing.md)
 [review record](review.md). A mock, document or skipped case is not native proof.
 The current result combines complementary evidence rather than pretending one
 uninterrupted clean-account journey was performed on a physical customer's Mac.
+The subsequent [recorded native task](testing.md#recorded-native-collaboration-trial-2026-10-19)
+combines a visible guest interface with real native agents through an isolated
+test bridge; its four submissions and repeated lifecycle checks passed independent
+review. It does not add a supported remote connection feature.
 
 ## How the shared context works
 

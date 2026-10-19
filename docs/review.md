@@ -1,6 +1,6 @@
 # Review and issue record
 
-As of 2026-10-18. This is a working acceptance record, not an independent security
+As of 2026-10-19. This is a working acceptance record, not an independent security
 certification. Private transcripts, screenshots, paths and account details stay
 outside the public repository. Use synthetic reproductions here.
 
@@ -18,6 +18,8 @@ contradicts it; keep the former result's scope and date.
 
 | ID | Source / trigger | Priority / owner | Status and evidence | Remaining check or trigger |
 | --- | --- | --- | --- | --- |
+| A23-T1 | User: exercise the visible product with a small real cooperative task, repeat core flows and record success | High / desktop maintainer | Closed for the representative study-planning workflow after independent raw-evidence review: real Claude/Codex 90-to-75-minute task, four parent submissions, private revision before explicit sharing, identity/history/drafts, repeated drag, archive and two UI reopens passed | See recorded native collaboration trial in testing.md; does not close full fleet, arbitrary unattended goals or cost parity |
+| A23-F1 | Native trial: automatic handoff text retains the original session name after a local display rename | Low / desktop maintainer | Open naming-consistency follow-up; source uses the daemon name while UI aliases decorate snapshots. Routing uses stable IDs; no wrong recipient observed | When expanding same-provider multi-session collaboration or source-label confusion is reported, align the authorized source label with the display alias and stable identity without silently sharing additional names |
 | A23-5 | Fresh guest: python.org installation remains missing because Finder PATH finds the system installer shim first | High / setup maintainer | Closed for alpha.23: skip unusable shim while searching, preserve explicit-location priority. Targeted eight-check regression, final guest auto-discovery/native startup and independent delivery review passed | Same-version developer rebuilds retain old loaded backends |
 | A23-1 | Independent review: Claude Stop precedes submission ACK, then permission/human/end state changes | High / adapter maintainer | Closed for alpha.23: hold a reply until its exact ACK, invalidate candidates on newer native work, preserve newer approval/end state. Native task, installed regressions and independent delivery review passed | No speculative retry |
 | A23-2 | Review plus native Codex fleet trial: positive background activity outside current reply, and current protocol uses subAgentActivity/collabAgentToolCall | High / adapter maintainer | Closed for observed events in alpha.23: current reply retained before stopping handoffs; unrelated member activity pauses immediately. Actual-shaped Codex events, real Claude hook ordering, final regression and independent delivery review passed | Observed events are not a complete fleet inventory or termination guarantee |
