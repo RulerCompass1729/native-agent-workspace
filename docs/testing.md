@@ -212,9 +212,21 @@ native provider or model requests; the owner scenario is not a native two-window
 concurrency or permission test. The existing `test:terminal` readiness cases
 remain separate coverage for delayed/stale/failed snapshots.
 
+## Draft ownership and recovery
+
+`npm run test:draft-ownership` deliberately opens two hidden windows, using real
+Electron/IPC/workspace persistence and synthetic transport. It checks explicit
+takeover, current draft visibility, reload without stale writes, rejection of a
+former owner's save, copyable recovery, and legacy window records after a full UI
+restart. Unresolved copies must survive ordinary editing; explicit deletion must
+survive another window's state broadcast while a successful save acknowledgement
+is still held. No provider or model task is created; dispatches must remain zero.
+Set `NAW_APP_EXECUTABLE` and `NAW_TEST_APP_ROOT` together for packaged validation.
+Screenshots remain private via `NAW_EVIDENCE_DIR`. This is not physical IME proof.
+
 ## Complete daily-use regression
 
-`npm run test:daily` uses one visible desktop window and an isolated profile.
+`npm run test:daily` uses one hidden desktop window and an isolated profile.
 It exercises setup appearance, both themes, Codex first-attachment history across
 pages, solo conversation/terminal switching, exact input and GUI drafts, rename,
 directed two-agent sharing, detach/continue, repeated launch and reopen, privacy

@@ -22,6 +22,9 @@ let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
 const terminals = new Map();
 const inputRecoveries = new Map();
 const draftRevisions = new Map();
+const pendingDrafts = new Map();
+const draftRecoveries = new Map();
+const draftRecoveryQueues = new Map();
 const viewClaims = new Map();
 const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
@@ -29,6 +32,49 @@ const members = () => state?.room.archived ? [] : state?.sessions.filter(s => s.
 const nativeUsable = s => s && !s.archived && (['starting', 'idle', 'working', 'approval'].includes(s.state) || (s.state === 'error' && s.terminalAvailable));
 const canResume = s => s?.nativeId && !s.terminalAvailable && ['ended', 'recoverable', 'error'].includes(s.state) && ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
 const inputFocusAllowed = () => !sessionMenu && !roomMenu && !document.querySelector('dialog[open]');
+function updateState(next) {
+  const before = current(), id = activeSessionId();
+  state = { ...state, ...next };
+  const after = current();
+  if (before && after && (before.owner !== owner || after.owner !== owner)) {
+    const pending = pendingDrafts.get(id);
+    if (pending && pending.text !== after.liveDraft) rememberDraftRecovery(id, pending.text);
+    // Observing/taking over a session reads its current draft. Do not rewrite
+    // an owner's in-progress input on routine service broadcasts.
+    $('message-input').value = after.liveDraft || '';
+  }
+}
+function renderDraftRecovery(id) {
+  const copies = draftRecoveries.get(id) || [], list = $('draft-recovery-list');
+  $('draft-recovery').hidden = !copies.length;
+  const signature = JSON.stringify([id, copies]);
+  if (list.dataset.signature === signature) return;
+  list.dataset.signature = signature; list.replaceChildren();
+  copies.forEach((text, index) => {
+    const row = node('div', undefined, 'draft-recovery-copy'), area = node('textarea');
+    area.value = text; area.readOnly = true; area.rows = 3; area.className = 'draft-recovery-text';
+    if (!index) area.id = 'draft-recovery-text';
+    area.setAttribute('aria-label', `草稿副本 ${index + 1}`);
+    row.append(area, button('复制副本', () => api.copy(text), 'small'), button('删除此副本', () => changeDraftRecovery(id, 'discardDraftRecovery', text), 'small'));
+    list.append(row);
+  });
+}
+function rememberDraftRecovery(id, text) {
+  if (!text || draftRecoveries.get(id)?.includes(text)) return;
+  attempt(() => changeDraftRecovery(id, 'retainDraftRecovery', text));
+}
+function changeDraftRecovery(id, method, text) {
+  // Show a saved copy only after local persistence. Serializing recovery edits
+  // also prevents a late retain response from resurrecting an explicit deletion.
+  const task = (draftRecoveryQueues.get(id) || Promise.resolve()).catch(() => {}).then(async () => {
+    draftRecoveries.set(id, await api[method](id, text));
+    if (activeSessionId() === id) renderDraftRecovery(id);
+  });
+  draftRecoveryQueues.set(id, task);
+  const clear = () => { if (draftRecoveryQueues.get(id) === task) draftRecoveryQueues.delete(id); };
+  task.then(clear, clear);
+  return task;
+}
 function claimView(id, next, revision, takeControl = false) {
   const intent = state.sessions.find(s => s.id === id);
   const expectedOwner = intent?.owner, expectedControl = intent?.controlRevision;
@@ -40,7 +86,7 @@ function claimView(id, next, revision, takeControl = false) {
     const fresh = await api.initial();
     if (!isCurrent()) return false;
     const target = fresh.sessions.find(s => s.id === id);
-    state = fresh;
+    updateState(fresh);
     // Waiting is not renewed consent to override a more recent human action.
     // Older native services have no atomic conditional-claim protocol; this
     // cancels stale queued intent, not changes after this local observation.
@@ -49,7 +95,7 @@ function claimView(id, next, revision, takeControl = false) {
     if (!isCurrent()) return false;
     const acknowledged = await api.initial();
     if (!isCurrent()) return false;
-    state = acknowledged;
+    updateState(acknowledged);
     if (state.sessions.find(s => s.id === id)?.owner !== owner) { render(); return false; }
     return true;
   });
@@ -67,6 +113,7 @@ function soloAction(s) {
   return { kind: 'send', label: '发送 ↑', hint: s.state === 'approval' ? '先完成上方的原生确认；可以保留下一条草稿。' : s.state === 'working' || s.pendingTag ? '正在回复，可以先编辑下一条。' : 'Enter 发送 · Shift Enter 换行' };
 }
 function renderComposer(s) {
+  renderDraftRecovery(s?.id);
   const action = soloAction(s), send = $('send-button');
   $('message-input').readOnly = action.kind !== 'send';
   $('message-input').disabled = false; // Saved drafts remain selectable/copyable.
@@ -273,8 +320,6 @@ function renderArchives() {
 }
 async function restoreArchivedSession(id) {
   await api.restoreSession(id); state = await api.initial();
-  const record = state.sessions.find(s => s.id === id), draft = state.viewState?.draft;
-  if (record && record.owner === owner && draft?.id === id) record.liveDraft = draft.text;
   $('archive-dialog').close(); await select(id);
 }
 async function showSetup() {
@@ -728,7 +773,7 @@ function fitTerminal(id) {
 function writeTerminal(entry, event) { if (event.sequence > entry.sequence) { entry.term.write(event.data); entry.sequence = event.sequence; } }
 const disposers = [
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
-  api.onState(next => { state = { ...state, ...next }; render(); }),
+  api.onState(next => { updateState(next); render(); }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);
     if (record) { record.name = name; render(); }
@@ -783,8 +828,20 @@ $('close-terminal-display').onclick = () => { $('terminal-display-dialog').close
 $('message-input').oninput = () => {
   const s = current();
   if (s) {
-    draftRevisions.set(s.id, (draftRevisions.get(s.id) || 0) + 1);
-    s.liveDraft = $('message-input').value; attempt(() => api.draft(s.id, s.liveDraft));
+    const revision = (draftRevisions.get(s.id) || 0) + 1;
+    draftRevisions.set(s.id, revision);
+    const pending = { text: $('message-input').value, revision };
+    pendingDrafts.set(s.id, pending); s.liveDraft = pending.text;
+    attempt(async () => {
+      try { await api.draft(s.id, pending.text); }
+      catch (error) {
+        if (draftRevisions.get(s.id) === revision && pending.text) rememberDraftRecovery(s.id, pending.text);
+        throw error;
+      } finally {
+        if (pendingDrafts.get(s.id) === pending) pendingDrafts.delete(s.id);
+        if (activeSessionId() === s.id) renderDraftRecovery(s.id);
+      }
+    });
     renderComposer(s);
   }
 };
@@ -888,8 +945,14 @@ attempt(async () => {
     $('recipient').value = members().some(s => s.id === savedRecipient) ? savedRecipient : '';
     $('recipient').title = $('recipient').selectedOptions[0]?.textContent || '';
   }
-  const draft = state.viewState.draft, saved = state.sessions.find(s => s.id === draft?.id);
-  if (saved && (!saved.owner || saved.owner === owner)) { saved.liveDraft = draft.text; if (!saved.archived && !state.roomStorageWarning) await api.draft(saved.id, draft.text); }
+  for (const [id, backup] of Object.entries(state.viewState.draftBackups || {})) {
+    const saved = state.sessions.find(s => s.id === id);
+    if (!saved) continue;
+    draftRecoveries.set(id, Array.isArray(backup.recoveries) ? backup.recoveries : []);
+    if (!backup.discarded && (backup.acknowledged !== true || saved.state === 'recoverable' || state.storageWarning) && typeof backup.text === 'string' && backup.text && backup.text !== saved.liveDraft) {
+      draftRecoveries.set(id, await api.retainDraftRecovery(id, backup.text));
+    }
+  }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
 return () => { sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

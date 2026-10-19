@@ -141,3 +141,5 @@ header h1, header p { overflow-wrap: anywhere; }
 .terminal-input-recovery p { font-size: 12px; }
 .terminal-input-recovery textarea { display: block; width: 100%; margin: 8px 0; }
 .terminal-input-recovery button { margin-right: 8px; }
+
+#draft-recovery{margin-bottom:10px;padding:10px;border:1px solid var(--border);border-radius:8px}#draft-recovery summary{cursor:pointer;font-size:12px;color:var(--muted)}.draft-recovery-text{display:block;width:100%;margin-bottom:8px}.draft-recovery-copy+.draft-recovery-copy{margin-top:12px}.draft-recovery-copy button+button{margin-left:8px}

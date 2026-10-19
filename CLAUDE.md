@@ -31,10 +31,10 @@ or start paid model runs as a side effect of editing documents.
   launches focus the existing instance; isolated test launches and their repeated
   launches remain hidden. Extra windows require an intentional test case.
   Clean up only processes owned by that test, preserving native user sessions.
-- For development cost control, implementation and routine tests may use an
-  explicitly delegated, suitable GPT-6.1 worker while the main agent coordinates
-  and reviews. Reuse the reviewer and relevant evidence, and scope delegated
-  context to the task. This does not guarantee lower quota use.
+- Current development preference: the main agent implements and tests directly.
+  Keep one independent reviewer at delivery checkpoints; do not delegate coding
+  or routine testing again unless requested. Reuse relevant evidence and avoid
+  frequent handoffs. This does not resolve model-service capacity errors.
 
 ## Architectural invariants
 

@@ -30,6 +30,13 @@ hidden by default; foreground return is explicitly skipped. Physical IME and
 visible desktop interaction remain unverified, so this is a local trial checkpoint
 rather than full daily-use acceptance. See [alpha.19](alpha.md#alpha19-single-conversation-interaction-work).
 
+Alpha.20 additionally fixes stale window backups overwriting a newer conversation
+draft. Recovery copies survive editing/reload and explicit deletion remains final
+for that edit even with delayed acknowledgements. The final packaged two-window
+regression and installed input regression pass with synthetic provider transport;
+no new native model task was needed. See [alpha.20](alpha.md#alpha20-draft-continuity).
+This does not close the physical IME or full daily-use acceptance gaps above.
+
 After that path is accepted, revisit collaboration as a coherent communication
 flow: recipient selection, sharing scope, agent awareness, reply visibility and
 explicit human control. Do not add another control for each missing behavior.

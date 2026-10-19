@@ -1,7 +1,8 @@
 // Isolated desktop regression: replace only the provider transport, never spawn
 // a native agent or connect to a model. The runner controls acceptance timing.
 const { EventEmitter } = require('node:events');
-const { NativeHost } = require('../../app/adapters.cjs');
+const path = require('node:path');
+const { NativeHost } = require(path.join(process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..'), 'app/adapters.cjs'));
 const sends = [];
 NativeHost.prototype.start = async function () { this.binaries = { claude: 'fixture', codex: 'fixture', python: 'fixture' }; };
 NativeHost.prototype.close = function () {};

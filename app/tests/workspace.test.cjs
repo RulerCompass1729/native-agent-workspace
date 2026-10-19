@@ -14,6 +14,15 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('a former window cannot overwrite a draft after another window takes control', async t => {
+  const { workspace: w, ids: [id] } = await fixture(t);
+  w.setDraft(id, 'first draft', 'owner');
+  w.claim(id, 'new-owner', 'chat');
+  w.setDraft(id, 'newest draft', 'new-owner');
+  assert.throws(() => w.setDraft(id, 'late stale write', 'owner'), /另一窗口控制/);
+  assert.equal(w.snapshot().sessions[0].liveDraft, 'newest draft');
+  assert.equal(w.versions.dispatches, 0);
+});
 test('native human input invalidates shared reply return while retaining the private conversation', async t => {
   const { workspace: w, runtimes, ids } = await fixture(t, 2);
   for (const [i, id] of ids.entries()) {

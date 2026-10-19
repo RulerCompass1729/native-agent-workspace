@@ -46,7 +46,7 @@
       <div id="approval" hidden></div>
       <div id="messages" class="messages" aria-label="会话内容" aria-live="polite"></div>
       <div id="terminal-area" hidden aria-label="原生终端"></div>
-      <div id="composer-wrap"><form id="composer"><textarea id="message-input" rows="3" placeholder="直接说你想做什么…" aria-label="发送给当前 agent 的消息"></textarea><div class="composer-footer"><span id="compose-hint">Enter 发送 · Shift Enter 换行</span><button type="button" id="interrupt" class="subtle" hidden>中断回复</button><button type="submit" id="send-button" class="primary">发送 ↑</button></div></form></div>
+      <div id="composer-wrap"><details id="draft-recovery" hidden><summary>有草稿副本待处理</summary><p class="quiet">副本单独保存在本机，不会覆盖当前草稿或自动发送。可复制合并，用完后删除副本。</p><div id="draft-recovery-list"></div></details><form id="composer"><textarea id="message-input" rows="3" placeholder="直接说你想做什么…" aria-label="发送给当前 agent 的消息"></textarea><div class="composer-footer"><span id="compose-hint">Enter 发送 · Shift Enter 换行</span><button type="button" id="interrupt" class="subtle" hidden>中断回复</button><button type="submit" id="send-button" class="primary">发送 ↑</button></div></form></div>
       <details id="advanced"><summary>会话与原生团队</summary><div id="advanced-content"></div></details>
     </section>
     </div>

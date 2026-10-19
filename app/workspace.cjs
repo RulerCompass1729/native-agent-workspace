@@ -148,7 +148,12 @@ class Workspace extends EventEmitter {
     // reconnect after a UI update; another view can explicitly take control.
     this.changed();
   }
-  setDraft(id, text) { this.get(id); if (typeof text !== 'string' || text.length > 16000) throw new Error('草稿过长。'); this.drafts.set(id, text); this.draftRevisions.set(id, (this.draftRevisions.get(id) || 0) + 1); this.changed(); }
+  setDraft(id, text, owner) {
+    const s = this.get(id);
+    if (owner !== undefined && s.owner !== owner) throw new Error('会话已由另一窗口控制；本窗口的草稿副本已保留。');
+    if (typeof text !== 'string' || text.length > 16000) throw new Error('草稿过长。');
+    this.drafts.set(id, text); this.draftRevisions.set(id, (this.draftRevisions.get(id) || 0) + 1); this.changed();
+  }
   async send(id, text, owner, route = null, forward = null) {
     text = cleanText(text); const s = this.get(id); const runtime = this.runtime(id);
     if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); this.pause('真人输入优先'); }

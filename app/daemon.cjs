@@ -32,7 +32,7 @@ async function main() {
       case 'join': if (typeof args[1] !== 'boolean') throw new Error('无效成员操作。'); return workspace.join(...args);
       case 'claim': return workspace.claim(args[0], owner, args[1]);
       case 'send': if (/^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw new Error('原生命令请在终端执行；草稿已保留。'); return workspace.send(args[0], args[1], owner);
-      case 'draft': return workspace.setDraft(...args);
+      case 'draft': return workspace.setDraft(args[0], args[1], owner);
       case 'terminal': return workspace.terminal(args[0], owner);
       case 'terminalSnapshot': { const t = await workspace.runtime(args[0]).openTerminal(); return t.snapshot(); }
       case 'input': return workspace.input(args[0], args[1], owner);

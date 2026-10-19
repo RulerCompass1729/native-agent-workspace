@@ -10,6 +10,7 @@ const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
+const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 
 app.setName('Native Agent Workspace');
 process.env.NAW_APP_VERSION = app.getVersion();
@@ -91,6 +92,7 @@ function saveViews() {
 async function openWindow(saved) {
   if (quitting) return;
   const view = saved || { owner: randomUUID(), selected: '', mode: 'terminal', preference: 'terminal', active: true };
+  backups(view);
   if (!views.includes(view)) views.push(view);
   view.active = true; saveViews();
   const client = await connect(dataDir, view.owner);
@@ -174,13 +176,11 @@ async function boot() {
   for (const method of ['run', 'forward']) register(method, (c, ...args) => submit(c, method, ...args));
   register('uiReady', c => c.ready?.());
   register('send', async (c, id, text) => {
-    const draft = c.view.draft;
+    const draft = backups(c.view)[id];
     const result = await submit(c, 'send', id, text);
     // Every draft edit replaces this object, including retyping identical text.
     // A late acceptance must not clear a newer recovery copy.
-    if (c.view.draft === draft && draft?.id === id && draft.text.trim() === text.trim()) {
-      c.view.draft = { id, text: '' }; saveViews();
-    }
+    if (acceptSentDraft(c.view, id, draft, text)) saveViews();
     return result;
   });
   register('preflight', () => preflight());
@@ -197,9 +197,18 @@ async function boot() {
   });
   register('draft', async (c, id, text) => {
     if (typeof text !== 'string' || text.length > 16000) throw new Error('草稿过长。');
-    c.view.draft = { id, text }; saveViews();
-    roomState.assertAvailable(id);
-    await c.client.call('draft', id, text);
+    if (typeof id !== 'string' || id.length > 100) throw new Error('无效会话。');
+    const draft = beginDraft(c.view, id, text); saveViews();
+    try { roomState.assertAvailable(id); await c.client.call('draft', id, text); }
+    catch (error) {
+      if (backups(c.view)[id] === draft && text) { retainRecovery(c.view, id, text); saveViews(); }
+      throw error;
+    }
+    if (acknowledgeDraft(c.view, id, draft)) saveViews();
+  });
+  for (const [name, operation] of [['retainDraftRecovery', retainRecovery], ['discardDraftRecovery', discardRecovery]]) register(name, (c, id, text) => {
+    if (typeof id !== 'string' || id.length > 100 || typeof text !== 'string' || text.length > 16000) throw new Error('无效草稿副本。');
+    const copies = operation(c.view, id, text); saveViews(); return copies;
   });
   register('reconnect', async c => {
     await ensureService(dataDir, process.execPath);
@@ -218,7 +227,7 @@ async function boot() {
     if (answer.response === 1) {
       await c.client.call(action, id);
       if (action === 'forget') {
-        for (const view of views) { if (view.draft?.id === id) delete view.draft; if (view.selected === id) view.selected = ''; }
+        for (const view of views) { forgetDraft(view, id); if (view.selected === id) view.selected = ''; }
         saveViews();
         try { sessionLabels.remove(id); } catch { throw new Error('会话记录已移除，但本地显示名未能清理。请检查本机数据权限与磁盘空间。'); }
       }

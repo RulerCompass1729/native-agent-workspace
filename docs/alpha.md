@@ -1,8 +1,40 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.19. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.20. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.20 draft continuity
+
+Taking control in another window now reads the session's current draft. Reloading
+a window no longer writes its old backup into the session. The new backend rejects
+draft writes from a former controller. Existing live backends retain their loaded
+version; they are not silently replaced to acquire that backend check.
+
+Window recovery copies are stored separately by session, with acknowledgement
+status. Failed or legacy unconfirmed copies remain available in a collapsed,
+copyable section beside the composer; they never replace or send the current
+draft automatically. Unresolved copies survive further editing and UI reload;
+explicit deletion is respected even if an old save acknowledgement or another
+window's state arrives later. Copies appear only after their local save succeeds.
+After service loss, a differing acknowledged copy is also offered for recovery,
+because an in-memory acknowledgement is not disk durability.
+
+Source validation: 160 local tests and nine existing late-send/draft groups
+passed without model requests. Ten two-window checks preserve the original failing
+results and cover takeover/reload, former-owner rejection, legacy copies and
+recovery persistence/deletion with delayed successful acknowledgements. The same
+ten checks passed using the final packaged renderer, main process and service.
+The installed app also passed eight input regression groups with zero provider
+processes or model tasks. Foreground-app return is explicitly skipped; physical
+IME, visible desktop use and the broader daily-use milestone remain unverified.
+
+The installed copy matches all 9,179 files/links in the final mounted DMG, its
+runtime matches source, and its ad-hoc signature verifies. The original three
+native sessions, history, drafts, views and diagnostics remain unchanged; the
+normal UI was not launched. The DMG remains unnotarized and unpublished.
+Independent source and final artifact review passed for this bounded draft
+continuity fix; the wider daily-use acceptance gates remain open.
 
 ## Alpha.19 single-conversation interaction work
 
