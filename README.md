@@ -152,10 +152,13 @@ interrupted task.
 
 ## Local macOS app build
 
-`npm run package:mac` produces an Apple Silicon `.app`, drag-to-install `.dmg`,
+`npm run package:mac` produces an Apple Silicon drag-to-install `.dmg`
 and zip in `dist/`, using
 Electron Packager and a clean production dependency tree. The app itself does not
 need a separate Node/npm installation; native CLI and Python prerequisites remain.
+The `.app` is staged temporarily and included inside those archives; it is not
+left as a second launchable copy in `dist/`. Keep the daily app in `/Applications`.
+Test and rollback copies stay outside application search, with tests hidden by default.
 The local artifact is ad-hoc signed, not notarized or automatically published.
 See [alpha trial instructions](docs/alpha.md) for startup, recovery and limits.
 The DMG contains the app and an Applications shortcut. It removes Git/npm from

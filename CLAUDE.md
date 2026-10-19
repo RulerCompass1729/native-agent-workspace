@@ -31,6 +31,11 @@ or start paid model runs as a side effect of editing documents.
   launches focus the existing instance; isolated test launches and their repeated
   launches remain hidden. Extra windows require an intentional test case.
   Clean up only processes owned by that test, preserving native user sessions.
+- Keep one daily launchable installed app in `/Applications`. Build bundles are
+  temporary; keep distribution/rollback archives, not extra discoverable `.app`
+  copies. Do not leave test/backup bundles registered as ordinary applications.
+  Verify application-search entries separately from processes and window count;
+  removing a duplicate launcher must not stop or migrate native user sessions.
 - Current development preference: the main agent implements and tests directly.
   Keep one independent reviewer at delivery checkpoints; do not delegate coding
   or routine testing again unless requested. Reuse relevant evidence and avoid

@@ -16,7 +16,7 @@ function buildDmg(app) {
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-dmg-'));
   try {
-    const contents = path.join(scratch, 'contents'); fs.mkdirSync(contents);
+    const contents = path.join(scratch, 'contents.noindex'); fs.mkdirSync(contents);
     run('/usr/bin/ditto', [app, path.join(contents, `${appName}.app`)]);
     fs.symlinkSync('/Applications', path.join(contents, 'Applications'));
     fs.writeFileSync(path.join(contents, 'Install.txt'), [
@@ -31,6 +31,7 @@ function buildDmg(app) {
       '',
     ].join('\n'));
     const image = path.join(root, 'dist', `${manifest.name}-${manifest.version}-mac-arm64.dmg`);
+    fs.mkdirSync(path.dirname(image), { recursive: true });
     run('/usr/bin/hdiutil', ['create', '-volname', appName, '-srcfolder', contents, '-fs', 'HFS+', '-format', 'UDZO', '-ov', image]);
     run('/usr/bin/hdiutil', ['verify', image]);
     fs.writeFileSync(`${image}.sha256`, `${createHash('sha256').update(fs.readFileSync(image)).digest('hex')}  ${path.basename(image)}\n`);
@@ -41,6 +42,9 @@ function buildDmg(app) {
 
 module.exports = { buildDmg };
 if (require.main === module) {
-  try { buildDmg(path.join(root, 'dist', `${appName}-darwin-arm64`, `${appName}.app`)); }
+  try {
+    if (process.argv.length !== 3) throw new Error('Usage: node scripts/package-dmg.cjs /path/to/reviewed.app');
+    buildDmg(path.resolve(process.argv[2]));
+  }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }

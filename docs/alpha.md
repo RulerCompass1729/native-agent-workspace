@@ -377,7 +377,8 @@ or downloaded-app Gatekeeper behavior; the artifact is still unnotarized.
 2. Follow the [complete download/install steps](../README.md#run-locally): clone
    or download this public repository, enter its folder, run `npm ci`, then
    `npm start`. Building requires Node.js 22.19+ on 22.x, or 24+.
-3. On an Apple Silicon Mac, `npm run package:mac` builds an app/DMG/zip in `dist/`.
+3. On an Apple Silicon Mac, `npm run package:mac` builds a DMG and zip in `dist/`.
+   The `.app` exists inside those archives; temporary executable staging is removed.
    The app uses Electron's bundled Node runtime; no separate Node/npm is needed
    to launch the app. The installed provider may have its own runtime needs.
 4. Open **检查安装与版本**, then create a session. The terminal handles native
@@ -389,8 +390,9 @@ upload or auto-updater. Do not disable Gatekeeper globally. Before distributing
 a downloaded app, review its exact artifact, licensing/provider conditions and
 platform signing plan; a successful local build is not that approval.
 
-For an already-built matching app, `node scripts/package-dmg.cjs` creates only the
-DMG without rebuilding the application. Open the DMG, drag the app to Applications,
+For an already-built matching app, run
+`node scripts/package-dmg.cjs "/Applications/Native Agent Workspace.app"` to create
+only the DMG without rebuilding the application. Open the DMG, drag the app to Applications,
 eject the image, then open the installed copy. Keep the same app data directory
 when replacing an older copy. The DMG does not install Python or provider CLIs;
 the setup screen still checks them. A locally copied app launching successfully

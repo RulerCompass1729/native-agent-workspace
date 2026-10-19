@@ -11,6 +11,8 @@ const run = (bin, args, cwd) => execFileSync(bin, args, { cwd, stdio: 'inherit' 
 async function build() {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('This alpha is verified only on Apple Silicon macOS.');
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-package-'));
+  // Keep executable staging bundles out of application search. Only the
+  // installable archives survive the build; /Applications is the daily entry.
   const stage = path.join(scratch, 'app'); fs.mkdirSync(stage);
   try {
     for (const name of ['package.json', 'package-lock.json', 'LICENSE', 'NOTICE', 'COPYRIGHT', 'THIRD_PARTY_NOTICES.md']) fs.copyFileSync(path.join(root, name), path.join(stage, name));
@@ -63,12 +65,13 @@ async function build() {
       appBundleId: 'io.github.rulercompass1729.native-agent-workspace',
       appVersion: manifest.version, buildVersion: '1', platform: 'darwin', arch: 'arm64',
       electronVersion: manifest.devDependencies.electron,
-      out: path.join(root, 'dist'), overwrite: true, asar: false, prune: false,
+      out: path.join(scratch, 'bundles.noindex'), overwrite: true, asar: false, prune: false,
       // Ad-hoc signatures are for local alpha testing, not notarized distribution.
       osxSign: { identity: '-', identityValidation: false, preAutoEntitlements: false, optionsForFile: () => ({ hardenedRuntime: false }) },
     });
     const app = path.join(output[0], 'Native Agent Workspace.app');
     run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
+    fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
     const archive = path.join(root, 'dist', `native-agent-workspace-${manifest.version}-mac-arm64.zip`);
     fs.rmSync(archive, { force: true });
     run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', app, archive]);

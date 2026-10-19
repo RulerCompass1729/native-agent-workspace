@@ -10,6 +10,9 @@ live progress and trajectory visibility in unified solo/room views. The accepted
 short-task flow does not cover all temporary native output. See [U17](review.md)
 and the [proposed native observation increment](live-progress.md). Do not describe
 the present conversation view as a complete replacement for native visibility.
+Retained older sessions can also remain terminal-only: updating the app preserves
+their original backend and does not add its missing safe graphical-send capability.
+New-session checks do not establish seamless feature upgrades for those sessions.
 
 | Area | Current evidence | Boundary |
 | --- | --- | --- |
