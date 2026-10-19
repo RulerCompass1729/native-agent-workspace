@@ -135,3 +135,9 @@ header h1, header p { overflow-wrap: anywhere; }
   #solo-drop { display: block; font-size: 0; min-height: 16px; margin: 0; }
   .dragging-session #solo-drop { background: var(--hover); }
 }
+
+/* Only present after an unconfirmed IME commit; never resubmits input. */
+.terminal-input-recovery { position: absolute; z-index: 2; left: 12px; right: 12px; bottom: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; color: var(--ink); background: var(--surface); }
+.terminal-input-recovery p { font-size: 12px; }
+.terminal-input-recovery textarea { display: block; width: 100%; margin: 8px 0; }
+.terminal-input-recovery button { margin-right: 8px; }

@@ -130,13 +130,13 @@ async function run() {
     assert.deepEqual(identity(await page.evaluate(() => workspace.initial())), identity(before));
     console.log('PASS: a second test runner is refused without touching the first.');
   } finally { if (competingTest.exitCode === null && competingTest.signalCode === null) competingTest.kill('SIGTERM'); }
-  const duplicate = spawn(executablePath, launchArgs, { env: { ...process.env, NAW_DATA_DIR: dataDir }, stdio: 'ignore' });
+  const duplicate = spawn(executablePath, launchArgs, { env: { ...process.env, NAW_DATA_DIR: dataDir, NAW_TEST_PARENT_PID: String(process.pid) }, stdio: 'ignore' });
   try {
     await until(() => duplicate.exitCode !== null, 'Duplicate application did not exit');
     assert.equal(duplicate.exitCode, 0);
     assert.equal(application.windows().length, 1);
     assert.equal(JSON.parse(fs.readFileSync(hostFile, 'utf8')).pid, host.pid);
-    console.log('PASS: repeated launch focuses one UI and retains one DSH host.');
+    console.log('PASS: repeated test launch retains one inactive UI and retains one DSH host.');
   } finally { if (duplicate.exitCode === null && duplicate.signalCode === null) duplicate.kill('SIGTERM'); }
   if (selected) {
     const opened = application.waitForEvent('window');

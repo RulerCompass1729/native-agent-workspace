@@ -7,7 +7,8 @@ is confidence in important behavior, not maximum live-test volume.
 
 1. Inspect the changed implementation and reuse relevant passing evidence.
 2. Check state transitions, routing and failure handling with local synthetic tests.
-3. Exercise changed desktop behavior in a visible app, without sending prompts.
+3. Exercise Electron renderer/IPC behavior in a hidden app, without sending prompts.
+   Visible desktop acceptance requires an explicitly wanted separate check.
 4. Use a real native model turn only when the unresolved question requires it.
 
 Every live trial needs a concrete question, a small synthetic task, a finite
@@ -29,6 +30,13 @@ the real mod dispatcher with mocked external boundaries, without login, network
 or a model turn. Node mocks alone missed a native dispatch difference during
 alpha.5 development. Neither kind of local check replaces a visible native test.
 
+Automated Electron launchers use a validated test parent and private profile and
+remain hidden by default, including startup, restored views and duplicates. The
+checks below can establish DOM interaction and real IPC/storage behavior; they do
+not establish visible desktop or physical OS input acceptance. Historical visible
+results keep their original dates and scope. Do not activate a test window or
+reopen the normal user UI as a cleanup step.
+
 ## Reuse and retest
 
 An unchanged provider does not need another marker response for a CSS, window,
@@ -41,6 +49,52 @@ The desktop runner has one stable private profile and an exclusive runner lock;
 parallel launches are refused. Only intentional multi-view checks may create an
 extra window, and they close it afterward. Cleanup owns specific child handles,
 never broad process-name kills.
+
+## Single-conversation interaction check
+
+`npm run test:solo` uses one hidden Electron renderer at a time against a private synthetic
+transport. It covers late view acknowledgements, queued takeover conflicts,
+read-only view navigation, unavailable send routes, menu/dialog focus, composition,
+explicit send/interrupt, and draft persistence in the DOM, main process, disk and
+service after reopening and 12-second idle windows. It waits for actual restored
+UI state; the runner never signals application readiness on the renderer's behalf.
+
+For an installed build, set both `NAW_APP_EXECUTABLE` and `NAW_TEST_APP_ROOT` (the
+bundle's `Contents/Resources/app`) and run `node scripts/test-solo-use.cjs`. The
+fixture then exercises the installed daemon and workspace as well as the UI.
+This is Electron UI/IPC/persistence evidence with synthetic native transport,
+not visible desktop, physical macOS IME or provider-model evidence. Its window
+stays hidden and non-focusable while CDP delivers test input. It makes one synthetic send
+and starts no native providers or model tasks. `test:focus`, `test:terminal` and
+`test:drafts` retain the relevant timing and draft regressions.
+
+## Immediate input and composition
+
+`npm run test:input` clicks a session/view and types immediately, without waiting
+for a terminal-focus assertion after the click. First attachments still have an
+explicit loading gate. The hidden Chromium renderer check uses actual composition events,
+checks exact bytes and origin IDs, and covers Enter confirmation, cancellation,
+blur/refocus, GUI drafts, slow input/control acknowledgements, cancelled queues,
+newer owners, error-copy paste isolation and opt-in macOS app activation. It permits
+confirmed text only after an observed compositionend and rejects confirmation CR;
+a separate later Enter must pass exactly once. Synthetic transport starts no
+provider processes or model tasks. This is not physical System Pinyin/WeChat IME
+certification or visible desktop acceptance. Deterministic CDP checks use a hidden,
+non-focusable Electron window from its first construction. The existing test-parent
+lease and canonical, privately owned profile select test-only accessory activation
+policy before app readiness; invalid test flags fail before locking or windows. Normal
+user launches retain their usual window behavior. macOS foreground-return is
+skipped by default, not counted as passing. Set `NAW_TEST_FOREGROUND_RETURN=1`
+only for an explicitly wanted short activation check; it checks exact input,
+hides the test window immediately and suppresses raw foreground diagnostics on
+failure. This isolation does not prove physical OS input or prevent every
+possible desktop interaction. Both installed-build variables above are supported.
+
+Pending control input is bounded to 65,536 UTF-16 code units and only exists for
+an already-ready terminal owned by this view. New terminals and another owner's
+session remain gated until authorized. Rejected/cancelled input is never retried;
+the copyable error notice is temporary, and explicitly instructs the person to
+copy it before closing the app. It is not a persistent native terminal draft.
 
 ## Initial demo evidence
 

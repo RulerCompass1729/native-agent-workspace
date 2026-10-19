@@ -57,7 +57,7 @@ async function send(id, text) {
 async function release(fail = false) {
   await native('release', fail);
   if (fail) await page.locator('#toast').filter({ hasText: 'Synthetic acceptance failure' }).waitFor({ state: 'visible' });
-  await until(async () => !(await page.locator('#send-button').isDisabled()), 'Acceptance processed');
+  await until(async () => (await snapshot()).sessions.every(s => s.state === 'idle' && !s.pendingTag), 'Acceptance processed');
   await delay(150); // Allow the actual main-process IPC reply and UI task to run.
 }
 async function run() {

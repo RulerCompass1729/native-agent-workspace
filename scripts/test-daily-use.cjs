@@ -92,8 +92,8 @@ async function run() {
   assert.deepEqual(identities(await snapshot()), ids); assert.equal((await snapshot()).sessions.find(s => s.id === codex).roomId, null);
   await page.locator('#chat-tab').click(); assert.equal(await page.locator('#message-input').inputValue(), '保留独立草稿');
   await terminal(codex); const before = await snapshot(); await capture('detached-terminal');
-  // A deliberate competing launch must focus this app, never create another UI.
-  const duplicate = spawn(executablePath, args, { env: { ...process.env, NAW_DATA_DIR: profile }, stdio: 'ignore' });
+  // A deliberate competing test launch keeps this app inactive and creates no new UI.
+  const duplicate = spawn(executablePath, args, { env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, stdio: 'ignore' });
   try { await until(() => duplicate.exitCode !== null, 'Duplicate exits'); assert.equal(duplicate.exitCode, 0); } finally { if (duplicate.exitCode === null) duplicate.kill('SIGTERM'); }
   assert.equal(app.windows().length, 1);
   await app.close(); app = null; await launch();

@@ -20,6 +20,16 @@ synthetic keystrokes or Chinese paste do not establish that coverage. Clean-Mac
 installation and complete native fleet/configuration parity remain separate gates.
 Do not mark single-conversation daily use complete while these relevant gaps remain.
 
+Alpha.19 passes the local continuous interaction check with synthetic transport:
+useful unavailable-send fallback, exact input/send/interrupt, guarded switching,
+explicit takeover and drafts after reopen plus idle save windows. The installed
+artifact passed hidden Electron/CDP input and persistence checks, plus a
+zero-task check of two real native recoveries and unsent composition. Source
+and final installed evidence passed independent review for the local trial. Test windows remain
+hidden by default; foreground return is explicitly skipped. Physical IME and
+visible desktop interaction remain unverified, so this is a local trial checkpoint
+rather than full daily-use acceptance. See [alpha.19](alpha.md#alpha19-single-conversation-interaction-work).
+
 After that path is accepted, revisit collaboration as a coherent communication
 flow: recipient selection, sharing scope, agent awareness, reply visibility and
 explicit human control. Do not add another control for each missing behavior.
@@ -69,7 +79,7 @@ Codex uses explicit RPC input. Alpha.11 verifies unsent-draft preservation and o
 in-flight terminal steering scenario, with visible input and private reply isolation.
 This is not a full native concurrency guarantee.
 
-## Current delivery checkpoint: one complete daily-use path
+## Historical combined checkpoint: alpha.15–17
 
 The 2026-10-18 collaboration feedback narrows this former checkpoint: alpha.15
 proved selected mechanical paths, not a finished daily collaboration experience.
@@ -97,61 +107,31 @@ The clean-system test is still deferred for storage availability; a new app
 profile on the maintainer's Mac does not substitute for it. Do not mark that gate
 complete or call this a general consumer release when the local checkpoint passes.
 
-## Next milestone
+## Active milestone: single-conversation daily use
 
-The product is a unified Desktop + TUI workspace. TUI daily use remains the first
-delivery path, while both interfaces share session identity, input safety,
-permissions, control and recovery acceptance. Keep the DSH foundation and native
-service. A complete conversation-first experience follows daily-use feedback;
-its needs already constrain today's architecture and tests. Clean-machine
-installation testing still waits for disk space.
+Follow the single-conversation priority at the top of this document. The earlier
+combined solo/shared milestone above is historical evidence, not the current
+acceptance target. Keep the DSH foundation and native service; collaboration
+expansion waits for a dependable solo path and a coherent communication design.
 
-The cross-view Claude submission and conservative handoff changes are locally
-verified as described in [alpha evidence](alpha.md). Unknown native state now
-pauses automatic routing while preserving the reply and human-directed sharing.
-Unattended multi-agent completion remains gated on authoritative native fleet
-state; observing child events or a root reply is insufficient. Do not add new
-orchestration surfaces. Alpha.7 removes forced permission defaults; the remaining
-native configuration differences are explicitly listed in alpha.md. Alpha.8 now
-routes new sessions to the current backend while preserving old native sessions. Local upgrade, control/lifecycle and rename checks are recorded
-in alpha.md and review.md. Alpha.10 protects new GUI drafts from late acceptance. Alpha.11 closes the
-reproduced Codex missing-steer input issue and preserves the terminal view during
-sharing/interrupt; its native and local evidence is recorded in alpha.md. First-turn history synchronization is addressed in alpha.15; broader
-native concurrency, cold-history recovery and authoritative fleet status remain
-separate gates. The next user-facing acceptance is the existing
-solo/shared TUI daily-use path; it does not require adding new orchestration UI.
+Accept one continuous local workflow: open a session, enter and edit text, switch
+between its graphical and native views, interrupt explicitly, leave and return,
+and reopen the app with the same identity, history and unsent drafts. Capability
+limits must expose an available action without automatically moving text, starting
+a new session or replaying a task. A late view switch must not replace a newer
+choice, claim another window's control or move keyboard focus out of a dialog.
 
-The maintainer's current milestone is the complete installation/use path, focused
-on **individual and collaborative native TUI use**:
+Check draft persistence at the DOM, main-process view state, disk and service after
+UI readiness, a longer idle interval and reopening. Verify composition events
+separately from a physical input method. Preserve a historical unexplained draft
+change as unexplained; a successful synthetic test cannot establish its origin.
 
-1. Download the macOS installer, install and open it without Git/npm commands.
-2. Complete prerequisite detection and native login/trust, then use Claude or
-   Codex alone in its terminal view.
-3. Join the two sessions, explicitly share a task, observe bounded handoffs and
-   retain human pause/takeover controls.
-4. Detach either agent and keep using its original native session.
-5. Quit/reopen the interface and retain sessions, selected view and saved draft
-   without duplicate instances or replayed prompts.
-
-The local DMG copy/launch path is verified. The current trial deliberately uses
-free, unnotarized distribution; public binary download, exact-artifact publication
-review and the app-specific Gatekeeper opening path remain unverified. Signing and
-notarization are a later option. First use on a Mac without Python/provider installation
-also remains open: current setup links to official instructions. Earlier native
-single-session replies and bounded collaboration may be reused only where the
-runtime/adapter behavior is unchanged; they do not prove fresh-machine setup.
-See [alpha evidence](alpha.md).
-
-Do not expand this milestone into new providers, extra chat features, or iTerm2
-embedding. The [unified experience criteria](interaction.md#统一体验验收与反馈依据)
-guide improvements to existing flows. Preferred-terminal integration below is a
-follow-up after this path works; it must not displace installation, input safety
-and basic use.
-
-Every commit/push still requires proactive secret/PII scans and review, including
-outgoing history, author identities and commit messages. Raw test evidence stays
-local. The guard and written privacy requirements are not a global compliance
-certification. See [publication](publication.md) and [privacy](privacy.md).
+Clean-machine installation, public download/Gatekeeper and complete native fleet
+or configuration parity remain separate unfinished gates. The user allowed the
+clean-Mac test to wait for available storage. A fresh app profile does not replace
+that environment. Do not broaden this work into providers, orchestration controls,
+or preferred-terminal embedding. Reuse existing native evidence only where the
+runtime, adapter and affected behavior are unchanged.
 
 ## Delivery order and interface review
 
@@ -167,7 +147,7 @@ until the maintainer frees system-disk space; no VM image has been installed.
 最小增量：先推进维护者可日常使用的 TUI 版本，随后验收朋友试用的完整安装路径；完整对话式 Desktop 体验等 TUI 使用反馈通过后开始。
 不做会坏什么：用户仍可能卡在环境准备，或混淆查看会话、脱出协作与停止原生任务。
 
-### Current milestone: a usable TUI trial
+### Historical plan: a usable TUI trial
 
 Alpha.3 adds a TUI-focused increment: terminal-first new windows, persisted text
 size/palette, paste/copy controls, macOS Option-drag selection when native mouse

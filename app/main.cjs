@@ -14,10 +14,31 @@ const { RoomState } = require('./room-state.cjs');
 app.setName('Native Agent Workspace');
 process.env.NAW_APP_VERSION = app.getVersion();
 for (const flag of ['disable-background-networking', 'disable-component-update', 'disable-sync']) app.commandLine.appendSwitch(flag);
+const normalDataDir = app.getPath('userData');
 if (process.env.NAW_DATA_DIR) app.setPath('userData', path.resolve(process.env.NAW_DATA_DIR));
 // Headed test runs belong to their launcher, not to a forgotten background job.
 // This is opt-in for the test command; normal desktop sessions have no parent lease.
 const testParent = Number(process.env.NAW_TEST_PARENT_PID);
+// Existing headed launchers supply both a real parent and a private profile.
+// Set macOS activation policy before ready/window creation, not after firstWindow.
+const testRequested = Object.hasOwn(process.env, 'NAW_TEST_PARENT_PID');
+function canonicalNormalProfile(target) {
+  try { return fs.realpathSync(target); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    return path.join(canonicalNormalProfile(path.dirname(target)), path.basename(target));
+  }
+}
+let backgroundTest = false;
+if (testRequested) {
+  try {
+    const profile = process.env.NAW_DATA_DIR && fs.realpathSync(path.resolve(process.env.NAW_DATA_DIR));
+    const info = profile && fs.statSync(profile);
+    backgroundTest = /^\d+$/.test(process.env.NAW_TEST_PARENT_PID) && Number.isSafeInteger(testParent) && testParent > 1 && process.ppid === testParent && Boolean(profile) && profile !== canonicalNormalProfile(normalDataDir) && info.isDirectory() && typeof process.getuid === 'function' && info.uid === process.getuid() && (info.mode & 0o077) === 0;
+  } catch { /* An unverifiable profile must never fall through to foreground. */ }
+  if (!backgroundTest) { console.error('Invalid isolated headed-test parent/profile; no window opened.'); process.exit(1); }
+}
+if (backgroundTest && process.platform === 'darwin') app.setActivationPolicy('accessory');
 if (testParent > 1) {
   const checkParent = () => { if (process.ppid !== testParent) app.quit(); };
   const lease = setInterval(checkParent, 1000); lease.unref();
@@ -31,7 +52,11 @@ const trusted = url => { try { const parsed = new URL(url); return parsed.origin
 let dataDir, sessionLabels, roomState, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 const startupFile = path.join(__dirname, 'startup.html');
-function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, minWidth: 850, minHeight: 600, backgroundColor: '#f8f8f5', webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
+function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, ...(backgroundTest ? { show: false, focusable: false } : {}), minWidth: 850, minHeight: 600, backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
+function createWindow(view) {
+  const win = new BrowserWindow(windowOptions(view));
+  return win;
+}
 function bindClient(context) {
   const { win, client } = context;
   // Rechecked by the router after awaited pauses as well as at IPC entry.
@@ -70,7 +95,7 @@ async function openWindow(saved) {
   view.active = true; saveViews();
   const client = await connect(dataDir, view.owner);
   if (quitting) { client.close(); return; }
-  const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : new BrowserWindow(windowOptions(view));
+  const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : createWindow(view);
   startupWindow = null;
   if (view.bounds) win.setBounds(view.bounds);
   const context = { win, client, view, failed: false };
@@ -248,14 +273,14 @@ async function boot() {
 }
 async function start() {
   if (starting || quitting) return; starting = true;
-  if (!startupWindow || startupWindow.isDestroyed()) { startupWindow = new BrowserWindow(windowOptions()); await startupWindow.loadFile(startupFile); }
+  if (!startupWindow || startupWindow.isDestroyed()) { startupWindow = createWindow(); await startupWindow.loadFile(startupFile); }
   startupWindow.webContents.send('workspace:startup', { title: '正在打开你的工作空间', detail: '连接本机服务，恢复上次的界面…', retry: false });
   try { await boot(); }
   catch (error) {
     dsh?.stop();
     for (const c of [...windows.values()]) { c.failed = true; c.client.close(); c.win.destroy(); }
     if (!quitting && (!startupWindow || startupWindow.isDestroyed())) {
-      startupWindow = new BrowserWindow(windowOptions()); await startupWindow.loadFile(startupFile);
+      startupWindow = createWindow(); await startupWindow.loadFile(startupFile);
     }
     if (!quitting && startupWindow && !startupWindow.isDestroyed()) startupWindow.webContents.send('workspace:startup', { title: '暂时未能打开', detail: startupMessage(error), retry: true });
   } finally { starting = false; }
@@ -263,7 +288,7 @@ async function start() {
 ipcMain.handle('workspace:retry-startup', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href) return start(); });
 function focusOrOpen() {
   const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : windows.values().next().value?.win;
-  if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+  if (win) { if (!backgroundTest) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } }
   else if (!starting && !quitting) { if (dsh && wired) openWindow(views.at(-1)).catch(() => start()); else start(); }
 }
 app.on('activate', focusOrOpen);

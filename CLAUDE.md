@@ -27,9 +27,14 @@ or start paid model runs as a side effect of editing documents.
   before sending a task. Never silently fall back to a more expensive default;
   stop the trial if the selected model is unavailable. Override only the test
   session, never the person's normal agent settings.
-- Use one desktop test profile and one test launcher. Repeated launch must
-  focus the existing instance; extra windows require an intentional test case.
+- Use one desktop test profile and one test launcher. Repeated normal user
+  launches focus the existing instance; isolated test launches and their repeated
+  launches remain hidden. Extra windows require an intentional test case.
   Clean up only processes owned by that test, preserving native user sessions.
+- For development cost control, implementation and routine tests may use an
+  explicitly delegated, suitable GPT-6.1 worker while the main agent coordinates
+  and reviews. Reuse the reviewer and relevant evidence, and scope delegated
+  context to the task. This does not guarantee lower quota use.
 
 ## Architectural invariants
 

@@ -1,8 +1,74 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.18. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.19. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.19 single-conversation interaction work
+
+An unavailable graphical send now offers **Open native terminal** in the existing
+primary action. Saved text stays readable and copyable; it is never automatically
+pasted or sent. The same fallback works for an unavailable shared recipient.
+Ended sessions expose explicit recovery only when the backend supports the safe
+recovery path. A still-connected error opens the existing terminal instead of
+attempting to resume a duplicate native process.
+
+View changes are serialized per session. Late acknowledgements cannot switch a
+newly selected session or steal an open menu/dialog's focus. A queued choice is
+cancelled when refreshed state shows a newer controller or control revision.
+Tabs can inspect another window's session without taking control; **Take control**
+is explicit. This does not add an atomic conditional-claim protocol: a controller
+change after the refresh but before the native claim remains a protocol race.
+
+Sidebar selection and graphical-view switching now focus an editable draft
+immediately. Native control acknowledgement still gates sending. An already
+connected owned terminal accepts keys during its control acknowledgement, keeping
+a bounded local queue tied to that exact intent. Cancellation, failed control or a
+new owner preserves a copy without submitting it. Initial attachment keeps its
+loading gate. Chinese composition stays with its originating terminal; confirming
+a candidate does not emit the Enter that sends a native task. Unconfirmed input
+has a copyable notice, temporary to the current window; copy before app close.
+
+Source validation passed 155 local tests with no skips. The final installed build
+passed eight input groups and eight single-conversation groups using its packaged
+UI, daemon and workspace. These final runs use hidden Electron renderers with
+CDP input and synthetic native transport. They check exact text/origin, send and
+interrupt, unavailable-send fallback, ownership changes, and DOM/main/disk/service
+drafts after reopen and 12-second idle windows. They made one synthetic send and
+started no native providers or model tasks. Physical macOS IME, visible desktop
+interaction and foreground app return were not established by these runs; the
+foreground-return case is explicitly skipped by default.
+
+A separate final installed check resumed two existing synthetic Claude/Codex
+histories using the real native runtimes. It verified unsubmitted Chinese
+composition and immediate GUI/TUI typing, exact historical replies and drafts,
+and unchanged native PIDs through UI reopen. Each terminal was attached once;
+app dispatches and native task inputs stayed zero, and no model task was sent.
+The hidden test answered only the exact native-resume confirmation in code; that
+OS confirmation UI and physical IME remain unverified. Both test-owned native
+processes exited after cleanup.
+
+Test startup previously switched Spaces, and an inactive visible window could
+still appear above fullscreen Chrome. Isolated tests now validate their parent
+and canonical private profile before locking, use accessory policy before app
+readiness, and keep all windows hidden/non-focusable, including restored,
+startup-error and duplicate routes. The final installed launch/reopen/duplicate
+probe observed hidden windows, 185 unchanged foreground-app PID samples and zero
+active-Space notifications. This is a bounded observation, not a guarantee about
+all macOS desktop behavior. Normal user launches retain their usual behavior.
+
+The final DMG copy matched all 9,178 files/links, its runtime matched source and
+its ad-hoc signature verified. It remains unnotarized and is not a public
+installer release. Source and final installed evidence passed independent review for this bounded
+local trial. Original user native identities, three live native PIDs, histories,
+drafts, views and diagnostics matched the post-exit baseline after another
+12-second idle check. The normal user UI remains closed for manual launch;
+preservation checking did not open or activate it.
+
+No provider adapter, native session protocol or dependency changed. Collaboration
+design, physical IME and clean-Mac installation remain separate acceptance items.
+The earlier unexplained profile draft change and prior mixed-input anomaly are
+not retroactively explained by these checks.
 
 ## Alpha.18 single-session recovery work
 
