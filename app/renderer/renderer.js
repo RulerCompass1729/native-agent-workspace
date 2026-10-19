@@ -826,13 +826,20 @@ $('send-button').onclick = () => attempt(async () => {
 $('composer').onsubmit = event => {
   event.preventDefault();
   if ($('send-button').disabled || soloAction(current()).kind !== 'send') return;
+  // The clicked action can become disabled/hidden in the next state update.
+  // Return to editing now, before any asynchronous reply can change selection.
+  if (inputFocusAllowed()) $('message-input').focus();
   attempt(async () => {
     const id = activeSessionId(), text = $('message-input').value, revision = draftRevisions.get(id);
     await api.send(id, text);
     if (activeSessionId() === id && draftRevisions.get(id) === revision && $('message-input').value === text) $('message-input').value = '';
   });
 };
-$('interrupt').onclick = () => attempt(() => api.interrupt(activeSessionId()));
+$('interrupt').onclick = () => {
+  const id = activeSessionId();
+  if (mode === 'chat' && inputFocusAllowed() && !$('message-input').readOnly) $('message-input').focus();
+  attempt(() => api.interrupt(id));
+};
 $('shared-input').oninput = event => { roomDraftRevision++; attempt(persistView); render(); if (event.inputType === 'insertText' && !event.isComposing) showMentions(); else closeMentions(); };
 $('shared-input').onkeydown = event => {
   if (event.isComposing || event.keyCode === 229) return;

@@ -85,7 +85,9 @@ distinction.
 
 Not yet verified: active Codex fleet migration, every Claude teammate lifecycle,
 permission-race behavior across all native tools, external running-session attach,
-physical Chinese IME composition, and screen-reader completeness. Saved native
+and screen-reader completeness. Controlled guest System Pinyin and WeChat input
+now pass the [alpha.22 acceptance](docs/alpha.md#alpha22-single-conversation-os-acceptance);
+other input methods/devices remain unverified. Saved native
 Claude history was located, but cross-app history visibility in the providers'
 desktop GUIs has not been certified. Claude Desktop Chat and Claude Code are not
 assumed to share all sessions.

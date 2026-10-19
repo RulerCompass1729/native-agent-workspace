@@ -126,7 +126,15 @@ async function run() {
   await page.keyboard.press('Enter'); await until(async () => (await fixture()).sends.length === 1, 'Explicit subsequent Enter sends');
   assert.deepEqual((await fixture()).sends[0], { id: a, text: '中文组合\nsecond line' });
   await page.locator('#interrupt').click(); await until(async () => (await fixture()).interruptions.length === 1, 'Explicit interrupt');
-  await page.locator('#message-input').fill('REOPEN-PRIVATE-中文');
+  await page.keyboard.type('MOUSE-SEND');
+  assert.equal(await page.locator('#message-input').inputValue(), 'MOUSE-SEND', 'Typing after clicking stop returns to the composer');
+  await page.locator('#send-button').click(); await page.keyboard.type('REOPEN-PRIVATE-');
+  await until(async () => (await fixture()).sends.length === 2, 'Mouse send');
+  assert.deepEqual((await fixture()).sends[1], { id: a, text: 'MOUSE-SEND' });
+  assert.equal(await page.locator('#message-input').inputValue(), 'REOPEN-PRIVATE-', 'Typing after clicking send edits the next draft');
+  await page.locator('#interrupt').click(); await page.keyboard.insertText('中文');
+  await until(async () => (await fixture()).interruptions.length === 2, 'Second explicit interrupt');
+  assert.equal(await page.locator('#message-input').inputValue(), 'REOPEN-PRIVATE-中文', 'Stopping retains the next draft and accepts immediate input');
   await page.locator('#terminal-tab').click(); await until(() => focused(a), 'Terminal composition');
   const initialInputs = (await fixture()).inputs.length;
   await cdp.send('Input.imeSetComposition', { text: '终端中文', selectionStart: 4, selectionEnd: 4 });
@@ -165,10 +173,10 @@ async function run() {
   await page.locator('#send-button').getByText('继续原生会话', { exact: true }).waitFor();
   assert.equal(await page.locator('#message-input').evaluate(el => el.readOnly), true);
   assert.equal(await page.locator('#message-input').inputValue(), 'REOPEN-PRIVATE-中文');
-  assert.equal((await fixture()).sends.length, 1); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []); await capture('ended-preserved');
+  assert.equal((await fixture()).sends.length, 2); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []); await capture('ended-preserved');
   passed.push('DOM/main/disk/service drafts agree after ready, 12-second idle, UI reopen and another 12-second idle; no replay');
   passed.push('An empty room and invalid saved recipient retain the shared draft after reopen/idle; ended native sessions expose explicit recovery');
-  console.log(JSON.stringify({ passed, errors, nativeProviderProcesses: 0, modelTasks: 0, syntheticSends: 1, physicalIME: false, oneWindow: true }, null, 2));
+  console.log(JSON.stringify({ passed, errors, nativeProviderProcesses: 0, modelTasks: 0, syntheticSends: 2, physicalIME: false, oneWindow: true }, null, 2));
 }
 run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await capture('failed'); process.exitCode = 1; }).finally(async () => {
   if (app) await app.close();

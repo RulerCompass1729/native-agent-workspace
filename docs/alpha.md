@@ -1,8 +1,67 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.21. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.22. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.22 single-conversation OS acceptance
+
+The local daily single-conversation TUI workflow now passes the controlled
+acceptance below. This is the maintainer's daily-use alpha milestone, not a claim
+of universal terminal compatibility or a general consumer release. Collaboration
+expansion remains paused.
+
+A visible installed app on a separate macOS 26.6.2 guest was driven through real
+OS mouse/keyboard events, with System Pinyin and WeChat Input 3.0.0. This exposed
+one additional defect: clicking Stop hid the focused button, leaving subsequent
+typing on the page. Send and Stop now return focus synchronously to the composer;
+no later asynchronous response can steal it from a newer view or dialog.
+
+The final installed guest checks cover:
+
+- Both input methods: preedit, confirmation, cancellation, session switching with
+  a composition in progress, and exact input bytes delivered to the original
+  session. Confirming a GUI composition does not submit a task; a subsequent Enter
+  does. Mouse Send/Stop accepts immediate Chinese input and retains the next draft.
+- OS pointer selection and Copy, toolbar paste and Command-V, arrow/Control-C,
+  app foreground return, and dialog focus during a state update. Multiline paste
+  is rejected when native bracketed-paste protection is absent; when enabled it
+  is delivered once, bracketed, without an extra submission Enter.
+- Terminal history: actual mouse-wheel scrolling through 180 lines, copying a
+  historical line, retaining that position through view/session switching, then
+  delivering input only to the selected terminal.
+- Normal Command-Q and reopening: the same service, session/native IDs, history,
+  distinct per-session drafts and selected view survive. Immediate keyboard input
+  works; a further 12.5-second idle check finds no draft loss or replay.
+
+The OS event driver uses CGEvents, not a physical person's keyboard. CDP only
+inspects DOM/state and positions the OS pointer actions; it does not inject text
+or composition in these cases. Candidate windows and exact backend bytes were
+inspected. Some observed compositionend events have isTrusted=false even though
+start/key events are true; a temporary dispatchEvent observer found no JavaScript
+composition dispatch. The cause remains unknown and the original trace is retained;
+no claim depends on treating that flag as hardware-origin proof.
+
+Provider transport in this guest is synthetic. Four fixture tasks exercised GUI
+send/stop; zero real Claude/Codex processes or model calls were added. The native
+runtime/adapter/PTY layers are unchanged, so their earlier scoped native replies,
+recovery and unsent-input evidence is reused. Source and final packaged solo
+checks pass eight groups; 162 local checks pass with zero skips. Prior reading and
+multi-window draft results remain applicable to the unchanged paths.
+
+The host installed alpha.22 matches all 9,180 file/link entries in the mounted
+DMG and passes strict ad-hoc signature verification. Guest version and seven
+runtime/generated-UI hashes match that installed artifact. The host's three
+original native sessions, history, drafts, views and diagnostics are unchanged;
+the host user UI was not activated. A rollback copy remains local.
+
+The guest used a prepared vanilla macOS image, not a factory-clean Mac. Its local
+DMG first-open/missing-prerequisite checks do not establish internet-download
+quarantine, provider installation/sign-in, or notarization. Screen readers,
+long-duration resource use, full provider fleet/configuration parity, complete
+network privacy and equal-task cost parity remain separate gates. Reopening a UI
+is not recovery of live fleets after a machine/service failure. The DMG remains
+unnotarized and unpublished. Independent final review is recorded in review.md.
 
 ## Alpha.21 reading continuity
 

@@ -15,40 +15,22 @@ First close the local single-conversation path: usable native input and controls
 preserved identity/history/drafts across UI reopen, honest recovery after service
 loss, and a clear available action when graphical input is unsupported. Old live
 sessions must not be silently migrated or replayed to make new controls work.
-Physical Chinese IME and ordinary input ergonomics require real acceptance;
-synthetic keystrokes or Chinese paste do not establish that coverage. Clean-Mac
-installation and complete native fleet/configuration parity remain separate gates.
-Do not mark single-conversation daily use complete while these relevant gaps remain.
+Alpha.22 closes the controlled local daily TUI acceptance after visible installed
+macOS testing: System Pinyin and WeChat OS input, mouse/keyboard controls, terminal
+history, foreground return and normal reopen. It also fixes Send/Stop losing the
+composer's input focus. The OS path uses synthetic provider transport; earlier
+native replies/recovery evidence is reused only for unchanged native layers.
+See [exact evidence and limits](alpha.md#alpha22-single-conversation-os-acceptance).
 
-Alpha.19 passes the local continuous interaction check with synthetic transport:
-useful unavailable-send fallback, exact input/send/interrupt, guarded switching,
-explicit takeover and drafts after reopen plus idle save windows. The installed
-artifact passed hidden Electron/CDP input and persistence checks, plus a
-zero-task check of two real native recoveries and unsent composition. Source
-and final installed evidence passed independent review for the local trial. Test windows remain
-hidden by default; foreground return is explicitly skipped. Physical IME and
-visible desktop interaction remain unverified, so this is a local trial checkpoint
-rather than full daily-use acceptance. See [alpha.19](alpha.md#alpha19-single-conversation-interaction-work).
+Alpha.19's guarded input/view switching, alpha.20's multi-window draft recovery
+and alpha.21's reading continuity remain the underlying regression evidence.
+Hidden checks still do not certify visible OS behavior; the separate guest test
+supplies that coverage without activating windows in the person's working Spaces.
+This is a local daily-use alpha, not proof of every input device, OS version,
+screen reader, native configuration or fleet operation. Clean-machine provider
+setup and public download/Gatekeeper remain separate unfinished gates.
 
-Alpha.20 additionally fixes stale window backups overwriting a newer conversation
-draft. Recovery copies survive editing/reload and explicit deletion remains final
-for that edit even with delayed acknowledgements. The final packaged two-window
-regression and installed input regression pass with synthetic provider transport;
-no new native model task was needed. See [alpha.20](alpha.md#alpha20-draft-continuity).
-This does not close the physical IME or full daily-use acceptance gaps above.
-
-Alpha.21 preserves historical reading selection/focus during new output and
-restores each conversation's reading position through view/session changes and
-normal reopening. Installed hidden reading and input checks pass with synthetic
-transport; no model tasks were needed. See [alpha.21](alpha.md#alpha21-reading-continuity).
-
-Visible desktop acceptance is separate from hidden Electron/DSH checks. Those
-checks render the actual application and exercise CDP/IPC/storage, but do not
-certify system IME, macOS foreground focus or Spaces. Current test windows stay
-hidden to avoid interrupting the person's fullscreen work; a suitable visible
-Desktop-only environment is still required before daily-use sign-off.
-
-After that path is accepted, revisit collaboration as a coherent communication
+The next product phase can revisit collaboration as a coherent communication
 flow: recipient selection, sharing scope, agent awareness, reply visibility and
 explicit human control. Do not add another control for each missing behavior.
 
@@ -121,18 +103,18 @@ sending a task. Existing native evidence is reused only for unchanged behavior.
 
 External first-install acceptance remains a distinct unfinished gate: exact public
 artifact review/download, Gatekeeper and a clean Mac with missing prerequisites.
-The clean-system test is still deferred for storage availability; a new app
-profile on the maintainer's Mac does not substitute for it. Do not mark that gate
-complete or call this a general consumer release when the local checkpoint passes.
+The later alpha.22 guest OS-input check does not complete this clean-system
+provider-setup/download gate. Do not mark that gate complete or call the local
+checkpoint a general consumer release.
 
-## Active milestone: single-conversation daily use
+## Completed local milestone: single-conversation daily use
 
 Follow the single-conversation priority at the top of this document. The earlier
 combined solo/shared milestone above is historical evidence, not the current
 acceptance target. Keep the DSH foundation and native service; collaboration
 expansion waits for a dependable solo path and a coherent communication design.
 
-Accept one continuous local workflow: open a session, enter and edit text, switch
+The accepted local workflow is: open a session, enter and edit text, switch
 between its graphical and native views, interrupt explicitly, leave and return,
 and reopen the app with the same identity, history and unsent drafts. Capability
 limits must expose an available action without automatically moving text, starting
@@ -145,9 +127,11 @@ separately from a physical input method. Preserve a historical unexplained draft
 change as unexplained; a successful synthetic test cannot establish its origin.
 
 Clean-machine installation, public download/Gatekeeper and complete native fleet
-or configuration parity remain separate unfinished gates. The user allowed the
-clean-Mac test to wait for available storage. A fresh app profile does not replace
-that environment. Do not broaden this work into providers, orchestration controls,
+or configuration parity remain separate unfinished gates. A separate macOS guest
+now covers OS input and the missing-prerequisite screen;
+it does not complete clean-machine provider installation or downloaded-quarantine
+acceptance. A fresh app profile alone does not replace that environment. Do not
+broaden this work into providers, orchestration controls,
 or preferred-terminal embedding. Reuse existing native evidence only where the
 runtime, adapter and affected behavior are unchanged.
 
@@ -155,8 +139,9 @@ runtime, adapter and affected behavior are unchanged.
 
 Reviewed 2026-10-17 against alpha.2 source and its saved installed-app screenshots.
 This section is a plan, not a new runtime acceptance result. No model calls or new
-desktop instances were needed for this review. The clean macOS VM trial is paused
-until the maintainer frees system-disk space; no VM image has been installed.
+desktop instances were needed for that historical review. Alpha.22 later added
+a separate macOS guest for controlled OS-input acceptance; the remaining installer
+coverage is still listed below.
 
 问题：下一步有哪些工作，以及如何改善当前界面的质感和操作。
 现有机制：`renderer/index.html`、`renderer/renderer.js`、`renderer/styles.css`、
@@ -188,7 +173,7 @@ parallel new products. Finish one testable user path before widening scope.
 | Download and first open | Local DMG copy/launch passed; public download, quarantine and clean-machine first open remain unverified | The exact reviewed release artifact is downloaded and opened on a clean Mac/VM following the user guide; no maintainer environment or credentials are copied in |
 | First-use setup | Discovery checks executable presence in PATH and conventional locations; it does not establish provider version, login or successful startup | Missing agent, unusable installation and native login/trust each have a clear next action; a user with only one agent can start; unusual install locations have an explicit fallback |
 | Prerequisites | Python is still needed for the PTY bridge; current setup sends users to installation instructions | Complete the missing-Python path on the clean system. Evaluate a reviewed bundled helper/runtime only if required to remove the blocker; do not blindly replace the session architecture |
-| Single-session interface | Terminal display/copy/paste/focus and the compact small-window sidebar are checked; physical IME, screen reader and daily-use feedback remain open | A compact header, readable light/dark themes, adjustable terminal text size, stable focus, selection, paste and Chinese input; no agent recreation on view changes |
+| Single-session interface | Terminal display/copy/paste/focus, visible guest System Pinyin/WeChat input, OS foreground return and compact sidebar are checked; screen reader and broader daily-use compatibility remain open | A compact header, readable light/dark themes, adjustable terminal text size, stable focus, selection, paste and Chinese input; no agent recreation on view changes |
 | Collaboration interface | Shared-record/member terminals, visible pause, explicit takeover and detach are checked; the three-reply handoff remains bounded, not general goal completion | Invite an existing managed session, choose the material and recipient, observe handoffs, pause, detach and continue independently without needing a verbal explanation |
 | Continuity and failure | Window reopen and some recovery paths are tested; alpha.3 saves the per-window shared-task draft; cold backend recovery differs from reopening a live UI | Preserve unsent input; distinguish waiting for login, disconnect, recovery and confirmed termination; never auto-replay an uncertain send |
 | Release confidence | Source privacy guard and packaging allowlist exist; these do not prove full binary/network privacy | Review the exact binary/notices; use synthetic data for startup, sharing and deletion checks; retain no unexpected upload; record a small shell CPU/RSS/startup/interaction baseline rather than claiming zero overhead |

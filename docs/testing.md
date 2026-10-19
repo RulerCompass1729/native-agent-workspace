@@ -64,9 +64,43 @@ bundle's `Contents/Resources/app`) and run `node scripts/test-solo-use.cjs`. The
 fixture then exercises the installed daemon and workspace as well as the UI.
 This is Electron UI/IPC/persistence evidence with synthetic native transport,
 not visible desktop, physical macOS IME or provider-model evidence. Its window
-stays hidden and non-focusable while CDP delivers test input. It makes one synthetic send
+stays hidden and non-focusable while CDP delivers test input. It makes two synthetic sends
 and starts no native providers or model tasks. `test:focus`, `test:terminal` and
 `test:drafts` retain the relevant timing and draft regressions.
+
+## Visible macOS input acceptance
+
+Alpha.22 additionally used one visible installed app in an isolated macOS guest.
+No host home, credentials, clipboard or user configuration were shared. The VM
+window stayed off the host desktop; an OS-event driver operated its real GUI and
+input methods. Host test windows retain their default hidden/non-focusable policy.
+
+Reproduce this acceptance in an isolated desktop with the exact candidate app:
+
+1. Verify guest app version and runtime/generated-UI hashes against the installed
+   candidate. Use a private profile and synthetic provider transport; keep the
+   real Electron renderer, IPC, service, storage and OS input methods.
+2. Select System Pinyin, then WeChat Input. Observe candidates; confirm/cancel,
+   switch sessions mid-composition, and check exact origin/text/Enter bytes. In
+   the GUI, distinguish IME confirmation from task submission. Click Send/Stop
+   and immediately type, without refocusing the input as a test workaround.
+3. Use OS mouse selection/scrolling, Command-C/Command-V and actual guest
+   clipboard. Check multiline paste both without and with bracketed-paste mode.
+   Scroll a long terminal history, copy an older line and switch views/sessions.
+   Return from another guest app and check the first input's destination.
+4. Save different drafts, quit normally and reopen the same profile. Compare
+   native IDs, service PID, history, selected view and drafts, including the DOM
+   and persisted state after an idle window. Assert no task replay.
+
+The final alpha.22 cases passed with four synthetic GUI submissions and zero
+real provider/model calls. Initial test-driver failures (key naming, helpers and
+assuming DOM scrollTop for virtual terminal rows) are retained separately from
+product failures. The Stop-focus defect was reproduced before the fix. OS event
+traces include compositionend isTrusted=false; exact delivery and candidate-window
+observations, not that flag, establish the bounded input result. These are real
+OS IME paths driven by CGEvents, not physical-person or universal IME certification.
+Read the remaining limits in [alpha.22](alpha.md#alpha22-single-conversation-os-acceptance).
+Raw guest screens, event traces and user-state comparisons remain private.
 
 ## Continuous reading and resource samples
 
