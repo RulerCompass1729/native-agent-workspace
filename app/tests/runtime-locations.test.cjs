@@ -1,0 +1,36 @@
+const test = require('node:test'), assert = require('node:assert/strict');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { setLocation, readLocations } = require('../runtime-locations.cjs');
+const { executable, pythonExecutable } = require('../platform.cjs');
+const { preflight } = require('../preflight.cjs');
+test('custom native locations persist privately without running programs or falling back after removal', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'runtime-locations-'));
+  const file = path.join(dir, 'locations.json'), binary = path.join(dir, 'custom native program');
+  const old = process.env.NAW_RUNTIME_CONFIG; process.env.NAW_RUNTIME_CONFIG = file;
+  t.after(() => { if (old === undefined) delete process.env.NAW_RUNTIME_CONFIG; else process.env.NAW_RUNTIME_CONFIG = old; fs.rmSync(dir, { recursive: true, force: true }); });
+  fs.writeFileSync(binary, '#!/bin/sh\nexit 99\n', { mode: 0o700 });
+  assert.throws(() => setLocation(file, 'unknown', binary)); assert.throws(() => setLocation(file, 'claude', dir));
+  setLocation(file, 'claude', binary); assert.equal(executable('claude'), binary);
+  assert.equal(preflight().paths.claude, binary); assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  fs.unlinkSync(binary); assert.equal(executable('claude'), undefined); assert.equal(preflight().claude, false);
+  assert.equal(preflight().configured.claude, binary);
+  setLocation(file, 'claude', null); assert.deepEqual(readLocations(), {});
+  fs.writeFileSync(file, '{invalid'); assert.throws(() => readLocations()); assert.equal(executable('codex'), undefined); assert.ok(preflight().error);
+});
+test('Finder discovery skips an uninstalled macOS Python shim and rechecks a later real installation', { skip: process.platform !== 'darwin' }, t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'python-discovery-'));
+  const oldPath = process.env.PATH, oldConfig = process.env.NAW_RUNTIME_CONFIG;
+  process.env.PATH = '/usr/bin' + path.delimiter + dir;
+  process.env.NAW_RUNTIME_CONFIG = path.join(dir, 'locations.json');
+  t.after(() => { process.env.PATH = oldPath; if (oldConfig === undefined) delete process.env.NAW_RUNTIME_CONFIG; else process.env.NAW_RUNTIME_CONFIG = oldConfig; fs.rmSync(dir, { recursive: true, force: true }); });
+  const exists = fs.existsSync;
+  t.mock.method(fs, 'existsSync', file => file === '/Library/Developer/CommandLineTools/usr/bin/python3' ? false : exists(file));
+  const python = path.join(dir, 'python3');
+  fs.writeFileSync(python, '#!/bin/sh\nexit 99\n', { mode: 0o700 });
+  assert.equal(pythonExecutable(), python);
+  assert.equal(preflight().paths.python, python);
+  setLocation(process.env.NAW_RUNTIME_CONFIG, 'python3', '/usr/bin/python3');
+  assert.equal(pythonExecutable(), undefined, 'An explicitly selected unusable shim never silently falls back');
+  setLocation(process.env.NAW_RUNTIME_CONFIG, 'python3', null);
+  assert.equal(pythonExecutable(), python);
+});

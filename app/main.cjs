@@ -6,6 +6,7 @@ const { ensureService, connect } = require('./service-client.cjs');
 const { startDsh } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
 const { preflight } = require('./preflight.cjs');
+const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
@@ -147,6 +148,7 @@ async function boot() {
   dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.chmodSync(dataDir, 0o700);
   sessionLabels = new SessionLabels(dataDir);
   roomState = new RoomState(dataDir);
+  process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
   if (quitting) return;
   dsh = await startDsh(dataDir); entry = dsh.url;
@@ -200,6 +202,15 @@ async function boot() {
     return result;
   });
   register('preflight', () => preflight());
+  register('runtimeLocation', async (c, key, reset = false) => {
+    if (!['claude', 'codex', 'python3'].includes(key) || typeof reset !== 'boolean') throw Error('未知程序设置。');
+    if (reset) setLocation(process.env.NAW_RUNTIME_CONFIG, key, null);
+    else {
+      const result = await dialog.showOpenDialog(c.win, { title: '选择已安装的原生程序', buttonLabel: '使用这个程序', properties: ['openFile', 'showHiddenFiles'] });
+      if (!result.canceled && result.filePaths.length === 1) setLocation(process.env.NAW_RUNTIME_CONFIG, key, result.filePaths[0]);
+    }
+    return preflight();
+  });
   register('dataDirectory', () => shell.openPath(dataDir));
   register('quitService', async c => { await c.client.call('shutdown'); app.quit(); });
   register('clearSharedHistory', async c => {

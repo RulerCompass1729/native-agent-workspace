@@ -144,6 +144,64 @@ test('bounded routing sends only the goal and current answer, and stops at the r
   assert.equal(sends.length, 3); assert.equal(w.room.run.status, 'completed');
   assert.deepEqual(sends.map(s => s.index), [0, 1, 0]);
 });
+test('explicit reply exchange preserves unknowns, rejects duplicate results and never resumes on service recovery', async t => {
+  const { workspace: w, runtimes, ids, directory } = await fixture(t, 2);
+  const sends = []; ids.forEach(id => w.join(id, true));
+  runtimes.forEach((r, i) => { r.send = async (text, tag) => sends.push({ i, text, tag }); });
+  await assert.rejects(w.startRun(ids, 'task', 3, 'anything'), /未知/);
+  await w.startRun(ids, 'task', 4, 'replies');
+  const event = { tag: sends[0].tag, text: 'first reply' };
+  runtimes[0].emit('complete', event); await tick();
+  assert.equal(sends.length, 2); assert.equal(w.room.run.nativeWorkUnknown, true);
+  runtimes[0].emit('complete', event); await tick(); assert.equal(sends.length, 2);
+  w.persist(); const restored = new Workspace({ binaries: {}, close() {} }, directory);
+  assert.equal(restored.room.run.status, 'paused'); assert.equal(restored.room.run.awaiting, null); restored.close();
+  runtimes[1].emit('complete', { tag: sends[1].tag, text: 'second reply' }); await tick();
+  runtimes[0].emit('complete', { tag: sends[2].tag, text: 'first reply' }); await tick();
+  assert.equal(sends.length, 3); assert.equal(w.room.run.status, 'paused'); assert.match(w.room.run.reason, /重复/);
+});
+for (const intervention of ['approval', 'leave', 'native', 'background']) test(`reply authorization stops on ${intervention}`, async t => {
+  const { workspace: w, runtimes, ids } = await fixture(t, 2);
+  const sends = []; ids.forEach(id => w.join(id, true));
+  runtimes.forEach((r, i) => { r.send = async (text, tag) => sends.push({ i, tag }); });
+  await w.startRun(ids, 'task', 3, 'replies');
+  if (intervention === 'approval') runtimes[0].emit('state', 'approval');
+  if (intervention === 'leave') w.join(ids[1], false);
+  if (intervention === 'native') runtimes[0].emit('nativeInput', 'human correction');
+  runtimes[0].emit('complete', { tag: sends[0].tag, text: 'reply', background: intervention === 'background' ? 1 : null }); await tick();
+  assert.equal(sends.length, 1); assert.equal(w.room.run.status, 'paused');
+});
+for (const event of ['background', 'scheduled', 'SubagentStart', 'thread/started']) test(`activity in another member pauses reply exchange: ${event}`, async t => {
+  const { workspace: w, runtimes, ids } = await fixture(t, 2);
+  const sends = []; ids.forEach(id => w.join(id, true));
+  runtimes.forEach((r, i) => { r.send = async (text, tag) => sends.push({ i, tag }); });
+  await w.startRun(ids, 'task', 3, 'replies');
+  if (event === 'background' || event === 'scheduled') runtimes[1].emit('background', { count: event === 'background' ? 1 : 0, scheduled: event === 'scheduled' ? 1 : 0 });
+  else runtimes[1].emit('fleet', { id: 'child', event });
+  runtimes[0].emit('complete', { tag: sends[0].tag, text: 'reply' }); await tick();
+  assert.equal(sends.length, 1); assert.equal(w.room.run.status, 'paused');
+  assert.equal(w.runtime(ids[1]), runtimes[1], 'Native member remains available');
+});
+for (const key of ['background', 'scheduled']) test(`reply exchange cannot start with known ${key}`, async t => {
+  const { workspace: w, ids } = await fixture(t, 2);
+  ids.forEach(id => w.join(id, true)); w.get(ids[1])[key] = 1;
+  await assert.rejects(w.startRun(ids, 'task', 3, 'replies'), /后台或定时/);
+  assert.equal(w.versions.dispatches, 0);
+});
+for (const activity of ['background', 'fleet']) test(`actual Claude hook sequence retains current reply before stopping ${activity} handoffs`, async t => {
+  const { workspace: w, ids } = await fixture(t, 2);
+  const { Claude } = require('../adapters.cjs');
+  const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+  runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
+  runtime.submission = { request: async () => {} }; runtime.terminal = { input() {} };
+  w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
+  ids.forEach(id => w.join(id, true)); await w.startRun(ids, 'shared question', 3, 'replies');
+  if (activity === 'fleet') runtime.hook({ hook_event_name: 'SubagentStart', session_id: runtime.record.nativeId, agent_id: 'child' });
+  runtime.hook({ hook_event_name: 'Stop', session_id: runtime.record.nativeId, last_assistant_message: 'authorized reply', background_tasks: activity === 'background' ? [{ id: 'job' }] : [], session_crons: [], stop_hook_active: false });
+  await tick(); assert.equal(w.room.run.status, 'paused');
+  assert.equal(w.versions.dispatches, 1);
+  assert.equal(w.room.messages.filter(m => m.role === 'assistant').at(-1).text, 'authorized reply');
+});
 test('unknown or active native work pauses routing without losing the reply or blocking explicit sharing', async t => {
   const clear = { background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false };
   const cases = [
@@ -162,12 +220,12 @@ test('unknown or active native work pauses routing without losing the reply or b
     assert.equal(sends.length, 1); assert.equal(w.room.run.status, 'paused');
     assert.equal(w.room.run.steps, 1); assert.equal(w.room.run.awaiting, null);
     assert.match(w.room.run.reason, /原生/);
-    assert.equal(w.room.messages.at(-1).text, event.text);
+    assert.equal(w.room.messages.filter(m => m.role === 'assistant').at(-1).text, event.text);
     // Neither a duplicate completion nor later state observations resume work.
     runtimes[0].emit('complete', event);
     runtimes[0].emit('background', { count: 0, scheduled: 0 }); await tick();
-    assert.equal(sends.length, 1); assert.equal(w.room.messages.length, 2);
-    w.persist(); assert.equal(JSON.parse(fs.readFileSync(path.join(w.dataDir, 'workspace.json'))).room.messages.at(-1).text, event.text);
+    assert.equal(sends.length, 1); assert.equal(w.room.messages.filter(m => m.role !== 'system').length, 2);
+    w.persist(); assert.equal(JSON.parse(fs.readFileSync(path.join(w.dataDir, 'workspace.json'))).room.messages.filter(m => m.role === 'assistant').at(-1).text, event.text);
     await w.forward(ids[1], 'only this human-selected text', 'owner');
     assert.equal(sends.length, 2); assert.equal(sends[1].text, 'only this human-selected text');
     assert.equal(w.room.run.status, 'paused');
@@ -183,7 +241,7 @@ test('unknown fleet state at the reply cap is paused, never presented as confirm
   runtimes[0].emit('complete', { tag: sends[0].tag, text: 'first reply', background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false }); await tick();
   runtimes[1].emit('complete', { tag: sends[1].tag, text: 'last root reply', background: 0, scheduled: 0, fleetPending: null, stopHookActive: false }); await tick();
   assert.equal(sends.length, 2); assert.equal(w.room.run.status, 'paused'); assert.equal(w.room.run.steps, 2);
-  assert.equal(w.room.messages.at(-1).text, 'last root reply');
+  assert.equal(w.room.messages.filter(m => m.role === 'assistant').at(-1).text, 'last root reply');
 });
 test('leaving cancels pending explicit sharing; human interrupt cancels pending direct submission', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
@@ -270,4 +328,19 @@ test('clearing shared history refuses an active run and prevents late shared rep
   assert.equal(w.get(id).messages.at(-1).text, 'late answer');
   assert.equal(w.snapshot().sessions[0].liveDraft, 'private draft');
   assert.ok(w.runtime(id));
+});
+for (const item of [
+  { type: 'subAgentActivity', kind: 'started', agentThreadId: 'child', agentPath: '/root/check', model: 'synthetic-small' },
+  { type: 'subAgentActivity', kind: 'interacted', agentThreadId: 'child' },
+  { type: 'collabAgentToolCall', tool: 'spawnAgent', status: 'inProgress' },
+  { type: 'collabAgentToolCall', tool: 'followupTask', status: 'inProgress' },
+]) test(`native Codex fleet protocol blocks subsequent handoff: ${item.type}/${item.kind || item.tool}`, async t => {
+  const { workspace: w, ids } = await fixture(t, 2), { Codex } = require('../adapters.cjs');
+  const s = w.get(ids[1]), runtime = new Codex(s, { codexTargets: new Map() });
+  w.runtimes.set(s.id, runtime); w.bind(s, runtime); ids.forEach(id => w.join(id, true));
+  await w.startRun(ids, 'shared question', 3, 'replies');
+  runtime.event({ method: 'item/started', params: { threadId: s.nativeId, item: { id: 'fleet-item', ...item } } });
+  assert.equal(w.room.run.status, 'paused'); assert.equal(w.versions.dispatches, 1);
+  assert.equal(s.fleet.at(-1).active, true);
+  if (item.kind === 'started') assert.equal(s.fleet.at(-1).model, 'synthetic-small');
 });

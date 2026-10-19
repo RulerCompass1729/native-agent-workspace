@@ -22,6 +22,9 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   Electron/DSH keep local UI preferences/cache and a local UI access token.
   The independent service keeps its private connection/token files and a
   versioned runtime copy. Tokens are not displayed in startup failures.
+- runtime-locations.json stores explicitly chosen executable paths only, in an
+  owner-only file. Discovery does not execute a program or inspect credentials;
+  choosing a program does not prove sign-in or version compatibility.
 - session-labels.json holds display names keyed by stable application session ID.
   Names use an owner-only file and are not automatically sent to a model.
   Explicitly shared background can include visible room/session names; its text

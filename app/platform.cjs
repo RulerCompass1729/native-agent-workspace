@@ -1,14 +1,23 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-function executable(name) {
+const { readLocations, isExecutable } = require('./runtime-locations.cjs');
+function executable(name, acceptable = () => true) {
+  let configured;
+  try { configured = readLocations()[name]; } catch { return undefined; }
+  // An explicitly selected but missing program must not silently switch to a
+  // different installation. Show the setting as unavailable until repaired.
+  if (configured) return isExecutable(configured) && acceptable(configured) ? configured : undefined;
   const candidates = (process.env.PATH || '').split(path.delimiter).map(p => path.join(p, name));
   candidates.push(path.join(require('node:os').homedir(), '.local/bin', name), `/opt/homebrew/bin/${name}`, `/usr/local/bin/${name}`, `/usr/bin/${name}`);
-  return candidates.find(p => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch { return false; } });
+  return candidates.find(p => { try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile() && acceptable(p); } catch { return false; } });
 }
 function pythonExecutable() {
-  const python = executable('python3');
-  return python === '/usr/bin/python3' && !fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/python3') ? undefined : python;
+  // Finder's PATH can find the developer-tools installer shim before a real
+  // Python installed by python.org. Skip the shim while searching, not after
+  // choosing it, so installation followed by Recheck works without restarting.
+  return executable('python3', python => process.platform !== 'darwin' ||
+    python !== '/usr/bin/python3' || fs.existsSync('/Library/Developer/CommandLineTools/usr/bin/python3'));
 }
 function nativeEnvironment(extra = {}) {
   const env = { ...process.env, ...extra };

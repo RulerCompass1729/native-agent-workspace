@@ -115,34 +115,54 @@ class Claude extends EventEmitter {
         // structured submission result acknowledges our own sends separately.
         if (!this.pending || event.prompt !== this.pending.text) { this.pending = null; this.emit('state', 'working'); this.emit('nativeInput', event.prompt || '原生输入'); }
         break;
-      case 'PermissionRequest': this.emit('state', 'approval'); break;
+      case 'PermissionRequest': this.pending = null; this.emit('state', 'approval'); break;
       case 'Notification':
-        if (/permission|elicitation|auth/.test(event.notification_type || '')) this.emit('state', 'approval');
+        if (/permission|elicitation|auth/.test(event.notification_type || '')) { this.pending = null; this.emit('state', 'approval'); }
         break;
-      case 'PreToolUse': this.emit('activity', event.tool_name || '原生工具'); this.emit('state', 'working'); break;
+      case 'PreToolUse':
+        if (this.pending) this.pending.reply = null;
+        this.emit('activity', event.tool_name || '原生工具'); this.emit('state', 'working'); break;
       case 'Stop': {
-        const pending = this.pending; this.pending = null;
+        const pending = this.pending;
+        // Hooks may arrive before the structured submission acknowledgement.
+        // Keep that candidate private until this exact request was accepted.
+        if (pending && !pending.accepted) { pending.reply = event; return; }
+        this.finishReply(pending, event);
+        break;
+      }
+      case 'StopFailure': this.pending = null; this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请在原生终端查看。'); break;
+      case 'SessionEnd': this.pending = null; this.ready = false; this.emit('state', 'stopping'); break;
+    }
+  }
+  finishReply(pending, event) {
+        if (pending && this.pending !== pending) {
+          if (event.last_assistant_message) this.emit('messageItem', { id: crypto.randomUUID(), text: event.last_assistant_message });
+          return;
+        }
+        const accepted = pending?.accepted && this.pending === pending && pending.guard();
+        if (this.pending === pending) this.pending = null;
         const background = Array.isArray(event.background_tasks) ? event.background_tasks.length : null;
         const scheduled = Array.isArray(event.session_crons) ? event.session_crons.length : null;
         this.emit('background', { count: background, scheduled });
         this.emit('state', 'idle');
         // Observed child hooks cannot certify that all descendants are idle.
-        this.emit('complete', { tag: pending?.tag, text: event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
-        break;
-      }
-      case 'StopFailure': this.pending = null; this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请在原生终端查看。'); break;
-      case 'SessionEnd': this.ready = false; this.emit('state', 'stopping'); break;
-    }
+        this.emit('complete', { tag: accepted ? pending.tag : undefined, text: event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
   }
   async send(text, tag, guard) {
     if (!this.ready || this.pending) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
     if (!guard()) throw new Error('这条交接已撤销。');
-    this.pending = { tag, text };
+    const pending = this.pending = { tag, text, guard, accepted: false };
     try {
       await this.submission.request(text, tag, guard);
+      pending.accepted = true;
       this.emit('submitted', tag);
-      if (this.pending?.tag === tag) this.emit('state', 'working');
-    } catch (error) { if (this.pending?.tag === tag) this.pending = null; throw error; }
+      if (pending.reply) this.finishReply(pending, pending.reply);
+      else if (this.pending === pending) this.emit('state', 'working');
+    } catch (error) {
+      if (pending.reply) this.finishReply(pending, pending.reply);
+      if (this.pending === pending) this.pending = null;
+      throw error;
+    }
   }
   interrupt() { this.pending = null; this.terminal.input('\x1b'); }
   async openTerminal() { return this.terminal; }
@@ -248,7 +268,7 @@ class Codex extends EventEmitter {
       };
       this.host.pendingCodex = started;
       try {
-        this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${this.host.codexSocket}`, '-C', this.record.cwd]).once('closed', closed);
+        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${this.host.codexSocket}`, '-C', this.record.cwd]).once('closed', closed);
       } catch (error) { cleanup(); reject(error); }
     });
   }
@@ -329,7 +349,13 @@ class Codex extends EventEmitter {
         break;
       case 'item/started':
         if (p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) this.emit('activity', p.item.type);
-        if (/collab|agent/i.test(p.item?.type || '') && p.item.type !== 'agentMessage') this.emit('fleet', { event: p.item.type, id: p.item.id, name: 'Codex 原生子 agent' });
+        if (/collab|agent/i.test(p.item?.type || '') && p.item.type !== 'agentMessage') {
+          const item = p.item;
+          this.emit('fleet', { event: item.type, id: item.id, name: item.agentPath || 'Codex 原生子 agent', kind: item.kind, tool: item.tool,
+            nativeId: item.agentThreadId, model: item.model,
+            active: (item.type === 'subAgentActivity' && ['started', 'interacted'].includes(item.kind)) ||
+              (item.type === 'collabAgentToolCall' && ['spawnAgent', 'sendInput', 'resumeAgent', 'sendMessage', 'followupTask'].includes(item.tool)) });
+        }
         break;
       case 'item/completed':
         if (['userMessage', 'agentMessage'].includes(p.item?.type)) this.stateRevision++;
@@ -387,7 +413,7 @@ class Codex extends EventEmitter {
     if (this.terminal?.alive) return this.terminal;
     if (!this.record.nativeId) { for (let i = 0; i < 100 && !this.terminal; i++) await delay(50); if (this.terminal) return this.terminal; }
     if (!this.hasHistory) throw new Error('请先完成一条对话，再打开同一会话的原生终端。');
-    return this.makeTerminal([this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
+    return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
   }
   async stop() {
     const previouslyStopped = this.stopped;
@@ -441,30 +467,54 @@ class NativeHost {
   async startCodex() {
     if (this.rpc) return;
     if (this.starting) return this.starting;
-    this.starting = (async () => {
-      this.codexProcess = spawn(this.binaries.codex, ['-c', 'analytics.enabled=false', 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
-      this.codexProcess.stderr.on('data', () => {});
-      this.codexProcess.on('error', () => {});
-      for (let i = 0; i < 100 && !fs.existsSync(this.codexSocket); i++) await delay(100);
-      const ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(this.codexSocket), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000 });
+    this.starting = Promise.resolve().then(async () => {
+      let ws, rpc, child, spawnError;
+      try {
+      this.codexBinary = this.binaries.codex;
+      child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
+      child.stderr.on('data', () => {});
+      child.on('error', error => { spawnError = error; });
+      for (let i = 0; i < 100 && !fs.existsSync(this.codexSocket); i++) {
+        if (spawnError || child.exitCode !== null || child.signalCode !== null) throw new Error('Codex 后台未能启动，请在设置中检查所选程序。');
+        await delay(100);
+      }
+      ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(this.codexSocket), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000 });
       await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-      this.rpc = new Rpc(ws);
-      this.rpc.on('event', message => {
+      rpc = new Rpc(ws);
+      rpc.on('event', message => {
         const p = message.params || {};
         if (message.method === 'thread/started' && !p.thread?.parentThreadId && this.pendingCodex) this.pendingCodex(p.thread);
         const target = this.codexTargets.get(p.threadId || p.thread?.id);
         if (target) target.event(message);
         else if (message.method === 'thread/started' && p.thread?.parentThreadId) this.codexTargets.get(p.thread.parentThreadId)?.emit('fleet', { id: p.thread.id, event: 'thread/started', name: p.thread.agentNickname || 'Codex 子 agent' });
       });
-      this.rpc.on('closed', () => { for (const target of this.codexTargets.values()) target.emit('state', 'error'); });
-      await this.rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+      rpc.on('closed', () => { for (const target of this.codexTargets.values()) target.emit('state', 'error'); });
+      await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } });
       ws.send(JSON.stringify({ method: 'initialized', params: {} }));
-    })();
+      this.rpc = rpc;
+      } catch (error) {
+        ws?.terminate();
+        // Only this unsuccessful startup's child can be terminated. No thread
+        // has been exposed yet; an existing live server never enters this path.
+        const exited = () => !child || (!child.pid && spawnError) || child.exitCode !== null || child.signalCode !== null;
+        if (!exited()) {
+          child.kill('SIGTERM');
+          for (let i = 0; i < 20 && !exited(); i++) await delay(50);
+        }
+        if (exited()) {
+          this.codexProcess = null; this.codexBinary = null; this.starting = null;
+          try { fs.unlinkSync(this.codexSocket); } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+        }
+        // If exit cannot be confirmed, retain the failed lease and block reuse.
+        throw error;
+      }
+    });
     return this.starting;
   }
   create(record) {
     this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
     if (!this.binaries[record.provider] || !this.binaries.python) throw new Error('未找到原生 CLI 或 Python 3，请先安装并完成原生登录。');
+    if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw new Error('Codex 位置已修改，现有后台继续使用原程序。请恢复原位置，或结束原生会话并完全退出后台后再使用新位置。');
     return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);
   }
   close() { for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }

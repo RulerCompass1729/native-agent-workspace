@@ -65,7 +65,7 @@ async function run() {
   await page.locator(`[data-session-id="${codex}"]`).click(); await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   assert.equal((await snapshot()).room.messages.length, 0, 'Joining does not expose private history');
-  await page.locator('#recipient').selectOption(claude); await page.locator('#shared-input').fill('SHARED-MATERIAL'); await page.locator('#forward-button').click();
+  await chooseRecipient(claude); await page.locator('#shared-input').fill('SHARED-MATERIAL'); await page.locator('#forward-button').click();
   await until(async () => (await fixture()).sends.length === 2, 'Directed Claude send'); await reply('REVIEW-MATERIAL');
   const shared = page.locator('#room-messages article.assistant').filter({ has: page.getByText('REVIEW-MATERIAL', { exact: true }) });
   await shared.getByRole('button', { name: '选择并分享', exact: true }).click(); await page.locator('#share-recipient').selectOption(codex);
@@ -85,7 +85,7 @@ async function run() {
   await capture('shared-review'); passed.push('Two-agent directed verification shares only selected material; current author/recipient names follow renaming without changing saved messages');
   await page.locator(`[data-room-session="${codex}"]`).click(); await until(() => input(codex).evaluate(el => document.activeElement === el), 'Room terminal focus');
   await page.keyboard.type('-ROOM');
-  await page.locator('#room-record').click(); await page.locator('#recipient').selectOption(claude); await page.locator('#shared-input').fill('下一次核查草稿');
+  await page.locator('#room-record').click(); await chooseRecipient(claude); await page.locator('#shared-input').fill('下一次核查草稿');
   await page.locator(`[data-session-id="${codex}"]`).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
   await terminal(codex); await page.keyboard.type('-SOLO');
   assert.equal((await fixture()).inputs.filter(x => x.id === codex).map(x => x.data).join(''), 'UNSUBMITTED-CODEX-ROOM-SOLO');
@@ -123,3 +123,5 @@ async function run() {
 run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(async () => {
   if (app) await app.close(); if (client) { const state = await client.call('initial'); for (const s of state.sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
 });
+
+async function chooseRecipient(id) { await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click(); }

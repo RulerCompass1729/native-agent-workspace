@@ -325,3 +325,27 @@ orders, same text with distinct identity, own GUI echoes, overlapping deltas,
 working/approval races, closed/stopped reads, malformed data and failed/cyclic
 pagination. History imports neither dispatch work nor impersonate human input;
 a real human notification must still take precedence even if already displayed.
+
+## Alpha.23 core acceptance
+
+Use `test:room`, `test:collaboration` and `test:solo` with the installed executable
+and `NAW_TEST_APP_ROOT` to test the actual bundle's UI and service. Parent/child
+model trials are separate and capped; alpha.23 used five parent submissions plus
+one observed Codex child. Replaying native event shapes tests protocol mapping
+without rerunning a paid fleet.
+
+The visible guest core journey used actual OS pointer/keyboard events with
+synthetic provider replies: drag in/out, typed `@`, one send, explicit three-reply
+authorization, notes, rename, archive/restore and normal reopen. Four synthetic
+submissions were checked against recipient/payload counts. Initial driver-only
+errors (input-source identifier, ambiguous menu selector, wrong assertion field)
+are retained in private logs and do not count as product passes or retries of
+paid tasks. Final state assertions and visible screenshots establish the result.
+
+Installer checks use a fresh app profile and a guest without the host's auth.
+Keep downloaded quarantine attributes, compare SHA-256, use only app-specific
+Gatekeeper approval, and verify prerequisites after installation with Recheck.
+Do not use curl-only copying as browser-quarantine proof. The guest test found
+the system Python shim masking a later real installation; the selection-stage
+regression and final guest native startup cover that fix. Native login screens
+are not evidence of completing a new account's authorization.

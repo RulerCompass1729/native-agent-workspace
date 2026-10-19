@@ -15,8 +15,10 @@ This is a **macOS source alpha** for a small technical trial. It supports native
 Alpha.22 passes the controlled local daily single-conversation acceptance,
 including visible macOS System Pinyin/WeChat input, terminal controls and reopen
 continuity. See [evidence and limits](docs/alpha.md#alpha22-single-conversation-os-acceptance).
-Collaboration expansion is paused while its communication flow is reconsidered; existing manual sharing
-checks are not a finished agent-team experience. See [acceptance priorities](docs/readiness.md#current-priority-a-dependable-single-conversation).
+Alpha.23 adds a tested core workflow: `@` recipient selection, explicit bounded
+reply exchange, shared notes, detach/continue and archive/reopen. The local DMG
+also passed Safari download, app-specific Gatekeeper approval and prerequisite
+setup in an isolated macOS guest. See the [core acceptance and boundaries](docs/core-milestone.md).
 
 Claude conversation/room sends now use its native structured submission API,
 with a draft check and no terminal paste/Enter injection. This requires Claude
@@ -72,7 +74,10 @@ installation to finish before starting. If npm says it cannot find `package.json
 you are outside the extracted/cloned project folder. No GitHub login is required
 to download this public source.
 
-5. In the window, open **检查安装与版本**. Then choose **新会话**, your provider,
+5. In the window, open **检查安装与版本**. It discovers conventional installation
+   locations without running a login probe. **选择已有程序…** handles custom locations;
+   **自动查找** resets that choice. After installing a missing prerequisite, select
+   **重新检查**. Then choose **新会话**, your provider,
    a working folder (or keep the empty default), and **原生终端** or **对话**.
    If the session says **正在启动**, switch to **原生终端** to check for the native
    folder-trust or login prompt. Read and answer it there; the app does not approve
@@ -129,7 +134,19 @@ summary, background notification turn or private-history replay.
 
 The default **发送** action sends only to the selected member. The draft and recipient survive reopening; if the
 recipient is no longer available, choose one explicitly before sending.
-The separate **开始一轮核查** action under the composer’s **⋯** has a ceiling of three replies within ten minutes. Automatic handoffs require complete native background/team status. Current adapters cannot certify this, so a run pauses after its first reply; use **选择并分享** or **发送** to continue with human control. A reply limit does not mean the task or its descendants finished. Native tools and teammates can incur their own usage. Quit/reopen the UI to return to live sessions while the local service remains running. After service loss, records and drafts remain available and an explicit action can resume native history. This does not restore a live fleet or replay an interrupted task.
+Use **一起核查…** under the composer’s **⋯** to preview the task and participants,
+choose 2–6 replies (default 3), and explicitly authorize transferring this round’s
+replies when native descendant state is unknown. A ten-minute deadline stops
+later handoffs. Human input, membership or permission changes, known native work,
+repetition, failures and limits pause or end the exchange. It never automatically
+retries. This is bounded reply exchange, not a guarantee that any arbitrary goal
+or all native descendants have finished. Native tools and teammates incur their
+own usage; stopping handoffs does not terminate them or cap their bill.
+
+Quit/reopen the UI to return to live sessions while the local service remains
+running. After service loss, records and drafts remain available and an explicit
+action can resume native history. This does not restore a live fleet or replay an
+interrupted task.
 
 `npm test` runs local regression checks without model calls. `npm run test:reading` checks selection, scrolling and reading recovery with synthetic output in the actual hidden application. `npm run test:desktop` checks the hidden Electron lifecycle without sending prompts; it reuses a single private test profile and refuses a second test runner. Visible desktop and physical input acceptance remain separate checks. See [test policy](docs/testing.md).
 

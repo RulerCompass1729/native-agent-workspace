@@ -92,7 +92,7 @@ async function run() {
   passed.push('Duplicate labels are disambiguated by provider/ID; keyboard @ selects one recipient, exact explicit send, time and member filtering never reroute');
   await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('共同目标：比较两种学习方法。\n决定：先核对证据，再写结论。'); await page.locator('#save-notes').click();
   assert.equal((await fixture()).sends.length, 1, 'Notes save does not call model');
-  await page.locator('#attach-context').click(); const context = await page.locator('#context-text').inputValue(); assert.ok(context.includes('共同目标')); assert.ok(context.includes('当前参与会话')); assert.ok(!context.includes('PRIVATE-'));
+  await page.locator('#room-advanced summary').click(); await page.locator('#attach-context').click(); const context = await page.locator('#context-text').inputValue(); assert.ok(context.includes('共同目标')); assert.ok(context.includes('当前参与会话')); assert.ok(!context.includes('PRIVATE-'));
   await page.locator('#insert-context').click(); assert.equal(await page.locator('#shared-input').inputValue(), context); assert.equal((await fixture()).sends.length, 1);
   await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 2, 'Explicit context submission'); assert.deepEqual((await fixture()).sends[1], { id: b, text: context }); await reply('本条背景已接收。');
   await page.locator('#room-search').fill('本条背景已接收');
@@ -113,7 +113,7 @@ async function run() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); assert.equal(await page.locator('#recipient').inputValue(), '');
   await page.locator('#room-filter').selectOption(b); assert.ok((await page.locator('#room-messages').innerText()).includes('本条背景已接收')); assert.ok((await page.locator('#room-messages').innerText()).includes('离开了工作区'));
   passed.push('Shared notes persist locally; only an explicit send transmits visible context once; drag out preserves terminal, private draft and received native history');
-  await page.locator('#room-filter').selectOption(''); await page.locator('#recipient').selectOption(a); await page.locator('#shared-input').fill('尚在执行的共享任务'); await page.locator('#forward-button').click();
+  await page.locator('#room-filter').selectOption(''); await chooseRecipient(a); await page.locator('#shared-input').fill('尚在执行的共享任务'); await page.locator('#forward-button').click();
   await until(async () => (await fixture()).sends.length === 3, 'Pending task');
   await drag(page.locator(`[data-room-session="${a}"]`), page.locator('#session-list'));
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === null, 'Active session detached'); await reply('PRIVATE-AFTER-LEAVE');
@@ -145,7 +145,7 @@ async function run() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await drag(page.locator(`[data-session-id="${a}"]`), page.locator('#room-nav'));
   await drag(page.locator(`[data-session-id="${b}"]`), page.locator('#room-nav'));
-  await page.locator('#recipient').selectOption(a); await page.locator('#shared-input').fill('ARCHIVE-PENDING'); await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 4, 'Task before archive');
+  await chooseRecipient(a); await page.locator('#shared-input').fill('ARCHIVE-PENDING'); await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 4, 'Task before archive');
   await page.locator(`[data-session-menu="${a}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).archived, 'Session archived');
   assert.equal(await page.locator(`[data-session-id="${a}"]`).count(), 0);
@@ -192,3 +192,5 @@ async function run() {
 run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(async () => {
   if (app) await app.close(); if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
 });
+
+async function chooseRecipient(id) { await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click(); }

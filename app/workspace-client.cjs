@@ -46,7 +46,7 @@ class WorkspaceClient extends EventEmitter {
     const memberServices = this.entries.filter(e => e.state.sessions.some(s => s.roomId === 'shared'));
     const routingService = memberServices.length === 1 ? memberServices[0] : this.active;
     const capabilities = (this.active.state.capabilities || []).filter(cap => {
-      if (cap === 'verifiedHandoffs') return memberServices.length <= 1 && routingService.state.capabilities?.includes(cap) && routingService.state.capabilities?.includes('nativeInputIsolation');
+      if (['verifiedHandoffs', 'boundedReplyHandoffs'].includes(cap)) return memberServices.length <= 1 && routingService.state.capabilities?.includes(cap) && routingService.state.capabilities?.includes('nativeInputIsolation');
       if (cap === 'clearSharedHistory') return this.entries.every(e => e.state.capabilities?.includes(cap));
       return true;
     });
@@ -139,7 +139,7 @@ class WorkspaceClient extends EventEmitter {
       if (!Array.isArray(args[0]) || args[0].length !== 2) throw new Error('请选择两个不同会话。');
       const targets = args[0].map(id => this.route(id));
       if (targets[0] !== targets[1]) throw new Error('跨版本自动交接暂不可用；请选择内容并定向分享。');
-      assertAutomaticRun(state); assertSharing(state, args[0]);
+      assertAutomaticRun(state, args[3]); assertSharing(state, args[0]);
       await Promise.all(interventions);
       await this.pauseExcept(targets[0]);
       const previousArm = this.control.armed.get(targets[0].key);

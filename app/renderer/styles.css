@@ -107,6 +107,12 @@ header h1, header p { overflow-wrap: anywhere; }
 #room-advanced { position: relative; }
 #room-advanced summary { list-style: none; cursor: pointer; padding: 5px 9px; border-radius: 6px; }
 #room-advanced[open] #run-button { position: absolute; right: 0; bottom: 34px; white-space: nowrap; box-shadow: 0 4px 20px #0002; z-index: 5; }
+#room-advanced[open] #attach-context { position: absolute; right: 0; bottom: 72px; white-space: nowrap; box-shadow: 0 4px 20px #0002; z-index: 5; }
+.context-preview { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; padding: 12px; background: var(--selected); border-radius: 8px; }
+.run-consent { display: flex; align-items: start; gap: 8px; }
+.run-consent input { width: auto; margin-top: 4px; }
+.setup-program { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.program-path { font: 11px ui-monospace, monospace; overflow-wrap: anywhere; color: var(--muted); margin: 6px 0; }
 .mention-wrap { position: relative; }
 #mention-list { position: absolute; bottom: calc(100% + 5px); left: 0; width: min(420px, 100%); max-height: 230px; overflow: auto; background: var(--raised); border: 1px solid var(--border); border-radius: 9px; padding: 5px; box-shadow: 0 6px 24px #0002; z-index: 10; }
 .mention-option { display: block; width: 100%; text-align: left; border: 0; font-size: 12px; }

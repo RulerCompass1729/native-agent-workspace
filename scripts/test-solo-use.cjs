@@ -109,7 +109,7 @@ async function run() {
   await chat(a); assert.equal(await page.locator('#message-input').inputValue(), 'PRIVATE-UNSENT-中文');
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   // Draft first, then select an unavailable recipient. Never inject it into TUI.
-  await page.locator('#shared-input').fill('ROOM-UNSENT'); await page.locator('#recipient').selectOption(a);
+  await page.locator('#shared-input').fill('ROOM-UNSENT'); await chooseRecipient(a);
   await page.locator('#forward-button').getByText('打开原生终端', { exact: true }).waitFor();
   assert.equal(await page.locator('#shared-input').evaluate(el => el.readOnly), true);
   await capture('unavailable-room'); await page.locator('#forward-button').click(); await until(() => focused(a), 'Same member terminal');
@@ -153,7 +153,7 @@ async function run() {
   await page.locator('#send-button').click(); await until(async () => (await snapshot()).sessions.find(s => s.id === a).owner === (await snapshot()).owner, 'Explicit takeover');
   assert.equal(await page.locator('#message-input').inputValue(), 'REOPEN-PRIVATE-中文');
   passed.push('Connected errors use the existing terminal; another owner remains read-only until explicit takeover');
-  await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await page.locator('#recipient').selectOption(a); await page.locator('#shared-input').fill('REOPEN-ROOM-中文');
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await chooseRecipient(a); await page.locator('#shared-input').fill('REOPEN-ROOM-中文');
   await chat(a); await until(async () => (await snapshot()).viewState.draft?.text === 'REOPEN-PRIVATE-中文', 'Saved GUI draft');
   await checkSaved(a, 'REOPEN-PRIVATE-中文', 'REOPEN-ROOM-中文', a);
   await delay(12000); await checkSaved(a, 'REOPEN-PRIVATE-中文', 'REOPEN-ROOM-中文', a);
@@ -183,3 +183,5 @@ run().catch(async error => { console.error(error.stack); if (page && !page.isClo
   if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); }
   if (child.connected) child.disconnect();
 });
+
+async function chooseRecipient(id) { await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click(); }

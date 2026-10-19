@@ -1,15 +1,89 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.22. Suitable for a small technical trial with
+As of 2026-10-18. Version 0.1.0-alpha.23. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.23 core acceptance
+
+One visible recipient control replaces the separate @/recipient controls. Advanced
+context and bounded checking are in the composer menu. Reply exchange requires an
+explicit task/participant preview, a 2–6 reply cap and consent to transfer root
+replies despite unknown descendant state. The 10-minute deadline stops later
+handoffs, not already-running native tasks or their billing. Strict native-state
+checks remain distinct. Human input, membership/permission changes, known native
+activity, repetition, failures and limits stop further routing. Service recovery
+pauses the saved exchange and never replays it.
+
+A source-app native test with Claude Code 2.1.303 / Haiku 5.5 and Codex 0.163.0 /
+GPT-6 Luna completed a three-reply read-only check of a synthetic local file.
+Both computed 20 cells; the third reply ended handoffs. Claude then detached by
+pointer drag and continued privately with the same native ID/process and the
+previous result. Archive/restore and UI reopen retained both native identities,
+shared record, notes and distinct unsent drafts without another submission.
+A fifth parent task spawned exactly one GPT-6 Luna/low native Codex child; native
+events recorded its start, completion and interruption/close request. This does
+not prove every descendant process terminated or active-fleet recovery.
+
+That trial exposed a Codex event-name mismatch in native activity guards. The
+subsequent mapping fix is covered with saved event shapes through the real
+adapter/workspace. It has not been represented as having been active during the
+already-completed native child trial. The final artifact contains that mapping;
+its actual-shaped regression passes with source-to-package equality verified.
+
+Native usage is not equal to parent task count: tools and the native child make
+additional requests. No expensive-model fallback was used. Existing Claude Teams
+evidence retains its original scoped version/idle-continuity limits.
+
+The final local regression result is **191 passed, zero failures/skips**. The
+installed room runner passes seven groups with nine synthetic submissions; the
+installed solo runner passes eight groups and the broader collaboration runner
+covers drag/cancel/detach, context, filtering, ownership, archive and reopening.
+Those hidden runners are UI/service tests, not physical input or native-model
+proof. The final rebuild changes Python discovery only; affected native-lifetime
+and discovery checks, the installed room runner and guest startup were rerun.
+
+On a separate macOS 26.6.2 guest, Safari downloaded the final DMG from a controlled
+VM-only HTTP server. The downloaded quarantine attribute was present and SHA-256
+matched. Finder drag-install was checked on the initial candidate. The final
+candidate replacement retained quarantine and required app-specific **Open Anyway**
+and administrator approval; the system-wide App Store-only setting was not changed.
+This is a network-download/Gatekeeper check, not a GitHub release download or
+notarization claim. The final host install matches all **9,181 file/link entries**
+in the mounted DMG and passes strict ad-hoc signature checks.
+
+The fresh profile initially detected neither agent nor usable Python. Session
+creation stayed blocked with setup actions. Python.org's signed 3.15.0 installer
+was completed through its GUI; Claude Code 2.1.303 used the reviewed official
+installer and Codex 0.163.0 used its official release archive with matching digest.
+No host home, credentials or auth files were copied. This exposed and fixed a real
+Finder-PATH bug: an uninstalled system Python shim hid a later usable Python.
+After rebuilding, **自动查找 / 重新检查** finds the real installation. The native
+file chooser also saves a selected executable privately. Both native terminals
+reach their own first-use/login screens. Account authorization and the first
+paid reply in this guest were not performed; authenticated native work was checked
+separately on the host. Missing-one-agent startup does not require the other agent.
+
+The visible final app was then driven with guest OS mouse/keyboard events:
+drag in both members; type `@` and select one; send exactly once; save shared notes;
+rename the room; authorize three synthetic replies and observe the limit; drag
+one member out retaining identity; archive/restore the room; quit/reopen with
+notes, timeline, recipient and distinct private/shared drafts intact. Four
+synthetic submissions, zero native/model tasks in this UI fixture. System
+Pinyin/WeChat evidence from alpha.22 is reused for unchanged input paths.
+
+Live test usage for this increment: **five parent submissions (Claude three,
+Codex two), plus one observed native Codex child**. Tools can make multiple model
+requests; these are not total call/token counts. No full fleet-stop guarantee,
+new-account sign-in certification or equal-task cost/latency claim is made.
+Public binary distribution, notarization, broad hardware/VoiceOver compatibility
+and complete native descendant recovery remain outside this local trial gate.
 
 ## Alpha.22 single-conversation OS acceptance
 
 The local daily single-conversation TUI workflow now passes the controlled
 acceptance below. This is the maintainer's daily-use alpha milestone, not a claim
-of universal terminal compatibility or a general consumer release. Collaboration
-expansion remains paused.
+of universal terminal compatibility or a general consumer release. The later core milestone resumes collaboration work.
 
 A visible installed app on a separate macOS 26.6.2 guest was driven through real
 OS mouse/keyboard events, with System Pinyin and WeChat Input 3.0.0. This exposed
@@ -325,7 +399,7 @@ does not prove an internet-downloaded, quarantined app will pass Gatekeeper.
 The maintainer chose the free, unnotarized route for the current trial. A downloaded
 copy can trigger Gatekeeper. After checking the app's source, macOS may offer an
 app-specific **Open Anyway** action in Privacy & Security; managed Macs may block
-it. Do not disable Gatekeeper globally. This downloaded-app path has not yet been
+it. Do not disable Gatekeeper globally. This earlier downloaded-app path had not yet been
 verified for our artifact. See [Apple's opening guidance](https://support.apple.com/en-us/102445).
 
 Developer ID signing and notarization are a later option for smoother public

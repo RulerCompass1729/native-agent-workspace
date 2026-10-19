@@ -7,6 +7,7 @@ const states = { starting: '正在启动', idle: '就绪', working: '正在工�
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSubmitting = false;
+let runPreview = null;
 let renamingId = '', renaming = false;
 let sessionMenu;
 let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, notesRevision, contextTarget = null;
@@ -206,7 +207,7 @@ async function showTrust() {
   const content = $('trust-status'); content.replaceChildren();
   const section = (title, text) => { const item = node('section'); item.append(node('h3', title), node('p', text)); content.append(item); return item; };
   section('数据去向', '会话副本和草稿保存在本机。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
-  section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。一轮核查最多交接 3 次回复；原生工具和子 agent 的用量不受这个次数上限限制。');
+  section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。每轮核查由你确认 2–6 次回复上限和 10 分钟期限；原生工具和子 agent 的用量不受这些交接限制约束。');
   const dispatches = snapshot.diagnostics?.dispatches;
   section('本次后台运行的派发计数', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。只计通过应用发送与交接的消息，不含原生终端直接输入，也不代表总模型调用或费用；后台重启后重新计数。`);
   const usage = section('原生报告的用量', '以下是原生接口报告的累计 token；可能延迟或缺少子任务，不是账单。金额请在原生提供商账户核对。');
@@ -327,10 +328,18 @@ async function showSetup() {
   state.preflight = await api.preflight();
   const entries = [['claude', 'Claude Code', 'https://code.claude.com/docs/en/setup'], ['codex', 'Codex CLI', 'https://developers.openai.com/codex/cli/'], ['python', 'Python 3', 'https://www.python.org/downloads/macos/']];
   $('setup-status').replaceChildren(...entries.map(([key, label, url]) => {
-    const row = node('p', `${label}：${state.preflight[key] ? '已找到' : '尚未找到'} `);
-    row.append(button('官方安装说明', () => api.openExternal(url))); return row;
+    const setting = key === 'python' ? 'python3' : key;
+    const row = node('div', undefined, 'setup-program');
+    row.append(node('strong', `${label}：${state.preflight[key] ? '已找到' : '尚未找到'}`));
+    const location = state.preflight.paths?.[key] || state.preflight.configured?.[setting];
+    if (location) row.append(node('p', location, 'program-path'));
+    const actions = node('div', undefined, 'actions');
+    actions.append(button('安装说明', () => api.openExternal(url)), button('选择已有程序…', async () => { await api.runtimeLocation(setting); await showSetup(); }));
+    if (state.preflight.configured?.[setting]) actions.append(button('自动查找', async () => { await api.runtimeLocation(setting, true); await showSetup(); }));
+    row.append(actions); return row;
   }));
-  $('version-info').textContent = `应用 ${state.appVersion || '开发版'} · 后台 ${state.runtimeVersion || '旧版（会话保留中）'}。安装或替换应用后可点“重新检查”。`;
+  if (state.preflight.error) $('setup-status').append(node('p', state.preflight.error));
+  $('version-info').textContent = `应用 ${state.appVersion || '开发版'} · 后台 ${state.runtimeVersion || '旧版（会话保留中）'}。这里只检查程序文件，不代表已登录或版本兼容。已有会话保留原进程；Codex 后台已运行时，更换程序位置需先结束原会话并完全退出后台。`;
   createReadiness(); if (!$('setup-dialog').open) $('setup-dialog').showModal();
 }
 function populateSelect(el, items) {
@@ -514,7 +523,7 @@ function render() {
       $('advanced-content').replaceChildren(node('div', `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`));
       if (s.usage) $('advanced-content').append(node('div', `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}`));
       $('advanced-content').append(button('查看协作笔记', openNotes, 'small'), button('带上协作背景…', openContext, 'small'));
-      for (const event of s.fleet.slice(-8)) $('advanced-content').append(node('div', `${event.event} · ${event.name}`));
+      for (const event of s.fleet.slice(-8)) $('advanced-content').append(node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`));
       if (!['ended', 'stopping', 'recoverable'].includes(s.state)) $('advanced-content').append(button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small'));
       if (canResume(s) && mode === 'terminal') $('header-actions').prepend(button('继续原生会话', () => api.resume(s.id), 'primary'));
       if (['ended', 'recoverable', 'error'].includes(s.state) && !s.terminalAvailable && (s.serviceCapabilities || state.capabilities)?.includes('forget')) {
@@ -550,8 +559,10 @@ function render() {
       $('recipient').dataset.hadChoices = 'true';
       populateSelect($('recipient'), members());
       if (previousRecipient && !$('recipient').value) attempt(persistView);
-      const safeHandoffs = state.capabilities?.includes('verifiedHandoffs');
+      const safeHandoffs = state.capabilities?.includes('boundedReplyHandoffs');
       const recipient = people.find(s => s.id === $('recipient').value);
+      $('mention-button').textContent = recipient ? `@ ${participantLabel(recipient)} ⌄` : '@ 选择成员';
+      $('mention-button').title = recipient ? `接收者：${participantLabel(recipient)}；点击更换` : '选择接收者，也可以在消息中输入 @';
       const nativeRoute = recipient && (recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient));
       $('shared-input').readOnly = Boolean(nativeRoute);
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
@@ -561,7 +572,7 @@ function render() {
       $('forward-button').disabled = nativeRoute ? roomSubmitting || disconnected : unavailable || !ready(recipient);
       $('run-button').disabled = unavailable || !recipient || people.length !== 2 || !people.every(ready) || run?.status === 'running' || !safeHandoffs;
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
-      $('run-button').title = safeHandoffs ? '最多 3 次回复、10 分钟；原生后台或团队状态未报告时暂停。子 agent 的用量另计。' : state.handoffNotice || '现有后台暂不支持自动核查，原生会话继续保留。';
+      $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
       if (nativeRoute) $('run-help').textContent = '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
       $('pause-button').disabled = run?.status !== 'running';
       if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
@@ -856,9 +867,12 @@ async function submitRoom(automatic) {
   if (roomSubmitting || $('shared-input').readOnly || $(automatic ? 'run-button' : 'forward-button').disabled) return;
   const first = $('recipient').value, text = $('shared-input').value, revision = roomDraftRevision;
   const ids = [first, ...members().filter(s => s.id !== first).map(s => s.id)];
+  // Return focus before the clicked control becomes disabled. Never steal it
+  // back asynchronously after the person has opened another view or dialog.
+  $('shared-input').focus();
   roomSubmitting = true; render();
   try {
-    await (automatic ? api.run(ids, text, 3) : api.forward(first, text));
+    await (automatic ? api.run(ids, text, automatic.limit, 'replies') : api.forward(first, text));
     if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
   }
   finally { roomSubmitting = false; render(); }
@@ -870,7 +884,25 @@ $('forward-button').onclick = () => {
   if (!recipient) return;
   if (nativeUsable(recipient)) selectRoom(recipient.id); else select(recipient.id, 'chat');
 };
-$('run-button').onclick = () => attempt(() => submitRoom(true));
+$('run-button').onclick = () => {
+  if ($('run-button').disabled) return;
+  $('room-advanced').open = false;
+  runPreview = { text: $('shared-input').value, recipient: $('recipient').value, revision: roomDraftRevision, members: members().map(s => [s.id, s.memberRevision]) };
+  $('run-preview').textContent = runPreview.text;
+  $('run-participants').textContent = `参与：${members().map(s => s.name).join('、')}；先交给 ${members().find(s => s.id === runPreview.recipient)?.name}。`;
+  $('run-consent').checked = false; $('confirm-run').disabled = true; $('run-error').hidden = true;
+  $('run-dialog').showModal();
+};
+$('run-consent').onchange = () => { $('confirm-run').disabled = !$('run-consent').checked; };
+$('cancel-run').onclick = () => { $('run-dialog').close(); runPreview = null; $('shared-input').focus(); };
+$('run-form').onsubmit = event => {
+  event.preventDefault();
+  if (!$('run-consent').checked || !runPreview) return;
+  const same = selected === 'room' && !roomSession && runPreview.text === $('shared-input').value && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision]));
+  if (!same || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
+  const limit = Number($('run-limit').value);
+  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit }));
+};
 $('recipient').onchange = () => { closeMentions(); attempt(persistView); render(); };
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };
 $('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString() : '时间未记录'} · ${state.sessions.find(s => s.id === (m.recipientId || m.sessionId))?.name || m.name || '工作区'}${m.recipientId ? '（接收）' : ''}\n${m.text}`).join('\n\n')));
@@ -881,7 +913,7 @@ $('notes-form').onsubmit = async event => {
   catch (error) { $('notes-error').textContent = error.message; $('notes-error').hidden = false; }
   finally { $('save-notes').disabled = false; }
 };
-$('attach-context').onclick = openContext; $('close-context').onclick = () => $('context-dialog').close();
+$('attach-context').onclick = () => { $('room-advanced').open = false; openContext(); }; $('close-context').onclick = () => $('context-dialog').close();
 $('copy-context').onclick = () => attempt(async () => { await api.copy($('context-text').value); toast('已复制，尚未发送给 agent。'); });
 $('insert-context').onclick = () => attempt(async () => {
   const target = contextTarget, text = $('context-text').value;
