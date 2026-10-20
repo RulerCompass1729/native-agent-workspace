@@ -58,13 +58,17 @@ function createSubmissionServer(filename, targets) {
     req.setEncoding('utf8');
     req.on('error', () => {});
     req.on('data', chunk => { body += chunk; if (body.length > 100000) req.destroy(); });
-    req.on('end', () => {
+    req.on('end', async () => {
       let message;
       try { message = JSON.parse(body); } catch { res.writeHead(400); res.end('{}'); return; }
       if (!message || typeof message !== 'object' || Array.isArray(message)) { res.writeHead(400); res.end('{}'); return; }
       if (message.sessionId !== target.record.nativeId) { res.writeHead(409); res.end('{}'); return; }
       if (req.url === '/next') return target.submission.receive(res);
-      if (req.url === '/authorize') return res.end(JSON.stringify({ allowed: target.submission.authorize(message) }));
+      if (req.url === '/authorize') {
+        try { if (target.beforeAuthorize) await target.beforeAuthorize(); }
+        catch { return res.end(JSON.stringify({ allowed: false })); }
+        return res.end(JSON.stringify({ allowed: target.submission.authorize(message) }));
+      }
       if (req.url === '/result') return res.end(JSON.stringify({ received: target.submission.result(message) }));
       res.writeHead(404); res.end('{}');
     });

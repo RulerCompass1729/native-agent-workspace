@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-19. Version 0.1.0-alpha.24. Suitable for a small technical trial with
+As of 2026-10-19. Version 0.1.0-alpha.25. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -1126,3 +1126,31 @@ input claim or native resize is part of observation. Exact limits, native task,
 resource samples, cold recovery and unsupported surfaces are in
 [live-progress.md](live-progress.md). Historical acceptance above remains scoped
 to its tested version; active legacy backends are not silently upgraded.
+
+
+## Alpha.25 retained Claude continuity
+
+Retained alpha.2 Claude sessions can display their complete current native screen
+and explicitly connect GUI input to the same process. The original unsafe sender
+remains disabled. Project-local plugin loading is explicit; new native sessions
+use their normal bridge. See [implementation and native evidence](live-progress.md#retained-alpha2-claude-repair--alpha25)
+and [data boundaries](privacy.md#explicit-retained-session-input-connection-in-alpha25).
+
+The source acceptance includes 215 passing local tests, actual Electron progress
+and legacy-selection checks, a native old-daemon draft overwrite reproduction and
+its guarded fix, and a one-task cheap-model trial with exact native history and
+reopen. Old Codex and legacy shared/automatic dispatch remain open; this does not
+close the full seamless-use milestone. Physical input is not newly certified.
+
+Final installed alpha.25 acceptance also passes the connection/navigation/draft
+scenario against the same old daemon, and the synthetic full progress suite
+(including legacy selection/resize/reconnect, paint P95 19 ms under its declared
+load). Affected packaged source/generated UI match final source; local signature,
+ZIP integrity and image checks pass. Three pre-existing user native sessions retain
+their IDs, PIDs, messages and persisted store hashes; their processes remain alive.
+Test-owned native processes/services and temporary app copies were cleaned up.
+Independent source, complete private evidence and final artifact review closed
+A25-1 through A25-5 only. The normal UI was quit for safe replacement and is left
+for the person to reopen, avoiding a forced foreground/Space switch. Original
+native work continues independently. The package remains locally signed and
+unnotarized; this is not a public release or a universal security certification.

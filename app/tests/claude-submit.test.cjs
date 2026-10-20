@@ -50,11 +50,11 @@ test('private transport rejects invalid tokens, sessions, and bodies without los
   assert.equal(await request('fixture-token', { sessionId: 'fixture-session' }), 200);
 });
 
-async function modFixture({ draft = '', changeBeforeSubmit = false, authorized = true, failAuthorization = false } = {}) {
+async function modFixture({ draft = '', changeBeforeSubmit = false, authorized = true, failAuthorization = false, endOnFinalRead = false } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8');
   const { register } = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + Math.random()).toString('base64'));
   const hooks = new Map(), clock = [], results = [], entered = [];
-  let text = draft, submits = 0;
+  let text = draft, submits = 0, reads = 0;
   const invoke = async (name, event, next = async e => e) => {
     const hook = hooks.get(name);
     try { return await hook.fn($, event, next); } catch (e) { if (hook.fallback) return hook.fallback($, event, next); throw e; }
@@ -70,7 +70,7 @@ async function modFixture({ draft = '', changeBeforeSubmit = false, authorized =
       const value = url.endsWith('/next') ? { id: 'request', text: 'only this text' } : url.endsWith('/authorize') ? { allowed: authorized } : (results.push(body), { received: true });
       return { ok: true, text: JSON.stringify(value) };
     } },
-    prompt: { read: async () => ({ text }), submit: async args => {
+    prompt: { read: async () => { if (++reads === 2 && endOnFinalRead) await invoke('session.end', {}); return { text }; }, submit: async args => {
       submits++; assert.equal(args.asUser, true);
       entered.push(args.text); return { text: args.text };
     } },
@@ -89,6 +89,23 @@ test('native mod preserves existing and racing drafts; only the authorized expli
   }
   const accepted = await modFixture(); assert.deepEqual(accepted.entered, ['only this text']); assert.equal(accepted.results[0].status, 'accepted');
   const offline = await modFixture({ failAuthorization: true }); assert.equal(offline.submits, 0); assert.deepEqual(offline.entered, []);
+  const ended = await modFixture({ endOnFinalRead: true }); assert.equal(ended.submits, 0); assert.deepEqual(ended.entered, []);
+});
+
+test('a compatibility plugin in the project remains dormant when the native submission plugin is present', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8');
+  const clocks = [];
+  for (const legacy of [false, true]) {
+    const code = source.replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
+    const { register } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+    const hooks = new Map(), clock = [];
+    register((name, fn) => hooks.set(name, fn));
+    await hooks.get('session.start')({ session: { version: async () => ({ version: '2.1.302' }) },
+      env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? '/fixture/native.sock' : 'fixture-token' },
+      clock: { after: (_ms, fn) => clock.push(fn) } }, {}, async e => e);
+    clocks.push(clock.length);
+  }
+  assert.deepEqual(clocks, [1, 0], 'Only the original native plugin starts a poll listener');
 });
 
 test('an updated UI cannot use an older Claude submission path, while native sessions remain intact', () => {

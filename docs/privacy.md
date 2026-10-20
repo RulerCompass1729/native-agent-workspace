@@ -173,3 +173,23 @@ Limits and overflow/disconnection behavior are documented in `live-progress.md`.
 No model is invoked to summarize or interpret a screen. Local rendering/memory
 are real costs; short test measurements are not a zero-resource or bill-parity
 claim. Raw test evidence remains private and is not included in source/packages.
+
+## Explicit retained-session input connection in alpha.25
+
+For the inspected alpha.2 Claude connection, clicking the connection action adds
+our own plugin code to `.claude/skills/native-workspace-compat` in that session's
+working directory. It does not install globally, copy provider credentials or
+silently overwrite a different/edited plugin. The app validates directory
+ownership and refuses symlink destinations. Native plugin reload stays explicit.
+
+Per-session socket credentials are in the existing private local socket directory,
+not the project/plugin or public repository. The UI's local metadata retains the
+native identity/connection reference and dispatch attempt status; the compatibility
+ledger does not duplicate prompt bodies. Existing workspace/native histories and
+drafts continue under their prior retention rules. Closing the UI removes its
+active descriptors; a later UI restores only explicitly prepared, still-identical
+native processes. Neither setup, polling nor reconnect sends a model prompt.
+
+Dispatch counters include rejected/unconfirmed attempts and are not paid-call
+counts. Compatibility attempt counts persist locally; ordinary native backend
+counters remain per process lifetime. No claim of complete billing measurement.

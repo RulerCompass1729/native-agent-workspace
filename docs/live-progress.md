@@ -1,6 +1,8 @@
 # 原生实时显示与运行轨迹
 
-2026-10-19。alpha.24 已实现下述有界 TUI 观察能力；本地协议/界面回归与真实原生任务已验证。最终审查记录见 `review.md`。这不是原生 Desktop 适配或永久完整轨迹归档。
+2026-10-19。alpha.24 新后台已实现下述有界 TUI 观察能力；本地协议/界面回归与真实原生任务已验证。随后用户旧会话截图暴露未覆盖路径，U17 重新打开；新后台的通过结果不等于原有会话无缝切换已完成。审查记录见 `review.md`。这不是原生 Desktop 适配或永久完整轨迹归档。
+
+实际试用纠正：图形对话不是只保留最终回答的摘要。原生可见的工具执行、等待确认、错误、耗时和结果可以组织、折叠，但应能在同一会话中查看；不能凭整理界面而省略。终端与图形输入应服务同一原生会话，切换不丢草稿、不误投、不自动重发。现有旧后台的发送保护不是目标体验；保留保护的同时必须解决接入缺口，再按原会话验收。旧 Claude 的 snapshot 只读现有终端，可评估兼容接入；旧 Codex 的同名接口有创建分支，不能泛用。接入前已覆盖的临时画面及未广播的尺寸事件不能补造。
 
 问题：用户在统一界面发送后看不到原生 TUI 的临时状态、中间结果和滚动过程；
 单会话与协作的轨迹都不完整。用户进一步要求 TUI 可见内容一一对应，仅允许很小延迟，
@@ -148,3 +150,50 @@ Claude 原生恢复 hook 缺少模型字段时显示“原生未报告”，不�
 
 原生 Desktop、无限 scrollback、永久工具日志、完整 fleet 生命周期、无损活动旧后台
 热升级均未在这里实现；对应能力限制仍见 `readiness.md`。
+
+## Retained alpha.2 Claude repair — alpha.25
+
+The retained daemon is not patched or restarted. `legacy-observation.cjs` only
+accepts the inspected alpha.2 Claude snapshot contract; other unknown contracts
+remain gated. Existing terminal events schedule a canonical snapshot after a
+40 ms debounce. There is no idle screen polling, terminal opening, control claim,
+PTY resize or model call from observation. Native dimensions, tool counts, timing,
+Unicode and alternate-screen contents are retained in bounded in-memory frames.
+Selecting text freezes the selected frame until the user returns to live output.
+Older overwritten content and changes between snapshots cannot be reconstructed;
+this fallback is not the byte-complete current-backend journal.
+
+The explicit **接通原会话输入** action installs this project's local compatibility
+plugin in that session's project. Claude Code 2.1.302 was verified to load it using
+native `/reload-plugins` without replacing the process. It reads the native draft,
+authorizes the exact request against fresh portal ownership/state, reads the draft
+again and uses native `$.prompt.submit({text, asUser: true})`. It never calls the
+old paste/Enter sender. Native hooks remain the writer of user/reply history.
+Reload is not automatically typed and `--force` is never added. Compatibility
+code is dormant in new native processes that already have the normal bridge.
+
+Local source checks and a real old daemon/Claude/Electron trial establish:
+
+- One Haiku low-effort task submitted through the GUI runs a synthetic shell
+  command and returns one reply. Exactly one native user message and one assistant
+  message persist; tool count and elapsed-time text remain in the readonly native
+  screen. Two native-draft rejection attempts create no model tasks.
+- Closing/reopening the GUI reconnects the explicitly prepared link and preserves
+  the same PID, native ID and messages, without replay or another plugin reload.
+- Public xterm selection followed by new native output/resize retains the selected
+  text; the actual Copy button returns it. This is not physical drag/IME evidence.
+- The unmodified old daemon reproduces former-owner draft overwrite. Portal-wide
+  ordering of legacy claims/drafts plus owner/control checks rejects that write.
+  Queue, new-owner and newer-identical-draft regressions also protect ACK cleanup.
+
+The task-complete screenshot is not evidence of an executing intermediate frame;
+full terminal contents were checked separately. Host UI tests remain hidden to
+avoid switching the person's macOS Space. Earlier unrelated visible OS input
+results are reused, not relabelled as a fresh physical test. Raw logs/screenshots
+are private. Legacy Codex input/observation and legacy automatic/shared dispatch
+remain separate open work; no active fleet or original user session was migrated.
+
+Plugin API references checked on 2026-10-19:
+[reload](https://code.claude.com/docs/en/plugins/cli-reference#reload-plugins),
+[project loading](https://code.claude.com/docs/en/plugins/loading),
+[native prompt API](https://code.claude.com/docs/en/plugins/mods/api).

@@ -32,7 +32,7 @@ function renderProgressPanels() {
     let panel = progressPanels.get(record.id);
     if (!panel) { panel = new NativeProgressPanel(record.id, progressReading.get(record.id)); progressPanels.set(record.id, panel); }
     if (panel.element.parentElement !== container) container.append(panel.element);
-    panel.update(record, (record.serviceCapabilities || state.capabilities || []).includes("observe"), !disconnected);
+    panel.update(record, record.legacyObservation || (record.serviceCapabilities || state.capabilities || []).includes("observe"), !disconnected);
   }
 }
 
@@ -125,15 +125,19 @@ function soloAction(s) {
     ? { kind: 'resume', label: '继续原生会话', hint: '记录和草稿已保留；恢复不会重发旧任务。' }
     : { kind: 'none', label: '暂不可发送', hint: '请检查原生会话状态。记录和草稿保留，不会自动重发。' };
   if (s.owner !== owner) return { kind: 'claim', label: '接管此窗口', hint: '此窗口只读。接管后继续使用原会话，草稿保留。' };
+  if (s.chatAvailable === false && s.legacyInputEligible) return s.legacyInputPrepared
+    ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
+    : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
   if (s.chatAvailable === false || s.state === 'starting' || s.state === 'error') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
   return { kind: 'send', label: '发送 ↑', hint: s.state === 'approval' ? '先完成上方的原生确认；可以保留下一条草稿。' : s.state === 'working' || s.pendingTag ? '正在回复，可以先编辑下一条。' : 'Enter 发送 · Shift Enter 换行' };
 }
 function renderComposer(s) {
   renderDraftRecovery(s?.id);
   const action = soloAction(s), send = $('send-button');
-  $('message-input').readOnly = action.kind !== 'send';
+  const legacyDraft = s?.legacyInputEligible && s.owner === owner && !disconnected && !s.archived && ['connect', 'terminal'].includes(action.kind);
+  $('message-input').readOnly = action.kind !== 'send' && !legacyDraft;
   $('message-input').disabled = false; // Saved drafts remain selectable/copyable.
-  $('message-input').placeholder = action.kind === 'send' ? '直接说你想做什么…' : '草稿保留在这里；请使用下方操作继续。';
+  $('message-input').placeholder = action.kind === 'send' ? '直接说你想做什么…' : legacyDraft ? '可以先写草稿；接通原会话后发送。' : '草稿保留在这里；请使用下方操作继续。';
   send.textContent = action.label; send.type = action.kind === 'send' ? 'submit' : 'button';
   send.disabled = action.kind === 'none' || (action.kind === 'send' && (s.state !== 'idle' || s.pendingTag || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
   $('compose-hint').textContent = inputRecoveries.get(s?.id)?.text.value ? '上一段原生输入未确认。草稿可继续编辑；请在原生终端查看保留的文字。' : pendingMode?.id === s?.id ? '正在切换输入方式，可以先编辑草稿。' : action.hint;
@@ -224,7 +228,8 @@ async function showTrust() {
   section('数据去向', '会话副本和草稿保存在本机。实时画面和工具片段仅在本机内存暂存，不写入本应用的持久记录，也不自动分享。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
   section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。每轮核查由你确认 2–6 次回复上限和 10 分钟期限；原生工具和子 agent 的用量不受这些交接限制约束。');
   const dispatches = snapshot.diagnostics?.dispatches;
-  section('本次后台运行的派发计数', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。只计通过应用发送与交接的消息，不含原生终端直接输入，也不代表总模型调用或费用；后台重启后重新计数。`);
+  section('应用派发记录', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。包含未确认或被拒绝的尝试，不代表付费调用；不含原生终端直接输入，也不是总用量或账单。普通后台计数从本次运行开始，旧会话输入连接保留本地发送计数。`);
+  if (snapshot.sessions.some(s => s.legacyInputEligible)) section('原会话输入连接', '只有点击“接通原会话输入”才在该工作目录添加 .claude/skills/native-workspace-compat 本地插件。插件代码不含凭据；连接凭据在本机私有目录。加载插件和切换界面不发起模型任务，不重启原会话。');
   const usage = section('原生报告的用量', '以下是原生接口报告的累计 token；可能延迟或缺少子任务，不是账单。金额请在原生提供商账户核对。');
   for (const s of snapshot.sessions) {
     const total = s.usage?.total;
@@ -849,7 +854,14 @@ $('send-button').onclick = () => attempt(async () => {
   if ($('send-button').disabled) return;
   const s = current(), action = soloAction(s);
   if (action.kind === 'terminal') await switchMode('terminal');
-  else if (action.kind === 'claim') await switchMode(s.chatAvailable === false ? 'terminal' : 'chat', true);
+  else if (action.kind === 'connect') {
+    const revision = selectionRevision;
+    await api.prepareInput(s.id);
+    if (revision !== selectionRevision || current()?.id !== s.id) return;
+    await switchMode('terminal');
+    if (current()?.id === s.id && mode === 'terminal') toast('请在此会话运行 /reload-plugins；连接成功后即可切回对话输入。');
+  }
+  else if (action.kind === 'claim') await switchMode(s.chatAvailable === false && !s.legacyInputEligible ? 'terminal' : 'chat', true);
   else if (action.kind === 'resume') await api.resume(s.id);
 });
 $('composer').onsubmit = event => {

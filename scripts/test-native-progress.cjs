@@ -140,6 +140,21 @@ async function run() {
   await until(async () => await panel(a).locator('.progress-trace > div > details').count() < 40, 'Evicted structured items removed');
   assert.ok(!fs.readFileSync(path.join(profile, 'workspace.json'), 'utf8').includes('SELECT-ME-PRIVATE'));
   checks.push('Retention overrun explicitly checkpoints; structured eviction mirrored; raw/tool observations not persisted');
+  // Exercise the legacy frame contract in the actual renderer/xterm. This is
+  // synthetic transport, not a claim of physical mouse/IME input or old-daemon proof.
+  await fixture('legacyFrames', b);
+  await panel(b).getByRole('button', { name: '重新连接画面', exact: true }).click();
+  await fixture('output', b, { data: '\x1bcSELECT-LEGACY\r\n' }); await aligned(b);
+  const selection = () => page.evaluate(id => [...progressTestTerminals].reverse().find(t => t.element?.isConnected && t.element.closest('[data-progress-id]')?.dataset.progressId === id).getSelection(), b);
+  await page.evaluate(id => [...progressTestTerminals].reverse().find(t => t.element?.isConnected && t.element.closest('[data-progress-id]')?.dataset.progressId === id).select(0, 0, 13), b);
+  assert.equal(await selection(), 'SELECT-LEGACY');
+  await fixture('output', b, { data: 'NEW FULL FRAME\r\n', cols: 72, rows: 20 }); await delay(120);
+  assert.equal(await selection(), 'SELECT-LEGACY');
+  assert.ok(!(await screen(b)).lines.join('').includes('NEW FULL FRAME'));
+  await panel(b).getByRole('button', { name: '重新连接画面', exact: true }).click(); await delay(120);
+  assert.equal(await selection(), 'SELECT-LEGACY');
+  await panel(b).getByRole('button', { name: '回到实时', exact: true }).click(); await aligned(b);
+  checks.push('Legacy full-frame output/resize/reconnect preserve the selected frame; explicit live action returns to canonical screen');
   await fixture('hold', a); await panel(a).getByRole('button', { name: '重新连接画面', exact: true }).click();
   await until(async () => (await fixture()).waiting.includes(a), 'Observe held before disconnect');
   await fixture('progress', a, { id: 'queued-disconnected', title: 'Must not show after disconnect', status: 'running' });

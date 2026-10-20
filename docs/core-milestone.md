@@ -75,5 +75,14 @@ progress in solo/room views. A real two-provider CSV check complements the earli
 recorded study-planning workflow; unchanged lifecycle scenarios reuse their prior
 OS evidence. Current raw-output, queue/gap, focus/draft and reconnect checks plus
 same-history cold recovery are recorded in `live-progress.md` and `testing.md`.
-This closes the scoped observation increment, not seamless active old-backend
-feature upgrades (U05), full fleet recovery or official Desktop state integration.
+The new-backend observation subcase passed. Subsequent retained-session screenshots
+reopen U17: terminal output is present but conversation mode lacks it and cannot
+send. The practical seamless-use milestone is therefore not closed for that path.
+U05, full fleet recovery and official Desktop state integration remain open.
+
+Alpha.25 repairs the inspected retained alpha.2 Claude path without replacing its
+native process: explicit native input plugin reload, readonly complete-screen
+snapshots, draft/owner protection and UI reconnect. See `live-progress.md` for the
+real task and limitations. U17/U05 remain open for other old connections, including
+Codex and legacy shared/automatic dispatch; this narrower repair does not close
+all seamless-use acceptance.

@@ -21,7 +21,7 @@ NativeHost.prototype.create = function (record) {
   r.journal = new TerminalJournal(80, 24); r.sequence = 0;
   r.terminal = {
     alive: true, input() { stats.inputs++; }, resize() { stats.resizes++; },
-    observe: async () => ({ ...r.journal.snapshot(), alive: true }),
+    observe: async () => ({ ...r.journal.snapshot(), alive: true, legacySnapshots: !!r.legacyFrames }),
     snapshot: async () => ({ buffer: r.serializer.serialize(), sequence: r.sequence, cols: r.screen.cols, rows: r.screen.rows }),
   };
   r.start = async () => r.emit('state', 'idle'); r.stop = async () => ({ state: 'ended' });
@@ -34,13 +34,14 @@ process.on('message', async q => {
     if (q.method === 'hold') held.add(q.target);
     if (q.method === 'rawUnavailable') q.value ? noRaw.add(q.target) : noRaw.delete(q.target);
     if (q.method === 'release') { waiting.get(q.target)?.(); waiting.delete(q.target); }
+    if (q.method === 'legacyFrames') r.legacyFrames = true;
     if (q.method === 'output' || q.method === 'burst') {
       const items = q.method === 'burst' ? q.value : [q.value];
       for (const item of items) {
         const receivedAt = Date.now();
         if (item.cols) r.screen.resize(item.cols, item.rows);
         await write(r.screen, item.data || '');
-        const event = r.journal.append(item.cols ? 'resize' : 'output', item.data || '', r.screen.cols, r.screen.rows, () => r.serializer.serialize());
+        const event = r.journal.append(r.legacyFrames ? 'snapshot' : item.cols ? 'resize' : 'output', r.legacyFrames ? '\x1bc' + r.serializer.serialize() : item.data || '', r.screen.cols, r.screen.rows, () => r.serializer.serialize());
         r.emit('terminal', { ...event, receivedAt, sequence: ++r.sequence });
         if (item.delay) await new Promise(resolve => setTimeout(resolve, item.delay));
       }

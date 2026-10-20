@@ -1,22 +1,32 @@
 # Readiness and next gates
 
-As of 2026-10-19. Version 0.1.0-alpha.24 is a **local macOS technical-trial alpha**.
+As of 2026-10-19. Version 0.1.0-alpha.25 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.24 adds private native TUI observation and bounded
+**Current increment:** alpha.25 repairs the inspected retained Claude input and
+snapshot path. Alpha.24 adds private native TUI observation and bounded
 rewind/tool traces to both solo and room views. Protocol, real Electron and visible
 native-task evidence are described in [live-progress.md](live-progress.md).
 The native terminal remains the authority; not every structured tool payload or
 native Desktop interface is mapped. Observation is volatile and explicitly bounded.
 
-Retained older sessions can still be terminal-only. Updates preserve their live
-backend and cannot safely hot-patch missing graphical-send capabilities. The menu
-explains blockers and offers an explicit same-history continuation for ended,
-compatible services. Earliest backends without atomic shutdown remain preserved;
-there is no automatic upgrade or active-team reconstruction. U05 remains open
-for seamless active-session feature upgrades, separate from accepted cold recovery.
+**Acceptance correction after actual retained-session feedback:** the person still
+sees only final replies in conversation mode and cannot compose/send there while
+their original terminal works. U17 is reopened for this user path. Passing a new
+backend trial is not evidence of seamless use of an existing conversation. Visible
+tool work, permission waits, errors, timing and results must remain accessible
+across presentation changes; an optional raw pane does not establish complete
+structured coverage. Input continuity must also be verified on that same session.
+
+Alpha.25 adds an explicit same-process input connection and readonly snapshot
+observation for retained alpha.2 Claude sessions. Click the connection action,
+then run native `/reload-plugins` once if needed; never automatically force a
+reload. This preserves the live PID, native ID, history and drafts. Old Codex
+connections and old automatic/shared dispatch remain capability-gated. Older
+missing intermediate frames cannot be reconstructed. These are bounded repairs,
+not a claim that every retained backend supports all current features.
 
 | Area | Current evidence | Boundary |
 | --- | --- | --- |

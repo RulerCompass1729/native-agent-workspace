@@ -37,15 +37,17 @@ class NativeProgressPanel {
       this.traceTruncated = snapshot.progress.truncated; this.renderTrace();
       const raw = snapshot.terminal;
       this.raw = raw; this.events = raw?.events || []; this.index = raw?.index || 0;
+      this.trace.hidden = !!raw?.legacySnapshots;
       this.bytes = raw?.bytes || 0; this.checkpoint = raw?.checkpoint; this.epoch = raw?.epoch;
       this.viewport.hidden = !this.checkpoint; this.controls.hidden = !this.checkpoint;
       if (!this.checkpoint && !this.traceChosen) this.trace.open = true;
       this.notice.textContent = raw?.unavailable || (!raw ? '尚未连接原生画面；运行记录仍会更新。打开一次原生终端后可在这里实时查看。' : raw.truncated ? '仅保留最近的原生过程；更早临时画面已移出内存。此处仅你可见。' : '原生实时画面 · 仅你可见，临时过程只在本机内存保留');
+      if (raw?.legacySnapshots && !raw.unavailable) this.notice.textContent = '原会话实时画面 · 仅你可见。旧连接以画面快照同步，接入前或两次快照之间的临时变化无法完整回看。';
       if (this.checkpoint) {
         this.ensureScreen(); this.live = wasLive;
         const retained = previousEpoch === this.epoch && previousTarget >= this.checkpoint.index;
         if (!wasLive && !retained) this.notice.textContent = '此前回看位置已移出缓存，显示当前最早保留画面。';
-        this.replay(wasLive ? this.index : retained ? Math.min(previousTarget, this.index) : this.checkpoint.index);
+        if (!(this.selectionHeld && this.term.hasSelection())) this.replay(wasLive ? this.index : retained ? Math.min(previousTarget, this.index) : this.checkpoint.index);
       }
     } catch { if (!this.disposed && this.connected !== false) this.notice.textContent = '实时连接暂不可用，原生会话未改动。'; }
     finally {
@@ -63,6 +65,14 @@ class NativeProgressPanel {
       theme: { background: '#191b1e', foreground: '#e6e8eb', selectionBackground: '#53677b88' } });
     this.term.open(this.surface);
     this.term.textarea?.setAttribute('aria-label', '只读原生实时画面');
+    this.term.onSelectionChange(() => {
+      if (!this.raw?.legacySnapshots || !this.term.hasSelection() || !this.live) return;
+      // A complete legacy frame resets xterm. Keep the exact selected frame,
+      // rather than trying to transplant a selection onto changed text.
+      this.live = false; this.paintRevision++; this.paintPending = []; this.paintBytes = 0; this.pendingReplay = null;
+      this.selectionHeld = true; this.range.value = String(this.paintedIndex || 0);
+      this.position.textContent = '已停在选中文字的画面 · 可回到实时';
+    });
     // No onData/onBinary handlers: device queries cannot reach the agent.
   }
   dimensions(cols, rows) {
@@ -73,6 +83,7 @@ class NativeProgressPanel {
   writeScreen(data) { return new Promise(resolve => this.term.write(data, resolve)); }
   replay(target) {
     if (!this.term || !this.checkpoint || this.disposed) return;
+    this.selectionHeld = false;
     const revision = ++this.paintRevision;
     this.paintPending = []; this.paintBytes = 0;
     this.pendingReplay = { revision, checkpoint: this.checkpoint, events: this.events.filter(event => event.index <= target), target };
@@ -105,6 +116,7 @@ class NativeProgressPanel {
             await this.writeScreen(batch.join(''));
           }
           if (this.disposed || revision !== this.paintRevision) continue;
+          this.paintedIndex = target;
           this.range.min = String(checkpoint.index); this.range.max = String(this.index); this.range.value = String(target);
           const event = events.at(-1) || checkpoint;
           this.position.textContent = this.live ? '实时' : `回看 ${new Date(event.time).toLocaleTimeString()}`;
@@ -115,6 +127,7 @@ class NativeProgressPanel {
           while (this.paintPending.length && batch.length < 64 && this.paintPending[0].event.cols === first.cols && this.paintPending[0].event.rows === first.rows);
           this.dimensions(first.cols, first.rows); await this.writeScreen(batch.map(event => event.data).join(''));
           if (this.disposed || revision !== this.paintRevision) continue;
+          this.paintedIndex = batch.at(-1).index;
           if (this.live) this.range.value = String(batch.at(-1).index);
           requestAnimationFrame(() => { if (!this.disposed && revision === this.paintRevision) {
             this.element.dataset.paintLatency = String(Math.max(0, Date.now() - (first.receivedAt || first.time)));
@@ -131,6 +144,7 @@ class NativeProgressPanel {
     this.pendingBytes += bytes; this.pendingEvents.push(event);
   }
   receive(event) {
+    if (event.observationError && !this.disposed && this.connected !== false) { this.notice.textContent = '原会话画面暂时未能同步，以下是最后收到的内容；可重新连接画面。'; return; }
     if (this.disposed || this.connected === false || !event.epoch) return;
     if (this.loading) {
       this.queuePending(event);
@@ -178,5 +192,5 @@ class NativeProgressPanel {
     for (const row of existing.values()) row.remove();
   }
   readingState() { return { live: this.live, epoch: this.epoch, target: Number(this.range.value), open: this.element.open, traceOpen: this.trace.open, scroll: this.term ? this.viewport.scrollTop : undefined, followScreen: this.followScreen }; }
-  dispose() { this.disposed = true; this.paintRevision++; this.term?.dispose(); this.element.remove(); this.pendingEvents = []; this.pendingReplay = null; this.paintPending = []; }
+  dispose() { this.disposed = true; this.paintRevision++; api.unobserve(this.id).catch(() => {}); this.term?.dispose(); this.element.remove(); this.pendingEvents = []; this.pendingReplay = null; this.paintPending = []; }
 }
