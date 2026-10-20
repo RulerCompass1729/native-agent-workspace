@@ -874,3 +874,25 @@ groups pass final independent artifact review. All 37 app files match source and
 the ad-hoc signature verifies. Original user records and protected processes are
 unchanged, with one discoverable app. Force termination, crash and power loss
 are outside the cancellable close/quit protection.
+
+## Saved window placement — alpha.37
+
+An actual Electron startup restored synthetic saved coordinates outside every
+current display. The window ran but had no visible overlap. The new placement
+helper restores only unreachable title bars and unusably small dimensions;
+reachable positions, including intentional partial placements, remain.
+Six focused geometry checks include negative-coordinate displays, a small work
+area, hidden title bars, invalid native-coordinate input and the independent
+reviewer's accessible 100×100 counterexample. All 361 unit checks pass without skips.
+
+The actual source Electron runner checks offscreen recovery, persisted corrected
+bounds, two independent windows/drafts, repeated normal reopen, unchanged native
+identity/service and a real undersized-record recovery to the native minimum.
+All provider opens, inputs, resizes and sends remain zero. Windows are intentionally
+hidden and non-focusable; this does not certify OS Space assignment or live monitor
+hot-plug handling. Small/negative display configurations are geometry fixtures;
+the actual restart runner uses the host's current display configuration.
+The same four installed restart groups and six installed save-failure lifecycle
+regressions pass final independent review. All 38 shipped app files match source;
+the ad-hoc signature verifies. Original user records and five protected processes
+remain unchanged, with one discoverable app.

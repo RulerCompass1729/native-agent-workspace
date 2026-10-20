@@ -1,11 +1,20 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.36 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.37 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.36 keeps a window open when its local view/draft save
+**Current increment:** alpha.37 restores a saved window to an available display
+when its title bar is no longer reachable. Usable positions, including negative
+coordinates and intentionally partial placements, remain. Undersized records
+cannot reduce the usable minimum unless the current work area itself is smaller.
+The source and installed restart checks retain both windows, drafts and native
+identities with zero provider activity. Four restart groups and six installed
+save-failure regressions pass final independent artifact review.
+This does not move windows in response to live display hot-plug events.
+
+Alpha.36 keeps a window open when its local view/draft save
 fails, including application quit. The existing warning and retry control remain
 available independently of the native service connection. A post-acceptance disk
 failure no longer mislabels an accepted message as a failed send; storage events

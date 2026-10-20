@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, session, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, session, shell, screen } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -13,6 +13,7 @@ const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { readingState } = require('./reading-state.cjs');
 const { ViewStore } = require('./view-store.cjs');
+const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 
 app.setName('Native Agent Workspace');
@@ -56,7 +57,7 @@ const trusted = url => { try { const parsed = new URL(url); return parsed.origin
 let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 const startupFile = path.join(__dirname, 'startup.html');
-function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, ...(backgroundTest ? { show: false, focusable: false } : {}), minWidth: 850, minHeight: 600, backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
+function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, show: !backgroundTest, focusable: !backgroundTest, minWidth: Math.min(850, view.bounds?.width || 850), minHeight: Math.min(600, view.bounds?.height || 600), backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
 function createWindow(view) {
   const win = new BrowserWindow(windowOptions(view));
   return win;
@@ -118,6 +119,7 @@ function saveReadingSoon() {
 async function openWindow(saved) {
   if (quitting) return;
   const view = saved || { owner: randomUUID(), selected: '', mode: 'terminal', preference: 'terminal', active: true };
+  if (view.bounds) view.bounds = windowPlacement(view.bounds, screen);
   backups(view);
   if (!views.includes(view)) views.push(view);
   view.active = true; saveViews();
@@ -125,7 +127,10 @@ async function openWindow(saved) {
   if (quitting) { client.close(); return; }
   const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : createWindow(view);
   startupWindow = null;
-  if (view.bounds) win.setBounds(view.bounds);
+  if (view.bounds) {
+    win.setMinimumSize(Math.min(850, view.bounds.width), Math.min(600, view.bounds.height));
+    win.setBounds(view.bounds);
+  }
   const context = { win, client, view, failed: false };
   windows.set(win.webContents.id, context); bindClient(context);
   const ready = new Promise((resolve, reject) => { context.ready = resolve; context.readyTimer = setTimeout(() => reject(new Error('UI did not become ready')), 25000); });
