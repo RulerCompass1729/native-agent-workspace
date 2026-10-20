@@ -957,3 +957,30 @@ disabled for testing. Summed RSS can count shared pages more than once. These
 numbers do not include real native agents, certify visible-window energy use,
 or establish long-term leak freedom. The original user's processes were excluded
 from measurement and retained.
+
+## Selection-to-sharing continuity — alpha.40
+
+With a real room recipient available, the installed alpha.39 pointer probe selected
+text in the readonly native pane but the header asked the person to select text.
+The same mouse action in the repaired source opens an exact-text sharing preview.
+The initial probe without a room recipient was insufficient on its own: the
+repaired path correctly asked for a recipient. Both results remain in private
+evidence, and the corrected comparison uses identical recipient prerequisites.
+
+The existing header action now reads only the current visible native pane or
+conversation/trace/permission text. A new document selection replaces an older
+terminal selection and vice versa. Empty, hidden and other-pane selections are
+not shareable. No selection text is cached across sessions. The preview and its
+explicit recipient/confirmation remain unchanged. No clipboard read or model call
+is added by selection, viewing, opening or cancelling a preview.
+
+Actual pointer/keyboard source checks include exact readonly and native-terminal
+selections, competing document/native selections, session and view switching,
+keyboard collapse of native pane/trace/record and room-to-member navigation.
+Early runner failures were corrected to await the selection event and identify
+the selected terminal by session ID, rather than matching multiple retained DOM
+screens. Five source and installed selection groups pass, as do six installed
+native-progress and seven installed sharing-preview regression groups. All 38
+app files match source and the ad-hoc signature verifies. Original user records
+and five protected processes remain unchanged, with one discoverable app.
+Independent final artifact review passes. No native model task was run.

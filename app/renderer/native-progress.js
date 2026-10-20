@@ -131,6 +131,7 @@ class NativeProgressPanel {
     this.term.open(this.surface);
     this.term.textarea?.setAttribute('aria-label', '只读原生实时画面');
     this.term.onSelectionChange(() => {
+      nativeSelectionChanged(this.id, this.term);
       if (!this.raw?.legacySnapshots || !this.term.hasSelection() || !this.live) return;
       // A complete legacy frame resets xterm. Keep the exact selected frame,
       // rather than trying to transplant a selection onto changed text.

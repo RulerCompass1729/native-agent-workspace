@@ -501,13 +501,52 @@ function updateSharingControls() {
   $('confirm-share').textContent = sharePending ? '发送中…' : '发送这段内容';
   $('share-help').textContent = sharePending ? '正在发送刚才确认的内容；你可以继续编辑，新的修改不会随这次发送。' : target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
 }
+function visibleSelectionTerminal() {
+  const s = current(); if (!s || s.archived) return null;
+  if (mode === 'terminal') return terminals.get(s.id)?.ready ? terminals.get(s.id).term : null;
+  const panel = progressPanels.get(s.id);
+  return panel?.element.open && !panel.viewport.hidden ? panel.borrowed?.term || panel.term : null;
+}
+function selectedSharingText() {
+  const s = current(); if (!s || s.archived) return '';
+  if (mode === 'chat') {
+    const selection = window.getSelection(), text = selection?.toString() || '';
+    if (text) {
+      // Only the displayed conversation/trace/permission content is a source.
+      // A selection in another pane or dialog must not become this agent's text.
+      const visible = value => (value?.nodeType === Node.ELEMENT_NODE ? value : value?.parentElement)?.getClientRects().length > 0;
+      const inside = visible(selection.anchorNode) && visible(selection.focusNode) && ['messages', 'solo-progress', 'approval'].some(id => {
+        const el = $(id);
+        return !el.hidden && el.contains(selection.anchorNode) && el.contains(selection.focusNode);
+      });
+      return inside ? text : '';
+    }
+  }
+  return visibleSelectionTerminal()?.getSelection() || '';
+}
+function updateSelectedSharing() {
+  if (headerControls) headerControls.selectedText.disabled = !selectedSharingText().trim();
+}
+function nativeSelectionChanged(id, term) {
+  if (current()?.id !== id || visibleSelectionTerminal() !== term) return;
+  if (term.hasSelection() && term.element.contains(document.activeElement)) window.getSelection()?.removeAllRanges();
+  updateSelectedSharing();
+}
+function documentSelectionChanged() {
+  // Choosing ordinary text supersedes an older terminal selection. No selection
+  // is cached or transferred between sessions; sharing always reads it afresh.
+  if (window.getSelection()?.toString()) visibleSelectionTerminal()?.clearSelection();
+  updateSelectedSharing();
+}
+document.addEventListener('selectionchange', documentSelectionChanged);
+document.addEventListener('toggle', updateSelectedSharing, true);
 function renderHeader(s, inRoom) {
   if (!headerControls) {
     const resume = button('继续原生会话', () => { const s = current(); if (s && canResume(s)) return api.resume(s.id); }, 'primary');
     const membership = button('', () => { const s = current(); if (s && !s.archived) return s.roomId ? detach(s.id) : api.join(s.id, true); });
     const selectedText = button('分享选中内容', () => {
       const s = current(); if (!s || s.archived) return;
-      const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString();
+      const text = selectedSharingText();
       text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。');
     });
     const restore = button('恢复会话', () => { const s = current(); if (s?.archived) return restoreArchivedSession(s.id); }, 'primary');
@@ -683,6 +722,7 @@ function render() {
       if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
     }
     renderProgressPanels();
+    updateSelectedSharing();
   } finally { restoreVisibleReading(); rendering = false; }
 }
 async function switchMode(next, takeControl = false) {
@@ -743,6 +783,7 @@ async function ensureTerminal(id) {
   const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
   const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [] }; terminals.set(id, entry);
+  term.onSelectionChange(() => nativeSelectionChanged(id, term));
   let recovery = inputRecoveries.get(id);
   if (!recovery) {
     const panel = node('div', undefined, 'terminal-input-recovery'); panel.hidden = true;
@@ -1125,4 +1166,4 @@ attempt(async () => {
   }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); for (const panel of progressPanels.values()) panel.dispose(); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); for (const panel of progressPanels.values()) panel.dispose(); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

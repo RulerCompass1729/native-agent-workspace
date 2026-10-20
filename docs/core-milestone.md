@@ -114,3 +114,33 @@ unattended goals, external-session live attachment, official Desktop UI state
 synchronization and broad consumer onboarding remain separate unfinished work.
 No new claim of physical IME completeness, zero latency or identical total cost
 is made by this checkpoint. See the alpha.27 evidence in testing.md and review.md.
+
+## Local reliability follow-up — alpha.29–40
+
+As of 2026-10-20, the supported local-trial workflow has additional failure and
+interaction coverage. This preserves the earlier native task evidence and its
+limits; it does not declare the entire product vision complete.
+
+- Recovery and saving: confirmed backend exit, explicit same-owned-Codex
+  reconnect, continuous-output checkpoints, unreadable-record preservation,
+  failed-save close/quit cancellation and accepted-send/storage separation.
+- Daily interaction: long-list navigation, minimum-window conversation space,
+  unreachable saved-window recovery, stable keyboard controls and exact visible
+  native-selection sharing through the existing preview.
+- Control: native permission pending/resolution and scope guards, obsolete
+  request/owner rejection, invalidated membership actions and protection of
+  newer preview edits from older send completion.
+
+Each increment has actual failure/counterexample evidence, affected source and
+installed-app checks, and independent final review in testing.md/review.md.
+The final local app is alpha.40; only one ordinary application entry remains.
+Original native sessions and saved user records were preserved. No new native
+model task was run during this hardening window; local synthetic transports test
+the changed interface/control paths, not provider inference quality. Earlier
+automated guest OS-event and native-task evidence retains its original scope and date.
+
+The next larger gate remains complete native-fleet lifecycle and cross-version
+compatibility, followed by broader account onboarding and distribution. External
+live-session attachment, official Desktop-state synchronization and arbitrary
+unattended goal completion are still unfinished; they are not implicit claims
+of this local-trial acceptance.

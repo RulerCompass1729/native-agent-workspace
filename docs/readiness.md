@@ -1,15 +1,21 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.39 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.40 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.39 preserves keyboard control focus during native
+**Current increment:** alpha.40 connects the existing sharing action to the
+selected text in the visible native pane as well as conversation text. Empty and
+hidden selections are rejected; sharing still requires the original preview and
+explicit recipient. Five installed selection groups, six native-progress groups
+and seven sharing-preview groups pass final independent artifact review.
+
+Alpha.39 preserves keyboard control focus during native
 history updates. Header, member, permission and advanced controls remain stable
 while their action is valid. Changed permission/owner state remains guarded;
 removing a focused member returns to dialog completion. Seven source/installed keyboard groups, four native-confirmation groups and
-six collaboration groups pass final independent artifact review. No new model
+six collaboration groups pass final independent artifact review. No new native-provider model
 task was run.
 
 Alpha.38 keeps later sharing-preview edits and reopened
@@ -65,7 +71,7 @@ directory and reason; unrepresented permission scopes cannot be approved here.
 Retained backends without native-confirmation synchronization keep their original
 session and terminal, but cannot receive GUI permission decisions. Source and
 rendered synthetic-protocol checks, actual retained alpha.31 backend with the new
-GUI, installed empty-profile cold boot and final independent artifact review pass. No new model task or live native permission
+GUI, installed empty-profile cold boot and final independent artifact review pass. No new native-provider model task or live native permission
 round-trip is claimed.
 
 Alpha.31 allows an explicit reconnect when the graphical
