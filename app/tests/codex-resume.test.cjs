@@ -127,6 +127,33 @@ test('native history confirms a saved uncertain submission without replaying it'
   w.sessions.set(s.id, s); t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   await w.resume(s.id, 'owner'); assert.equal(s.messages.length, 1); assert.equal(s.messages[0].id, 'gui-tag'); assert.equal(s.messages[0].status, 'submitted'); assert.equal(w.versions.dispatches, 0);
 });
+for (const scenario of ['two-each', 'extra-cache', 'gui-exact', 'mixed-content', 'live-input']) {
+  test('old random native display IDs reconcile one-for-one: ' + scenario, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-resume-legacy-'));
+    const user = (id, extra = {}) => ({ id, type: 'userMessage', content: [{ type: 'text', text: 'same' }], ...extra });
+    const count = scenario === 'two-each' ? 2 : 1;
+    const f = fixture(idle, (_p, r) => {
+      if (scenario === 'live-input') r.event({ method: 'item/completed', params: { item: user('new-live') } });
+      return { data: Array.from({ length: count }, (_, i) => ({ item: user('native-' + i,
+        scenario === 'gui-exact' ? { clientId: 'gui' } : scenario === 'mixed-content'
+          ? { content: [{ type: 'text', text: 'same' }, { type: 'image', url: 'synthetic' }] } : {}) })) };
+    });
+    Object.assign(f.host, { binaries: {}, close() {}, create: s => { f.r.record = s; return f.r; } });
+    const w = new Workspace(f.host, dir);
+    const cached = id => ({ id, role: 'user', text: 'same', status: 'submitted', origin: 'native' });
+    const s = { ...f.r.record, id: 'local', provider: 'codex', cwd: dir, state: 'recoverable',
+      controlRevision: 0, messages: [cached('old-1'), ...(['two-each', 'extra-cache'].includes(scenario) ? [cached('old-2')] : []),
+        ...(scenario === 'gui-exact' ? [{ ...cached('gui'), origin: 'human' }] : [])] };
+    w.sessions.set(s.id, s);
+    t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    await w.resume(s.id, 'owner');
+    const expected = { 'two-each': ['native-0', 'native-1'], 'extra-cache': ['native-0', 'old-2'],
+      'gui-exact': ['gui', 'old-1'], 'mixed-content': ['native-0', 'old-1'], 'live-input': ['native-0', 'new-live'] };
+    assert.deepEqual(s.messages.map(m => m.id), expected[scenario]);
+    assert.equal(w.versions.dispatches, 0); assert.deepEqual(w.room.messages, []);
+    assert.equal(s.controlRevision, scenario === 'live-input' ? 2 : 1);
+  });
+}
 test('a failed terminal launch after native resume keeps the owned runtime for retry', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-resume-terminal-'));
   const f = fixture(idle); const open = f.r.openTerminal; f.r.openTerminal = async () => { throw Error('synthetic terminal failure'); };

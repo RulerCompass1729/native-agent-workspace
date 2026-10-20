@@ -118,6 +118,16 @@ class Workspace extends EventEmitter {
     });
     runtime.on('history', items => {
       const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set();
+      const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
+      const legacyInputs = new Map();
+      if (s.provider === 'codex' && s.recovering) {
+        for (const [id, text] of runtime.recoveryNativeInputs || []) {
+          const cached = existing.get(id);
+          if (!cached || exactIds.has(id) || cached.text !== text || cached.role !== 'user' || cached.origin !== 'native') continue;
+          if (!legacyInputs.has(text)) legacyInputs.set(text, { ids: [], next: 0 });
+          legacyInputs.get(text).ids.push(id);
+        }
+      }
       for (const item of items) {
         const own = item.type === 'userMessage' && item.clientId && existing.get(item.clientId)?.role === 'user' ? existing.get(item.clientId) : existing.get(item.id);
         // A cold connection's persisted partial text is not newer than native
@@ -129,13 +139,32 @@ class Workspace extends EventEmitter {
         const m = own || (item.type === 'userMessage'
           ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
           : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+        // Early backends assigned random display IDs to native user input.
+        // One unmatched pure-text history item may replace one pre-recovery
+        // cache row. This is display reconciliation, never reply attribution.
+        if (!own && s.provider === 'codex' && s.recovering && item.type === 'userMessage' &&
+          item.content?.length && item.content.every(i => i.type === 'text' && typeof i.text === 'string')) {
+          const queue = legacyInputs.get(m.text);
+          if (queue && queue.next < queue.ids.length) used.add(queue.ids[queue.next++]);
+        }
         if (!used.has(m.id)) { imported.push(m); used.add(m.id); }
       }
       // Keep live content and GUI submission status; only history supplies order.
       // No complete/nativeInput events: hydration cannot route or pause a task.
-      s.messages = imported.concat(s.messages.filter(m => !used.has(m.id))); this.changed();
+      s.messages = imported.concat(s.messages.filter(m => !used.has(m.id)));
+      runtime.recoveryNativeInputs?.clear();
+      this.changed();
     });
     runtime.on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.changed(); });
+    runtime.on('unattributed', tag => {
+      if (s.pendingTag !== tag) return;
+      s.pendingTag = null;
+      const shared = this.room.messages.find(m => m.id === tag);
+      if (shared) shared.status = 'reply-private';
+      this.forwards.delete(tag);
+      s.activity = '输入已接收；回复归属未确认，自动交接已暂停。';
+      this.pause(s.activity); this.changed();
+    });
     runtime.on('delta', item => {
       let message = s.messages.find(m => m.id === item.id);
       if (!message) { message = { id: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
@@ -143,8 +172,8 @@ class Workspace extends EventEmitter {
     });
     runtime.on('messageItem', item => { let m = s.messages.find(m => m.id === item.id); if (!m) { m = { id: item.id, role: 'assistant' }; s.messages.push(m); } Object.assign(m, { text: item.text, status: 'complete', phase: item.phase }); this.changed(); });
     runtime.on('complete', info => {
-      // Claude's root Stop has no turn ID and loses its tag on human takeover
-      // or interrupt. Codex has native turn IDs and must match its own pending.
+      // Only the adapter's verified native identity can authorize a forward.
+      // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
       if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag) { s.pendingTag = null; s.activity = ''; s.approval = null; }
       if (s.provider === 'claude' && info.text) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete' });

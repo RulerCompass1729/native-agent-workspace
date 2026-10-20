@@ -95,3 +95,22 @@ renderer and runtime files match the tested source. This closes the inspected
 input/raw-preview/manual-sharing subcases after independent delivery review;
 full U17/U05 remain open for other compatibility and active-fleet cases. Old
 Claude automatic reply routing still needs a reliable submit-to-turn contract.
+
+
+## Alpha.27 local-trial checkpoint
+
+The supported local GUI/TUI and bounded-collaboration path passes final independent
+review. Real retained Claude/Codex work, explicit sharing, same-ID cold recovery,
+new prompt-correlated reply transfer, two installed lifecycle cycles, and native
+live-pane/input regressions cover the reported day-to-day path. The successful
+recording is local; only synthetic reproductions and redacted conclusions enter Git.
+This delivery fixes the reproduced stale-reply attribution and recovery-display
+bugs without additional background model calls or replacing the user's sessions.
+
+Keep U05 open for arbitrary live old-backend feature upgrades. An existing native
+process can continue with its supported capabilities; current automatic handoff
+requires the verified identity contract. Full fleet restoration, arbitrary
+unattended goals, external-session live attachment, official Desktop UI state
+synchronization and broad consumer onboarding remain separate unfinished work.
+No new claim of physical IME completeness, zero latency or identical total cost
+is made by this checkpoint. See the alpha.27 evidence in testing.md and review.md.

@@ -133,20 +133,32 @@ class Claude extends EventEmitter {
       case 'UserPromptSubmit':
         // A settings hook observing a prompt is not its acceptance. The native
         // structured submission result acknowledges our own sends separately.
-        if (!this.pending || event.prompt !== this.pending.text) { this.pending = null; this.emit('state', 'working'); this.emit('nativeInput', event.prompt || '原生输入'); }
+        this.lastPromptId = event.prompt_id || null;
+        if (this.pending && !this.pending.accepted && this.submission.pending?.authorized && event.prompt === this.pending.text) {
+          this.pending.prompts.add(event.prompt_id || null);
+        } else if (!this.pending || event.prompt !== this.pending.text || event.prompt_id !== this.pending.promptId) {
+          this.pending = null; this.emit('state', 'working'); this.emit('nativeInput', event.prompt || '原生输入');
+        }
         break;
       case 'PermissionRequest': this.pending = null; this.emit('state', 'approval'); break;
       case 'Notification':
         if (/permission|elicitation|auth/.test(event.notification_type || '')) { this.pending = null; this.emit('state', 'approval'); }
         break;
       case 'PreToolUse':
-        if (this.pending) this.pending.reply = null;
+        if (this.pending) this.pending.replies.delete(event.prompt_id);
         this.emit('activity', event.tool_name || '原生工具'); this.emit('state', 'working'); break;
       case 'Stop': {
         const pending = this.pending;
-        // Hooks may arrive before the structured submission acknowledgement.
-        // Keep that candidate private until this exact request was accepted.
-        if (pending && !pending.accepted) { pending.reply = event; return; }
+        // Native IDs, not arrival time or matching text, select the reply.
+        if (pending && !pending.accepted) {
+          if (pending.replies.size < 8 && event.prompt_id) pending.replies.set(event.prompt_id, event);
+          return;
+        }
+        if ((pending && event.prompt_id !== pending.promptId) ||
+          (!pending && this.lastPromptId && event.prompt_id !== this.lastPromptId)) {
+          if (event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id || crypto.randomUUID()}`, text: event.last_assistant_message });
+          return;
+        }
         this.finishReply(pending, event);
         break;
       }
@@ -159,7 +171,7 @@ class Claude extends EventEmitter {
           if (event.last_assistant_message) this.emit('messageItem', { id: crypto.randomUUID(), text: event.last_assistant_message });
           return;
         }
-        const accepted = pending?.accepted && this.pending === pending && pending.guard();
+        const accepted = pending?.accepted && pending.promptId && event.prompt_id === pending.promptId && this.pending === pending && pending.guard();
         if (this.pending === pending) this.pending = null;
         const background = Array.isArray(event.background_tasks) ? event.background_tasks.length : null;
         const scheduled = Array.isArray(event.session_crons) ? event.session_crons.length : null;
@@ -171,15 +183,25 @@ class Claude extends EventEmitter {
   async send(text, tag, guard) {
     if (!this.ready || this.pending) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
     if (!guard()) throw new Error('这条交接已撤销。');
-    const pending = this.pending = { tag, text, guard, accepted: false };
+    const pending = this.pending = { tag, text, guard, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
     try {
-      await this.submission.request(text, tag, guard);
+      const receipt = await this.submission.request(text, tag, guard);
       pending.accepted = true;
+      pending.promptId = receipt?.promptId || null;
       this.emit('submitted', tag);
-      if (pending.reply) this.finishReply(pending, pending.reply);
+      if (!pending.promptId || [...pending.prompts].some(id => id !== pending.promptId)) {
+        if (this.pending === pending) {
+          this.pending = null;
+          this.emit('unattributed', tag);
+          const observed = this.lastPromptId && pending.replies.get(this.lastPromptId);
+          if (observed) this.finishReply(null, observed);
+          else this.emit('state', 'working');
+        }
+        return;
+      }
+      if (pending.replies.has(pending.promptId)) this.finishReply(pending, pending.replies.get(pending.promptId));
       else if (this.pending === pending) this.emit('state', 'working');
     } catch (error) {
-      if (pending.reply) this.finishReply(pending, pending.reply);
       if (this.pending === pending) this.pending = null;
       throw error;
     }
@@ -224,6 +246,9 @@ class Codex extends EventEmitter {
     if (record.recovering) this.recoveryReady = new Promise(resolve => { this.finishRecoveryConnection = resolve; });
   }
   async start() {
+    this.recoveryNativeInputs = new Map(this.record.recovering
+      ? (this.record.messages || []).filter(m => m.role === 'user' && m.origin === 'native').map(m => [m.id, m.text])
+      : []);
     try { await this.host.startCodex(); }
     catch (error) { this.finishRecoveryConnection?.(false); throw error; }
     if (this.record.recovering) {

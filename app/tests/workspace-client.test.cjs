@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
-const current = ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+const current = ['claudePromptIdentity', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
 test('a delayed initial response cannot reverse newer membership, messages or permission state', async () => {
   const { ServiceClient } = require('../service-client.cjs');
   for (const newerRead of [false, true]) {
@@ -392,4 +392,13 @@ test('the registered desktop IPC run handler records intent before its first awa
   assert.equal(result.ok, false); assert.match(result.error, /真人操作.*失效/);
   assert.equal(first.next.calls.some(call => call[0] === 'run'), false);
   assert.equal(first.next.real.room.run, null);
+});
+
+test('previous handoff capabilities without Claude prompt identity cannot forward or run',async()=>{
+ const {old,next,c}=fixture();next.real.capabilities=next.real.capabilities.filter(v=>v!=='claudePromptIdentity');
+ next.real.sessions.push({...next.real.sessions[0],id:'second',provider:'codex'});
+ for(const s of next.real.sessions)s.roomId='shared';await c.call('initial');
+ assert.equal(c.snapshot().sessions.find(s=>s.id==='new').shareAvailable,false);
+ for(const op of [()=>c.call('forward','new','material'),()=>c.call('run',['new','second'],'task',2)]) await assert.rejects(op());
+ assert.equal(next.calls.filter(([method])=>['forward','run'].includes(method)).length,0);c.close();
 });

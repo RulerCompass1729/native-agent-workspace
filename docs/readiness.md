@@ -1,11 +1,15 @@
 # Readiness and next gates
 
-As of 2026-10-19. Version 0.1.0-alpha.26 is a **local macOS technical-trial alpha**.
+As of 2026-10-19. Version 0.1.0-alpha.27 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.26 adds retained Codex input and the same existing
+**Current increment:** alpha.27 verifies native Claude prompt identity before automatic
+reply transfer and repairs duplicate legacy Codex input rows on cold recovery.
+A two-reply real native check, installed same-identity recovery, and two installed
+lifecycle cycles passed independent review.
+Alpha.26 adds retained Codex input and the same existing
 terminal in conversation/room views, plus explicit directed sharing for retained
 Claude/Codex sessions. Alpha.25 repairs the retained Claude input and snapshot path. Alpha.24 adds private native TUI observation and bounded
 rewind/tool traces to both solo and room views. Protocol, real Electron and visible
@@ -13,9 +17,11 @@ native-task evidence are described in [live-progress.md](live-progress.md).
 The native terminal remains the authority; not every structured tool payload or
 native Desktop interface is mapped. Observation is volatile and explicitly bounded.
 
-**Acceptance correction after actual retained-session feedback:** the person still
-sees only final replies in conversation mode and cannot compose/send there while
-their original terminal works. U17 is reopened for this user path. Passing a new
+**Acceptance correction after actual retained-session feedback:** earlier screenshots
+showed only final replies and blocked graphical input while the original terminal
+worked. That feedback reopened U17; the inspected retained paths now have direct
+native input, live panes and explicit sharing, plus same-identity cold recovery.
+Broader old-version and active-fleet compatibility remains unverified. Passing a new
 backend trial is not evidence of seamless use of an existing conversation. Visible
 tool work, permission waits, errors, timing and results must remain accessible
 across presentation changes; an optional raw pane does not establish complete

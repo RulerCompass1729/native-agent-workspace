@@ -38,13 +38,15 @@ class SubmissionChannel extends EventEmitter {
   result(message) {
     const p = this.pending;
     if (!p || p.tag !== message.id) return false;
-    if (message.status === 'accepted' && p.authorized) this.finish();
+    if (message.status === 'accepted' && p.authorized) this.finish(null, {
+      promptId: typeof message.promptId === 'string' && /^[a-f0-9-]{36}$/i.test(message.promptId) ? message.promptId : null,
+    });
     else this.finish(new Error(message.status === 'draft' ? '原生终端里还有未发送的草稿。请先在那里处理；两边草稿均已保留。' : '原生未接受这次发送；草稿已保留，请查看原生会话。'));
     return true;
   }
-  finish(error) {
+  finish(error, receipt) {
     const p = this.pending; if (!p) return;
-    this.pending = null; clearTimeout(p.timer); error ? p.reject(error) : p.resolve();
+    this.pending = null; clearTimeout(p.timer); error ? p.reject(error) : p.resolve(receipt);
   }
   close() { this.status(false); this.finish(new Error('安全发送连接已关闭；不会自动重发。')); this.poll?.end(JSON.stringify({ closed: true })); this.poll = null; }
 }

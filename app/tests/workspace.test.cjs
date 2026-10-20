@@ -74,14 +74,14 @@ for (const intervention of ['native input', 'interrupt']) test(`Claude ${interve
   // Exercise the actual adapter hook/interrupt semantics, without starting CLI.
   const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
   runtime.record = s; runtime.ready = true; runtime.chatAvailable = true;
-  runtime.submission = { request: async () => {} };
+  runtime.submission = { request: async () => ({promptId:'fixture-prompt'}) };
   runtime.terminal = { input() {} };
   w.runtimes.set(id, runtime); w.bind(s, runtime);
   w.join(id, true); await w.forward(id, 'shared task', 'owner');
   assert.ok(s.pendingTag);
   if (intervention === 'native input') runtime.hook({ hook_event_name: 'UserPromptSubmit', session_id: s.nativeId, prompt: 'private change' });
   else await w.interrupt(id, 'owner');
-  runtime.hook({ hook_event_name: 'Stop', session_id: s.nativeId, last_assistant_message: 'private result' });
+  runtime.hook({ hook_event_name: 'Stop', prompt_id: 'fixture-prompt', session_id: s.nativeId, last_assistant_message: 'private result' });
   assert.equal(s.state, 'idle'); assert.equal(s.pendingTag, null);
   assert.equal(s.messages.at(-1).text, 'private result');
   assert.ok(!JSON.stringify(w.room.messages).includes('private result'));
@@ -193,11 +193,11 @@ for (const activity of ['background', 'fleet']) test(`actual Claude hook sequenc
   const { Claude } = require('../adapters.cjs');
   const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
   runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
-  runtime.submission = { request: async () => {} }; runtime.terminal = { input() {} };
+  runtime.submission = { request: async () => ({promptId:'fixture-prompt'}) }; runtime.terminal = { input() {} };
   w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
   ids.forEach(id => w.join(id, true)); await w.startRun(ids, 'shared question', 3, 'replies');
   if (activity === 'fleet') runtime.hook({ hook_event_name: 'SubagentStart', session_id: runtime.record.nativeId, agent_id: 'child' });
-  runtime.hook({ hook_event_name: 'Stop', session_id: runtime.record.nativeId, last_assistant_message: 'authorized reply', background_tasks: activity === 'background' ? [{ id: 'job' }] : [], session_crons: [], stop_hook_active: false });
+  runtime.hook({ hook_event_name: 'Stop', prompt_id: 'fixture-prompt', session_id: runtime.record.nativeId, last_assistant_message: 'authorized reply', background_tasks: activity === 'background' ? [{ id: 'job' }] : [], session_crons: [], stop_hook_active: false });
   await tick(); assert.equal(w.room.run.status, 'paused');
   assert.equal(w.versions.dispatches, 1);
   assert.equal(w.room.messages.filter(m => m.role === 'assistant').at(-1).text, 'authorized reply');

@@ -484,3 +484,61 @@ Codex attachment checks that the original thread is loaded before subscribing,
 but the provider does not offer an atomic loaded-only resume contract. Neither
 this test nor a readonly pane proves full active-fleet migration or recovery of
 already overwritten terminal frames.
+
+
+## Same-session recovery and reply identity — alpha.27
+
+As of 2026-10-19. The current Claude adapter now requires the native prompt ID
+observed through the public plugin API, a single matching main-thread prompt
+append with the engine-pinned plugin origin, and the matching Stop ID before
+sharing a reply. Native acceptance without provable attribution remains accepted;
+the reply stays private and subsequent handoffs pause. Authorization-before-input,
+identical human text, stale Stop events, conflicting native appends, hook exception
+and timeout fallback, and previous-service capabilities have explicit regressions.
+Old running services without this capability cannot inherit the new UI's permission
+to forward replies. Their native processes and solo input remain available.
+
+A real Electron/DSH trial resumed the two existing native sessions, then used
+Claude Haiku 5.5 low and Codex Luna low for one arithmetic check and its review.
+Exactly two new parent submissions were observed; the second input contained the
+first agent's new response. The reply cap stopped further routing. Native journal
+IDs, the two results, the shared timeline and both live terminal panes agree.
+The short successful recording and complete local evidence remain private.
+No tool or child call was observed in these two new turns; this is not a provider
+billing audit. A separate native plugin-engine probe established prompt/append/ACK
+ordering without invoking a model. No paid retries were made.
+
+Cold recovery exposed an old cache defect: early Codex services assigned random
+local IDs to native user rows, so native history added a second displayed copy.
+Full successful history import now reconciles unmatched pure-text legacy rows
+one-for-one, only from the recovery-start snapshot. Native ID/clientId matches,
+repeated text counts, mixed-content inputs, GUI submissions and new live input
+are protected. Unmatched cache remains. Text matching here changes the local
+presentation only; it never authorizes routing, emits input or changes native
+history. The synthetic old cache was reset to its original failing baseline for
+reproduction, while the real native journals and completed shared run remained
+untouched. The fixed recovery shows four messages per original session with no
+new model submission. The implementation builds lookup queues once instead of
+scanning the complete cache for every historical item.
+
+The full local suite passed 265 checks with no skips. The later equivalent
+linear-time cache implementation passed its 44 affected history/recovery checks.
+Claude's native plugin validation and both plugin-engine tests passed. The exact
+known previous compatibility plugin upgrades successfully; user-edited plugin
+files remain untouched. Final installed alpha.27 passes exact source/archive/signature checks, same-ID
+native recovery and two pointer-driven lifecycle cycles (drag, detach, session
+and room archive/restore, UI reopen, private drafts and shared records). The five
+installed progress groups pass with 204 synthetic paint samples and P95 20 ms;
+all observed input/open/resize/send side effects are zero. Eight deterministic
+input groups pass; physical foreground return is skipped to preserve the user’s
+Space. User-session PID, identity, history/draft and stored-view hashes remain
+unchanged. Independent review read these outputs and compared the installed code.
+
+The task recording uses the real application renderer and native providers with
+a hidden test window, avoiding foreground/Space disruption. The exact resume
+confirmation is answered by the test harness; this is not a physical OS click.
+A repeated guest IME experiment did not complete: its assumptions about initial
+view and the IME's inserted space were incorrect, and the disk-reserve guard later
+stopped the guest. It is not a pass. The unchanged renderer/input path retains the
+earlier alpha.22 visible System Pinyin/WeChat evidence and later regression checks;
+this release adds no new universal IME/device claim.

@@ -10,7 +10,7 @@ def main():
     message = json.loads(raw)
     fields = (
         "hook_event_name", "session_id", "agent_id", "agent_type", "source",
-        "prompt", "last_assistant_message", "stop_hook_active", "model",
+        "prompt", "prompt_id", "last_assistant_message", "stop_hook_active", "model",
         "teammate_name", "team_name", "task_id", "task_subject", "tool_name",
         "notification_type", "message", "background_tasks", "session_crons", "tool_use_id",
     )

@@ -1183,3 +1183,22 @@ cannot overwrite newer membership/messages/permissions. A separate early UI test
 failure was corrected by waiting for the actual restore handler to finish; it is
 not evidence of that IPC defect. Raw evidence and video remain private. See
 [retained continuity details](testing.md#retained-session-continuity--alpha26).
+
+
+## Alpha.27 reply identity and cold recovery
+
+Native Claude replies are shared only when their prompt identity is confirmed.
+Uncertain attribution pauses collaboration and leaves the reply private, without
+retrying an already accepted input. Current GUI capabilities cannot enable an old
+backend's unsafe forwarding. Existing native sessions are not stopped or silently
+migrated to acquire this check.
+
+Codex cold recovery reconciles legacy random display IDs against complete native
+history one-for-one. It retains distinct repeated inputs, unresolved cache,
+private drafts and original native identity. A real two-root Haiku/Luna check and
+subsequent zero-model cold recovery passed. Source, native and installed evidence passed independent final review: same-ID
+recovery, two lifecycle cycles, five live-progress groups and eight deterministic
+input groups. The foreground OS-return check was skipped to preserve the user’s
+Space; earlier physical IME evidence remains separate. Detailed limits
+and the deliberately incomplete repeated guest IME experiment are in
+[testing](testing.md#same-session-recovery-and-reply-identity--alpha27).

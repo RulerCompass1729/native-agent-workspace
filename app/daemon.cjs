@@ -28,7 +28,7 @@ async function main() {
   const dispatch = async (owner, method, args) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['atomicShutdown', 'observe', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'boundedReplyHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['atomicShutdown', 'observe', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'observe': return workspace.observe(args[0]);
       case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view);
       case 'join': if (typeof args[1] !== 'boolean') throw new Error('无效成员操作。'); return workspace.join(...args);

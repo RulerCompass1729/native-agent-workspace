@@ -40,15 +40,28 @@ function installPlugin(cwd) {
     const stat = fs.lstatSync(parent);
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件路径不安全，未写入插件文件。');
   }
-  // Never replace someone else's plugin or their edited copy.
+  // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
+  const previousHook = '6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1';
+  const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
-    if (fs.existsSync(filename) && (fs.lstatSync(filename).isSymbolicLink() || fs.readFileSync(filename, 'utf8') !== content)) throw Error('已有同名插件内容不同，未覆盖；原会话继续保留。');
+    if (!fs.existsSync(filename)) continue;
+    const stat = fs.lstatSync(filename);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('已有同名插件内容不同，未覆盖；原会话继续保留。');
+    const prior = fs.readFileSync(filename, 'utf8');
+    if (prior === content) continue;
+    if (name === 'hooks/register.js' && crypto.createHash('sha256').update(prior).digest('hex') === previousHook) upgrades.add(name);
+    else throw Error('已有同名插件内容不同，未覆盖；原会话继续保留。');
   }
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     if (!fs.existsSync(filename)) fs.writeFileSync(filename, content, { mode: 0o600, flag: 'wx' });
+    else if (upgrades.has(name)) {
+      const temp = filename + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
+      try { fs.writeFileSync(temp, content, { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, filename); }
+      finally { fs.rmSync(temp, { force: true }); }
+    }
   }
 }
 

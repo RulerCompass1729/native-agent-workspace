@@ -50,7 +50,7 @@ test('private transport rejects invalid tokens, sessions, and bodies without los
   assert.equal(await request('fixture-token', { sessionId: 'fixture-session' }), 200);
 });
 
-async function modFixture({ draft = '', changeBeforeSubmit = false, authorized = true, failAuthorization = false, endOnFinalRead = false } = {}) {
+async function modFixture({ draft = '', changeBeforeSubmit = false, authorized = true, failAuthorization = false, endOnFinalRead = false, observe } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8');
   const { register } = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + Math.random()).toString('base64'));
   const hooks = new Map(), clock = [], results = [], entered = [];
@@ -72,7 +72,7 @@ async function modFixture({ draft = '', changeBeforeSubmit = false, authorized =
     } },
     prompt: { read: async () => { if (++reads === 2 && endOnFinalRead) await invoke('session.end', {}); return { text }; }, submit: async args => {
       submits++; assert.equal(args.asUser, true);
-      entered.push(args.text); return { text: args.text };
+      entered.push(args.text); if (observe) await observe(invoke,hooks); return { text: args.text, origin:{kind:'plugin',name:'native-workspace-submit',asUser:true} };
     } },
   };
   register((event, fn) => { const hook = { fn }; hooks.set(event, hook); return { catch(fallback) { hook.fallback = fallback; } }; });
@@ -99,7 +99,7 @@ test('a compatibility plugin in the project remains dormant when the native subm
     const code = source.replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
     const { register } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
     const hooks = new Map(), clock = [];
-    register((name, fn) => hooks.set(name, fn));
+    register((name, fn) => {hooks.set(name, fn);return {catch(){}};});
     await hooks.get('session.start')({ session: { version: async () => ({ version: '2.1.302' }) },
       env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? '/fixture/native.sock' : 'fixture-token' },
       clock: { after: (_ms, fn) => clock.push(fn) } }, {}, async e => e);
@@ -127,4 +127,41 @@ test('a retained backend cannot start automatic routing without verified handoff
 test('an older retained service cannot create or recover sessions with forced permission overrides', () => {
   for (const capabilities of [undefined, [], ['verifiedHandoffs', 'structuredClaudeSubmit']]) assert.throws(() => assertNativeCreation({ capabilities }), /旧版会话/);
   assert.doesNotThrow(() => assertNativeCreation({ capabilities: ['nativePermissionDefaults'] }));
+});
+
+const promptId='00000000-0000-4000-8000-000000000001';
+const classic={session_id:'fixture-session',prompt_id:promptId,prompt:'only this text'};
+const append={door:'prompt',origin:{kind:'plugin',name:'native-workspace-submit',asUser:true},message:{type:'user',role:'user',content:[{type:'text',text:'only this text'}]},uuid:'00000000-0000-4000-8000-000000000002'};
+test('only one native prompt with an own-origin append yields correlation', async () => {
+  const f=await modFixture({observe:async invoke=>{
+    await invoke('classic.UserPromptSubmit',classic);await invoke('session.append',append);
+  }});
+  assert.equal(f.results[0].status,'accepted');assert.equal(f.results[0].promptId,promptId);
+});
+for(const scenario of ['missing-classic','missing-append','foreign-same-text','queued-foreign','two-classics','two-appends','unknown-origin','child','reload','throw']) test(`accepted Claude submission stays uncorrelated: ${scenario}`,async()=>{
+  const f=await modFixture({observe:async invoke=>{
+    if(scenario==='foreign-same-text') await invoke('prompt.submit',{text:'only this text',origin:{kind:'composer'}});
+    if(scenario!=='missing-classic') await invoke('classic.UserPromptSubmit',scenario==='child'?{...classic,agent_id:'child'}:classic);
+    if(scenario==='two-classics') await invoke('classic.UserPromptSubmit',{...classic,prompt_id:'00000000-0000-4000-8000-000000000003'});
+    if(scenario==='throw') try{await invoke('classic.UserPromptSubmit',classic,async()=>{throw Error('native hook failed')})}catch{}
+    if(scenario==='queued-foreign') await invoke('session.append',{...append,origin:{kind:'composer'}});
+    if(scenario!=='missing-append') await invoke('session.append',scenario==='unknown-origin'?{...append,origin:{kind:'unclassified'}}:append);
+    if(scenario==='two-appends') await invoke('session.append',append);
+    if(scenario==='reload') await invoke('session.start',{});
+  }});
+  assert.equal(f.results[0].status,'accepted');assert.equal(f.results[0].promptId,undefined);
+  assert.equal(f.submits,1);
+});
+
+for(const name of ['classic.UserPromptSubmit','session.append','prompt.submit']) test(`native engine timeout fallback cancels attribution: ${name}`,async()=>{
+ const f=await modFixture({observe:async(invoke,hooks)=>{
+   await invoke('classic.UserPromptSubmit',classic);await invoke('session.append',append);
+   let continuations=0;const next=async e=>{continuations++;return e};next.error={kind:'timeout'};
+   await hooks.get(name).fallback({}, {}, next);assert.equal(continuations,1);
+ }});assert.equal(f.results[0].status,'accepted');assert.equal(f.results[0].promptId,undefined);
+});
+test('a rewritten native append cannot authorize reply sharing',async()=>{
+ const f=await modFixture({observe:async invoke=>{
+  await invoke('classic.UserPromptSubmit',classic);await invoke('session.append',{...append,message:{...append.message,content:[{type:'text',text:'changed task'}]}});
+ }});assert.equal(f.results[0].promptId,undefined);
 });

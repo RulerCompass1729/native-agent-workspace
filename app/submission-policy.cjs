@@ -2,11 +2,12 @@
 const legacyNotice = '这个旧版会话的原生身份和历史已保留。可用“接通原会话输入”连接；尚不支持的连接可在原生终端继续。';
 const capabilitiesFor = (snapshot, id) => snapshot.sessions?.find(s => s.id === id)?.serviceCapabilities || snapshot.capabilities || [];
 const canSubmit = (snapshot, s) => s.legacySubmit === true || capabilitiesFor(snapshot, s.id).includes(s.provider === 'claude' ? 'structuredClaudeSubmit' : 'nativeInputIsolation');
+const canShare = (snapshot, s) => s.legacyShare === true || (capabilitiesFor(snapshot, s.id).includes('nativeInputIsolation') && (s.provider !== 'claude' || capabilitiesFor(snapshot, s.id).includes('claudePromptIdentity')));
 function submissionState(snapshot) {
   return { ...snapshot, sessions: snapshot.sessions.map(s => ({ ...s,
     ...(!canSubmit(snapshot, s) ? { chatAvailable: false, submissionNotice: legacyNotice } : {}),
-    shareAvailable: canSubmit(snapshot, s) && (s.legacyShare === true || capabilitiesFor(snapshot, s.id).includes('nativeInputIsolation')),
-    sharingNotice: s.legacyShare === true ? '回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。' : capabilitiesFor(snapshot, s.id).includes('nativeInputIsolation') ? null : legacyNotice,
+    shareAvailable: canSubmit(snapshot, s) && canShare(snapshot, s),
+    sharingNotice: s.legacyShare === true ? '回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。' : canShare(snapshot, s) ? null : legacyNotice,
   })) };
 }
 function assertSubmission(snapshot, ids) {
@@ -14,7 +15,7 @@ function assertSubmission(snapshot, ids) {
 }
 function assertSharing(snapshot, ids) {
   assertSubmission(snapshot, ids);
-  if (ids.some(id => !snapshot.sessions.find(s => s.id === id)?.legacyShare && !capabilitiesFor(snapshot, id).includes('nativeInputIsolation'))) throw new Error(legacyNotice);
+  if (ids.some(id => { const s = snapshot.sessions.find(s => s.id === id); return !s || !canShare(snapshot, s); })) throw new Error(legacyNotice);
 }
 function assertAutomaticRun(snapshot, mode = 'strict') {
   if (!['strict', 'replies'].includes(mode)) throw new Error('未知协作授权。');

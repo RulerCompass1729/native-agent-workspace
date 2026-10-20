@@ -65,11 +65,11 @@ test('continuation replaces only its target while an ended peer and live peer ke
 });
 
 test('reusing an older live service pauses unsafe routing without replacing its native sessions', async t => {
-  for (const level of [0, 1, 2]) await t.test(['legacy service', 'previous handoff checks', 'current service'][level], async () => {
+  for (const level of [0, 1, 2, 3]) await t.test(['legacy service', 'previous handoff checks', 'current Codex service', 'old Claude identity checks'][level], async () => {
     const verified = level === 2;
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-test-'));
     const endpoint = path.join(directory, 's.sock'), calls = [], clients = new Set();
-    const state = { capabilities: ['structuredClaudeSubmit', ...(level >= 1 ? ['verifiedHandoffs'] : []), ...(verified ? ['nativeInputIsolation'] : [])], sessions: [{ id: 'synthetic-native-session', state: 'idle', provider: 'codex' }], room: { run: { status: 'running', ids: ['synthetic-native-session'] } } };
+    const state = { capabilities: ['structuredClaudeSubmit', ...(level >= 1 ? ['verifiedHandoffs'] : []), ...(level >= 2 ? ['nativeInputIsolation'] : [])], sessions: [{ id: 'synthetic-native-session', state: 'idle', provider: level === 3 ? 'claude' : 'codex' }], room: { run: { status: 'running', ids: ['synthetic-native-session'] } } };
     const server = net.createServer(socket => {
       clients.add(socket); socket.on('close', () => clients.delete(socket)); socket.on('error', () => {});
       let buffer = '', authorized = false;
