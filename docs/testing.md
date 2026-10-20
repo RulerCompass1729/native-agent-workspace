@@ -896,3 +896,24 @@ The same four installed restart groups and six installed save-failure lifecycle
 regressions pass final independent review. All 38 shipped app files match source;
 the ad-hoc signature verifies. Original user records and five protected processes
 remain unchanged, with one discoverable app.
+
+## Sharing preview continuity — alpha.38
+
+An actual sharing-dialog reproduction confirmed that an old send acceptance
+closed a newly opened preview. Preview revisions now bind completion to the
+original unedited content and recipient. Blank text and additional clicks while
+acceptance is pending do not submit. People can still edit or close the preview;
+doing so does not retract an already accepted native task.
+
+Real Electron controls with delayed synthetic transports cover same-text edits,
+cancel/reopen before success or failure, retained edits after rejection, explicit
+keyboard retry, Escape without reopening, and recipient departure/rejoin before
+native acceptance without automatic selection or replay. Departure does not
+cancel work already accepted by a native agent. The first runner's final count assertion used
+the solo-message role instead of the shared-message role; correcting it changed
+only the test, not the stored records. Earlier failure evidence remains private.
+Seven source groups and seven existing room-send groups pass source review.
+The same seven installed preview groups and five installed daily-use groups pass
+final independent review. All 38 app files match source and the ad-hoc signature
+verifies; original user records and five protected processes remain unchanged,
+with one discoverable app. No new native model task was run.

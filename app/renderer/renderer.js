@@ -8,6 +8,7 @@ let state, owner, selected = '', mode = 'terminal', preference = 'terminal', fol
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSubmitting = false;
+let shareRevision = 0, sharePending = null;
 let runPreview = null;
 let renamingId = '', renaming = false;
 let sessionMenu;
@@ -489,12 +490,14 @@ function chooseMention(id) {
 }
 function share(text) {
   if (!members().length) return toast('先把接收方加入共同工作，再分享选定内容。');
+  shareRevision++;
   $('share-text').value = text; populateSelect($('share-recipient'), members()); updateSharingControls(); $('share-dialog').showModal();
 }
 function updateSharingControls() {
   const target = members().find(s => s.id === $('share-recipient').value);
-  $('confirm-share').disabled = !target || target.shareAvailable === false || target.chatAvailable === false || disconnected;
-  $('share-help').textContent = target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
+  $('confirm-share').disabled = Boolean(sharePending) || !$('share-text').value.trim() || !target || target.shareAvailable === false || target.chatAvailable === false || disconnected;
+  $('confirm-share').textContent = sharePending ? '发送中…' : '发送这段内容';
+  $('share-help').textContent = sharePending ? '正在发送刚才确认的内容；你可以继续编辑，新的修改不会随这次发送。' : target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
 }
 function render() {
   if (!state || rendering) return;
@@ -993,12 +996,26 @@ $('insert-context').onclick = () => attempt(async () => {
   roomDraftRevision++; await persistView();
   $('context-dialog').close(); render(); input.focus();
 });
-$('share-recipient').onchange = updateSharingControls;
+$('share-recipient').onchange = $('share-text').oninput = () => { shareRevision++; updateSharingControls(); };
 $('pause-button').onclick = () => attempt(() => api.pause());
 $('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && !s.archived && s.state !== 'ended').map(s => { const entry = button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
-$('confirm-share').onclick = () => attempt(async () => { await api.forward($('share-recipient').value, $('share-text').value); $('share-dialog').close(); toast('已定向发送。'); });
+$('share-dialog').onclose = () => { shareRevision++; };
+$('confirm-share').onclick = () => attempt(async () => {
+  updateSharingControls();
+  if ($('confirm-share').disabled) return;
+  const request = { revision: shareRevision, recipient: $('share-recipient').value, text: $('share-text').value };
+  sharePending = request; updateSharingControls();
+  try {
+    await api.forward(request.recipient, request.text);
+    // An old acceptance must not close a reopened preview or discard edits,
+    // including a new edit whose text happens to match the submitted text.
+    if ($('share-dialog').open && shareRevision === request.revision &&
+        $('share-recipient').value === request.recipient && $('share-text').value === request.text) $('share-dialog').close();
+    toast('已定向发送。');
+  } finally { sharePending = null; updateSharingControls(); }
+});
 $('privacy-button').onclick = $('refresh-trust').onclick = () => attempt(showTrust); $('quit-service').onclick = () => attempt(() => api.quitService());
 $('privacy-source').onclick = () => attempt(() => api.openExternal('https://github.com/RulerCompass1729/native-agent-workspace/blob/main/docs/privacy.md'));
 $('data-directory').onclick = () => attempt(() => api.dataDirectory());

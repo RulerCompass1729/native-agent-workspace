@@ -1,11 +1,19 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.37 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.38 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.37 restores a saved window to an available display
+**Current increment:** alpha.38 keeps later sharing-preview edits and reopened
+previews when an older send succeeds or fails. Empty/pending sends are blocked,
+and a departed recipient never silently becomes someone else. Seven actual
+source preview groups and the existing directed/finite-exchange regressions pass;
+seven installed preview groups and five installed daily-use groups pass final
+independent artifact review. Closing a preview does not cancel accepted
+native work, and no failed request is automatically replayed.
+
+Alpha.37 restores a saved window to an available display
 when its title bar is no longer reachable. Usable positions, including negative
 coordinates and intentionally partial placements, remain. Undersized records
 cannot reduce the usable minimum unless the current work area itself is smaller.
