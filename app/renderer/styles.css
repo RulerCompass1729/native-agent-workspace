@@ -55,10 +55,12 @@ header h1, header p { overflow-wrap: anywhere; }
 .sidebar { padding: 18px 12px 12px; }
 .brand { margin-bottom: 18px; gap: 8px; }
 .brand-mark { font-size: 29px; }
-.sidebar-navigation { flex: 1; min-height: 0; overflow-y: auto; margin: 16px -4px 0; padding: 0 4px 12px; }
+.sidebar-navigation { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; margin: 16px -4px 0; padding: 0 4px 12px; }
+.sidebar-group:first-child { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 48px; overflow: hidden; }
+#workspace-group, #solo-drop { flex: none; }
 .sidebar-group + .sidebar-group { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
 .nav-label { margin: 0 0 5px; padding: 5px 8px; font-size: 11px; font-weight: 650; line-height: 20px; letter-spacing: 0; color: var(--ink); }
-#session-list { flex: none; min-height: 0; overflow: visible; margin-left: 8px; }
+#session-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; margin-left: 8px; scroll-padding-block: 4px; }
 .session-row { margin: 1px 0; }
 .session-row .session-link { padding: 7px 8px; gap: 8px; }
 .session-link small { margin-top: 2px; }

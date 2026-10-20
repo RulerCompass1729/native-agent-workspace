@@ -766,3 +766,26 @@ cold boot and six reconnection groups also pass. Test windows remain hidden and
 non-focusable, owned test daemons exit, and original user records/processes remain
 unchanged. There is one discoverable installed app. This closes only A32-1–7, not
 the remaining full-product and arbitrary-old-backend acceptance.
+
+## Long-session navigation — alpha.33
+
+A real hidden Electron probe with sixty retained histories reproduced two issues:
+the shared workspace was below the viewport, and opening the last session from
+search left its selected sidebar row offscreen. Session history now scrolls in
+its own section; shared-space and utility actions remain reachable. Explicit
+selection reveals the complete row, including its menu in the compact rail.
+Native state updates do not reset a person's manual sidebar scroll.
+
+The navigation runner uses ninety synthetic saved histories (thirty initially
+archived), plus one live synthetic transport. It exercises search, a long rename,
+archive and last-entry restore, actual pointer drag to/from collaboration, repeated
+native status updates, the minimum-size window, keyboard menu dismissal and UI
+reopen. Identity, history, names, archive state and an unsent draft remain intact;
+there are no model submissions or native provider processes. This is navigation
+acceptance, not physical OS-input or full compact conversation-layout acceptance.
+Six source and installed navigation groups, six source search groups and five
+installed daily-use groups pass; independent final artifact review passes. All
+36 shipped application files match source. Original user records and protected
+processes are unchanged, with one discoverable installed app. The 349-check
+alpha.32 backend result is reused for this UI-only change, not claimed as a new
+full-suite execution.

@@ -170,6 +170,14 @@ async function select(id, requestedMode, member = roomSession) {
   $('message-input').value = s?.liveDraft || '';
   clearFailedTerminal(s?.id);
   lastMessages = ''; lastRoomMessages = ''; render(); attempt(persistView);
+  // Reveal only deliberate navigation (including search/restore/reopen).
+  // Native state updates must not pull the person's sidebar scroll back.
+  const entry = sessionRows.get(selected)?.element, list = $('session-list');
+  if (entry) {
+    const row = entry.getBoundingClientRect(), viewport = list.getBoundingClientRect();
+    if (row.top < viewport.top) list.scrollTop -= viewport.top - row.top;
+    else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
+  }
   if (s && mode === 'chat' && !$('message-input').readOnly && inputFocusAllowed()) $('message-input').focus();
   if (s && mode === 'terminal' && !['ended', 'stopping', 'disconnected', 'recoverable'].includes(s.state)) attempt(async () => { await ensureTerminal(s.id); focusTerminal(s.id); });
   if (selected === 'room' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {

@@ -1,11 +1,17 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.32 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.33 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.32 synchronizes native Codex confirmation resolution,
+**Current increment:** alpha.33 keeps collaboration and utilities reachable with
+long session lists and reveals the selected session after search, restoration or
+reopen. Six real source/installed navigation groups, search and daily collaboration
+regressions, and independent final artifact review pass. The minimum-size main
+conversation layout remains a separate reading issue, not closed by sidebar checks.
+
+Alpha.32 synchronizes native Codex confirmation resolution,
 keeps sent decisions pending until native acknowledgement, and rejects obsolete
 or ambiguous decisions. The same compatibility path no longer resurrects cached
 old-backend approvals. Ordinary command decisions show the complete command,
