@@ -16,6 +16,8 @@ let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, notesR
 let roomDraftRevision = 0;
 let pendingRoomFilter = '';
 const sessionRows = new Map();
+const memberRows = new Map();
+let headerControls, advancedControls;
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
 const terminalThemes = {
   dark: { background: '#191b1e', foreground: '#e6e8eb', cursor: '#e6e8eb', selectionBackground: '#53677b88' },
@@ -499,6 +501,90 @@ function updateSharingControls() {
   $('confirm-share').textContent = sharePending ? '发送中…' : '发送这段内容';
   $('share-help').textContent = sharePending ? '正在发送刚才确认的内容；你可以继续编辑，新的修改不会随这次发送。' : target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
 }
+function renderHeader(s, inRoom) {
+  if (!headerControls) {
+    const resume = button('继续原生会话', () => { const s = current(); if (s && canResume(s)) return api.resume(s.id); }, 'primary');
+    const membership = button('', () => { const s = current(); if (s && !s.archived) return s.roomId ? detach(s.id) : api.join(s.id, true); });
+    const selectedText = button('分享选中内容', () => {
+      const s = current(); if (!s || s.archived) return;
+      const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString();
+      text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。');
+    });
+    const restore = button('恢复会话', () => { const s = current(); if (s?.archived) return restoreArchivedSession(s.id); }, 'primary');
+    const more = button('⋯', () => openRoomMenu()); more.setAttribute('aria-label', '工作区菜单');
+    headerControls = { resume, membership, selectedText, restore, more };
+    $('header-actions').append(resume, membership, selectedText, restore, more);
+  }
+  const h = headerControls;
+  const membershipAction = JSON.stringify([s?.id, !!s?.roomId, !!s?.archived]);
+  // A peer can change membership while this control is focused. Preserve focus
+  // for output updates, never for a newly opposite join/leave action.
+  if (h.membership.dataset.action !== membershipAction && document.activeElement === h.membership) h.membership.blur();
+  h.membership.dataset.action = membershipAction;
+  h.resume.hidden = !s || !canResume(s) || mode !== 'terminal';
+  h.membership.hidden = h.selectedText.hidden = !s || !!s.archived;
+  h.membership.textContent = s?.roomId ? '脱出协作' : '加入协作';
+  h.restore.hidden = !s?.archived;
+  h.more.hidden = !inRoom || !!s;
+}
+function renderApproval(s, own) {
+  const el = $('approval');
+  el.hidden = s.state !== 'approval';
+  const signature = JSON.stringify([s.id, s.state, own, s.approval, s.approvalNotice, s.approvalResolved, s.approvalDecisionAvailable]);
+  if (el.dataset.signature === signature) return;
+  el.dataset.signature = signature; el.replaceChildren();
+  if (el.hidden) return;
+  el.append(node('strong', s.approvalNotice ? '原生确认状态待核对' : s.approvalResolved ? '这项原生确认已处理' : s.approval?.pending ? '等待原生确认结果' : '原生会话需要你确认'));
+  if (s.approvalNotice) el.append(node('p', s.approvalNotice));
+  if (s.approvalResolved) el.append(node('p', '等待原生状态更新；已处理不代表工具执行成功。'));
+  if (s.approval) {
+    const policy = window.nativeWorkspaceApproval.nativeApprovalPolicy(s.approval);
+    if (policy.notice) el.append(node('p', policy.notice));
+    if (policy.command) el.append(node('pre', policy.command, 'approval-command'));
+    if (policy.cwd) el.append(node('p', '工作目录：' + policy.cwd));
+    if (policy.reason) el.append(node('p', '原因：' + policy.reason));
+    const requestId = s.approval.requestId;
+    for (const decision of s.approvalDecisionAvailable ? policy.decisions : []) {
+      const action = button(decision === 'accept' ? '允许这一次' : '拒绝', () => api.approve(s.id, requestId, decision));
+      action.disabled = !own || Boolean(s.approval.pending); el.append(action);
+    }
+  }
+  el.append(button('在原生终端查看', () => switchMode('terminal')));
+}
+function renderAdvanced(s) {
+  if (advancedControls?.id !== s.id) {
+    const info = node('div'), usage = node('div'), fleet = node('div');
+    const stop = button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small');
+    const forget = button('移除本应用记录…', () => api.forget(s.id), 'small');
+    $('advanced-content').replaceChildren(info, usage, button('查看协作笔记', openNotes, 'small'), button('带上协作背景…', openContext, 'small'), fleet, stop, forget);
+    advancedControls = { id: s.id, info, usage, fleet, stop, forget };
+  }
+  const a = advancedControls;
+  a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
+  a.usage.hidden = !s.usage; a.usage.textContent = s.usage ? `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}` : '';
+  a.fleet.replaceChildren(...s.fleet.slice(-8).map(event => node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`)));
+  a.stop.hidden = ['ended', 'stopping', 'recoverable'].includes(s.state);
+  a.forget.hidden = !(['ended', 'recoverable', 'error'].includes(s.state) && !s.backendUnavailable && !s.terminalAvailable && (s.serviceCapabilities || state.capabilities)?.includes('forget'));
+}
+function renderMembers() {
+  const people = members(), ids = new Set(people.map(s => s.id)), list = $('members');
+  for (const [id, row] of memberRows) if (!ids.has(id)) {
+    if (row.element.contains(document.activeElement)) $('close-members').focus();
+    row.element.remove(); memberRows.delete(id);
+  }
+  people.forEach((record, index) => {
+    let row = memberRows.get(record.id);
+    if (!row) {
+      const element = node('div', undefined, 'member-card'), heading = node('div', undefined, 'member-name');
+      const name = node('strong'), status = node('p'), actions = node('div', undefined, 'actions');
+      element.dataset.memberId = record.id; heading.append(icon(record.provider), name);
+      actions.append(button('查看终端', () => { $('members-dialog').close(); selectRoom(record.id); }), button('脱出', async () => { await detach(record.id); $('members-dialog').close(); }));
+      element.append(heading, status, actions); row = { element, name, status }; memberRows.set(record.id, row);
+    }
+    row.name.textContent = record.name; row.status.textContent = states[record.state];
+    const slot = list.children[index]; if (slot !== row.element) list.insertBefore(row.element, slot || null);
+  });
+}
 function render() {
   if (!state || rendering) return;
   captureReadingViews();
@@ -536,12 +622,9 @@ function render() {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
       if (record) entry.textContent = `加入 ${record.name}`;
     }
-    $('header-actions').replaceChildren();
-    if (inRoom && !s) { const more = button('⋯', () => openRoomMenu()); more.setAttribute('aria-label', '工作区菜单'); $('header-actions').append(more); }
+    renderHeader(s, inRoom);
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
-      if (s.archived) $('header-actions').append(button('恢复会话', () => restoreArchivedSession(s.id), 'primary'));
-      else $('header-actions').append(button(s.roomId ? '脱出协作' : '加入协作', () => s.roomId ? detach(s.id) : api.join(s.id, true)), button('分享选中内容', () => { const text = mode === 'terminal' ? terminals.get(s.id)?.term.getSelection() : window.getSelection().toString(); text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。'); }));
       $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
       $('take-control').hidden = own || !alive || mode === 'chat';
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
@@ -552,35 +635,8 @@ function render() {
       $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
       const signature = JSON.stringify(s.messages);
       if (mode === 'chat' && (signature !== lastMessages || messageViews.get($('messages'))?.key !== s.id)) { messageList($('messages'), s.messages, false, s.id); lastMessages = signature; }
-      $('approval').hidden = s.state !== 'approval';
-      $('approval').replaceChildren();
-      if (s.state === 'approval') {
-        $('approval').append(node('strong', s.approvalNotice ? '原生确认状态待核对' : s.approvalResolved ? '这项原生确认已处理' : s.approval?.pending ? '等待原生确认结果' : '原生会话需要你确认'));
-        if (s.approvalNotice) $('approval').append(node('p', s.approvalNotice));
-        if (s.approvalResolved) $('approval').append(node('p', '等待原生状态更新；已处理不代表工具执行成功。'));
-        if (s.approval) {
-          const policy = window.nativeWorkspaceApproval.nativeApprovalPolicy(s.approval);
-          if (policy.notice) $('approval').append(node('p', policy.notice));
-          if (policy.command) $('approval').append(node('pre', policy.command, 'approval-command'));
-          if (policy.cwd) $('approval').append(node('p', '工作目录：' + policy.cwd));
-          if (policy.reason) $('approval').append(node('p', '原因：' + policy.reason));
-          const requestId = s.approval.requestId;
-          for (const decision of s.approvalDecisionAvailable ? policy.decisions : []) {
-            const action = button(decision === 'accept' ? '允许这一次' : '拒绝', () => api.approve(s.id, requestId, decision));
-            action.disabled = !own || Boolean(s.approval.pending); $('approval').append(action);
-          }
-        }
-        $('approval').append(button('在原生终端查看', () => switchMode('terminal')));
-      }
-      $('advanced-content').replaceChildren(node('div', `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`));
-      if (s.usage) $('advanced-content').append(node('div', `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}`));
-      $('advanced-content').append(button('查看协作笔记', openNotes, 'small'), button('带上协作背景…', openContext, 'small'));
-      for (const event of s.fleet.slice(-8)) $('advanced-content').append(node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`));
-      if (!['ended', 'stopping', 'recoverable'].includes(s.state)) $('advanced-content').append(button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small'));
-      if (canResume(s) && mode === 'terminal') $('header-actions').prepend(button('继续原生会话', () => api.resume(s.id), 'primary'));
-      if (['ended', 'recoverable', 'error'].includes(s.state) && !s.backendUnavailable && !s.terminalAvailable && (s.serviceCapabilities || state.capabilities)?.includes('forget')) {
-        $('advanced-content').append(button('移除本应用记录…', () => api.forget(s.id), 'small'));
-      }
+      renderApproval(s, own);
+      renderAdvanced(s);
       for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)); }
       if (mode === 'terminal' && alive) attempt(() => ensureTerminal(s.id));
     }
@@ -602,11 +658,7 @@ function render() {
       const next = state.sessions.find(m => m.id === run?.awaiting?.sessionId);
       if (run?.status === 'running' && next) $('run-status').textContent += ` · 等待 ${next.name}`;
       renderTimeline();
-      $('members').replaceChildren(...members().map(m => {
-        const card = node('div', undefined, 'member-card'); const heading = node('div', undefined, 'member-name'); heading.append(icon(m.provider), node('strong', m.name));
-        const actions = node('div', undefined, 'actions'); actions.append(button('查看终端', () => { $('members-dialog').close(); selectRoom(m.id); }), button('脱出', async () => { await detach(m.id); $('members-dialog').close(); }));
-        card.append(heading, node('p', states[m.state]), actions); return card;
-      }));
+      renderMembers();
       const previousRecipient = $('recipient').value;
       $('recipient').dataset.hadChoices = 'true';
       populateSelect($('recipient'), members());

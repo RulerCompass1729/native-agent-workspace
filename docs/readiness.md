@@ -1,11 +1,18 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.38 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.39 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.38 keeps later sharing-preview edits and reopened
+**Current increment:** alpha.39 preserves keyboard control focus during native
+history updates. Header, member, permission and advanced controls remain stable
+while their action is valid. Changed permission/owner state remains guarded;
+removing a focused member returns to dialog completion. Seven source/installed keyboard groups, four native-confirmation groups and
+six collaboration groups pass final independent artifact review. No new model
+task was run.
+
+Alpha.38 keeps later sharing-preview edits and reopened
 previews when an older send succeeds or fails. Empty/pending sends are blocked,
 and a departed recipient never silently becomes someone else. Seven actual
 source preview groups and the existing directed/finite-exchange regressions pass;

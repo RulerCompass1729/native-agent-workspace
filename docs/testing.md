@@ -917,3 +917,43 @@ The same seven installed preview groups and five installed daily-use groups pass
 final independent review. All 38 app files match source and the ad-hoc signature
 verifies; original user records and five protected processes remain unchanged,
 with one discoverable app. No new native model task was run.
+
+## Keyboard controls during native updates — alpha.39
+
+Actual Electron reproduction showed that unrelated native history updates removed
+the focused header, member and permission buttons. These controls now retain their
+DOM nodes while the represented action remains valid. A changed permission request
+or owner still rebuilds or disables decisions; removal of a focused member moves
+focus to dialog completion instead of another member action. Advanced local
+notes/context controls use the same stable-node approach.
+
+Seven source keyboard groups cover history/name updates, exact member navigation,
+member departure, changed permission/ownership and repeated selection/membership
+changes. Independent review supplied a second real counterexample: a peer changed
+a focused join button into leave, so Enter performed the opposite operation.
+Membership controls now withdraw old focus only when their session or action
+changes; both directions pass the regression. The first runner incorrectly expected a raw numeric permission ID; the
+actual service uses an opaque request identity. Its corrected assertion compares
+the two real identities and checks rejection of the old one. Production behavior
+was unchanged by that test correction. The separate native-confirmation runner
+checks actual IPC decisions, duplicate delivery, pending/resolved states and
+special permission scopes with synthetic protocol events. The installed app passes
+the same seven keyboard groups, four permission groups and six collaboration
+groups (including drag, context, archive and reopen). All 38 app files match
+source and the ad-hoc signature verifies. Original user records and five protected
+processes remain unchanged, with one discoverable app. Independent final artifact
+review passes. No new native model task was run.
+
+## Local idle resource sample — alpha.38
+
+A five-minute installed-app check sampled six owned processes in each sample
+at 15-second intervals, with two idle synthetic native-progress panes. Interval CPU time
+was a median 0.1% and maximum 0.8% of one core. Summed resident memory was 748 MiB
+at the first sample, then 718 MiB for the remaining samples; the six-process count
+stayed constant. Provider opens, inputs, resizes and sends were all zero.
+
+This was a hidden, non-focusable Electron window with background throttling
+disabled for testing. Summed RSS can count shared pages more than once. These
+numbers do not include real native agents, certify visible-window energy use,
+or establish long-term leak freedom. The original user's processes were excluded
+from measurement and retained.
