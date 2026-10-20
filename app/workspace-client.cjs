@@ -3,6 +3,7 @@ const { submissionState, assertSubmission, assertSharing, assertAutomaticRun, as
 const { isTerminalResponse } = require('./workspace.cjs');
 const { LegacyObservation, supportsLegacyObservation } = require('./legacy-observation.cjs');
 const { LegacyInput, eligible: legacyInputEligible } = require('./legacy-input.cjs');
+const { nativeApprovalPolicy } = require('./approval-policy.js');
 let creationQueue = Promise.resolve();
 const controls = new Map();
 
@@ -96,6 +97,10 @@ class WorkspaceClient extends EventEmitter {
         const native = bridge?.target(s)?.native;
         const legacyCodex = e.state.runtimeVersion === '0.1.0-alpha.2' && s.provider === 'codex';
         const approvalDecisionAvailable = legacyCodex ? Boolean(native?.connected) : Boolean(e.state.capabilities?.includes('nativeApprovalSync'));
+        const approval = legacyCodex ? native?.approval : s.approval;
+        const approvalDecisions = approvalDecisionAvailable ? nativeApprovalPolicy(approval, {
+          localDecisions: legacyCodex || e.state.capabilities?.includes('nativeApprovalLocalDecisions') === true,
+        }).decisions : [];
         ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           legacyShare: legacySubmit,
@@ -103,7 +108,7 @@ class WorkspaceClient extends EventEmitter {
             pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
           ...(legacyCodex
             ? { approval: native?.connected ? native.approval : null, approvalResolved: Boolean(native?.connected && native.approvalResolved) } : {}),
-          approvalDecisionAvailable,
+          approvalDecisionAvailable, approvalDecisions,
           approvalNotice: s.provider === 'codex' && !approvalDecisionAvailable ? '旧连接无法核实这项确认的最新状态，请在原生终端核对。原会话继续保留。' : null,
           serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
       }
@@ -339,6 +344,12 @@ class WorkspaceClient extends EventEmitter {
     }
     if (method === 'approve' && !target.state.capabilities?.includes('nativeApprovalSync')) {
       throw Error('旧连接无法核实这项确认的最新状态，请在原生终端核对；没有发送决定。');
+    }
+    if (method === 'approve' && !target.state.capabilities?.includes('nativeApprovalLocalDecisions')) {
+      const approval = target.state.sessions.find(s => s.id === args[0])?.approval;
+      if (!nativeApprovalPolicy(approval, { localDecisions: false }).decisions.includes(args[2])) {
+        throw Error('旧后台不支持这项确认方式，请在原生终端处理；没有发送决定。');
+      }
     }
     if (['send', 'forward'].includes(method) && this.control.legacyInput?.connected(target.state.sessions.find(s => s.id === args[0]))) {
       const shared = method === 'forward';

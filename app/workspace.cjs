@@ -383,7 +383,7 @@ class Workspace extends EventEmitter {
     if (!route || !s.approval || s.approval.pending || s.state !== 'approval' || s.owner !== owner || s.approval.requestId !== requestId || route.requestId !== requestId ||
       route.runtime !== this.runtimes.get(id) || route.rpc !== this.host.rpc || route.runtime.transportDisconnected ||
       route.runtime.backendExitConfirmed) throw new Error('权限请求已变化，请重新查看。');
-    if (!['accept', 'decline'].includes(decision)) throw new Error('未知权限决定。');
+    if (!['accept', 'decline', 'cancel'].includes(decision)) throw new Error('未知权限决定。');
     if (!nativeApprovalPolicy(s.approval).decisions.includes(decision)) throw new Error('请在原生终端核对；此界面不支持这项权限决定。');
     route.rpc.reply(route.nativeRequestId, { decision });
     if (this.approvalRoutes.get(id) === route && s.approval?.requestId === requestId) s.approval = { ...s.approval, pending: true };

@@ -569,7 +569,7 @@ function renderHeader(s, inRoom) {
 function renderApproval(s, own) {
   const el = $('approval');
   el.hidden = s.state !== 'approval';
-  const signature = JSON.stringify([s.id, s.state, own, s.approval, s.approvalNotice, s.approvalResolved, s.approvalDecisionAvailable]);
+  const signature = JSON.stringify([s.id, s.state, own, s.approval, s.approvalNotice, s.approvalResolved, s.approvalDecisions]);
   if (el.dataset.signature === signature) return;
   el.dataset.signature = signature; el.replaceChildren();
   if (el.hidden) return;
@@ -583,8 +583,9 @@ function renderApproval(s, own) {
     if (policy.cwd) el.append(node('p', '工作目录：' + policy.cwd));
     if (policy.reason) el.append(node('p', '原因：' + policy.reason));
     const requestId = s.approval.requestId;
-    for (const decision of s.approvalDecisionAvailable ? policy.decisions : []) {
-      const action = button(decision === 'accept' ? '允许这一次' : '拒绝', () => api.approve(s.id, requestId, decision));
+    if (s.approval.params?.environmentId === 'local') el.append(node('p', '执行位置：本机'));
+    for (const decision of (s.approvalDecisions || []).filter(d => policy.decisions.includes(d))) {
+      const action = button({ accept: '允许这一次', decline: '拒绝', cancel: '取消本轮' }[decision], () => api.approve(s.id, requestId, decision));
       action.disabled = !own || Boolean(s.approval.pending); el.append(action);
     }
   }

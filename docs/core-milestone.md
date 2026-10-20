@@ -144,3 +144,15 @@ compatibility, followed by broader account onboarding and distribution. External
 live-session attachment, official Desktop-state synchronization and arbitrary
 unattended goal completion are still unfinished; they are not implicit claims
 of this local-trial acceptance.
+
+## Existing-core regression — alpha.41
+
+A full 23-scenario installed regression passed, then actual native permission
+checks exposed a first-turn dead end that synthetic UI coverage had missed.
+Alpha.41 repairs local one-time approval/cancellation and same-thread terminal
+attachment before that first turn completes, with separate retained-backend
+capability checks. It also clears an obsolete terminal-exit notice on display
+restart. The native runtime evidence uses local synthetic inference with no
+external paid model request; native internal title work is counted separately.
+See testing.md and A41-1/A41-2 in review.md. This does not broaden the earlier
+physical IME, onboarding, fleet or external Desktop integration claims.

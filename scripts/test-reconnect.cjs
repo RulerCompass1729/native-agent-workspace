@@ -31,7 +31,15 @@ async function run() {
   await page.getByRole('button', { name: '断开本应用连接…', exact: true }).click();
   await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
   assert.equal((await snapshot()).sessions[0].state, 'disconnected');
-  await page.locator('.progress-notice').getByText('连接已断开', { exact: false }).waitFor();
+  // This GUI-first fixture has never produced a native screen. A disconnected
+  // observer must retain history without inventing a frozen terminal frame.
+  const progress = page.locator(`[data-progress-id="${id}"]`);
+  await progress.locator('.progress-notice').getByText('当前没有保留的临时画面。', { exact: false }).waitFor();
+  assert.match(await progress.locator(':scope > summary').textContent(), /已断开/);
+  assert.equal(await progress.locator('.progress-viewport').isVisible(), false);
+  assert.equal(await progress.locator('.progress-controls').isVisible(), false);
+  assert.equal(await page.locator('#messages').getByText('保留的原生历史', { exact: true }).isVisible(), true);
+  if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'disconnected-without-frame.png') }); }
   assert.equal(await page.locator('#message-input').inputValue(), '私有草稿：断开后保留');
   checks.push('Cancel disconnect preserves live session; confirmed disconnect exposes continuation and preserves draft');
   await app.evaluate(() => { globalThis.choice = 0; });

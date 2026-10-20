@@ -121,3 +121,18 @@ test('GUI approval cannot bypass unrepresented permission scope or native availa
   }
   assert.deepEqual(f.replies, []);
 });
+test('local command accept and cancel reach the exact native request without granting a policy', t => {
+  const f = fixture(t);
+  for (const [id, decision] of [[11, 'accept'], [12, 'cancel']]) {
+    f.r.event({ id, method: 'item/commandExecution/requestApproval', params: { threadId: f.s.nativeId,
+      kind: 'command', environmentId: 'local', command: 'synthetic', cwd: '/synthetic',
+      availableDecisions: ['accept', { acceptWithExecpolicyAmendment: {} }, 'cancel'] } });
+    const key = f.s.approval.requestId;
+    assert.throws(() => f.w.approve(f.s.id, key, decision, 'another-window'), /权限请求已变化/);
+    f.w.approve(f.s.id, key, decision, 'window');
+    assert.equal(f.s.approval.pending, true);
+    assert.throws(() => f.w.approve(f.s.id, key, decision, 'window'), /权限请求已变化/);
+    f.resolve(id);
+  }
+  assert.deepEqual(f.replies, [{ id: 11, result: { decision: 'accept' } }, { id: 12, result: { decision: 'cancel' } }]);
+});

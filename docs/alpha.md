@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-20. Version 0.1.0-alpha.40. Suitable for a small technical trial with
+As of 2026-10-20. Version 0.1.0-alpha.41. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 

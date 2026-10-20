@@ -106,6 +106,18 @@ async function run() {
   await page.getByRole('button', { name: '允许这一次', exact: true }).click();
   await page.locator('#approval').getByText('等待原生确认结果', { exact: true }).waitFor(); await resolve(id, 23);
   checks.push('Special permission scopes and native decision restrictions cannot be approved through either controls or direct IPC; a fully displayed multiline command retains one-time approval');
+  await event(id, { id: 24, method: 'item/commandExecution/requestApproval', params: {
+    kind: 'command', environmentId: 'local', command: '本机合成确认', cwd: '/synthetic',
+    availableDecisions: ['accept', { acceptWithExecpolicyAmendment: {} }, 'cancel'],
+  } });
+  await page.locator('#approval').getByText('执行位置：本机', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '允许这一次', exact: true }).isEnabled(), true);
+  assert.equal(await page.getByRole('button', { name: '拒绝', exact: true }).count(), 0);
+  await page.getByRole('button', { name: '取消本轮', exact: true }).click();
+  await page.locator('#approval').getByText('等待原生确认结果', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '取消本轮', exact: true }).isDisabled(), true);
+  await shot('local-cancel'); await resolve(id, 24);
+  checks.push('Local environment exposes literal one-time accept and turn cancellation; cancellation is pending until native resolution and never becomes a persistent policy grant');
   await request(id, 8, '连接中断前的合成确认');
   await page.locator('#approval').getByText('连接中断前的合成确认', { exact: true }).waitFor();
   await fixture('transport-close', id);
@@ -114,13 +126,13 @@ async function run() {
   assert.equal(await page.locator('#message-input').inputValue(), '这份草稿保留，不发送');
   await shot('disconnected');
   const log = await fixture('inspect');
-  assert.deepEqual(log.replies, [{ id: '7', result: { decision: 'decline' } }, { id: 23, result: { decision: 'accept' } }]);
+  assert.deepEqual(log.replies, [{ id: '7', result: { decision: 'decline' } }, { id: 23, result: { decision: 'accept' } }, { id: 24, result: { decision: 'cancel' } }]);
   assert.equal(log.calls.some(c => ['turn/start', 'turn/steer'].includes(c.method)), false);
   assert.equal((await snapshot()).diagnostics.dispatches, 0);
   assert.deepEqual(errors, []);
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
-  checks.push('Native idle and connection loss drive displayed status; lost decisions remain explicitly unknown; draft is intact, two explicit decisions, zero model tasks, one hidden non-focusable test window');
+  checks.push('Native idle and connection loss drive displayed status; lost decisions remain explicitly unknown; draft is intact, three explicit decisions, zero model tasks, one hidden non-focusable test window');
   console.log(JSON.stringify({ checks, themes, errors, modelTasks: 0, nativeProcesses: 0, profile, windows }, null, 2));
 }
 run().catch(async error => {

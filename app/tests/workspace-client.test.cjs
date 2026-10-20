@@ -155,6 +155,22 @@ test('approval synchronization is a per-session backend capability, including re
   assert.equal(old.real.sessions[1].state, 'approval');
   c.close();
 });
+test('retained approval synchronization does not imply support for local approval or native cancel', async () => {
+  const { next, c } = fixture(); next.real.capabilities.push('nativeApprovalSync');
+  const s = next.real.sessions[0]; Object.assign(s, { provider: 'codex', state: 'approval',
+    approval: { requestId: 'native-key', method: 'item/commandExecution/requestApproval', params: {
+      kind: 'command', environmentId: 'local', command: 'synthetic', cwd: '/synthetic', availableDecisions: ['accept', 'cancel'],
+    } } });
+  await c.refresh();
+  assert.deepEqual(c.snapshot().sessions.find(r => r.id === 'new').approvalDecisions, []);
+  for (const decision of ['accept', 'cancel']) await assert.rejects(c.call('approve', 'new', 'native-key', decision), /旧后台/);
+  assert.equal(next.calls.some(([method]) => method === 'approve'), false);
+  next.real.capabilities.push('nativeApprovalLocalDecisions'); await c.refresh();
+  assert.deepEqual(c.snapshot().sessions.find(r => r.id === 'new').approvalDecisions, ['accept', 'cancel']);
+  await c.call('approve', 'new', 'native-key', 'cancel');
+  assert.deepEqual(next.calls.filter(([method]) => method === 'approve'), [['approve', 'new', 'native-key', 'cancel']]);
+  c.close();
+});
 test('save retry targets only supported failed writers and preserves unrelated warnings and native work', async () => {
   const { old, next, c } = fixture();
   old.real.storageWarning = 'Unread original';

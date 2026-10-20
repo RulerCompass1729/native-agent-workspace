@@ -54,11 +54,14 @@ async function run() {
   assert.equal(await page.locator('.session-row button button').count(), 0);
   const anchor = await more(b.id).elementHandle();
   const focused = await page.evaluateHandle(() => document.activeElement);
-  await page.evaluate(id => workspace.draft(id, '未发送的测试草稿'), a.id);
-  await until(async () => (await snapshot()).sessions.find(s => s.id === a.id).liveDraft !== '', 'State broadcast');
-  await page.waitForTimeout(100); // Let the real service's 35 ms UI broadcast arrive.
+  // Ended fixtures have no input owner. Exercise a legitimate metadata
+  // broadcast instead of trying to write an unowned native session's draft.
+  await page.evaluate(id => workspace.rename(id, '状态更新中的会话'), a.id);
+  await until(async () => (await snapshot()).sessions.find(s => s.id === a.id).name === '状态更新中的会话', 'State broadcast');
+  await page.waitForTimeout(100); // Let the name metadata broadcast reach the view.
   assert.ok(await anchor.evaluate(el => el.isConnected && el.getAttribute('aria-expanded') === 'true'));
   assert.ok(await focused.evaluate(el => el === document.activeElement), 'Broadcast must retain menu focus');
+  await page.evaluate(({ id, name }) => workspace.rename(id, name), a);
   await page.keyboard.press('Escape');
   assert.equal(await more(b.id).getAttribute('aria-expanded'), 'false');
   assert.ok(await more(b.id).evaluate(el => el === document.activeElement));
@@ -124,7 +127,6 @@ async function run() {
   assert.ok(await more(b.id).evaluate(el => { const r = el.getBoundingClientRect(); return r.width >= 24 && r.height >= 24 && r.right <= innerWidth; }));
   await screenshot('session-menu-small'); await page.keyboard.press('Escape');
   console.log('PASS: keyboard menu/new-window target, cross-window and room-name sync, light/dark contrast, small-window menu bounds.');
-  await page.evaluate(id => workspace.draft(id, ''), a.id);
   after = await snapshot(); assert.deepEqual(stable(after), stable(before));
   assert.equal(after.diagnostics.dispatches, 0); assert.equal(after.diagnostics.shellModelCalls, 0);
   fs.writeFileSync(path.join(profile, 'menu-result.json'), JSON.stringify(after), { mode: 0o600 });

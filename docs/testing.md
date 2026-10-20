@@ -245,7 +245,7 @@ the draft runner above. Native draft continuity remains separately documented.
 
 ## Room composer regression
 
-`npm run test:room` opens one visible Electron/DSH window with an isolated profile,
+`npm run test:room` opens one hidden Electron/DSH window with an isolated profile,
 real IPC and workspace state, and a delayed synthetic provider transport. It
 starts no native provider processes and makes no model requests. The check
 verifies default form submission, pointer/keyboard activation, explicit automatic
@@ -984,3 +984,45 @@ native-progress and seven installed sharing-preview regression groups. All 38
 app files match source and the ad-hoc signature verifies. Original user records
 and five protected processes remain unchanged, with one discoverable app.
 Independent final artifact review passes. No native model task was run.
+
+## Full local regression and first-turn native permissions — alpha.41
+
+On 2026-10-20, all 23 existing installed-app scenario runners passed: solo/daily
+use, collaboration and room sending, drafts and ownership, composition and view
+switching, privacy boundaries, search/reading, progress/permissions, reconnect,
+view/storage recovery, window placement, controls, sharing, navigation and menus.
+Two stale test assumptions were corrected: a GUI-only thread has no retained TUI
+frame on disconnect, and an ended unowned fixture cannot write a native draft.
+The checks retain history/draft and focus assertions; neither change relaxes the
+production boundary. Physical foreground/IME return was intentionally skipped to
+avoid taking over the person's macOS Space. Prior guest OS evidence is unchanged.
+
+A subsequent real Codex 0.163.0 runtime check found a first-turn approval dead end:
+`environmentId: local` plus literal accept/cancel choices were not represented,
+and opening the same native terminal demanded a completed turn. Alpha.41 accepts
+only the native one-time local decision, sends native `cancel` as turn cancellation,
+and advertises this support separately from older approval synchronization.
+Old backends retain their supported decisions without receiving unsupported ones.
+The first terminal attachment reads the owned native rollout and checks identity,
+transport and lifecycle before attaching; it never creates an artificial turn.
+
+Source and installed UI checks used the actual native binary and its permission
+protocol against a loopback synthetic Responses server. They verify GUI accept
+→ exact native RPC reply → resolution → fixed command output/exit 0 → completion;
+first-turn same-thread native terminal attachment; native TUI cancellation of a
+file-change request with no file written; and GUI cancel → native interrupted turn.
+Each run submitted three user turns. Two native ephemeral title threads were also
+observed per run; there were five source and six installed loopback HTTP requests.
+There were zero external paid model requests. This is native protocol/runtime
+proof with synthetic inference, not a provider inference or billing benchmark.
+A test-wrapper permission override initially blocked remote TUI attachment; the
+wrapper was corrected to configure only its own server, with native resume left
+unmodified. The failed attempt and successful native screens are retained privately.
+
+Independent screenshot review also found a stale terminal-exit activity after
+reopening. The final build clears only that specific notice on a new display's
+start; other activities remain intact. Actual local PTY process exit/restart checks
+pass against both source and the final installed adapter. All 372 unit checks pass.
+Seven final affected installed runners pass: native confirmation, control focus,
+reconnect, solo use, room sending, input/composition and draft ownership. Final
+independent delivery review is recorded in review.md. Original user sessions and stored profile hashes remain unchanged.

@@ -120,3 +120,19 @@ test('failed Codex disconnect retains event observation and ownership for recove
     assert.equal(states.at(-1), 'working');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('a restarted native display clears only its own obsolete exit notice', async t => {
+  const { once } = require('node:events');
+  const { Codex } = require('../adapters.cjs');
+  const record = { cwd: require('node:os').tmpdir(), activity: '' };
+  const r = new Codex(record, {});
+  r.on('activity', text => { record.activity = text; });
+  t.after(async () => { if (r.terminal?.alive) await r.terminal.stop(); });
+  let terminal = r.makeTerminal([process.execPath, '-e', 'process.exit(0)']);
+  await once(terminal, 'closed'); assert.match(record.activity, /原生终端已退出/);
+  terminal = r.makeTerminal([process.execPath, '-e', 'setInterval(() => {}, 1000)']);
+  await once(terminal, 'started'); assert.equal(record.activity, '');
+  await terminal.stop(); record.activity = '保留其他原生确认状态';
+  terminal = r.makeTerminal([process.execPath, '-e', 'setInterval(() => {}, 1000)']);
+  await once(terminal, 'started'); assert.equal(record.activity, '保留其他原生确认状态');
+});

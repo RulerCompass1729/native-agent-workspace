@@ -394,11 +394,15 @@ class Codex extends EventEmitter {
   }
   makeTerminal(argv) {
     this.terminal = new Terminal(argv, this.record.cwd);
+    const exitNotice = '原生终端已退出；已连接的会话仍由运行服务管理。';
     this.terminal.on('data', data => this.emit('terminal', data));
-    this.terminal.on('started', pid => this.emit('pid', pid));
+    this.terminal.on('started', pid => {
+      this.emit('pid', pid);
+      if (this.record.activity === exitNotice) this.emit('activity', '');
+    });
     this.terminal.on('closed', () => this.emit('activity', this.backendExitConfirmed
       ? '原生后台已退出；记录和草稿保留，任务不会自动重发。'
-      : '原生终端已退出；已连接的会话仍由运行服务管理。'));
+      : exitNotice));
     return this.terminal;
   }
   observeStatus(status) {
@@ -589,7 +593,18 @@ class Codex extends EventEmitter {
     if (this.stopped) throw new Error('本应用已断开该会话；原生历史仍保留。');
     if (this.terminal?.alive) return this.terminal;
     if (!this.record.nativeId) { for (let i = 0; i < 100 && !this.terminal; i++) await delay(50); if (this.terminal) return this.terminal; }
-    if (!this.hasHistory) throw new Error('请先完成一条对话，再打开同一会话的原生终端。');
+    if (!this.hasHistory) {
+      // A first turn may already be waiting for a native-only permission. Read
+      // its actual rollout rather than demanding that blocked turn finish.
+      // Never create a seed turn or change native permissions to attach a TUI.
+      const rpc = this.host.rpc, revision = this.lifecycleRevision, id = this.record.nativeId;
+      const { thread } = await rpc.call('thread/read', { threadId: id, includeTurns: true });
+      if (this.stopped || this.transportDisconnected || this.host.rpc !== rpc || this.lifecycleRevision !== revision || this.record.nativeId !== id) throw new Error('原生连接已变化，请重新打开终端。');
+      if (thread?.id !== id || !Array.isArray(thread.turns) || !thread.turns.length) throw new Error('请先发送一条消息，再打开同一会话的原生终端。');
+      this.hasHistory = true;
+    }
+    // Another attachment can finish while the initial rollout read is pending.
+    if (this.terminal?.alive) return this.terminal;
     return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
   }
   async reconnect() {

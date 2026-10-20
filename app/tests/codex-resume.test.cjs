@@ -203,3 +203,23 @@ for (const succeeds of [true, false]) test('early terminal attachment waits for 
   if (succeeds) { release(); await starting; await attachment; assert.equal(created, 1); }
   else { const outcomes = Promise.allSettled([starting, attachment]); release(); assert.deepEqual((await outcomes).map(x => x.status), ['rejected', 'rejected']); assert.equal(created, 0); }
 });
+for (const scenario of ['pending', 'empty', 'wrong-thread', 'disconnected', 'changed-rpc', 'stopped', 'concurrent']) test('first-turn terminal attachment verifies native rollout: ' + scenario, async () => {
+  const calls = [], record = { nativeId: 'first-thread', cwd: '/synthetic', view: 'chat' };
+  let r;
+  const host = { binaries: { codex: 'synthetic' }, codexSocket: '/synthetic/socket', rpc: { call: async (method, params) => {
+    calls.push({ method, params }); await new Promise(resolve => setImmediate(resolve));
+    if (scenario === 'disconnected') r.transportDisconnected = true;
+    if (scenario === 'changed-rpc') host.rpc = {};
+    if (scenario === 'stopped') r.stopped = true;
+    return { thread: { id: scenario === 'wrong-thread' ? 'another-thread' : record.nativeId, turns: scenario === 'empty' ? [] : [{ id: 'active', status: 'inProgress' }] } };
+  } } };
+  r = new Codex(record, host); let starts = 0, argv;
+  r.makeTerminal = args => { starts++; argv = args; return (r.terminal = { alive: true }); };
+  if (['pending', 'concurrent'].includes(scenario)) {
+    const results = await Promise.all(scenario === 'concurrent' ? [r.openTerminal(), r.openTerminal()] : [r.openTerminal()]);
+    assert.equal(starts, 1); assert.ok(results.every(result => result === r.terminal));
+    assert.equal(argv.at(-1), record.nativeId); assert.ok(argv.includes('resume'));
+    assert.equal(r.hasHistory, true);
+  } else { await assert.rejects(r.openTerminal()); assert.equal(starts, 0); assert.equal(r.hasHistory, false); }
+  assert.ok(calls.every(c => c.method === 'thread/read' && c.params.threadId === record.nativeId && c.params.includeTurns));
+});
