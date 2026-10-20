@@ -48,7 +48,9 @@ const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = () => state?.room.archived ? [] : state?.sessions.filter(s => s.roomId === 'shared' && !s.archived) || [];
 const nativeUsable = s => s && !s.archived && (['starting', 'idle', 'working', 'approval'].includes(s.state) || (s.state === 'error' && s.terminalAvailable));
-const canResume = s => s?.nativeId && !s.terminalAvailable && ['ended', 'recoverable', 'error'].includes(s.state) && ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
+const canResume = s => s?.nativeId && !s.terminalAvailable &&
+  (['ended', 'recoverable', 'error'].includes(s.state) || (s.provider === 'codex' && s.state === 'disconnected' && (s.serviceCapabilities || state.capabilities || []).includes('resubscribe'))) &&
+  ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
 const inputFocusAllowed = () => !sessionMenu && !roomMenu && !document.querySelector('dialog[open]');
 function updateState(next) {
   const before = current(), id = activeSessionId();
@@ -978,6 +980,22 @@ $('data-directory').onclick = () => attempt(() => api.dataDirectory());
 $('clear-shared-history').onclick = () => attempt(() => { if (!state.capabilities?.includes('clearSharedHistory')) throw new Error('后台仍在保留旧版会话；结束它们并重开应用后可使用此功能。'); return api.clearSharedHistory(); });
 $('close-privacy').onclick = () => { $('privacy-dialog').close(); focusTerminal(); };
 $('reconnect-button').onclick = () => attempt(async () => { $('reconnect-button').disabled = true; try { await api.reconnect(); } finally { $('reconnect-button').disabled = false; } });
+$('search-button').onclick = () => openSearch();
+$('close-search').onclick = () => $('search-dialog').close();
+$('search-preview-back').onclick = renderSearch;
+$('search-dialog').addEventListener('close', () => { clearTimeout(searchTimer); ui.clearMarkdown($('search-preview-body')); $('search-preview-body').textContent = ''; });
+$('search-input').oninput = event => { clearTimeout(searchTimer); if (!event.isComposing) searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
+$('search-input').oncompositionend = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
+$('search-input').onkeydown = event => {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); $('search-dialog').close(); return; }
+  if (event.key === 'ArrowDown') { event.preventDefault(); renderSearch(); $('search-results').querySelector('button')?.focus(); }
+  if (event.key === 'Enter') { event.preventDefault(); renderSearch(); if ($('search-results').querySelectorAll('button').length === 1) $('search-results').querySelector('button').click(); else $('search-results').querySelector('button')?.focus(); }
+};
+$('search-scope').onchange = $('search-archived').onchange = () => { searchLimit = 60; renderSearch(); };
+$('search-more').onclick = () => { searchLimit += 60; renderSearch(); };
+$('return-reading').onclick = () => attempt(returnToReading);
+document.addEventListener('keydown', searchKey);
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
@@ -1006,4 +1024,4 @@ attempt(async () => {
   }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { for (const panel of progressPanels.values()) panel.dispose(); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); for (const panel of progressPanels.values()) panel.dispose(); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

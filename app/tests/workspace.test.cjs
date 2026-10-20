@@ -108,6 +108,25 @@ test('a view without control cannot send or write terminal input', async t => {
   assert.throws(() => w.input(id, 'hello', 'observer'));
   assert.equal(w.versions.dispatches, 0);
 });
+test('a rejected old-owner send releases its own pending slot without changing the new owner draft or work', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  let reject;
+  r.send = () => new Promise((_resolve, fail) => { reject = fail; });
+  w.setDraft(id, 'old draft', 'owner');
+  const pending = w.send(id, 'old draft', 'owner'), rejected = assert.rejects(pending);
+  w.claim(id, 'next-owner');
+  w.setDraft(id, 'new draft', 'next-owner');
+  w.room.run = { id: 'new-work', status: 'running', ids: [] };
+  reject(Error('Old submission canceled')); await rejected;
+  assert.equal(w.get(id).pendingTag, null);
+  assert.equal(w.get(id).messages.at(-1).status, 'unconfirmed');
+  assert.equal(w.get(id).state, 'idle');
+  assert.equal(w.drafts.get(id), 'new draft');
+  assert.equal(w.room.run.status, 'running');
+  r.send = async () => {};
+  await w.send(id, 'new draft', 'next-owner');
+  assert.ok(w.get(id).pendingTag);
+});
 test('switching your own view does not cancel a pending send; actual input or takeover does', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   let allowed;

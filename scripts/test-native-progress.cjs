@@ -156,6 +156,15 @@ async function run() {
   await panel(b).getByRole('button', { name: '回到实时', exact: true }).click(); await aligned(b);
   checks.push('Legacy full-frame output/resize/reconnect preserve the selected frame; explicit live action returns to canonical screen');
   await fixture('hold', a); await panel(a).getByRole('button', { name: '重新连接画面', exact: true }).click();
+  await until(async () => (await fixture()).waiting.includes(a), 'Old observation held');
+  await fixture('connection', a, 'disconnected');
+  await panel(a).locator('.progress-notice').getByText('连接已断开', { exact: false }).waitFor();
+  await fixture('connection', a, 'idle');
+  await fixture('output', a, { data: '\x1bcNEW CONNECTION CONTENT\r\n' });
+  await fixture('release', a); await aligned(a);
+  await until(() => panel(a).locator('.progress-notice').innerText().then(text => !text.includes('停止同步')), 'New connection observed');
+  checks.push('Session disconnect labels its frozen observation; old snapshot cannot overwrite a later connection; same panel refreshes after reconnect');
+  await fixture('hold', a); await panel(a).getByRole('button', { name: '重新连接画面', exact: true }).click();
   await until(async () => (await fixture()).waiting.includes(a), 'Observe held before disconnect');
   await fixture('progress', a, { id: 'queued-disconnected', title: 'Must not show after disconnect', status: 'running' });
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('workspace:disconnected', 'Synthetic disconnect'));

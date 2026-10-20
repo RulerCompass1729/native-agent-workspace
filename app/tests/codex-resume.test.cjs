@@ -23,6 +23,20 @@ function fixture(reply, pages = () => ({ data: [] })) {
 const idle = r => ({ thread: { id: r.record.nativeId, status: { type: 'idle' } } });
 const item = n => ({ turnId: 'saved-turn', item: { id: 'message-' + n, type: 'userMessage', content: [{ type: 'text', text: String(n) }] } });
 
+for (const cached of [false, true]) test('history without a native turn ID is complete, never inferred streaming: ' + cached, t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-history-state-'));
+  const f = fixture(idle); Object.assign(f.host, { binaries: {}, close() {} });
+  const w = new Workspace(f.host, dir), s = { id: 'local', provider: 'codex', recovering: true, messages: cached ? [{ id: 'answer', role: 'assistant', text: 'partial', status: 'streaming' }] : [] };
+  w.sessions.set(s.id, s); w.bind(s, f.r);
+  t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  f.r.emit('history', [{ id: 'answer', type: 'agentMessage', turnId: null, text: 'Saved answer' }]);
+  assert.equal(s.messages[0].status, 'complete'); assert.equal(s.messages[0].text, 'Saved answer');
+  f.r.turnId = 'actual-active';
+  f.r.emit('history', [{ id: 'live-answer', type: 'agentMessage', turnId: 'actual-active', text: 'Still working' }]);
+  assert.equal(s.messages.find(m => m.id === 'live-answer').status, 'streaming');
+  assert.equal(w.versions.dispatches, 0);
+});
+
 test('cold resume imports paginated history before enabling graphical sends, without a model task', async () => {
   const f = fixture(idle, (p, r) => {
     assert.equal(r.chatAvailable, false);

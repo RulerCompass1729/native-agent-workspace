@@ -155,8 +155,8 @@ test('GUI approval reaches its original native transport and rejects stale or ot
   await assert.rejects(client.call('approve', f.record.id, next.requestId, 'accept'), /权限请求已变化/);
 });
 
-test('native completion before acknowledgement is matched to its turn, never to a neighboring turn', async t => {
-  const f = await fixture(t, { start(m, reply, event) {
+for (const empty of [false, true]) test('native completion before acknowledgement is matched once to its turn, including an empty retained thread: ' + empty, async t => {
+  const f = await fixture(t, { empty, start(m, reply, event) {
     event('turn/started', { turn: { id: 'owned-turn' } });
     event('item/completed', { turnId: 'other-turn', item: { id: 'other-answer', type: 'agentMessage', text: 'private other reply' } });
     event('turn/completed', { turn: { id: 'other-turn', status: 'completed' } });
@@ -164,12 +164,19 @@ test('native completion before acknowledgement is matched to its turn, never to 
     event('turn/completed', { turn: { id: 'owned-turn', status: 'completed' } });
     reply({ turn: { id: 'owned-turn' } });
   } });
-  const target = new LegacyCodex(f.record), completed = []; t.after(() => target.close());
+  const target = new LegacyCodex({ ...f.record, messages: [] }), completed = []; t.after(() => target.close());
   await target.connect(f.socket); target.on('complete', result => completed.push(result));
   await target.send('synthetic task', 'owned-tag', async () => {}, () => true); await tick();
   assert.equal(completed.find(r => r.text === 'private other reply').tag, undefined);
   assert.equal(completed.find(r => r.tag === 'owned-tag').text, 'authorized reply');
+  assert.equal(completed.length, 2);
+  assert.equal(target.subscribed, true);
+  assert.equal(target.state, 'idle');
+  assert.equal(target.pending, null);
   assert.equal(f.calls.find(c => c.method === 'turn/start').params.clientUserMessageId, 'owned-tag');
+  await target.send('next synthetic task', 'next-tag', async () => {}, () => true); await tick();
+  assert.equal(f.calls.filter(c => c.method === 'turn/start').length, 2);
+  assert.equal(target.state, 'idle');
 });
 
 test('human native messages invalidate a pending dispatch; progress needs no terminal operation', async t => {
@@ -196,4 +203,18 @@ test('manager records only metadata, preserves native history writer and refuses
   assert.equal(fs.readFileSync(path.join(f.directory, 'legacy-dispatches.json'), 'utf8').includes('synthetic private prompt'), false);
   assert.equal(fs.existsSync(path.join(f.directory, 'workspace.json')), false);
   assert.equal(fs.existsSync(path.join(f.directory, '.claude')), false);
+});
+test('closing while the empty first turn is acknowledged cannot start another observer request', async t => {
+  let acknowledge;
+  const f = await fixture(t, { empty: true, start(_m, reply) { acknowledge = () => reply({ turn: { id: 'late-accepted' } }); } });
+  const target = new LegacyCodex({ ...f.record, messages: [] }); t.after(() => target.close());
+  await target.connect(f.socket);
+  // Marking closed is the synchronous portion of close(); keep the test socket
+  // just long enough to deliver the late ACK instead of a transport failure.
+  const pending = target.send('one input', 'late-tag', async () => {}, () => true);
+  while (!acknowledge) await new Promise(resolve => setImmediate(resolve));
+  target.closed = true; target.connected = false; target.adapter.stopped = true;
+  const before = f.calls.filter(c => c.method === 'thread/resume').length;
+  acknowledge(); await pending; await tick();
+  assert.equal(f.calls.filter(c => c.method === 'thread/resume').length, before);
 });

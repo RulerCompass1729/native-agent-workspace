@@ -30,6 +30,26 @@ function restoreVisibleReading() {
     view.visible = visible;
   }
 }
+function readingMatch(body, query) {
+  if (!query?.trim()) return null;
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  const nodes = []; let text = '', current;
+  while ((current = walker.nextNode())) {
+    if (current.parentElement?.closest('button, svg, [hidden], script, style')) continue;
+    nodes.push({ node: current, start: text.length }); text += current.textContent;
+  }
+  // Literal, Unicode-aware case matching retains UTF-16 positions in the
+  // original text; lowercasing first can change their lengths.
+  const match = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu').exec(text);
+  if (!match) return null;
+  const start = nodes.findLast(n => n.start <= match.index);
+  const endIndex = match.index + match[0].length;
+  const end = nodes.findLast(n => n.start < endIndex);
+  if (!start || !end) return null;
+  const range = document.createRange();
+  range.setStart(start.node, match.index - start.start); range.setEnd(end.node, endIndex - end.start);
+  return range;
+}
 function scheduleReading(view, intent = view.intent) {
   if (!intent || view.intent !== intent || view.frame) return;
   view.frame = requestAnimationFrame(() => {
@@ -37,6 +57,16 @@ function scheduleReading(view, intent = view.intent) {
     if (!view.intent || !view.el.clientHeight || !view.el.getClientRects().length) return;
     const el = view.el, p = view.intent.position;
     const anchor = view.entries.get(p.anchor)?.item;
+    if (anchor && view.intent.searchQuery) {
+      const entry = view.entries.get(p.anchor), range = readingMatch(entry.body, view.intent.searchQuery);
+      if (range) {
+        const offset = 16 - (range.getBoundingClientRect().top - anchor.getBoundingClientRect().top);
+        if (p.offset !== offset) {
+          p.offset = offset;
+          attempt(() => api.readingState(readingPositions));
+        }
+      }
+    }
     el.scrollTop = p.follow ? el.scrollHeight : anchor ? el.scrollTop + anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - p.offset : p.top;
     view.assignedTop = el.scrollTop;
   });

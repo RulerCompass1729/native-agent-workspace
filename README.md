@@ -104,6 +104,17 @@ to change its local display name. The same menu offers **在独立窗口打开**
 The sidebar, room tabs and other windows update together. The name
 is saved on this Mac; renaming does not call a model or change native history.
 
+Use **查找会话与记录** to find loaded conversations or shared records on this Mac.
+**⌘F** scopes the search to the current conversation or shared timeline; optionally
+include archived records. Opening a result does not restore an archive or send its
+content. **返回查找前的位置** returns to the original reading position and filters.
+Queries are temporary; drafts and raw terminal frames are not searched.
+
+After explicitly disconnecting a Codex session on a current backend, select
+**继续原生会话** to reconnect the same thread and sync its history. This does not
+start a model turn, override native settings or resume earlier collaboration.
+Records and drafts stay intact if the connection needs another attempt.
+
 After an update, new sessions use the current backend while existing sessions
 keep their original processes. Both appear in the same workspace. Older sessions
 retain their actual capability restrictions; see [update continuity](docs/alpha.md#updates-with-live-sessions).

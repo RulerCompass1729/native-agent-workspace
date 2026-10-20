@@ -32,6 +32,7 @@ process.on('message', async q => {
   try {
     const r = runtimes.get(q.target);
     if (q.method === 'hold') held.add(q.target);
+    if (q.method === 'connection') { r.record.connectionRevision = (r.record.connectionRevision || 0) + 1; r.emit('state', q.value); }
     if (q.method === 'rawUnavailable') q.value ? noRaw.add(q.target) : noRaw.delete(q.target);
     if (q.method === 'release') { waiting.get(q.target)?.(); waiting.delete(q.target); }
     if (q.method === 'legacyFrames') r.legacyFrames = true;

@@ -117,24 +117,15 @@ class LegacyCodex extends EventEmitter {
     await refresh();
     const valid = () => this.connected && !this.closed && this.state === 'idle' && this.revision === revision && guard();
     if (!valid()) throw Error('原生状态已变化，输入未发送。');
-    await this.adapter.send(text, tag, valid);
+    const turnId = await this.adapter.send(text, tag, valid);
+    if (this.closed) return;
     if (!this.subscribed) {
       // The accepted first turn created native history. Rejoin for its events;
       // if it already ended, reconcile by the exact native turn ID.
-      const turnId = this.adapter.pending?.turnId;
-      this.state = 'working'; this.emit('change');
       try {
-        const revision = this.adapter.stateRevision;
-        const result = await this.rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true });
-        if (result.thread?.id !== this.record.nativeId || this.closed) throw Error('原生观察连接已变化。');
+        await this.adapter.observeAcceptedTurn(turnId);
+        if (this.closed) throw Error('原生观察连接已变化。');
         this.subscribed = true;
-        if (revision === this.adapter.stateRevision) this.adapter.observeStatus(result.thread.status);
-        const page = await this.rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 20, itemsView: 'full' });
-        const turn = page.data?.find(t => t.id === turnId);
-        if (turn && turn.status !== 'inProgress') {
-          for (const item of turn.items || []) this.adapter.event({ method: 'item/completed', params: { threadId: this.record.nativeId, turnId, item } });
-          this.adapter.event({ method: 'turn/completed', params: { threadId: this.record.nativeId, turn } });
-        }
       } catch {
         // ACK was already received. Never turn a later observation failure
         // into a failed send that invites duplicate billing.
@@ -152,6 +143,7 @@ class LegacyCodex extends EventEmitter {
   }
   close() {
     this.closed = true; this.connected = false; this.revision++;
+    if (this.adapter) this.adapter.stopped = true;
     // Closing only this subscription must not invoke adapter.stop(), native
     // interrupt, thread/unsubscribe on another client, or server termination.
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.close();

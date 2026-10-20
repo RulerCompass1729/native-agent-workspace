@@ -12,6 +12,7 @@
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">◒</span><div>Native Workspace<small>本地桌面 · Alpha</small></div></div>
     <button class="new-button" id="new-session" aria-label="新会话" title="新会话"><span class="rail-icon" aria-hidden="true">＋</span><span class="rail-label">＋ 新会话</span><kbd>⌘N</kbd></button>
+    <button id="search-button" class="subtle" aria-label="查找会话与记录" title="查找会话与记录"><span class="rail-icon" aria-hidden="true">⌕</span><span class="rail-label">查找会话与记录</span></button>
     <div class="sidebar-navigation">
       <section class="sidebar-group" aria-labelledby="session-group-label">
         <h2 class="nav-label" id="solo-drop" tabindex="0" aria-label="会话：把成员拖到这里独立使用" title="把协作成员拖回这里，继续独立使用"><span id="session-group-label">会话</span></h2>
@@ -34,6 +35,7 @@
     <header id="header"><div><h1 id="title">你的工作空间</h1><p id="subtitle">从一个会话开始，需要时再邀请另一个。</p></div><div id="header-actions"></div></header>
     <div id="alert" role="status" hidden></div>
     <button id="reconnect-button" hidden>重新连接本机服务</button>
+    <button id="return-reading" class="reading-return subtle" hidden>返回查找前的位置</button>
     <section id="welcome">
       <div class="welcome-icon" aria-hidden="true">◒</div><p class="eyebrow">按你的方式工作</p><h2>一个人提问，<br>也可以一起完成。</h2>
       <p class="welcome-copy">Claude 和 Codex 各自保留原来的会话。<br>需要协作时，再选择分享什么。</p>
@@ -76,11 +78,14 @@
   <dialog id="share-dialog"><h2>分享选定内容</h2><p id="share-help">检查内容，选择共同工作中的接收方。</p><textarea id="share-text" rows="8" aria-label="即将分享的内容"></textarea><select id="share-recipient" aria-label="分享接收方"></select><div class="dialog-actions"><button id="cancel-share">取消</button><button id="confirm-share" class="primary">发送这段内容</button></div></dialog>
   <dialog id="terminal-display-dialog"><h2>终端显示</h2><p>只调整这个窗口的显示，原生会话继续运行。</p><label for="terminal-font-size">字号</label><input id="terminal-font-size" type="number" min="10" max="24" step="1"><label for="terminal-palette">配色</label><select id="terminal-palette"><option value="dark">中性深色</option><option value="green">柔和绿色</option></select><p class="quiet">原生程序自己的主题与快捷键继续由原生程序管理。</p><div class="dialog-actions"><button id="reset-terminal-display">恢复默认</button><button id="close-terminal-display" class="primary">完成</button></div></dialog>
   <dialog id="privacy-dialog"><h2>隐私与用量</h2><p>这里展示当前本机状态及其边界。应用的说明和计数不能替代独立安全审计或原生账单。</p><div id="trust-status"></div><details><summary>数据、权限与退出</summary><p>本应用保存对话副本、草稿和会话信息，不提供云同步、遥测或远程崩溃上传。UI 网络请求限定为本机服务；原生 agent 可以连接其模型服务，并按原生权限运行工具。</p><p>登录由原生 Claude / Codex 管理，本应用不复制它们的凭据文件。原生权限继续生效；加入或脱出协作不改变工具已有的文件访问权。</p><p>剪贴板只在你使用粘贴时读取，不监听剪贴板。退出协作不能撤回已经分享的内容。</p><p>关闭界面后，原生会话继续运行。重开界面不会自动重发任务；电脑重启或原生进程丢失后，活跃团队无法保证恢复。</p><p>本地副本没有应用层加密；同一系统账户下有文件访问权的程序可能读取它们。记录保留到你移除，删除本应用记录不会删除原生历史或提供商端记录。</p><p>结束会话后，可在“会话与原生团队”中移除本应用记录；共享记录需单独清除。</p></details><div class="dialog-actions"><button id="data-directory">查看本机数据</button><button id="privacy-source">查看公开实现</button><button id="refresh-trust">刷新状态</button><button id="close-privacy" class="primary">完成</button></div><details><summary>清理与完全退出</summary><div class="dialog-actions"><button id="quit-service">所有会话结束后完全退出</button><button id="clear-shared-history">清除共同工作记录…</button></div></details></dialog>
+  <dialog id="search-dialog" aria-labelledby="search-title"><h2 id="search-title">查找会话与记录</h2><input id="search-input" type="search" maxlength="500" placeholder="会话名称或正文关键词…" aria-label="搜索本机记录" autocomplete="off"><div class="search-options"><select id="search-scope" aria-label="搜索范围"><option value="all">全部会话与共享记录</option><option value="current">当前会话</option><option value="room">共享记录</option></select><label><input id="search-archived" type="checkbox"> 包含归档</label></div><p class="quiet">仅查找本机已载入的记录，不搜索草稿或临时终端画面，也不会发送给 agent。</p><p id="search-count" role="status"></p><div id="search-results" aria-label="搜索结果"></div><section id="search-preview" hidden><h3 id="search-preview-title"></h3><div id="search-preview-body" class="message-body"></div><div class="dialog-actions"><button id="search-preview-back" type="button">返回结果</button><button id="search-preview-copy" type="button">复制</button></div></section><button id="search-more" type="button" hidden>显示更多</button><div class="dialog-actions"><button id="close-search" type="button">关闭</button></div></dialog>
   <div id="toast" role="status" hidden></div>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="reading-list.js"></script>
   <script src="native-progress.js"></script>
+  <script src="local-search.js"></script>
+  <script src="search-view.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

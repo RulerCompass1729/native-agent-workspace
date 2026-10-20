@@ -542,3 +542,46 @@ view and the IME's inserted space were incorrect, and the disk-reserve guard lat
 stopped the guest. It is not a pass. The unchanged renderer/input path retains the
 earlier alpha.22 visible System Pinyin/WeChat evidence and later regression checks;
 this release adds no new universal IME/device claim.
+
+
+## Local find and disconnected-session continuity — alpha.28
+
+Source tests cover literal local search, current/all/shared scope, pagination,
+archive inclusion and exclusion of private drafts. The actual hidden Electron/DSH
+search runner uses 160 synthetic records, a match deep inside a long Markdown
+message, streaming while reading, the original reading position and shared filters,
+archived-session reading, archived-room preview/copy and close/reopen. Search
+queries are not persisted. Markdown syntax that has no visible equivalent may
+locate the message rather than an exact text range.
+
+The native reconnect runner uses a previously completed isolated Codex history:
+continue, disconnect, continue the same thread, check exact history and Chinese
+draft, then open its native TUI. No new task is submitted. A separate real empty
+thread probe confirms reconnect without manufacturing a model turn. The transport
+fixture verifies cancel, failure and retry through the actual dialog/action path.
+Native dialogs in these hidden tests are answered by the test harness, not OS input.
+
+Regression cases include old reconnect success/failure/history arriving after a
+new connection, old send failure after a new pending task, early approvals,
+empty-thread status races, history-read failure, concurrent stop and closed legacy
+observers. A first accepted user input stays accepted when subsequent observation
+fails; it is never automatically resent. Reconnection uses only thread identity
+and the native exclude-turns option, without model or permission overrides.
+
+Native progress labels a disconnected session as a frozen observation, refreshes
+on reconnection, and rejects snapshots from an older connection generation. Its
+actual UI test covers an old held snapshot arriving after the next connection.
+Search/progress/connection tests do not create a model turn or edit native settings.
+The final artifact matches all 35 packaged application source files and passes
+signature verification. Installed reconnect and ten two-window draft-ownership
+checks pass; unchanged bundled search/progress files retain their installed
+six-group checks. The complete local suite passes 296 tests with no skips.
+The original three user sessions, histories, drafts, view files and process
+identities remain unchanged; application search has one existing installed entry.
+Temporary app bundles were removed, retaining the previous rollback archive.
+Independent source and final installed-artifact review passed within this scope.
+
+Reviewer counterexamples also cover rejected old-owner input after takeover and
+an empty retained thread completing before its ACK. Clearing the old pending slot
+cannot modify the new owner's draft/work. The accepted native turn ID survives
+completion and observation does not emit a second reply or resend an input.

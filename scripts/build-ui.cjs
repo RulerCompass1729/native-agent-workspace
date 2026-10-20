@@ -15,7 +15,7 @@ const palette = css.match(/:root\{([^}]*)\}/)[1];
 css = css.replace(/:root\{[^}]*\}/, '').replace(/body\{[^}]*\}/, '');
 css = `.naw{${palette};font-size:14px;height:100%;min-height:0;overflow:hidden;${css}}\n.naw>.sidebar{width:100%;height:100%}.naw>main{height:100%}.naw .message-body:has(.dsh-markdown){white-space:normal}`;
 const bootstrap = read('app/dsh/bootstrap.js');
-const renderer = read('app/renderer/reading-list.js') + '\n' + read('app/renderer/native-progress.js') + '\n' + read('app/renderer/renderer.js');
+const renderer = ['local-search.js', 'reading-list.js', 'native-progress.js', 'search-view.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
 const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\n*/\n${read(`node_modules/${name}/${entry}`)}`;
 const terminal = licensed('@xterm/xterm', 'lib/xterm.js') + '\n' + licensed('@xterm/addon-fit', 'lib/addon-fit.js');
 const source = bootstrap

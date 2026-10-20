@@ -242,7 +242,7 @@ class Rpc extends EventEmitter {
 
 class Codex extends EventEmitter {
   constructor(record, host) {
-    super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = !record.recovering && record.view !== 'terminal'; this.stopped = false; this.eventRevision = 0; this.stateRevision = 0; this.on('state', () => this.stateRevision++); this.inputItems = new Set(); this.liveMessageItems = new Set(); this.historyMessageItems = new Set();
+    super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = !record.recovering && record.view !== 'terminal'; this.stopped = false; this.lifecycleRevision = 0; this.eventRevision = 0; this.stateRevision = 0; this.on('state', state => { this.latestState = state; this.stateRevision++; }); this.inputItems = new Set(); this.liveMessageItems = new Set(); this.historyMessageItems = new Set();
     if (record.recovering) this.recoveryReady = new Promise(resolve => { this.finishRecoveryConnection = resolve; });
   }
   async start() {
@@ -339,14 +339,14 @@ class Codex extends EventEmitter {
       this.chatAvailable = true; this.hasHistory = true; this.emit('capability');
     }
   }
-  async hydrateHistory(threadId) {
+  async hydrateHistory(threadId, lifecycle = this.lifecycleRevision) {
     // Read all pages before committing a history snapshot. Live input/approval
     // still takes effect immediately; history itself must never take control.
     const items = new Map(), cursors = new Set(); let cursor;
     for (let page = 0; page < 1000; page++) {
-      if (this.stopped) return false;
+      if (this.stopped || lifecycle !== this.lifecycleRevision) return false;
       const result = await this.host.rpc.call('thread/items/list', { threadId, limit: 100, sortDirection: 'asc', ...(cursor ? { cursor } : {}) });
-      if (this.stopped) return false;
+      if (this.stopped || lifecycle !== this.lifecycleRevision) return false;
       if (!Array.isArray(result.data)) throw new Error('原生历史格式未能确认；请在原生终端继续。');
       for (const entry of result.data) {
         const item = entry.item || entry;
@@ -452,16 +452,48 @@ class Codex extends EventEmitter {
   async send(text, tag, guard) {
     if (!this.chatAvailable || this.pending || !guard()) throw new Error('会话忙碌、原生对话接口尚未连接，或交接已失效。');
     const pending = this.pending = { tag, turnId: null }; this.ownInputs.add(tag);
+    const lifecycle = this.lifecycleRevision, revision = this.stateRevision;
     try {
       const r = await this.host.rpc.call('turn/start', { threadId: this.record.nativeId, clientUserMessageId: tag, input: [{ type: 'text', text, text_elements: [] }] });
+      if (lifecycle !== this.lifecycleRevision || this.stopped) { this.emit('submitted', tag); return; }
       pending.turnId = r.turn.id;
       if (!this.turnId) this.turnId = r.turn.id;
+      if (revision === this.stateRevision) this.emit('state', 'working');
       this.emit('submitted', tag);
       for (const id of this.turns.keys()) this.finishTurn(id);
     } catch (error) {
       if (this.pending === pending) this.pending = null;
-      for (const id of this.turns.keys()) this.finishTurn(id);
+      if (lifecycle === this.lifecycleRevision) for (const id of this.turns.keys()) this.finishTurn(id);
       throw error;
+    }
+    if (this.needsSubscription) {
+      try { await this.observeAcceptedTurn(pending.turnId); }
+      catch {
+        // The native ACK already accepted this one turn. An observation error
+        // must never be returned as a send failure that invites a paid retry.
+        if (lifecycle === this.lifecycleRevision && !this.stopped) {
+          this.emit('state', 'error');
+          this.emit('failed', '消息已被原生接受，但后续状态尚未同步；请核对原生终端，不要重发。');
+        }
+      }
+    }
+    return pending.turnId;
+  }
+  async observeAcceptedTurn(turnId) {
+    if (this.stopped || !turnId) throw Error('原生观察连接已变化。');
+    const revision = this.stateRevision, lifecycle = this.lifecycleRevision;
+    const result = await this.host.rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true });
+    if (this.stopped || lifecycle !== this.lifecycleRevision || result.thread?.id !== this.record.nativeId) throw Error('原生观察连接已变化。');
+    this.needsSubscription = false; this.hasHistory = true;
+    if (revision === this.stateRevision && this.latestState !== 'approval') this.observeStatus(result.thread.status);
+    const page = await this.host.rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 20, itemsView: 'full' });
+    if (this.stopped || lifecycle !== this.lifecycleRevision) throw Error('原生观察连接已变化。');
+    const turn = page.data?.find(t => t.id === turnId);
+    // A live completion may have already finished this exact accepted input.
+    // Re-subscribe, but never replay that reply as a second unowned completion.
+    if (turn && turn.status !== 'inProgress' && this.pending?.turnId === turnId) {
+      for (const item of turn.items || []) this.event({ method: 'item/completed', params: { threadId: this.record.nativeId, turnId, item } });
+      this.event({ method: 'turn/completed', params: { threadId: this.record.nativeId, turn } });
     }
   }
   async interrupt() {
@@ -476,7 +508,58 @@ class Codex extends EventEmitter {
     if (!this.hasHistory) throw new Error('请先完成一条对话，再打开同一会话的原生终端。');
     return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
   }
+  async reconnect() {
+    if (!this.stopped || this.closed || !this.record.nativeId) throw new Error('原生连接状态已改变，请重新查看。');
+    const lifecycle = ++this.lifecycleRevision;
+    const current = () => lifecycle === this.lifecycleRevision && !this.stopped;
+    // Re-subscribe to the owned thread. Omit every configuration override:
+    // thread/resume is not a new thread or a turn/start request.
+    this.chatAvailable = false; this.stopped = false;
+    this.pending = null; this.turnId = null; this.turns.clear();
+    this.liveMessageItems.clear();
+    for (const message of this.record.messages || []) {
+      if (message.role === 'assistant') this.historyMessageItems.add(message.id);
+    }
+    this.host.codexTargets.set(this.record.nativeId, this);
+    const revision = this.stateRevision;
+    try {
+      let result;
+      try { result = await this.host.rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
+      catch (error) {
+        if (!error.nativeMissingHistory || this.hasHistory || this.record.messages?.length || !current()) throw error;
+        // Native creates its rollout on the first actual input. Confirm the
+        // owned empty thread is still live; no synthetic turn to make history.
+        const { thread } = await this.host.rpc.call('thread/read', { threadId: this.record.nativeId, includeTurns: false });
+        if (!current() || thread?.id !== this.record.nativeId || thread.preview || thread.status?.type !== 'idle') throw error;
+        this.needsSubscription = true; this.chatAvailable = true;
+        if (revision === this.stateRevision) this.observeStatus(thread.status);
+        this.emit('capability');
+        return;
+      }
+      if (result.thread?.id !== this.record.nativeId) throw new Error('原生返回了不同的会话，恢复未确认。');
+      if (!current()) throw new Error('原生连接已经关闭；没有重发任务。');
+      this.hasHistory = true; this.needsSubscription = false;
+      this.emit('pid', this.host.codexProcess.pid);
+      if (result.model || result.thread.model) this.emit('model', result.model || result.thread.model);
+      if (revision === this.stateRevision) this.observeStatus(result.thread.status);
+      if (!await this.hydrateHistory(this.record.nativeId, lifecycle) || !current()) throw new Error('连接在同步记录时断开；没有重发任务。');
+      this.chatAvailable = true; this.emit('capability');
+    } catch (error) {
+      if (lifecycle === this.lifecycleRevision) {
+        this.chatAvailable = false; this.stopped = true;
+        if (!this.closed) this.emit('state', 'disconnected');
+      }
+      throw error;
+    }
+    // A terminal is a view on this same thread. A failure to open that view
+    // must not undo a confirmed subscription or disable graphical input.
+    if (this.record.view === 'terminal') {
+      try { await this.openTerminal(); }
+      catch { this.emit('activity', '原会话已连接；原生终端未能打开，可切到对话继续或重试终端。'); }
+    }
+  }
   async stop() {
+    ++this.lifecycleRevision;
     const previouslyStopped = this.stopped;
     this.stopped = true;
     try {

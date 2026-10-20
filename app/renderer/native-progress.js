@@ -57,6 +57,12 @@ class NativeProgressPanel {
     $('terminal-area').append(entry.element);
   }
   update(record, capable, connected = true) {
+    connected = connected && !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
+    if (this.connected !== connected || this.runtimeRevision !== (record.connectionRevision || 0)) {
+      this.connectionGeneration = (this.connectionGeneration || 0) + 1;
+      this.runtimeRevision = record.connectionRevision || 0;
+      this.started = false;
+    }
     this.connected = connected;
     this.heading.textContent = record.name;
     this.status.textContent = states[record.state] + (record.activity ? ' · ' + record.activity : '');
@@ -66,10 +72,11 @@ class NativeProgressPanel {
   }
   async reload() {
     if (this.loading || this.disposed || this.connected === false) return;
+    const generation = this.connectionGeneration;
     this.loading = true;
     try {
       const snapshot = await api.observe(this.id);
-      if (this.disposed || this.connected === false) return;
+      if (this.disposed || this.connected === false || generation !== this.connectionGeneration) return;
       const wasLive = this.live, previousTarget = Number(this.range.value), previousEpoch = this.epoch;
       this.progress = new Map(snapshot.progress.items.map(item => [item.id, item])); this.progressRevision = snapshot.progress.revision;
       this.traceTruncated = snapshot.progress.truncated; this.renderTrace();
@@ -88,13 +95,13 @@ class NativeProgressPanel {
         if (!(this.selectionHeld && this.term.hasSelection())) this.replay(wasLive ? this.index : retained ? Math.min(previousTarget, this.index) : this.checkpoint.index);
       }
       if (this.borrowed) this.useNativeEntry(this.borrowed);
-    } catch { if (!this.disposed && this.connected !== false) this.notice.textContent = '实时连接暂不可用，原生会话未改动。'; }
+    } catch { if (!this.disposed && this.connected !== false && generation === this.connectionGeneration) this.notice.textContent = '实时连接暂不可用，原生会话未改动。'; }
     finally {
       this.loading = false;
       const pending = this.pendingEvents; this.pendingEvents = []; this.pendingBytes = 0;
       const overflow = this.pendingOverflow; this.pendingOverflow = false;
-      for (const event of pending) event.progress ? this.receiveProgress(event.progress) : this.receive(event);
-      if (overflow && !this.disposed) this.reload();
+      if (generation === this.connectionGeneration) for (const event of pending) event.progress ? this.receiveProgress(event.progress) : this.receive(event);
+      if ((overflow || generation !== this.connectionGeneration) && !this.disposed) this.reload();
     }
   }
   ensureScreen() {

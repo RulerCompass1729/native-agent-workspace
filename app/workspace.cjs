@@ -34,7 +34,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || this.runtimes.get(s.id)?.hasHistory), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null };
   }
   changed() {
     this.emit('change');
@@ -133,12 +133,12 @@ class Workspace extends EventEmitter {
         // A cold connection's persisted partial text is not newer than native
         // history. Live items received on this connection still take precedence.
         if (own && s.recovering && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
-          Object.assign(own, { text: item.text || '', status: item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+          Object.assign(own, { text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
         }
         if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) own.status = 'submitted';
         const m = own || (item.type === 'userMessage'
           ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
-          : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+          : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
         // Early backends assigned random display IDs to native user input.
         // One unmatched pure-text history item may replace one pre-recovery
         // cache row. This is display reconciliation, never reply attribution.
@@ -219,7 +219,7 @@ class Workspace extends EventEmitter {
     if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); this.pause('真人输入优先'); }
     if (s.state !== 'idle' || s.pendingTag || s.approval) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
     if (runtime.chatAvailable === false) throw new Error(s.provider === 'claude' ? '安全发送接口尚未连接；请在原生终端继续，草稿已保留。' : '请先在原生终端完成第一条消息；草稿已保留。');
-    const control = s.controlRevision; const member = s.memberRevision;
+    const control = s.controlRevision; const member = s.memberRevision; const connection = s.connectionRevision;
     const guard = () => s.state !== 'ended' && s.controlRevision === control && (!(route || forward) || (s.roomId === 'shared' && s.memberRevision === member)) && (!route || (this.room.run?.id === route.id && this.room.run.status === 'running'));
     if (!guard()) throw new Error('交接已经失效。');
     const tag = randomUUID(); s.pendingTag = tag;
@@ -236,10 +236,18 @@ class Workspace extends EventEmitter {
     this.changed();
     try { await runtime.send(text, tag, guard); }
     catch (error) {
-      s.pendingTag = null; this.forwards.delete(tag);
-      for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'unconfirmed'; }
-      if (clearedDraft && this.draftRevisions.get(id) === draftRevision) this.drafts.set(id, draft);
-      this.pause(error.message); this.changed(); throw error;
+      const current = this.runtimes.get(id) === runtime && s.connectionRevision === connection && s.pendingTag === tag;
+      const sameControl = s.controlRevision === control;
+      this.forwards.delete(tag);
+      for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m?.status === 'awaiting-native') m.status = 'unconfirmed'; }
+      if (current) {
+        s.pendingTag = null;
+        if (sameControl) {
+          if (clearedDraft && this.draftRevisions.get(id) === draftRevision) this.drafts.set(id, draft);
+          this.pause(error.message);
+        }
+      }
+      this.changed(); throw error;
     }
     return tag;
   }
@@ -330,7 +338,7 @@ class Workspace extends EventEmitter {
     const s = this.get(id);
     if (s.state === 'ended') return Promise.resolve();
     const runtime = this.runtime(id);
-    this.pause('正在断开原生会话'); s.controlRevision++; s.state = 'stopping'; s.activity = '等待原生确认'; this.changed();
+    this.pause('正在断开原生会话'); s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; s.activity = '等待原生确认'; this.changed();
     const operation = Promise.resolve().then(() => runtime.stop()).then(result => {
       if (!['ended', 'disconnected'].includes(result?.state)) throw new Error('原生未确认结束状态。');
       s.state = result.state; s.pendingTag = null; s.approval = null;
@@ -342,6 +350,19 @@ class Workspace extends EventEmitter {
   }
   async resume(id, owner) {
     const s = this.get(id);
+    const retained = this.runtimes.get(id);
+    if (s.state === 'disconnected' && s.provider === 'codex' && retained?.reconnect && !this.stops.has(id)) {
+      s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1;
+      const generation = s.connectionRevision;
+      s.owner = owner; s.recovering = true; s.state = 'starting'; s.activity = '正在连接原生历史';
+      this.pause('重新连接原会话；之前的交接不会自动继续。'); this.changed();
+      try { await retained.reconnect(); }
+      catch (error) {
+        if (generation === s.connectionRevision && s.state !== 'ended' && !this.stops.has(id)) { s.state = 'disconnected'; s.activity = error.message; }
+        throw error;
+      } finally { if (generation === s.connectionRevision) { s.recovering = false; this.changed(); } }
+      return;
+    }
     if (this.runtimes.has(id)) throw new Error('该会话仍有运行连接，请先检查原生状态。');
     if (!s.nativeId || !['ended', 'recoverable', 'error'].includes(s.state)) throw new Error('这个会话目前不能恢复。');
     const sameServer = s.provider === 'codex' && s.serverIdentity?.pid === this.host.codexProcess?.pid;

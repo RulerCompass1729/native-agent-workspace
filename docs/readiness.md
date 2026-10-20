@@ -1,11 +1,15 @@
 # Readiness and next gates
 
-As of 2026-10-19. Version 0.1.0-alpha.27 is a **local macOS technical-trial alpha**.
+As of 2026-10-19. Version 0.1.0-alpha.28 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.27 verifies native Claude prompt identity before automatic
+**Current increment:** alpha.28 adds local find with exact-context navigation,
+archive reading and return, plus explicit reconnection of a disconnected owned
+Codex thread. Source tests, real native no-task UI checks and installed artifact
+checks passed independent review. Native configuration, drafts and identity are retained.
+Alpha.27 verifies native Claude prompt identity before automatic
 reply transfer and repairs duplicate legacy Codex input rows on cold recovery.
 A two-reply real native check, installed same-identity recovery, and two installed
 lifecycle cycles passed independent review.

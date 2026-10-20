@@ -278,11 +278,13 @@ async function boot() {
   });
   for (const action of ['resume', 'forget']) register(action, async (c, id) => {
     const snapshot = await c.client.call('initial');
+    const resubscribe = action === 'resume' && snapshot.sessions.find(s => s.id === id)?.state === 'disconnected';
     if (action === 'resume') assertNativeCreation(snapshot, id);
+    if (resubscribe && !capabilitiesFor(snapshot, id).includes('resubscribe')) throw new Error('这个后台尚不支持重新连接；原生会话仍保留。');
     if (!capabilitiesFor(snapshot, id).includes(action)) throw new Error('这个会话的后台暂不支持此操作；原生会话已保留。');
     const answer = await dialog.showMessageBox(c.win, {
       type: 'question', message: action === 'resume' ? '继续这个原生会话？' : '移除此应用中的会话记录？',
-      detail: action === 'resume' ? '使用原生历史继续，不重发旧任务。活动中的原生团队不会自动重建；若已在其他应用打开该会话，请先结束那里的连接。' : '移除本应用的会话副本和草稿。原生服务中的历史与共同工作中已分享的内容仍保留。',
+      detail: action === 'resume' ? resubscribe ? '重新连接同一个原生线程并同步记录；保留原来的设置，不发送新任务，也不自动继续协作。原生仍可能有后台工作。' : '使用原生历史继续，不重发旧任务。活动中的原生团队不会自动重建；若已在其他应用打开该会话，请先结束那里的连接。' : '移除本应用的会话副本和草稿。原生服务中的历史与共同工作中已分享的内容仍保留。',
       buttons: ['取消', action === 'resume' ? '继续会话' : '移除记录'], defaultId: 0, cancelId: 0,
     });
     if (answer.response === 1) {
