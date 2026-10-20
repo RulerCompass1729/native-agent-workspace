@@ -48,8 +48,9 @@ const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = () => state?.room.archived ? [] : state?.sessions.filter(s => s.roomId === 'shared' && !s.archived) || [];
 const nativeUsable = s => s && !s.archived && !s.backendUnavailable && (['starting', 'idle', 'working', 'approval'].includes(s.state) || (s.state === 'error' && s.terminalAvailable));
-const canResume = s => s?.nativeId && !s.backendUnavailable && !s.terminalAvailable &&
-  (['ended', 'recoverable', 'error'].includes(s.state) || (s.provider === 'codex' && s.state === 'disconnected' && (s.serviceCapabilities || state.capabilities || []).includes('resubscribe'))) &&
+const canResume = s => s?.nativeId && !s.backendUnavailable &&
+  ((s.provider === 'codex' && s.transportDisconnected && ['error', 'disconnected'].includes(s.state) && (s.serviceCapabilities || state.capabilities || []).includes('transportReconnect')) ||
+  (!s.terminalAvailable && (['ended', 'recoverable', 'error'].includes(s.state) || (s.provider === 'codex' && s.state === 'disconnected' && (s.serviceCapabilities || state.capabilities || []).includes('resubscribe'))))) &&
   ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
 const inputFocusAllowed = () => !sessionMenu && !roomMenu && !document.querySelector('dialog[open]');
 function updateState(next) {
@@ -125,6 +126,7 @@ function claimView(id, next, revision, takeControl = false) {
 }
 function soloAction(s) {
   if (!s || disconnected || s.archived) return { kind: 'none', label: s?.archived ? '已归档' : '未连接', hint: s?.archived ? '恢复会话后继续，草稿保留。' : '重新连接本机服务后继续，草稿保留。' };
+  if (s.transportDisconnected && canResume(s)) return { kind: 'resume', label: '继续原生会话', hint: '图形连接已断开；重接同一后台与会话，已有终端和草稿保留，不重发任务。' };
   if (!nativeUsable(s)) return canResume(s)
     ? { kind: 'resume', label: '继续原生会话', hint: '记录和草稿已保留；恢复不会重发旧任务。' }
     : { kind: 'none', label: '暂不可发送', hint: '请检查原生会话状态。记录和草稿保留，不会自动重发。' };
@@ -541,7 +543,8 @@ function render() {
           const p = s.approval.params;
           $('approval').append(node('p', p.command || p.reason || s.approval.method));
           if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(s.approval.method)) {
-            $('approval').append(button('允许这一次', () => api.approve(s.id, s.approval.requestId, 'accept')), button('拒绝', () => api.approve(s.id, s.approval.requestId, 'decline')));
+            const requestId = s.approval.requestId;
+            $('approval').append(button('允许这一次', () => api.approve(s.id, requestId, 'accept')), button('拒绝', () => api.approve(s.id, requestId, 'decline')));
           }
         }
         $('approval').append(button('在原生终端查看', () => switchMode('terminal')));

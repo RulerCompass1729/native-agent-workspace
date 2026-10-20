@@ -231,6 +231,9 @@ class Rpc extends EventEmitter {
     ws.on('error', () => {});
   }
   call(method, params) {
+    if (this.ws.readyState !== undefined && this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('原生连接已断开；不会自动重发。'));
+    }
     return new Promise((resolve, reject) => {
       const id = ++this.sequence;
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('原生请求确认超时；不会自动重发。')); }, 30000);
@@ -338,18 +341,21 @@ class Codex extends EventEmitter {
   async observeFirstTurn() {
     // An empty native thread cannot be resumed. Wait for a real user turn;
     // never spend a model call to manufacture history for an attachment.
-    while (!this.stopped && !this.chatAvailable) {
+    const lifecycle = this.lifecycleRevision, rpc = this.host.rpc, child = this.host.codexProcess;
+    const current = () => !this.stopped && !this.transportDisconnected && lifecycle === this.lifecycleRevision &&
+      rpc === this.host.rpc && child === this.host.codexProcess;
+    while (current() && !this.chatAvailable) {
       await delay(1000);
-      if (this.stopped) return;
+      if (!current()) return;
       const revision = this.eventRevision;
-      const { thread } = await this.host.rpc.call('thread/read', { threadId: this.record.nativeId, includeTurns: false });
-      if (this.stopped) return;
+      const { thread } = await rpc.call('thread/read', { threadId: this.record.nativeId, includeTurns: false });
+      if (!current()) return;
       const nativeState = thread.status?.type;
       if (revision === this.eventRevision) this.emit('state', nativeState === 'active' ? 'working' : nativeState === 'idle' ? 'idle' : 'starting');
       if (!thread.preview || nativeState !== 'idle') continue;
-      await this.host.rpc.call('thread/resume', { threadId: thread.id, excludeTurns: true });
-      if (this.stopped) return;
-      if (!await this.hydrateHistory(thread.id)) return;
+      await rpc.call('thread/resume', { threadId: thread.id, excludeTurns: true });
+      if (!current()) return;
+      if (!await this.hydrateHistory(thread.id, lifecycle) || !current()) return;
       this.chatAvailable = true; this.hasHistory = true; this.emit('capability');
     }
   }
@@ -398,6 +404,7 @@ class Codex extends EventEmitter {
     else { this.emit('state', 'starting'); this.emit('activity', '原生状态尚未确认，请在原生终端查看。'); }
   }
   event(message) {
+    if (this.transportDisconnected) return;
     const p = message.params || {};
     this.eventRevision++;
     if (message.method === 'thread/closed') {
@@ -514,6 +521,7 @@ class Codex extends EventEmitter {
   }
   backendExited() {
     this.backendExitConfirmed = true;
+    this.transportDisconnected = false;
     this.stopped = true; this.chatAvailable = false; this.lifecycleRevision++;
     this.finishRecoveryConnection?.(false);
     if (this.retiringTerminal) return this.retiringTerminal;
@@ -544,9 +552,12 @@ class Codex extends EventEmitter {
     return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
   }
   async reconnect() {
-    if (!this.stopped || this.closed || !this.record.nativeId) throw new Error('原生连接状态已改变，请重新查看。');
+    const transportOnly = Boolean(this.transportDisconnected);
+    if ((!this.stopped && !transportOnly) || this.closed || !this.record.nativeId) throw new Error('原生连接状态已改变，请重新查看。');
     const lifecycle = ++this.lifecycleRevision;
-    const current = () => lifecycle === this.lifecycleRevision && !this.stopped;
+    let rpc, child;
+    const current = () => lifecycle === this.lifecycleRevision && !this.stopped &&
+      (!rpc || (this.host.rpc === rpc && this.host.codexProcess === child));
     // Re-subscribe to the owned thread. Omit every configuration override:
     // thread/resume is not a new thread or a turn/start request.
     this.chatAvailable = false; this.stopped = false;
@@ -558,13 +569,17 @@ class Codex extends EventEmitter {
     this.host.codexTargets.set(this.record.nativeId, this);
     const revision = this.stateRevision;
     try {
+      if (transportOnly) await this.host.reconnectCodex();
+      if (!current()) throw new Error('原生连接已经变化；没有重发任务。');
+      rpc = this.host.rpc; child = this.host.codexProcess;
+      this.transportDisconnected = false;
       let result;
-      try { result = await this.host.rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
+      try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
       catch (error) {
         if (!error.nativeMissingHistory || this.hasHistory || this.record.messages?.length || !current()) throw error;
         // Native creates its rollout on the first actual input. Confirm the
         // owned empty thread is still live; no synthetic turn to make history.
-        const { thread } = await this.host.rpc.call('thread/read', { threadId: this.record.nativeId, includeTurns: false });
+        const { thread } = await rpc.call('thread/read', { threadId: this.record.nativeId, includeTurns: false });
         if (!current() || thread?.id !== this.record.nativeId || thread.preview || thread.status?.type !== 'idle') throw error;
         this.needsSubscription = true; this.chatAvailable = true;
         if (revision === this.stateRevision) this.observeStatus(thread.status);
@@ -574,15 +589,16 @@ class Codex extends EventEmitter {
       if (result.thread?.id !== this.record.nativeId) throw new Error('原生返回了不同的会话，恢复未确认。');
       if (!current()) throw new Error('原生连接已经关闭；没有重发任务。');
       this.hasHistory = true; this.needsSubscription = false;
-      this.emit('pid', this.host.codexProcess.pid);
+      this.emit('pid', this.terminal?.alive && this.terminal.pid ? this.terminal.pid : this.host.codexProcess.pid);
       if (result.model || result.thread.model) this.emit('model', result.model || result.thread.model);
       if (revision === this.stateRevision) this.observeStatus(result.thread.status);
       if (!await this.hydrateHistory(this.record.nativeId, lifecycle) || !current()) throw new Error('连接在同步记录时断开；没有重发任务。');
       this.chatAvailable = true; this.emit('capability');
     } catch (error) {
       if (lifecycle === this.lifecycleRevision) {
-        this.chatAvailable = false; this.stopped = true;
-        if (!this.closed) this.emit('state', 'disconnected');
+        this.chatAvailable = false; this.stopped = !transportOnly;
+        this.transportDisconnected = transportOnly;
+        if (!this.closed) this.emit('state', transportOnly ? 'error' : 'disconnected');
       }
       throw error;
     }
@@ -592,6 +608,13 @@ class Codex extends EventEmitter {
       try { await this.openTerminal(); }
       catch { this.emit('activity', '原会话已连接；原生终端未能打开，可切到对话继续或重试终端。'); }
     }
+  }
+  transportClosed() {
+    if (this.closed || this.backendExitConfirmed) return;
+    this.transportDisconnected = true; this.chatAvailable = false; this.lifecycleRevision++;
+    this.finishRecoveryConnection?.(false);
+    this.emit('activity', '图形连接已断开；原生任务可能仍在运行。可重新连接，已有终端保持原样，不会重发任务。');
+    this.emit('state', this.stopped ? 'disconnected' : 'error');
   }
   async stop() {
     if (this.backendExitConfirmed) return this.backendExited();
@@ -651,12 +674,97 @@ class NativeHost {
     });
     this.creationQueue = next.catch(() => {}); return next;
   }
+  watchCodexConnection(rpc, child) {
+    const ws = rpc.ws;
+    let initialized = false, retired = false;
+    const current = () => !retired && !this.closed && this.codexProcess === child && this.rpc === rpc;
+    const dispose = () => {
+      child.removeListener('exit', retire); rpc.removeListener('event', event); rpc.removeListener('closed', closed);
+    };
+    const retire = () => {
+      if (!initialized || !current() || (child.exitCode === null && child.signalCode === null) || ws.readyState !== WebSocket.CLOSED) return;
+      retired = true; dispose();
+      this.rpc = null; this.starting = null; this.codexProcess = null; this.codexBinary = null; this.codexEndpoint = null;
+      const targets = new Set(this.codexTargets.values());
+      if (this.pendingCodexRuntime) targets.add(this.pendingCodexRuntime);
+      this.codexTargets.clear();
+      for (const target of targets) target.backendExited().catch(() => {});
+    };
+    const event = message => {
+      if (!current()) return;
+      const p = message.params || {};
+      if (message.method === 'thread/started' && !p.thread?.parentThreadId && this.pendingCodex) this.pendingCodex(p.thread);
+      const target = this.codexTargets.get(p.threadId || p.thread?.id);
+      if (target) target.event(message);
+      else if (message.method === 'thread/started' && p.thread?.parentThreadId) {
+        const parent = this.codexTargets.get(p.thread.parentThreadId);
+        if (parent && !parent.transportDisconnected) parent.emit('fleet', { id: p.thread.id, event: 'thread/started', name: p.thread.agentNickname || 'Codex 子 agent' });
+      }
+    };
+    const closed = () => {
+      if (!current()) return;
+      for (const target of this.codexTargets.values()) target.transportClosed();
+      retire();
+    };
+    child.once('exit', retire); rpc.on('event', event); rpc.on('closed', closed);
+    return {
+      activate: () => {
+        this.disposeCodexConnection?.();
+        this.rpc = rpc; this.disposeCodexConnection = dispose;
+        initialized = true; retire();
+      },
+      dispose,
+    };
+  }
+  readCodexEndpoint() {
+    const link = fs.lstatSync(this.codexSocket), resolved = fs.realpathSync(this.codexSocket);
+    const socket = fs.lstatSync(resolved);
+    if (link.uid !== process.getuid() || socket.uid !== process.getuid() || !socket.isSocket() ||
+      (!link.isSocket() && !link.isSymbolicLink())) throw new Error('原生接口身份未确认，没有连接其他后台。');
+    // Codex may publish a symlink. Keep both identities: an unchanged link
+    // does not prove that its target still belongs to the original listener.
+    return { resolved, linkDev: link.dev, linkIno: link.ino, socketDev: socket.dev, socketIno: socket.ino };
+  }
+  async reconnectCodex() {
+    if (this.reconnecting) return this.reconnecting;
+    const child = this.codexProcess, previous = this.rpc, endpoint = this.codexEndpoint;
+    const owned = () => !this.closed && this.codexProcess === child && child &&
+      child.exitCode === null && child.signalCode === null && this.rpc === previous;
+    if (!owned()) throw new Error('原生后台身份已变化；请重新查看状态。');
+    if (previous?.ws.readyState === WebSocket.OPEN) return;
+    if (previous?.ws.readyState !== WebSocket.CLOSED || !endpoint) throw new Error('原生连接退出尚未确认；请稍后重试。');
+    const sameEndpoint = () => {
+      const now = this.readCodexEndpoint();
+      if (Object.keys(endpoint).some(key => now[key] !== endpoint[key])) throw new Error('原生接口已变化；没有连接其他后台。');
+    };
+    this.reconnecting = Promise.resolve().then(async () => {
+      let ws, watcher;
+      try {
+        if (!owned()) throw new Error('原生后台身份已变化；没有新建后台。');
+        sameEndpoint();
+        ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000 });
+        await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+        const rpc = new Rpc(ws);
+        watcher = this.watchCodexConnection(rpc, child);
+        await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+        if (!owned() || ws.readyState !== WebSocket.OPEN) throw new Error('原生连接在确认时已变化；没有重发任务。');
+        sameEndpoint();
+        ws.send(JSON.stringify({ method: 'initialized', params: {} }));
+        watcher.activate();
+      } catch (error) {
+        watcher?.dispose(); ws?.terminate();
+        // A failed observer connection cannot stop the existing native server.
+        throw error;
+      }
+    }).finally(() => { this.reconnecting = null; });
+    return this.reconnecting;
+  }
   async startCodex() {
     if (this.closed) throw new Error('原生服务已关闭。');
     if (this.rpc) return;
     if (this.starting) return this.starting;
     this.starting = Promise.resolve().then(async () => {
-      let ws, rpc, child, spawnError;
+      let ws, rpc, child, spawnError, watcher;
       try {
       // A stale socket may remain after a crash. Never remove an endpoint that
       // still answers, or turn an uncertain connection into a second server.
@@ -686,38 +794,20 @@ class NativeHost {
         if (spawnError || child.exitCode !== null || child.signalCode !== null) throw new Error('Codex 后台未能启动，请在设置中检查所选程序。');
         await delay(100);
       }
-      ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(this.codexSocket), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000 });
+      const endpoint = this.readCodexEndpoint();
+      ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000 });
       await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
       rpc = new Rpc(ws);
-      let initialized = false, retired = false;
-      const retire = () => {
-        if (!initialized || retired || this.closed || this.codexProcess !== child
-          || (child.exitCode === null && child.signalCode === null) || ws.readyState !== WebSocket.CLOSED) return;
-        retired = true; this.rpc = null; this.starting = null; this.codexProcess = null; this.codexBinary = null;
-        const targets = new Set(this.codexTargets.values());
-        if (this.pendingCodexRuntime) targets.add(this.pendingCodexRuntime);
-        this.codexTargets.clear();
-        for (const target of targets) target.backendExited().catch(() => {});
-      };
-      child.once('exit', retire);
-      rpc.on('event', message => {
-        if (retired || this.closed || this.codexProcess !== child) return;
-        const p = message.params || {};
-        if (message.method === 'thread/started' && !p.thread?.parentThreadId && this.pendingCodex) this.pendingCodex(p.thread);
-        const target = this.codexTargets.get(p.threadId || p.thread?.id);
-        if (target) target.event(message);
-        else if (message.method === 'thread/started' && p.thread?.parentThreadId) this.codexTargets.get(p.thread.parentThreadId)?.emit('fleet', { id: p.thread.id, event: 'thread/started', name: p.thread.agentNickname || 'Codex 子 agent' });
-      });
-      rpc.on('closed', () => {
-        if (retired || this.closed || this.codexProcess !== child || (this.rpc && this.rpc !== rpc)) return;
-        for (const target of this.codexTargets.values()) target.emit('state', 'error');
-        retire();
-      });
+      watcher = this.watchCodexConnection(rpc, child);
       await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+      if (ws.readyState !== WebSocket.OPEN) throw new Error('原生连接在启动时已断开。');
+      const verifiedEndpoint = this.readCodexEndpoint();
+      if (Object.keys(endpoint).some(key => verifiedEndpoint[key] !== endpoint[key])) throw new Error('原生接口在启动时已变化。');
+      this.codexEndpoint = endpoint;
       ws.send(JSON.stringify({ method: 'initialized', params: {} }));
-      this.rpc = rpc; initialized = true; retire();
+      watcher.activate();
       } catch (error) {
-        ws?.terminate();
+        watcher?.dispose(); ws?.terminate();
         // Only this unsuccessful startup's child can be terminated. No thread
         // has been exposed yet; an existing live server never enters this path.
         const exited = () => !child || (!child.pid && spawnError) || child.exitCode !== null || child.signalCode !== null;

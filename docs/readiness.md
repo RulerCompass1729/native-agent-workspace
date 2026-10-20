@@ -1,11 +1,20 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.30 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.31 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.30 prevents continuously streaming output from
+**Current increment:** alpha.31 allows an explicit reconnect when the graphical
+Codex connection is lost but its owned native backend remains alive. The existing
+terminal, native identity, configuration, history and draft are retained. Only the
+selected session is subscribed; old tasks and sharing authorizations are not
+replayed. Permission decisions bind to their original connection and request.
+The actual installed native no-task check and six renderer groups pass; final
+independent source and installed-artifact review passed. This does not cover native login/setup
+before a thread identity exists, active-fleet recovery or every retained backend.
+
+Alpha.30 prevents continuously streaming output from
 postponing all local saves. It keeps short-burst coalescing and adds a one-second
 checkpoint scheduling target. Actual process-crash/UI reconnect checks preserve
 saved records and drafts without replay. Failed writes have an explicit retry

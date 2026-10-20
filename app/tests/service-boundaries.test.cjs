@@ -79,3 +79,11 @@ test('non-object native RPC frames are ignored without losing a valid pending re
   assert.deepEqual(await pending, { thread: { id: 'synthetic' } });
   assert.equal(rpc.pending.size, 0);
 });
+
+test('a closed native RPC refuses a new call immediately without creating a timeout or write', async () => {
+  const socket = new EventEmitter(); socket.readyState = 3;
+  socket.send = () => { throw Error('A closed socket must not be written'); };
+  const rpc = new Rpc(socket);
+  await assert.rejects(rpc.call('thread/read', { threadId: 'synthetic' }), /连接已断开/);
+  assert.equal(rpc.pending.size, 0);
+});

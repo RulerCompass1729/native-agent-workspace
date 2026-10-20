@@ -1,9 +1,10 @@
 // Actual Codex/workspace lifecycle with deterministic native transport, no model.
 const path = require('node:path');
 const { NativeHost, Codex } = require(path.join(process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..'), 'app/adapters.cjs'));
-let fail = false, finishDisplayExit, inputs = 0; const calls = [], records = new Map(), runtimes = new Map();
+let fail = false, finishDisplayExit, inputs = 0, terminalCreations = 0; const calls = [], replies = [], records = new Map(), runtimes = new Map();
 NativeHost.prototype.start = async function () { this.binaries = { codex: 'fixture', python: 'fixture' }; };
 NativeHost.prototype.close = function () {};
+NativeHost.prototype.reconnectCodex = async function () { if (fail) throw Error('Synthetic connection interruption'); };
 NativeHost.prototype.startCodex = async function () {
   this.codexProcess = { pid: process.pid };
   this.rpc = { call: async (method, params) => {
@@ -16,13 +17,16 @@ NativeHost.prototype.startCodex = async function () {
     if (method === 'thread/items/list') return { data: [{ turnId: 'earlier', item: { id: 'saved-answer', type: 'agentMessage', text: '保留的原生历史' } }] };
     if (method === 'thread/unsubscribe') return { status: 'unsubscribed' };
     throw Error('Unexpected native request: ' + method);
-  } };
+  }, reply: (id, result) => replies.push({ id, result }) };
 };
 NativeHost.prototype.create = function (record) {
   records.set(record.id, record); const runtime = new Codex(record, this); runtimes.set(record.id, runtime);
   runtime.openTerminal = async () => {
     if (runtime.stopped) throw Error('Disconnected');
-    if (!runtime.terminal?.alive) runtime.terminal = { alive: true, async stop() { this.alive = false; this.nativeExited = true; }, resize() {}, input() { inputs++; throw Error('No native input permitted'); }, snapshot: async () => ({ buffer: 'Same native session\r\n> ', sequence: 0, cols: 100, rows: 30 }) };
+    if (!runtime.terminal?.alive) {
+      terminalCreations++;
+      runtime.terminal = { alive: true, async stop() { this.alive = false; this.nativeExited = true; }, resize() {}, input() { inputs++; throw Error('No native input permitted'); }, snapshot: async () => ({ buffer: 'Same native session\r\n> ', sequence: 0, cols: 100, rows: 30 }) };
+    }
     return runtime.terminal;
   };
   return runtime;
@@ -30,6 +34,8 @@ NativeHost.prototype.create = function (record) {
 process.on('message', q => {
   if (q.method === 'history') { const r = runtimes.get(q.target); r.hasHistory = true; r.emit('history', [{ id: 'saved-answer', type: 'agentMessage', text: '保留的原生历史' }]); }
   if (q.method === 'fail') fail = q.value;
+  if (q.method === 'transport-close') runtimes.get(q.target).transportClosed();
+  if (q.method === 'approval') runtimes.get(q.target).event({ id: 7, method: 'item/commandExecution/requestApproval', params: { command: q.value } });
   if (q.method === 'backend-exit') {
     const r = runtimes.get(q.target);
     r.terminal.stop = () => new Promise(resolve => {
@@ -38,5 +44,5 @@ process.on('message', q => {
     r.backendExited().catch(() => {});
   }
   if (q.method === 'display-exit') finishDisplayExit();
-  process.send({ requestId: q.id, calls, inputs });
+  process.send({ requestId: q.id, calls, replies, inputs, terminalCreations });
 });

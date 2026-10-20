@@ -278,9 +278,11 @@ async function boot() {
   });
   for (const action of ['resume', 'forget']) register(action, async (c, id) => {
     const snapshot = await c.client.call('initial');
-    const resubscribe = action === 'resume' && snapshot.sessions.find(s => s.id === id)?.state === 'disconnected';
+    const record = snapshot.sessions.find(s => s.id === id);
+    const resubscribe = action === 'resume' && (record?.state === 'disconnected' || record?.transportDisconnected);
     if (action === 'resume') assertNativeCreation(snapshot, id);
     if (resubscribe && !capabilitiesFor(snapshot, id).includes('resubscribe')) throw new Error('这个后台尚不支持重新连接；原生会话仍保留。');
+    if (record?.transportDisconnected && !capabilitiesFor(snapshot, id).includes('transportReconnect')) throw new Error('这个后台尚不支持恢复图形连接；已有终端保持原样。');
     if (!capabilitiesFor(snapshot, id).includes(action)) throw new Error('这个会话的后台暂不支持此操作；原生会话已保留。');
     const answer = await dialog.showMessageBox(c.win, {
       type: 'question', message: action === 'resume' ? '继续这个原生会话？' : '移除此应用中的会话记录？',

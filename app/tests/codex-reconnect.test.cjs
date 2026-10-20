@@ -43,7 +43,7 @@ for (const mode of ['approval', 'working', 'closed', 'failure', 'mismatched']) t
   assert.equal(f.s.state, mode === 'closed' ? 'ended' : ['failure','mismatched'].includes(mode) ? 'disconnected' : mode);
   assert.equal(f.s.nativeId, 'same-thread'); assert.equal(f.w.versions.dispatches, 0);
   if (mode === 'working') assert.equal(f.r.turnId, 'new-live-turn');
-  if (mode === 'approval') assert.equal(f.s.approval.requestId, 7);
+  if (mode === 'approval') { assert.equal(typeof f.s.approval.requestId, 'string'); assert.equal(f.w.approvalRoutes.get(f.s.id).nativeRequestId, 7); }
   if (mode === 'closed') assert.equal(f.w.runtimes.has(f.s.id), false);
   else assert.equal(f.w.runtime(f.s.id), f.r);
 });
@@ -136,7 +136,7 @@ test('permission request before the first real turn ACK remains actionable after
  });
  f.r.stopped=false;f.r.pending=null;f.r.turnId=null;f.r.needsSubscription=true;f.r.chatAvailable=true;
  await f.r.send('one human input','tag',()=>true);
- assert.equal(f.s.state,'approval');assert.equal(f.s.approval.requestId,24);assert.equal(f.r.pending.turnId,'accepted');
+ assert.equal(f.s.state,'approval');assert.equal(f.w.approvalRoutes.get(f.s.id).nativeRequestId,24);assert.equal(f.r.pending.turnId,'accepted');
 });
 test('old send rejection cannot clear the new pending task or restore its draft after reconnect',async t=>{
  let rejectOld,releaseNew,turns=0;

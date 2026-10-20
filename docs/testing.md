@@ -670,3 +670,47 @@ privacy and draft flows pass; the installed empty-daemon/client/RPC boundary
 checks also pass. All 35 application files match source and signing verification
 passes. Original three sessions and their history/draft/view records remain
 unchanged; system application search lists one installed launch entry.
+
+## Graphical transport recovery — alpha.31
+
+The native backend and its remote terminal may remain alive after the GUI RPC
+socket closes. Continuation now explicitly reconnects that owned backend and the
+selected native thread. It validates both the published endpoint and the resolved
+socket when Codex uses a symlink. Reconnection does not start another backend or
+terminal, change native settings, replay a task, subscribe unselected peers or
+restore an earlier reply-sharing authorization.
+
+Negative regressions reproduce a first-turn observer crossing into a replacement
+connection, a stale permission decision matching a reused native request number,
+a replaced target behind an unchanged symlink, and replacement of a retained
+terminal's recorded process identity. Lifecycle/RPC/process guards, request-scoped
+decision tokens and separate endpoint/process identities repair those cases.
+The complete suite passes 331 checks with zero skips.
+
+The real installed Electron/native trial resumes a previously completed isolated
+Codex test history, opens its actual TUI and enters an unsent Chinese GUI draft.
+Private instrumentation closes only the graphical WebSocket. The original TUI
+still accepts and clears unsent text. Clicking continuation restores GUI access;
+native thread ID, backend PID, terminal PID, both recorded process identities,
+model, complete messages, room membership and draft remain unchanged. UI close
+and reopen preserve the same native processes. During acceptance, the application
+RPC trace contains only initialization, history reads and two resumes: the initial cold resume retains its
+saved working directory; the subsequent transport reconnect passes only thread
+identity and history-exclusion flags. There is no new thread, turn or steering
+request, and the dispatch count remains zero. Cleanup then unsubscribes the
+test-owned thread. This trace instruments the application's RPC calls, not every
+request issued internally by the separate native TUI.
+
+Source and installed renderer tests cover cancel, failed retry, successful retry,
+switching to the retained TUI, a queued click on an obsolete permission button,
+current refusal and the existing confirmed-backend-exit gate. These permission
+events use synthetic native transport; they are not new proof of a native tool
+permission round-trip. Test confirmation dialogs are answered by the harness.
+All test windows remain hidden and non-focusable, so this run does not revalidate
+physical OS IME or foreground switching.
+
+The installed artifact has 35 application files matching final source and passes
+signature validation. Existing three user sessions and their history/draft/view
+files are unchanged; protected native processes stay alive and system application
+search finds one installed app. Final independent source and installed-artifact
+review passed for this bounded recovery repair.

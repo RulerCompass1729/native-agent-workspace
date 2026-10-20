@@ -20,6 +20,7 @@ class Workspace extends EventEmitter {
     this.deadlineTimer = setInterval(() => { if (this.room.run?.status === 'running' && Date.now() > this.room.run.deadline) this.pause('达到本轮 10 分钟期限。'); }, 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map();
+    this.approvalRoutes = new Map();
     this.stops = new Map();
     this.progress = new Map(); this.observedTerminals = new Map();
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -34,7 +35,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.emit('change');
@@ -110,10 +111,12 @@ class Workspace extends EventEmitter {
     on('state', state => {
       if (this.stops.has(s.id) && !['ended', 'recoverable', 'error', 'disconnected'].includes(state)) return;
       s.state = state;
+      if (runtime.transportDisconnected) { s.approval = null; this.approvalRoutes.delete(s.id); }
       if (state !== 'starting' && s.activity === '正在连接原生历史') s.activity = '';
       if (state === 'ended' || state === 'recoverable') {
         if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
         s.pid = null; s.pendingTag = null; s.approval = null; this.runtimes.delete(s.id);
+        this.approvalRoutes.delete(s.id);
       }
       if (state === 'approval') this.pause('等待原生权限确认');
       if (state === 'working' && this.room.run?.status === 'running' && this.room.run.ids.includes(s.id) && this.room.run.awaiting?.sessionId !== s.id) this.pause('成员开始了本轮之外的原生工作，请核对后再交接。');
@@ -135,7 +138,14 @@ class Workspace extends EventEmitter {
       if (item.active === true || ['SubagentStart', 'thread/started', 'collabAgentSpawnToolCall'].includes(item.event)) this.nativeWorkObserved(s.id, '观察到原生团队活动，后续转交已暂停；原生团队继续保留。');
       this.changed();
     });
-    on('approval', approval => { s.approval = approval; this.pause('等待原生权限确认'); this.changed(); });
+    on('approval', approval => {
+      // Native request numbers may be reused after a socket reconnect. The
+      // visible decision is scoped to this request and its original RPC.
+      const requestId = randomUUID();
+      this.approvalRoutes.set(s.id, { runtime, rpc: this.host.rpc, requestId, nativeRequestId: approval.requestId });
+      s.approval = { ...approval, requestId };
+      this.pause('等待原生权限确认'); this.changed();
+    });
     on('nativeInput', (text, item) => {
       this.pause('真人在原生终端输入'); s.controlRevision++;
       if (!item?.id || !s.messages.some(m => m.id === item.id)) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
@@ -360,10 +370,14 @@ class Workspace extends EventEmitter {
     this.claim(id, owner, s.view); await this.send(id, text, owner, null, { member: s.memberRevision });
   }
   approve(id, requestId, decision, owner) {
-    const s = this.get(id); if (s.owner !== owner || s.approval?.requestId !== requestId) throw new Error('权限请求已变化，请重新查看。');
+    const s = this.get(id), route = this.approvalRoutes.get(id);
+    if (!route || !s.approval || s.owner !== owner || s.approval.requestId !== requestId || route.requestId !== requestId ||
+      route.runtime !== this.runtimes.get(id) || route.rpc !== this.host.rpc || route.runtime.transportDisconnected ||
+      route.runtime.backendExitConfirmed) throw new Error('权限请求已变化，请重新查看。');
     if (!['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(s.approval.method)) throw new Error('请在原生终端处理这项请求。');
     if (!['accept', 'decline'].includes(decision)) throw new Error('未知权限决定。');
-    this.host.rpc.reply(requestId, { decision }); s.approval = null; s.state = 'working'; this.changed();
+    route.rpc.reply(route.nativeRequestId, { decision }); this.approvalRoutes.delete(id);
+    s.approval = null; s.state = 'working'; this.changed();
   }
   stop(id) {
     if (this.stops.has(id)) return this.stops.get(id);
@@ -385,14 +399,23 @@ class Workspace extends EventEmitter {
   async resume(id, owner) {
     const s = this.get(id);
     const retained = this.runtimes.get(id);
-    if (s.state === 'disconnected' && s.provider === 'codex' && retained?.reconnect && !this.stops.has(id)) {
+    if ((s.state === 'disconnected' || (s.state === 'error' && retained?.transportDisconnected)) && s.provider === 'codex' && retained?.reconnect && !retained.backendExitConfirmed && !this.stops.has(id)) {
+      if (s.pendingTag && s.messages.some(m => m.id === s.pendingTag && m.status === 'awaiting-native')) throw new Error('上一条输入的接收结果仍在核对；请稍后重连，不要重发。');
+      // Reconnection observes current native work; it does not renew a previous
+      // reply-sharing authorization or attach it to a later native completion.
+      if (s.pendingTag) {
+        const shared = this.room.messages.find(m => m.id === s.pendingTag);
+        if (shared) shared.status = 'reply-private';
+        this.forwards.delete(s.pendingTag);
+      }
+      s.pendingTag = null; s.approval = null; this.approvalRoutes.delete(id);
       s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1;
       const generation = s.connectionRevision;
       s.owner = owner; s.recovering = true; s.state = 'starting'; s.activity = '正在连接原生历史';
       this.pause('重新连接原会话；之前的交接不会自动继续。'); this.changed();
       try { await retained.reconnect(); }
       catch (error) {
-        if (generation === s.connectionRevision && s.state !== 'ended' && !this.stops.has(id)) { s.state = 'disconnected'; s.activity = error.message; }
+        if (generation === s.connectionRevision && !['ended', 'recoverable'].includes(s.state) && this.runtimes.get(id) === retained && !this.stops.has(id)) { s.state = retained.transportDisconnected ? 'error' : 'disconnected'; s.activity = error.message; }
         throw error;
       } finally { if (generation === s.connectionRevision) { s.recovering = false; this.changed(); } }
       return;
