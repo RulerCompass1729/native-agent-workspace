@@ -1,8 +1,68 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');
-const { ensureService, connect, connectService } = require('../service-client.cjs');
+const { ensureService, connect, connectService, continuationStatus, continueService } = require('../service-client.cjs');
 const { readLayout, writeLayout } = require('../service-layout.cjs');
+
+test('continuation requires every session to end and rejects missing history or failed persistence', () => {
+  const record = { id: 'old', nativeId: 'native', name: 'Old task', state: 'ended' };
+  for (const state of ['idle', 'working', 'disconnected', 'recoverable', 'error', 'stopping']) {
+    const status = continuationStatus({ sessions: [record, { id: 'sibling', state, name: 'Another task' }] }, 'old');
+    assert.equal(status.ready, false); assert.match(status.reason, /Another task/);
+  }
+  assert.equal(continuationStatus({ sessions: [{ ...record, nativeId: null }] }, 'old').ready, false);
+  assert.equal(continuationStatus({ sessions: [record], storageWarning: 'write failed' }, 'old').ready, false);
+  const early = continuationStatus({ sessions: [record], capabilities: ['resume'] }, 'old');
+  assert.equal(early.ready, false); assert.match(early.reason, /主动关闭运行服务/);
+  assert.equal(continuationStatus({ sessions: [record], capabilities: ['atomicShutdown'] }, 'old').ready, true);
+});
+test('explicit ended-service continuation retains same store, native identity, membership, history and drafts without replay', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-continuation-')), oldVersion = process.env.NAW_APP_VERSION;
+  const stored = { sessions: [{ id: 'retained', nativeId: 'retained-native', provider: 'claude', state: 'ended', name: 'Original', roomId: 'shared', messages: [{ role: 'user', text: 'Original private history' }] }], room: { messages: [{ id: 'shared', text: 'Explicit shared result' }] }, drafts: { retained: 'Unsent draft' } };
+  let client;
+  try {
+    fs.writeFileSync(path.join(directory, 'workspace.json'), JSON.stringify(stored), { mode: 0o600 });
+    process.env.NAW_APP_VERSION = 'continuation-old'; await ensureService(directory, process.execPath);
+    process.env.NAW_APP_VERSION = 'continuation-new'; await continueService(directory, process.execPath, 'retained');
+    client = await connect(directory, 'test'); const state = await client.call('initial');
+    assert.equal(state.runtimeVersion, 'continuation-new'); assert.deepEqual(readLayout(directory).entries, ['.']);
+    const record = state.sessions[0];
+    for (const key of ['id', 'nativeId', 'roomId', 'messages', 'name']) assert.deepEqual(record[key], stored.sessions[0][key]);
+    assert.equal(record.liveDraft, 'Unsent draft'); assert.equal(record.state, 'ended'); assert.equal(record.terminalAvailable, false);
+    assert.deepEqual(state.room.messages, stored.room.messages); assert.equal(state.diagnostics.dispatches, 0);
+  } finally {
+    client?.close(); await stopOwnEmptyService(directory);
+    if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('continuation replaces only its target while an ended peer and live peer keep their sockets', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-isolated-continuation-')), oldVersion = process.env.NAW_APP_VERSION;
+  const peerDir = path.join(directory, 'backends/aaaaaaaaaaaaaaaaaaaa'), liveDir = path.join(directory, 'backends/bbbbbbbbbbbbbbbbbbbb');
+  let peer, live;
+  try {
+    for (const [dir, id] of [[directory, 'target'], [peerDir, 'peer']]) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(dir, 'workspace.json'), JSON.stringify({ sessions: [{ id, nativeId: id + '-native', provider: 'claude', state: 'ended', messages: [] }], room: { messages: [] }, drafts: {} }), { mode: 0o600 });
+      process.env.NAW_APP_VERSION = 'retained-old'; await ensureService(dir, process.execPath);
+    }
+    fs.mkdirSync(liveDir, { recursive: true, mode: 0o700 });
+    live = await syntheticService(liveDir, { runtimeVersion: 'retained-old', capabilities: ['atomicShutdown'], sessions: [{ id: 'working', provider: 'claude', state: 'working' }], room: { messages: [], run: null } });
+    writeLayout(directory, { format: 1, entries: ['.', 'backends/aaaaaaaaaaaaaaaaaaaa', 'backends/bbbbbbbbbbbbbbbbbbbb'], active: 'backends/bbbbbbbbbbbbbbbbbbbb' });
+    peer = await connectService(peerDir, 'existing-peer-window'); const before = await peer.call('initial');
+    let closed = false; peer.on('closed', () => { closed = true; });
+    process.env.NAW_APP_VERSION = 'current-isolated'; await continueService(directory, process.execPath, 'target');
+    const after = await peer.call('initial');
+    assert.equal(closed, false); assert.equal(after.servicePid, before.servicePid); assert.equal(after.runtimeVersion, 'retained-old');
+    assert.ok(live.calls.every(method => method === 'initial'), 'No pause, shutdown or action on the working peer');
+    assert.deepEqual(readLayout(directory), { format: 1, entries: ['.', 'backends/aaaaaaaaaaaaaaaaaaaa', 'backends/bbbbbbbbbbbbbbbbbbbb'], active: 'backends/bbbbbbbbbbbbbbbbbbbb' });
+  } finally {
+    peer?.close(); await live?.close();
+    await stopOwnEmptyService(peerDir); await stopOwnEmptyService(directory);
+    if (oldVersion === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = oldVersion;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test('reusing an older live service pauses unsafe routing without replacing its native sessions', async t => {
   for (const level of [0, 1, 2]) await t.test(['legacy service', 'previous handoff checks', 'current service'][level], async () => {

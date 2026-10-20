@@ -21,6 +21,21 @@ const terminalThemes = {
 };
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
 const terminals = new Map();
+const progressPanels = new Map();
+const progressReading = new Map();
+function renderProgressPanels() {
+  const visible = selected === "room" && !roomSession ? members() : current() && mode === "chat" ? [current()] : [];
+  const container = selected === "room" && !roomSession ? $("room-progress") : $("solo-progress");
+  for (const [id, panel] of progressPanels) if (!visible.some(record => record.id === id)) { progressReading.set(id, panel.readingState()); panel.dispose(); progressPanels.delete(id); }
+  while (progressReading.size > 50) progressReading.delete(progressReading.keys().next().value);
+  for (const record of visible) {
+    let panel = progressPanels.get(record.id);
+    if (!panel) { panel = new NativeProgressPanel(record.id, progressReading.get(record.id)); progressPanels.set(record.id, panel); }
+    if (panel.element.parentElement !== container) container.append(panel.element);
+    panel.update(record, (record.serviceCapabilities || state.capabilities || []).includes("observe"), !disconnected);
+  }
+}
+
 const inputRecoveries = new Map();
 const draftRevisions = new Map();
 const pendingDrafts = new Map();
@@ -206,7 +221,7 @@ async function showTrust() {
   const snapshot = await api.initial();
   const content = $('trust-status'); content.replaceChildren();
   const section = (title, text) => { const item = node('section'); item.append(node('h3', title), node('p', text)); content.append(item); return item; };
-  section('数据去向', '会话副本和草稿保存在本机。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
+  section('数据去向', '会话副本和草稿保存在本机。实时画面和工具片段仅在本机内存暂存，不写入本应用的持久记录，也不自动分享。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
   section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。每轮核查由你确认 2–6 次回复上限和 10 分钟期限；原生工具和子 agent 的用量不受这些交接限制约束。');
   const dispatches = snapshot.diagnostics?.dispatches;
   section('本次后台运行的派发计数', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。只计通过应用发送与交接的消息，不含原生终端直接输入，也不代表总模型调用或费用；后台重启后重新计数。`);
@@ -252,10 +267,10 @@ function openSessionMenu(id, point) {
   const row = sessionRows.get(id); if (!row) return;
   row.more.focus(); row.more.setAttribute('aria-expanded', 'true');
   const close = ui.menu({
-    items: [{ id: 'rename', label: '重命名…' }, { id: 'membership', label: state.sessions.find(s => s.id === id).roomId ? '脱出协作' : '加入协作' }, { id: 'window', label: '在独立窗口打开' }, { id: 'archive', label: '归档会话' }],
+    items: [{ id: 'rename', label: '重命名…' }, { id: 'membership', label: state.sessions.find(s => s.id === id).roomId ? '脱出协作' : '加入协作' }, { id: 'window', label: '在独立窗口打开' }, ...((state.sessions.find(s => s.id === id).serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : row.more.getBoundingClientRect(),
     onClose: () => { sessionMenu = null; row.more.setAttribute('aria-expanded', 'false'); focusSessionAction(id); },
-    onSelect: action => { if (action === 'rename') openRename(id); else if (action === 'window') attempt(() => api.newWindow(id)); else if (action === 'membership') attempt(() => state.sessions.find(s => s.id === id)?.roomId ? detach(id) : api.join(id, true)); else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
+    onSelect: action => { if (action === 'rename') openRename(id); else if (action === 'continue') attempt(() => api.continueConnection(id)); else if (action === 'window') attempt(() => api.newWindow(id)); else if (action === 'membership') attempt(() => state.sessions.find(s => s.id === id)?.roomId ? detach(id) : api.join(id, true)); else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
   });
   sessionMenu = { id, close };
 }
@@ -577,6 +592,7 @@ function render() {
       $('pause-button').disabled = run?.status !== 'running';
       if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
     }
+    renderProgressPanels();
   } finally { restoreVisibleReading(); rendering = false; }
 }
 async function switchMode(next, takeControl = false) {
@@ -753,13 +769,15 @@ function fitTerminal(id) {
 }
 function writeTerminal(entry, event) { if (event.sequence > entry.sequence) { entry.term.write(event.data); entry.sequence = event.sequence; } }
 const disposers = [
-  api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
+  api.onProgress(event => progressPanels.get(event.id)?.receiveProgress(event)),
+  api.onTerminal(event => { progressPanels.get(event.id)?.receive(event); const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
   api.onState(next => { updateState(next); render(); }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);
     if (record) { record.name = name; render(); }
   }),
   api.onDisconnected(message => { disconnected = true; render(); toast(message); }),
+  api.onReconnected(next => { disconnected = false; for (const panel of progressPanels.values()) panel.started = false; updateState(next); render(); }),
   api.onNew(() => openCreate()),
 ];
 const observer = new ResizeObserver(() => { if (activeSessionId()) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
@@ -965,4 +983,4 @@ attempt(async () => {
   }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { for (const panel of progressPanels.values()) panel.dispose(); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

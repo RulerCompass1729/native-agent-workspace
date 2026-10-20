@@ -66,3 +66,14 @@ Trigger the next increment with trial feedback: account onboarding on another
 Mac, full native-fleet lifecycle and external-session attachment, then broader
 consumer distribution. Arbitrary overnight goal completion is still unverified;
 this version authorizes a bounded exchange, not an unlimited agent conversation.
+
+
+## Native visibility follow-up — alpha.24
+
+The local core workflow now includes bounded readonly native TUI output and tool
+progress in solo/room views. A real two-provider CSV check complements the earlier
+recorded study-planning workflow; unchanged lifecycle scenarios reuse their prior
+OS evidence. Current raw-output, queue/gap, focus/draft and reconnect checks plus
+same-history cold recovery are recorded in `live-progress.md` and `testing.md`.
+This closes the scoped observation increment, not seamless active old-backend
+feature upgrades (U05), full fleet recovery or official Desktop state integration.

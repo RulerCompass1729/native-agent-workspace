@@ -4,6 +4,77 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+test('late initial replies cannot overwrite a replaced connection or carry queued creation across it', async () => {
+  for (const method of ['initial', 'create']) {
+    const { c, next } = fixture(); let release;
+    const original = next.client, call = original.call;
+    original.call = async (...args) => {
+      const result = await call(...args);
+      if (args[0] === 'initial') await new Promise(resolve => { release = resolve; });
+      return result;
+    };
+    const pending = c.call(method, { provider: 'claude' });
+    while (!release) await new Promise(resolve => setImmediate(resolve));
+    const finish = c.maintainService('next'), replacement = new EventEmitter();
+    const fresh = { ...next.state, runtimeVersion: 'replacement' };
+    replacement.call = async () => fresh; replacement.close = () => replacement.emit('closed');
+    c.replaceService('next', replacement, fresh); finish(); release();
+    if (method === 'create') await assert.rejects(pending, /连接已变化/); else await pending;
+    assert.equal(next.state.runtimeVersion, 'replacement'); assert.equal(next.calls.some(([m]) => m === 'create'), false);
+    c.close();
+  }
+});
+test('queued native intents never cross maintenance or silently use a replacement socket', async () => {
+  for (const method of ['input', 'send', 'resume', 'claim']) {
+    const { c, next } = fixture(); let release, calls = 0;
+    c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+    const pending = c.call(method, 'new', 'Old intent');
+    assert.equal(typeof release, 'function');
+    const finish = c.maintainService('next'), replacement = new EventEmitter();
+    replacement.call = async () => { calls++; }; replacement.close = () => replacement.emit('closed');
+    c.replaceService('next', replacement, next.state); finish(); release();
+    await assert.rejects(pending, /连接已变化/); assert.equal(calls, 0); assert.equal(next.calls.length, 0);
+    c.close();
+  }
+});
+test('ended-service maintenance isolates socket loss across windows and fails closed if replacement fails', async () => {
+  const first = fixture(), second = first.openWindow();
+  first.old.real.sessions.forEach(s => { s.state = 'ended'; });
+  await first.c.refresh(); await second.c.refresh();
+  let disconnects = 0;
+  first.c.on('closed', () => disconnects++); second.c.on('closed', () => disconnects++);
+  const finish = first.c.maintainService('old');
+  assert.throws(() => second.c.maintainService('old'), /已在更新/);
+  first.old.client.emit('closed'); second.old.client.emit('closed');
+  assert.equal(disconnects, 0); assert.equal(second.c.socket.destroyed, false);
+  await second.c.call('initial'); await second.c.call('draft', 'new', 'Unrelated preedit draft');
+  assert.equal(first.next.real.sessions[0].liveDraft, 'Unrelated preedit draft');
+  await assert.rejects(second.c.call('resume', 'old'), /正在更新/);
+  const legacyOnly = first.openWindow(false);
+  await assert.rejects(legacyOnly.c.call('create', { provider: 'claude' }), /正在更新/);
+  legacyOnly.c.close();
+  const replacement = new EventEmitter(); replacement.call = async () => first.old.state; replacement.close = () => replacement.emit('closed');
+  first.c.replaceService('old', replacement, first.old.state);
+  finish();
+  assert.equal(first.c.socket.destroyed, false); assert.equal(second.c.socket.destroyed, true);
+  assert.equal(disconnects, 1, 'Only the view whose replacement failed disconnects');
+  first.c.close(); second.c.close();
+});
+test('replacing an ended backend ignores stale events and leaves unrelated live transports connected', async () => {
+  const { c, old, next } = fixture(), seen = [];
+  c.on('terminal', e => seen.push(e)); c.on('progress', e => seen.push(e));
+  const replacement = new EventEmitter(), fresh = { ...old.state, runtimeVersion: 'new-connection' };
+  replacement.call = async () => fresh; replacement.close = () => replacement.emit('closed');
+  const original = old.client;
+  original.emit('closed'); assert.equal(c.socket.destroyed, true);
+  let unrelatedClosed = false; next.client.on('closed', () => { unrelatedClosed = true; });
+  c.replaceService('old', replacement, fresh);
+  original.emit('state', { ...fresh, runtimeVersion: 'stale' }); original.emit('terminal', { text: 'stale' }); original.emit('progress', { text: 'stale' }); original.emit('closed');
+  assert.equal(c.socket.destroyed, false); assert.equal(old.state.runtimeVersion, 'new-connection'); assert.deepEqual(seen, []); assert.equal(unrelatedClosed, false);
+  replacement.emit('terminal', { text: 'current' }); assert.deepEqual(seen, [{ text: 'current' }]);
+  await c.call('draft', 'new', 'Still typing'); assert.equal(next.real.sessions[0].liveDraft, 'Still typing');
+  c.close();
+});
 test('portal archive authorization is checked again after a delayed pause for already queued input and sharing', async () => {
   for (const method of ['input', 'send', 'forward']) {
     const { c, next } = fixture(); let archived = false, release;

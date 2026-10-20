@@ -156,3 +156,20 @@ design and Apache-2.0 do not replace privacy obligations or provider terms.
 
 These sources inform the engineering requirements; they are not a worldwide legal
 clearance. Recheck changing terms and the actual business model before distribution.
+
+
+## Native observation in alpha.24
+
+The portal now holds bounded native terminal bytes and allowlisted structured tool
+progress in local process memory. These may contain private paths, drafts, login
+messages or secrets printed by the native program; they are **not** guaranteed to
+be redacted. The same local human can inspect them in solo/room views. Observation
+does not automatically write these records into workspace persistence, exports,
+shared context, diagnostics or external uploads. Explicitly selecting/copying or
+sharing content is a separate user action. Native providers may independently
+retain their own histories according to their own settings and terms.
+
+Limits and overflow/disconnection behavior are documented in `live-progress.md`.
+No model is invoked to summarize or interpret a screen. Local rendering/memory
+are real costs; short test measurements are not a zero-resource or bill-parity
+claim. Raw test evidence remains private and is not included in source/packages.

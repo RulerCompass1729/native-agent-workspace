@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-18. Version 0.1.0-alpha.23. Suitable for a small technical trial with
+As of 2026-10-19. Version 0.1.0-alpha.24. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -1116,3 +1116,13 @@ The DMG remains unnotarized and unpublished. Exact public artifact review,
 download/Gatekeeper and a clean Mac with missing prerequisites remain outstanding.
 Physical IME/VoiceOver, full egress audit, equal-task cost comparison and active
 fleet/unattended completion also retain their documented acceptance gaps.
+
+
+## Alpha.24 native visibility
+
+Private raw TUI observation, bounded rewind and native tool progress now share
+one component in solo and room views. No hidden model call, terminal creation,
+input claim or native resize is part of observation. Exact limits, native task,
+resource samples, cold recovery and unsupported surfaces are in
+[live-progress.md](live-progress.md). Historical acceptance above remains scoped
+to its tested version; active legacy backends are not silently upgraded.

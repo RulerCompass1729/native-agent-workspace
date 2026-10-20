@@ -10,7 +10,7 @@ class WorkspaceClient extends EventEmitter {
   constructor(entries, active, scope = Symbol()) {
     super(); this.entries = entries; this.active = entries.find(e => e.key === active); this.closing = false;
     this.scope = scope;
-    if (!controls.has(scope)) controls.set(scope, { revision: 0, clients: 0, armed: new Map(), interventions: new Set(), views: new Set() });
+    if (!controls.has(scope)) controls.set(scope, { revision: 0, clients: 0, armed: new Map(), interventions: new Set(), views: new Set(), maintenance: new Set(), generations: new Map() });
     this.control = controls.get(scope); this.control.clients++; this.control.views.add(this);
     for (const entry of entries) {
       entry.closed = false; entry.closing = false;
@@ -19,14 +19,53 @@ class WorkspaceClient extends EventEmitter {
     }
     this.socket = { destroyed: false };
     for (const entry of entries) {
-      entry.client.on('state', state => {
+      this.bindEntry(entry);
+    }
+  }
+  bindEntry(entry) {
+      const client = entry.client;
+      client.on('state', state => {
+        if (entry.client !== client) return;
         entry.state = { ...entry.state, ...state };
         try { this.emit('state', this.snapshot()); }
         catch { this.socket.destroyed = true; this.emit('closed'); this.close(); }
       });
-      entry.client.on('terminal', data => this.emit('terminal', data));
-      entry.client.on('closed', () => { entry.closed = true; entry.confirmClosed(); this.socket.destroyed = true; this.control.revision++; if (!this.closing) this.emit('closed'); });
-    }
+      client.on('terminal', data => { if (entry.client === client) this.emit('terminal', data); });
+      client.on('progress', data => { if (entry.client === client) this.emit('progress', data); });
+      client.on('closed', () => {
+        if (entry.client !== client) return;
+        entry.closed = true; entry.confirmClosed(); this.control.revision++;
+        if (this.control.maintenance.has(entry.key)) return;
+        this.socket.destroyed = true; if (!this.closing) this.emit('closed');
+      });
+  }
+  replaceService(key, client, state) {
+    const entry = this.entries.find(e => e.key === key);
+    if (!entry || this.closing) { client.close(); throw new Error('窗口连接已变化，请重新连接。'); }
+    const old = entry.client;
+    this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1);
+    entry.client = client; entry.state = state; entry.closed = false; entry.closing = false;
+    entry.closedPromise = new Promise(resolve => { entry.confirmClosed = resolve; });
+    this.bindEntry(entry); old.close();
+    this.socket.destroyed = this.entries.some(e => e.closed);
+  }
+  maintainService(key) {
+    if (this.control.maintenance.has(key)) throw new Error('这个连接已在更新，请稍候。');
+    this.control.maintenance.add(key);
+    this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1); this.control.revision++;
+    return () => {
+      this.control.maintenance.delete(key);
+      for (const view of this.control.views) if (view.entries.some(e => e.closed && !this.control.maintenance.has(e.key))) {
+        view.socket.destroyed = true; view.emit('closed');
+      }
+    };
+  }
+  operationGuard(entry) {
+    const client = entry.client, generation = this.control.generations.get(entry.key) || 0;
+    return () => {
+      if (this.control.maintenance.has(entry.key)) throw new Error('这个连接正在更新，请稍候；没有发送输入。');
+      if (entry.client !== client || (this.control.generations.get(entry.key) || 0) !== generation || entry.closed || this.closing) throw new Error('连接已变化，原操作没有重发；请重新确认。');
+    };
   }
   snapshot() {
     const sessions = [], messages = new Map(), runs = [];
@@ -67,7 +106,11 @@ class WorkspaceClient extends EventEmitter {
   }
   async refresh() {
     await Promise.all(this.entries.map(async e => {
-      e.state = await e.client.call('initial');
+      if (this.control.maintenance.has(e.key)) return;
+      const client = e.client, generation = this.control.generations.get(e.key) || 0;
+      const state = await client.call('initial');
+      if (e.client !== client || generation !== (this.control.generations.get(e.key) || 0) || this.control.maintenance.has(e.key)) return;
+      e.state = state;
       if (e.state.room.run?.status === 'running' && !this.control.armed.has(e.key)) this.control.armed.set(e.key, { entry: e });
     }));
     return this.snapshot();
@@ -116,28 +159,35 @@ class WorkspaceClient extends EventEmitter {
       return Promise.all([...entries.values()].map(e => this.pauseEntry(e, true)));
     });
     if (method === 'create') {
+      const guard = this.operationGuard(this.active);
       const operation = creationQueue.then(async () => {
+        guard();
         const state = await this.refresh(); assertNativeCreation(state);
         if (state.sessions.filter(s => s.state !== 'ended').length >= 6) throw new Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
+        guard();
         const id = await this.active.client.call(method, ...args); await this.refresh(); return id;
       });
       creationQueue = operation.catch(() => {}); return operation;
     }
     if (method === 'shutdown' || method === 'clearSharedHistory') {
+      const guards = this.entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
       const state = await this.refresh();
       if (method === 'shutdown' && state.sessions.some(s => s.state !== 'ended')) throw new Error('请先结束各原生会话，再关闭运行服务。');
       if (method === 'clearSharedHistory' && (!state.capabilities.includes(method) || state.room.run?.status === 'running')) throw new Error('请先暂停交接，并确认各后台支持清除记录。');
       // These are explicit user actions. Partial failure must remain visible.
+      guards.forEach(check => check());
       const results = await Promise.allSettled(this.entries.map(e => e.client.call(method)));
       if (results.some(r => r.status === 'rejected')) throw new Error('部分后台未确认操作；请重新连接核对，未自动重试。');
       return true;
     }
     if (method === 'run') {
+      const guards = new Map(this.entries.map(e => [e.key, this.operationGuard(e)]));
       const revision = ++this.control.revision;
       const interventions = [...this.control.interventions];
       const state = await this.refresh();
       if (!Array.isArray(args[0]) || args[0].length !== 2) throw new Error('请选择两个不同会话。');
       const targets = args[0].map(id => this.route(id));
+      const guard = guards.get(targets[0].key); guard();
       if (targets[0] !== targets[1]) throw new Error('跨版本自动交接暂不可用；请选择内容并定向分享。');
       assertAutomaticRun(state, args[3]); assertSharing(state, args[0]);
       await Promise.all(interventions);
@@ -148,19 +198,21 @@ class WorkspaceClient extends EventEmitter {
       if (previousPause) await previousPause;
       if (revision !== this.control.revision || this.socket.destroyed) throw new Error('真人操作已使这次交接失效；请重新确认任务。');
       this.authorizeOperation?.(method, args);
+      guard();
       const arm = this.control.armed.get(targets[0].key) || { entry: targets[0] };
       this.control.armed.set(targets[0].key, arm);
       return arm.entry.client.call(method, ...args);
     }
-    if (!['join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'forward', 'approve', 'stop', 'resume', 'forget'].includes(method)) throw new Error('不支持的本地操作。');
+    if (!['observe', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'forward', 'approve', 'stop', 'resume', 'forget'].includes(method)) throw new Error('不支持的本地操作。');
     const target = this.route(args[0]);
+    const guard = this.operationGuard(target); guard();
     if (method === 'resume') assertNativeCreation(target.state);
     if (['send', 'forward'].includes(method)) assertSubmission(target.state, [args[0]]);
     if (method === 'forward') assertSharing(target.state, [args[0]]);
     const ownView = ['claim', 'terminal'].includes(method) && typeof target.state.owner === 'string' && target.state.sessions.find(s => s.id === args[0])?.owner === target.state.owner;
     if (ownView) return target.client.call(method, ...args);
     if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && !isTerminalResponse(args[1]))) return this.intervene(async () => {
-      await this.pauseExcept(null); this.authorizeOperation?.(method, args); return target.client.call(method, ...args);
+      await this.pauseExcept(null); guard(); this.authorizeOperation?.(method, args); return target.client.call(method, ...args);
     });
     return target.client.call(method, ...args);
   }

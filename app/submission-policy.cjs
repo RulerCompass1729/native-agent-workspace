@@ -1,5 +1,5 @@
 // Capability checks apply to the session's retained service, not the new UI.
-const legacyNotice = '这个旧版会话保留在原后台，请用原生终端继续。新建会话可使用新版功能；旧会话不会自动迁移或重发。';
+const legacyNotice = '这个旧版会话仍在原连接上，可用原生终端继续。原生工作结束后，从会话菜单选择“更新原会话连接”启用新版功能；保留原身份和历史，不重发旧任务。';
 const capabilitiesFor = (snapshot, id) => snapshot.sessions?.find(s => s.id === id)?.serviceCapabilities || snapshot.capabilities || [];
 const canSubmit = (snapshot, s) => capabilitiesFor(snapshot, s.id).includes(s.provider === 'claude' ? 'structuredClaudeSubmit' : 'nativeInputIsolation');
 function submissionState(snapshot) {

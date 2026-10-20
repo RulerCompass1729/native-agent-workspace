@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, session, shell } =
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { ensureService, connect } = require('./service-client.cjs');
+const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
 const { startDsh } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
 const { preflight } = require('./preflight.cjs');
@@ -69,9 +69,10 @@ function bindClient(context) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'run'].includes(method));
     }
   };
-  const send = (channel, data) => { if (!win.isDestroyed()) win.webContents.send(channel, data); };
+  const send = (channel, data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, data); };
   client.on('state', data => send('workspace:state', displayState(data, context)));
   client.on('terminal', data => send('workspace:terminal', data));
+  client.on('progress', data => send('workspace:progress', data));
   client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
 }
 function displayState(snapshot, context) { return roomState.apply(sessionLabels.apply(submissionState(snapshot))); }
@@ -160,7 +161,7 @@ async function boot() {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   if (!wired) {
   wired = true;
-  for (const name of ['claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => {
+  for (const name of ['observe', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => {
     if (['claim', 'terminal', 'input', 'approve'].includes(name)) roomState.assertAvailable(args[0]);
     return c.client.call(name, ...args);
   });
@@ -241,6 +242,39 @@ async function boot() {
     await ensureService(dataDir, process.execPath);
     const client = await connect(dataDir, c.view.owner), old = c.client;
     c.client = client; bindClient(c); old.close(); await c.win.reload();
+  });
+  register('continueConnection', async (c, id) => {
+    await c.client.refresh();
+    const target = c.client.route(id), status = continuationStatus(target.state, id);
+    if (!status.ready) {
+      await dialog.showMessageBox(c.win, { type: 'info', message: '保留原会话，等待原生工作结束', detail: status.reason, buttons: ['知道了'] });
+      return false;
+    }
+    const answer = await dialog.showMessageBox(c.win, {
+      type: 'warning', message: '更新这个已结束会话的连接？',
+      detail: '保留原会话身份、历史、草稿和协作关系。更新会关闭这个旧运行服务；原生后台或子任务若仍存在可能被中断，请先确认它们已结束。之后可点“继续原生会话”，不会重发旧任务，也不会重建活动团队。其他仍在工作的连接不受影响。',
+      buttons: ['保留原连接', '已核对，更新连接'], defaultId: 0, cancelId: 0,
+    });
+    if (answer.response !== 1) return false;
+    const finishMaintenance = c.client.maintainService(target.key);
+    try {
+    const { key } = await continueService(dataDir, process.execPath, id);
+    // Replace only the ended backend's sockets. Other live transports and every
+    // renderer DOM/IME stay intact; reopening a window is unnecessary.
+    const replacements = [];
+    try {
+      for (const context of windows.values()) if (!context.win.isDestroyed()) {
+        const client = await connectService(path.join(dataDir, key), context.view.owner);
+        const replacement = { context, client }; replacements.push(replacement);
+        replacement.state = await client.call('initial');
+      }
+    } catch (error) { for (const replacement of replacements) replacement.client.close(); throw error; }
+    for (const { context, client, state } of replacements) {
+      context.client.replaceService(key, client, state);
+      if (!context.client.socket.destroyed && !context.win.isDestroyed()) context.win.webContents.send('workspace:reconnected', displayState(await context.client.refresh(), context));
+    }
+    return true;
+    } finally { finishMaintenance(); }
   });
   for (const action of ['resume', 'forget']) register(action, async (c, id) => {
     const snapshot = await c.client.call('initial');

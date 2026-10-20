@@ -390,3 +390,57 @@ review found no blocking product defect in this task. Raw recordings and an
 original-speed excerpt remain private; native status bars contain personal paths
 and quota information. This result does not establish full fleet recovery,
 arbitrary unattended completion, physical-device parity or equal-task cost.
+
+
+## Native observation and cold recovery — alpha.24, 2026-10-19
+
+Run `npm test`, `node scripts/test-native-progress.cjs`, `npm run test:solo`,
+`npm run test:reading`, and `npm run test:draft-ownership` for the affected local
+regressions. No native model is called by these runners. The full unit run passed
+203 tests; the later missing-model assertion also passed the observation group.
+The observation runner uses real Electron/daemon/xterm and a synthetic provider,
+including actual screen equality, bounds, lost-sequence resync, paused replay,
+GUI-first no-TUI tool progress, composition DOM/focus retention on reconnection,
+manual scroll and no readonly input/open/resize. It also checks that queued or
+peer structured progress stops when the UI reports disconnected.
+
+Maintenance counterexamples cover two ended stores plus a working peer, late
+initial acknowledgements and queued operations. Targeted replacement leaves the
+other real service PID/socket intact. These checks are not a physical IME upgrade
+trial. Physical System Pinyin/WeChat input evidence is reused from unchanged
+alpha.22 input paths; no new claim for every input method/device.
+
+The visible macOS guest trial used OS mouse/keyboard, current product UI and real
+host native runtimes through the same isolated test bridge described above. The
+CSV task involved one Codex submission and one explicit @Claude submission, each
+on a verified inexpensive model. Both found 3 rows and total 23. Raw terminal,
+structured tool, permission wait and completion were inspected. Human approval
+in the original terminal invalidates automatic room sharing by design, preserving
+the result privately. Two total parent submissions, no new child activity observed.
+No extra marker turn or repeated paid run was used for UI changes.
+
+After native work was idle, an owned test-backend shutdown simulated a fault.
+Explicit UI history recovery retained both native IDs, prior messages and room
+membership; dispatch count since restart stayed zero. This is **fault/cold recovery**,
+not an ordinary successful Codex termination: native unsubscribe returned
+unsubscribed/notSubscribed and correctly stayed disconnected. It is also not a
+hot alpha.2 migration or reconstruction of native teams. No real user backend was
+stopped. The guest was briefly stopped by the disk guard; that interruption was
+not reported as product failure or as a continuous installation journey.
+
+Guest product source was checked against a 65-file manifest. Subsequent local
+maintenance fixes were separately tested on the updated source and packaged
+artifact; do not attribute unexecuted code to the earlier guest recording.
+The final installed alpha.24 artifact passed ZIP CRC, code-signature verification
+and exact source comparison for all 32 packaged app files. Four sampled user-state
+files retained their hashes across replacement. The observation runner was then
+run against the installed executable and installed daemon/modules: 202 latency
+samples, P95 19 ms, no page errors and zero native input/open/resize/send actions.
+This last runner is a hidden synthetic regression, not another visible native task.
+Application search and LaunchServices both resolve one normal installed app;
+the owned VM, test bridge and isolated test backend were stopped after testing.
+The private video is a roughly 149-second edited excerpt of the real task and
+recovery, with idle development intervals omitted. Full timestamped screen frames
+and native event logs remain local; none are embedded in the public repository.
+Source/protocol evidence, visible GUI evidence and installed artifact evidence
+remain distinct. See `live-progress.md` for retention/performance boundaries.

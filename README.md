@@ -20,6 +20,11 @@ reply exchange, shared notes, detach/continue and archive/reopen. The local DMG
 also passed Safari download, app-specific Gatekeeper approval and prerequisite
 setup in an isolated macOS guest. See the [core acceptance and boundaries](docs/core-milestone.md).
 
+Alpha.24 adds private live native output and bounded tool/rewind records in both
+solo and collaboration views. Viewing does not open another agent or send context.
+Old live backends retain their existing capabilities; this is not seamless active
+backend migration. See [native visibility and its limits](docs/live-progress.md).
+
 Claude conversation/room sends now use its native structured submission API,
 with a draft check and no terminal paste/Enter injection. This requires Claude
 Code 2.1.302+ and enabled session-local mods. An older retained backend keeps its

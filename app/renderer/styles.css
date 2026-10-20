@@ -149,3 +149,19 @@ header h1, header p { overflow-wrap: anywhere; }
 .terminal-input-recovery button { margin-right: 8px; }
 
 #draft-recovery{margin-bottom:10px;padding:10px;border:1px solid var(--border);border-radius:8px}#draft-recovery summary{cursor:pointer;font-size:12px;color:var(--muted)}.draft-recovery-text{display:block;width:100%;margin-bottom:8px}.draft-recovery-copy+.draft-recovery-copy{margin-top:12px}.draft-recovery-copy button+button{margin-left:8px}
+
+.progress-panels { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:0 24px; flex-shrink:0; max-height:42vh; overflow:auto; }
+.progress-panels:empty { display:none; }
+.native-progress { border:1px solid var(--border); border-radius:10px; min-width:0; background:var(--surface); }
+.native-progress>summary { padding:9px 12px; cursor:pointer; display:flex; align-items:center; gap:12px; }
+.native-progress>summary .quiet { margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.progress-notice { margin:0; padding:4px 12px 8px; font-size:10px; }
+.progress-viewport { overflow:auto; max-height:210px; background:#191b1e; }
+.progress-screen { padding:6px; }
+.progress-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:6px 10px; }
+.progress-controls input[type=range] { flex:1; min-width:70px; padding:0; width:100px; }
+.progress-controls button { font-size:11px; padding:4px 7px; }
+.progress-trace { padding:6px 12px; border-top:1px solid var(--border); font-size:12px; }
+.progress-trace summary { cursor:pointer; padding:4px 0; overflow-wrap:anywhere; }
+.progress-trace pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:150px; overflow:auto; font-size:11px; }
+.progress-trace button { font-size:10px; padding:3px 6px; }

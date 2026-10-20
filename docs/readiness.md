@@ -1,22 +1,27 @@
 # Readiness and next gates
 
-As of 2026-10-19. Version 0.1.0-alpha.23 is a **local macOS technical-trial alpha**.
+As of 2026-10-19. Version 0.1.0-alpha.24 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current high-priority gap:** the 2026-10-19 feedback identifies incomplete
-live progress and trajectory visibility in unified solo/room views. The accepted
-short-task flow does not cover all temporary native output. See [U17](review.md)
-and the [proposed native observation increment](live-progress.md). Do not describe
-the present conversation view as a complete replacement for native visibility.
-Retained older sessions can also remain terminal-only: updating the app preserves
-their original backend and does not add its missing safe graphical-send capability.
-New-session checks do not establish seamless feature upgrades for those sessions.
+**Current increment:** alpha.24 adds private native TUI observation and bounded
+rewind/tool traces to both solo and room views. Protocol, real Electron and visible
+native-task evidence are described in [live-progress.md](live-progress.md).
+The native terminal remains the authority; not every structured tool payload or
+native Desktop interface is mapped. Observation is volatile and explicitly bounded.
+
+Retained older sessions can still be terminal-only. Updates preserve their live
+backend and cannot safely hot-patch missing graphical-send capabilities. The menu
+explains blockers and offers an explicit same-history continuation for ended,
+compatible services. Earliest backends without atomic shutdown remain preserved;
+there is no automatic upgrade or active-team reconstruction. U05 remains open
+for seamless active-session feature upgrades, separate from accepted cold recovery.
 
 | Area | Current evidence | Boundary |
 | --- | --- | --- |
 | Single conversation | GUI/TUI use, draft/identity retention, input focus and normal reopen; visible System Pinyin/WeChat evidence from alpha.22 | Controlled guest OS events; no universal terminal or accessibility guarantee |
+| Live native progress | Read-only per-session raw output, structured tool states, bounded rewind, two private room panes, gap/overflow notices | 19–20 ms synthetic paint P95 under declared load; volatile retention, no Desktop synchronization |
 | Shared work | `@` selection, one visible recipient, timeline/search/filter, notes, room/session rename/archive/restore, pointer drag and detach | One room; private history is not automatically copied |
 | Native collaboration | Claude→Codex→Claude completes a three-reply file check; detached Claude continues privately with same native identity | Explicit 2–6 reply exchange, ten-minute deadline; not arbitrary goal completion |
 | Human control | Input, membership, permission, failure, repetition and known native activity stop further handoffs; uncertain sends never auto-retry | An accepted native task and its billing may continue |

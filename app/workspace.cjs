@@ -3,6 +3,7 @@ const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
+const { ProgressJournal } = require('./observation.cjs');
 
 const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error('请输入有效文字；一次最多 16,000 个字符。');
@@ -20,6 +21,7 @@ class Workspace extends EventEmitter {
     this.deadlineTimer.unref();
     this.forwards = new Map();
     this.stops = new Map();
+    this.progress = new Map(); this.observedTerminals = new Map();
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
@@ -51,6 +53,12 @@ class Workspace extends EventEmitter {
   }
   get(id) { const s = this.sessions.get(id); if (!s) throw new Error('找不到这个会话。'); return s; }
   runtime(id) { const r = this.runtimes.get(id); if (!r) throw new Error('会话已经结束；保存的记录仍可查看。'); return r; }
+  async observe(id) {
+    this.get(id);
+    const terminal = this.runtimes.get(id)?.terminal || this.observedTerminals.get(id);
+    return { terminal: terminal?.observe ? await terminal.observe() : null,
+      progress: this.progress.get(id)?.snapshot() || { items: [], revision: 0, truncated: false } };
+  }
   async create(provider, cwd, owner, name, view = 'chat') {
     if (!['chat', 'terminal'].includes(view)) throw new Error('未知视图。');
     if (!['claude', 'codex'].includes(provider) || !path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error('请选择可用 agent 和工作目录。');
@@ -65,6 +73,15 @@ class Workspace extends EventEmitter {
     } catch (error) { record.state = 'error'; record.activity = error.message; this.changed(); throw error; }
   }
   bind(s, runtime) {
+    if (!this.progress.has(s.id)) this.progress.set(s.id, new ProgressJournal());
+    for (const id of this.progress.keys()) {
+      if (this.progress.size <= 12) break;
+      if (!this.runtimes.has(id)) { this.progress.delete(id); this.observedTerminals.delete(id); }
+    }
+    runtime.on('progress', item => {
+      const update = this.progress.get(s.id)?.update(item);
+      if (update) this.emit('progress', { id: s.id, ...update });
+    });
     runtime.on('capability', () => this.changed());
     runtime.on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
     runtime.on('model', model => { s.model = model; this.changed(); });
@@ -77,7 +94,10 @@ class Workspace extends EventEmitter {
       if (state === 'working' && this.room.run?.status === 'running' && this.room.run.ids.includes(s.id) && this.room.run.awaiting?.sessionId !== s.id) this.pause('成员开始了本轮之外的原生工作，请核对后再交接。');
       if (state === 'ended' || state === 'error') this.pause('原生会话不可用'); this.changed();
     });
-    runtime.on('terminal', event => this.emit('terminal', { id: s.id, ...event }));
+    runtime.on('terminal', event => {
+      if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
+      this.emit('terminal', { id: s.id, ...event });
+    });
     runtime.on('activity', text => { s.activity = text; this.changed(); });
     runtime.on('background', info => {
       s.background = info.count; s.scheduled = info.scheduled;
@@ -317,6 +337,7 @@ class Workspace extends EventEmitter {
     const s = this.get(id);
     if (this.runtimes.has(id) || (s.state !== 'ended' && (processMayBeAlive(s.processIdentity) || processMayBeAlive(s.serverIdentity)))) throw new Error('原生连接仍存在，请先结束或检查会话。');
     this.sessions.delete(id); this.drafts.delete(id); this.draftRevisions.delete(id); this.changed(); this.persist();
+    this.progress.delete(id); this.observedTerminals.delete(id);
   }
   close() { clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
 }

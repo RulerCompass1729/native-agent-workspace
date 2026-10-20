@@ -9,6 +9,7 @@ const WebSocket = require('ws');
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
+const { TerminalJournal } = require('./observation.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -20,6 +21,7 @@ class Terminal extends EventEmitter {
     this.pid = null; this.alive = true; this.sequence = 0; this.nativeExited = false;
     this.screen = new HeadlessTerminal({ cols: 100, rows: 30, scrollback: 5000, allowProposedApi: true });
     this.serialize = new SerializeAddon(); this.screen.loadAddon(this.serialize);
+    this.journal = new TerminalJournal(this.screen.cols, this.screen.rows);
     this.decoder = new StringDecoder('utf8');
     this.worker = spawn(pythonExecutable(), [path.join(__dirname, 'pty_host.py')], { stdio: ['pipe', 'pipe', 'pipe'], env: nativeEnvironment(env) });
     let lines = '';
@@ -33,7 +35,11 @@ class Terminal extends EventEmitter {
         if (message.type === 'exit' && Number.isInteger(message.code)) this.nativeExited = true;
         if (message.type === 'data') {
           const data = this.decoder.write(Buffer.from(message.data, 'base64'));
-          this.screen.write(data, () => this.emit('data', { data, sequence: ++this.sequence }));
+          const receivedAt = Date.now();
+          this.screen.write(data, () => {
+            const observation = this.journal.append('output', data, this.screen.cols, this.screen.rows, () => this.serialize.serialize());
+            this.emit('data', { ...observation, receivedAt, sequence: ++this.sequence });
+          });
         }
       }
     });
@@ -54,9 +60,15 @@ class Terminal extends EventEmitter {
   input(data) { this.command({ type: 'input', data }); }
   resize(cols, rows) {
     cols = Math.max(20, Math.min(400, cols)); rows = Math.max(5, Math.min(200, rows));
-    if (this.alive && (cols !== this.screen.cols || rows !== this.screen.rows)) { this.screen.resize(cols, rows); this.command({ type: 'resize', cols, rows }); }
+    if (this.alive) this.screen.write('', () => {
+      if (!this.alive || (cols === this.screen.cols && rows === this.screen.rows)) return;
+      this.screen.resize(cols, rows); this.command({ type: 'resize', cols, rows });
+      const observation = this.journal.append('resize', '', cols, rows, () => this.serialize.serialize());
+      this.emit('data', { ...observation, sequence: this.sequence });
+    });
   }
   snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serialize.serialize(), sequence: this.sequence, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid }))); }
+  observe() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.journal.snapshot(), alive: this.alive }))); }
   stop(timeout = 5000) {
     if (this.stopPending) return this.stopPending;
     if (!this.alive) return this.nativeExited ? Promise.resolve() : Promise.reject(new Error('原生进程退出未获确认；请检查原生会话。'));
@@ -80,7 +92,7 @@ class Claude extends EventEmitter {
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};
-    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PermissionRequest', 'PreToolUse', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'SessionEnd']) {
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'SessionEnd']) {
       hooks[event] = [{ hooks: [{ type: 'command', command, timeout: 2 }] }];
     }
     const settings = path.join(host.privateDir, `${record.id}.settings.json`);
@@ -108,8 +120,16 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
     });
     if (isChild) return;
+    if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) this.emit('progress', {
+      id: event.tool_use_id, source: 'claude-hook', kind: 'tool', title: event.tool_name || '原生工具',
+      status: event.hook_event_name === 'PreToolUse' ? 'running' : event.hook_event_name === 'PostToolUse' ? 'completed' : 'failed',
+    });
+    if (['PermissionRequest', 'Notification', 'StopFailure'].includes(event.hook_event_name)) this.emit('progress', {
+      source: 'claude-hook', kind: event.hook_event_name, title: event.hook_event_name === 'PermissionRequest' ? '等待原生权限确认' : event.hook_event_name === 'StopFailure' ? '原生请求失败' : '原生通知',
+      text: event.message || '', status: event.hook_event_name === 'StopFailure' ? 'failed' : 'observed',
+    });
     switch (event.hook_event_name) {
-      case 'SessionStart': this.ready = true; this.emit('state', 'idle'); this.emit('model', event.model || '原生默认'); break;
+      case 'SessionStart': this.ready = true; this.emit('state', 'idle'); this.emit('model', event.model || '原生未报告'); break;
       case 'UserPromptSubmit':
         // A settings hook observing a prompt is not its acceptance. The native
         // structured submission result acknowledges our own sends separately.
@@ -339,6 +359,18 @@ class Codex extends EventEmitter {
       this.closed = true; this.stopped = true; this.finishRecoveryConnection?.(false); this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
     }
     if (this.stopped) return;
+    if (['item/started', 'item/completed'].includes(message.method) && p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) {
+      const item = p.item;
+      this.emit('progress', { id: item.id, turnId: p.turnId, source: 'codex-native', kind: item.type,
+        title: item.command || item.tool || item.type, status: message.method === 'item/started' ? 'running' : item.status || 'completed',
+        ...(typeof item.aggregatedOutput === 'string' ? { text: item.aggregatedOutput } : {}),
+      });
+    }
+    if (['item/commandExecution/outputDelta', 'item/mcpToolCall/progress'].includes(message.method)) this.emit('progress', {
+      id: p.itemId, turnId: p.turnId, source: 'codex-native', kind: message.method === 'item/commandExecution/outputDelta' ? 'commandExecution' : 'mcpToolCall',
+      ...(typeof p.delta === 'string' ? { delta: p.delta } : { text: p.message || '' }),
+    });
+    if (message.id !== undefined || message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: message.id !== undefined ? '等待原生确认' : '原生会话错误', status: message.id !== undefined ? 'waiting' : 'failed' });
     if (message.id !== undefined) { this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); return; }
     switch (message.method) {
       case 'thread/status/changed': this.observeStatus(p.status); break;
