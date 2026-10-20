@@ -1,15 +1,21 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.33 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.34 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.33 keeps collaboration and utilities reachable with
-long session lists and reveals the selected session after search, restoration or
-reopen. Six real source/installed navigation groups, search and daily collaboration
-regressions, and independent final artifact review pass. The minimum-size main
-conversation layout remains a separate reading issue, not closed by sidebar checks.
+**Current increment:** alpha.34 reserves readable space for conversation text
+alongside native live panes in a minimum-size window. Shared drafts have a
+responsive resize limit; expanded draft recovery remains scrollable without
+pushing the editor outside the window. An ended session without a held temporary
+frame shows an accurate empty state. Five source/installed layout groups, six installed raw-progress groups and eleven
+installed reading checks pass, with independent final artifact review.
+
+Alpha.33 keeps collaboration and utilities reachable with long session lists and
+reveals the selected session after search, restoration or reopen. Its six source
+and installed navigation groups, search/daily collaboration regressions, and
+independent artifact review pass.
 
 Alpha.32 synchronizes native Codex confirmation resolution,
 keeps sent decisions pending until native acknowledgement, and rejects obsolete

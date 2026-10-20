@@ -26,6 +26,9 @@ class NativeProgressPanel {
     this.range.oninput = () => { this.live = false; this.replay(Number(this.range.value)); };
     this.trace = node('details', undefined, 'progress-trace'); this.traceSummary = node('summary', '运行记录'); this.traceList = node('div'); this.trace.append(this.traceSummary, this.traceList); this.trace.open = !!saved.traceOpen; this.savedScroll = saved.scroll; this.traceChosen = typeof saved.traceOpen === 'boolean';
     this.traceSummary.addEventListener('click', () => { this.traceChosen = true; });
+    // A new panel has no frame to display yet. In particular, selecting an
+    // already-ended session must not manufacture an empty "last screen".
+    this.viewport.hidden = true; this.controls.hidden = true; this.trace.hidden = true;
     this.element.append(this.summary, this.notice, this.viewport, this.controls, this.trace);
   }
   useNativeEntry(entry) {
@@ -37,7 +40,9 @@ class NativeProgressPanel {
     entry.element.style.width = screen.style.width; entry.element.style.height = screen.style.height;
     if (entry.element.parentElement !== this.viewport) this.viewport.append(entry.element);
     this.viewport.hidden = false; this.surface.hidden = true; this.controls.hidden = true;
-    this.notice.textContent = '同一原生终端的实时画面 · 仅你可见；在下方对话框输入，或切回原生终端操作。';
+    this.notice.textContent = this.connected === false
+      ? '连接已断开，下面是最后收到的画面；恢复连接后继续同步。'
+      : '同一原生终端的实时画面 · 仅你可见；在下方对话框输入，或切回原生终端操作。';
     if (!this.borrowedActions) {
       this.borrowedActions = node('div', undefined, 'progress-controls');
       this.borrowedActions.append(button('复制选中内容', () => api.copy(this.borrowed?.term.getSelection() || '')),
@@ -71,7 +76,16 @@ class NativeProgressPanel {
     if (!connected && this.live) this.position.textContent = '最后画面';
     this.heading.textContent = record.name;
     this.status.textContent = states[record.state] + (record.activity ? ' · ' + record.activity : '');
-    if (!connected) { this.status.textContent = '已断开 · 最后收到的画面'; this.notice.textContent = '连接已断开，下面的画面与记录停止同步；重新连接后会核对缺口。'; return; }
+    if (!connected) {
+      const hasFrame = !!(this.checkpoint || this.borrowed);
+      this.status.textContent = hasFrame ? '已断开 · 最后收到的画面' : record.state === 'ended' ? states.ended : '已断开';
+      this.notice.textContent = hasFrame || this.progress.size
+        ? '连接已断开，下面的画面与记录停止同步；重新连接后会核对缺口。'
+        : '当前没有保留的临时画面。已保存的对话仍可阅读；恢复会话后继续同步。';
+      this.viewport.hidden = !hasFrame; this.controls.hidden = !this.checkpoint;
+      this.trace.hidden = !this.progress.size || !!this.raw?.legacySnapshots;
+      return;
+    }
     if (!capable) { this.notice.textContent = '旧连接尚无只读实时画面，可在原生终端核对。'; this.viewport.hidden = true; this.controls.hidden = true; return; }
     if (!this.started) { this.started = true; this.reload(); }
   }

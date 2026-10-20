@@ -789,3 +789,30 @@ installed daily-use groups pass; independent final artifact review passes. All
 processes are unchanged, with one discoverable installed app. The 349-check
 alpha.32 backend result is reused for this UI-only change, not claimed as a new
 full-suite execution.
+
+
+## Compact reading and native-panel empty states — alpha.34
+
+A real hidden Electron window at 850×600 reproduced zero readable text height in
+both solo and shared views. The existing raw panels now shrink/scroll while the
+conversation retains at least four text lines in the tested geometry. No output
+is filtered or removed to make space. Initial native panels show no frame controls
+until a frame exists; a disconnected panel with received output keeps that last
+frame, while an ended session without cached output says so.
+
+An independent reviewer identified a further counterexample: manually resizing
+the shared draft to 200px pushed Send below the viewport. The actual pointer-drag
+reproduction failed before the responsive height limit. An initial composer-scroll
+fix also failed the ordinary-input check and was revised: the editor retains its
+normal height, with a bounded scroll area for expanded recovery copies.
+
+The compact runner verifies the solo/shared timeline, pointer/keyboard folding,
+canonical terminal buffers, distinct unsent drafts, explicit member-terminal
+switching, long permission scope and reachable decision actions, retained versus
+absent last frames, and three persisted recovery copies after reload. It uses
+synthetic provider events and actual Electron controls; no model task or native
+provider process runs. Five source and installed groups pass. Six raw-progress regression groups
+and eleven reading/selection/reopen checks pass in the final installed app.
+Independent final review passes; all 36 shipped app files match source. Original
+user records and five protected processes are unchanged, with one discoverable app. Four unchanged UI-lifetime checks pass without skips. This is not a new
+physical input-method, screen-reader or complete accessibility certification.
