@@ -126,6 +126,7 @@ class WorkspaceClient extends EventEmitter {
       room: { ...this.active.state.room, revision: this.entries.reduce((n, e) => n + (e.state.room.revision || 0), 0), run: runs[0] || null, messages: [...messages.values()].sort((a, b) => (a.time || 0) - (b.time || 0)) },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
       storageWarning: [...this.entries.map(e => e.state.storageWarning), this.control.legacyInput?.storageWarning].filter(Boolean).join('\n') || null,
+      storageRetryable: this.entries.some(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave')),
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),
       handoffNotice: memberServices.length > 1 ? '成员使用不同版本的后台，自动交接暂不可用。可在同一协作视图查看终端、选择内容并定向分享。' : null,
     };
@@ -229,6 +230,18 @@ class WorkspaceClient extends EventEmitter {
     if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
     this.authorizeOperation?.(method, args);
     if (method === 'initial') return this.refresh();
+    if (method === 'retrySave') {
+      const targets = this.entries.filter(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave'));
+      if (!targets.length) throw new Error('当前没有支持重试的保存失败；原记录保持不变。');
+      const targetsWithGuards = targets.map(entry => ({ entry, guard: this.operationGuard(entry) }));
+      let failed = false;
+      for (const { entry, guard } of targetsWithGuards) {
+        try { guard(); await entry.client.call('retrySave'); } catch { failed = true; }
+      }
+      await this.refresh();
+      if (failed) throw new Error('部分记录仍未保存，请保留窗口并检查磁盘空间和写入权限。');
+      return true;
+    }
     if (method === 'pause') return this.intervene(() => {
       const entries = new Map(this.entries.map(e => [e.key, e]));
       for (const [key, arm] of this.control.armed) entries.set(key, arm.entry);

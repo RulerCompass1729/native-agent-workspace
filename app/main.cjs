@@ -161,7 +161,7 @@ async function boot() {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   if (!wired) {
   wired = true;
-  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => {
+  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'retrySave']) register(name, (c, ...args) => {
     if (['prepareInput', 'claim', 'terminal', 'input', 'approve'].includes(name)) roomState.assertAvailable(args[0]);
     return c.client.call(name, ...args);
   });

@@ -17,6 +17,7 @@ class ServiceClient extends EventEmitter {
       if (buffer.length > 16 * 1024 * 1024) return socket.destroy();
       for (let end; (end = buffer.indexOf('\n')) >= 0;) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1); let m; try { m = JSON.parse(line); } catch { socket.destroy(); return; }
+        if (!m || typeof m !== 'object' || Array.isArray(m)) { socket.destroy(); return; }
         const value = m.event ? m.data : m.value;
         if (value && typeof value === 'object') this.receipts.set(value, ++received);
         if (m.ready) this.emit('ready');

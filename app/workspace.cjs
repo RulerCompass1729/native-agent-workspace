@@ -30,18 +30,24 @@ class Workspace extends EventEmitter {
       if (stored.room?.run) this.room.run = { ...stored.room.run, awaiting: null, ...(stored.room.run.status === 'running' ? { status: 'paused', reason: '运行服务曾中断；未重发任务，请核对原生结果。' } : {}) };
       if (stored.drafts) for (const [key, value] of Object.entries(stored.drafts)) this.drafts.set(key, value);
     } catch (error) {
-      if (error.code !== 'ENOENT') this.storageWarning = '本地记录未能读取，原文件已保留；请检查后再保存。';
+      if (error.code !== 'ENOENT') { this.storageFailure = 'read'; this.storageWarning = '本地记录未能读取，原文件已保留；请检查后再保存。'; }
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.emit('change');
+    if (this.storageWarning) return;
+    // Keep burst coalescing, but a continuously streaming reply must not
+    // postpone every checkpoint until the provider becomes quiet.
+    if (!this.saveDeadline) this.saveDeadline = setTimeout(() => this.persist(), 1000);
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.persist(), 150);
   }
   persist() {
+    clearTimeout(this.saveTimer); clearTimeout(this.saveDeadline);
+    this.saveTimer = this.saveDeadline = null;
     if (this.storageWarning) return;
     const target = path.join(this.dataDir, 'workspace.json'); const temp = `${target}.tmp`;
     try {
@@ -49,7 +55,16 @@ class Workspace extends EventEmitter {
       const sessions = [...this.sessions.values()].map(({ owner, approval, pid, ...s }) => ({ ...s, pendingTag: null }));
       fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: this.room.messages, ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
       fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
-    } catch { this.storageWarning = '本地保存失败，当前会话仍在内存中；请保留窗口并检查磁盘。'; this.emit('change'); }
+    } catch { this.storageFailure = 'write'; this.storageWarning = '本地保存失败，当前会话仍在内存中；请保留窗口并检查磁盘，恢复后重试保存。'; this.emit('change'); }
+  }
+  retrySave() {
+    // A failed read may hide existing records. Never overwrite it with the
+    // incomplete in-memory state, even when the person requests a write retry.
+    if (this.storageFailure !== 'write') throw new Error('没有可重试的写入；未读取的原文件不会被覆盖。');
+    this.storageFailure = null; this.storageWarning = null;
+    this.persist(); this.emit('change');
+    if (this.storageWarning) throw new Error('仍未能保存，请保留窗口并检查磁盘空间和写入权限。');
+    return true;
   }
   get(id) { const s = this.sessions.get(id); if (!s) throw new Error('找不到这个会话。'); return s; }
   runtime(id) { const r = this.runtimes.get(id); if (!r) throw new Error('会话已经结束；保存的记录仍可查看。'); return r; }

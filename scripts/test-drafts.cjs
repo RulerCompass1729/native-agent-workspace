@@ -4,14 +4,15 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const assert = require('node:assert/strict');
 const { fork } = require('node:child_process');
 const { _electron } = require('playwright');
-const { connect } = require('../app/service-client.cjs');
 const root = path.resolve(__dirname, '..');
+const code = process.env.NAW_TEST_APP_ROOT || root;
+const { connect } = require(path.join(code, 'app/service-client.cjs'));
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-draft-test-'));
 const shots = process.env.NAW_EVIDENCE_DIR;
 if (shots) fs.mkdirSync(shots, { recursive: true, mode: 0o700 });
-const child = fork(path.join(root, 'app/daemon.cjs'), [profile], {
+const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/delayed-native.cjs')],
-  env: { ...process.env, NAW_APP_VERSION: require('../package.json').version, NAW_WORKSPACE: profile },
+  env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
 let app, page, client, sequence = 0;
@@ -101,6 +102,20 @@ async function run() {
   console.log(JSON.stringify({ passed, errors, nativeModelCalls: 0, transport: 'synthetic; real headed desktop, IPC, service, persistence', sends: (await native('stats')).sends.length }));
 }
 run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
-  try { await close(); if (client) { const state = await client.call('initial'); for (const s of state.sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } }
+  try {
+    await close(); client?.close();
+    // Read the final layout: a UI version change may have added a backend
+    // after the original cleanup connection was created.
+    client = await connect(profile, 'fixture-final-cleanup');
+    try {
+      const state = await client.call('initial'), entries = client.entries.map(e => ({ key: e.key, pid: e.state.servicePid }));
+      for (const s of state.sessions) await client.call('stop', s.id);
+      await client.call('shutdown');
+      await until(() => entries.every(e => {
+        if (fs.existsSync(path.join(profile, e.key, 'connection.json'))) return false;
+        try { process.kill(e.pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
+      }), 'All test backends exited and removed their connection records');
+    } finally { client.close(); }
+  }
   finally { if (child.connected) child.disconnect(); setTimeout(() => { if (child.exitCode === null) child.kill('SIGTERM'); }, 1000).unref(); }
 });

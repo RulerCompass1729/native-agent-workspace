@@ -506,6 +506,7 @@ function render() {
     const warning = disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
+    $('retry-save').hidden = disconnected || !state.storageRetryable;
     renderSessions();
     renderArchives(); $('room-nav').parentElement.hidden = Boolean(state.room.archived); document.querySelector('.drop-hint').hidden = Boolean(state.room.archived);
     $('workspace-empty').hidden = !state.room.archived;
@@ -980,6 +981,11 @@ $('data-directory').onclick = () => attempt(() => api.dataDirectory());
 $('clear-shared-history').onclick = () => attempt(() => { if (!state.capabilities?.includes('clearSharedHistory')) throw new Error('后台仍在保留旧版会话；结束它们并重开应用后可使用此功能。'); return api.clearSharedHistory(); });
 $('close-privacy').onclick = () => { $('privacy-dialog').close(); focusTerminal(); };
 $('reconnect-button').onclick = () => attempt(async () => { $('reconnect-button').disabled = true; try { await api.reconnect(); } finally { $('reconnect-button').disabled = false; } });
+$('retry-save').onclick = () => attempt(async () => {
+  $('retry-save').disabled = true;
+  try { await api.retrySave(); updateState(await api.initial()); render(); }
+  finally { $('retry-save').disabled = false; }
+});
 $('search-button').onclick = () => openSearch();
 $('close-search').onclick = () => $('search-dialog').close();
 $('search-preview-back').onclick = renderSearch;

@@ -164,6 +164,7 @@ header h1, header p { overflow-wrap: anywhere; }
 #search-preview { min-height: 0; overflow: auto; }
 #search-preview-body { font-size: 13px; }
 [data-search-target] { outline: 2px solid var(--accent, #527564); outline-offset: 7px; border-radius: 4px; }
+#retry-save { align-self: flex-start; margin: 0 20px 10px; }
 .reading-return { align-self: flex-start; margin: 5px 20px; font-size: 12px; padding: 4px 8px; }
 &[data-native-surface="sidebar"][data-collapsed="true"] #search-button { width: 38px; height: 38px; padding: 5px; }
 

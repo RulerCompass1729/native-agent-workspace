@@ -614,3 +614,59 @@ with zero skips; the final endpoint/startup cleanup additionally passes ten
 focused regressions. Original user sessions, histories, drafts and view files are
 unchanged, with one existing installed application entry. Independent source and
 final installed-artifact review passed for this bounded repair.
+
+## Continuous-output checkpoints — alpha.30
+
+The old trailing-only save timer was reproduced with uninterrupted output: the
+conversation changed in memory while the disk retained no part of that reply.
+Short bursts still coalesce for 150 ms, with a separate one-second scheduling
+target for an uninterrupted stream. Direct persistence and normal close cancel
+both timers. This is not a real-time or power-loss durability guarantee; changes
+not yet checkpointed can still be lost in a crash.
+
+The actual Electron/service test creates 400 synthetic historical records, enters
+a Chinese draft, joins the shared room and receives continuous output. It kills
+only its own test daemon with SIGKILL, then clicks reconnect. Checkpointed text,
+message IDs/order, native identity, draft and room membership survive; no provider
+process or model task is created. The related direct regression confirms a native
+closed event followed by a late rejection of that same resume cannot change the
+confirmed ended status. The same UI test obstructs its own checkpoint temporary
+path, verifies a failed retry leaves the old checkpoint intact, removes the
+obstruction and clicks retry again. Current history, draft and membership are
+saved with no native action. Separate regressions preserve unread/corrupt originals
+and reject retries queued across a backend replacement. Final installed acceptance
+passed independent review.
+
+The recovered partial-reply label was checked against the previous built UI,
+where it incorrectly claimed to be replying, and the corrected build. Session
+and progress state remain the source of current activity.
+
+A 45-minute real Electron reading run used 1,000 synthetic historical records,
+90 selection/stream/conversation-switch cycles and a retained Chinese draft.
+All eleven reading checks passed, including stable selection/scroll/focus,
+late-output isolation and reopen/quit restoration. Initial history rendering took
+930 ms on the test host. Sampled application working-set totals ranged with
+garbage collection, peaking at 1,011 MiB during the timed loop and ending at
+750 MiB; the later reopen sample was higher. These are observations, not a
+cross-machine performance or leak-free guarantee. No model or provider process
+was used by this run.
+
+The actual renderer privacy trial uses synthetic content and a separate loopback
+receiver. Script-bearing HTML remains inert; Markdown cannot read a private
+test file, and image/fetch/WebSocket/beacon probes do not reach the receiver.
+Copy and external-link actions are intercepted to verify their explicit payloads
+without changing the system clipboard or opening a browser. Privacy-panel refresh
+retains zero dispatch and correctly distinguishes missing usage from zero usage.
+This covers the application renderer, not native provider/tool network traffic or
+a security certification.
+
+Real empty-daemon boundary tests reject non-object, malformed, unauthenticated
+and oversized frames while a valid observer remains responsive. The draft and
+privacy UI runners reconnect to their final backend layout for cleanup and verify
+owned services exit. Unknown and user-owned native processes are preserved.
+
+The complete suite passes 317 checks with zero skips. Final installed storage,
+privacy and draft flows pass; the installed empty-daemon/client/RPC boundary
+checks also pass. All 35 application files match source and signing verification
+passes. Original three sessions and their history/draft/view records remain
+unchanged; system application search lists one installed launch entry.

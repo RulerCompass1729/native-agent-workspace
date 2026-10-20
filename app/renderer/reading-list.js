@@ -148,7 +148,9 @@ function messageList(el, messages, room = false, key = 'room') {
     if (entry.headingKey !== headingKey) {
       entry.heading.replaceChildren(node('strong', name)); entry.headingKey = headingKey;
       if (room && Number.isFinite(m.time)) { const time = node('time', new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); time.title = new Date(m.time).toLocaleString(); entry.heading.append(time); }
-      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '正在回复', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
+      // A stored fragment is not proof that its native turn is still running.
+      // Current activity lives in the session/progress status, not this record.
+      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '已收到的部分回复', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
       if (status) entry.heading.append(node('span', status));
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
     }

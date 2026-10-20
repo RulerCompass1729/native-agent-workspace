@@ -14,6 +14,89 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('continuous output checkpoints before it becomes quiet and reload never sends a task', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
+  w.join(id, true); w.setDraft(id, '未发送的草稿'); w.persist();
+  let saves = 0;
+  const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (...args) => { saves++; return rename(...args); });
+  for (let i = 0; i < 20; i++) {
+    r.emit('delta', { id: 'continuous-reply', text: `第${i}段。` });
+    t.mock.timers.tick(50);
+  }
+  const stored = JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json')));
+  assert.equal(stored.sessions[0].messages[0]?.text, w.get(id).messages[0].text);
+  assert.equal(saves, 1, 'One bounded checkpoint, not one disk write per output chunk');
+  assert.equal(stored.drafts[id], '未发送的草稿');
+  assert.equal(stored.sessions[0].roomId, 'shared');
+  let starts = 0, sends = 0;
+  const recovered = new Workspace({ binaries: {}, close() {}, create() { starts++; return { send() { sends++; } }; } }, directory);
+  t.after(() => recovered.close());
+  assert.deepEqual(recovered.get(id).messages, stored.sessions[0].messages);
+  assert.equal(recovered.get(id).state, 'recoverable');
+  assert.equal(starts, 0); assert.equal(sends, 0);
+  r.emit('delta', { id: 'continuous-reply', text: '最后一段。' });
+  t.mock.timers.tick(150);
+  assert.equal(saves, 2, 'Quiet output still saves promptly');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'))).sessions[0].messages[0].text, w.get(id).messages[0].text);
+  t.mock.timers.tick(2000);
+  assert.equal(saves, 2, 'Completed checkpoints leave no redundant timer');
+});
+
+test('explicit persistence and close drain both save deadlines', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { workspace: w, ids: [id], directory } = await fixture(t);
+  w.setDraft(id, 'first'); w.persist();
+  let saves = 0; const rename = fs.renameSync;
+  t.mock.method(fs, 'renameSync', (...args) => { saves++; return rename(...args); });
+  t.mock.timers.tick(1200);
+  assert.equal(saves, 0);
+  w.setDraft(id, 'last edit before close'); w.close();
+  assert.equal(saves, 1);
+  t.mock.timers.tick(1200);
+  assert.equal(saves, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'))).drafts[id], 'last edit before close');
+});
+
+test('explicit save retry retains latest memory after a real write failure without restarting native work', async t => {
+  const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
+  w.get(id).nativeId = 'original-native-id';
+  w.join(id, true); w.setDraft(id, 'saved draft'); w.persist();
+  const file = path.join(directory, 'workspace.json'), temp = file + '.tmp';
+  const original = fs.readFileSync(file, 'utf8');
+  fs.mkdirSync(temp); // A real filesystem error, without affecting other files.
+  w.setDraft(id, 'latest in-memory draft'); r.emit('delta', { id: 'partial', text: '收到的内容' }); w.persist();
+  assert.equal(w.snapshot().storageRetryable, true);
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+  assert.throws(() => w.retrySave(), /仍未能保存/);
+  assert.equal(w.snapshot().storageRetryable, true);
+  fs.rmdirSync(temp);
+  assert.equal(w.retrySave(), true);
+  const saved = JSON.parse(fs.readFileSync(file));
+  assert.equal(saved.drafts[id], 'latest in-memory draft');
+  assert.equal(saved.sessions[0].nativeId, 'original-native-id');
+  assert.equal(saved.sessions[0].roomId, 'shared');
+  assert.deepEqual(saved.sessions[0].messages, w.get(id).messages);
+  assert.equal(w.runtimes.get(id), r); assert.equal(w.get(id).state, 'idle');
+  assert.equal(w.snapshot().storageWarning, null); assert.equal(w.snapshot().storageRetryable, false);
+  assert.equal(w.versions.dispatches, 0);
+  assert.throws(() => w.retrySave(), /没有可重试/);
+});
+
+test('save retry never replaces an original that could not be read', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-unread-'));
+  const file = path.join(directory, 'workspace.json'), original = '{ unread original';
+  fs.writeFileSync(file, original, { mode: 0o600 });
+  const w = new Workspace({ binaries: {}, close() {} }, directory);
+  t.after(() => { w.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  assert.equal(w.snapshot().storageRetryable, false);
+  assert.throws(() => w.retrySave(), /原文件不会被覆盖/);
+  w.persist();
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+  assert.ok(w.snapshot().storageWarning);
+});
+
 test('a former window cannot overwrite a draft after another window takes control', async t => {
   const { workspace: w, ids: [id] } = await fixture(t);
   w.setDraft(id, 'first draft', 'owner');
@@ -317,6 +400,33 @@ test('failed stop keeps the runtime and draft available for a confirmed retry', 
   r.stop = async () => ({ state: 'ended' }); await w.stop(id);
   assert.equal(w.get(id).state, 'ended'); assert.equal(w.runtimes.has(id), false);
   assert.equal(w.snapshot().sessions[0].liveDraft, 'unsent draft');
+});
+
+test('native closed followed by rejection of the same resume keeps the confirmed ended state', async t => {
+  const { workspace: w, runtimes: [old], ids: [id] } = await fixture(t);
+  w.setDraft(id, 'keep after closed resume');
+  old.emit('messageItem', { id: 'old-answer', text: 'Existing native history' });
+  old.emit('state', 'ended');
+  const before = structuredClone(w.get(id).messages), nativeId = w.get(id).nativeId;
+  let starts = 0;
+  w.host.create = () => {
+    const r = new EventEmitter();
+    r.start = async () => {
+      starts++;
+      r.emit('state', 'ended');
+      await tick();
+      throw Error('Late resume rejection after native close');
+    };
+    return r;
+  };
+  await assert.rejects(w.resume(id, 'owner'), /Late resume rejection/);
+  assert.equal(w.get(id).state, 'ended');
+  assert.equal(w.get(id).recovering, false);
+  assert.equal(w.runtimes.has(id), false);
+  assert.equal(w.get(id).nativeId, nativeId);
+  assert.deepEqual(w.get(id).messages, before);
+  assert.equal(w.snapshot().sessions[0].liveDraft, 'keep after closed resume');
+  assert.equal(starts, 1); assert.equal(w.versions.dispatches, 0);
 });
 
 test('service restart retains membership and draft without replay; explicit resume reuses native identity', async t => {

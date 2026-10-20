@@ -1,11 +1,21 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.29 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.30 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.29 repairs continuation after a confirmed owned
+**Current increment:** alpha.30 prevents continuously streaming output from
+postponing all local saves. It keeps short-burst coalescing and adds a one-second
+checkpoint scheduling target. Actual process-crash/UI reconnect checks preserve
+saved records and drafts without replay. Failed writes have an explicit retry
+after storage is restored; unread originals are never overwritten by that action.
+Recovered partial replies are labeled as received fragments rather than active
+work. Malformed non-object service frames no longer crash the daemon.
+Independent source and final installed-artifact acceptance passed; unsaved
+increments and power loss remain separate limitations.
+
+Alpha.29 repairs continuation after a confirmed owned
 Codex backend exit. Records and drafts remain; recovery is explicit, and stale
 connections cannot overwrite the new runtime. Native no-task and local UI checks
 pass; independent source and final installed-artifact review passed. The installed

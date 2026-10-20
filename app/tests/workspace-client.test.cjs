@@ -135,6 +135,43 @@ function fixture() {
   const openWindow = (includeNext = true) => { const old = oldView(), next = nextView(); return { old, next, c: new WorkspaceClient(includeNext ? [old, next] : [old], includeNext ? 'next' : 'old', scope) }; };
   return { ...openWindow(), openWindow };
 }
+test('save retry targets only supported failed writers and preserves unrelated warnings and native work', async () => {
+  const { old, next, c } = fixture();
+  old.real.storageWarning = 'Unread original';
+  next.real.storageWarning = 'Write failed'; next.real.storageRetryable = true; next.real.capabilities.push('retrySave');
+  const call = next.client.call;
+  next.client.call = async (method, ...args) => {
+    if (method === 'retrySave') { next.real.storageWarning = null; next.real.storageRetryable = false; }
+    return call(method, ...args);
+  };
+  await c.refresh(); const sessions = structuredClone(c.snapshot().sessions);
+  assert.equal(c.snapshot().storageRetryable, true);
+  await c.call('retrySave');
+  assert.equal(c.snapshot().storageRetryable, false);
+  assert.equal(c.snapshot().storageWarning, 'Unread original');
+  assert.equal(old.calls.some(([method]) => method !== 'initial'), false);
+  assert.deepEqual(next.calls.filter(([method]) => method !== 'initial'), [['retrySave']]);
+  assert.deepEqual(c.snapshot().sessions, sessions);
+  assert.equal(c.snapshot().diagnostics.dispatches, 0);
+  await assert.rejects(c.call('retrySave'), /没有支持重试/); c.close();
+});
+test('a queued save retry never moves to a replacement backend after another write finishes', async () => {
+  const { old, next, c } = fixture(); let finishFirst;
+  for (const entry of [old, next]) {
+    entry.real.storageWarning = 'Write failed'; entry.real.storageRetryable = true; entry.real.capabilities.push('retrySave');
+  }
+  const oldCall = old.client.call;
+  old.client.call = async (method, ...args) => {
+    if (method === 'retrySave') await new Promise(resolve => { finishFirst = resolve; });
+    return oldCall(method, ...args);
+  };
+  await c.refresh(); const pending = c.call('retrySave'), rejected = assert.rejects(pending, /部分记录仍未保存/);
+  while (!finishFirst) await new Promise(resolve => setImmediate(resolve));
+  const end = c.maintainService('next'); end(); finishFirst(); await rejected;
+  assert.equal(next.calls.some(([method]) => method === 'retrySave'), false);
+  assert.equal(c.snapshot().storageRetryable, true);
+  assert.equal(c.snapshot().diagnostics.dispatches, 0); c.close();
+});
 test('new sessions use the current service while legacy terminal writes and drafts keep their identity', async () => {
   const { old, next, c } = fixture();
   const before = structuredClone(old.real.sessions[0]);

@@ -216,6 +216,7 @@ class Rpc extends EventEmitter {
     super(); this.ws = ws; this.sequence = 0; this.pending = new Map();
     ws.on('message', data => {
       let message; try { message = JSON.parse(data.toString()); } catch { return; }
+      if (!message || typeof message !== 'object' || Array.isArray(message)) return;
       if (message.method) this.emit('event', message);
       else if (this.pending.has(message.id)) {
         const p = this.pending.get(message.id); this.pending.delete(message.id); clearTimeout(p.timer);
