@@ -14,11 +14,15 @@ class WorkspaceClient extends EventEmitter {
     this.scope = scope;
     if (!controls.has(scope)) controls.set(scope, { revision: 0, clients: 0, armed: new Map(), interventions: new Set(), views: new Set(), maintenance: new Set(), generations: new Map() });
     this.control = controls.get(scope); this.control.clients++; this.control.views.add(this);
+    this.control.legacyOwners ||= new Map();
+    for (const entry of entries) this.observeLegacyOwners(entry);
     if (typeof scope === 'string' && !this.control.legacyInput) {
       this.control.legacyInput = new LegacyInput(scope);
       this.control.legacyInput.on('change', () => { for (const view of this.control.views) if (!view.closing) view.emit('state', view.snapshot()); });
+      this.control.legacyInput.on('progress', update => { for (const view of this.control.views) if (!view.closing) view.emit('progress', update); });
     }
     for (const entry of entries) {
+      entry.stateOrder = entry.client.receivedOrder?.(entry.state) || 0;
       entry.closed = false; entry.closing = false;
       entry.closedPromise = new Promise(resolve => { entry.confirmClosed = resolve; });
       if (entry.state.room.run?.status === 'running' && !this.control.armed.has(entry.key)) this.control.armed.set(entry.key, { entry });
@@ -33,7 +37,9 @@ class WorkspaceClient extends EventEmitter {
       const client = entry.client;
       client.on('state', state => {
         if (entry.client !== client) return;
+        entry.stateOrder = client.receivedOrder?.(state) || entry.stateOrder;
         entry.state = { ...entry.state, ...state };
+        this.observeLegacyOwners(entry);
         try { this.emit('state', this.snapshot()); }
         catch { this.socket.destroyed = true; this.emit('closed'); this.close(); }
       });
@@ -54,6 +60,8 @@ class WorkspaceClient extends EventEmitter {
     for (const s of entry.state.sessions) { this.legacyObservers.get(s.id)?.dispose(); this.legacyObservers.delete(s.id); }
     this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1);
     entry.client = client; entry.state = state; entry.closed = false; entry.closing = false;
+    entry.stateOrder = client.receivedOrder?.(state) || 0;
+    this.observeLegacyOwners(entry);
     entry.closedPromise = new Promise(resolve => { entry.confirmClosed = resolve; });
     this.bindEntry(entry); old.close();
     this.socket.destroyed = this.entries.some(e => e.closed);
@@ -84,10 +92,13 @@ class WorkspaceClient extends EventEmitter {
       for (const s of state.sessions) {
         if (ids.has(s.id)) throw new Error('会话归属冲突；未向任何原生会话发送输入。');
         const bridge = this.control.legacyInput;
-        const legacySubmit = legacyInputEligible(e.state, s) && !!bridge?.connected(s);
-        ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s),
+        const legacySubmit = legacyInputEligible(e.state, s) && ['idle', 'working', 'approval', 'starting'].includes(s.state) && !!bridge?.connected(s);
+        const native = bridge?.target(s)?.native;
+        ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
-          ...(legacySubmit ? { chatAvailable: true, submissionNotice: null, pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
+          legacyShare: legacySubmit,
+          ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null, sharingNotice: '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。', ...(native?.state ? { state: native.state } : {}),
+            ...(native?.approval ? { approval: native.approval } : {}), pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
           serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
       }
       for (const m of state.room.messages || []) {
@@ -96,11 +107,16 @@ class WorkspaceClient extends EventEmitter {
       }
       if (state.room.run) runs.push(state.room.run);
     }
+    for (const message of this.control.legacyInput?.sharedMessages?.() || []) {
+      if (messages.has(message.id)) throw Error('共享记录归属冲突；原记录已保留。');
+      messages.set(message.id, message);
+    }
     const memberServices = this.entries.filter(e => e.state.sessions.some(s => s.roomId === 'shared'));
     const routingService = memberServices.length === 1 ? memberServices[0] : this.active;
     const capabilities = (this.active.state.capabilities || []).filter(cap => {
       if (['verifiedHandoffs', 'boundedReplyHandoffs'].includes(cap)) return memberServices.length <= 1 && routingService.state.capabilities?.includes(cap) && routingService.state.capabilities?.includes('nativeInputIsolation');
-      if (cap === 'clearSharedHistory') return this.entries.every(e => e.state.capabilities?.includes(cap));
+      if (cap === 'clearSharedHistory') return this.entries.every(e => e.state.capabilities?.includes(cap)
+        || (e.state.runtimeVersion === '0.1.0-alpha.2' && !e.state.room.messages?.length));
       return true;
     });
     const sum = key => this.entries.every(e => Number.isSafeInteger(e.state.diagnostics?.[key])) ? this.entries.reduce((n, e) => n + e.state.diagnostics[key], 0) : null;
@@ -108,7 +124,7 @@ class WorkspaceClient extends EventEmitter {
     return { ...this.active.state, sessions, capabilities,
       room: { ...this.active.state.room, revision: this.entries.reduce((n, e) => n + (e.state.room.revision || 0), 0), run: runs[0] || null, messages: [...messages.values()].sort((a, b) => (a.time || 0) - (b.time || 0)) },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
-      storageWarning: this.entries.map(e => e.state.storageWarning).filter(Boolean).join('\n') || null,
+      storageWarning: [...this.entries.map(e => e.state.storageWarning), this.control.legacyInput?.storageWarning].filter(Boolean).join('\n') || null,
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),
       handoffNotice: memberServices.length > 1 ? '成员使用不同版本的后台，自动交接暂不可用。可在同一协作视图查看终端、选择内容并定向分享。' : null,
     };
@@ -118,13 +134,35 @@ class WorkspaceClient extends EventEmitter {
     if (matches.length !== 1) throw new Error('找不到唯一的会话归属；没有发送输入。');
     return matches[0];
   }
+  observeLegacyOwners(entry) {
+    if (entry.state.runtimeVersion !== '0.1.0-alpha.2') return;
+    for (const record of entry.state.sessions) {
+      const previous = this.control.legacyOwners.get(record.id);
+      const generation = this.control.generations.get(entry.key) || 0;
+      const same = previous && previous.nativeId === record.nativeId && previous.pid === record.pid && previous.generation === generation;
+      if (same && Number.isSafeInteger(record.controlRevision) && record.controlRevision < previous.controlRevision) {
+        // Another view's older initial response must not reverse an observed
+        // takeover. Native input advances this counter without changing owner.
+        record.owner = previous.owner; record.controlRevision = previous.controlRevision;
+        continue;
+      }
+      this.control.legacyOwners.set(record.id, { owner: record.owner, nativeId: record.nativeId, pid: record.pid, generation,
+        controlRevision: record.controlRevision, revision: (previous?.revision || 0) + (!same || previous.owner !== record.owner ? 1 : 0) });
+    }
+  }
   async refresh() {
     await Promise.all(this.entries.map(async e => {
       if (this.control.maintenance.has(e.key)) return;
       const client = e.client, generation = this.control.generations.get(e.key) || 0;
       const state = await client.call('initial');
       if (e.client !== client || generation !== (this.control.generations.get(e.key) || 0) || this.control.maintenance.has(e.key)) return;
+      // An initial response may share a socket chunk with a later state event.
+      // Resolving its promise must not roll that event (or a newer read) back.
+      const order = client.receivedOrder?.(state);
+      if (order && order < e.stateOrder) return;
+      e.stateOrder = order || e.stateOrder;
       e.state = state;
+      this.observeLegacyOwners(e);
       if (e.state.room.run?.status === 'running' && !this.control.armed.has(e.key)) this.control.armed.set(e.key, { entry: e });
     }));
     return this.snapshot();
@@ -165,7 +203,8 @@ class WorkspaceClient extends EventEmitter {
   }
   legacyMutation(entry, operation) {
     // alpha.2 has no owner check/CAS for drafts. Order every portal window's
-    // claim, terminal claim and draft write on the same retained service.
+    // claim, terminal claim, interrupt (which implicitly claims) and draft
+    // write on the same retained service.
     this.control.legacyWrites ||= new Map();
     const queues = this.control.legacyWrites;
     const pending = (queues.get(entry.key) || Promise.resolve()).then(operation);
@@ -175,11 +214,13 @@ class WorkspaceClient extends EventEmitter {
   }
   legacyDraft(entry, id, text, expected, valid = () => true) {
     const guard = this.operationGuard(entry);
+    const ownerRevision = this.control.legacyOwners.get(id)?.revision;
     return this.legacyMutation(entry, async () => {
       guard(); await this.refresh(); guard(); this.authorizeOperation?.('draft', [id, text]);
       const current = entry.state.sessions.find(s => s.id === id);
       if (!current || current.owner !== entry.state.owner || current.owner !== expected.owner
-        || current.controlRevision !== expected.controlRevision || !valid(current)) throw Error('会话控制权或草稿已变化；此窗口的草稿保留为恢复副本，没有覆盖原会话。');
+        || current.nativeId !== expected.nativeId || current.pid !== expected.pid
+        || this.control.legacyOwners.get(id)?.revision !== ownerRevision || !valid(current)) throw Error('会话控制权或草稿已变化；此窗口的草稿保留为恢复副本，没有覆盖原会话。');
       return entry.client.call('draft', id, text);
     });
   }
@@ -204,14 +245,17 @@ class WorkspaceClient extends EventEmitter {
       creationQueue = operation.catch(() => {}); return operation;
     }
     if (method === 'shutdown' || method === 'clearSharedHistory') {
+      const sharedIds = this.control.legacyInput?.sharedMessages?.().map(message => message.id) || [];
       const guards = this.entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
       const state = await this.refresh();
       if (method === 'shutdown' && state.sessions.some(s => s.state !== 'ended')) throw new Error('请先结束各原生会话，再关闭运行服务。');
       if (method === 'clearSharedHistory' && (!state.capabilities.includes(method) || state.room.run?.status === 'running')) throw new Error('请先暂停交接，并确认各后台支持清除记录。');
       // These are explicit user actions. Partial failure must remain visible.
       guards.forEach(check => check());
-      const results = await Promise.allSettled(this.entries.map(e => e.client.call(method)));
+      const results = await Promise.allSettled(this.entries.map(e => method === 'clearSharedHistory'
+        && e.state.runtimeVersion === '0.1.0-alpha.2' && !e.state.room.messages?.length ? Promise.resolve() : e.client.call(method)));
       if (results.some(r => r.status === 'rejected')) throw new Error('部分后台未确认操作；请重新连接核对，未自动重试。');
+      if (method === 'clearSharedHistory') this.control.legacyInput?.clearSharedHistory(sharedIds);
       return true;
     }
     if (method === 'run') {
@@ -241,18 +285,21 @@ class WorkspaceClient extends EventEmitter {
     const target = this.route(args[0]);
     const guard = this.operationGuard(target); guard();
     const legacy = target.state.runtimeVersion === '0.1.0-alpha.2';
-    if (legacy && ['claim', 'terminal'].includes(method)) {
+    if (legacy && ['claim', 'terminal', 'interrupt'].includes(method)) {
       const expected = { ...target.state.sessions.find(s => s.id === args[0]) };
       const owned = expected.owner === target.state.owner;
+      const ownerRevision = this.control.legacyOwners.get(args[0])?.revision;
+      if (method === 'interrupt' && !owned) throw Error('请先接管会话，再停止原生任务。');
       const operation = () => this.legacyMutation(target, async () => {
-        if (!owned) await this.pauseExcept(null);
+        if (!owned || method === 'interrupt') await this.pauseExcept(null);
         guard(); await this.refresh(); guard(); this.authorizeOperation?.(method, args);
         const current = target.state.sessions.find(s => s.id === args[0]);
-        if (owned && (current?.owner !== expected.owner || current?.controlRevision !== expected.controlRevision)) throw Error('会话已由其他窗口接管；请重新确认控制权。');
+        if (!current || current.owner !== expected.owner || current.nativeId !== expected.nativeId || current.pid !== expected.pid
+          || this.control.legacyOwners.get(args[0])?.revision !== ownerRevision) throw Error('会话已由其他窗口接管；请重新确认控制权。');
         const result = await target.client.call(method, ...args);
         await this.refresh(); guard(); return result;
       });
-      return owned ? operation() : this.intervene(operation);
+      return owned && method !== 'interrupt' ? operation() : this.intervene(operation);
     }
     if (method === 'prepareInput') {
       await this.refresh(); guard();
@@ -260,28 +307,39 @@ class WorkspaceClient extends EventEmitter {
       if (record?.owner !== target.state.owner || !this.control.legacyInput) throw Error('请先在此窗口接管原会话。');
       return this.control.legacyInput.prepare(target, record);
     }
-    if (method === 'send' && this.control.legacyInput?.connected(target.state.sessions.find(s => s.id === args[0]))) {
+    if (method === 'approve' && typeof args[1] === 'string' && args[1].startsWith('legacy:')) {
+      await this.refresh(); guard(); this.authorizeOperation?.(method, args);
+      const record = target.state.sessions.find(s => s.id === args[0]);
+      if (record?.owner !== target.state.owner) throw Error('会话控制权已变化，请重新查看。');
+      const native = this.control.legacyInput?.target(record)?.native;
+      if (!native) throw Error('原生确认连接已变化，没有将确认交给其他连接。');
+      return native.approve(args[1], args[2]);
+    }
+    if (['send', 'forward'].includes(method) && this.control.legacyInput?.connected(target.state.sessions.find(s => s.id === args[0]))) {
+      const shared = method === 'forward';
       return this.intervene(async () => {
         const revision = this.control.revision;
         await this.pauseExcept(null); await this.refresh(); guard();
         const record = target.state.sessions.find(s => s.id === args[0]);
+        if (shared && record?.roomId !== 'shared') throw Error('接收方已离开共同工作。');
         const control = record.controlRevision, member = record.memberRevision;
         const draft = record.liveDraft, draftRevision = this.control.draftVersions?.get(record.id) || 0;
         const valid = () => {
-          try { guard(); this.authorizeOperation?.('send', args); } catch { return false; }
+          try { guard(); this.authorizeOperation?.(method, args); } catch { return false; }
           const current = target.state.sessions.find(s => s.id === record.id);
           return this.control.revision === revision && current?.pid === record.pid && current.nativeId === record.nativeId
             && current.owner === target.state.owner && current.controlRevision === control && current.memberRevision === member
+            && (!shared || current.roomId === 'shared')
             && current.state === 'idle' && !current.pendingTag && !current.approval;
         };
         if (!valid()) throw Error('原会话状态或控制权已变化，草稿已保留。');
         const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原会话已变化'); };
         // Native hooks remain the sole writer of conversation history.
         // Never call the old paste/Enter sender or launch a replacement CLI.
-        const tag = await this.control.legacyInput.send(record, args[1], refresh, valid);
+        const tag = await this.control.legacyInput.send(record, args[1], refresh, valid, shared);
         // An accepted native submission stays accepted even if cleanup loses
         // ownership or the connection. Never report that as a failed send.
-        if (draft?.trim() === args[1].trim()) await this.legacyDraft(target, record.id, '', record, current =>
+        if (!shared && draft?.trim() === args[1].trim()) await this.legacyDraft(target, record.id, '', record, current =>
           current.liveDraft === draft && (this.control.draftVersions?.get(record.id) || 0) === draftRevision).catch(() => {});
         return tag;
       });
@@ -294,6 +352,8 @@ class WorkspaceClient extends EventEmitter {
     }
     if (method === 'observe' && !target.state.capabilities?.includes('observe')) {
       const id = args[0], record = target.state.sessions.find(s => s.id === id);
+      const native = this.control.legacyInput?.target(record)?.native;
+      if (native?.connected) return native.observe();
       if (!supportsLegacyObservation(target.state, record)) throw Error('此连接尚无安全的只读观察接口。');
       let observer = this.legacyObservers.get(id);
       if (!observer) {

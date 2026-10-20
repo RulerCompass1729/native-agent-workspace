@@ -444,3 +444,43 @@ recovery, with idle development intervals omitted. Full timestamped screen frame
 and native event logs remain local; none are embedded in the public repository.
 Source/protocol evidence, visible GUI evidence and installed artifact evidence
 remain distinct. See `live-progress.md` for retention/performance boundaries.
+
+
+## Retained-session continuity — alpha.26
+
+As of 2026-10-19. A real isolated alpha.2 service retained both native sessions
+while the new Electron UI connected through the compatibility path. Codex Luna
+(low) created a one-line arithmetic file; UI automation selected its result in the
+actual GUI share dialog and sent one check to Claude Haiku 5.5 (low), CLI 2.1.304.
+Claude read the file and confirmed the arithmetic. The recording includes the
+explicit preview/send, running native screen and result. Two parent submissions;
+no observed child activity, not a complete fleet/token billing audit. Raw video,
+native screen dumps, operation logs and screenshots remain private. The Electron
+test window stayed hidden to avoid switching the user's macOS Space; its real
+renderer was operated and recorded. This is not physical keyboard/IME evidence.
+
+Two subsequent zero-model UI cycles used pointer drag to detach/rejoin, archived
+and restored a session, archived the room, quit/reopened the UI, and restored the
+room. Exact native IDs, PIDs, two messages per native conversation, private draft
+and explicit shared message were retained with no replay. Tests also exercised
+switching a retained Codex terminal's composition to GUI, without losing the
+original xterm or submitting the unfinished native prompt. CDP composition does
+not prove physical System Pinyin/WeChat behavior; earlier OS evidence is separate.
+
+The full local suite passes 237 checks, including owner changes, stale initial
+responses, pending interrupts, exact turn matching, connection shutdown, ACK
+storage failure and shared-history clearing during pending/new sends. A separate
+receive-order regression checks both initial/event orders in one actual IPC parser
+chunk. The UI restore check waits for the dialog to close and archive state to clear
+before inspecting the roster; clicking a button alone does not await its handler. Real UI
+IME and native-progress fixtures pass with synthetic providers and no model call.
+These fixtures supplement, rather than replace, the two real native tasks.
+
+Retained automatic reply routing remains disabled: old Claude submission ACKs
+lack a resulting turn ID, so temporal/text matching could expose an unrelated
+private reply. The direct shared send is locally persisted and explicitly labeled; viewing
+the recipient and selecting its reply is the supported continuation. Native
+Codex attachment checks that the original thread is loaded before subscribing,
+but the provider does not offer an atomic loaded-only resume contract. Neither
+this test nor a readonly pane proves full active-fleet migration or recovery of
+already overwritten terminal frames.

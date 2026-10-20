@@ -86,3 +86,12 @@ snapshots, draft/owner protection and UI reconnect. See `live-progress.md` for t
 real task and limitations. U17/U05 remain open for other old connections, including
 Codex and legacy shared/automatic dispatch; this narrower repair does not close
 all seamless-use acceptance.
+
+
+Alpha.26 extends the retained-session repair to Codex and explicit human-directed
+sharing on both providers. Two real cheap parent tasks and repeated source/installed
+lifecycle checks retain native identity/history and drafts. The final installed
+renderer and runtime files match the tested source. This closes the inspected
+input/raw-preview/manual-sharing subcases after independent delivery review;
+full U17/U05 remain open for other compatibility and active-fleet cases. Old
+Claude automatic reply routing still needs a reliable submit-to-turn contract.

@@ -197,7 +197,11 @@ class Rpc extends EventEmitter {
       if (message.method) this.emit('event', message);
       else if (this.pending.has(message.id)) {
         const p = this.pending.get(message.id); this.pending.delete(message.id); clearTimeout(p.timer);
-        message.error ? p.reject(new Error(`原生接口拒绝请求（${message.error.code}），请查看原生会话。`)) : p.resolve(message.result);
+        if (message.error) {
+          const error = new Error(`原生接口拒绝请求（${message.error.code}），请查看原生会话。`);
+          error.nativeMissingHistory = message.error.code === -32600 && /^no rollout found for thread id /.test(message.error.message || '');
+          p.reject(error);
+        } else p.resolve(message.result);
       }
     });
     ws.on('close', () => { for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('原生连接已断开；不会自动重发。')); } this.pending.clear(); this.emit('closed'); });
@@ -552,4 +556,4 @@ class NativeHost {
   close() { for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
-module.exports = { NativeHost, Terminal, Claude, Codex, executable, delay };
+module.exports = { NativeHost, Terminal, Claude, Codex, Rpc, executable, delay };

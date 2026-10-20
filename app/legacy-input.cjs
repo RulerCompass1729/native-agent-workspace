@@ -1,6 +1,7 @@
-// Explicit, same-process compatibility for the inspected alpha.2 Claude host.
+// Explicit, same-process compatibility for inspected alpha.2 native hosts.
 // Native hooks remain the sole writer of conversation history. This transport
-// records only dispatch metadata and never calls the old paste/Enter sender.
+// records dispatch metadata and explicitly shared text only. It never calls
+// the old paste/Enter sender or infers which native reply may be shared.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -8,10 +9,11 @@ const { EventEmitter } = require('node:events');
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
 const { supportsLegacyObservation } = require('./legacy-observation.cjs');
 const { processMayBeAlive, processIdentity } = require('./platform.cjs');
+const { LegacyCodex, eligibleCodex, retainedSocket } = require('./legacy-codex.cjs');
 
 function eligible(state, record) {
-  return supportsLegacyObservation(state, record) && /^[a-f0-9-]{36}$/i.test(record.nativeId || '')
-    && Number.isSafeInteger(record.pid) && record.pid > 1;
+  return eligibleCodex(state, record) || (supportsLegacyObservation(state, record) && /^[a-f0-9-]{36}$/i.test(record.nativeId || '')
+    && Number.isSafeInteger(record.pid) && record.pid > 1);
 }
 function privateDirectory(directory) {
   const stat = fs.lstatSync(directory);
@@ -53,7 +55,7 @@ function installPlugin(cwd) {
 class LegacyInput extends EventEmitter {
   constructor(dataDir) {
     super(); this.dataDir = dataDir; this.servers = new Map(); this.targets = new Map(); this.pendingPrepare = new Map();
-    this.filename = path.join(dataDir, 'legacy-dispatches.json'); this.records = []; this.closed = false;
+    this.filename = path.join(dataDir, 'legacy-dispatches.json'); this.records = []; this.closed = false; this.connecting = new Set();
     try { this.records = JSON.parse(fs.readFileSync(this.filename, 'utf8')); if (!Array.isArray(this.records)) throw Error('Invalid ledger'); }
     catch (e) { if (e.code !== 'ENOENT') this.storageError = true; }
   }
@@ -62,6 +64,18 @@ class LegacyInput extends EventEmitter {
     const temp = this.filename + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(this.records), { mode: 0o600 }); fs.renameSync(temp, this.filename);
   }
+  saveLink(entry, record) {
+    // Read at the synchronous commit point: another session may have connected
+    // while this one awaited its native handshake.
+    const filename = path.join(this.dataDir, 'legacy-links.json');
+    let links = []; try { links = JSON.parse(fs.readFileSync(filename, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (!Array.isArray(links)) throw Error('原会话连接记录无法读取。');
+    if (links.some(link => link.id === record.id && link.pid === record.pid && link.nativeId === record.nativeId)) return;
+    links.push({ id: record.id, pid: record.pid, nativeId: record.nativeId, key: entry.key });
+    const temp = filename + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
+    try { fs.writeFileSync(temp, JSON.stringify(links), { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, filename); }
+    finally { try { fs.unlinkSync(temp); } catch {} }
+  }
   target(record) {
     if (!record) return null;
     const t = this.targets.get(record.id);
@@ -69,6 +83,22 @@ class LegacyInput extends EventEmitter {
   }
   connected(record) { return !!this.target(record)?.submission.connected; }
   prepared(record) { return !!this.target(record); }
+  sharedMessages() {
+    return this.records.filter(row => row.shared === true).map(row => ({
+      id: row.id, role: 'human', recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
+      status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', manualReply: true,
+    }));
+  }
+  clearSharedHistory(ids = this.records.filter(row => row.shared === true).map(row => row.id)) {
+    const selected = new Set(ids);
+    const previous = this.records;
+    this.records = previous.map(row => {
+      if (!selected.has(row.id)) return row;
+      const { text, name, shared, ...metadata } = row; return metadata;
+    });
+    try { this.save(); } catch (error) { this.records = previous; throw error; }
+    this.emit('change');
+  }
   async prepare(entry, record) {
     if (this.closed) throw Error('窗口连接已关闭。');
     if (this.pendingPrepare.has(record.id)) return this.pendingPrepare.get(record.id);
@@ -79,16 +109,29 @@ class LegacyInput extends EventEmitter {
     const checkOpen = () => { if (this.closed) throw Error('窗口连接已关闭。'); };
     checkOpen();
     if (!eligible(entry.state, record) || record.processIdentity?.pid !== record.pid || !processMayBeAlive(record.processIdentity)) throw Error('原生会话状态已变化，未接入输入。');
-    if (this.target(record)) return true;
+    const existing = this.target(record);
+    if (existing && (!existing.native || existing.native.connected)) return true;
+    if (existing) { existing.submission.close(); this.targets.delete(record.id); }
     const connectionFile = path.join(this.dataDir, entry.key, 'connection.json');
     const stat = fs.lstatSync(connectionFile);
     if (stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw Error('原连接文件权限不安全。');
     const connection = JSON.parse(fs.readFileSync(connectionFile, 'utf8'));
     if (connection.pid !== entry.state.servicePid) throw Error('原连接已变化，未接入输入。');
     const directory = path.dirname(connection.endpoint); privateDirectory(directory);
-    const linksFile = path.join(this.dataDir, 'legacy-links.json');
-    let links = []; try { links = JSON.parse(fs.readFileSync(linksFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-    if (!Array.isArray(links)) throw Error('原会话连接记录无法读取。');
+    if (record.provider === 'codex') {
+      const native = new LegacyCodex(record), target = { record: { ...record }, submission: native, native };
+      this.connecting.add(native);
+      try {
+        await native.connect(retainedSocket(this.dataDir, entry, record)); checkOpen();
+        this.saveLink(entry, record);
+        this.targets.set(record.id, target);
+        native.on('change', () => this.emit('change'));
+        native.on('progress', update => this.emit('progress', { id: record.id, ...update }));
+        for (const event of ['complete', 'nativeInput', 'approval', 'failed', 'fleet']) native.on(event, (...args) => this.emit(event, record.id, ...args));
+      } catch (error) { native.close(); throw error; }
+      finally { this.connecting.delete(native); }
+      this.emit('change'); return true;
+    }
     installPlugin(record.cwd);
     let server = this.servers.get(directory);
     if (!server) {
@@ -112,18 +155,16 @@ class LegacyInput extends EventEmitter {
     const target = { record: { ...record }, submission, token, server, descriptor: path.join(directory, `gui-${record.nativeId}.json`) };
     target.beforeAuthorize = async () => { if (!target.refresh) throw Error('No active send'); await target.refresh(); };
     const temp = target.descriptor + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
-    const linksTemp = linksFile + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
     let published = false;
     try {
       checkOpen();
       fs.writeFileSync(temp, JSON.stringify({ sessionId: record.nativeId, socketPath: server.socket, token, compat: true }), { mode: 0o600, flag: 'wx' });
-      if (!links.some(link => link.id === record.id && link.pid === record.pid && link.nativeId === record.nativeId)) links.push({ id: record.id, pid: record.pid, nativeId: record.nativeId, key: entry.key });
-      fs.writeFileSync(linksTemp, JSON.stringify(links), { mode: 0o600, flag: 'wx' }); fs.renameSync(linksTemp, linksFile);
+      this.saveLink(entry, record);
       fs.renameSync(temp, target.descriptor); published = true;
       server.targets.set(token, target); this.targets.set(record.id, target);
       submission.on('change', () => this.emit('change'));
     } catch (error) {
-      for (const file of [temp, linksTemp, ...(published ? [target.descriptor] : [])]) try { fs.unlinkSync(file); } catch {}
+      for (const file of [temp, ...(published ? [target.descriptor] : [])]) try { fs.unlinkSync(file); } catch {}
       submission.close(); throw error;
     }
     this.emit('change'); return true;
@@ -136,7 +177,7 @@ class LegacyInput extends EventEmitter {
       if (record && eligible(entry.state, record)) await this.prepare(entry, record).catch(() => {});
     }
   }
-  async send(record, text, refresh, guard) {
+  async send(record, text, refresh, guard, shared = false) {
     const target = this.target(record);
     if (!target?.submission.connected) throw Error('原会话输入连接尚未就绪，草稿已保留。');
     if (typeof text !== 'string' || !text.trim() || text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw Error('请输入有效文字；一次最多 16,000 个字符。');
@@ -144,15 +185,28 @@ class LegacyInput extends EventEmitter {
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
     if (target.submission.pending) throw Error('上一条发送仍待确认。');
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
+    if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}` });
     this.records.push(row); this.save(); target.refresh = refresh;
     try {
-      const pending = target.submission.request(text, row.id, guard); this.emit('change'); await pending;
-      row.status = 'accepted'; this.save(); return row.id;
+      const pending = target.native ? target.native.send(text, row.id, refresh, guard) : target.submission.request(text, row.id, guard);
+      this.emit('change'); await pending;
+      // Clearing shared text may replace a pending ledger row while native
+      // acceptance is in flight. Update the retained metadata by stable ID.
+      const stored = this.records.find(record => record.id === row.id);
+      if (stored) stored.status = 'accepted';
+      try { this.save(); }
+      catch {
+        this.storageError = true;
+        this.storageWarning = '原生会话已接收消息，但本地发送记录未能保存。请在原生会话核对；没有重发，后续发送暂停。';
+      }
+      return row.id;
     } finally { target.refresh = null; this.emit('change'); }
   }
   close() {
     this.closed = true;
-    for (const t of this.targets.values()) { t.submission.close(); try { fs.unlinkSync(t.descriptor); } catch {} }
+    for (const native of this.connecting) native.close();
+    this.connecting.clear();
+    for (const t of this.targets.values()) { t.submission.close(); if (t.descriptor) try { fs.unlinkSync(t.descriptor); } catch {} }
     for (const s of this.servers.values()) { s.transport.server.closeAllConnections(); s.transport.server.close(() => { try { fs.unlinkSync(s.ownerFile); } catch {} }); }
     this.targets.clear(); this.servers.clear();
   }

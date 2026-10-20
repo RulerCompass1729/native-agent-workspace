@@ -32,8 +32,10 @@ function renderProgressPanels() {
     let panel = progressPanels.get(record.id);
     if (!panel) { panel = new NativeProgressPanel(record.id, progressReading.get(record.id)); progressPanels.set(record.id, panel); }
     if (panel.element.parentElement !== container) container.append(panel.element);
-    panel.update(record, record.legacyObservation || (record.serviceCapabilities || state.capabilities || []).includes("observe"), !disconnected);
+    panel.update(record, record.legacyObservation || record.legacyProgress || (record.serviceCapabilities || state.capabilities || []).includes("observe"), !disconnected);
+    if (record.provider === 'codex' && record.runtimeVersion === '0.1.0-alpha.2') panel.useNativeEntry(terminals.get(record.id));
   }
+  for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id));
 }
 
 const inputRecoveries = new Map();
@@ -125,6 +127,7 @@ function soloAction(s) {
     ? { kind: 'resume', label: '继续原生会话', hint: '记录和草稿已保留；恢复不会重发旧任务。' }
     : { kind: 'none', label: '暂不可发送', hint: '请检查原生会话状态。记录和草稿保留，不会自动重发。' };
   if (s.owner !== owner) return { kind: 'claim', label: '接管此窗口', hint: '此窗口只读。接管后继续使用原会话，草稿保留。' };
+  if (s.chatAvailable === false && s.legacyInputEligible && s.provider === 'codex') return { kind: 'connect', label: '接通原会话输入', hint: '连接正在运行的原生 Codex 会话，保留上下文、模型与权限设置；不会新建对话。' };
   if (s.chatAvailable === false && s.legacyInputEligible) return s.legacyInputPrepared
     ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
     : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
@@ -229,7 +232,7 @@ async function showTrust() {
   section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。每轮核查由你确认 2–6 次回复上限和 10 分钟期限；原生工具和子 agent 的用量不受这些交接限制约束。');
   const dispatches = snapshot.diagnostics?.dispatches;
   section('应用派发记录', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。包含未确认或被拒绝的尝试，不代表付费调用；不含原生终端直接输入，也不是总用量或账单。普通后台计数从本次运行开始，旧会话输入连接保留本地发送计数。`);
-  if (snapshot.sessions.some(s => s.legacyInputEligible)) section('原会话输入连接', '只有点击“接通原会话输入”才在该工作目录添加 .claude/skills/native-workspace-compat 本地插件。插件代码不含凭据；连接凭据在本机私有目录。加载插件和切换界面不发起模型任务，不重启原会话。');
+  if (snapshot.sessions.some(s => s.legacyInputEligible)) section('原会话输入连接', '接通 Claude 会在其工作目录添加本地插件，代码不含凭据；Codex 连接原生私有接口，不安装 Claude 插件。连接凭据留在本机私有目录。加载插件和切换界面不发起模型任务。独立输入仅记录派发元数据；你明确共享的正文、收件人名称会本地保存。清除共享记录会移除这些正文，保留派发计数；不会撤回 agent 已收到的内容。');
   const usage = section('原生报告的用量', '以下是原生接口报告的累计 token；可能延迟或缺少子任务，不是账单。金额请在原生提供商账户核对。');
   for (const s of snapshot.sessions) {
     const total = s.usage?.total;
@@ -592,6 +595,7 @@ function render() {
       $('forward-button').disabled = nativeRoute ? roomSubmitting || disconnected : unavailable || !ready(recipient);
       $('run-button').disabled = unavailable || !recipient || people.length !== 2 || !people.every(ready) || run?.status === 'running' || !safeHandoffs;
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
+      if (recipient?.legacyShare) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
       if (nativeRoute) $('run-help').textContent = '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
       $('pause-button').disabled = run?.status !== 'running';
@@ -772,7 +776,7 @@ function fitTerminal(id) {
   if (!entry?.ready || activeSessionId() !== id || mode !== 'terminal' || s?.owner !== owner) return;
   requestAnimationFrame(() => { if (activeSessionId() !== id || mode !== 'terminal' || !entry.element.isConnected || !entry.element.checkVisibility() || state.sessions.find(s => s.id === id)?.owner !== owner) return; entry.fit.fit(); attempt(() => api.resize(id, entry.term.cols, entry.term.rows)); });
 }
-function writeTerminal(entry, event) { if (event.sequence > entry.sequence) { entry.term.write(event.data); entry.sequence = event.sequence; } }
+function writeTerminal(entry, event) { if (event.sequence > entry.sequence) { entry.term.write(event.data, () => progressPanels.get(event.id)?.followNativeEntry()); entry.sequence = event.sequence; } }
 const disposers = [
   api.onProgress(event => progressPanels.get(event.id)?.receiveProgress(event)),
   api.onTerminal(event => { progressPanels.get(event.id)?.receive(event); const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
@@ -858,6 +862,13 @@ $('send-button').onclick = () => attempt(async () => {
     const revision = selectionRevision;
     await api.prepareInput(s.id);
     if (revision !== selectionRevision || current()?.id !== s.id) return;
+    if (s.provider === 'codex') {
+      const fresh = await api.initial();
+      if (revision !== selectionRevision || current()?.id !== s.id) return;
+      updateState(fresh); render();
+      if (mode === 'chat' && inputFocusAllowed() && !$('message-input').readOnly) $('message-input').focus();
+      return;
+    }
     await switchMode('terminal');
     if (current()?.id === s.id && mode === 'terminal') toast('请在此会话运行 /reload-plugins；连接成功后即可切回对话输入。');
   }

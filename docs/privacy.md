@@ -1,6 +1,6 @@
 # Local alpha privacy and release conditions
 
-As of 2026-10-18. The macOS alpha runs locally. There is no product account
+As of 2026-10-19. The macOS alpha runs locally. There is no product account
 system, cloud sync, analytics service, remote crash upload or shell model call.
 The renderer permits network requests only to its local DSH host. The UI host
 mounts an explicit UI composition; model/tool/account/telemetry plugins are not
@@ -30,6 +30,15 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   Explicitly shared background can include visible room/session names; its text
   can be reviewed and edited before sending. Native titles, history and stored
   original author labels are not renamed; the UI can display current aliases.
+- legacy-links.json holds explicit same-process connection references, not
+  credentials. Retained Claude uses a local project plugin; retained Codex uses
+  its existing private native socket. legacy-dispatches.json keeps submission
+  metadata for private input. **Explicitly shared** submissions additionally
+  store their text and recipient name locally, with acceptance status. Replies
+  are not inferred or automatically copied from retained sessions. Clearing
+  shared records strips the selected rows' text/name/sharing flag while retaining
+  dispatch accounting. A later submission is not part of that earlier clear.
+  Provider history and material already delivered to another agent remain separate.
 - room-state.json contains the room name, human-written shared notes and their
   saved versions, confirmed membership events, archive indexes and the original
   member IDs for explicit restoration. Its file is owner-only. These are local
@@ -74,7 +83,8 @@ polled or saved as clipboard history.
 
 The dispatch count includes application sends and collaboration handoffs. It does
 not include direct native TUI input, every underlying model request, tools or
-teammates, and it resets when the backend restarts. A failed/unconfirmed dispatch
+teammates. Native-service counters reset on backend restart; the retained-session
+compatibility ledger persists its dispatch count across UI restarts. A failed/unconfirmed dispatch
 can still be counted. Native tokens can be missing, stale or incomplete for a
 fleet. Unknown values say **未报告**, not zero. The app does not calculate a dollar
 charge or claim equal cost to direct native use; verify charges in the provider's

@@ -92,6 +92,8 @@ function messageList(el, messages, room = false, key = 'room') {
       actions.append(button('复制', () => api.copy(entry.message.text)));
       entry.share = button('选择并分享', () => share(entry.message.text)); actions.append(entry.share);
       if (room) {
+        entry.openRecipient = button('查看会话', () => select(entry.message.recipientId, 'chat'));
+        actions.append(entry.openRecipient);
         entry.context = button('查看上下文', () => {
           $('room-search').value = ''; $('room-filter').value = ''; renderTimeline();
           const original = view.entries.get(m.id)?.item;
@@ -112,14 +114,16 @@ function messageList(el, messages, room = false, key = 'room') {
     let name = participant ? (m.role === 'human' ? `你 → ${participantLabel(participant, state.sessions)}` : participantLabel(participant, state.sessions)) : m.name;
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
     if (m.role === 'system' && !m.sessionId) name = '工作区';
-    const headingKey = JSON.stringify([name, m.status, room && m.time]);
+    const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply]);
     if (entry.headingKey !== headingKey) {
       entry.heading.replaceChildren(node('strong', name)); entry.headingKey = headingKey;
       if (room && Number.isFinite(m.time)) { const time = node('time', new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); time.title = new Date(m.time).toLocaleString(); entry.heading.append(time); }
       const status = { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '正在回复', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
       if (status) entry.heading.append(node('span', status));
+      else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
     }
     entry.share.hidden = m.role === 'system';
+    if (entry.openRecipient) entry.openRecipient.hidden = !m.manualReply || !state.sessions.some(s => s.id === m.recipientId && !s.archived);
     if (entry.context) entry.context.hidden = !($('room-search').value || $('room-filter').value);
     if (entry.text !== m.text || entry.role !== m.role || entry.streaming !== (m.status === 'streaming')) {
       if (entry.role && entry.role !== m.role) ui.clearMarkdown(entry.body);

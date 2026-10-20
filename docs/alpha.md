@@ -1154,3 +1154,32 @@ A25-1 through A25-5 only. The normal UI was quit for safe replacement and is lef
 for the person to reopen, avoiding a forced foreground/Space switch. Original
 native work continues independently. The package remains locally signed and
 unnotarized; this is not a public release or a universal security certification.
+
+
+## Alpha.26 retained Codex and explicit shared work
+
+The inspected alpha.2 Codex session can explicitly connect its existing native
+server for GUI input, preserving the original thread and settings. Its live pane
+reuses the already opened terminal; observation never creates a second native
+process through the old snapshot API. Retained Claude/Codex sessions can receive
+explicit selected shared text, with private replies selected manually before any
+further share. Old automatic routing stays gated.
+
+Real evidence: one Luna file task and one Haiku 5.5 check (Claude CLI 2.1.304),
+then two source and two final-installed lifecycle cycles without another model
+turn. Final local suite: 237/237. Final installed input regression: eight groups,
+zero model tasks, physical OS foreground test skipped to preserve the user's
+Space. Final installed progress regression: five groups, synthetic P95 18 ms over
+204 paint samples, zero native open/input/resize/send operations. A final UI
+walkthrough opens the receiving conversation, original terminal and editable GUI
+draft. It does not claim that this navigation identifies a task-correlated reply.
+The user's existing three native sessions and stored view/draft/history hashes
+remain unchanged. System application search resolves one installed daily app.
+
+The final artifact passes signature, ZIP checksum/CRC and source/generated-client
+identity checks. This is local ad-hoc signing, not notarization. The source includes
+an independently reproduced IPC receive-order repair: delayed initial results
+cannot overwrite newer membership/messages/permissions. A separate early UI test
+failure was corrected by waiting for the actual restore handler to finish; it is
+not evidence of that IPC defect. Raw evidence and video remain private. See
+[retained continuity details](testing.md#retained-session-continuity--alpha26).

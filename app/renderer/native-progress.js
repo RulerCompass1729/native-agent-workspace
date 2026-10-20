@@ -8,7 +8,15 @@ class NativeProgressPanel {
     this.summary.append(this.heading, this.status);
     this.notice = node('p', '', 'quiet progress-notice'); this.notice.setAttribute('role', 'status');
     this.viewport = node('div', undefined, 'progress-viewport'); this.surface = node('div', undefined, 'progress-screen'); this.viewport.append(this.surface); this.followScreen = saved.followScreen !== false;
-    this.viewport.addEventListener('scroll', () => { this.followScreen = this.viewport.scrollTop + this.viewport.clientHeight >= this.viewport.scrollHeight - 4; });
+    const reading = () => { this.userScrollingUntil = performance.now() + 700; };
+    this.viewport.addEventListener('wheel', reading, { passive: true });
+    this.viewport.addEventListener('pointerdown', reading);
+    this.viewport.addEventListener('keydown', reading);
+    this.viewport.addEventListener('scroll', () => {
+      // Mounting/reparenting an xterm can generate a scroll at zero. Only the
+      // person's scroll gesture changes follow mode; layout must not do so.
+      if (!this.borrowed || performance.now() < this.userScrollingUntil) this.followScreen = this.viewport.scrollTop + this.viewport.clientHeight >= this.viewport.scrollHeight - 4;
+    });
     this.range = node('input'); this.range.type = 'range'; this.range.min = '0'; this.range.max = '0'; this.range.max = String(saved.target || 0); this.range.value = String(saved.target || 0); this.epoch = saved.epoch; this.range.setAttribute('aria-label', '回看原生过程');
     this.position = node('span', '实时', 'quiet');
     this.controls = node('div', undefined, 'progress-controls');
@@ -17,6 +25,36 @@ class NativeProgressPanel {
     this.trace = node('details', undefined, 'progress-trace'); this.traceSummary = node('summary', '运行记录'); this.traceList = node('div'); this.trace.append(this.traceSummary, this.traceList); this.trace.open = !!saved.traceOpen; this.savedScroll = saved.scroll; this.traceChosen = typeof saved.traceOpen === 'boolean';
     this.traceSummary.addEventListener('click', () => { this.traceChosen = true; });
     this.element.append(this.summary, this.notice, this.viewport, this.controls, this.trace);
+  }
+  useNativeEntry(entry) {
+    if (!entry?.ready) return;
+    this.borrowed = entry;
+    entry.element.hidden = false;
+    entry.element.classList.add('terminal-mirror');
+    const screen = entry.term.element.querySelector('.xterm-screen');
+    entry.element.style.width = screen.style.width; entry.element.style.height = screen.style.height;
+    if (entry.element.parentElement !== this.viewport) this.viewport.append(entry.element);
+    this.viewport.hidden = false; this.surface.hidden = true; this.controls.hidden = true;
+    this.notice.textContent = '同一原生终端的实时画面 · 仅你可见；在下方对话框输入，或切回原生终端操作。';
+    if (!this.borrowedActions) {
+      this.borrowedActions = node('div', undefined, 'progress-controls');
+      this.borrowedActions.append(button('复制选中内容', () => api.copy(this.borrowed?.term.getSelection() || '')),
+        button('操作终端', () => selected === 'room' ? selectRoom(this.id) : select(this.id, 'terminal')));
+      this.viewport.after(this.borrowedActions);
+    }
+    this.followNativeEntry();
+  }
+  followNativeEntry() {
+    requestAnimationFrame(() => {
+      if (!this.disposed && this.borrowed && this.followScreen && !this.borrowed.term.hasSelection()) this.viewport.scrollTop = this.viewport.scrollHeight;
+    });
+  }
+  releaseNativeEntry() {
+    if (!this.borrowed) return;
+    const entry = this.borrowed; this.borrowed = null;
+    entry.element.classList.remove('terminal-mirror');
+    entry.element.style.width = ''; entry.element.style.height = '';
+    $('terminal-area').append(entry.element);
   }
   update(record, capable, connected = true) {
     this.connected = connected;
@@ -49,6 +87,7 @@ class NativeProgressPanel {
         if (!wasLive && !retained) this.notice.textContent = '此前回看位置已移出缓存，显示当前最早保留画面。';
         if (!(this.selectionHeld && this.term.hasSelection())) this.replay(wasLive ? this.index : retained ? Math.min(previousTarget, this.index) : this.checkpoint.index);
       }
+      if (this.borrowed) this.useNativeEntry(this.borrowed);
     } catch { if (!this.disposed && this.connected !== false) this.notice.textContent = '实时连接暂不可用，原生会话未改动。'; }
     finally {
       this.loading = false;
@@ -192,5 +231,5 @@ class NativeProgressPanel {
     for (const row of existing.values()) row.remove();
   }
   readingState() { return { live: this.live, epoch: this.epoch, target: Number(this.range.value), open: this.element.open, traceOpen: this.trace.open, scroll: this.term ? this.viewport.scrollTop : undefined, followScreen: this.followScreen }; }
-  dispose() { this.disposed = true; this.paintRevision++; api.unobserve(this.id).catch(() => {}); this.term?.dispose(); this.element.remove(); this.pendingEvents = []; this.pendingReplay = null; this.paintPending = []; }
+  dispose() { this.disposed = true; this.paintRevision++; this.releaseNativeEntry(); api.unobserve(this.id).catch(() => {}); this.term?.dispose(); this.element.remove(); this.pendingEvents = []; this.pendingReplay = null; this.paintPending = []; }
 }

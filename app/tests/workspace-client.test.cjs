@@ -4,6 +4,29 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+test('a delayed initial response cannot reverse newer membership, messages or permission state', async () => {
+  const { ServiceClient } = require('../service-client.cjs');
+  for (const newerRead of [false, true]) {
+    const socket = new EventEmitter(), writes = [];
+    socket.setEncoding = () => {}; socket.write = text => writes.push(JSON.parse(text));
+    socket.end = () => socket.emit('close');
+    const client = new ServiceClient(socket);
+    const initial = { owner: 'view', capabilities: [], sessions: [{ id: 'one', provider: 'claude', state: 'idle' }], room: { messages: [] } };
+    const entry = { key: 'one', client, state: initial }, c = new WorkspaceClient([entry], 'one');
+    const pending = c.refresh();
+    const fresh = structuredClone(initial);
+    Object.assign(fresh.sessions[0], { roomId: 'shared', memberRevision: 2, state: 'approval',
+      approval: { requestId: 'current' }, messages: [{ id: 'new-message', text: 'Current native result' }] });
+    const reply = { id: writes[0].id, ok: true, value: newerRead ? fresh : initial };
+    const event = { event: 'state', data: newerRead ? initial : fresh };
+    // Both lines arrive before the resolved promise resumes. Verify both orders:
+    // a later event wins, and a later read is not dropped merely due to an event.
+    socket.emit('data', (newerRead ? [event, reply] : [reply, event]).map(JSON.stringify).join('\n') + '\n');
+    await pending;
+    assert.deepEqual(entry.state.sessions, fresh.sessions);
+    c.close();
+  }
+});
 test('late initial replies cannot overwrite a replaced connection or carry queued creation across it', async () => {
   for (const method of ['initial', 'create']) {
     const { c, next } = fixture(); let release;

@@ -10,13 +10,15 @@ const { processMayBeAlive } = require('./platform.cjs');
 
 class ServiceClient extends EventEmitter {
   constructor(socket) {
-    super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); let buffer = '';
+    super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); let buffer = '', received = 0;
     socket.setEncoding('utf8');
     socket.on('data', chunk => {
       buffer += chunk;
       if (buffer.length > 16 * 1024 * 1024) return socket.destroy();
       for (let end; (end = buffer.indexOf('\n')) >= 0;) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1); let m; try { m = JSON.parse(line); } catch { socket.destroy(); return; }
+        const value = m.event ? m.data : m.value;
+        if (value && typeof value === 'object') this.receipts.set(value, ++received);
         if (m.ready) this.emit('ready');
         else if (m.event) this.emit(m.event, m.data);
         else if (this.pending.has(m.id)) { const p = this.pending.get(m.id); this.pending.delete(m.id); clearTimeout(p.timer); m.ok ? p.resolve(m.value) : p.reject(new Error(m.error)); }
@@ -25,6 +27,7 @@ class ServiceClient extends EventEmitter {
     socket.on('error', () => {});
     socket.on('close', () => { for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('本地运行服务断开；原输入不会自动重发。')); } this.pending.clear(); this.emit('closed'); });
   }
+  receivedOrder(value) { return this.receipts.get(value); }
   call(method, ...args) {
     return new Promise((resolve, reject) => {
       if (this.socket.destroyed) return reject(new Error('本地服务未连接。'));

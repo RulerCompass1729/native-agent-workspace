@@ -1,12 +1,13 @@
 # Readiness and next gates
 
-As of 2026-10-19. Version 0.1.0-alpha.25 is a **local macOS technical-trial alpha**.
+As of 2026-10-19. Version 0.1.0-alpha.26 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.25 repairs the inspected retained Claude input and
-snapshot path. Alpha.24 adds private native TUI observation and bounded
+**Current increment:** alpha.26 adds retained Codex input and the same existing
+terminal in conversation/room views, plus explicit directed sharing for retained
+Claude/Codex sessions. Alpha.25 repairs the retained Claude input and snapshot path. Alpha.24 adds private native TUI observation and bounded
 rewind/tool traces to both solo and room views. Protocol, real Electron and visible
 native-task evidence are described in [live-progress.md](live-progress.md).
 The native terminal remains the authority; not every structured tool payload or
@@ -23,8 +24,11 @@ structured coverage. Input continuity must also be verified on that same session
 Alpha.25 adds an explicit same-process input connection and readonly snapshot
 observation for retained alpha.2 Claude sessions. Click the connection action,
 then run native `/reload-plugins` once if needed; never automatically force a
-reload. This preserves the live PID, native ID, history and drafts. Old Codex
-connections and old automatic/shared dispatch remain capability-gated. Older
+reload. This preserves the live PID, native ID, history and drafts. Alpha.26 adds an explicit connection to the already loaded native Codex thread,
+without model/permission overrides or another agent process. Its GUI live pane
+borrows the existing terminal; it never calls the old snapshot API to create one.
+Both retained providers support explicit directed sharing; their replies require
+human selection before further sharing. Old automatic handoffs remain gated. Older
 missing intermediate frames cannot be reconstructed. These are bounded repairs,
 not a claim that every retained backend supports all current features.
 

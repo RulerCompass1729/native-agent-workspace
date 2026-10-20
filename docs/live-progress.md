@@ -197,3 +197,16 @@ Plugin API references checked on 2026-10-19:
 [reload](https://code.claude.com/docs/en/plugins/cli-reference#reload-plugins),
 [project loading](https://code.claude.com/docs/en/plugins/loading),
 [native prompt API](https://code.claude.com/docs/en/plugins/mods/api).
+
+
+## alpha.26：保留中的 Codex 与明确共享
+
+旧 alpha.2 Codex 的原生终端如果已经打开，图形对话及协作区复用同一个 xterm
+实时画面，不用旧 snapshot 接口创建另一个终端，不改变原尺寸或抢占输入。
+滚动框可查看完整现有屏幕；接入前消失的临时状态不能补造。明确接通输入后，
+GUI 通过原 native server 向原 thread 提交，保留模型与权限设置；未确认原会话
+仍已加载时不接通。原生接口缺少原子 loaded-only resume，不能宣传为纯被动订阅。
+
+旧 Claude/Codex 可接收真人预览选定的共享内容，记录只保存这次明确共享的文字。
+回复仍留在原会话，点击「查看会话」后选中分享；不依据时间或文字猜测私人回复
+属于共享任务。此限制在原生提供可靠的提交回合关联后才可进一步解除。

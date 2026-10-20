@@ -25,6 +25,12 @@ solo and collaboration views. Viewing does not open another agent or send contex
 Old live backends retain their existing capabilities; this is not seamless active
 backend migration. See [native visibility and its limits](docs/live-progress.md).
 
+Alpha.26 adds explicit input connections for inspected retained Claude/Codex
+sessions, preserving their native identities. Both can receive a selected shared
+message; replies from these older backends require human selection before sharing.
+Codex conversation/room previews reuse its existing terminal instead of launching
+another agent. See [retained-session evidence](docs/testing.md#retained-session-continuity--alpha26).
+
 Claude conversation/room sends now use its native structured submission API,
 with a draft check and no terminal paste/Enter injection. This requires Claude
 Code 2.1.302+ and enabled session-local mods. An older retained backend keeps its
