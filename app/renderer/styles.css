@@ -182,6 +182,8 @@ header h1, header p { overflow-wrap: anywhere; }
 .native-progress>summary { padding:9px 12px; cursor:pointer; display:flex; align-items:center; gap:12px; }
 .native-progress>summary .quiet { margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .progress-notice { margin:0; padding:4px 12px 8px; font-size:10px; }
+.progress-fleet { padding:10px 12px; border-top:1px solid var(--border); font-size:12px; display:grid; gap:6px; }
+.progress-fleet-row { display:flex; justify-content:space-between; gap:12px; overflow-wrap:anywhere; }
 .progress-viewport { overflow:auto; max-height:210px; background:#191b1e; }
 .progress-screen { padding:6px; }
 .progress-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:6px 10px; }

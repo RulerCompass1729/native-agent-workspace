@@ -426,8 +426,11 @@ class Codex extends EventEmitter {
     if (this.stopped) return;
     if (['item/started', 'item/completed'].includes(message.method) && p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) {
       const item = p.item;
+      const fleetActivity = item.type === 'subAgentActivity';
+      const fleetTitle = { started: '子任务已启动', completed: '子任务本轮已结束', interacted: '已联系子任务' }[item.kind] || '原生团队活动';
       this.emit('progress', { id: item.id, turnId: p.turnId, source: 'codex-native', kind: item.type,
-        title: item.command || item.tool || item.type, status: message.method === 'item/started' ? 'running' : item.status || 'completed',
+        title: fleetActivity ? `${fleetTitle}${item.agentPath ? ' · ' + item.agentPath : ''}` : item.command || item.tool || item.type,
+        status: fleetActivity ? 'observed' : message.method === 'item/started' ? 'running' : item.status || 'completed',
         ...(typeof item.aggregatedOutput === 'string' ? { text: item.aggregatedOutput } : {}),
       });
     }

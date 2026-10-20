@@ -1026,3 +1026,40 @@ pass against both source and the final installed adapter. All 372 unit checks pa
 Seven final affected installed runners pass: native confirmation, control focus,
 reconnect, solo use, room sending, input/composition and draft ownership. Final
 independent delivery review is recorded in review.md. Original user sessions and stored profile hashes remain unchanged.
+
+
+## Observed native child continuity — alpha.42
+
+The next native-fleet gate began with actual Codex 0.163.0 using a local synthetic
+Responses endpoint. It reproduced a misleading display: the root had replied,
+its child was still running, but the UI said ready and the spawn activity's
+completed envelope appeared as finished work. Alpha.42 labels that envelope as
+an observed start, shows the last known child state in existing solo/room progress,
+and distinguishes root readiness from child activity. It does not add model calls,
+team controls, polling queries, shared child messages or fleet completion inference.
+
+The final installed run submitted one root task and created one actual native
+child, making exactly three loopback Responses requests. The fixed child response
+was held while the UI joined a room, left it, saved a Chinese draft, closed and
+reopened. Native root/child IDs, child activity and the unsent draft survived;
+reopening made no new provider request or task dispatch. Releasing the response
+produced the native child completion event and the UI changed to “本轮已结束”.
+No private child event became a shared message. Screenshots, full native events
+and an approximately nine-second app-frame recording stay private. This verifies
+the native runtime/protocol with synthetic inference, not model quality/billing.
+Early probes used unsupported function-call namespace shapes; a later fixture
+misclassified child input and replied too early. Those attempts are not passes.
+All inference in these probes used the explicit loopback provider, not paid APIs.
+Playwright's optional video launch twice failed to expose the app DOM; normal
+hidden launch and timestamped app screenshots were used for the final recording.
+No macOS Space was brought to the foreground for this test.
+
+All 379 unit checks pass, including same-name child identity, unrelated task
+completion, contact-versus-start, stale legacy/transport/cold state, latest-eight
+ordering and the actual native start/completed envelope shape. Seven source
+progress groups pass. Final installed progress, control-focus, reconnect and
+collaboration checks cover the affected surfaces; complete logs remain private.
+Claude lifecycle interpretation has hook fixtures here, not a new live Teams run.
+An observed completion describes that child's turn, not success, process exit or
+full fleet termination. The 80-event window and latest-eight view are incomplete;
+old retained services without freshness metadata remain explicitly unknown.

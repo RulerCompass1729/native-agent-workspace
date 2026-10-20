@@ -96,6 +96,11 @@ async function run() {
   await panel(a).getByRole('slider').fill(String(temporary));
   await until(async () => (await screen(a)).lines.some(line => line.includes('TEMPORARY')), 'Rewind before navigation');
   const b = await create('codex');
+  await fixture('fleet', b, { event: 'subAgentActivity', kind: 'started', nativeId: 'synthetic-child', name: '/root/check', model: 'synthetic-small' });
+  await until(async () => (await page.locator('#session-status').innerText()).includes('1 个子任务进行中'), 'Root-ready status retains child activity');
+  assert.equal(await panel(b).locator('[data-child-id="synthetic-child"]').innerText(), '/root/check\n任务进行中');
+  await fixture('fleet', b, { event: 'TaskCompleted', id: 'synthetic-child', name: 'task-complete' });
+  assert.ok((await page.locator('#session-status').innerText()).includes('1 个子任务进行中'), 'Task event is not child completion');
   await page.locator(`[data-session-id="${a}"]`).click();
   await until(async () => (await screen(a))?.lines.some(line => line.includes('TEMPORARY')), 'Rewind survives session switch');
   await panel(a).getByRole('button', { name: '回到实时', exact: true }).click(); await aligned(a);
@@ -104,6 +109,15 @@ async function run() {
   await page.locator(`[data-session-id="${a}"]`).click(); await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await until(async () => await page.locator('#room-progress .xterm').count() === 2, 'Both observers visible');
+  assert.ok((await panel(b).locator(':scope > summary').innerText()).includes('1 个子任务进行中'));
+  assert.equal(await panel(b).locator('[data-child-id="synthetic-child"]').innerText(), '/root/check\n任务进行中');
+  await fixture('connection', b, 'disconnected'); await fixture('connection', b, 'idle');
+  await until(async () => (await panel(b).locator('[data-child-id="synthetic-child"]').innerText()).includes('状态待核对'), 'Reconnect cannot turn historical child state into live evidence');
+  await fixture('fleet', b, { event: 'subAgentActivity', kind: 'completed', nativeId: 'synthetic-child', name: '/root/check' });
+  await until(async () => (await panel(b).locator('[data-child-id="synthetic-child"]').innerText()).includes('本轮已结束'), 'Only native child completion updates its row');
+  assert.ok((await panel(b).locator(':scope > summary').innerText()).includes('主会话就绪'));
+  assert.ok(!(await snapshot()).room.messages.some(m => String(m.text).includes('/root/check')), 'Private team observations are never shared messages');
+  checks.push('Solo and room retain observed native child state; unrelated task completion cannot finish a child; reconnect marks stale until a new native lifecycle event; no shared payload or model query');
   await until(async () => await panel(b).locator('.progress-viewport').evaluate(el => el.scrollHeight <= el.clientHeight || el.scrollTop + el.clientHeight >= el.scrollHeight - 4), 'New live view starts at current output');
   await panel(b).locator('.progress-viewport').evaluate(el => { el.scrollTop = 0; }); await delay(80);
   await fixture('output', b, { data: 'Keep reading above\r\n' }); await aligned(b);

@@ -7,6 +7,7 @@ class NativeProgressPanel {
     this.summary = node('summary'); this.heading = node('strong'); this.status = node('span', '', 'quiet');
     this.summary.append(this.heading, this.status);
     this.notice = node('p', '', 'quiet progress-notice'); this.notice.setAttribute('role', 'status');
+    this.fleet = node('div', undefined, 'progress-fleet'); this.fleet.hidden = true;
     this.viewport = node('div', undefined, 'progress-viewport'); this.surface = node('div', undefined, 'progress-screen'); this.viewport.append(this.surface); this.followScreen = saved.followScreen !== false;
     const reading = () => { this.userScrollingUntil = performance.now() + 700; };
     this.viewport.addEventListener('wheel', reading, { passive: true });
@@ -29,7 +30,7 @@ class NativeProgressPanel {
     // A new panel has no frame to display yet. In particular, selecting an
     // already-ended session must not manufacture an empty "last screen".
     this.viewport.hidden = true; this.controls.hidden = true; this.trace.hidden = true;
-    this.element.append(this.summary, this.notice, this.viewport, this.controls, this.trace);
+    this.element.append(this.summary, this.fleet, this.notice, this.viewport, this.controls, this.trace);
   }
   useNativeEntry(entry) {
     if (!entry?.ready) return;
@@ -75,7 +76,20 @@ class NativeProgressPanel {
     this.latestButton.textContent = connected ? '回到实时' : '最后画面';
     if (!connected && this.live) this.position.textContent = '最后画面';
     this.heading.textContent = record.name;
-    this.status.textContent = states[record.state] + (record.activity ? ' · ' + record.activity : '');
+    this.status.textContent = window.nativeWorkspaceFleet.fleetStatus(record, states[record.state], connected) + (record.activity ? ' · ' + record.activity : '');
+    const observed = window.nativeWorkspaceFleet.observedFleet(record, connected);
+    this.fleet.hidden = !observed.observed;
+    const signature = JSON.stringify(observed);
+    if (signature !== this.fleetSignature) {
+      this.fleetSignature = signature;
+      const children = observed.children.slice(-8).map(child => {
+        const row = node('div', undefined, 'progress-fleet-row'); row.dataset.childId = child.id;
+        row.append(node('span', child.name), node('span', { running: '任务进行中', completed: '本轮已结束', unknown: '状态待核对' }[child.status], 'quiet'));
+        return row;
+      });
+      this.fleet.replaceChildren(node('strong', '原生子任务'), ...children,
+        node('small', observed.children.length ? `最近观察${observed.children.length > 8 ? ' · 显示最近 8 项' : ''}，非完整团队清单；仅你可见。` : '已收到团队活动；原生未提供可关联的成员状态。', 'quiet'));
+    }
     if (!connected) {
       const hasFrame = !!(this.checkpoint || this.borrowed);
       this.status.textContent = hasFrame ? '已断开 · 最后收到的画面' : record.state === 'ended' ? states.ended : '已断开';

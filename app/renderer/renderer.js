@@ -4,6 +4,7 @@ const $ = id => document.getElementById(id);
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 const button = (text, action, cls) => { const el = node('button', text, cls); el.type = 'button'; el.addEventListener('click', () => attempt(action)); return el; };
 const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', error: '需要检查' };
+const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, states[record.state], !disconnected);
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
@@ -325,11 +326,11 @@ function renderSessions() {
       element.addEventListener('keydown', event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openSessionMenu(record.id); } });
       element.append(link, more); row = { element, link, more, name, status, dot }; sessionRows.set(record.id, row);
     }
-    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[record.state]}`;
+    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionStatus(record)}`;
     row.link.setAttribute('aria-label', label); row.link.title = label;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     row.more.setAttribute('aria-label', `会话操作：${record.name}`); row.more.title = `会话操作：${record.name}`; row.more.disabled = disconnected;
-    row.name.textContent = record.name; row.status.textContent = `${states[record.state]}${record.roomId ? ' · 协作中' : ''}`; row.dot.className = `state-dot ${record.state}`;
+    row.name.textContent = record.name; row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}`; row.dot.className = `state-dot ${record.state}`;
     // Keep existing DOM nodes: native state updates must not remove a focused
     // row or its open menu anchor every 35 ms.
     const slot = $('session-list').children[index]; if (slot !== row.element) $('session-list').insertBefore(row.element, slot || null);
@@ -621,7 +622,7 @@ function renderMembers() {
       actions.append(button('查看终端', () => { $('members-dialog').close(); selectRoom(record.id); }), button('脱出', async () => { await detach(record.id); $('members-dialog').close(); }));
       element.append(heading, status, actions); row = { element, name, status }; memberRows.set(record.id, row);
     }
-    row.name.textContent = record.name; row.status.textContent = states[record.state];
+    row.name.textContent = record.name; row.status.textContent = sessionStatus(record);
     const slot = list.children[index]; if (slot !== row.element) list.insertBefore(row.element, slot || null);
   });
 }
@@ -665,7 +666,7 @@ function render() {
     renderHeader(s, inRoom);
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
-      $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${states[s.state]}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
+      $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
       $('take-control').hidden = own || !alive || mode === 'chat';
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
       $('terminal-controls').hidden = mode !== 'terminal';

@@ -1,14 +1,18 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.41 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.42 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.41 closes the reproduced first-turn native permission
-dead end and stale terminal-exit notice. Full installed regression and actual
-native protocol evidence are recorded in testing.md; active-fleet lifecycle is the
-next separate gate.
+**Current increment:** alpha.42 distinguishes the main reply from observed native
+child activity in solo and room views. A real Codex child retained identity and
+activity across joining/leaving the room and reopening the UI; no task was replayed.
+These are partial recent observations, not complete fleet inventory or termination
+proof. Transport/service gaps and old backends without freshness evidence show
+unknown state. Alpha.41's full local regression and first-turn permission repair
+remain the core baseline. See testing.md and review.md.
+
 
 Alpha.40 connects the existing sharing action to the
 selected text in the visible native pane as well as conversation text. Empty and

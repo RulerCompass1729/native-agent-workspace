@@ -48,6 +48,7 @@ process.on('message', async q => {
       }
     }
     if (q.method === 'progress') r.emit('progress', q.value);
+    if (q.method === 'fleet') r.emit('fleet', q.value);
     if (q.method === 'history') r.emit('history', q.value);
     if (q.method === 'approval') { r.emit('approval', q.value); r.emit('state', 'approval'); }
     if (q.method === 'gap') r.emit('terminal', { epoch: r.journal.epoch, index: r.journal.index + 2, data: 'must-not-paint', cols: 80, rows: 24 });

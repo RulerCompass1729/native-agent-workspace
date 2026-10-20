@@ -156,3 +156,13 @@ restart. The native runtime evidence uses local synthetic inference with no
 external paid model request; native internal title work is counted separately.
 See testing.md and A41-1/A41-2 in review.md. This does not broaden the earlier
 physical IME, onboarding, fleet or external Desktop integration claims.
+
+
+## Native-fleet follow-up — alpha.42
+
+The first follow-up slice now exposes observed child lifecycle without confusing
+root reply/tool completion with child completion. Actual native window continuity
+and room join/leave retain the same root/child identities and unsent draft. This
+is a verified visibility increment, not closure of the larger fleet gate: complete
+inventory, active-backend migration, full termination and live Claude Teams
+continuity remain separately unverified. Source/installed evidence: testing.md.

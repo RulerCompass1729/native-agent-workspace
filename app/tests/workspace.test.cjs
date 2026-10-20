@@ -14,6 +14,21 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('observed native children survive window reads; transport/service gaps invalidate freshness without replay', async t => {
+  const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
+  const { observedFleet } = require('../renderer/fleet-observation.js');
+  const started = { event: 'SubagentStart', id: 'child', name: 'check' };
+  r.emit('fleet', started);
+  assert.equal(observedFleet(w.snapshot().sessions[0]).running, 1);
+  r.emit('state', 'disconnected'); r.emit('state', 'idle');
+  assert.equal(observedFleet(w.snapshot().sessions[0]).unknown, 1);
+  r.emit('fleet', started); w.persist();
+  assert.equal(observedFleet(w.snapshot().sessions[0]).running, 1);
+  const cold = new Workspace({ binaries: {}, close() {} }, directory); t.after(() => cold.close());
+  cold.get(id).state = 'idle'; // Even a resumed root is not a refreshed child inventory.
+  assert.equal(observedFleet(cold.snapshot().sessions[0]).unknown, 1);
+  assert.equal(cold.versions.dispatches, 0);
+});
 test('continuous output checkpoints before it becomes quiet and reload never sends a task', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
