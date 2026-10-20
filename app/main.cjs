@@ -12,6 +12,7 @@ const { submissionState, assertNativeCreation, capabilitiesFor } = require('./su
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { readingState } = require('./reading-state.cjs');
+const { ViewStore } = require('./view-store.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 
 app.setName('Native Agent Workspace');
@@ -52,7 +53,7 @@ if (!primary) app.quit();
 const windows = new Map();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, viewStore, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 const startupFile = path.join(__dirname, 'startup.html');
 function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, ...(backgroundTest ? { show: false, focusable: false } : {}), minWidth: 850, minHeight: 600, backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
@@ -93,9 +94,8 @@ function saveViews() {
   const resolve = finishReadingSave, reject = failReadingSave;
   readingSavePromise = finishReadingSave = failReadingSave = undefined;
   try {
-    const target = path.join(dataDir, 'views.json');
-    fs.writeFileSync(`${target}.tmp`, JSON.stringify(views), { mode: 0o600 });
-    fs.renameSync(`${target}.tmp`, target);
+    if (!viewStore) throw Error('界面记录尚未读取，未写入空白记录。');
+    viewStore.save(views);
     resolve?.();
   } catch (error) { reject?.(error); throw error; }
 }
@@ -149,12 +149,13 @@ async function boot() {
   dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.chmodSync(dataDir, 0o700);
   sessionLabels = new SessionLabels(dataDir);
   roomState = new RoomState(dataDir);
+  viewStore = new ViewStore(dataDir);
+  views = viewStore.load();
   process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
   if (quitting) return;
   dsh = await startDsh(dataDir); entry = dsh.url;
   if (quitting) { dsh.stop(); return; }
-  try { views = JSON.parse(fs.readFileSync(path.join(dataDir, 'views.json'), 'utf8')); if (!Array.isArray(views)) views = []; } catch { views = []; }
   for (const view of views) { try { view.readingPositions = readingState(view.readingPositions || {}); } catch { view.readingPositions = {}; } }
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -359,10 +360,11 @@ async function start() {
     if (!quitting && (!startupWindow || startupWindow.isDestroyed())) {
       startupWindow = createWindow(); await startupWindow.loadFile(startupFile);
     }
-    if (!quitting && startupWindow && !startupWindow.isDestroyed()) startupWindow.webContents.send('workspace:startup', { title: '暂时未能打开', detail: startupMessage(error), retry: true });
+    if (!quitting && startupWindow && !startupWindow.isDestroyed()) startupWindow.webContents.send('workspace:startup', { title: '暂时未能打开', detail: startupMessage(error), retry: true, data: error.code === 'NAW_VIEW_RECORD' });
   } finally { starting = false; }
 }
 ipcMain.handle('workspace:retry-startup', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href) return start(); });
+ipcMain.handle('workspace:startup-data', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href && viewStore && !viewStore.loaded) return shell.openPath(dataDir); });
 function focusOrOpen() {
   const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : windows.values().next().value?.win;
   if (win) { if (!backgroundTest) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } }
@@ -372,5 +374,5 @@ app.on('activate', focusOrOpen);
 app.on('second-instance', focusOrOpen);
 if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
-app.on('before-quit', () => { quitting = true; try { if (dataDir) saveViews(); } finally { dsh?.stop(); } });
+app.on('before-quit', () => { quitting = true; try { if (viewStore?.loaded) saveViews(); } finally { dsh?.stop(); } });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.

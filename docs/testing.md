@@ -816,3 +816,32 @@ and eleven reading/selection/reopen checks pass in the final installed app.
 Independent final review passes; all 36 shipped app files match source. Original
 user records and five protected processes are unchanged, with one discoverable app. Four unchanged UI-lifetime checks pass without skips. This is not a new
 physical input-method, screen-reader or complete accessibility certification.
+
+## Unreadable window-record protection — alpha.35
+
+An actual isolated Electron probe reproduced a destructive recovery path:
+truncated views.json was treated as an empty array and overwritten during startup
+and quit, removing a synthetic saved draft recovery copy. The separate ViewStore
+now accepts only a successfully read compatible record (or a genuinely absent
+file) before allowing writes. Malformed content, read denial, a file disappearing
+after stat, unsafe file type/ownership/mode and invalid draft shapes fail closed.
+Unique owner-only temporary files avoid following a predictable temporary-file
+symlink; rename failure preserves the prior file and removes only the owned temp.
+
+All 355 unit checks pass without skips. The real Electron runner checks damaged
+startup, repeated failed retry, quit, an actual chmod-induced read denial, and
+explicit retry after restoring a known-good synthetic backup. Both original
+windows, selected identities, legacy/private/shared drafts and recovery copies
+return. Further editing and another reopen retain them. No new DSH host starts
+while the record is unreadable; the existing service connection stays unchanged.
+The data-folder button is clicked through its actual guarded IPC, with only
+shell.openPath intercepted so Finder does not change the person's desktop.
+
+All provider opens, input writes, resizes and sends remain zero in this runner.
+Its two windows are intentional, hidden and non-focusable. This is local recovery
+evidence, not physical IME, provider-history restoration or power-loss durability.
+The original user's view-record shape was checked read-only for compatibility.
+The same three installed recovery groups, nine source normal-draft checks and
+eleven installed reading checks pass final independent review. All 37 application
+files match the tested source, with a verified ad-hoc signature. Original user
+records and five protected processes are unchanged; one app is discoverable.

@@ -19,6 +19,11 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   provider credential files, full environment dumps or raw protocol traces.
 - views.json stores window/layout selection, terminal display preferences,
   a per-window shared-task draft and a local private-session draft recovery copy.
+  An unreadable or malformed view record blocks startup and writes to that file;
+  the application retains the original rather than replacing it with empty data.
+  The startup screen offers the same local-data location and an explicit retry
+  after permission repair or restoration from a known-good backup. This does not
+  repair a damaged file or provide an independent historical backup service.
   Electron/DSH keep local UI preferences/cache and a local UI access token.
   The independent service keeps its private connection/token files and a
   versioned runtime copy. Tokens are not displayed in startup failures.

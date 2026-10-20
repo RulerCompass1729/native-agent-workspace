@@ -1,11 +1,19 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.34 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.35 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.34 reserves readable space for conversation text
+**Current increment:** alpha.35 refuses to overwrite an unreadable or malformed
+window record. Startup stops before launching a new service, keeps the original
+file, and offers local-data access and an explicit retry after repair. The source
+checks cover exact-byte preservation, real filesystem read denial and restoration
+of two windows with legacy drafts and recovery copies. The installed artifact,
+normal-draft and reading regressions pass final independent review. This does not certify all disk-write failures
+or power-loss recovery.
+
+Alpha.34 reserves readable space for conversation text
 alongside native live panes in a minimum-size window. Shared drafts have a
 responsive resize limit; expanded draft recovery remains scrollable without
 pushing the editor outside the window. An ended session without a held temporary
