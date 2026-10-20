@@ -714,3 +714,55 @@ signature validation. Existing three user sessions and their history/draft/view
 files are unchanged; protected native processes stay alive and system application
 search finds one installed app. Final independent source and installed-artifact
 review passed for this bounded recovery repair.
+
+## Native confirmation synchronization — alpha.32
+
+Native `serverRequest/resolved` updates the original progress record and removes
+only the corresponding action. It means answered or cleared, not successful tool
+execution; the native thread status remains authoritative. Sending a decision
+disables repeat submission while awaiting the native event. A disconnected
+observer marks unresolved progress unknown. The compatibility adapter explicitly
+overrides an old daemon's cached approval even when the current value is null;
+obsolete numeric IDs cannot fall back to the older transport.
+
+Negative checks reproduce stale buttons, false local working state, compatibility
+fallback, duplicate-request resubmission and conflicting contents under one
+unresolved native ID. Fixes preserve the original request/connection, distinguish
+numeric and string IDs, retain pending decisions on duplicate delivery, and direct
+ambiguous requests to the native terminal. These are synthetic protocol
+counterexamples, not claims of provider defects. The complete source suite passes
+349 checks with zero skips.
+
+The shared display/backend policy presents the complete command, directory and
+reason. Network/additional-permission scopes, file changes, terminal input and
+unsupported native decision lists cannot be accepted as ordinary commands.
+Where the native method permits refusal, it remains available without granting
+the hidden scope. Direct IPC and compatibility calls enforce the same policy.
+An actual previous alpha.31 daemon is retained while the new GUI opens a new
+active backend: the older session retains its native ID and terminal but offers
+no GUI decisions, and direct accept/decline calls are blocked. This demonstrates
+per-session capability isolation rather than assuming the active backend's
+capabilities apply to all sessions.
+
+The first full suite after policy extraction exposed a missing module in the
+independent runtime copy. The runtime manifest now includes it; that negative
+result is retained alongside the passing repeat.
+
+The real Electron runner clicks current and obsolete actions, switches GUI/TUI,
+retains an unsent draft, receives native-resolution/status events, and loses the
+connection. It checks the original progress rows and exact outbound decisions,
+with no native provider or model tasks. An actual screenshot exposed low warning
+text contrast; rendered light/dark checks now cover this confirmation area.
+Two initial UI attempts with an added recording configuration timed out before
+the product entry appeared; those failures are retained and are not passing
+evidence. The existing hidden non-focusable launch path works without that
+recording option. This round produces screenshots, not a new successful video.
+Physical IME, foreground switching and live native tool permissions are not
+retested by this runner. Final installed verification and independent review pass.
+The final installation matches all 36 shipped source modules; the installed UI
+repeats four confirmation groups, light/dark readability and the corrected pending/
+resolved composer hints. The actual prior-backend isolation check, empty-profile
+cold boot and six reconnection groups also pass. Test windows remain hidden and
+non-focusable, owned test daemons exit, and original user records/processes remain
+unchanged. There is one discoverable installed app. This closes only A32-1–7, not
+the remaining full-product and arbitrary-old-backend acceptance.

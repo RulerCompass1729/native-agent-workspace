@@ -212,6 +212,8 @@ test('an old permission decision cannot authorize a new request with the same na
   f.w.approve(f.id,nextKey,'decline','window');
   await until(()=>f.calls().some(c=>c.id===7&&c.result?.decision==='decline'));
   assert.equal(f.calls().some(c=>c.result?.decision==='accept'),false);
+  assert.equal(s.approval.pending,true);assert.equal(s.state,'approval');
+  r.event({method:'serverRequest/resolved',params:{requestId:7}});
   assert.equal(s.approval,null);
 });
 test('a pre-ACK crash retains the uncertain input and its draft without retrying', async t => {

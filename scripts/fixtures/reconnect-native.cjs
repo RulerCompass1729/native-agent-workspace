@@ -35,7 +35,8 @@ process.on('message', q => {
   if (q.method === 'history') { const r = runtimes.get(q.target); r.hasHistory = true; r.emit('history', [{ id: 'saved-answer', type: 'agentMessage', text: '保留的原生历史' }]); }
   if (q.method === 'fail') fail = q.value;
   if (q.method === 'transport-close') runtimes.get(q.target).transportClosed();
-  if (q.method === 'approval') runtimes.get(q.target).event({ id: 7, method: 'item/commandExecution/requestApproval', params: { command: q.value } });
+  if (q.method === 'approval') runtimes.get(q.target).event({ id: 7, method: 'item/commandExecution/requestApproval', params: { command: q.value, cwd: '/synthetic' } });
+  if (q.method === 'event') runtimes.get(q.target).event(q.value);
   if (q.method === 'backend-exit') {
     const r = runtimes.get(q.target);
     r.terminal.stop = () => new Promise(resolve => {

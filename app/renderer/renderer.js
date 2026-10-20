@@ -136,7 +136,11 @@ function soloAction(s) {
     ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
     : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
   if (s.chatAvailable === false || s.state === 'starting' || s.state === 'error') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
-  return { kind: 'send', label: '发送 ↑', hint: s.state === 'approval' ? '先完成上方的原生确认；可以保留下一条草稿。' : s.state === 'working' || s.pendingTag ? '正在回复，可以先编辑下一条。' : 'Enter 发送 · Shift Enter 换行' };
+  return { kind: 'send', label: '发送 ↑', hint: s.state === 'approval'
+    ? s.approvalResolved ? '确认已处理，等待原生状态更新；可以继续编辑草稿。'
+      : s.approval?.pending ? '已提交决定，等待原生确认；可以继续编辑草稿。'
+        : '请核对上方的原生确认；可以保留下一条草稿。'
+    : s.state === 'working' || s.pendingTag ? '正在回复，可以先编辑下一条。' : 'Enter 发送 · Shift Enter 换行' };
 }
 function renderComposer(s) {
   renderDraftRecovery(s?.id);
@@ -538,13 +542,19 @@ function render() {
       $('approval').hidden = s.state !== 'approval';
       $('approval').replaceChildren();
       if (s.state === 'approval') {
-        $('approval').append(node('strong', '原生会话需要你确认'));
+        $('approval').append(node('strong', s.approvalNotice ? '原生确认状态待核对' : s.approvalResolved ? '这项原生确认已处理' : s.approval?.pending ? '等待原生确认结果' : '原生会话需要你确认'));
+        if (s.approvalNotice) $('approval').append(node('p', s.approvalNotice));
+        if (s.approvalResolved) $('approval').append(node('p', '等待原生状态更新；已处理不代表工具执行成功。'));
         if (s.approval) {
-          const p = s.approval.params;
-          $('approval').append(node('p', p.command || p.reason || s.approval.method));
-          if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(s.approval.method)) {
-            const requestId = s.approval.requestId;
-            $('approval').append(button('允许这一次', () => api.approve(s.id, requestId, 'accept')), button('拒绝', () => api.approve(s.id, requestId, 'decline')));
+          const policy = window.nativeWorkspaceApproval.nativeApprovalPolicy(s.approval);
+          if (policy.notice) $('approval').append(node('p', policy.notice));
+          if (policy.command) $('approval').append(node('pre', policy.command, 'approval-command'));
+          if (policy.cwd) $('approval').append(node('p', '工作目录：' + policy.cwd));
+          if (policy.reason) $('approval').append(node('p', '原因：' + policy.reason));
+          const requestId = s.approval.requestId;
+          for (const decision of s.approvalDecisionAvailable ? policy.decisions : []) {
+            const action = button(decision === 'accept' ? '允许这一次' : '拒绝', () => api.approve(s.id, requestId, decision));
+            action.disabled = !own || Boolean(s.approval.pending); $('approval').append(action);
           }
         }
         $('approval').append(button('在原生终端查看', () => switchMode('terminal')));

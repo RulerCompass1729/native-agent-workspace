@@ -1,11 +1,22 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.31 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.32 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.31 allows an explicit reconnect when the graphical
+**Current increment:** alpha.32 synchronizes native Codex confirmation resolution,
+keeps sent decisions pending until native acknowledgement, and rejects obsolete
+or ambiguous decisions. The same compatibility path no longer resurrects cached
+old-backend approvals. Ordinary command decisions show the complete command,
+directory and reason; unrepresented permission scopes cannot be approved here.
+Retained backends without native-confirmation synchronization keep their original
+session and terminal, but cannot receive GUI permission decisions. Source and
+rendered synthetic-protocol checks, actual retained alpha.31 backend with the new
+GUI, installed empty-profile cold boot and final independent artifact review pass. No new model task or live native permission
+round-trip is claimed.
+
+Alpha.31 allows an explicit reconnect when the graphical
 Codex connection is lost but its owned native backend remains alive. The existing
 terminal, native identity, configuration, history and draft are retained. Only the
 selected session is subscribed; old tasks and sharing authorizations are not

@@ -135,6 +135,26 @@ function fixture() {
   const openWindow = (includeNext = true) => { const old = oldView(), next = nextView(); return { old, next, c: new WorkspaceClient(includeNext ? [old, next] : [old], includeNext ? 'next' : 'old', scope) }; };
   return { ...openWindow(), openWindow };
 }
+test('approval synchronization is a per-session backend capability, including retained alpha.31', async () => {
+  const { old, next, c } = fixture();
+  old.real.runtimeVersion = '0.1.0-alpha.31';
+  next.real.capabilities.push('nativeApprovalSync');
+  for (const s of [old.real.sessions[1], next.real.sessions[0]]) Object.assign(s, {
+    provider: 'codex', state: 'approval', owner: 'view',
+    approval: { requestId: 'opaque-request', method: 'item/commandExecution/requestApproval', params: { command: 'synthetic', cwd: '/synthetic' } },
+  });
+  await c.refresh();
+  const oldSession = c.snapshot().sessions.find(s => s.id === 'old-codex');
+  assert.equal(oldSession.approvalDecisionAvailable, false);
+  assert.match(oldSession.approvalNotice, /旧连接/);
+  assert.equal(c.snapshot().sessions.find(s => s.id === 'new').approvalDecisionAvailable, true);
+  for (const decision of ['accept', 'decline']) await assert.rejects(c.call('approve', 'old-codex', 'opaque-request', decision), /旧连接/);
+  assert.equal(old.calls.some(([method]) => method === 'approve'), false);
+  await c.call('approve', 'new', 'opaque-request', 'decline');
+  assert.equal(next.calls.filter(([method]) => method === 'approve').length, 1);
+  assert.equal(old.real.sessions[1].state, 'approval');
+  c.close();
+});
 test('save retry targets only supported failed writers and preserves unrelated warnings and native work', async () => {
   const { old, next, c } = fixture();
   old.real.storageWarning = 'Unread original';

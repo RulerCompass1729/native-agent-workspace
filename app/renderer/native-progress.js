@@ -233,7 +233,7 @@ class NativeProgressPanel {
           if (target) { this.live = false; this.replay(target.index); } else this.notice.textContent = '这段原生画面已不在当前保留范围内。';
         })); this.traceList.append(row);
       }
-      const heading = `${new Date(item.time).toLocaleTimeString()} · ${item.title || item.kind} · ${{ running: '进行中', completed: '完成', failed: '失败', waiting: '等待确认', observed: '已观察' }[item.status] || item.status || ''}`;
+      const heading = `${new Date(item.time).toLocaleTimeString()} · ${item.title || item.kind} · ${{ running: '进行中', completed: '完成', failed: '失败', waiting: '等待确认', resolved: '已处理', unknown: '结果未确认', observed: '已观察' }[item.status] || item.status || ''}`;
       if (row.children[0].textContent !== heading) row.children[0].textContent = heading;
       const text = (item.truncated ? '仅显示最近输出；完整过程请核对原生画面。\n' : '') + (item.text || '');
       if (row.children[1].textContent !== text) row.children[1].textContent = text;

@@ -94,11 +94,17 @@ class WorkspaceClient extends EventEmitter {
         const bridge = this.control.legacyInput;
         const legacySubmit = legacyInputEligible(e.state, s) && ['idle', 'working', 'approval', 'starting'].includes(s.state) && !!bridge?.connected(s);
         const native = bridge?.target(s)?.native;
+        const legacyCodex = e.state.runtimeVersion === '0.1.0-alpha.2' && s.provider === 'codex';
+        const approvalDecisionAvailable = legacyCodex ? Boolean(native?.connected) : Boolean(e.state.capabilities?.includes('nativeApprovalSync'));
         ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           legacyShare: legacySubmit,
           ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null, sharingNotice: '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。', ...(native?.state ? { state: native.state } : {}),
-            ...(native?.approval ? { approval: native.approval } : {}), pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
+            pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
+          ...(legacyCodex
+            ? { approval: native?.connected ? native.approval : null, approvalResolved: Boolean(native?.connected && native.approvalResolved) } : {}),
+          approvalDecisionAvailable,
+          approvalNotice: s.provider === 'codex' && !approvalDecisionAvailable ? '旧连接无法核实这项确认的最新状态，请在原生终端核对。原会话继续保留。' : null,
           serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
       }
       for (const m of state.room.messages || []) {
@@ -321,6 +327,8 @@ class WorkspaceClient extends EventEmitter {
       if (record?.owner !== target.state.owner || !this.control.legacyInput) throw Error('请先在此窗口接管原会话。');
       return this.control.legacyInput.prepare(target, record);
     }
+    if (method === 'approve' && legacy && target.state.sessions.find(s => s.id === args[0])?.provider === 'codex' &&
+      !(typeof args[1] === 'string' && args[1].startsWith('legacy:'))) throw Error('原生确认连接已变化；请在原生终端查看，不会执行旧后台的确认。');
     if (method === 'approve' && typeof args[1] === 'string' && args[1].startsWith('legacy:')) {
       await this.refresh(); guard(); this.authorizeOperation?.(method, args);
       const record = target.state.sessions.find(s => s.id === args[0]);
@@ -328,6 +336,9 @@ class WorkspaceClient extends EventEmitter {
       const native = this.control.legacyInput?.target(record)?.native;
       if (!native) throw Error('原生确认连接已变化，没有将确认交给其他连接。');
       return native.approve(args[1], args[2]);
+    }
+    if (method === 'approve' && !target.state.capabilities?.includes('nativeApprovalSync')) {
+      throw Error('旧连接无法核实这项确认的最新状态，请在原生终端核对；没有发送决定。');
     }
     if (['send', 'forward'].includes(method) && this.control.legacyInput?.connected(target.state.sessions.find(s => s.id === args[0]))) {
       const shared = method === 'forward';

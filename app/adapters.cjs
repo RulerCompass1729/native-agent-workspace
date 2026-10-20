@@ -241,12 +241,16 @@ class Rpc extends EventEmitter {
       this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
-  reply(id, result) { this.ws.send(JSON.stringify({ id, result })); }
+  reply(id, result) {
+    if (this.ws.readyState !== undefined && this.ws.readyState !== WebSocket.OPEN) throw new Error('原生连接已断开；确认没有发送。');
+    this.ws.send(JSON.stringify({ id, result }));
+  }
 }
 
 class Codex extends EventEmitter {
   constructor(record, host) {
     super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = !record.recovering && record.view !== 'terminal'; this.stopped = false; this.lifecycleRevision = 0; this.eventRevision = 0; this.stateRevision = 0; this.on('state', state => { this.latestState = state; this.stateRevision++; }); this.inputItems = new Set(); this.liveMessageItems = new Set(); this.historyMessageItems = new Set();
+    this.nativeRequests = new Map();
     if (record.recovering) this.recoveryReady = new Promise(resolve => { this.finishRecoveryConnection = resolve; });
   }
   async start() {
@@ -403,11 +407,16 @@ class Codex extends EventEmitter {
     else if (status?.type === 'systemError') this.emit('state', 'error');
     else { this.emit('state', 'starting'); this.emit('activity', '原生状态尚未确认，请在原生终端查看。'); }
   }
+  forgetNativeRequests() {
+    for (const request of this.nativeRequests.values()) this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认结果未确认' });
+    this.nativeRequests.clear();
+  }
   event(message) {
     if (this.transportDisconnected) return;
     const p = message.params || {};
     this.eventRevision++;
     if (message.method === 'thread/closed') {
+      this.forgetNativeRequests();
       this.closed = true; this.stopped = true; this.finishRecoveryConnection?.(false); this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
     }
     if (this.stopped) return;
@@ -422,9 +431,40 @@ class Codex extends EventEmitter {
       id: p.itemId, turnId: p.turnId, source: 'codex-native', kind: message.method === 'item/commandExecution/outputDelta' ? 'commandExecution' : 'mcpToolCall',
       ...(typeof p.delta === 'string' ? { delta: p.delta } : { text: p.message || '' }),
     });
-    if (message.id !== undefined || message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: message.id !== undefined ? '等待原生确认' : '原生会话错误', status: message.id !== undefined ? 'waiting' : 'failed' });
-    if (message.id !== undefined) { this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); return; }
+    if (message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: '原生会话错误', status: 'failed' });
+    if (message.id !== undefined) {
+      let request = this.nativeRequests.get(message.id);
+      const fingerprint = crypto.createHash('sha256').update(JSON.stringify([message.method, p])).digest('hex');
+      if (request?.rpc === this.host.rpc) {
+        // Duplicate delivery must not reopen a decision that is already pending.
+        // A reused unresolved ID with different contents is ambiguous; only the
+        // native client can safely interpret it.
+        if (request.fingerprint !== fingerprint && !request.ambiguous) {
+          request.ambiguous = true;
+          this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认需要核对' });
+          this.emit('approval', { requestId: message.id, method: 'native/requestAmbiguous', params: { reason: '原生确认标识重复且内容变化；请在原生终端核对。' } });
+          this.emit('state', 'approval');
+        }
+        return;
+      }
+      if (!request || request.rpc !== this.host.rpc) {
+        request = { id: crypto.randomUUID(), rpc: this.host.rpc, fingerprint };
+        this.nativeRequests.set(message.id, request);
+        // Match the bounded progress journal, without storing request bodies.
+        while (this.nativeRequests.size > 200) this.nativeRequests.delete(this.nativeRequests.keys().next().value);
+      }
+      this.emit('progress', { id: request.id, source: 'codex-native', kind: message.method, title: '等待原生确认', status: 'waiting' });
+      this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); return;
+    }
     switch (message.method) {
+      case 'serverRequest/resolved': {
+        const request = this.nativeRequests.get(p.requestId);
+        if (!request || request.rpc !== this.host.rpc) break;
+        this.nativeRequests.delete(p.requestId);
+        this.emit('progress', { id: request.id, source: 'codex-native', status: 'resolved', title: '原生确认已处理' });
+        this.emit('approvalResolved', p.requestId);
+        break;
+      }
       case 'thread/status/changed': this.observeStatus(p.status); break;
       case 'turn/started': this.turnId = p.turn.id; this.emit('state', 'working'); break;
       case 'item/agentMessage/delta':
@@ -520,6 +560,7 @@ class Codex extends EventEmitter {
     }
   }
   backendExited() {
+    this.forgetNativeRequests();
     this.backendExitConfirmed = true;
     this.transportDisconnected = false;
     this.stopped = true; this.chatAvailable = false; this.lifecycleRevision++;
@@ -611,6 +652,7 @@ class Codex extends EventEmitter {
   }
   transportClosed() {
     if (this.closed || this.backendExitConfirmed) return;
+    this.forgetNativeRequests();
     this.transportDisconnected = true; this.chatAvailable = false; this.lifecycleRevision++;
     this.finishRecoveryConnection?.(false);
     this.emit('activity', '图形连接已断开；原生任务可能仍在运行。可重新连接，已有终端保持原样，不会重发任务。');
@@ -633,6 +675,7 @@ class Codex extends EventEmitter {
       await this.terminal?.stop();
       const result = await this.host.rpc.call('thread/unsubscribe', { threadId: this.record.nativeId });
       if (!['notLoaded', 'notSubscribed', 'unsubscribed'].includes(result.status)) throw new Error('原生返回了未知的断开状态。');
+      this.forgetNativeRequests();
       // An unsubscribe acknowledgement is not thread termination. The server may
       // retain its thread or other subscribers; never kill the shared app-server.
       const state = this.closed || result.status === 'notLoaded' ? 'ended' : 'disconnected';

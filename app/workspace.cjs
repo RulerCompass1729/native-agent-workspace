@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
 const { ProgressJournal } = require('./observation.cjs');
+const { nativeApprovalPolicy } = require('./approval-policy.js');
 
 const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error('请输入有效文字；一次最多 16,000 个字符。');
@@ -26,7 +27,7 @@ class Workspace extends EventEmitter {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
-      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, state: record.state === 'ended' ? 'ended' : 'recoverable', owner: null, approval: null, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
+      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, state: record.state === 'ended' ? 'ended' : 'recoverable', owner: null, approval: null, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
       this.room.messages = stored.room?.messages || [];
       if (stored.room?.run) this.room.run = { ...stored.room.run, awaiting: null, ...(stored.room.run.status === 'running' ? { status: 'paused', reason: '运行服务曾中断；未重发任务，请核对原生结果。' } : {}) };
       if (stored.drafts) for (const [key, value] of Object.entries(stored.drafts)) this.drafts.set(key, value);
@@ -53,7 +54,7 @@ class Workspace extends EventEmitter {
     const target = path.join(this.dataDir, 'workspace.json'); const temp = `${target}.tmp`;
     try {
       // No terminal bytes, credentials, environment, hook secrets or raw protocol.
-      const sessions = [...this.sessions.values()].map(({ owner, approval, pid, ...s }) => ({ ...s, pendingTag: null }));
+      const sessions = [...this.sessions.values()].map(({ owner, approval, approvalResolved, pid, ...s }) => ({ ...s, pendingTag: null }));
       fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: this.room.messages, ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
       fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
     } catch { this.storageFailure = 'write'; this.storageWarning = '本地保存失败，当前会话仍在内存中；请保留窗口并检查磁盘，恢复后重试保存。'; this.emit('change'); }
@@ -111,6 +112,7 @@ class Workspace extends EventEmitter {
     on('state', state => {
       if (this.stops.has(s.id) && !['ended', 'recoverable', 'error', 'disconnected'].includes(state)) return;
       s.state = state;
+      if (state !== 'approval') s.approvalResolved = false;
       if (runtime.transportDisconnected) { s.approval = null; this.approvalRoutes.delete(s.id); }
       if (state !== 'starting' && s.activity === '正在连接原生历史') s.activity = '';
       if (state === 'ended' || state === 'recoverable') {
@@ -143,8 +145,15 @@ class Workspace extends EventEmitter {
       // visible decision is scoped to this request and its original RPC.
       const requestId = randomUUID();
       this.approvalRoutes.set(s.id, { runtime, rpc: this.host.rpc, requestId, nativeRequestId: approval.requestId });
-      s.approval = { ...approval, requestId };
+      s.approval = { ...approval, requestId }; s.approvalResolved = false;
       this.pause('等待原生权限确认'); this.changed();
+    });
+    on('approvalResolved', nativeRequestId => {
+      const route = this.approvalRoutes.get(s.id);
+      if (!route || route.rpc !== this.host.rpc || route.nativeRequestId !== nativeRequestId) return;
+      this.approvalRoutes.delete(s.id); s.approval = null;
+      s.approvalResolved = s.state === 'approval';
+      this.changed();
     });
     on('nativeInput', (text, item) => {
       this.pause('真人在原生终端输入'); s.controlRevision++;
@@ -371,13 +380,14 @@ class Workspace extends EventEmitter {
   }
   approve(id, requestId, decision, owner) {
     const s = this.get(id), route = this.approvalRoutes.get(id);
-    if (!route || !s.approval || s.owner !== owner || s.approval.requestId !== requestId || route.requestId !== requestId ||
+    if (!route || !s.approval || s.approval.pending || s.state !== 'approval' || s.owner !== owner || s.approval.requestId !== requestId || route.requestId !== requestId ||
       route.runtime !== this.runtimes.get(id) || route.rpc !== this.host.rpc || route.runtime.transportDisconnected ||
       route.runtime.backendExitConfirmed) throw new Error('权限请求已变化，请重新查看。');
-    if (!['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(s.approval.method)) throw new Error('请在原生终端处理这项请求。');
     if (!['accept', 'decline'].includes(decision)) throw new Error('未知权限决定。');
-    route.rpc.reply(route.nativeRequestId, { decision }); this.approvalRoutes.delete(id);
-    s.approval = null; s.state = 'working'; this.changed();
+    if (!nativeApprovalPolicy(s.approval).decisions.includes(decision)) throw new Error('请在原生终端核对；此界面不支持这项权限决定。');
+    route.rpc.reply(route.nativeRequestId, { decision });
+    if (this.approvalRoutes.get(id) === route && s.approval?.requestId === requestId) s.approval = { ...s.approval, pending: true };
+    this.changed();
   }
   stop(id) {
     if (this.stops.has(id)) return this.stops.get(id);
@@ -387,7 +397,7 @@ class Workspace extends EventEmitter {
     this.pause('正在断开原生会话'); s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; s.activity = '等待原生确认'; this.changed();
     const operation = Promise.resolve().then(() => runtime.stop()).then(result => {
       if (!['ended', 'recoverable', 'disconnected'].includes(result?.state)) throw new Error('原生未确认结束状态。');
-      s.state = result.state; s.pendingTag = null; s.approval = null;
+      s.state = result.state; s.pendingTag = null; s.approval = null; s.approvalResolved = false; this.approvalRoutes.delete(id);
       s.activity = result.state === 'ended' ? '' : result.state === 'recoverable'
         ? '原生后台已退出；记录和草稿保留，任务不会自动重发。'
         : '本应用连接已断开；原生线程或后台任务可能仍在运行。';

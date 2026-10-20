@@ -9,6 +9,7 @@ const WebSocket = require('ws');
 const { Codex, Rpc } = require('./adapters.cjs');
 const { ProgressJournal } = require('./observation.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
+const { nativeApprovalPolicy } = require('./approval-policy.js');
 
 function eligibleCodex(state, record) {
   return state.runtimeVersion === '0.1.0-alpha.2' && record?.provider === 'codex'
@@ -60,9 +61,10 @@ class LegacyCodex extends EventEmitter {
     adapter.chatAvailable = false;
     for (const event of ['state', 'nativeInput', 'approval', 'failed', 'fleet', 'background', 'complete', 'submitted']) {
       adapter.on(event, (...args) => {
-        if (event === 'state') this.state = args[0];
+        if (event === 'state') { this.state = args[0]; if (this.state !== 'approval') this.approvalResolved = false; }
         if (event === 'approval') {
-          this.approval = { ...args[0], requestId: `legacy:${this.approvalScope}:${String(args[0].requestId)}` };
+          this.approval = { ...args[0], requestId: `legacy:${this.approvalScope}:${crypto.randomUUID()}` };
+          this.approvalResolved = false;
           this.nativeRequestId = args[0].requestId;
         }
         if (['nativeInput', 'approval', 'failed', 'fleet'].includes(event)) this.revision++;
@@ -70,12 +72,13 @@ class LegacyCodex extends EventEmitter {
       });
     }
     adapter.on('progress', item => { const update = this.progress.update(item); this.emit('progress', update); });
-    rpc.on('closed', () => { this.connected = false; this.revision++; this.emit('change'); });
+    adapter.on('approvalResolved', requestId => {
+      if (requestId !== this.nativeRequestId) return;
+      this.approval = null; this.nativeRequestId = undefined; this.approvalResolved = this.state === 'approval'; this.emit('change');
+    });
+    rpc.on('closed', () => { this.connected = false; this.revision++; adapter.transportClosed(); this.emit('change'); });
     rpc.on('event', message => {
       const p = message.params || {};
-      if (message.method === 'serverRequest/resolved' && p.threadId === this.record.nativeId && p.requestId === this.nativeRequestId) {
-        this.approval = null; this.nativeRequestId = undefined; this.emit('change');
-      }
       if ((p.threadId || p.thread?.id) === this.record.nativeId) adapter.event(message);
       else if (message.method === 'thread/started' && p.thread?.parentThreadId === this.record.nativeId) {
         adapter.emit('fleet', { event: 'thread/started', id: p.thread.id, active: true });
@@ -135,15 +138,15 @@ class LegacyCodex extends EventEmitter {
   }
   observe() { return { terminal: null, progress: this.progress.snapshot() }; }
   approve(requestId, decision) {
-    if (!this.connected || this.closed || this.approval?.requestId !== requestId) throw Error('权限请求已变化，请重新查看。');
-    if (!['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(this.approval.method)
-      || !['accept', 'decline'].includes(decision)) throw Error('请在原生终端处理这项请求。');
+    if (!this.connected || this.closed || this.state !== 'approval' || this.approval?.pending || this.approval?.requestId !== requestId) throw Error('权限请求已变化，请重新查看。');
+    if (!nativeApprovalPolicy(this.approval).decisions.includes(decision)) throw Error('请在原生终端核对；此界面不支持这项权限决定。');
     this.rpc.reply(this.nativeRequestId, { decision });
-    this.approval = null; this.nativeRequestId = undefined; this.emit('change');
+    if (this.approval?.requestId === requestId) this.approval = { ...this.approval, pending: true };
+    this.emit('change');
   }
   close() {
     this.closed = true; this.connected = false; this.revision++;
-    if (this.adapter) this.adapter.stopped = true;
+    if (this.adapter) { this.adapter.forgetNativeRequests(); this.adapter.stopped = true; }
     // Closing only this subscription must not invoke adapter.stop(), native
     // interrupt, thread/unsubscribe on another client, or server termination.
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.close();

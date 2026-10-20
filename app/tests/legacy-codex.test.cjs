@@ -155,6 +155,52 @@ test('GUI approval reaches its original native transport and rejects stale or ot
   await assert.rejects(client.call('approve', f.record.id, next.requestId, 'accept'), /权限请求已变化/);
 });
 
+test('retained native permission scope and available decisions cannot be bypassed with a direct GUI call', async t => {
+  const f = await fixture(t), target = new LegacyCodex(f.record); t.after(() => target.close()); await target.connect(f.socket);
+  let id = 200;
+  for (const params of [
+    { networkApprovalContext: { host: 'synthetic.example', protocol: 'https' } },
+    { additionalPermissions: { fileSystem: { write: ['/synthetic/extra'] } } },
+    { kind: 'writeStdin' }, { environmentId: 'remote-environment' }, { availableDecisions: ['decline'] },
+  ]) {
+    f.request({ id: ++id, method: 'item/commandExecution/requestApproval', params: { threadId: f.record.nativeId, command: 'Synthetic command', cwd: '/synthetic', ...params } }); await tick();
+    assert.throws(() => target.approve(target.approval.requestId, 'accept'), /原生终端|不支持/);
+    f.event('serverRequest/resolved', { requestId: id }); await tick();
+  }
+  assert.equal(f.calls.some(c => c.result?.decision === 'accept'), false);
+});
+
+test('legacy resolved or disconnected approval cannot fall back to an old daemon request', async t => {
+  const { WorkspaceClient } = require('../workspace-client.cjs'), { EventEmitter } = require('node:events');
+  const f = await fixture(t); Object.assign(f.record, { state: 'approval', owner: 'window',
+    approval: { requestId: 42, method: 'item/commandExecution/requestApproval', params: { command: 'obsolete daemon request' } } });
+  const transport = new EventEmitter(), oldCalls = [];
+  const state = { ...f.entry.state, sessions: [f.record], owner: 'window', capabilities: [], room: { messages: [] }, diagnostics: {} };
+  transport.call = async method => { oldCalls.push(method); return state; };
+  transport.close = () => transport.emit('closed');
+  const client = new WorkspaceClient([{ ...f.entry, state, client: transport }], '.', f.directory);
+  t.after(() => client.close());
+  assert.equal(client.snapshot().sessions[0].approval, null);
+  await assert.rejects(client.call('approve', f.record.id, 42, 'accept'), /原生确认/);
+  await client.call('prepareInput', f.record.id);
+  f.request({ id: 94, method: 'item/commandExecution/requestApproval', params: { threadId: f.record.nativeId, command: 'current request' } }); await tick();
+  const key = client.snapshot().sessions[0].approval.requestId;
+  await client.call('approve', f.record.id, key, 'decline'); await tick();
+  assert.equal(client.snapshot().sessions[0].approval.pending, true);
+  f.request({ id: 94, method: 'item/commandExecution/requestApproval', params: { threadId: f.record.nativeId, command: 'current request' } }); await tick();
+  assert.equal(client.snapshot().sessions[0].approval.requestId, key);
+  assert.equal(client.snapshot().sessions[0].approval.pending, true);
+  await assert.rejects(client.call('approve', f.record.id, key, 'accept'), /权限请求已变化/);
+  assert.equal(f.calls.filter(c => c.id === 94 && c.result).length, 1);
+  f.event('serverRequest/resolved', { requestId: 94 }); await tick();
+  assert.equal(client.snapshot().sessions[0].approval, null);
+  await assert.rejects(client.call('approve', f.record.id, 42, 'accept'), /原生确认/);
+  client.control.legacyInput.target(f.record).native.close();
+  assert.equal(client.snapshot().sessions[0].approval, null);
+  await assert.rejects(client.call('approve', f.record.id, key, 'accept'), /权限请求已变化/);
+  assert.equal(oldCalls.includes('approve'), false);
+});
+
 for (const empty of [false, true]) test('native completion before acknowledgement is matched once to its turn, including an empty retained thread: ' + empty, async t => {
   const f = await fixture(t, { empty, start(m, reply, event) {
     event('turn/started', { turn: { id: 'owned-turn' } });

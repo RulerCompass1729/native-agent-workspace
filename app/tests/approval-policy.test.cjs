@@ -1,0 +1,28 @@
+const test = require('node:test'), assert = require('node:assert/strict');
+const { nativeApprovalPolicy } = require('../approval-policy.js');
+const command = params => ({ method: 'item/commandExecution/requestApproval', params: { command: 'first line\nsecond line', cwd: '/synthetic/work', reason: 'Requested scope reason', ...params } });
+test('ordinary command displays all material text and only one-time decision options', () => {
+  for (const params of [{}, { kind: 'command', environmentId: null }]) {
+    const p = nativeApprovalPolicy(command(params));
+    assert.deepEqual(p.decisions, ['accept', 'decline']);
+    assert.equal(p.command, 'first line\nsecond line'); assert.equal(p.cwd, '/synthetic/work'); assert.equal(p.reason, 'Requested scope reason');
+    assert.equal(p.nativeRequired, false);
+  }
+});
+test('native available decisions are literal and an explicit malformed/empty field fails closed', () => {
+  for (const availableDecisions of [null, [], false, 'accept', ['acceptForSession'], [{ acceptWithExecpolicyAmendment: {} }]]) {
+    assert.deepEqual(nativeApprovalPolicy(command({ availableDecisions })).decisions, []);
+  }
+  assert.deepEqual(nativeApprovalPolicy(command({ availableDecisions: ['decline', 'acceptForSession'] })).decisions, ['decline']);
+  assert.deepEqual(nativeApprovalPolicy(command({ availableDecisions: ['accept'] })).decisions, ['accept']);
+});
+test('special or incomplete scope never offers GUI acceptance, while a supported refusal remains possible', () => {
+  for (const params of [{ kind: 'writeStdin' }, { kind: null }, { kind: 'future' }, { environmentId: 'remote' }, { additionalPermissions: {} },
+    { networkApprovalContext: { host: 'synthetic.example' } }, { command: null }, { command: ' ' }, { cwd: null }, { cwd: '' }]) {
+    const p = nativeApprovalPolicy(command(params));
+    assert.deepEqual(p.decisions, ['decline']); assert.equal(p.nativeRequired, true); assert.ok(p.notice);
+  }
+  const file = nativeApprovalPolicy({ method: 'item/fileChange/requestApproval', params: { grantRoot: '/synthetic' } });
+  assert.deepEqual(file.decisions, ['decline']); assert.equal(file.nativeRequired, true);
+  assert.deepEqual(nativeApprovalPolicy({ method: 'item/permissions/requestApproval', params: {} }).decisions, []);
+});
