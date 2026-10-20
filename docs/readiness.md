@@ -1,11 +1,19 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.35 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.36 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.35 refuses to overwrite an unreadable or malformed
+**Current increment:** alpha.36 keeps a window open when its local view/draft save
+fails, including application quit. The existing warning and retry control remain
+available independently of the native service connection. A post-acceptance disk
+failure no longer mislabels an accepted message as a failed send; storage events
+received during initialization remain visible. Six installed save/lifecycle
+groups, ten draft checks and three read-failure regressions pass final independent
+artifact review. Forced termination and power loss remain outside this guard.
+
+Alpha.35 refuses to overwrite an unreadable or malformed
 window record. Startup stops before launching a new service, keeps the original
 file, and offers local-data access and an explicit retry after repair. The source
 checks cover exact-byte preservation, real filesystem read denial and restoration

@@ -5,6 +5,7 @@ const node = (tag, text, cls) => { const el = document.createElement(tag); if (t
 const button = (text, action, cls) => { const el = node('button', text, cls); el.type = 'button'; el.addEventListener('click', () => attempt(action)); return el; };
 const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', error: '需要检查' };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
+let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSubmitting = false;
 let runPreview = null;
@@ -56,6 +57,7 @@ const inputFocusAllowed = () => !sessionMenu && !roomMenu && !document.querySele
 function updateState(next) {
   const before = current(), id = activeSessionId();
   state = { ...state, ...next };
+  if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
   const after = current();
   if (before && after && (before.owner !== owner || after.owner !== owner)) {
     const pending = pendingDrafts.get(id);
@@ -517,10 +519,10 @@ function render() {
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
     $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${s.model} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
-    const warning = disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' ');
+    const warning = [disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' '), state.viewStorageWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
-    $('retry-save').hidden = disconnected || !state.storageRetryable;
+    $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions();
     renderArchives(); $('room-nav').parentElement.hidden = Boolean(state.room.archived); document.querySelector('.drop-hint').hidden = Boolean(state.room.archived);
     $('workspace-empty').hidden = !state.room.archived;
@@ -810,6 +812,7 @@ const disposers = [
     if (record) { record.name = name; render(); }
   }),
   api.onDisconnected(message => { disconnected = true; render(); toast(message); }),
+  api.onViewStorage(warning => { latestViewStorage = warning; if (state) { state.viewStorageWarning = warning; render(); } }),
   api.onReconnected(next => { disconnected = false; for (const panel of progressPanels.values()) panel.started = false; updateState(next); render(); }),
   api.onNew(() => openCreate()),
 ];
@@ -1004,7 +1007,7 @@ $('close-privacy').onclick = () => { $('privacy-dialog').close(); focusTerminal(
 $('reconnect-button').onclick = () => attempt(async () => { $('reconnect-button').disabled = true; try { await api.reconnect(); } finally { $('reconnect-button').disabled = false; } });
 $('retry-save').onclick = () => attempt(async () => {
   $('retry-save').disabled = true;
-  try { await api.retrySave(); updateState(await api.initial()); render(); }
+  try { await api.retrySave(); if (!disconnected) updateState(await api.initial()); render(); }
   finally { $('retry-save').disabled = false; }
 });
 $('search-button').onclick = () => openSearch();
@@ -1027,7 +1030,9 @@ $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').oncli
 $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
 attempt(async () => {
-  state = await api.initial(); owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;
+  state = await api.initial();
+  if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
+  owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;
   readingPositions = state.viewState.readingPositions || {};
   roomSession = typeof state.viewState.roomSession === 'string' ? state.viewState.roomSession : '';
   const display = state.viewState.terminalDisplay;

@@ -845,3 +845,32 @@ The same three installed recovery groups, nine source normal-draft checks and
 eleven installed reading checks pass final independent review. All 37 application
 files match the tested source, with a verified ad-hoc signature. Original user
 records and five protected processes are unchanged; one app is discoverable.
+
+## Window save failure and safe close — alpha.36
+
+An actual Electron write-fault probe showed that closing a window after a failed
+view save still closed it and produced two uncaught main-process error dialogs.
+Only the older draft was on disk. Normal close and quit now cancel if saving the
+view record fails; the existing UI host and editable drafts remain. An intentional
+window destruction cannot be cancelled, but its failed save is handled without
+throwing another main-process error.
+
+Independent review identified two further counterexamples, both reproduced:
+a post-native-acceptance save error caused the graphical send to appear failed;
+a storage event before a peer's initial snapshot caused an undefined-state error.
+The accepted result now stays accepted with a separate storage warning. The latest
+storage event survives initialization and an older initial snapshot.
+
+The real source runner checks held initial delivery, two-window close/quit
+cancellation, failed and successful retry, original host retention, reopen with
+independent shared/private recovery copies, and local retry after backend exit.
+Private text not acknowledged by the service stays a recovery copy rather than
+silently replacing the service draft. A delayed synthetic-acceptance check verifies
+one submission and no replay through the later save failure. Ten source draft
+checks and all 355 unit checks pass without skips. Native provider/model tasks
+remain zero. Six installed write/lifecycle groups, including normal single-window
+close after recovery, ten installed draft checks and three installed read-failure
+groups pass final independent artifact review. All 37 app files match source and
+the ad-hoc signature verifies. Original user records and protected processes are
+unchanged, with one discoverable app. Force termination, crash and power loss
+are outside the cancellable close/quit protection.

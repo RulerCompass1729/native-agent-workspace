@@ -97,6 +97,33 @@ async function run() {
   await row(a.id).click(); assert.equal(await input().inputValue(), '');
   await row(b.id).click(); await close(); await launch(); await checkDraft(b.id, '另一个会话的草稿');
   passed.push('switching session and reopening preserve the other draft');
+  // Acceptance is a provider fact. A later local save failure must not turn it
+  // into a send failure or leave a tempting duplicate in the composer.
+  await send(a.id, '已接受的消息：保存失败也不能误报未发送');
+  await app.evaluate(() => {
+    const fs = process.getBuiltinModule('fs');
+    global.draftTestRename = fs.renameSync;
+    fs.renameSync = (source, destination) => {
+      if (String(destination).endsWith('/views.json')) throw Error('Synthetic post-acceptance save failure');
+      return global.draftTestRename(source, destination);
+    };
+  });
+  try {
+    const submissions = (await native('stats')).sends.length;
+    await release();
+    await until(async () => await input().inputValue() === '', 'Accepted draft clears despite later disk failure');
+    assert.equal(await page.locator('#alert').isVisible(), true);
+    assert.equal(await page.locator('#retry-save').isVisible(), true);
+    assert.equal((await native('stats')).sends.length, submissions);
+    assert.equal((await snapshot()).sessions.find(s => s.id === a.id).messages.filter(m => m.role === 'user' && m.text === '已接受的消息：保存失败也不能误报未发送').length, 1);
+    if (shots) await page.screenshot({ path: path.join(shots, 'accepted-despite-save-failure.png') });
+  } finally {
+    await app.evaluate(() => { process.getBuiltinModule('fs').renameSync = global.draftTestRename; });
+  }
+  await page.locator('#retry-save').click();
+  await until(() => page.locator('#alert').isHidden(), 'Explicit post-acceptance save retry');
+  await checkDraft(a.id, '');
+  passed.push('accepted message remains accepted through a later view-save failure; explicit save retry does not resubmit it');
   assert.deepEqual(errors, []); assert.equal(app.windows().length, 1);
   const final = await snapshot(); assert.equal(final.diagnostics.shellModelCalls, 0);
   console.log(JSON.stringify({ passed, errors, nativeModelCalls: 0, transport: 'synthetic; real headed desktop, IPC, service, persistence', sends: (await native('stats')).sends.length }));

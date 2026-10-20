@@ -24,6 +24,11 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   The startup screen offers the same local-data location and an explicit retry
   after permission repair or restoration from a known-good backup. This does not
   repair a damaged file or provide an independent historical backup service.
+  A later write failure keeps the normal window/quit action from closing the
+  unsaved view. The existing warning offers an explicit local-save retry, even
+  if the native service has disconnected. A message already accepted by a native
+  agent stays accepted; retrying storage never resends it. Forced process
+  termination, device failure and unsaved memory are not covered by this guard.
   Electron/DSH keep local UI preferences/cache and a local UI access token.
   The independent service keeps its private connection/token files and a
   versioned runtime copy. Tokens are not displayed in startup failures.

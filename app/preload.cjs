@@ -12,7 +12,7 @@ for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create',
 }
 api.retryStartup = () => ipcRenderer.invoke('workspace:retry-startup');
 api.startupData = () => ipcRenderer.invoke('workspace:startup-data');
-for (const [name, channel] of [['onState', 'workspace:state'], ['onReconnected', 'workspace:reconnected'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
+for (const [name, channel] of [['onState', 'workspace:state'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
   api[name] = callback => { const listener = (_event, data) => callback(data); ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener); };
 }
 contextBridge.exposeInMainWorld('workspace', Object.freeze(api));

@@ -53,7 +53,7 @@ if (!primary) app.quit();
 const windows = new Map();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, viewStore, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 const startupFile = path.join(__dirname, 'startup.html');
 function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, ...(backgroundTest ? { show: false, focusable: false } : {}), minWidth: 850, minHeight: 600, backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
@@ -76,7 +76,12 @@ function bindClient(context) {
   client.on('progress', data => send('workspace:progress', data));
   client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
 }
-function displayState(snapshot, context) { return roomState.apply(sessionLabels.apply(submissionState(snapshot))); }
+function displayState(snapshot, context) { return { ...roomState.apply(sessionLabels.apply(submissionState(snapshot))), viewStorageWarning }; }
+function reportViewStorage(warning) {
+  if (viewStorageWarning === warning) return;
+  viewStorageWarning = warning;
+  for (const { win } of windows.values()) if (!win.isDestroyed()) win.webContents.send('workspace:view-storage', warning);
+}
 async function broadcastRoom() {
   await Promise.allSettled([...windows.values()].map(async context => {
     if (context.win.isDestroyed() || context.client.socket.destroyed) return;
@@ -96,8 +101,12 @@ function saveViews() {
   try {
     if (!viewStore) throw Error('界面记录尚未读取，未写入空白记录。');
     viewStore.save(views);
+    reportViewStorage(null);
     resolve?.();
-  } catch (error) { reject?.(error); throw error; }
+  } catch (error) {
+    reportViewStorage('界面与草稿副本未能保存。窗口已保留；请检查磁盘空间或本机数据权限，再点“重试保存”。');
+    reject?.(error); throw error;
+  }
 }
 function saveReadingSoon() {
   if (!readingSavePromise) {
@@ -126,10 +135,18 @@ async function openWindow(saved) {
   win.webContents.on('will-navigate', (event, url) => { if (!trusted(url)) event.preventDefault(); });
   win.webContents.on('will-attach-webview', event => event.preventDefault());
   const id = win.webContents.id;
-  win.on('close', () => { view.bounds = win.getBounds(); if (!quitting && !context.failed) view.active = false; saveViews(); });
+  win.on('close', event => {
+    if (quitting || context.failed) return;
+    view.bounds = win.getBounds(); const wasActive = view.active; view.active = false;
+    try { saveViews(); }
+    catch { view.active = wasActive; event.preventDefault(); }
+  });
   win.on('closed', () => {
     // A renderer/webContents shutdown can bypass the cancellable close event.
-    if (!quitting && !context.failed) { view.active = false; saveViews(); }
+    if (!quitting && !context.failed && view.active !== false) {
+      view.active = false;
+      try { saveViews(); } catch { view.active = true; }
+    }
     windows.delete(id); context.client.close();
   });
   try { await win.loadURL(entry); await ready; }
@@ -162,9 +179,15 @@ async function boot() {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   if (!wired) {
   wired = true;
-  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'retrySave']) register(name, (c, ...args) => {
+  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve']) register(name, (c, ...args) => {
     if (['prepareInput', 'claim', 'terminal', 'input', 'approve'].includes(name)) roomState.assertAvailable(args[0]);
     return c.client.call(name, ...args);
+  });
+  register('retrySave', async c => {
+    if (viewStorageWarning) saveViews();
+    // The window record is independent of provider/service availability.
+    if (!c.client.socket.destroyed && (await c.client.call('initial')).storageRetryable) await c.client.call('retrySave');
+    return true;
   });
   register('join', async (c, id, join) => {
     try { await roomState.membership(c.client, id, join, sessionLabels.labels.get(id)); }
@@ -200,7 +223,9 @@ async function boot() {
     const result = await submit(c, 'send', id, text);
     // Every draft edit replaces this object, including retyping identical text.
     // A late acceptance must not clear a newer recovery copy.
-    if (acceptSentDraft(c.view, id, draft, text)) saveViews();
+    if (acceptSentDraft(c.view, id, draft, text)) {
+      try { saveViews(); } catch { /* Native acceptance stands; the independent storage warning remains actionable. */ }
+    }
     return result;
   });
   register('preflight', () => preflight());
@@ -374,5 +399,14 @@ app.on('activate', focusOrOpen);
 app.on('second-instance', focusOrOpen);
 if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
-app.on('before-quit', () => { quitting = true; try { if (viewStore?.loaded) saveViews(); } finally { dsh?.stop(); } });
+app.on('before-quit', event => {
+  if (quitting) return;
+  try {
+    if (viewStore?.loaded) {
+      for (const { win, view } of windows.values()) if (!win.isDestroyed()) view.bounds = win.getBounds();
+      saveViews();
+    }
+  } catch { event.preventDefault(); return; }
+  quitting = true; dsh?.stop();
+});
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
