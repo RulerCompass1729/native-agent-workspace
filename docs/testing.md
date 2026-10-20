@@ -585,3 +585,32 @@ Reviewer counterexamples also cover rejected old-owner input after takeover and
 an empty retained thread completing before its ACK. Clearing the old pending slot
 cannot modify the new owner's draft/work. The accepted native turn ID survives
 completion and observation does not emit a second reply or resend an input.
+
+## Owned native backend failure — alpha.29
+
+A synthetic local server first reproduced an exited child with a permanently
+cached closed RPC. The repair releases only a confirmed dead owned lease, rejects
+an endpoint that still answers, and fences old runtime events, queued creation
+and late startup results. A remote display-client exit must be confirmed before
+continuation is offered. Its pending-exit period is read-only, including the
+actual IPC input path; the last observation remains available.
+
+The real native UI trial reuses previously completed isolated Codex history. It
+opens the native terminal, retains a Chinese graphical draft and room membership,
+terminates only the test-owned server, waits for recoverable state, and explicitly
+continues the same native ID with a replacement server. History, draft and room
+membership match; GUI/TUI switching works and dispatch count remains zero. It
+submits no new model task. Hidden windows are non-focusable; native dialogs are
+answered by the test harness, not physical OS input.
+
+Synthetic regressions cover input before an acknowledgement, unchanged versus
+newer drafts, dead transport with a living process, a still-listening endpoint,
+unconfirmed display exit, old completion/events and creation slots. Actual
+Electron tests additionally verify the read-only pending-exit state and restore
+path. Final installed checks cover four connection groups, six observation groups
+and the real native no-task recovery. All 35 packaged application files match
+source and signature verification passes. The complete suite passes 307 tests
+with zero skips; the final endpoint/startup cleanup additionally passes ten
+focused regressions. Original user sessions, histories, drafts and view files are
+unchanged, with one existing installed application entry. Independent source and
+final installed-artifact review passed for this bounded repair.

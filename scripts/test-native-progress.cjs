@@ -159,10 +159,14 @@ async function run() {
   await until(async () => (await fixture()).waiting.includes(a), 'Old observation held');
   await fixture('connection', a, 'disconnected');
   await panel(a).locator('.progress-notice').getByText('连接已断开', { exact: false }).waitFor();
+  assert.equal(await panel(a).getByRole('button', { name: '重新连接画面', exact: true }).isDisabled(), true);
+  await panel(a).getByRole('button', { name: '最后画面', exact: true }).click();
+  await panel(a).locator('.progress-controls > span').getByText('最后画面', { exact: true }).waitFor();
   await fixture('connection', a, 'idle');
   await fixture('output', a, { data: '\x1bcNEW CONNECTION CONTENT\r\n' });
   await fixture('release', a); await aligned(a);
   await until(() => panel(a).locator('.progress-notice').innerText().then(text => !text.includes('停止同步')), 'New connection observed');
+  assert.equal(await panel(a).getByRole('button', { name: '重新连接画面', exact: true }).isDisabled(), false);
   checks.push('Session disconnect labels its frozen observation; old snapshot cannot overwrite a later connection; same panel refreshes after reconnect');
   await fixture('hold', a); await panel(a).getByRole('button', { name: '重新连接画面', exact: true }).click();
   await until(async () => (await fixture()).waiting.includes(a), 'Observe held before disconnect');

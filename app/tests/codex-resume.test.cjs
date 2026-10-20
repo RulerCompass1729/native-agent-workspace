@@ -27,7 +27,7 @@ for (const cached of [false, true]) test('history without a native turn ID is co
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-history-state-'));
   const f = fixture(idle); Object.assign(f.host, { binaries: {}, close() {} });
   const w = new Workspace(f.host, dir), s = { id: 'local', provider: 'codex', recovering: true, messages: cached ? [{ id: 'answer', role: 'assistant', text: 'partial', status: 'streaming' }] : [] };
-  w.sessions.set(s.id, s); w.bind(s, f.r);
+  w.sessions.set(s.id, s); w.runtimes.set(s.id, f.r); w.bind(s, f.r);
   t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   f.r.emit('history', [{ id: 'answer', type: 'agentMessage', turnId: null, text: 'Saved answer' }]);
   assert.equal(s.messages[0].status, 'complete'); assert.equal(s.messages[0].text, 'Saved answer');

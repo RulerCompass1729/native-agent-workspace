@@ -56,6 +56,25 @@ async function run() {
   assert.equal(calls.some(c => c.method === 'turn/start'), false);
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.deepEqual(errors, []);
   checks.push('Native view toggle retains same thread; reconnection has no settings overrides, duplicate thread creation, or model send');
+  await page.locator('#terminal-tab').click();
+  await fixture('backend-exit', id);
+  await until(async () => (await snapshot()).sessions[0].backendUnavailable, 'Backend exit blocks pending terminal input');
+  const inputError = await page.evaluate(async id => {
+    try { await workspace.input(id, 'must remain unsent'); return ''; } catch (error) { return error.message; }
+  }, id);
+  assert.match(inputError, /输入未发送/);
+  await page.locator('#chat-tab').click();
+  await page.getByRole('button', { name: '暂不可发送', exact: true }).waitFor();
+  assert.equal(await page.locator('#message-input').evaluate(el => el.readOnly), true);
+  assert.equal(await page.getByRole('button', { name: '继续原生会话', exact: true }).count(), 0);
+  assert.equal((await fixture('inspect')).inputs, 0);
+  await fixture('display-exit', id);
+  await page.getByRole('button', { name: '继续原生会话', exact: true }).click();
+  await until(async () => (await snapshot()).sessions[0].state === 'idle', 'Explicit continuation after confirmed display exit');
+  assert.equal(await page.locator('#message-input').inputValue(), '私有草稿：断开后保留');
+  assert.equal((await snapshot()).sessions[0].nativeId, original.nativeId);
+  assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.deepEqual(errors, []);
+  checks.push('Backend exit immediately makes the old terminal read-only; continuation waits for display exit and retains the same draft and identity');
   console.log(JSON.stringify({ checks, errors, modelTasks: 0, nativeProcesses: 0, profile }, null, 2));
 }
 run().catch(async e => { console.error(e.stack); process.exitCode = 1; }).finally(async () => {

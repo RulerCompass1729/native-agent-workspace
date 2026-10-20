@@ -1,11 +1,16 @@
 # Readiness and next gates
 
-As of 2026-10-19. Version 0.1.0-alpha.28 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.29 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.28 adds local find with exact-context navigation,
+**Current increment:** alpha.29 repairs continuation after a confirmed owned
+Codex backend exit. Records and drafts remain; recovery is explicit, and stale
+connections cannot overwrite the new runtime. Native no-task and local UI checks
+pass; independent source and final installed-artifact review passed. The installed
+real native check restores the same completed test identity without a new task.
+Alpha.28 adds local find with exact-context navigation,
 archive reading and return, plus explicit reconnection of a disconnected owned
 Codex thread. Source tests, real native no-task UI checks and installed artifact
 checks passed independent review. Native configuration, drafts and identity are retained.

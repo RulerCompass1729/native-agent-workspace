@@ -1,6 +1,6 @@
 # Review and issue record
 
-As of 2026-10-19. This is a working acceptance record, not an independent security
+As of 2026-10-20. This is a working acceptance record, not an independent security
 certification. Private transcripts, screenshots, paths and account details stay
 outside the public repository. Use synthetic reproductions here.
 
@@ -18,6 +18,10 @@ contradicts it; keep the former result's scope and date.
 
 | ID | Source / trigger | Priority / owner | Status and evidence | Remaining check or trigger |
 | --- | --- | --- | --- | --- |
+| A29-1 | Actual zero-model server-exit reproduction: closed RPC and fulfilled startup promise keep an exited backend cached | High / adapter maintainer | Closed after independent source and final installed-artifact review: paired owned-process exit/transport closure releases the lease, retains records and pauses work; same native ID continuation passes actual native UI test | Installed real native recovery, four connection and six observation UI groups passed; no arbitrary active-fleet reconstruction |
+| A29-2 | Reviewer: old RPC/runtime events and creation queue can cross into a new backend | High / adapter maintainer | Lease checks, current-runtime event guards and stale startup ACK rejection; synthetic process/protocol regressions pass | Closed after independent source and final installed-artifact review; a still-answering endpoint is never replaced |
+| A29-3 | Reviewer: dying remote terminal still accepts input while waiting for exit | High / desktop maintainer | Backend-unavailable state immediately blocks GUI/TUI writes and continuation; held-client-exit unit and actual Electron/IPC checks pass | Closed after independent source and final installed-artifact review; unconfirmed terminal exit retains the recovery gate |
+| A29-4 | Actual UI screenshot: frozen observation still says live; terminal-close activity implies its exited backend remains running | Medium / desktop maintainer | Last-frame label, disabled unavailable reload and accurate exit message; actual progress UI checks pass | Closed after independent source and final installed-artifact review |
 | A28-1 | User trajectory feedback and independent source review: long solo conversations have no local find | Medium / desktop maintainer | Source and installed search/reading checks pass: stable message and deep-text location, archived-session reading, room preview/copy and return; no durable index, draft scan or model dispatch | Closed after independent source and installed-artifact review; Markdown-only syntax may locate its message rather than a visible text range |
 | A28-2 | Actual search UI / independent review: new output clears match marker; returning from shared search loses previous filters; Escape clears field instead of closing | Medium / desktop maintainer | Reproduced and fixed with independent data attribute, saved room filters and explicit Escape handling; source/installed real UI flows pass | Closed after independent source and installed-artifact review |
 | A28-3 | Independent source review: Codex unsubscribe leaves a disconnected session with no safe continuation action | High / adapter maintainer | Same-thread re-subscribe, empty-thread observation, operation generations and unchanged native settings; actual native no-task UI and installed cancel/failure/retry pass | Source review passed; closed after independent installed-artifact review. No shared-server termination or automatic task retry |

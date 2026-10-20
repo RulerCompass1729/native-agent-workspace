@@ -34,7 +34,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null };
   }
   changed() {
     this.emit('change');
@@ -66,57 +66,67 @@ class Workspace extends EventEmitter {
     const id = randomUUID();
     const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`, provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
     this.sessions.set(id, record); this.changed();
+    let runtime;
     try {
-      const runtime = this.host.create(record); this.runtimes.set(id, runtime); this.bind(record, runtime);
+      runtime = this.host.create(record); this.runtimes.set(id, runtime); this.bind(record, runtime);
       if (runtime.start) await runtime.start();
       return id;
-    } catch (error) { record.state = 'error'; record.activity = error.message; this.changed(); throw error; }
+    } catch (error) {
+      if (!runtime || this.runtimes.get(id) === runtime) { record.state = 'error'; record.activity = error.message; this.changed(); }
+      throw error;
+    }
   }
   bind(s, runtime) {
+    const on = (event, handler) => runtime.on(event, (...args) => {
+      if (this.runtimes.get(s.id) === runtime) handler(...args);
+    });
     if (!this.progress.has(s.id)) this.progress.set(s.id, new ProgressJournal());
     for (const id of this.progress.keys()) {
       if (this.progress.size <= 12) break;
       if (!this.runtimes.has(id)) { this.progress.delete(id); this.observedTerminals.delete(id); }
     }
-    runtime.on('progress', item => {
+    on('progress', item => {
       const update = this.progress.get(s.id)?.update(item);
       if (update) this.emit('progress', { id: s.id, ...update });
     });
-    runtime.on('capability', () => this.changed());
-    runtime.on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
-    runtime.on('model', model => { s.model = model; this.changed(); });
-    runtime.on('state', state => {
-      if (this.stops.has(s.id) && !['ended', 'error', 'disconnected'].includes(state)) return;
+    on('capability', () => this.changed());
+    on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
+    on('model', model => { s.model = model; this.changed(); });
+    on('state', state => {
+      if (this.stops.has(s.id) && !['ended', 'recoverable', 'error', 'disconnected'].includes(state)) return;
       s.state = state;
       if (state !== 'starting' && s.activity === '正在连接原生历史') s.activity = '';
-      if (state === 'ended') { s.pid = null; s.pendingTag = null; s.approval = null; this.runtimes.delete(s.id); }
+      if (state === 'ended' || state === 'recoverable') {
+        if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
+        s.pid = null; s.pendingTag = null; s.approval = null; this.runtimes.delete(s.id);
+      }
       if (state === 'approval') this.pause('等待原生权限确认');
       if (state === 'working' && this.room.run?.status === 'running' && this.room.run.ids.includes(s.id) && this.room.run.awaiting?.sessionId !== s.id) this.pause('成员开始了本轮之外的原生工作，请核对后再交接。');
-      if (state === 'ended' || state === 'error') this.pause('原生会话不可用'); this.changed();
+      if (['ended', 'recoverable', 'error'].includes(state)) this.pause('原生会话不可用'); this.changed();
     });
-    runtime.on('terminal', event => {
+    on('terminal', event => {
       if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
       this.emit('terminal', { id: s.id, ...event });
     });
-    runtime.on('activity', text => { s.activity = text; this.changed(); });
-    runtime.on('background', info => {
+    on('activity', text => { s.activity = text; this.changed(); });
+    on('background', info => {
       s.background = info.count; s.scheduled = info.scheduled;
       if ([info.count, info.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) this.nativeWorkObserved(s.id, '原生报告仍有后台或定时工作，请核对后再交接。');
       this.changed();
     });
-    runtime.on('usage', usage => { s.usage = usage; this.changed(); });
-    runtime.on('fleet', item => {
+    on('usage', usage => { s.usage = usage; this.changed(); });
+    on('fleet', item => {
       s.fleet.push({ ...item, time: Date.now() }); s.fleet = s.fleet.slice(-80);
       if (item.active === true || ['SubagentStart', 'thread/started', 'collabAgentSpawnToolCall'].includes(item.event)) this.nativeWorkObserved(s.id, '观察到原生团队活动，后续转交已暂停；原生团队继续保留。');
       this.changed();
     });
-    runtime.on('approval', approval => { s.approval = approval; this.pause('等待原生权限确认'); this.changed(); });
-    runtime.on('nativeInput', (text, item) => {
+    on('approval', approval => { s.approval = approval; this.pause('等待原生权限确认'); this.changed(); });
+    on('nativeInput', (text, item) => {
       this.pause('真人在原生终端输入'); s.controlRevision++;
       if (!item?.id || !s.messages.some(m => m.id === item.id)) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
       this.changed();
     });
-    runtime.on('history', items => {
+    on('history', items => {
       const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set();
       const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
       const legacyInputs = new Map();
@@ -155,8 +165,8 @@ class Workspace extends EventEmitter {
       runtime.recoveryNativeInputs?.clear();
       this.changed();
     });
-    runtime.on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.changed(); });
-    runtime.on('unattributed', tag => {
+    on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.changed(); });
+    on('unattributed', tag => {
       if (s.pendingTag !== tag) return;
       s.pendingTag = null;
       const shared = this.room.messages.find(m => m.id === tag);
@@ -165,13 +175,13 @@ class Workspace extends EventEmitter {
       s.activity = '输入已接收；回复归属未确认，自动交接已暂停。';
       this.pause(s.activity); this.changed();
     });
-    runtime.on('delta', item => {
+    on('delta', item => {
       let message = s.messages.find(m => m.id === item.id);
       if (!message) { message = { id: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
       message.text += item.text; this.changed();
     });
-    runtime.on('messageItem', item => { let m = s.messages.find(m => m.id === item.id); if (!m) { m = { id: item.id, role: 'assistant' }; s.messages.push(m); } Object.assign(m, { text: item.text, status: 'complete', phase: item.phase }); this.changed(); });
-    runtime.on('complete', info => {
+    on('messageItem', item => { let m = s.messages.find(m => m.id === item.id); if (!m) { m = { id: item.id, role: 'assistant' }; s.messages.push(m); } Object.assign(m, { text: item.text, status: 'complete', phase: item.phase }); this.changed(); });
+    on('complete', info => {
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
@@ -184,7 +194,7 @@ class Workspace extends EventEmitter {
       this.changed();
       this.advance(s, info).catch(error => { this.pause(error.message); });
     });
-    runtime.on('failed', (reason, info) => { if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pause(reason); this.changed(); });
+    on('failed', (reason, info) => { if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pause(reason); this.changed(); });
   }
   join(id, join) {
     const s = this.get(id);
@@ -246,6 +256,11 @@ class Workspace extends EventEmitter {
           if (clearedDraft && this.draftRevisions.get(id) === draftRevision) this.drafts.set(id, draft);
           this.pause(error.message);
         }
+      } else if (!this.runtimes.has(id) && s.state === 'recoverable' && s.connectionRevision === connection
+        && sameControl && !s.pendingTag && clearedDraft && this.draftRevisions.get(id) === draftRevision) {
+        // Confirmed backend exit may retire the runtime before its rejected
+        // ACK settles. Retain only this unchanged, still-owned draft.
+        this.drafts.set(id, draft);
       }
       this.changed(); throw error;
     }
@@ -260,11 +275,13 @@ class Workspace extends EventEmitter {
     const s = this.get(id);
     if (typeof data !== 'string' || data.length > 65536) throw new Error('终端输入无效。');
     if (s.owner !== owner) throw new Error('另一个窗口正在控制这个会话。');
+    const runtime = this.runtime(id);
+    if (runtime.backendExitConfirmed) throw new Error('原生后台已退出；当前画面只读，输入未发送。');
     // Terminal-generated device/cursor replies are not human instructions.
     const response = isTerminalResponse(data);
     if (!response && s.view !== 'terminal') throw new Error('请切换到原生终端后输入。');
     if (!response) { this.pause('真人在原生终端操作'); s.controlRevision++; }
-    const t = this.runtime(id).terminal; if (!t?.alive) throw new Error('终端尚未连接。'); t.input(data);
+    const t = runtime.terminal; if (!t?.alive) throw new Error('终端尚未连接。'); t.input(data);
   }
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }
   async interrupt(id, owner) { const s = this.get(id); this.claim(id, owner, s.view); s.controlRevision++; this.pause('真人中断当前回复'); await this.runtime(id).interrupt(); s.activity = '已请求原生中断；团队任务请在原生终端确认。'; this.changed(); }
@@ -340,10 +357,12 @@ class Workspace extends EventEmitter {
     const runtime = this.runtime(id);
     this.pause('正在断开原生会话'); s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; s.activity = '等待原生确认'; this.changed();
     const operation = Promise.resolve().then(() => runtime.stop()).then(result => {
-      if (!['ended', 'disconnected'].includes(result?.state)) throw new Error('原生未确认结束状态。');
+      if (!['ended', 'recoverable', 'disconnected'].includes(result?.state)) throw new Error('原生未确认结束状态。');
       s.state = result.state; s.pendingTag = null; s.approval = null;
-      s.activity = result.state === 'ended' ? '' : '本应用连接已断开；原生线程或后台任务可能仍在运行。';
-      if (s.state === 'ended') { s.pid = null; this.runtimes.delete(id); }
+      s.activity = result.state === 'ended' ? '' : result.state === 'recoverable'
+        ? '原生后台已退出；记录和草稿保留，任务不会自动重发。'
+        : '本应用连接已断开；原生线程或后台任务可能仍在运行。';
+      if (['ended', 'recoverable'].includes(s.state)) { s.pid = null; this.runtimes.delete(id); }
     }).catch(error => { s.state = 'error'; s.activity = error.message; throw error; })
       .finally(() => { this.stops.delete(id); this.changed(); });
     this.stops.set(id, operation); return operation;
@@ -371,13 +390,18 @@ class Workspace extends EventEmitter {
     s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.owner = owner; s.recovering = true; s.state = 'starting'; s.activity = '正在连接原生历史';
     // Membership is retained, but an interrupted automatic run never restarts.
     this.pause('恢复原生会话后，请重新选择本次协作任务。'); this.changed();
+    let runtime;
+    const generation = s.connectionRevision;
     try {
-      const runtime = this.host.create(s); this.runtimes.set(id, runtime); this.bind(s, runtime);
+      runtime = this.host.create(s); this.runtimes.set(id, runtime); this.bind(s, runtime);
       if (runtime.start) await runtime.start();
     } catch (error) {
-      if (!this.runtimes.get(id)?.terminal?.alive && !this.runtimes.get(id)?.hasHistory) this.runtimes.delete(id);
-      s.state = 'error'; s.activity = error.message; this.changed(); throw error;
-    } finally { s.recovering = false; this.changed(); }
+      if (generation === s.connectionRevision && (!runtime || this.runtimes.get(id) === runtime)) {
+        if (!runtime?.terminal?.alive && !runtime?.hasHistory) this.runtimes.delete(id);
+        s.state = 'error'; s.activity = error.message; this.changed();
+      }
+      throw error;
+    } finally { if (generation === s.connectionRevision) { s.recovering = false; this.changed(); } }
   }
   clearSharedHistory() {
     if (this.room.run?.status === 'running') throw new Error('请先暂停本轮交接，再清除共享记录。');

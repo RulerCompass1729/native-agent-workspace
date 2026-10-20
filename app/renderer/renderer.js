@@ -47,8 +47,8 @@ const viewClaims = new Map();
 const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = () => state?.room.archived ? [] : state?.sessions.filter(s => s.roomId === 'shared' && !s.archived) || [];
-const nativeUsable = s => s && !s.archived && (['starting', 'idle', 'working', 'approval'].includes(s.state) || (s.state === 'error' && s.terminalAvailable));
-const canResume = s => s?.nativeId && !s.terminalAvailable &&
+const nativeUsable = s => s && !s.archived && !s.backendUnavailable && (['starting', 'idle', 'working', 'approval'].includes(s.state) || (s.state === 'error' && s.terminalAvailable));
+const canResume = s => s?.nativeId && !s.backendUnavailable && !s.terminalAvailable &&
   (['ended', 'recoverable', 'error'].includes(s.state) || (s.provider === 'codex' && s.state === 'disconnected' && (s.serviceCapabilities || state.capabilities || []).includes('resubscribe'))) &&
   ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
 const inputFocusAllowed = () => !sessionMenu && !roomMenu && !document.querySelector('dialog[open]');
@@ -551,11 +551,11 @@ function render() {
       for (const event of s.fleet.slice(-8)) $('advanced-content').append(node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`));
       if (!['ended', 'stopping', 'recoverable'].includes(s.state)) $('advanced-content').append(button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small'));
       if (canResume(s) && mode === 'terminal') $('header-actions').prepend(button('继续原生会话', () => api.resume(s.id), 'primary'));
-      if (['ended', 'recoverable', 'error'].includes(s.state) && !s.terminalAvailable && (s.serviceCapabilities || state.capabilities)?.includes('forget')) {
+      if (['ended', 'recoverable', 'error'].includes(s.state) && !s.backendUnavailable && !s.terminalAvailable && (s.serviceCapabilities || state.capabilities)?.includes('forget')) {
         $('advanced-content').append(button('移除本应用记录…', () => api.forget(s.id), 'small'));
       }
       for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)); }
-      if (mode === 'terminal' && (alive || (s.state === 'error' && s.terminalAvailable))) attempt(() => ensureTerminal(s.id));
+      if (mode === 'terminal' && alive) attempt(() => ensureTerminal(s.id));
     }
     if (inRoom) {
       const run = state.room.run;

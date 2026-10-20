@@ -1,7 +1,7 @@
 // Actual Codex/workspace lifecycle with deterministic native transport, no model.
 const path = require('node:path');
 const { NativeHost, Codex } = require(path.join(process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..'), 'app/adapters.cjs'));
-let fail = false; const calls = [], records = new Map(), runtimes = new Map();
+let fail = false, finishDisplayExit, inputs = 0; const calls = [], records = new Map(), runtimes = new Map();
 NativeHost.prototype.start = async function () { this.binaries = { codex: 'fixture', python: 'fixture' }; };
 NativeHost.prototype.close = function () {};
 NativeHost.prototype.startCodex = async function () {
@@ -22,7 +22,7 @@ NativeHost.prototype.create = function (record) {
   records.set(record.id, record); const runtime = new Codex(record, this); runtimes.set(record.id, runtime);
   runtime.openTerminal = async () => {
     if (runtime.stopped) throw Error('Disconnected');
-    if (!runtime.terminal?.alive) runtime.terminal = { alive: true, async stop() { this.alive = false; }, resize() {}, input() { throw Error('No native input permitted'); }, snapshot: async () => ({ buffer: 'Same native session\r\n> ', sequence: 0, cols: 100, rows: 30 }) };
+    if (!runtime.terminal?.alive) runtime.terminal = { alive: true, async stop() { this.alive = false; this.nativeExited = true; }, resize() {}, input() { inputs++; throw Error('No native input permitted'); }, snapshot: async () => ({ buffer: 'Same native session\r\n> ', sequence: 0, cols: 100, rows: 30 }) };
     return runtime.terminal;
   };
   return runtime;
@@ -30,5 +30,13 @@ NativeHost.prototype.create = function (record) {
 process.on('message', q => {
   if (q.method === 'history') { const r = runtimes.get(q.target); r.hasHistory = true; r.emit('history', [{ id: 'saved-answer', type: 'agentMessage', text: '保留的原生历史' }]); }
   if (q.method === 'fail') fail = q.value;
-  process.send({ requestId: q.id, calls });
+  if (q.method === 'backend-exit') {
+    const r = runtimes.get(q.target);
+    r.terminal.stop = () => new Promise(resolve => {
+      finishDisplayExit = () => { r.terminal.alive = false; r.terminal.nativeExited = true; resolve(); };
+    });
+    r.backendExited().catch(() => {});
+  }
+  if (q.method === 'display-exit') finishDisplayExit();
+  process.send({ requestId: q.id, calls, inputs });
 });

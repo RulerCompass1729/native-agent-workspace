@@ -127,6 +127,18 @@ test('a rejected old-owner send releases its own pending slot without changing t
   await w.send(id, 'new draft', 'next-owner');
   assert.ok(w.get(id).pendingTag);
 });
+for (const edit of [false, true]) test('backend retirement before a rejected ACK preserves the right draft: ' + edit, async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  let reject; r.send = () => new Promise((_resolve, fail) => { reject = fail; });
+  w.setDraft(id, 'pending draft', 'owner');
+  const sending = w.send(id, 'pending draft', 'owner'), rejected = assert.rejects(sending);
+  r.emit('state', 'recoverable');
+  if (edit) w.setDraft(id, 'new edit', 'owner');
+  reject(Error('Transport lost')); await rejected;
+  assert.equal(w.drafts.get(id), edit ? 'new edit' : 'pending draft');
+  assert.equal(w.get(id).messages.at(-1).status, 'unconfirmed');
+  assert.equal(w.get(id).state, 'recoverable');
+});
 test('switching your own view does not cancel a pending send; actual input or takeover does', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   let allowed;

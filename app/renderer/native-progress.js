@@ -20,7 +20,9 @@ class NativeProgressPanel {
     this.range = node('input'); this.range.type = 'range'; this.range.min = '0'; this.range.max = '0'; this.range.max = String(saved.target || 0); this.range.value = String(saved.target || 0); this.epoch = saved.epoch; this.range.setAttribute('aria-label', '回看原生过程');
     this.position = node('span', '实时', 'quiet');
     this.controls = node('div', undefined, 'progress-controls');
-    this.controls.append(this.range, this.position, button('回到实时', () => { this.live = true; this.followScreen = true; this.savedScroll = null; this.replay(this.index); }), button('复制', () => api.copy(this.term?.getSelection() || '')), button('重新连接画面', () => this.reload()), button('操作终端', () => selected === 'room' ? selectRoom(this.id) : select(this.id, 'terminal')));
+    this.latestButton = button('回到实时', () => { this.live = true; this.followScreen = true; this.savedScroll = null; this.replay(this.index); });
+    this.reloadButton = button('重新连接画面', () => this.reload());
+    this.controls.append(this.range, this.position, this.latestButton, button('复制', () => api.copy(this.term?.getSelection() || '')), this.reloadButton, button('操作终端', () => selected === 'room' ? selectRoom(this.id) : select(this.id, 'terminal')));
     this.range.oninput = () => { this.live = false; this.replay(Number(this.range.value)); };
     this.trace = node('details', undefined, 'progress-trace'); this.traceSummary = node('summary', '运行记录'); this.traceList = node('div'); this.trace.append(this.traceSummary, this.traceList); this.trace.open = !!saved.traceOpen; this.savedScroll = saved.scroll; this.traceChosen = typeof saved.traceOpen === 'boolean';
     this.traceSummary.addEventListener('click', () => { this.traceChosen = true; });
@@ -57,13 +59,16 @@ class NativeProgressPanel {
     $('terminal-area').append(entry.element);
   }
   update(record, capable, connected = true) {
-    connected = connected && !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
+    connected = connected && !record.backendUnavailable && !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
     if (this.connected !== connected || this.runtimeRevision !== (record.connectionRevision || 0)) {
       this.connectionGeneration = (this.connectionGeneration || 0) + 1;
       this.runtimeRevision = record.connectionRevision || 0;
       this.started = false;
     }
     this.connected = connected;
+    this.reloadButton.disabled = !connected;
+    this.latestButton.textContent = connected ? '回到实时' : '最后画面';
+    if (!connected && this.live) this.position.textContent = '最后画面';
     this.heading.textContent = record.name;
     this.status.textContent = states[record.state] + (record.activity ? ' · ' + record.activity : '');
     if (!connected) { this.status.textContent = '已断开 · 最后收到的画面'; this.notice.textContent = '连接已断开，下面的画面与记录停止同步；重新连接后会核对缺口。'; return; }
@@ -165,7 +170,7 @@ class NativeProgressPanel {
           this.paintedIndex = target;
           this.range.min = String(checkpoint.index); this.range.max = String(this.index); this.range.value = String(target);
           const event = events.at(-1) || checkpoint;
-          this.position.textContent = this.live ? '实时' : `回看 ${new Date(event.time).toLocaleTimeString()}`;
+          this.position.textContent = this.live ? (this.connected ? '实时' : '最后画面') : `回看 ${new Date(event.time).toLocaleTimeString()}`;
           this.viewport.scrollTop = this.followScreen ? this.viewport.scrollHeight : this.savedScroll ?? this.viewport.scrollTop; this.savedScroll = null;
         } else {
           const revision = this.paintRevision, first = this.paintPending[0].event, batch = [];
