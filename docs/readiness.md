@@ -1,11 +1,19 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.42 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.43 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.42 distinguishes the main reply from observed native
+**Current increment:** alpha.43 repairs retrying an exited Codex display without
+replacing its thread/server, replaying input or losing the first keyboard focus.
+Installed synthetic regressions and a real native display exit/reopen pass with
+zero additional model tasks. The [registration task](acceptance/registration.md)
+also confirms one actual Claude Agent Teams task/message/shutdown workflow and
+a correct independent Codex result. Native permission intervention still keeps
+the subsequent reply private; automatic room return is not claimed for that path.
+
+Alpha.42 distinguishes the main reply from observed native
 child activity in solo and room views. A real Codex child retained identity and
 activity across joining/leaving the room and reopening the UI; no task was replayed.
 These are partial recent observations, not complete fleet inventory or termination

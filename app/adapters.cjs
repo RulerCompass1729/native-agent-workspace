@@ -67,7 +67,7 @@ class Terminal extends EventEmitter {
       this.emit('data', { ...observation, sequence: this.sequence });
     });
   }
-  snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serialize.serialize(), sequence: this.sequence, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid }))); }
+  snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serialize.serialize(), sequence: this.sequence, epoch: this.journal.epoch, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid }))); }
   observe() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.journal.snapshot(), alive: this.alive }))); }
   stop(timeout = 5000) {
     if (this.stopPending) return this.stopPending;
@@ -591,10 +591,13 @@ class Codex extends EventEmitter {
     if (!this.turnId) throw new Error('尚未确认当前原生回合；请在原生终端中断。');
     await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId: this.turnId });
   }
-  async openTerminal() {
+  async openTerminal(guard = () => true) {
+    if (!guard()) throw new Error('终端控制权已变化，请重新选择会话。');
     if (this.recoveryReady && !this.hasHistory && !await this.recoveryReady) throw new Error('原生会话恢复尚未确认，请检查恢复状态后重试。');
     if (this.stopped) throw new Error('本应用已断开该会话；原生历史仍保留。');
     if (this.terminal?.alive) return this.terminal;
+    if (this.backendExitConfirmed || this.transportDisconnected) throw new Error('原生连接已断开，请先恢复会话。');
+    if (this.terminal && !this.terminal.nativeExited) throw new Error('旧终端退出尚未确认，暂不启动另一个终端。');
     if (!this.record.nativeId) { for (let i = 0; i < 100 && !this.terminal; i++) await delay(50); if (this.terminal) return this.terminal; }
     if (!this.hasHistory) {
       // A first turn may already be waiting for a native-only permission. Read
@@ -607,6 +610,7 @@ class Codex extends EventEmitter {
       this.hasHistory = true;
     }
     // Another attachment can finish while the initial rollout read is pending.
+    if (!guard()) throw new Error('终端控制权已变化，请重新选择会话。');
     if (this.terminal?.alive) return this.terminal;
     return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
   }

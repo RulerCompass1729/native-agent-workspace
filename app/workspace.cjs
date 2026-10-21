@@ -36,7 +36,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.emit('change');
@@ -303,8 +303,18 @@ class Workspace extends EventEmitter {
   }
   async terminal(id, owner) {
     this.claim(id, owner, 'terminal');
-    const t = await this.runtime(id).openTerminal();
-    return t.snapshot();
+    return this.terminalSnapshot(id, owner);
+  }
+  async terminalSnapshot(id, owner) {
+    const s = this.get(id), runtime = this.runtime(id), control = s.controlRevision;
+    const reopening = runtime.terminal?.alive === false;
+    const guard = () => !reopening || (s.owner === owner && s.view === 'terminal' && s.controlRevision === control);
+    if (!guard()) throw new Error('请先接管这个终端，再重新连接。');
+    const t = await runtime.openTerminal(guard);
+    if (!guard()) throw new Error('终端控制权已变化，请重新选择会话。');
+    const snapshot = await t.snapshot();
+    if (!guard()) throw new Error('终端控制权已变化，请重新选择会话。');
+    return snapshot;
   }
   input(id, data, owner) {
     const s = this.get(id);

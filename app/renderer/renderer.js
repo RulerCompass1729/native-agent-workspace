@@ -185,13 +185,13 @@ async function select(id, requestedMode, member = roomSession) {
     else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
   }
   if (s && mode === 'chat' && !$('message-input').readOnly && inputFocusAllowed()) $('message-input').focus();
-  if (s && mode === 'terminal' && !['ended', 'stopping', 'disconnected', 'recoverable'].includes(s.state)) attempt(async () => { await ensureTerminal(s.id); focusTerminal(s.id); });
+  if (s && mode === 'terminal' && !['ended', 'stopping', 'disconnected', 'recoverable'].includes(s.state)) attempt(async () => { await ensureTerminal(s.id, true); focusTerminal(s.id); });
   if (selected === 'room' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {
     const revision = selectionRevision;
     const stillSelected = () => revision === selectionRevision && selected === 'room' && roomSession === s.id && mode === 'terminal';
     if (!await claimView(s.id, 'terminal', revision) || !stillSelected()) return;
     render();
-    await ensureTerminal(s.id);
+    await ensureTerminal(s.id, true);
     if (stillSelected()) focusTerminal(s.id);
   });
 }
@@ -212,11 +212,14 @@ function focusTerminal(id = activeSessionId()) {
 }
 function terminalCanInput(id) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
-  return Boolean(entry?.ready && id === activeSessionId() && mode === 'terminal' && nativeUsable(record) && record?.owner === owner && record?.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
+  return Boolean(entry?.ready && currentTerminalDisplay(entry, record) && id === activeSessionId() && mode === 'terminal' && nativeUsable(record) && record?.owner === owner && record?.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
+}
+function currentTerminalDisplay(entry, record) {
+  return record?.terminalState?.alive !== false && (!entry?.epoch || !record?.terminalState?.epoch || entry.epoch === record.terminalState.epoch);
 }
 function canCaptureTerminal(id) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id), pending = entry?.viewInput;
-  return Boolean(pending && pending.revision === selectionRevision && id === activeSessionId() && mode === 'terminal' && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === pending.owner && !state?.roomStorageWarning && !disconnected);
+  return Boolean(pending && currentTerminalDisplay(entry, record) && pending.revision === selectionRevision && id === activeSessionId() && mode === 'terminal' && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === pending.owner && !state?.roomStorageWarning && !disconnected);
 }
 function cancelViewInput(entry, error = new Error('切换已取消；这段输入没有发送。')) {
   const pending = entry?.viewInput; if (!pending) return;
@@ -226,7 +229,7 @@ function cancelViewInput(entry, error = new Error('切换已取消；这段输�
 }
 function canFlushComposition(id, token = terminals.get(id)?.composition) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
-  return Boolean(token && !token.cancelled && !token.consumed && entry?.composition === token && !entry.composing && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === owner && record.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
+  return Boolean(token && currentTerminalDisplay(entry, record) && !token.cancelled && !token.consumed && entry?.composition === token && !entry.composing && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === owner && record.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
 }
 function clearFailedTerminal(id) {
   const entry = terminals.get(id);
@@ -737,7 +740,7 @@ async function switchMode(next, takeControl = false) {
   const ending = entry?.composition;
   const stillSelected = () => revision === selectionRevision && activeSessionId() === s.id;
   let queued;
-  if (next === 'terminal' && !ending && entry?.ready && s.owner === owner) {
+  if (next === 'terminal' && !ending && entry?.ready && currentTerminalDisplay(entry, s) && s.owner === owner) {
     queued = { revision, owner: s.owner, text: '' };
     queued.done = new Promise((resolve, reject) => { queued.resolve = resolve; queued.reject = reject; });
     queued.done.catch(() => {});
@@ -765,17 +768,26 @@ async function switchMode(next, takeControl = false) {
     if (!stillSelected()) return;
     mode = next; preference = next; clearFailedTerminal(s.id); render(); await persistView();
     if (!stillSelected()) return;
-    if (next === 'terminal') { await ensureTerminal(s.id); if (stillSelected()) focusTerminal(s.id); }
+    if (next === 'terminal') { await ensureTerminal(s.id, true); if (stillSelected()) focusTerminal(s.id); }
     else if (inputFocusAllowed()) $('message-input').focus();
   } finally {
     if (queued && entry.viewInput === queued) cancelViewInput(entry);
     if (pendingMode?.revision === revision) { pendingMode = undefined; render(); }
   }
 }
-async function ensureTerminal(id) {
-  const generation = state.sessions.find(s => s.id === id)?.connectionRevision || 0;
+async function ensureTerminal(id, explicit = false) {
+  const record = state.sessions.find(s => s.id === id);
+  const generation = record?.connectionRevision || 0;
   const old = terminals.get(id);
   if (old && old.generation !== generation) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, new Error('原生连接已变化；旧输入没有发送。')); }
+  // A repaint never restarts a native display. Only an explicit view action can
+  // replace its cached screen, after the backend reports the display lifetime.
+  if (explicit && old?.ready && terminals.get(id) === old && !currentTerminalDisplay(old, record)) {
+    if (record.owner !== owner || record.backendUnavailable || record.transportDisconnected || disconnected) throw new Error('请先连接并接管这个会话，再打开终端。');
+    if (record.terminalState?.alive === false && !record.terminalState.exitConfirmed) throw new Error('旧终端退出尚未确认，暂不启动另一个终端。');
+    cancelViewInput(old); old.term.dispose(); old.element.remove(); terminals.delete(id);
+  }
+  if (!explicit && !terminals.has(id) && record?.terminalState?.alive === false) return;
   if (terminals.has(id)) { const existing = terminals.get(id); if (existing.ready) fitTerminal(id); return existing.pending; }
   const element = node('div', undefined, 'terminal-host'); element.dataset.terminalId = id; $('terminal-area').append(element);
   const theme = terminalThemes[terminalDisplay.palette];
@@ -784,6 +796,7 @@ async function ensureTerminal(id) {
   const surface = node('div', undefined, 'terminal-surface'); surface.hidden = true; surface.inert = true; element.append(loading, surface);
   const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
+  const intent = selectionRevision;
   const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [] }; terminals.set(id, entry);
   term.onSelectionChange(() => nativeSelectionChanged(id, term));
   let recovery = inputRecoveries.get(id);
@@ -878,13 +891,23 @@ async function ensureTerminal(id) {
     try {
       const snapshot = await api.terminalSnapshot(id);
       if (terminals.get(id) !== entry) return;
+      let live = state.sessions.find(s => s.id === id)?.terminalState;
+      // A new display snapshot can precede the batched state notification.
+      // Confirm the current display before enabling input or moving focus.
+      if (snapshot.epoch && live && (!live.alive || snapshot.epoch !== live.epoch)) {
+        updateState(await api.initial());
+        if (terminals.get(id) !== entry) return;
+        live = state.sessions.find(s => s.id === id)?.terminalState;
+      }
+      if (snapshot.epoch && live?.epoch && snapshot.epoch !== live.epoch) throw new Error('终端画面已变化，请重新选择这个视图。');
+      entry.epoch = snapshot.epoch;
       term.resize(snapshot.cols || 100, snapshot.rows || 30);
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
       if (terminals.get(id) !== entry) return;
       entry.sequence = snapshot.sequence; entry.ready = true;
       for (const event of entry.queued) writeTerminal(entry, event);
       entry.queued = []; loading.remove(); surface.hidden = false; surface.inert = false;
-      render(); fitTerminal(id); focusTerminal(id);
+      render(); fitTerminal(id); if (intent === selectionRevision) focusTerminal(id);
     } catch (error) {
       if (terminals.get(id) === entry) {
         entry.failed = true; entry.ready = false; entry.queued = []; entry.pending = Promise.resolve();
@@ -900,7 +923,7 @@ function fitTerminal(id) {
   if (!entry?.ready || activeSessionId() !== id || mode !== 'terminal' || s?.owner !== owner) return;
   requestAnimationFrame(() => { if (activeSessionId() !== id || mode !== 'terminal' || !entry.element.isConnected || !entry.element.checkVisibility() || state.sessions.find(s => s.id === id)?.owner !== owner) return; entry.fit.fit(); attempt(() => api.resize(id, entry.term.cols, entry.term.rows)); });
 }
-function writeTerminal(entry, event) { if (event.sequence > entry.sequence) { entry.term.write(event.data, () => progressPanels.get(event.id)?.followNativeEntry()); entry.sequence = event.sequence; } }
+function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => progressPanels.get(event.id)?.followNativeEntry()); entry.sequence = event.sequence; } }
 const disposers = [
   api.onProgress(event => progressPanels.get(event.id)?.receiveProgress(event)),
   api.onTerminal(event => { progressPanels.get(event.id)?.receive(event); const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),

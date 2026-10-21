@@ -136,3 +136,28 @@ test('a restarted native display clears only its own obsolete exit notice', asyn
   terminal = r.makeTerminal([process.execPath, '-e', 'setInterval(() => {}, 1000)']);
   await once(terminal, 'started'); assert.equal(record.activity, '保留其他原生确认状态');
 });
+
+test('remote display reopening rejects unknown exits and stale control, and concurrent opens share one display', async () => {
+  const { Codex } = require('../adapters.cjs');
+  let releaseRead, reads = 0, creations = 0;
+  const record = { nativeId: 'same-thread', cwd: os.tmpdir() };
+  const host = { codexTargets: new Map(), binaries: { codex: 'codex' }, rpc: { call: async () => { reads++; await new Promise(resolve => { releaseRead = resolve; }); return { thread: { id: record.nativeId, turns: [{}] } }; } } };
+  const runtime = new Codex(record, host);
+  runtime.terminal = { alive: false, nativeExited: false };
+  runtime.makeTerminal = () => { creations++; return (runtime.terminal = { alive: true }); };
+  await assert.rejects(runtime.openTerminal(), /退出尚未确认/);
+  assert.equal(reads, 0);
+  runtime.terminal.nativeExited = true;
+  let owned = true;
+  const stale = runtime.openTerminal(() => owned);
+  await new Promise(resolve => setImmediate(resolve)); owned = false; releaseRead();
+  await assert.rejects(stale, /控制权已变化/);
+  assert.equal(creations, 0);
+  runtime.hasHistory = true;
+  const [a, b] = await Promise.all([runtime.openTerminal(), runtime.openTerminal()]);
+  assert.equal(a, b); assert.equal(creations, 1);
+  runtime.terminal = { alive: false, nativeExited: true };
+  runtime.transportDisconnected = true;
+  await assert.rejects(runtime.openTerminal(), /原生连接已断开/);
+  assert.equal(creations, 1);
+});

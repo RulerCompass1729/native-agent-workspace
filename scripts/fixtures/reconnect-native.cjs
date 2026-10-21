@@ -1,7 +1,7 @@
 // Actual Codex/workspace lifecycle with deterministic native transport, no model.
 const path = require('node:path');
 const { NativeHost, Codex } = require(path.join(process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..'), 'app/adapters.cjs'));
-let fail = false, finishDisplayExit, inputs = 0, terminalCreations = 0; const calls = [], replies = [], records = new Map(), runtimes = new Map();
+let fail = false, finishDisplayExit, inputs = 0, acceptInput = false, terminalCreations = 0; const calls = [], replies = [], records = new Map(), runtimes = new Map();
 NativeHost.prototype.start = async function () { this.binaries = { codex: 'fixture', python: 'fixture' }; };
 NativeHost.prototype.close = function () {};
 NativeHost.prototype.reconnectCodex = async function () { if (fail) throw Error('Synthetic connection interruption'); };
@@ -25,7 +25,10 @@ NativeHost.prototype.create = function (record) {
     if (runtime.stopped) throw Error('Disconnected');
     if (!runtime.terminal?.alive) {
       terminalCreations++;
-      runtime.terminal = { alive: true, async stop() { this.alive = false; this.nativeExited = true; }, resize() {}, input() { inputs++; throw Error('No native input permitted'); }, snapshot: async () => ({ buffer: 'Same native session\r\n> ', sequence: 0, cols: 100, rows: 30 }) };
+      const epoch = `display-${terminalCreations}`;
+      // Deliberately no started/state event: snapshot can precede the next
+      // broadcast. Reopening must still confirm the display and focus it.
+      runtime.terminal = { alive: true, journal: { epoch }, async stop() { this.alive = false; this.nativeExited = true; }, resize() {}, input() { inputs++; if (!acceptInput) throw Error('No native input permitted'); }, snapshot: async () => ({ buffer: 'Same native session\r\n> ', epoch, sequence: 0, cols: 100, rows: 30 }) };
     }
     return runtime.terminal;
   };
@@ -45,5 +48,9 @@ process.on('message', q => {
     r.backendExited().catch(() => {});
   }
   if (q.method === 'display-exit') finishDisplayExit();
+  if (q.method === 'terminal-exit') { const r = runtimes.get(q.target); r.terminal.alive = false; r.terminal.nativeExited = q.value; r.emit('activity', '原生终端已退出；已连接的会话仍由运行服务管理。'); }
+  if (q.method === 'terminal-output') runtimes.get(q.target).emit('terminal', q.value);
+  if (q.method === 'generation') { const r = runtimes.get(q.target); r.record.connectionRevision = (r.record.connectionRevision || 0) + 1; r.emit('activity', 'Display cache invalidated'); }
+  if (q.method === 'accept-input') { acceptInput = q.value; inputs = 0; }
   process.send({ requestId: q.id, calls, replies, inputs, terminalCreations });
 });

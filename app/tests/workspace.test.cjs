@@ -14,6 +14,22 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('a delayed reopened terminal snapshot cannot finish under an obsolete owner', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  r.terminal = { alive: false, nativeExited: true };
+  let release, snapshots = 0;
+  r.openTerminal = async guard => {
+    assert.equal(guard(), true);
+    return { snapshot: () => { snapshots++; return new Promise(resolve => { release = resolve; }); } };
+  };
+  w.claim(id, 'owner', 'terminal');
+  const pending = w.terminalSnapshot(id, 'owner');
+  await tick(); assert.equal(snapshots, 1);
+  w.claim(id, 'new-owner', 'chat'); release({ buffer: 'old snapshot', epoch: 'old-display' });
+  await assert.rejects(pending, /控制权已变化/);
+  assert.equal(w.get(id).owner, 'new-owner'); assert.equal(w.get(id).view, 'chat');
+  assert.equal(w.versions.dispatches, 0);
+});
 test('observed native children survive window reads; transport/service gaps invalidate freshness without replay', async t => {
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
   const { observedFleet } = require('../renderer/fleet-observation.js');

@@ -1063,3 +1063,53 @@ Claude lifecycle interpretation has hook fixtures here, not a new live Teams run
 An observed completion describes that child's turn, not success, process exit or
 full fleet termination. The 80-event window and latest-eight view are incomplete;
 old retained services without freshness metadata remain explicitly unknown.
+
+
+## Native registration task and display retry — alpha.43
+
+The [registration acceptance scenario](acceptance/registration.md) was run through
+actual installed alpha.42 Electron UI with one native Claude in-process teammate
+and an independent Codex review. Native task ownership/status, messages and a
+matching shutdown approval are in the private transcripts. The written final
+file matches the independent oracle. Four human submissions include 12 lead and
+eight teammate assistant responses plus Codex tool activity; this is not a
+four-model-call or exact-billing assertion. Actual pointer drag, shared preview,
+room naming/notes, private continuation, archive/restore and saved Chinese drafts
+were exercised. Reopen occurred while the teammate was idle, not mid-inference.
+After native file approval the final reply was deliberately private; automatic
+return to the room is not a pass. This boundary is A43-3 in review.md.
+
+A faulty test wrapper initially applied server-only permission flags to a remote
+Codex TUI. Once corrected, the product still reused the dead cached display.
+Alpha.43 uses explicit display lifetime/epoch: repaint cannot recreate a dead
+view, uncertain exits remain blocked, and an explicit view action can replace a
+confirmed-ended display without replacing its native server or conversation.
+Old-epoch output cannot corrupt the new screen. Independent review also found
+that a new snapshot can precede the batched state notification; a local state
+confirmation now precedes input readiness/focus. A delayed reopened snapshot is
+rejected if ownership changes before completion.
+
+All **381 unit checks** pass with no skips. Source and installed reconnect,
+control-focus and deterministic terminal-input runners pass. The reconnect fixture
+withholds the new display's started/state notification, removes the cached DOM,
+checks that repaint opens nothing, then checks explicit retry, automatic keyboard
+focus and the first typed character. Separate counterexamples cover unknown exit,
+concurrent attachment, delayed ownership changes and stale output epochs.
+
+The final installed alpha.43 also resumed the task's actual Codex history without
+submitting a prompt, opened its native terminal, typed an unsent marker, exited
+the display through native Ctrl-C, and reopened through the same terminal tab.
+The new screen accepted keyboard input immediately. Native thread and server
+identity stayed unchanged; only display PID and epoch changed. Observed native
+`turn/started` and new app dispatch counts were both zero. Existing history and
+room records remained available. Raw native events, before/after state and actual
+app screenshots support this check; it is not a synthetic transport result.
+
+Independent final review checked the actual source, installed payload and raw
+native evidence and closed A43-1/A43-2. The installed source payload, archive
+digest and local ad-hoc signature match the tested build. Original user session PIDs, IDs, message/draft hashes and saved
+views/labels were unchanged. Tests used one hidden, non-focusable app at a time.
+Private timestamped recordings cover the first portion of the task and the full
+later display-retry verification; they are not an uninterrupted full-task movie.
+Physical OS input, full team cold recovery, external-provider billing and broad
+native-version compatibility remain outside this acceptance.

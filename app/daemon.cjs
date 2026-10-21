@@ -37,7 +37,7 @@ async function main() {
       case 'send': if (/^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw new Error('原生命令请在终端执行；草稿已保留。'); return workspace.send(args[0], args[1], owner);
       case 'draft': return workspace.setDraft(args[0], args[1], owner);
       case 'terminal': return workspace.terminal(args[0], owner);
-      case 'terminalSnapshot': { const t = await workspace.runtime(args[0]).openTerminal(); return t.snapshot(); }
+      case 'terminalSnapshot': return workspace.terminalSnapshot(args[0], owner);
       case 'input': return workspace.input(args[0], args[1], owner);
       case 'resize': return workspace.resize(args[0], owner, args[1], args[2]);
       case 'interrupt': return workspace.interrupt(args[0], owner);
