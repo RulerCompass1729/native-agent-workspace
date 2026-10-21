@@ -30,6 +30,26 @@ test('a delayed reopened terminal snapshot cannot finish under an obsolete owner
   assert.equal(w.get(id).owner, 'new-owner'); assert.equal(w.get(id).view, 'chat');
   assert.equal(w.versions.dispatches, 0);
 });
+test('paused handoff retains its exact waiting session as a cold-readable reference without sharing private replies', async t => {
+  const { workspace: w, runtimes: [r], ids, directory } = await fixture(t, 2);
+  ids.forEach(id => w.join(id, true));
+  await w.startRun(ids, '核查合计 75 元', 2, 'replies');
+  const tag = w.room.run.awaiting.tag;
+  r.emit('state', 'approval');
+  const event = w.room.messages.at(-1);
+  assert.equal(event.role, 'system'); assert.equal(event.name, '协作');
+  assert.equal(event.sessionId, ids[0]); assert.equal(event.runId, w.room.run.id);
+  r.emit('complete', { tag, text: 'Private budget answer' }); await tick();
+  assert.equal(w.room.run.status, 'paused'); assert.equal(w.versions.dispatches, 1);
+  assert.ok(w.get(ids[0]).messages.some(m => m.text === 'Private budget answer'));
+  assert.ok(w.room.messages.every(m => m.text !== 'Private budget answer'));
+  w.persist();
+  const cold = new Workspace({ binaries: {}, close() {} }, directory); t.after(() => cold.close());
+  assert.equal(cold.room.run.awaiting, null);
+  assert.equal(cold.room.messages.find(m => m.id === event.id).sessionId, ids[0]);
+  assert.equal(cold.versions.dispatches, 0);
+  assert.equal(cold.get(ids[0]).state, 'recoverable');
+});
 test('observed native children survive window reads; transport/service gaps invalidate freshness without replay', async t => {
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
   const { observedFleet } = require('../renderer/fleet-observation.js');

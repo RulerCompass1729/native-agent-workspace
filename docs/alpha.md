@@ -1,8 +1,16 @@
 # macOS alpha trial
 
-As of 2026-10-20. Version 0.1.0-alpha.41. Suitable for a small technical trial with
+As of 2026-10-20. Version 0.1.0-alpha.46. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.46 graphical follow-through
+
+The existing **查看会话** action now reaches private results after directed
+sharing invalidation and newly recorded finite-exchange pauses. Archived targets
+open read-only; automatic sharing is never restored. Actual source/installed UI,
+394 unit checks and independent artifact review pass. New test calls are all
+synthetic; unchanged native evidence is reused. See [M3 scope](acceptance/everyday-workflow.md).
 
 ## Alpha.23 core acceptance
 

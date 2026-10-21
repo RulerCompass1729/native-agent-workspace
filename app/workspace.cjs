@@ -335,7 +335,11 @@ class Workspace extends EventEmitter {
     if (run?.status === 'running') { run.status = 'paused'; run.reason = reason; this.room.revision++; this.runEvent(reason); this.changed(); }
   }
   runEvent(text) {
-    this.room.messages.push({ id: randomUUID(), role: 'system', name: '协作', text, time: Date.now(), runId: this.room.run?.id });
+    const run = this.room.run;
+    // Preserve a navigation reference when sharing pauses before a reply. This
+    // does not attribute the pause to that session or authorize another handoff.
+    const sessionId = run?.status === 'paused' ? run.awaiting?.sessionId : null;
+    this.room.messages.push({ id: randomUUID(), role: 'system', name: '协作', text, time: Date.now(), runId: run?.id, ...(sessionId ? { sessionId } : {}) });
   }
   nativeWorkObserved(id, reason) {
     const run = this.room.run;

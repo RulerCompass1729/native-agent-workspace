@@ -3,7 +3,7 @@
 const path = require('node:path'), { EventEmitter } = require('node:events');
 const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { NativeHost, Codex } = require(path.join(root, 'app/adapters.cjs'));
-const runtimes = new Map(), sends = [], inputs = [], calls = [];
+const runtimes = new Map(), sends = [], inputs = [], calls = [], decisions = [];
 function notify(r, method, params) { r.event({ method, params: { threadId: r.record.nativeId, ...params } }); }
 const item = (i, text = 'PRIVATE-HISTORY-' + i) => ({ turnId: 'history-turn', item: { id: 'history-' + i, type: i % 2 ? 'agentMessage' : 'userMessage', ...(i % 2 ? { text } : { content: [{ type: 'text', text }] }) } });
 const history = Array.from({ length: 105 }, (_, i) => item(i));
@@ -39,7 +39,7 @@ NativeHost.prototype.create = function (record) {
       }
       if (method === 'turn/interrupt') return {};
       throw Error('Unexpected fixture method: ' + method);
-    } };
+    }, reply: (id, result) => decisions.push({ id, result }) };
     r.start = async () => { r.emit('state', 'idle'); r.observing = r.observeFirstTurn(); r.observing.catch(e => { r.emit('activity', e.message); r.emit('state', 'error'); }); };
   } else {
     r.start = async () => r.emit('state', 'idle');
@@ -49,6 +49,7 @@ NativeHost.prototype.create = function (record) {
   runtimes.set(record.id, r); return r;
 };
 process.on('message', q => {
+  if (q.method === 'event') runtimes.get(q.target).event(q.value);
   if (q.method === 'release') {
     const sent = sends.at(-1), r = runtimes.get(sent.id);
     if (r.record.provider === 'codex') {
@@ -56,5 +57,5 @@ process.on('message', q => {
       notify(r, 'turn/completed', { turn: { id: sent.turnId, status: 'completed' } });
     } else { r.emit('state', 'idle'); r.emit('complete', { tag: sent.tag, text: q.text }); }
   }
-  process.send({ requestId: q.id, sends: sends.map(({ id, text }) => ({ id, text })), inputs, calls, nativeProcesses: 0, modelCalls: 0 });
+  process.send({ requestId: q.id, sends: sends.map(({ id, text }) => ({ id, text })), inputs, calls, decisions, nativeProcesses: 0, modelCalls: 0 });
 });

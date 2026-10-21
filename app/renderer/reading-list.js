@@ -122,7 +122,10 @@ function messageList(el, messages, room = false, key = 'room') {
       actions.append(button('复制', () => api.copy(entry.message.text)));
       entry.share = button('选择并分享', () => share(entry.message.text)); actions.append(entry.share);
       if (room) {
-        entry.openRecipient = button('查看会话', () => select(entry.message.recipientId, 'chat'));
+        entry.openRecipient = button('查看会话', () => {
+          if (!state.sessions.some(s => s.id === entry.openSessionId)) return toast('这个会话当前不可用，记录仍保留。');
+          return select(entry.openSessionId, 'chat');
+        });
         actions.append(entry.openRecipient);
         entry.context = button('查看上下文', () => {
           $('room-search').value = ''; $('room-filter').value = ''; renderTimeline();
@@ -144,6 +147,7 @@ function messageList(el, messages, room = false, key = 'room') {
     let name = participant ? (m.role === 'human' ? `你 → ${participantLabel(participant, state.sessions)}` : participantLabel(participant, state.sessions)) : m.name;
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
     if (m.role === 'system' && !m.sessionId) name = '工作区';
+    if (m.role === 'system' && m.runId) name = m.name || '协作';
     const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply]);
     if (entry.headingKey !== headingKey) {
       entry.heading.replaceChildren(node('strong', name)); entry.headingKey = headingKey;
@@ -155,7 +159,13 @@ function messageList(el, messages, room = false, key = 'room') {
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
     }
     entry.share.hidden = m.role === 'system';
-    if (entry.openRecipient) entry.openRecipient.hidden = !m.manualReply || !state.sessions.some(s => s.id === m.recipientId && !s.archived);
+    if (entry.openRecipient) {
+      // A paused handoff keeps only a reference, never a private answer or a
+      // renewed sharing grant. Archived sessions use the existing read-only view.
+      entry.openSessionId = m.manualReply || m.status === 'reply-private' ? m.recipientId : m.role === 'system' && m.runId ? m.sessionId : null;
+      entry.openRecipient.hidden = !entry.openSessionId || !state.sessions.some(s => s.id === entry.openSessionId);
+      entry.item.classList.toggle('has-session-link', !entry.openRecipient.hidden);
+    }
     if (entry.context) entry.context.hidden = !($('room-search').value || $('room-filter').value);
     if (entry.text !== m.text || entry.role !== m.role || entry.streaming !== (m.status === 'streaming')) {
       if (entry.role && entry.role !== m.role) ui.clearMarkdown(entry.body);

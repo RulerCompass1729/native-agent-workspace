@@ -1,5 +1,21 @@
 # Bounded testing
 
+## Graphical follow-through — alpha.46
+
+`node scripts/test-graphical-followthrough.cjs` drives the real application using
+controlled provider events. Its six scenario groups cover directed/private
+results, explicit selection sharing, local decisions/search, finite-exchange
+permissions, read-only archive and reopen. Four authorized synthetic submissions,
+zero model calls. The result must enter the actual conversation viewport after
+local search; DOM presence alone is insufficient. Source and installed runs pass.
+
+The complete unit suite passes 394 checks with zero skips; the existing seven
+sharing-preview and six search groups also pass. The installed 40 application
+payload files and generated UI match source, archive hash and strict signature
+pass, normal profile files remain unchanged, and application search has one
+daily entry. Actual alpha.44 native non-coding task evidence is reused because
+the provider adapters/protocols are unchanged. See [M3 boundaries](acceptance/everyday-workflow.md).
+
 The maintainer explicitly requires restrained use of Claude/Codex tests. The goal
 is confidence in important behavior, not maximum live-test volume.
 

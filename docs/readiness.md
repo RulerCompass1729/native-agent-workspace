@@ -1,24 +1,25 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.45 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.46 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.45 addresses long-history transport and view
-restoration. The actual application reproduces and fixes a roughly 19.5 MB
-history disconnect and a quit-during-view-switch restoration gap. Full saved
-history, drafts, membership, native identity and reading position are checked
-through normal reopen and cold backend reconnection without task replay. Final
-installed checks and independent review pass within this scope; see [M2 scope and limits](acceptance/session-continuity.md).
+**Current increment:** alpha.46 completes the scoped graphical follow-through:
+open the original session after a sharing/permission pause, find the private
+result, explicitly select what to share, keep local notes and return later.
+Source, installed-interface and independent artifact review pass; see
+[M3 evidence and limits](acceptance/everyday-workflow.md). M2 long-history and
+reopen continuity remain accepted within [their scope](acceptance/session-continuity.md).
 M1 graphical material/result and selected multi-session collaboration remain
 accepted within their [observed scope](acceptance/desktop-workflow.md).
 
-## Execution queue after alpha.45
+## Execution queue after alpha.46
 
 As of 2026-10-20. This orders the remaining product work; it does not mark it
 implemented. M1 passed its scoped graphical material-to-result acceptance path;
-M2 passed its stated history/restart/reconnect scope; M3 is next. The maintainer implements,
+M2 passed its stated history/restart/reconnect scope; M3 passed its graphical
+follow-through scope; M4 is next. The maintainer implements,
 tests the actual affected interface and obtains independent review; later rows
 remain queued. Existing accepted checks are reused unless a change invalidates
 their evidence. Planning itself authorizes no new provider test call.
@@ -27,7 +28,7 @@ their evidence. Planning itself authorizes no new provider test call.
 | --- | --- | --- |
 | M1 — accepted within scope | Reliable collaboration among independent sessions | Local checks cover both three-session provider arrangements; the installed native task covers material → selected participants → result preview/copy → detach → archive/reopen. Each session retains identity and context. Native Teams is optional; full active-fleet restoration and permission-to-room automatic return are not claimed. |
 | M2 — accepted within scope | Existing-session continuity for daily work | Approximately 19.5 MB synthetic history survives actual app reopen and cold local-record recovery with exact history/draft/identity/reading position; actual alpha.44 → alpha.45 UI reconnection retains its live backend. Finite limits and native recovery boundaries remain explicit; U05/U17 are not universally closed. |
-| M3 — next | Complete everyday graphical workflow | A person can input, understand progress, handle supported confirmations, inspect results and continue in GUI/TUI without redundant controls or lost context. Improve demonstrated friction in existing navigation, search and timeline; use one real non-coding task as acceptance. This is our graphical client over native sessions, not synchronization with official Desktop apps. |
+| M3 — accepted within scope | Complete everyday graphical workflow | Actual installed task follow-through covers input, progress/confirmation, native intervention, finding private results, selected sharing, local notes/search and archive/reopen. Reuses the unchanged M1 native non-coding task, with no new model calls. Official Desktop synchronization and universal physical-input compatibility are not claimed. |
 | M4 — queued, depends on M1 | Bounded unattended work | Extend the existing finite reply exchange only when lifecycle evidence can support the intended controls. A declared small goal stops at completion, human intervention, permission, error or its enforceable limits; uncertain native work is never called stopped. No unlimited agent conversation or unsupported hard monetary cap. |
 | M5 — conditional | Bring outside sessions into this workspace | After the everyday flow is usable, verify each provider's supported history-resume or live-attachment contract. Distinguish those modes, retain identity and prohibit a competing live resume. Missing upstream attachment support is a named blocker, not permission to copy context into an unrelated session. |
 
