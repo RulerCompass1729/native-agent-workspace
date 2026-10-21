@@ -193,3 +193,11 @@ header h1, header p { overflow-wrap: anywhere; }
 .progress-trace summary { cursor:pointer; padding:4px 0; overflow-wrap:anywhere; }
 .progress-trace pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:150px; overflow:auto; font-size:11px; }
 .progress-trace button { font-size:10px; padding:3px 6px; }
+
+.run-person { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.run-person label { display: flex; align-items: center; gap: 8px; margin: 0; flex: 1; }
+.run-person input[type=checkbox] { width: auto; }
+#run-order { line-height: 1.6; }
+
+#file-dialog { width: min(760px, calc(100vw - 48px)); }
+#file-content { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border: 1px solid var(--border); border-radius: 8px; font: 13px/1.6 ui-monospace, monospace; user-select: text; }

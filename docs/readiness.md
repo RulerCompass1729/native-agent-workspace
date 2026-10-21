@@ -1,17 +1,98 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.43 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.44 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.43 repairs retrying an exited Codex display without
-replacing its thread/server, replaying input or losing the first keyboard focus.
-Installed synthetic regressions and a real native display exit/reopen pass with
-zero additional model tasks. The [registration task](acceptance/registration.md)
-also confirms one actual Claude Agent Teams task/message/shutdown workflow and
-a correct independent Codex result. Native permission intervention still keeps
-the subsequent reply private; automatic room return is not claimed for that path.
+**Current increment:** alpha.44 adds graphical text-material preview, explicit
+draft insertion and result copies, plus selected/ordered subsets of 2–6 native
+sessions on one capable backend. The installed three-session native task produced
+a correct result and retained identity/context/drafts through detach, archive and
+UI reopen. Native permission intervention still keeps the subsequent reply
+private; automatic room return is not claimed for that path. See the
+[observed workflow and limits](acceptance/desktop-workflow.md). This scoped M1
+passed final independent source, installed-artifact and evidence review.
+
+## Execution queue after alpha.44
+
+As of 2026-10-20. This orders the remaining product work; it does not mark it
+implemented. M1 passed its scoped graphical material-to-result acceptance path;
+M2 is the next execution item. The maintainer implements,
+tests the actual affected interface and obtains independent review; later rows
+remain queued. Existing accepted checks are reused unless a change invalidates
+their evidence. Planning itself authorizes no new provider test call.
+
+| Order | Milestone | User outcome and exit condition |
+| --- | --- | --- |
+| M1 — accepted within scope | Reliable collaboration among independent sessions | Local checks cover both three-session provider arrangements; the installed native task covers material → selected participants → result preview/copy → detach → archive/reopen. Each session retains identity and context. Native Teams is optional; full active-fleet restoration and permission-to-room automatic return are not claimed. |
+| M2 — next | Existing-session continuity for daily work | Long conversations, normal restart and supported update/reconnect keep history, drafts, reading position and native identity. Old backends retain honest capability limits and a safe continuation path. U05/U17 are checked against specific supported versions rather than declared universally closed. |
+| M3 — queued | Complete everyday graphical workflow | A person can input, understand progress, handle supported confirmations, inspect results and continue in GUI/TUI without redundant controls or lost context. Improve demonstrated friction in existing navigation, search and timeline; use one real non-coding task as acceptance. This is our graphical client over native sessions, not synchronization with official Desktop apps. |
+| M4 — queued, depends on M1 | Bounded unattended work | Extend the existing finite reply exchange only when lifecycle evidence can support the intended controls. A declared small goal stops at completion, human intervention, permission, error or its enforceable limits; uncertain native work is never called stopped. No unlimited agent conversation or unsupported hard monetary cap. |
+| M5 — conditional | Bring outside sessions into this workspace | After the everyday flow is usable, verify each provider's supported history-resume or live-attachment contract. Distinguish those modes, retain identity and prohibit a competing live resume. Missing upstream attachment support is a named blocker, not permission to copy context into an unrelated session. |
+
+M1 proceeds as one acceptance batch: provide a local text material, choose
+participants, inspect a result, detach and continue, then reopen with records intact. Provider kind, independent session and
+that session's native teammate/subagent are different identities. A room may
+contain several sessions from the same provider, without any native team enabled.
+
+Current source already creates distinct same-provider sessions and addresses
+mentions by session ID. Alpha.43 limited automatic handoffs to exactly two sessions.
+Alpha.44 adds explicitly selected, ordered subsets of 2–6 sessions on the
+same capable backend, with a total cap of six replies; it does not migrate old
+backends or authorize cross-backend automatic routing. Runtime acceptance is
+recorded separately in [desktop workflow](acceptance/desktop-workflow.md). The demo's active-session
+limit is checked both in the aggregate client and per service; it is not a
+one-per-provider rule.
+
+1. **Graphical material-to-result and independent multi-session workflow.**
+   Use the minimal file preview to inspect local UTF-8 text, explicitly append it
+   to a draft and save a result copy. No folder crawl, silent upload, binary
+   conversion, document editor or hidden model call. These are part of M1; M3
+   retains broader format support and polish after demonstrated demand. Use three independent sessions to
+   test same-provider names, exact `@` targets, per-session native progress and
+   histories, drag-in/out, archive/reopen and draft retention. Cover both
+   two-Claude/one-Codex and one-Claude/two-Codex arrangements with local checks
+   first; necessary live evidence has its own finite budget. No native Teams
+   prerequisite and no mandatory lead or fixed roles.
+2. **Explicit bounded handoffs.** Address the two-session restriction together
+   with participant/recipient/order previews, a total reply limit, membership
+   changes, failure and human
+   takeover guards. Support a selected subset and a bounded three-or-more-session
+   path; joining must not automatically broadcast history, activate everyone or
+   start an all-member reply loop. Do not equate removing a length check with
+   implementing safe multi-party collaboration. For A43-3, recheck the existing
+   view-session/select-share route and fix demonstrated result-navigation gaps;
+   invalidated automatic sharing authorization stays invalidated.
+3. **Lifecycle and optional native capabilities.** Distinguish window closure,
+   transport loss and backend exit; retain records without task replay or forced
+   migration. If a participant uses Claude Teams or Codex subagents, preserve its
+   native behavior and keep parent readiness separate from child activity.
+   Actual active Teams tasks/messages/window continuity remain a separate missing
+   compatibility proof, not a reason every room must create a team. Unsupported
+   cold team restoration remains blocked/disclosed and never becomes a pass.
+
+Every milestone includes privacy/sharing boundaries, native permission/config
+preservation, input/accessibility, local resource use and cost visibility. Check
+that portal navigation creates no model tasks; report native child/tool usage
+separately and keep unavailable totals unknown. Stronger privacy/egress and
+same-task cost claims require their own evidence, not merely the existing panel.
+Necessary native tests receive a finite scenario budget before execution; prefer
+local counterexamples and reuse prior evidence. Raw task evidence stays local.
+
+Installer/public distribution stays deferred at the user's request. Official
+Desktop-state synchronization and an iTerm2 connector require supported interface
+and licensing checks; more provider types, rooms and operating systems follow actual
+need and the Claude/Codex multi-session acceptance. These are retained goals, not current work.
+
+## Earlier accepted increments
+
+Alpha.43 repairs retrying an exited Codex display without replacing its thread
+or server, replaying input or losing first keyboard focus. Installed synthetic
+regressions and a real native display exit/reopen pass with zero additional model
+tasks. The [registration task](acceptance/registration.md) also confirms one
+actual Claude Agent Teams task/message/shutdown workflow and a correct independent
+Codex result; it does not prove full active-team cold restoration.
 
 Alpha.42 distinguishes the main reply from observed native
 child activity in solo and room views. A real Codex child retained identity and

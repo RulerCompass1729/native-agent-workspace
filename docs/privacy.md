@@ -38,7 +38,9 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
 - session-labels.json holds display names keyed by stable application session ID.
   Names use an owner-only file and are not automatically sent to a model.
   Explicitly shared background can include visible room/session names; its text
-  can be reviewed and edited before sending. Native titles, history and stored
+  can be reviewed and edited before sending. An explicitly authorized bounded
+  reply exchange also shares its previewed source names, provider and short
+  application session IDs with selected participants. Native titles, history and stored
   original author labels are not renamed; the UI can display current aliases.
 - legacy-links.json holds explicit same-process connection references, not
   credentials. Retained Claude uses a local project plugin; retained Codex uses
@@ -213,3 +215,16 @@ native processes. Neither setup, polling nor reconnect sends a model prompt.
 Dispatch counters include rejected/unconfirmed attempts and are not paid-call
 counts. Compatibility attempt counts persist locally; ordinary native backend
 counters remain per process lifetime. No claim of complete billing measurement.
+
+## Explicit local file preview — alpha.44
+
+A system file choice reads one selected regular UTF-8 text file, up to 256 KB.
+Symlinks, special files, unsupported formats and changing reads are rejected.
+The preview holds a snapshot in the window's main-process context and releases
+it when closed; it does not crawl a directory or watch files. “加入草稿” appends
+the displayed filename and content to the existing draft, with the normal 16,000
+character limit. Drafts are saved locally by the existing draft mechanism. Only
+an explicit send shares the draft with the selected native agent; any native
+provider/tool access still follows its own permissions. “另存副本” writes the
+previewed bytes, refuses existing destinations, and does not reread a changed
+source. Previewing or saving calls no model.

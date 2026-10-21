@@ -17,9 +17,11 @@ NativeHost.prototype.create = function (record) {
   r.stop = async () => { r.stopped = true; r.terminal.alive = false; return { state: 'ended' }; };
   if (record.provider === 'codex') {
     this.rpc = { call: async (method, params) => {
+      const r = [...runtimes.values()].find(candidate => candidate.record.nativeId === params.threadId);
+      if (!r) throw Error('Unknown fixture thread');
       calls.push(method);
-      if (method === 'thread/read') return { thread: { id: record.nativeId, preview: 'synthetic saved history', status: { type: 'idle' } } };
-      if (method === 'thread/resume') return { thread: { id: record.nativeId } };
+      if (method === 'thread/read') return { thread: { id: r.record.nativeId, preview: 'synthetic saved history', status: { type: 'idle' } } };
+      if (method === 'thread/resume') return { thread: { id: r.record.nativeId } };
       if (method === 'thread/items/list') {
         if (!params.cursor) return { data: history.slice(0, 100), nextCursor: 'second-page' };
         // Live overlap while the second page is in flight.
@@ -30,7 +32,7 @@ NativeHost.prototype.create = function (record) {
       }
       if (method === 'turn/start') {
         const turnId = 'fixture-turn-' + sends.length;
-        sends.push({ id: record.id, text: params.input[0].text, turnId, tag: params.clientUserMessageId });
+        sends.push({ id: r.record.id, text: params.input[0].text, turnId, tag: params.clientUserMessageId });
         notify(r, 'turn/started', { turn: { id: turnId } });
         notify(r, 'item/completed', { turnId, item: { id: 'input-' + turnId, type: 'userMessage', clientId: params.clientUserMessageId, content: params.input } });
         return { turn: { id: turnId } };

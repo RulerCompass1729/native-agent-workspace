@@ -110,7 +110,7 @@ class WorkspaceClient extends EventEmitter {
             ? { approval: native?.connected ? native.approval : null, approvalResolved: Boolean(native?.connected && native.approvalResolved) } : {}),
           approvalDecisionAvailable, approvalDecisions,
           approvalNotice: s.provider === 'codex' && !approvalDecisionAvailable ? '旧连接无法核实这项确认的最新状态，请在原生终端核对。原会话继续保留。' : null,
-          serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
+          handoffGroup: this.entries.indexOf(e), serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
       }
       for (const m of state.room.messages || []) {
         if (messages.has(m.id)) throw new Error('共享记录归属冲突；原记录已保留。');
@@ -288,11 +288,11 @@ class WorkspaceClient extends EventEmitter {
       const revision = ++this.control.revision;
       const interventions = [...this.control.interventions];
       const state = await this.refresh();
-      if (!Array.isArray(args[0]) || args[0].length !== 2) throw new Error('请选择两个不同会话。');
+      if (!Array.isArray(args[0]) || args[0].length < 2 || args[0].length > 6 || new Set(args[0]).size !== args[0].length) throw new Error('请选择 2–6 个不同会话。');
       const targets = args[0].map(id => this.route(id));
       const guard = guards.get(targets[0].key); guard();
-      if (targets[0] !== targets[1]) throw new Error('跨版本自动交接暂不可用；请选择内容并定向分享。');
-      assertAutomaticRun(state, args[3]); assertSharing(state, args[0]);
+      if (targets.some(target => target !== targets[0])) throw new Error('跨版本自动交接暂不可用；请选择内容并定向分享。');
+      assertAutomaticRun(state, args[3], args[0]); assertSharing(state, args[0]);
       await Promise.all(interventions);
       await this.pauseExcept(targets[0]);
       const previousArm = this.control.armed.get(targets[0].key);

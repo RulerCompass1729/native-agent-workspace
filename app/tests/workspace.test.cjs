@@ -516,3 +516,35 @@ for (const item of [
   assert.equal(s.fleet.at(-1).active, true);
   if (item.kind === 'started') assert.equal(s.fleet.at(-1).model, 'synthetic-small');
 });
+
+test('three selected independent sessions preserve exact order, alias identity and a total reply cap; unselected history stays private', async t => {
+  const { workspace: w, runtimes, ids } = await fixture(t, 4), sends = [];
+  ids.forEach(id => { w.join(id, true); w.get(id).name = '伙伴'; w.get(id).messages.push({ id: 'secret-' + id, role: 'user', text: 'PRIVATE-' + id }); });
+  runtimes.forEach((r, i) => { r.send = async (text, tag, guard) => { assert.ok(guard()); sends.push({ i, text, tag }); }; });
+  await assert.rejects(w.startRun([ids[0], ids[1], ids[1]], 'task', 3, 'replies'), /不同会话/);
+  await assert.rejects(w.startRun(ids.slice(0, 3), 'task', 2, 'replies'), /上限/);
+  await w.startRun([ids[2], ids[0], ids[1]], '核对材料', 4, 'replies', { [ids[2]]: '预算复核' });
+  for (let i = 0; i < 4; i++) {
+    const sent = sends[i]; assert.ok(sent); assert.ok(!sent.text.includes('PRIVATE-'));
+    runtimes[sent.i].emit('complete', { tag: sent.tag, text: `结果 ${i}` }); await tick();
+  }
+  assert.deepEqual(sends.map(s => s.i), [2, 0, 1, 2]); assert.equal(w.room.run.status, 'completed');
+  assert.match(sends[1].text, /预算复核 · Codex/); assert.ok(sends[2].text.includes(ids[0].slice(0, 6)));
+  assert.ok(!sends[2].text.includes('结果 0')); assert.equal(w.get(ids[3]).messages.length, 1);
+});
+for (const action of ['leave-third', 'takeover-third']) test(`three-party authorization stops before the next hop on ${action}`, async t => {
+  const { workspace: w, runtimes, ids } = await fixture(t, 3), sends = [];
+  ids.forEach(id => w.join(id, true)); runtimes.forEach((r, i) => { r.send = async (text, tag) => sends.push({ i, tag }); });
+  await w.startRun(ids, 'task', 3, 'replies');
+  if (action === 'leave-third') { w.join(ids[2], false); w.join(ids[2], true); }
+  else w.claim(ids[2], 'another-window', 'chat');
+  runtimes[0].emit('complete', { tag: sends[0].tag, text: 'late reply' }); await tick();
+  assert.equal(sends.length, 1); assert.equal(w.room.run.status, 'paused');
+  assert.equal(w.room.messages.some(m => m.text === 'late reply'), false);
+});
+
+test('bounded task length fails before dispatch and reports its actual limit', async t => {
+  const { workspace: w, ids } = await fixture(t, 2); ids.forEach(id => w.join(id, true));
+  await assert.rejects(w.startRun(ids, 'x'.repeat(6001), 2, 'replies'), /6,000/);
+  assert.equal(w.versions.dispatches, 0); assert.equal(w.room.run, null);
+});

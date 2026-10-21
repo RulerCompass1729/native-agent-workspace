@@ -16,7 +16,8 @@ function validateId(id) {
 }
 
 // Display metadata belongs to the desktop profile, not a provider or daemon.
-// Only apply it to outgoing UI snapshots; native prompts/history stay untouched.
+// Native titles/history are not renamed. Explicit bounded-run authorization
+// may snapshot a display name as the human-visible source label for that run.
 class SessionLabels {
   constructor(dataDir) {
     this.file = path.join(dataDir, 'session-labels.json');

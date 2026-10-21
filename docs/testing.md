@@ -50,6 +50,40 @@ parallel launches are refused. Only intentional multi-view checks may create an
 extra window, and they close it afterward. Cleanup owns specific child handles,
 never broad process-name kills.
 
+## Graphical independent-session workflow — alpha.44
+
+Run `node scripts/test-desktop-workflow.cjs` after the normal client build. Set
+`NAW_APP_EXECUTABLE` and `NAW_TEST_APP_ROOT` to verify an installed build; optional
+`NAW_EVIDENCE_DIR` stores private app screenshots and a recording (requires local
+ffmpeg). One hidden Electron window uses actual UI, IPC, storage and the daemon;
+provider replies and native file-picker results are controlled fixtures.
+
+The source and installed checks cover local material preview/insertion, exact
+result copies, both three-session provider arrangements, duplicate labels,
+selected subsets/order, unchanged private history and six synthetic dispatches.
+They also cover the 6,000-character collaboration preflight, failed draft-save
+retry, delayed picker navigation, ownership changes and detach/archive/reopen.
+The final length regression was added after the source run and passed in the
+installed run. Existing room-send and pointer collaboration regressions passed.
+No provider model is called by these runners.
+
+One separate installed native task used three root submissions with Haiku/Luna/
+Haiku and produced the correct Markdown result. Native permission intervention
+paused automatic sharing; GUI preview/copy and retained-session continuity passed.
+The full source suite passed 388 checks before the final length correction; 112
+affected checks passed afterward. Exact installed payload comparison covered 39
+source files. See [the acceptance record](acceptance/desktop-workflow.md) for the
+observed usage and boundaries. This does not add physical macOS picker/IME,
+full native-fleet restoration or unattended-completion proof.
+
+Real native tests must use normal service bootstrap, which copies mutable
+provider-plugin files into the private runtime. A private direct-daemon runner
+bypassed this and invalidated the installed bundle signature through generated
+Claude type files (A44-4). The original reviewed archive was restored; a zero-task
+normal GUI/native startup then passed, with generated files outside the bundle
+and strict signature verification before and after. Always verify the signature
+after native testing. Synthetic provider fixtures do not exercise this behavior.
+
 ## Single-conversation interaction check
 
 `npm run test:solo` uses one hidden Electron renderer at a time against a private synthetic

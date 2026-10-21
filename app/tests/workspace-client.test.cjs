@@ -475,3 +475,18 @@ test('previous handoff capabilities without Claude prompt identity cannot forwar
  for(const op of [()=>c.call('forward','new','material'),()=>c.call('run',['new','second'],'task',2)]) await assert.rejects(op());
  assert.equal(next.calls.filter(([method])=>['forward','run'].includes(method)).length,0);c.close();
 });
+
+test('selected same-service subset may run beside an old member; three-party capability and all service routes are checked', async () => {
+  const { old, next, c } = fixture();
+  old.real.sessions[0].roomId = 'shared';
+  next.real.sessions.push({ id: 'second', provider: 'codex', state: 'idle', roomId: 'shared' }, { id: 'third', provider: 'claude', state: 'idle', roomId: 'shared' });
+  next.real.sessions[0].roomId = 'shared'; next.real.capabilities = [...current, 'boundedReplyHandoffs'];
+  await c.refresh(); assert.equal(c.snapshot().capabilities.includes('boundedReplyHandoffs'), false);
+  await c.call('run', ['new', 'second'], 'selected pair', 2, 'replies'); await c.call('pause');
+  await assert.rejects(c.call('run', ['new', 'second', 'third'], 'unsupported three', 3, 'replies'), /后台|交接/);
+  next.real.capabilities.push('multiSessionHandoffs');
+  await c.call('run', ['third', 'new', 'second'], 'selected three', 3, 'replies'); await c.call('pause');
+  await assert.rejects(c.call('run', ['new', 'second', 'old'], 'mixed backend', 3, 'replies'), /跨版本/);
+  assert.deepEqual(next.calls.filter(c => c[0] === 'run').map(c => c[1]), [['new', 'second'], ['third', 'new', 'second']]);
+  assert.equal(old.calls.some(c => c[0] === 'run'), false); c.close();
+});

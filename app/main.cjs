@@ -9,6 +9,7 @@ const { preflight } = require('./preflight.cjs');
 const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
+const { readPreview, saveCopy, extensions: textExtensions } = require('./local-files.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { readingState } = require('./reading-state.cjs');
@@ -221,7 +222,16 @@ async function boot() {
     for (const id of (method === 'run' ? args[0] : [args[0]])) roomState.assertAvailable(id, method !== 'send');
     return c.client.call(method, ...args);
   };
-  for (const method of ['run', 'forward']) register(method, (c, ...args) => submit(c, method, ...args));
+  for (const method of ['run', 'forward']) register(method, (c, ...args) => {
+    if (method === 'run' && Array.isArray(args[0])) {
+      if (args[4]) {
+        const snapshot = sessionLabels.apply(c.client.snapshot());
+        if (args[0].some(id => args[4][id] !== snapshot.sessions.find(s => s.id === id)?.name)) throw Error('参与者名称已变化，请重新预览任务。');
+      }
+      args[4] = Object.fromEntries(args[0].filter(id => sessionLabels.labels.has(id)).map(id => [id, sessionLabels.labels.get(id)]));
+    }
+    return submit(c, method, ...args);
+  });
   register('uiReady', c => c.ready?.());
   register('send', async (c, id, text) => {
     const draft = backups(c.view)[id];
@@ -361,6 +371,35 @@ async function boot() {
     if (next.roomSearch !== undefined) c.view.roomSearch = next.roomSearch;
     if (next.terminalDisplay !== undefined) c.view.terminalDisplay = { fontSize: next.terminalDisplay.fontSize, palette: next.terminalDisplay.palette };
     saveViews();
+  });
+  register('openLocalFile', async (c, sessionId) => {
+    if (c.fileChoosing) throw Error('文件选择窗口已经打开。');
+    c.fileChoosing = true;
+    try {
+      const snapshot = await c.client.call('initial');
+      const record = snapshot.sessions.find(s => s.id === sessionId);
+      if (sessionId && !record) throw Error('会话已变化，请重新打开文件。');
+      const result = await dialog.showOpenDialog(c.win, { title: '查看材料或成果', defaultPath: record?.cwd || snapshot.defaultWorkspace,
+        filters: [{ name: '文本材料', extensions: textExtensions }], properties: ['openFile', 'dontAddToRecent'] });
+      if (result.canceled || c.win.isDestroyed()) return null;
+      const preview = await readPreview(result.filePaths[0]);
+      if (c.win.isDestroyed()) return null;
+      c.filePreview = preview;
+      return { token: preview.token, name: preview.name, text: preview.text, size: preview.bytes.length };
+    } finally { c.fileChoosing = false; }
+  });
+  register('closeLocalFile', (c, token) => { if (c.filePreview?.token === token) c.filePreview = null; });
+  register('saveLocalFile', async (c, token) => {
+    const preview = c.filePreview;
+    if (!preview || preview.token !== token || c.fileSaving) throw Error('文件预览已变化，请重新打开。');
+    c.fileSaving = true;
+    try {
+      const ext = path.extname(preview.name);
+      const result = await dialog.showSaveDialog(c.win, { title: '保存预览的副本（不覆盖已有文件）', defaultPath: `${path.basename(preview.name, ext)}-copy${ext}`, properties: ['dontAddToRecent'] });
+      if (result.canceled || c.win.isDestroyed()) return false;
+      if (c.filePreview !== preview) throw Error('文件预览已变化，未保存。');
+      await saveCopy(preview, result.filePath); return true;
+    } finally { c.fileSaving = false; }
   });
   register('chooseFolder', async c => { const result = await dialog.showOpenDialog(c.win, { title: '选择这个会话可以工作的目录', properties: ['openDirectory', 'createDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
   register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw new Error('找不到会话。'); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });

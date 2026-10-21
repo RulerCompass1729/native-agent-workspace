@@ -707,7 +707,7 @@ function render() {
       $('recipient').dataset.hadChoices = 'true';
       populateSelect($('recipient'), members());
       if (previousRecipient && !$('recipient').value) attempt(persistView);
-      const safeHandoffs = state.capabilities?.includes('boundedReplyHandoffs');
+      const safeHandoffs = handoffCandidates($('recipient').value).length >= 2;
       const recipient = people.find(s => s.id === $('recipient').value);
       $('mention-button').textContent = recipient ? `@ ${participantLabel(recipient)} ⌄` : '@ 选择成员';
       $('mention-button').title = recipient ? `接收者：${participantLabel(recipient)}；点击更换` : '选择接收者，也可以在消息中输入 @';
@@ -718,7 +718,7 @@ function render() {
       const unavailable = roomSubmitting || disconnected || !$('shared-input').value.trim();
       const ready = s => s && s.state === 'idle' && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
       $('forward-button').disabled = nativeRoute ? roomSubmitting || disconnected : unavailable || !ready(recipient);
-      $('run-button').disabled = unavailable || !recipient || people.length !== 2 || !people.every(ready) || run?.status === 'running' || !safeHandoffs;
+      $('run-button').disabled = unavailable || !recipient || !ready(recipient) || run?.status === 'running' || !safeHandoffs;
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
       if (recipient?.legacyShare) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
@@ -981,6 +981,62 @@ const saveTerminalDisplay = () => attempt(async () => {
 $('terminal-font-size').onchange = $('terminal-palette').onchange = saveTerminalDisplay;
 $('reset-terminal-display').onclick = () => { $('terminal-font-size').value = 14; $('terminal-palette').value = 'dark'; saveTerminalDisplay(); };
 $('close-terminal-display').onclick = () => { $('terminal-display-dialog').close(); focusTerminal(); };
+let filePreview = null, fileTarget = null, fileChoosing = false;
+function fileTargetMatches() {
+  return fileTarget && fileTarget.revision === selectionRevision && fileTarget.id === activeSessionId() &&
+    fileTarget.room === (selected === 'room' && !roomSession) && fileTarget.mode === mode;
+}
+function fileDraftInput() { return fileTarget?.room ? $('shared-input') : $('message-input'); }
+async function openLocalFile() {
+  if (fileChoosing) return;
+  fileChoosing = true;
+  const target = { id: activeSessionId(), room: selected === 'room' && !roomSession, mode, revision: selectionRevision };
+  try {
+    const preview = await api.openLocalFile(target.room ? $('recipient').value || null : target.id);
+    if (!preview) return;
+    fileTarget = target;
+    if (!fileTargetMatches()) { await api.closeLocalFile(preview.token); return; }
+    filePreview = preview;
+    $('file-title').textContent = preview.name;
+    $('file-info').textContent = `${preview.size} 字节 · 当前文件快照 · 支持 UTF-8 文本，最多 256 KB`;
+    $('file-content').textContent = preview.text;
+    $('file-error').hidden = true;
+    $('insert-file').disabled = !target.room && mode !== 'chat' || fileDraftInput().readOnly;
+    $('insert-file').title = $('insert-file').disabled ? '可在对话视图中加入草稿；文件仍可查看和保存副本。' : '只加入草稿，不会发送';
+    $('file-dialog').showModal();
+  } finally { fileChoosing = false; }
+}
+$('session-files').onclick = $('room-files').onclick = () => attempt(openLocalFile);
+$('close-file').onclick = () => $('file-dialog').close();
+$('file-dialog').addEventListener('close', () => {
+  if (filePreview) attempt(() => api.closeLocalFile(filePreview.token));
+  filePreview = null; fileTarget = null; $('file-content').textContent = '';
+});
+$('insert-file').onclick = async () => {
+  try {
+    if (!filePreview || !fileTargetMatches() || fileDraftInput().readOnly || (!fileTarget.room && mode !== 'chat')) throw Error('视图或控制权已变化，请回到要编辑的会话重新选择文件。');
+    const input = fileDraftInput();
+    const next = [input.value, `文件：${filePreview.name}\n${filePreview.text}`].filter(Boolean).join('\n\n');
+    if (next.length > 16000) throw Error('合并后超过 16000 字符。请缩短草稿或选择较小的材料；没有截断内容。');
+    const room = fileTarget.room;
+    input.value = next;
+    // Insertion is synchronous and happens once. A failed persistence retry
+    // must save this draft, never append the same material a second time.
+    const token = filePreview.token; $('file-dialog').close(); filePreview = null; attempt(() => api.closeLocalFile(token));
+    if (room) { roomDraftRevision++; render(); input.focus(); await persistView(); }
+    else { input.oninput(); input.focus(); }
+  } catch (error) {
+    if ($('file-dialog').open) { $('file-error').textContent = error.message; $('file-error').hidden = false; }
+    else toast(error.message);
+  }
+};
+$('save-file').onclick = async () => {
+  if (!filePreview) return;
+  $('save-file').disabled = true;
+  try { if (await api.saveLocalFile(filePreview.token)) toast('已保存预览副本。'); }
+  catch (error) { $('file-error').textContent = error.message; $('file-error').hidden = false; }
+  finally { $('save-file').disabled = false; }
+};
 $('message-input').oninput = () => {
   const s = current();
   if (s) {
@@ -1055,13 +1111,13 @@ $('shared-input').onblur = event => { if (!event.relatedTarget?.closest('#mentio
 async function submitRoom(automatic) {
   if (roomSubmitting || $('shared-input').readOnly || $(automatic ? 'run-button' : 'forward-button').disabled) return;
   const first = $('recipient').value, text = $('shared-input').value, revision = roomDraftRevision;
-  const ids = [first, ...members().filter(s => s.id !== first).map(s => s.id)];
+  const ids = automatic?.ids;
   // Return focus before the clicked control becomes disabled. Never steal it
   // back asynchronously after the person has opened another view or dialog.
   $('shared-input').focus();
   roomSubmitting = true; render();
   try {
-    await (automatic ? api.run(ids, text, automatic.limit, 'replies') : api.forward(first, text));
+    await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels) : api.forward(first, text));
     if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
   }
   finally { roomSubmitting = false; render(); }
@@ -1073,24 +1129,73 @@ $('forward-button').onclick = () => {
   if (!recipient) return;
   if (nativeUsable(recipient)) selectRoom(recipient.id); else select(recipient.id, 'chat');
 };
+function handoffCandidates(firstId) {
+  const first = members().find(s => s.id === firstId);
+  if (!first) return [];
+  return members().filter(s => {
+    const caps = s.serviceCapabilities || state.capabilities || [];
+    return s.handoffGroup === first.handoffGroup && caps.includes('boundedReplyHandoffs') &&
+      s.state === 'idle' && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false &&
+      ![s.background, s.scheduled].some(n => Number.isSafeInteger(n) && n > 0);
+  });
+}
+function renderRunChoices() {
+  if (!runPreview) return;
+  const ids = runPreview.ids, eligible = handoffCandidates(runPreview.recipient);
+  const multi = eligible.every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs'));
+  $('run-participants').replaceChildren();
+  for (const s of members()) {
+    const row = node('div', undefined, 'run-person');
+    const label = node('label'), check = document.createElement('input'); check.type = 'checkbox';
+    check.dataset.runMember = s.id; check.checked = ids.includes(s.id);
+    check.disabled = s.id === runPreview.recipient || !eligible.some(m => m.id === s.id) || (!check.checked && !multi && ids.length >= 2);
+    label.append(check, document.createTextNode(`${s.name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${s.id.slice(0, 6)}`));
+    check.onchange = () => {
+      runPreview.ids = check.checked ? [...ids, s.id] : ids.filter(id => id !== s.id);
+      $('run-consent').checked = false; renderRunChoices();
+      document.querySelector(`[data-run-member="${s.id}"]`)?.focus();
+    };
+    row.append(label);
+    const position = ids.indexOf(s.id);
+    if (position > 1) {
+      const up = button('↑', () => { [ids[position - 1], ids[position]] = [ids[position], ids[position - 1]]; $('run-consent').checked = false; renderRunChoices(); });
+      up.setAttribute('aria-label', `提前 ${s.name} · ${s.id.slice(0, 6)}`); row.append(up);
+    }
+    $('run-participants').append(row);
+  }
+  for (const option of $('run-limit').options) option.disabled = Number(option.value) < ids.length;
+  if (Number($('run-limit').value) < ids.length) $('run-limit').value = String(ids.length);
+  const sequence = Array.from({ length: Number($('run-limit').value) }, (_, i) => {
+    const s = members().find(s => s.id === ids[i % ids.length]);
+    return s ? `${s.name} (${s.id.slice(0, 6)})` : '未选择';
+  });
+  $('run-order').textContent = `转交顺序：${sequence.join(' → ')}。只转交任务与上一份回复，不附加私人历史。`;
+  $('confirm-run').disabled = !$('run-consent').checked || ids.length < 2;
+}
 $('run-button').onclick = () => {
   if ($('run-button').disabled) return;
   $('room-advanced').open = false;
-  runPreview = { text: $('shared-input').value, recipient: $('recipient').value, revision: roomDraftRevision, members: members().map(s => [s.id, s.memberRevision]) };
+  if ($('shared-input').value.length > 6000) { toast('一起核查的任务与材料合计最多 6000 字符。草稿保留；可缩短后核查，或定向发送。'); $('shared-input').focus(); return; }
+  const recipient = $('recipient').value, candidates = handoffCandidates(recipient);
+  runPreview = { text: $('shared-input').value, recipient, revision: roomDraftRevision,
+    members: members().map(s => [s.id, s.memberRevision, s.name]), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
   $('run-preview').textContent = runPreview.text;
-  $('run-participants').textContent = `参与：${members().map(s => s.name).join('、')}；先交给 ${members().find(s => s.id === runPreview.recipient)?.name}。`;
-  $('run-consent').checked = false; $('confirm-run').disabled = true; $('run-error').hidden = true;
+  $('run-consent').checked = false; $('run-error').hidden = true; renderRunChoices();
   $('run-dialog').showModal();
 };
-$('run-consent').onchange = () => { $('confirm-run').disabled = !$('run-consent').checked; };
+$('run-consent').onchange = () => { $('confirm-run').disabled = !$('run-consent').checked || !runPreview || runPreview.ids.length < 2; };
+$('run-limit').onchange = () => { $('run-consent').checked = false; renderRunChoices(); };
 $('cancel-run').onclick = () => { $('run-dialog').close(); runPreview = null; $('shared-input').focus(); };
 $('run-form').onsubmit = event => {
   event.preventDefault();
   if (!$('run-consent').checked || !runPreview) return;
-  const same = selected === 'room' && !roomSession && runPreview.text === $('shared-input').value && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision]));
-  if (!same || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
-  const limit = Number($('run-limit').value);
-  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit }));
+  const eligible = handoffCandidates(runPreview.recipient);
+  const same = selected === 'room' && !roomSession && runPreview.text === $('shared-input').value && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name]));
+  const available = runPreview.ids.length >= 2 && runPreview.ids.every(id => eligible.some(s => s.id === id)) &&
+    (runPreview.ids.length <= 2 || eligible.filter(s => runPreview.ids.includes(s.id)).every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs')));
+  if (!same || !available || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
+  const limit = Number($('run-limit').value), ids = [...runPreview.ids], labels = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[2]]));
+  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit, ids, labels }));
 };
 $('recipient').onchange = () => { closeMentions(); attempt(persistView); render(); };
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };

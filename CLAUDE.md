@@ -36,6 +36,12 @@ or start paid model runs as a side effect of editing documents.
   copies. Do not leave test/backup bundles registered as ordinary applications.
   Verify application-search entries separately from processes and window count;
   removing a duplicate launcher must not stop or migrate native user sessions.
+- Installed native tests must start through normal service bootstrap, which
+  copies writable provider plugins into the private runtime directory. Do not
+  directly fork the signed bundle's daemon for real providers: native plugin
+  initialization can generate files beside the plugin. Verify the installed
+  bundle's strict signature after native testing, not only before it. Synthetic
+  transport fixtures may boot directly when they never initialize a provider.
 - Current development preference: the main agent implements and tests directly.
   Keep one independent reviewer at delivery checkpoints; do not delegate coding
   or routine testing again unless requested. Reuse relevant evidence and avoid

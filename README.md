@@ -12,6 +12,13 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.44 adds **文件…** in conversation and shared views: preview a local UTF-8
+text material, explicitly add it to a draft, or save an exact result copy. **一起核查…**
+lets you select and order 2–6 independent sessions on a capable shared backend,
+with at most six replies. Joining does not share private history or start work.
+An installed three-session calculation/check/file task passed; native permissions
+can still pause automatic sharing. See the [workflow evidence and boundaries](docs/acceptance/desktop-workflow.md).
+
 Alpha.22 passes the controlled local daily single-conversation acceptance,
 including visible macOS System Pinyin/WeChat input, terminal controls and reopen
 continuity. See [evidence and limits](docs/alpha.md#alpha22-single-conversation-os-acceptance).

@@ -16,7 +16,7 @@ async function build() {
   const stage = path.join(scratch, 'app'); fs.mkdirSync(stage);
   try {
     for (const name of ['package.json', 'package-lock.json', 'LICENSE', 'NOTICE', 'COPYRIGHT', 'THIRD_PARTY_NOTICES.md']) fs.copyFileSync(path.join(root, name), path.join(stage, name));
-    const sources = ['main.cjs', 'preload.cjs', 'startup.html', 'startup.js',
+    const sources = ['main.cjs', 'local-files.cjs', 'preload.cjs', 'startup.html', 'startup.js',
       'dsh-host.cjs', 'dsh-server.mjs', 'ui-errors.cjs', 'ui-parent-lease.cjs',
       'service-client.cjs', 'service-layout.cjs', 'workspace-client.cjs', 'legacy-observation.cjs', 'legacy-input.cjs', 'legacy-codex.cjs', 'platform.cjs', 'runtime-locations.cjs', 'preflight.cjs', 'daemon.cjs',
       'adapters.cjs', 'workspace.cjs', 'approval-policy.js', 'observation.cjs', 'window-placement.cjs', 'pty_host.py', 'claude_hook.py',
