@@ -12,6 +12,10 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.50 keeps automatic events from unrelated sessions from interrupting a
+selected collaboration. Late send failures apply to their original exchange;
+explicit human controls retain priority. See [six-session checks](docs/testing.md#six-session-independence--alpha50).
+
 Alpha.49 adds **新会话 → Codex → 继续已有 Codex 会话…** for explicitly
 selected, stopped native history. It retains the original ID and settings;
 selecting a known or locally archived session opens its existing record. This

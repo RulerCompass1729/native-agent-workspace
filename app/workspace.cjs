@@ -161,9 +161,9 @@ class Workspace extends EventEmitter {
         s.pid = null; s.pendingTag = null; s.approval = null; this.runtimes.delete(s.id);
         this.approvalRoutes.delete(s.id);
       }
-      if (state === 'approval') this.pause('等待原生权限确认');
+      if (state === 'approval') this.pauseParticipant(s.id, '等待原生权限确认');
       if (state === 'working' && this.room.run?.status === 'running' && this.room.run.ids.includes(s.id) && this.room.run.awaiting?.sessionId !== s.id) this.pause('成员开始了本轮之外的原生工作，请核对后再交接。');
-      if (['ended', 'recoverable', 'error'].includes(state)) this.pause('原生会话不可用'); this.changed();
+      if (['ended', 'recoverable', 'error'].includes(state)) this.pauseParticipant(s.id, '原生会话不可用'); this.changed();
     });
     on('terminal', event => {
       if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
@@ -187,7 +187,7 @@ class Workspace extends EventEmitter {
       const requestId = randomUUID();
       this.approvalRoutes.set(s.id, { runtime, rpc: this.host.rpc, requestId, nativeRequestId: approval.requestId });
       s.approval = { ...approval, requestId }; s.approvalResolved = false;
-      this.pause('等待原生权限确认'); this.changed();
+      this.pauseParticipant(s.id, '等待原生权限确认'); this.changed();
     });
     on('approvalResolved', nativeRequestId => {
       const route = this.approvalRoutes.get(s.id);
@@ -247,8 +247,8 @@ class Workspace extends EventEmitter {
       const shared = this.room.messages.find(m => m.id === tag);
       if (shared) shared.status = 'reply-private';
       this.forwards.delete(tag);
-      s.activity = '输入已接收；回复归属未确认，自动交接已暂停。';
-      this.pause(s.activity); this.changed();
+      s.activity = '输入已接收；回复归属未确认，请在原生会话核对。';
+      this.pauseParticipant(s.id, s.activity); this.changed();
     });
     on('delta', item => {
       let message = s.messages.find(m => m.id === item.id);
@@ -267,9 +267,10 @@ class Workspace extends EventEmitter {
       else if (forward) { const message = this.room.messages.find(m => m.id === forwardTag); if (message) message.status = 'reply-private'; }
       this.forwards.delete(forwardTag);
       this.changed();
-      this.advance(s, info).catch(error => { this.pause(error.message); });
+      const run = this.room.run;
+      this.advance(s, info).catch(error => { this.pause(error.message, run); });
     });
-    on('failed', (reason, info) => { if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pause(reason); this.changed(); });
+    on('failed', (reason, info) => { if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pauseParticipant(s.id, reason); this.changed(); });
   }
   join(id, join) {
     const s = this.get(id);
@@ -332,7 +333,9 @@ class Workspace extends EventEmitter {
         s.pendingTag = null;
         if (sameControl) {
           if (clearedDraft && this.draftRevisions.get(id) === draftRevision) this.drafts.set(id, draft);
-          this.pause(error.message);
+          // A private send already stopped the previous exchange. Its late
+          // rejection cannot revoke a later authorization for other sessions.
+          if (route) this.pause(error.message, route);
         }
       } else if (!this.runtimes.has(id) && s.state === 'recoverable' && s.connectionRevision === connection
         && sameControl && !s.pendingTag && clearedDraft && this.draftRevisions.get(id) === draftRevision) {
@@ -379,9 +382,13 @@ class Workspace extends EventEmitter {
     if (!run || run.id !== this.room.run?.id || run.status !== 'running' || Date.now() < run.deadline) return false;
     this.pause('达到本轮 10 分钟期限。'); return true;
   }
-  pause(reason = '已暂停交接') {
-    const run = this.room.run;
-    if (run?.status === 'running') { run.status = 'paused'; run.reason = reason; this.room.revision++; this.runEvent(reason); this.changed(); }
+  pause(reason = '已暂停交接', run = this.room.run) {
+    if (run === this.room.run && run?.status === 'running') { run.status = 'paused'; run.reason = reason; this.room.revision++; this.runEvent(reason); this.changed(); }
+  }
+  pauseParticipant(id, reason) {
+    // Native activity in another independent session does not revoke this
+    // selected run. Explicit human interventions still use the global pause.
+    if (this.room.run?.ids.includes(id)) this.pause(reason);
   }
   runEvent(text) {
     const run = this.room.run;

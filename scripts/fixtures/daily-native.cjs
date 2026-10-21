@@ -4,6 +4,7 @@ const path = require('node:path'), { EventEmitter } = require('node:events');
 const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { NativeHost, Codex } = require(path.join(root, 'app/adapters.cjs'));
 const runtimes = new Map(), sends = [], inputs = [], calls = [], decisions = [];
+const heldSends = new Map();
 function notify(r, method, params) { r.event({ method, params: { threadId: r.record.nativeId, ...params } }); }
 const item = (i, text = 'PRIVATE-HISTORY-' + i) => ({ turnId: 'history-turn', item: { id: 'history-' + i, type: i % 2 ? 'agentMessage' : 'userMessage', ...(i % 2 ? { text } : { content: [{ type: 'text', text }] }) } });
 const history = Array.from({ length: 105 }, (_, i) => item(i));
@@ -43,12 +44,26 @@ NativeHost.prototype.create = function (record) {
     r.start = async () => { r.emit('state', 'idle'); r.observing = r.observeFirstTurn(); r.observing.catch(e => { r.emit('activity', e.message); r.emit('state', 'error'); }); };
   } else {
     r.start = async () => r.emit('state', 'idle');
-    r.send = async (text, tag, guard) => { if (!guard()) throw Error('Invalid dispatch'); sends.push({ id: record.id, text, tag }); r.emit('submitted', tag); r.emit('state', 'working'); };
+    r.send = async (text, tag, guard) => {
+      if (!guard()) throw Error('Invalid dispatch'); sends.push({ id: record.id, text, tag });
+      if (heldSends.has(record.id)) {
+        r.emit('state', 'working');
+        try { await new Promise((_, reject) => heldSends.set(record.id, reject)); }
+        finally { r.emit('state', 'idle'); }
+      }
+      r.emit('submitted', tag); r.emit('state', 'working');
+    };
     r.interrupt = async () => r.emit('state', 'idle');
   }
   runtimes.set(record.id, r); return r;
 };
 process.on('message', q => {
+  if (q.method === 'holdSend') heldSends.set(q.target, null);
+  if (q.method === 'rejectSend') {
+    const reject = heldSends.get(q.target); heldSends.delete(q.target);
+    if (typeof reject !== 'function') throw Error('No held send for fixture target');
+    reject(new Error(q.text));
+  }
   if (q.method === 'event') runtimes.get(q.target).event(q.value);
   if (q.method === 'release') {
     const sent = sends.at(-1), r = runtimes.get(sent.id);

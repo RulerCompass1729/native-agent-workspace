@@ -1,5 +1,46 @@
 # Bounded testing
 
+## Six-session independence — alpha.50
+
+The actual alpha.49 installed interface reproduced an unrelated native permission
+request pausing a selected pair. The fix restricts automatic native approval,
+failure and exit events to selected participants; explicit human intervention and
+membership changes retain their existing conservative behavior. Delayed send
+failures can pause only their original run. Private draft restoration and pending
+cleanup remain intact. Current-participant failures still stop sharing.
+
+Nineteen local counterexamples include seven paired selected/outside events,
+private acknowledgement failure after another run starts, and old/current-run
+initial and handoff rejections. Three asynchronous cases failed before the final
+fix and pass afterward. The complete local suite passes 438 checks, with no skips.
+
+`node scripts/test-six-session-workflow.cjs` drives actual Electron controls at
+850 × 600 with three Claude and three Codex same-name sessions, controlled provider
+transport, thirteen synthetic submissions and zero provider/model tasks. Five
+source and installed groups cover ordered six-reply completion, removing a later participant,
+late-private results, draft/archive/reopen identity retention, an independent
+permission request during a selected pair, and private send failure followed by
+explicit reauthorization. The real Codex adapter handles synthetic native events;
+Claude transport is a fixture. Screenshots and raw logs remain private. Final source/artifact evidence passed
+independent review. All 41 installed payload files match source, the strict
+signature remains valid, four protected normal-profile hashes are unchanged,
+and application search resolves one daily installed entry. Existing native
+services were not stopped or migrated.
+
+An initial GUI experiment expected a new run to start before a pending private
+ACK. It failed because the client intentionally waits for outstanding human
+operations. That guard was retained. The corrected GUI test verifies no dispatch
+while waiting, rejection without replay, restored draft and explicit new consent.
+The daemon-level late-rejection cases are separate from this GUI ordering proof.
+
+Optional `--idle-sample` takes five minutes of owned-process measurements. The
+baseline had 21 samples and a constant six-process app/service tree. Median
+interval CPU was approximately 0.13% of one core, peak approximately 0.93%; summed
+RSS went from approximately 742 to 706 MiB. RSS can double-count shared pages.
+This sample has no real provider processes and establishes neither real-agent
+resource bounds nor general absence of leaks. All windows remained hidden and
+non-focusable; physical OS input and new native reasoning are not exercised.
+
 ## Outside Codex history — alpha.49
 
 `node scripts/test-native-history.cjs` drives the actual hidden Electron app.

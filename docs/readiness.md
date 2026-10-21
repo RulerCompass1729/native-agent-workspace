@@ -1,11 +1,15 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.49 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.50 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.49 adds explicitly selected stopped Codex history,
+**Current increment:** alpha.50 isolates automatic native errors and permission
+requests to the selected collaboration participants. Delayed send failures are
+bound to their original authorization. Source and installed five-group GUI
+checks and independent source/artifact review pass. Explicit human intervention
+remains conservative and unchanged. Alpha.49 adds explicitly selected stopped Codex history,
 retaining its native identity and settings. Source/installed interface checks and
 actual installed historical recovery pass; live outside attachment and Claude
 history remain separate compatibility work. Alpha.48 makes existing result-navigation actions readable
@@ -15,7 +19,7 @@ at native delivery and completion, as well as on its timer. M4 is accepted withi
 M3 graphical follow-through, M2 continuity and M1 selected multi-session work
 remain accepted within their linked scopes below.
 
-## Execution queue after alpha.49
+## Execution queue after alpha.50
 
 As of 2026-10-20. This orders the remaining product work; it does not mark it
 implemented. M1 passed its scoped graphical material-to-result acceptance path;
