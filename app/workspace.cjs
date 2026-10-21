@@ -5,6 +5,7 @@ const path = require('node:path');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
 const { ProgressJournal } = require('./observation.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
+const { NativeHistory, nativeId } = require('./native-history.cjs');
 
 const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error(`请输入有效文字；一次最多 ${max.toLocaleString('en-US')} 个字符。`);
@@ -24,6 +25,7 @@ class Workspace extends EventEmitter {
     this.approvalRoutes = new Map();
     this.stops = new Map();
     this.progress = new Map(); this.observedTerminals = new Map();
+    this.nativeHistory = new NativeHistory(host); this.historyQueue = Promise.resolve(); this.pendingNativeImports = 0;
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
@@ -92,6 +94,44 @@ class Workspace extends EventEmitter {
       if (!runtime || this.runtimes.get(id) === runtime) { record.state = 'error'; record.activity = error.message; this.changed(); }
       throw error;
     }
+  }
+  importHistory(id, owner) {
+    nativeId(id);
+    if (this.closed) throw Error('后台已关闭，没有接入会话。');
+    this.pendingNativeImports++;
+    const operation = this.historyQueue.then(async () => {
+      if (this.closed) throw Error('后台已关闭，没有接入会话。');
+      const existing = [...this.sessions.values()].filter(s => s.provider === 'codex' && s.nativeId === id);
+      if (existing.length > 1) throw Error('已有记录归属冲突；没有恢复第二个连接。');
+      if (existing.length) return existing[0].id;
+      if (this.storageWarning) throw Error('本地记录尚未安全保存，请先处理保存问题。');
+      if ([...this.sessions.values()].filter(s => s.state !== 'ended').length >= 6) throw Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
+      const info = await this.nativeHistory.read(id);
+      if (this.closed) throw Error('后台已关闭，没有接入会话。');
+      if (this.storageWarning) throw Error('本地保存状态已变化，没有恢复原生会话。');
+      if ([...this.sessions.values()].filter(s => s.state !== 'ended').length >= 6) throw Error('会话数量已变化，请先结束不需要的会话。');
+      if (!fs.statSync(info.cwd).isDirectory()) throw Error('原工作目录不可用，请先恢复该目录。');
+      const localId = randomUUID();
+      const record = { id: localId, nativeId: id, externalHistory: true, name: info.name || 'Codex 历史会话', provider: 'codex', cwd: info.cwd,
+        roomId: null, memberRevision: 0, controlRevision: 0, owner, view: 'chat', state: 'recoverable', messages: [], fleet: [], background: null,
+        scheduled: null, model: info.model, usage: null, pendingTag: null, activity: '', approval: null, pid: null };
+      // Reserve and locally persist the identity before crossing the native side
+      // effect boundary. An uncertain ACK is never retried or turned into a fork.
+      this.sessions.set(localId, record); this.persist();
+      if (this.storageWarning) { record.state = 'error'; record.activity = '历史接入尚未开始：请先重试本地保存。'; this.changed(); return localId; }
+      try { await this.resume(localId, owner); }
+      catch (error) {
+        if (error.nativeActiveWriter && this.sessions.get(localId) === record && !this.runtimes.has(localId)) {
+          // A definite refusal never acquired the native thread. Keep the
+          // person's selection in the picker instead of adding a failed copy.
+          this.sessions.delete(localId); this.progress.delete(localId); this.changed(); this.persist(); throw error;
+        }
+        if (this.sessions.get(localId) === record && record.state === 'recoverable' && !record.activity) { record.state = 'error'; record.activity = error.message; this.changed(); }
+      }
+      this.persist(); return localId;
+    });
+    const tracked = operation.finally(() => { this.pendingNativeImports--; });
+    this.historyQueue = tracked.catch(() => {}); return tracked;
   }
   bind(s, runtime) {
     const on = (event, handler) => runtime.on(event, (...args) => {
@@ -423,6 +463,10 @@ class Workspace extends EventEmitter {
     if (this.stops.has(id)) return this.stops.get(id);
     const s = this.get(id);
     if (s.state === 'ended') return Promise.resolve();
+    if (s.externalHistory && s.recovering && s.state === 'starting' && !this.runtimes.has(id)) {
+      s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'recoverable';
+      s.activity = '已取消连接，原生历史保持原样。'; this.changed(); return Promise.resolve();
+    }
     const runtime = this.runtime(id);
     this.pause('正在断开原生会话'); s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; s.activity = '等待原生确认'; this.changed();
     const operation = Promise.resolve().then(() => runtime.stop()).then(result => {
@@ -462,6 +506,9 @@ class Workspace extends EventEmitter {
     }
     if (this.runtimes.has(id)) throw new Error('该会话仍有运行连接，请先检查原生状态。');
     if (!s.nativeId || !['ended', 'recoverable', 'error'].includes(s.state)) throw new Error('这个会话目前不能恢复。');
+    if (s.externalHistory) {
+      if (this.storageWarning) throw Error('请先处理本地保存问题，再继续原生历史。');
+    }
     const sameServer = s.provider === 'codex' && s.serverIdentity?.pid === this.host.codexProcess?.pid;
     if ((!sameServer && processMayBeAlive(s.serverIdentity)) || (processMayBeAlive(s.processIdentity) && !(sameServer && s.processIdentity.pid === s.serverIdentity.pid))) throw new Error('之前的原生进程可能仍在运行。请先在原生界面检查，避免并行恢复同一个会话。');
     if (!fs.statSync(s.cwd).isDirectory()) throw new Error('原工作目录不可用，请先恢复该目录。');
@@ -471,10 +518,14 @@ class Workspace extends EventEmitter {
     let runtime;
     const generation = s.connectionRevision;
     try {
+      if (s.externalHistory) {
+        await this.nativeHistory.ready();
+        if (this.closed || this.storageWarning || this.sessions.get(id) !== s || generation !== s.connectionRevision || s.state !== 'starting' || this.runtimes.has(id) || this.stops.has(id)) throw Error('会话状态已变化，没有继续旧的恢复请求。');
+      }
       runtime = this.host.create(s); this.runtimes.set(id, runtime); this.bind(s, runtime);
       if (runtime.start) await runtime.start();
     } catch (error) {
-      if (generation === s.connectionRevision && (!runtime || this.runtimes.get(id) === runtime)) {
+      if (this.sessions.get(id) === s && generation === s.connectionRevision && (runtime ? this.runtimes.get(id) === runtime : s.state === 'starting')) {
         if (!runtime?.terminal?.alive && !runtime?.hasHistory) this.runtimes.delete(id);
         s.state = 'error'; s.activity = error.message; this.changed();
       }
@@ -491,7 +542,7 @@ class Workspace extends EventEmitter {
     this.sessions.delete(id); this.drafts.delete(id); this.draftRevisions.delete(id); this.changed(); this.persist();
     this.progress.delete(id); this.observedTerminals.delete(id);
   }
-  close() { clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
+  close() { this.closed = true; clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
 }
 
 module.exports = { Workspace, cleanText, isTerminalResponse };

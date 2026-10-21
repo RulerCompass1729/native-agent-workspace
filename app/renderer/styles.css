@@ -202,3 +202,15 @@ header h1, header p { overflow-wrap: anywhere; }
 
 #file-dialog { width: min(760px, calc(100vw - 48px)); }
 #file-content { max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border: 1px solid var(--border); border-radius: 8px; font: 13px/1.6 ui-monospace, monospace; user-select: text; }
+
+/* An explicit history picker shares the existing new-session entry point. */
+#native-history-dialog { width: 640px; max-height: 85vh; overflow: auto; }
+.native-history-search { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.native-history-search label { grid-column: 1 / -1; margin: 0; }
+#native-history-search { margin: 0; min-width: 0; }
+#native-history-list { max-height: 34vh; overflow: auto; margin-top: 16px; }
+.native-history-row { display: flex; gap: 10px; padding: 12px 4px; border-bottom: 1px solid var(--border); font-weight: 400; align-items: flex-start; }
+.native-history-row input { width: auto; margin: 4px 0 0; }
+.native-history-row span { min-width: 0; }
+.native-history-row strong, .native-history-row small { display: block; overflow-wrap: anywhere; }
+.native-history-row small { color: var(--muted); margin-top: 5px; line-height: 1.5; }

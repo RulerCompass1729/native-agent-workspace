@@ -1,24 +1,28 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.48 is a **local macOS technical-trial alpha**.
+As of 2026-10-20. Version 0.1.0-alpha.49 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.48 makes existing result-navigation actions readable
+**Current increment:** alpha.49 adds explicitly selected stopped Codex history,
+retaining its native identity and settings. Source/installed interface checks and
+actual installed historical recovery pass; live outside attachment and Claude
+history remain separate compatibility work. Alpha.48 makes existing result-navigation actions readable
 without hover; source and installed light/dark, pointer and keyboard checks passed
 independent review. Alpha.47 enforces the existing finite exchange deadline
 at native delivery and completion, as well as on its timer. M4 is accepted within its stated scope; see [bounded-away evidence and limits](acceptance/bounded-away.md).
 M3 graphical follow-through, M2 continuity and M1 selected multi-session work
 remain accepted within their linked scopes below.
 
-## Execution queue after alpha.48
+## Execution queue after alpha.49
 
 As of 2026-10-20. This orders the remaining product work; it does not mark it
 implemented. M1 passed its scoped graphical material-to-result acceptance path;
 M2 passed its stated history/restart/reconnect scope; M3 passed its graphical
 follow-through scope; M4 passed its finite unattended-lifecycle scope. M5
-starts with explicitly selected stopped Codex history after native contract verification. The maintainer implements,
+has passed the explicitly selected stopped Codex history subcase after native
+contract verification; its wider live-entry requirement remains open. The maintainer implements,
 tests the actual affected interface and obtains independent review; later rows
 remain queued. Existing accepted checks are reused unless a change invalidates
 their evidence. Planning itself authorizes no new provider test call.
@@ -29,7 +33,7 @@ their evidence. Planning itself authorizes no new provider test call.
 | M2 — accepted within scope | Existing-session continuity for daily work | Approximately 19.5 MB synthetic history survives actual app reopen and cold local-record recovery with exact history/draft/identity/reading position; actual alpha.44 → alpha.45 UI reconnection retains its live backend. Finite limits and native recovery boundaries remain explicit; U05/U17 are not universally closed. |
 | M3 — accepted within scope | Complete everyday graphical workflow | Actual installed task follow-through covers input, progress/confirmation, native intervention, finding private results, selected sharing, local notes/search and archive/reopen. Reuses the unchanged M1 native non-coding task, with no new model calls. Official Desktop synchronization and universal physical-input compatibility are not claimed. |
 | M4 — accepted within scope | Bounded unattended work | An explicitly authorized finite reply exchange continues with the UI closed and stops later handoffs at its reply cap, human/native intervention, error or deadline. Source natural ten-minute and installed lifecycle checks pass. This does not determine arbitrary goal completion, cancel native tasks or enforce a hard monetary cap. |
-| M5 — stopped-history implementation next | Bring outside sessions into this workspace | Current CLI/schema and official entry points are recorded in [native-session-entry.md](native-session-entry.md). Codex 0.163.0 rejected a second writer and retained identity after the first exited in a zero-inference protocol probe. Actual history-entry UI acceptance is still required; live attachment remains separate. Missing upstream attachment support is a named blocker, not permission to copy context into an unrelated session. |
+| M5 — stopped Codex history accepted within scope | Bring outside sessions into this workspace | Current CLI/schema and official entry points are recorded in [native-session-entry.md](native-session-entry.md). Codex 0.163.0 rejects a second writer and retains identity after its first writer exits. Actual installed history selection, native history/model identity, draft and join/detach checks pass without another task. Live outside attachment and Claude history remain open; missing proof never permits copying context into an unrelated session. |
 
 M1 proceeds as one acceptance batch: provide a local text material, choose
 participants, inspect a result, detach and continue, then reopen with records intact. Provider kind, independent session and

@@ -490,3 +490,16 @@ test('selected same-service subset may run beside an old member; three-party cap
   assert.deepEqual(next.calls.filter(c => c[0] === 'run').map(c => c[1]), [['new', 'second'], ['third', 'new', 'second']]);
   assert.equal(old.calls.some(c => c[0] === 'run'), false); c.close();
 });
+
+test('outside history deduplicates across retained services including archived and ended records', async () => {
+  const { c, old, next } = fixture();
+  next.real.capabilities.push('nativeHistory');
+  const nativeId = '00000000-0000-4000-8000-000000000001';
+  const existing = old.real.sessions.find(s => s.id === 'old-codex');
+  Object.assign(existing, { nativeId, state: 'ended', archived: true });
+  assert.equal(await c.call('importHistory', nativeId), existing.id);
+  assert.equal(next.calls.some(([method]) => method === 'importHistory'), false);
+  assert.equal(old.calls.some(([method]) => method === 'resume'), false);
+  next.real.sessions.push({ ...existing, id: 'duplicate' });
+  await assert.rejects(c.call('importHistory', nativeId), /归属冲突/); c.close();
+});

@@ -1,8 +1,20 @@
 # macOS alpha trial
 
-As of 2026-10-20. Version 0.1.0-alpha.48. Suitable for a small technical trial with
+As of 2026-10-20. Version 0.1.0-alpha.49. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.49 existing Codex history
+
+**新会话 → Codex → 继续已有 Codex 会话…** offers native indexed history.
+Choose an entry after ending its other native connection. Recovery keeps its ID,
+history and native settings without replaying a task. Existing/archived workspace
+records open instead of being imported twice. Version support is currently the
+verified Codex 0.163.0 running server. This is stopped-history recovery, not live
+attachment, fleet restoration or external Claude import. See the [entry contract
+and limits](native-session-entry.md). Source and installed GUI checks, actual
+native historical recovery and 419 local regression checks pass. No new model
+task was submitted for this acceptance.
 
 ## Alpha.48 readable result actions
 

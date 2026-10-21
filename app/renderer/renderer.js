@@ -274,6 +274,59 @@ function openCreate(provider = 'claude') {
   $('initial-view').value = preference; $('session-name').value = '';
   $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
 }
+let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
+function renderNativeHistory() {
+  const list = $('native-history-list'); list.replaceChildren();
+  for (const row of historyRows) {
+    const label = node('label', undefined, 'native-history-row'), input = document.createElement('input');
+    input.type = 'radio'; input.name = 'native-history-choice'; input.value = row.nativeId; input.checked = row.nativeId === historySelected;
+    input.disabled = historyLoading || historyImporting || row.existingIds?.length > 1;
+    const text = node('span'); text.append(node('strong', row.name || '未命名 Codex 会话'), node('small', row.cwd), node('small', `${row.updatedAt ? new Date(row.updatedAt * 1000).toLocaleString() : '更新时间未报告'}${row.existingIds?.length ? ' · 已在工作台中' : ''}`));
+    label.append(input, text); list.append(label);
+    input.onchange = () => { historySelected = row.nativeId; updateNativeHistoryControls(); };
+  }
+  updateNativeHistoryControls();
+}
+function updateNativeHistoryControls() {
+  const row = historyRows.find(r => r.nativeId === historySelected), busy = historyLoading || historyImporting;
+  $('confirm-native-history').disabled = busy || !row || row.existingIds?.length > 1;
+  $('confirm-native-history').textContent = historyImporting ? '正在连接…' : row?.existingIds?.length ? '查看已有会话' : '继续所选会话';
+  $('more-native-history').hidden = !historyCursor; $('more-native-history').disabled = busy;
+  $('search-native-history').disabled = busy; $('native-history-search').disabled = busy;
+  $('close-native-history').disabled = historyImporting;
+}
+async function loadNativeHistory(more = false) {
+  if (historyLoading || historyImporting) return;
+  const generation = ++historyGeneration; historyLoading = true;
+  if (!more) { historySearch = $('native-history-search').value; historyRows = []; historySelected = null; historyCursor = null; }
+  renderNativeHistory(); $('native-history-status').textContent = '正在读取本机原生索引…';
+  try {
+    const result = await api.nativeHistory({ search: historySearch, ...(more ? { cursor: historyCursor } : {}) });
+    if (generation !== historyGeneration || !$('native-history-dialog').open) return;
+    const seen = new Set(historyRows.map(r => r.nativeId)); historyRows.push(...result.data.filter(r => !seen.has(r.nativeId))); historyCursor = result.nextCursor;
+    $('native-history-status').textContent = historyRows.length ? `已显示 ${historyRows.length} 个会话` : '没有找到会话。可修改名称重试；这里只读取原生索引，不修复或扫描历史文件。';
+  } catch (error) { if (generation === historyGeneration) $('native-history-status').textContent = error.message; }
+  finally { if (generation === historyGeneration) { historyLoading = false; renderNativeHistory(); } }
+}
+$('open-native-history').onclick = () => {
+  $('create-dialog').close(); historyRows = []; historySelected = null; historyCursor = null; historyLoading = false;
+  $('native-history-search').value = ''; $('native-history-dialog').showModal(); loadNativeHistory();
+};
+$('native-history-search-form').onsubmit = event => { event.preventDefault(); loadNativeHistory(); };
+$('more-native-history').onclick = () => loadNativeHistory(true);
+$('close-native-history').onclick = () => $('native-history-dialog').close();
+$('native-history-dialog').addEventListener('cancel', event => { if (historyImporting) event.preventDefault(); });
+$('native-history-dialog').addEventListener('close', () => { historyGeneration++; historyLoading = false; });
+$('confirm-native-history').onclick = async () => {
+  if (historyImporting || historyLoading || !historyRows.some(r => r.nativeId === historySelected)) return;
+  historyImporting = true; renderNativeHistory(); $('native-history-status').textContent = '正在连接所选原生历史；不会重发旧任务。';
+  try {
+    const id = await api.importHistory(historySelected); state = await api.initial();
+    $('native-history-dialog').close(); await select(id, 'chat');
+    if (state.sessions.find(s => s.id === id)?.archived) toast('这是已归档的原会话；可从“归档”恢复，没有创建副本。');
+  } catch (error) { $('native-history-status').textContent = error.message; }
+  finally { historyImporting = false; renderNativeHistory(); }
+};
 function openRename(id) {
   const record = id === 'room' ? { id, name: state.room.name } : state.sessions.find(s => s.id === id); if (!record) return;
   renamingId = record.id; $('rename-name').value = record.name;
@@ -340,6 +393,7 @@ function renderSessions() {
   });
 }
 function createReadiness() {
+  $('open-native-history').hidden = document.querySelector('input[name="provider"]:checked').value !== 'codex' || !state.capabilities?.includes('nativeHistory');
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
     $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';

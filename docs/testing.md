@@ -1,5 +1,37 @@
 # Bounded testing
 
+## Outside Codex history — alpha.49
+
+`node scripts/test-native-history.cjs` drives the actual hidden Electron app.
+Six controlled-transport scenarios cover explicit browse/cancel/search/pages,
+exact history and native identity, view switching and join/detach with a draft,
+repeat and archived selection, active-writer refusal without a local copy,
+partial recovery and reopen. They make three synthetic resume requests and no
+inference/start/fork calls. Runtime tests additionally hold metadata reading while
+requesting daemon shutdown, and interrupt version verification with stop, removal,
+close or a second recovery. Accepted native recovery followed by failed saving or
+pagination retains one reference and never retries automatically.
+
+A separate normal-bootstrap test reuses the completed native budget task, sending
+no new question. The initial source run displayed the exact historical user and
+assistant text and retained its model, but failed at its private protocol-log
+collection because the injected recorder was not loaded. That run is not recorded
+as fully passing. The final installed run uses normal service bootstrap and passes:
+the exact previous user/assistant messages, native ID and model remain; joining
+and detaching retain an unsent draft. The native terminal also shows the exact
+historical assistant answer; returning to conversation retains the draft.
+It sends no new question and records zero
+application dispatches. Protocol request-count assertions belong to the controlled
+transport and native writer probe, not to the unavailable recorder.
+
+Final source and installed six-group interface checks pass; the complete local
+suite passes 419 tests with zero skips. The 41 installed payload files match
+source, strict bundle verification passes after the native run, the four normal
+profile records retain their original hashes, and application search finds only
+the one daily installed application. Screenshots, full logs and exact native IDs
+remain private. This does not verify physical OS input, live outside attachment,
+full fleet restoration or other native versions.
+
 ## Readable result actions — alpha.48
 
 The graphical follow-through runner now checks actual composited text contrast

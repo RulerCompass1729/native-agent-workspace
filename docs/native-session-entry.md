@@ -1,9 +1,11 @@
 # Bringing an outside session into the workspace
 
-Contract assessment as of 2026-10-20, not an implemented feature or compatibility
-certification. Locally inspected versions: Claude Code 2.1.306 and Codex 0.163.0.
-No outside user session was resumed or attached during this assessment. A later
-protocol probe used one newly created synthetic record in two owned native servers.
+Contract and implementation record as of 2026-10-20. Alpha.49 implements the
+selected stopped Codex history path below; source and installed acceptance pass.
+This is not general compatibility certification. Locally inspected versions: Claude Code 2.1.306 and Codex 0.163.0.
+The assessment and protocol probe do not touch the person's outside sessions.
+The probe uses a new synthetic record in two owned native servers; installed
+acceptance explicitly resumes one previously completed, owned native test task.
 
 ## Available native entry points
 
@@ -48,22 +50,29 @@ live event coverage. This is an integration proof still missing, not a claim
 that the providers cannot support it. Versioned upstream Codex implementation
 source could not be retrieved, so the exclusion result is scoped runtime evidence, not a source-level guarantee.
 
-## Next acceptance task: stopped Codex history
+## Alpha.49: stopped Codex history
 
-Offer metadata browsing only on request, and resume only the explicitly selected
+The existing new-session dialog offers **继续已有 Codex 会话…**. Metadata
+browsing happens only on request; an unnamed entry uses a bounded native preview,
+without a title-generation call. Recovery uses only the explicitly selected
 native ID. Check existing and archived records across every connected backend
 before creating a local reference. Preserve the native configuration; do not
 replace it with the new-session defaults. An active-writer rejection leaves its
-source untouched and creates no writable copy. Once resume has succeeded,
+source untouched, removes the unacquired local placeholder and retains the
+selection and explanation in the picker. Once resume has succeeded,
 history-loading or local-save failure must not trigger another resume, fork or
 replayed task.
 
-Verify selection/cancellation, writer conflict, same-identity history, drafts,
-archive/reopen and recovery through the actual interface. The protocol probe's
+Source and installed interface checks cover selection/cancellation, writer conflict,
+same-identity history, drafts, archive/reopen and recovery. Normal installed
+bootstrap also restores exact real historical messages and the original model
+without sending a new task; see [testing evidence](testing.md). The protocol probe's
 single injected synthetic record is not complete-history acceptance. Its native
 notifications included goal clearing, so preserving arbitrary goals or active
-fleets is not claimed. Version compatibility must be checked before enabling
-this path.
+fleets is not claimed. The actual running server must report exactly 0.163.0 in its initialization
+handshake before this path is enabled. A same-path CLI replacement cannot lend
+its version to an older server. Unknown versions remain unavailable for outside
+history; existing workspace sessions retain their existing behavior.
 
 ## Later: connection to a running outside session
 
@@ -73,3 +82,11 @@ remain coherent between native and graphical views. Historical resume, live
 connection and a read-only reference must be named separately. Missing proof
 does not permit silently forking or copying context. Existing app-managed
 sessions retain their current join, detach and recovery paths.
+
+The history browser uses the native state index with bounded pagination. It does
+not crawl history files or repair a missing native index. Native archived history
+is not included yet; locally archived workspace records are deduplicated and
+remain available through the existing archive view. One local reference is saved
+before resume; this follows the existing local-save behavior, not a guarantee
+against power loss. Uncertain native acknowledgement or incomplete pagination
+keeps that reference without automatic retry, fork or task replay.

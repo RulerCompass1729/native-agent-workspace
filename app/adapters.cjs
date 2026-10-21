@@ -10,6 +10,7 @@ const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
 const { TerminalJournal } = require('./observation.cjs');
+const { serverVersion } = require('./native-history.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -223,6 +224,10 @@ class Rpc extends EventEmitter {
         if (message.error) {
           const error = new Error(`原生接口拒绝请求（${message.error.code}），请查看原生会话。`);
           error.nativeMissingHistory = message.error.code === -32600 && /^no rollout found for thread id /.test(message.error.message || '');
+          if (message.error.code === -32600 && /already has an active writer/.test(message.error.message || '')) {
+            error.message = '该会话仍在其他原生连接中使用。请先在那里结束连接，再继续；原连接未被修改。';
+            error.nativeActiveWriter = true;
+          }
           p.reject(error);
         } else p.resolve(message.result);
       }
@@ -274,7 +279,7 @@ class Codex extends EventEmitter {
       const revision = this.stateRevision;
       let result;
       try {
-        result = await rpc.call('thread/resume', { threadId: this.record.nativeId, cwd: this.record.cwd, excludeTurns: true });
+        result = await rpc.call('thread/resume', { threadId: this.record.nativeId, ...(!this.record.externalHistory ? { cwd: this.record.cwd } : {}), excludeTurns: true });
         if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
         if (!current()) throw new Error('原生后台已变化，没有继续旧的恢复请求。');
         if (result.thread?.id !== this.record.nativeId) throw new Error('原生返回了不同的会话，恢复未确认。');
@@ -285,6 +290,7 @@ class Codex extends EventEmitter {
       }
       if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
       this.hasHistory = true; this.finishRecoveryConnection?.(true);
+      if (this.record.externalHistory && typeof result.thread.cwd === 'string' && path.isAbsolute(result.thread.cwd)) this.record.cwd = result.thread.cwd;
       this.emit('pid', this.host.codexProcess.pid); this.emit('model', result.model || result.thread.model || '原生默认');
       if (revision === this.stateRevision) this.observeStatus(result.thread.status);
       // The TUI can display native history while the graphical copy is loading.
@@ -811,7 +817,7 @@ class NativeHost {
         await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
         const rpc = new Rpc(ws);
         watcher = this.watchCodexConnection(rpc, child);
-        await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+        rpc.nativeVersion = serverVersion(await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } }));
         if (!owned() || ws.readyState !== WebSocket.OPEN) throw new Error('原生连接在确认时已变化；没有重发任务。');
         sameEndpoint();
         ws.send(JSON.stringify({ method: 'initialized', params: {} }));
@@ -864,7 +870,7 @@ class NativeHost {
       await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
       rpc = new Rpc(ws);
       watcher = this.watchCodexConnection(rpc, child);
-      await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+      rpc.nativeVersion = serverVersion(await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } }));
       if (ws.readyState !== WebSocket.OPEN) throw new Error('原生连接在启动时已断开。');
       const verifiedEndpoint = this.readCodexEndpoint();
       if (Object.keys(endpoint).some(key => verifiedEndpoint[key] !== endpoint[key])) throw new Error('原生接口在启动时已变化。');

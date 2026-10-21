@@ -241,6 +241,28 @@ class WorkspaceClient extends EventEmitter {
     if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
     this.authorizeOperation?.(method, args);
     if (method === 'initial') return this.refresh();
+    if (method === 'nativeHistory') {
+      const guard = this.operationGuard(this.active); guard();
+      if (!this.active.state.capabilities?.includes('nativeHistory')) throw Error('请重新打开应用连接新版后台；已有会话保持原样。');
+      const result = await this.active.client.call(method, ...args); guard();
+      const snapshot = await this.refresh(); guard();
+      return { ...result, data: result.data.map(row => ({ ...row, existingIds: snapshot.sessions.filter(s => s.provider === 'codex' && s.nativeId === row.nativeId).map(s => s.id) })) };
+    }
+    if (method === 'importHistory') {
+      const guard = this.operationGuard(this.active);
+      const operation = creationQueue.then(async () => {
+        guard(); const snapshot = await this.refresh(); guard();
+        const existing = snapshot.sessions.filter(s => s.provider === 'codex' && s.nativeId === args[0]);
+        if (existing.length > 1) throw Error('已有记录归属冲突；没有恢复第二个连接。');
+        if (existing.length) return existing[0].id;
+        assertNativeCreation(snapshot);
+        if (!snapshot.capabilities.includes('nativeHistory')) throw Error('当前后台尚不支持原生历史接入。');
+        if (snapshot.sessions.filter(s => s.state !== 'ended').length >= 6) throw Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
+        const id = await this.active.client.call(method, ...args);
+        await this.refresh(); return id;
+      });
+      creationQueue = operation.catch(() => {}); return operation;
+    }
     if (method === 'retrySave') {
       const targets = this.entries.filter(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave'));
       if (!targets.length) throw new Error('当前没有支持重试的保存失败；原记录保持不变。');
