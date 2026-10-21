@@ -36,7 +36,7 @@ class ProgressJournal {
     for (const key of ['source', 'kind', 'status', 'turnId', 'title']) if (typeof item[key] === 'string') next[key] = item[key].slice(0, 300);
     if (typeof item.text === 'string') next.text = item.text.slice(-12000);
     if (typeof item.delta === 'string') next.text = ((previous?.text || '') + item.delta).slice(-12000);
-    next.truncated = previous?.truncated || (typeof item.text === 'string' && item.text.length > 12000) || (typeof item.delta === 'string' && (previous?.text?.length || 0) + item.delta.length > 12000);
+    next.truncated = previous?.truncated || item.truncated === true || (typeof item.text === 'string' && item.text.length > 12000) || (typeof item.delta === 'string' && (previous?.text?.length || 0) + item.delta.length > 12000);
     this.items.set(id, next);
     let size = 0; const removed = [];
     for (const value of this.items.values()) size += Buffer.byteLength(JSON.stringify(value));

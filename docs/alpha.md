@@ -1,8 +1,22 @@
 # macOS alpha trial
 
-As of 2026-10-21. Version 0.1.0-alpha.53. Suitable for a small technical trial with
+As of 2026-10-21. Version 0.1.0-alpha.54. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.54 native intermediate messages
+
+The existing **运行记录** now receives stored intermediate response text and
+textual tool results from Claude Code 2.1.306. The same private panel is used in
+individual and shared views; these observations are not copied into the shared
+timeline, saved conversation, exported diagnostics or a future prompt. Viewing
+adds no model request. The existing raw terminal remains available alongside it.
+
+Observations have a bounded queue and per-item truncation notice. Late messages
+cannot cross the current native root or observer generation, or appear after a
+newer record. Failed or missing delivery is disclosed; there is no task retry.
+This is not a complete token stream, durable tool archive, descendant inventory
+or official Desktop-state synchronization. See [scope and test limits](live-progress.md#alpha54-native-claude-message-observation).
 
 ## Alpha.53 terminal startup input
 

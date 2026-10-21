@@ -73,7 +73,17 @@ function createSubmissionServer(filename, targets) {
       }
       if (target.rootLease && !target.validRootBinding(message)) { res.writeHead(409); res.end('{}'); return; }
       if (message.sessionId !== target.record.nativeId) { res.writeHead(409); res.end('{}'); return; }
-      if (req.url === '/next') return target.submission.receive(res);
+      if (req.url === '/observation') {
+        try { return res.end(JSON.stringify(target.observeRoot(message))); }
+        catch { res.writeHead(409); res.end('{}'); return; }
+      }
+      if (req.url === '/next') {
+        if (message.observationGap === true && target.observeRootGap) {
+          try { target.observeRootGap(message); }
+          catch { res.writeHead(409); res.end('{}'); return; }
+        }
+        return target.submission.receive(res);
+      }
       if (req.url === '/authorize') {
         try { if (target.beforeAuthorize) await target.beforeAuthorize(); }
         catch { return res.end(JSON.stringify({ allowed: false })); }

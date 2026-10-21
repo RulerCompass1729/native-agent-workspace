@@ -1,11 +1,19 @@
 # Readiness and next gates
 
-As of 2026-10-21. Version 0.1.0-alpha.53 is a **local macOS technical-trial alpha**.
+As of 2026-10-21. Version 0.1.0-alpha.54 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.53 fixes first-input loss when terminal configuration
+**Current increment:** alpha.54 adds stored intermediate Claude response text and
+tool-result text to the existing private running record, using the verified
+2.1.306 append contract. It does not change final-reply sharing or model input.
+Source/native/installed interface checks and 479 local tests pass; independent
+source/artifact review closes this scoped increment.
+The observation is bounded and volatile, with visible gaps and truncation; raw
+TUI observation remains authoritative. See [native message limits](live-progress.md#alpha54-native-claude-message-observation).
+
+Alpha.53 fixes first-input loss when terminal configuration
 and input arrive together. Five real-process checks, 465 local checks and source/
 installed Electron input/switch/reopen scenarios pass, with no model calls for
 these PTY checks. Independent source/artifact review closes the scoped defect.
@@ -32,7 +40,7 @@ at native delivery and completion, as well as on its timer. M4 is accepted withi
 M3 graphical follow-through, M2 continuity and M1 selected multi-session work
 remain accepted within their linked scopes below.
 
-## Execution queue after alpha.53
+## Execution queue after alpha.54
 
 As of 2026-10-20. This orders the remaining product work; it does not mark it
 implemented. M1 passed its scoped graphical material-to-result acceptance path;

@@ -1411,3 +1411,39 @@ increment's scenarios. Raw profiles, logs and screenshots stay private.
 
 See [M2 acceptance](acceptance/session-continuity.md) for finite frame/queue
 limits, old-service capability boundaries and the history-paging trigger.
+
+
+## Native Claude intermediate observation — alpha.54
+
+Actual source and installed Electron checks cover the existing solo and room
+progress panels, exact text, literal rendering, gap/truncation/media notices,
+privacy and lifecycle. Both eight-group controlled UI runs pass; the final
+479 local tests pass with zero skips. The declared dual-session synthetic paint
+check records a 19 ms P95 in both source and installed runs (204 samples each);
+that number is not native append-to-screen latency or an end-to-end guarantee.
+
+A real installed Claude Code 2.1.306 process receives one explicit graphical task
+from two canned loopback responses. The real tool executes harmless local printf.
+While the second response is held, the actual UI already shows the intermediate
+assistant text and the completed tool output, with the session still working.
+After release, three native saved-message observations have exact content and
+stable IDs. Join/detach keeps them out of the shared timeline and preserves the
+unsent graphical draft. Normal application close/reopen preserves the same native
+PID, root ID, all four progress rows and the draft, without another submission.
+There are one Portal dispatch and two local protocol responses, no external model
+inference. The unchanged native `/reload-plugins` command also retains identity
+and input capability; it does not demonstrate replacement of an unchanged mod.
+
+Separate zero-model counterexamples hold HTTP requests across timeout, native
+root clear and real mod-registration reload. They verify tail-gap disclosure,
+the two-request cap, monotonic order, retired observer rejection and unchanged
+control lease. Neither those controlled timings nor Chromium input constitutes
+physical keyboard/IME evidence. An earlier CDP Browser.close experiment hung
+and was aborted; it is not counted as a reopen pass. The final reopen uses the
+normal Electron application lifecycle.
+
+The installed 41 source payload files match, strict signature verifies after
+native testing, the four protected normal profile files remain unchanged, and
+application search finds one ordinary installed bundle. Owned trial processes
+are closed. No private screenshots, native history, tokens or full event payloads
+are published. Existing retained services keep their old observation capability.

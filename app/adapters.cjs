@@ -118,10 +118,37 @@ class Claude extends EventEmitter {
     // This credential stays in the root mod's memory. A child inheriting the
     // environment token cannot bind its different engine session identity.
     this.rootLease ||= crypto.randomBytes(32).toString('hex');
-    return { lease: this.rootLease };
+    // Reload can leave old unabortable HTTP observations in flight. Retire that
+    // observer independently of the native submission/control credential.
+    if (this.observationEpoch) this.observeRootGap({ sessionId: message.sessionId, lease: this.rootLease, epoch: this.observationEpoch });
+    this.observationEpoch = crypto.randomBytes(16).toString('hex');
+    this.rootObservation = null;
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch };
   }
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
+  }
+  observeRoot(message) {
+    if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch || !/^[a-f0-9-]{36}(?::\d{1,5})?$/i.test(message.id || '') ||
+      !['response', 'tool-output'].includes(message.kind) || typeof message.text !== 'string' || message.text.length > 12000 ||
+      !Number.isSafeInteger(message.sequence) || message.sequence < 1) throw Error('Invalid native observation');
+    const previous = this.rootObservation?.lease === message.lease ? this.rootObservation.sequence : 0;
+    // A timed-out request can arrive after a newer one. Never present that old
+    // text as the latest native state; the gap remains visible instead.
+    if (message.sequence <= previous) throw Error('Stale native observation');
+    this.rootObservation = { lease: message.lease, sequence: message.sequence };
+    if (message.gap === true) this.observeRootGap(message);
+    const tool = typeof message.title === 'string' ? message.title.slice(0, 200) : '';
+    this.emit('progress', { id: `claude-row-${message.id}`, source: 'claude-native-message', kind: message.kind,
+      status: 'observed', title: message.kind === 'response' ? '原生回复' : `${tool || '工具'} · 原生输出`,
+      text: message.text + (message.nonText === true ? '\n含非文本结果，请在原生终端查看。' : ''), truncated: message.truncated === true });
+    return { observed: true };
+  }
+  observeRootGap(message) {
+    if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
+    this.emit('progress', { id: `claude-observation-gap-${this.record.nativeId}`,
+      source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步',
+      text: '本地观察连接或队列出现缺口，请核对原生终端。没有重发任务。' });
   }
   contextEnding(reason = 'other') {
     if (this.rootEnding?.sessionId === this.record.nativeId) return;
@@ -144,7 +171,7 @@ class Claude extends EventEmitter {
     const previous = this.lastRootTransition;
     if (previous && previous.lease === message.lease && previous.sessionId === message.sessionId &&
       previous.nextSessionId === message.nextSessionId && this.record.nativeId === message.nextSessionId) {
-      return { lease: this.rootLease }; // Lost metadata ACK, never a second clear.
+      return { lease: this.rootLease, observationEpoch: this.observationEpoch }; // Lost metadata ACK, never a second clear.
     }
     if (!this.rootLease || message.lease !== this.rootLease || this.rootEnding?.sessionId !== message.sessionId ||
       this.rootEnding.reason !== 'clear' || message.source !== 'clear' || message.agentId ||
@@ -156,12 +183,13 @@ class Claude extends EventEmitter {
     if (!change.committed || this.record.nativeId !== change.nativeId) throw Error('Context not saved');
     this.lastRootTransition = { sessionId: message.sessionId, nextSessionId: message.nextSessionId, lease: message.lease };
     this.rootLease = crypto.randomBytes(32).toString('hex');
+    this.observationEpoch = crypto.randomBytes(16).toString('hex'); this.rootObservation = null;
     this.rootEnding = null; this.lastPromptId = null; this.pending = null; this.ready = true;
     this.emit('state', 'idle'); this.emit('model', change.model);
     const observed = (this.contextEvents || []).filter(e => e.session_id === change.nativeId);
     this.contextEvents = (this.contextEvents || []).filter(e => e.session_id !== change.nativeId);
     for (const event of observed) this.hook(event);
-    return { lease: this.rootLease };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch };
   }
   hook(event) {
     // A new root can already be receiving human input while its identity is

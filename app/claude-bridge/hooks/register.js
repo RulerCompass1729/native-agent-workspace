@@ -13,6 +13,70 @@ let syncingRoot = false;
 let syncRootAgain = false;
 let rootSyncBlocked = false;
 let contextTransitions = false;
+const observations = [];
+let observing = false;
+let observationGap = false;
+let observationGapRevision = 0;
+let observationRequests = 0;
+function markObservationGap(binding) {
+  if (binding && binding.lease === rootBinding?.lease) { observationGap = true; observationGapRevision++; }
+}
+
+function observeAppend($, e, result, binding) {
+  if (!contextTransitions || !binding || stopped || rootBinding !== binding || e.agentId ||
+    result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
+  const message = result.message;
+  if (!message || message.isMeta || !Array.isArray(message.content)) return;
+  const text = blocks => typeof blocks === 'string' ? blocks : Array.isArray(blocks)
+    ? blocks.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
+  const rows = [];
+  if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
+    rows.push({ id: result.uuid, kind: 'response', text: text(message.content) });
+  } else if (e.door === 'tool-result' && e.origin?.kind === 'tool' && message.type === 'user') {
+    for (const [index, block] of message.content.entries()) if (block?.type === 'tool_result') {
+      rows.push({ id: `${result.uuid}:${index}`, kind: 'tool-output', title: typeof e.origin.tool === 'string' ? e.origin.tool.slice(0, 200) : '',
+        text: text(block.content), nonText: Array.isArray(block.content) && block.content.some(b => b?.type !== 'text') });
+    }
+  }
+  for (const row of rows) {
+    if (!row.text && !row.nonText) continue;
+    row.truncated = row.text.length > 12000;
+    row.text = row.text.slice(-12000);
+    row.sequence = ++binding.observationSequence;
+    row.epoch = binding.observationEpoch;
+    // Bounded, private observation only. Native append never waits for local
+    // delivery. Retired root observations cannot bind a new root or send work.
+    while (observations.length >= 64 || observations.reduce((n, x) => n + x.row.text.length, 0) + row.text.length > 256000) {
+      observations.shift(); markObservationGap(binding);
+    }
+    observations.push({ row, binding });
+  }
+  if (!observing && observations.length) {
+    observing = true; $.clock.after(0, () => flushObservations($));
+  }
+}
+
+async function flushObservations($) {
+  try {
+    while (observations.length) {
+      const { row, binding } = observations.shift();
+      if (stopped || binding !== rootBinding) continue;
+      const gap = observationGap, revision = observationGapRevision;
+      try {
+        // The native HTTP API exposes no abort option. Bound outstanding calls
+        // as well as our wait: a stalled old root cannot hold the new queue, nor
+        // can repeated timeouts accumulate unbounded host requests.
+        if (observationRequests >= 2) throw Error('Observation transport busy');
+        observationRequests++;
+        const sending = request($, '/observation', { ...row, gap }, binding).finally(() => { observationRequests--; });
+        let timer;
+        const deadline = new Promise((_, reject) => { timer = $.clock.after(1500, () => reject(Error('Observation timeout'))); });
+        try { await Promise.race([sending, deadline]); } finally { timer?.cancel(); }
+        if (binding === rootBinding && revision === observationGapRevision) observationGap = false;
+      } catch { markObservationGap(binding); }
+    }
+  } finally { observing = false; }
+}
 
 async function connection($) {
   const sessionId = await $.session.id();
@@ -35,11 +99,16 @@ async function connection($) {
 async function request($, route, body, binding) {
   const { socketPath, token, sessionId, lease } = binding || await connection($);
   if (!socketPath || !token) throw new Error('Workspace connection unavailable');
+  // A trailing lost observation must be visible even without another append.
+  // Piggyback a gap on the existing independent control poll/reconnect path.
+  const reportGap = route === '/next' && observationGap && lease === rootBinding?.lease;
+  const gapRevision = observationGapRevision;
   const response = await $.http.fetch('http://localhost' + route, {
     socketPath, method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Token': token },
-    body: JSON.stringify({ ...body, sessionId, ...(lease ? { lease } : {}) }),
+    body: JSON.stringify({ ...body, sessionId, ...(lease ? { lease } : {}), ...(reportGap ? { observationGap: true, epoch: rootBinding.observationEpoch } : {}) }),
   });
   if (!response.ok) throw new Error('Workspace connection refused');
+  if (reportGap && lease === rootBinding?.lease && gapRevision === observationGapRevision) observationGap = false;
   return JSON.parse(response.text);
 }
 
@@ -107,7 +176,7 @@ async function bindRoot($, ownGeneration) {
   const binding = await connection($);
   const result = await request($, '/root-bind', {}, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
-  rootBinding = { ...binding, lease: result.lease };
+  rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
   await listen($, ownGeneration);
 }
 
@@ -130,7 +199,8 @@ async function syncRoot($) {
         source: 'clear', model: transition.model }, rootBinding);
       if (typeof result.lease !== 'string') throw Error('Root lease missing');
       rootEnds.delete(rootBinding.sessionId);
-      rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease };
+      rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
+      observationGap = false; observationGapRevision++;
       rootTransitions.shift();
     }
     const revision = generation, currentId = await $.session.id();
@@ -154,6 +224,7 @@ async function syncRoot($) {
 
 export function register(on) {
   on('session.append', async ($, e, next) => {
+    const observationBinding = rootBinding;
     if (collecting && e.door === 'prompt') {
       collecting.appends++;
       // The native engine pins origin. A previously queued foreign prompt also
@@ -167,7 +238,12 @@ export function register(on) {
         collecting.events.length !== 1) collecting.invalid = true;
     }
     const candidate = collecting;
-    try { return await next(e); }
+    try {
+      const result = await next(e);
+      try { observeAppend($, e, result, observationBinding); }
+      catch { markObservationGap(observationBinding); } // Never fail native append.
+      return result;
+    }
     catch (error) { if (candidate) candidate.invalid = true; throw error; }
   }).catch(async ($, e, next) => {
     if (collecting) collecting.invalid = true;

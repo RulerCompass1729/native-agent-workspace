@@ -220,3 +220,42 @@ GUI 通过原 native server 向原 thread 提交，保留模型与权限设置�
 仅保留最近 80 个团队事件，不宣称完整清单。连接或服务中断后，旧状态标为待核对；
 旧后台没有新鲜度证明时也不显示为实时。查看这些信息不会调用模型、查询 agent、
 恢复任务或将子任务内容自动发给协作者。真实 Codex 关闭/重开、入房/脱出验收见 testing.md。
+
+
+## alpha.54 native Claude message observation
+
+As of 2026-10-21. Claude Code 2.1.306 provides a stable UUID and the stored
+message returned by its public `session.append` continuation. The workspace
+observes main-session model text and textual tool results after that append,
+without changing the native message or waiting for local HTTP delivery. It does
+not copy thinking blocks, hidden attachments, prompt/context injection, child
+messages or binary media. Non-text tool results have a visible native-view notice.
+The final reply still follows the existing native Stop/correlation path; observed
+intermediate text cannot authorize sharing or mark work complete.
+
+The existing running record uses stable native row IDs. Its in-flight queue is
+limited to 64 records and 256,000 text characters, each text tail to 12,000
+characters; the existing service journal separately retains at most 200 items
+and 1 MiB. Truncation and lost observations are visible. Delivery waits at most
+1.5 seconds locally, with at most two unresolved native HTTP requests. The native
+API does not expose cancellation: if both remain held, later observations are
+dropped with a gap, not an unbounded retry queue. A final lost item is disclosed
+on the next normal control poll (normally within its existing 20-second poll
+interval); an unavailable connection cannot promise immediate disclosure.
+
+A per-root control lease, separate observer generation and monotonic observation
+sequence prevent old-context, old-plugin and out-of-order messages from becoming
+new current records. Reload discloses a conservative observation gap without
+changing the control lease. This is receive-order evidence, not precise alignment
+with every terminal frame. Stored-message append is not token-level streaming;
+transient repaint/spinner/approval detail remains in the raw TUI view. The record
+survives UI close/reopen while its service lives, but is not a persistent archive.
+
+Source evidence includes a real Claude client using two canned loopback protocol
+responses and one actual harmless local tool, plus the actual Electron private
+panel, room join/detach and unsubmitted draft. No external model inference is
+needed for this observation contract. Local protocol/queue/cancellation races
+are separate from that native test. Final installed acceptance and independent source/artifact review pass. The final
+response was deliberately held: intermediate text and the actual tool result
+were already readable while the native session was still working. UI reopen
+retains the same native PID/ID, four progress rows and unsent draft.

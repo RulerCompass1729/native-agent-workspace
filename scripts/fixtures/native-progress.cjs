@@ -4,7 +4,7 @@ const path = require('node:path');
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
 const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
-const { NativeHost } = require(path.join(root, 'app/adapters.cjs'));
+const { NativeHost, Claude } = require(path.join(root, 'app/adapters.cjs'));
 const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
 const held = new Set(), waiting = new Map(), noRaw = new Set(), observe = Workspace.prototype.observe;
 Workspace.prototype.observe = async function(id) { const result = await observe.call(this, id); if (noRaw.has(id)) result.terminal = null; if (held.delete(id)) await new Promise(resolve => waiting.set(id, resolve)); return result; };
@@ -15,6 +15,8 @@ NativeHost.prototype.start = async function () { this.binaries = { claude: 'fixt
 NativeHost.prototype.close = function () { for (const r of runtimes.values()) r.screen.dispose(); };
 NativeHost.prototype.create = function (record) {
   const r = new EventEmitter(); r.record = record; r.chatAvailable = true;
+  r.rootLease = 'fixture-lease'; r.observationEpoch = 'fixture-observer'; r.validRootBinding = Claude.prototype.validRootBinding;
+  r.observeRootGap = Claude.prototype.observeRootGap;
   record.nativeId ||= 'synthetic-' + record.id;
   r.screen = new Terminal({ cols: 80, rows: 24, allowProposedApi: true, scrollback: 5000 });
   r.serializer = new SerializeAddon(); r.screen.loadAddon(r.serializer);
@@ -48,6 +50,7 @@ process.on('message', async q => {
       }
     }
     if (q.method === 'progress') r.emit('progress', q.value);
+    if (q.method === 'nativeObservation') Claude.prototype.observeRoot.call(r, { ...q.value, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1 });
     if (q.method === 'fleet') r.emit('fleet', q.value);
     if (q.method === 'history') r.emit('history', q.value);
     if (q.method === 'approval') { r.emit('approval', q.value); r.emit('state', 'approval'); }
