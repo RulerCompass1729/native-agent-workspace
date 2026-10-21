@@ -1,8 +1,14 @@
 # macOS alpha trial
 
-As of 2026-10-20. Version 0.1.0-alpha.47. Suitable for a small technical trial with
+As of 2026-10-20. Version 0.1.0-alpha.48. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.48 readable result actions
+
+Existing message actions keep their text contrast without requiring hover. Source
+and installed graphical workflows cover both rendered themes, pointer input and
+Tab/Enter navigation. No new controls, native adapter changes or model calls.
 
 ## Alpha.47 bounded unattended lifecycle
 

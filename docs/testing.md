@@ -1,5 +1,16 @@
 # Bounded testing
 
+## Readable result actions — alpha.48
+
+The graphical follow-through runner now checks actual composited text contrast
+for directed and permission-pause result navigation in light and dark themes.
+It waits for rendered theme updates and confirms distinct backgrounds, avoiding
+a stale-color pass. The old light-theme action fails at 2.28; source and installed
+fixed values are 18.90/17.45 for directed results and 5.80/12.11 for system pauses.
+Tab reaches the pause action with a visible focus indicator and Enter opens the
+original session. The six existing task scenarios still pass without model calls.
+This is a scoped check, not full accessibility certification.
+
 ## Bounded unattended lifecycle — alpha.47
 
 `node scripts/test-bounded-away.cjs` drives the actual app through window closure,

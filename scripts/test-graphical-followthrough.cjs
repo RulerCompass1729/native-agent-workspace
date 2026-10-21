@@ -43,6 +43,41 @@ async function create(provider, name) {
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); return s.id;
 }
 async function room() { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
+async function readableAction(button, label) {
+  await page.locator('#room-search').click(); await page.mouse.move(3, 3);
+  assert.ok(await button.isEnabled());
+  const backgrounds = [];
+  for (const colorScheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const colors = await button.evaluate(el => {
+      const rgba = value => {
+        const v = value.match(/[\d.]+/g).map(Number);
+        return [v[0], v[1], v[2], v[3] ?? 1];
+      };
+      const over = (a, b) => {
+        const alpha = a[3] + b[3] * (1 - a[3]);
+        return alpha ? [0, 1, 2].map(i => (a[i] * a[3] + b[i] * b[3] * (1 - a[3])) / alpha).concat(alpha) : [0, 0, 0, 0];
+      };
+      let fg = rgba(getComputedStyle(el).color), bg = [0, 0, 0, 0];
+      for (let node = el; node; node = node.parentElement) {
+        const style = getComputedStyle(node), layer = rgba(style.backgroundColor);
+        fg = over(fg, layer); bg = over(bg, layer);
+        fg[3] *= Number(style.opacity); bg[3] *= Number(style.opacity);
+      }
+      const luminance = c => c.slice(0, 3).map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+      fg = over(fg, [255, 255, 255, 1]); bg = over(bg, [255, 255, 255, 1]);
+      const a = luminance(fg), b = luminance(bg);
+      return { contrast: (Math.max(a, b) + .05) / (Math.min(a, b) + .05), fg, bg };
+    });
+    backgrounds.push(colors.bg);
+    console.log(JSON.stringify({ action: label, colorScheme, ...colors }));
+    await shot(label + '-' + colorScheme);
+    assert.ok(colors.contrast >= 4.5, `${label} ${colorScheme}: enabled action must be readable without hover (${colors.contrast.toFixed(2)})`);
+  }
+  assert.notDeepEqual(backgrounds[0], backgrounds[1], 'Both rendered themes were actually checked');
+  await page.emulateMedia({ colorScheme: null });
+}
 async function findReply(id, text) {
   // Opening a session deliberately keeps its reading position. Use the same
   // local search a person can use, then verify the answer actually enters view.
@@ -89,6 +124,7 @@ async function run() {
     assert.equal(await row.getByRole('button', { name: '查看会话', exact: true }).isVisible(), false);
     await shot('reproduced-missing-navigation'); console.log('REPRODUCED: private result exists, but its shared record hides the existing conversation action.'); return;
   }
+  await readableAction(row.getByRole('button', { name: '查看会话', exact: true }), 'directed-result-action');
   await row.getByRole('button', { name: '查看会话', exact: true }).click();
   const answer = page.locator('#messages article').filter({ has: page.locator('.message-body', { hasText: result }) });
   await answer.waitFor(); assert.equal(await page.locator('#message-input').inputValue(), draft);
@@ -134,7 +170,11 @@ async function run() {
   assert.equal(paused.sessionId, b);
   const pauseRow = page.locator(`#room-messages [data-message-id="${paused.id}"]`);
   assert.equal(await pauseRow.locator('.message-heading strong').innerText(), '协作');
-  await pauseRow.getByRole('button', { name: '查看会话', exact: true }).click();
+  const pauseAction = pauseRow.getByRole('button', { name: '查看会话', exact: true });
+  await readableAction(pauseAction, 'paused-result-action');
+  for (let tabs = 0; tabs < 80 && !(await pauseAction.evaluate(el => el === document.activeElement)); tabs++) await page.keyboard.press('Tab');
+  assert.ok(await pauseAction.evaluate(el => el === document.activeElement && el.matches(':focus-visible')), 'Result action reachable with visible keyboard focus');
+  await page.keyboard.press('Enter');
   await page.locator('#approval').getByText(command, { exact: true }).waitFor();
   await page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }).click();
   await page.locator('#approval').getByText('等待原生确认结果', { exact: true }).waitFor();
