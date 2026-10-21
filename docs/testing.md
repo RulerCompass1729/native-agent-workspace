@@ -1,5 +1,38 @@
 # Bounded testing
 
+## Visible waiting and cancellation — alpha.51
+
+The actual installed alpha.50 interface reproduced a pending first collaboration
+with no visible status or cancel action. The existing status bar now names the
+wait, and its existing pause action can cancel a waiting authorization. Directed
+shared sends show their recipient and acknowledgement wait without offering a
+false task-cancellation promise. No new provider calls or polling are introduced.
+
+Cancellation intent immediately protects task materials and focus. Only a
+confirmed pause produces the success notice. Old submission completion cannot
+release a newer submission or a cancellation that is still pending. Both native
+success-before-pause and pause-failure-before-native-success initially reproduced
+material loss and now pass. A failed pause remains visible and permits another
+explicit operation; it does not claim the native task stopped.
+
+`node scripts/test-room-waiting.cjs` runs seven actual hidden-Electron groups,
+with twelve synthetic submissions and zero model calls. It verifies first wait,
+cancel and immediate typing, late failure/private draft restoration, fresh consent,
+late success during another authorization, both cancellation/ACK orders, pause
+failure, and a directed send retaining a newer draft. The unchanged shared-client
+human-operation guard passes 28 local checks. The existing actual collaboration
+runner passes drag/drop, exact mentions, shared notes/search, archive/reopen and
+history-deletion regressions. Final installed runs repeat all seven waiting groups
+and six collaboration groups successfully. Independent source/artifact review
+passed; 41 payload files match source, strict signature validation passes, four
+normal-profile files remain unchanged and one daily application entry remains.
+Raw failed and passing logs and screenshots stay private.
+
+These are actual interface/IPC checks with controlled provider transport, not
+new model or physical OS/IME acceptance. Existing native task and physical input
+evidence is reused within its original scope. Cancelling subsequent sharing
+never implies cancellation of native tools, teams, accepted work or billing.
+
 ## Six-session independence — alpha.50
 
 The actual alpha.49 installed interface reproduced an unrelated native permission

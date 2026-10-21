@@ -12,6 +12,10 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.51 shows when shared input is awaiting confirmation and lets you cancel a
+waiting exchange without losing its draft. It does not claim to cancel tasks
+already accepted by an agent. See [waiting and cancellation checks](docs/testing.md#visible-waiting-and-cancellation--alpha51).
+
 Alpha.50 keeps automatic events from unrelated sessions from interrupting a
 selected collaboration. Late send failures apply to their original exchange;
 explicit human controls retain priority. See [six-session checks](docs/testing.md#six-session-independence--alpha50).

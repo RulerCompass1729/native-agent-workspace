@@ -5,6 +5,14 @@ const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { NativeHost, Codex } = require(path.join(root, 'app/adapters.cjs'));
 const runtimes = new Map(), sends = [], inputs = [], calls = [], decisions = [];
 const heldSends = new Map();
+let heldPause;
+const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
+const originalPause = Workspace.prototype.pause;
+Workspace.prototype.pause = function (...args) {
+  const result = originalPause.apply(this, args);
+  if (heldPause && args[0]?.startsWith('你暂停')) return new Promise((resolve, reject) => { heldPause = { resolve, reject }; });
+  return result;
+};
 function notify(r, method, params) { r.event({ method, params: { threadId: r.record.nativeId, ...params } }); }
 const item = (i, text = 'PRIVATE-HISTORY-' + i) => ({ turnId: 'history-turn', item: { id: 'history-' + i, type: i % 2 ? 'agentMessage' : 'userMessage', ...(i % 2 ? { text } : { content: [{ type: 'text', text }] }) } });
 const history = Array.from({ length: 105 }, (_, i) => item(i));
@@ -48,7 +56,7 @@ NativeHost.prototype.create = function (record) {
       if (!guard()) throw Error('Invalid dispatch'); sends.push({ id: record.id, text, tag });
       if (heldSends.has(record.id)) {
         r.emit('state', 'working');
-        try { await new Promise((_, reject) => heldSends.set(record.id, reject)); }
+        try { await new Promise((resolve, reject) => heldSends.set(record.id, { resolve, reject })); }
         finally { r.emit('state', 'idle'); }
       }
       r.emit('submitted', tag); r.emit('state', 'working');
@@ -58,19 +66,25 @@ NativeHost.prototype.create = function (record) {
   runtimes.set(record.id, r); return r;
 };
 process.on('message', q => {
+  if (q.method === 'holdPause') heldPause = true;
+  if (['releasePause', 'rejectPause'].includes(q.method)) {
+    const pending = heldPause; heldPause = null;
+    if (typeof pending?.resolve !== 'function') throw Error('No pending pause acknowledgement');
+    if (q.method === 'rejectPause') pending.reject(new Error(q.text)); else pending.resolve();
+  }
   if (q.method === 'holdSend') heldSends.set(q.target, null);
-  if (q.method === 'rejectSend') {
-    const reject = heldSends.get(q.target); heldSends.delete(q.target);
-    if (typeof reject !== 'function') throw Error('No held send for fixture target');
-    reject(new Error(q.text));
+  if (['rejectSend', 'confirmSend'].includes(q.method)) {
+    const held = heldSends.get(q.target); heldSends.delete(q.target);
+    if (!held) throw Error('No held send for fixture target');
+    if (q.method === 'rejectSend') held.reject(new Error(q.text)); else held.resolve();
   }
   if (q.method === 'event') runtimes.get(q.target).event(q.value);
   if (q.method === 'release') {
-    const sent = sends.at(-1), r = runtimes.get(sent.id);
+    const sent = q.target ? sends.findLast(s => s.id === q.target) : sends.at(-1), r = runtimes.get(sent.id);
     if (r.record.provider === 'codex') {
       notify(r, 'item/completed', { turnId: sent.turnId, item: { id: 'answer-' + sent.turnId, type: 'agentMessage', text: q.text } });
       notify(r, 'turn/completed', { turn: { id: sent.turnId, status: 'completed' } });
     } else { r.emit('state', 'idle'); r.emit('complete', { tag: sent.tag, text: q.text }); }
   }
-  process.send({ requestId: q.id, sends: sends.map(({ id, text }) => ({ id, text })), inputs, calls, decisions, nativeProcesses: 0, modelCalls: 0 });
+  process.send({ requestId: q.id, sends: sends.map(({ id, text }) => ({ id, text })), inputs, calls, decisions, pausePending: typeof heldPause?.resolve === 'function', nativeProcesses: 0, modelCalls: 0 });
 });

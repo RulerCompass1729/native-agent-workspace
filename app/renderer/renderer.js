@@ -8,7 +8,7 @@ const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, 
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
-let roomSubmitting = false;
+let roomSubmitting = null;
 let shareRevision = 0, sharePending = null;
 let runPreview = null;
 let renamingId = '', renaming = false;
@@ -752,9 +752,13 @@ function render() {
       $('room-record').setAttribute('aria-pressed', String(!roomSession));
       for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.roomSession === roomSession));
       $('run-status').textContent = run ? `${{ running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
-      $('run-status').parentElement.hidden = !run;
+      const pendingRun = roomSubmitting?.automatic;
+      $('run-status').parentElement.hidden = !run && !roomSubmitting;
       const next = state.sessions.find(m => m.id === run?.awaiting?.sessionId);
       if (run?.status === 'running' && next) $('run-status').textContent += ` · 等待 ${next.name}`;
+      if (pendingRun && roomSubmitting.cancelling) $('run-status').textContent = '正在取消后续交接；草稿保留，已接收的任务仍在原会话中。';
+      else if (pendingRun && run?.status !== 'running') $('run-status').textContent = '正在准备核查，等待先前操作或原生接收确认。可取消本次等待；已开始的原生任务不受影响。';
+      if (roomSubmitting && !pendingRun) $('run-status').textContent = `正在发给 ${roomSubmitting.recipientName}，等待原生接收确认。请勿重复发送；草稿保留。`;
       renderTimeline();
       renderMembers();
       const previousRecipient = $('recipient').value;
@@ -777,7 +781,8 @@ function render() {
       if (recipient?.legacyShare) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
       if (nativeRoute) $('run-help').textContent = '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
-      $('pause-button').disabled = run?.status !== 'running';
+      $('pause-button').textContent = pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
+      $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || (!pendingRun && run?.status !== 'running');
       if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
     }
     renderProgressPanels();
@@ -1169,15 +1174,24 @@ async function submitRoom(automatic) {
   if (roomSubmitting || $('shared-input').readOnly || $(automatic ? 'run-button' : 'forward-button').disabled) return;
   const first = $('recipient').value, text = $('shared-input').value, revision = roomDraftRevision;
   const ids = automatic?.ids;
+  const recipient = members().find(s => s.id === first);
+  if (!recipient) throw Error('接收方已变化，请重新选择。');
   // Return focus before the clicked control becomes disabled. Never steal it
   // back asynchronously after the person has opened another view or dialog.
   $('shared-input').focus();
-  roomSubmitting = true; render();
+  const submission = { automatic: Boolean(automatic), recipientName: participantLabel(recipient), cancelling: false, cancelRequested: false };
+  roomSubmitting = submission; render();
   try {
     await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels) : api.forward(first, text));
+    if (submission.cancelRequested) return;
     if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
   }
-  finally { roomSubmitting = false; render(); }
+  catch (error) { if (!submission.cancelRequested) throw error; }
+  finally {
+    submission.settled = true;
+    if (roomSubmitting === submission && !submission.cancelling) roomSubmitting = null;
+    render();
+  }
 }
 $('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => submitRoom(false)); };
 $('forward-button').onclick = () => {
@@ -1277,7 +1291,27 @@ $('insert-context').onclick = () => attempt(async () => {
   $('context-dialog').close(); render(); input.focus();
 });
 $('share-recipient').onchange = $('share-text').oninput = () => { shareRevision++; updateSharingControls(); };
-$('pause-button').onclick = () => attempt(() => api.pause());
+$('pause-button').onclick = () => attempt(async () => {
+  const submission = roomSubmitting?.automatic ? roomSubmitting : null;
+  if (submission?.cancelling) return;
+  if (selected === 'room' && !roomSession && inputFocusAllowed()) $('shared-input').focus();
+  if (submission) { submission.cancelRequested = true; submission.cancelling = true; render(); }
+  try {
+    // Pause invalidates pending authorization in the shared client before its
+    // native ACK arrives. A later completion must not clear a newer draft/run.
+    await api.pause();
+    if (submission) {
+      if (roomSubmitting === submission) roomSubmitting = null;
+      toast('已取消后续交接；草稿保留，已接收的原生任务仍在原会话中。');
+    }
+  } finally {
+    if (submission) {
+      submission.cancelling = false;
+      if (submission.settled && roomSubmitting === submission) roomSubmitting = null;
+    }
+    render();
+  }
+});
 $('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && !s.archived && s.state !== 'ended').map(s => { const entry = button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
