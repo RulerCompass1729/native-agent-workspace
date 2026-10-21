@@ -1202,3 +1202,15 @@ input groups. The foreground OS-return check was skipped to preserve the user’
 Space; earlier physical IME evidence remains separate. Detailed limits
 and the deliberately incomplete repeated guest IME experiment are in
 [testing](testing.md#same-session-recovery-and-reply-identity--alpha27).
+
+
+## Alpha.45 — long conversation continuity
+
+Repairs the reproduced large-history disconnect and remembers an already-visible
+GUI/TUI choice before native control acknowledgement. Actual installed long
+history, pending-control quit/reopen and cold local-record recovery retain the
+history hash, draft, membership, identity and reading position without replay.
+A real retained alpha.44 backend also survives the alpha.45 frontend/reopen.
+The [M2 acceptance](acceptance/session-continuity.md) records tests and limits:
+64 MiB complete-response bound, retained old daemon behavior and explicit native
+resume remain distinct from unlimited history or full fleet recovery.

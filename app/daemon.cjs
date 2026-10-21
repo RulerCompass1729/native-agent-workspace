@@ -5,6 +5,7 @@ const net = require('node:net');
 const crypto = require('node:crypto');
 const { NativeHost } = require('./adapters.cjs');
 const { Workspace } = require('./workspace.cjs');
+const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./service-transport.cjs');
 
 async function main() {
   const dataDir = process.argv[2];
@@ -17,9 +18,17 @@ async function main() {
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');
   fs.mkdirSync(defaultWorkspace, { recursive: true, mode: 0o700 });
   const host = new NativeHost(privateDir); await host.start();
-  const workspace = new Workspace(host, dataDir); const clients = new Set();
-  const send = (client, value) => { if (!client.destroyed && client.writableLength < 8 * 1024 * 1024) client.write(JSON.stringify(value) + '\n'); else client.destroy(); };
-  const broadcast = (event, data) => { for (const client of clients) send(client, { event, data }); };
+  const workspace = new Workspace(host, dataDir); const clients = new Set(), writers = new Map();
+  const send = (client, value) => writers.get(client)?.send(value);
+  const broadcast = (event, data) => {
+    if (!clients.size) return;
+    let frame;
+    try { frame = encodeFrame({ event, data }); }
+    catch { for (const client of clients) client.destroy(); return; }
+    // Only complete state snapshots supersede each other. Terminal bytes,
+    // progress and RPC acknowledgements retain their order and payload.
+    for (const client of clients) writers.get(client)?.sendFrame(frame, event === 'state' ? 'state' : null);
+  };
   let scheduled = false;
   workspace.on('change', () => { if (!scheduled) { scheduled = true; setTimeout(() => { scheduled = false; broadcast('state', workspace.snapshot()); }, 35); } });
   workspace.on('terminal', data => broadcast('terminal', data));
@@ -57,26 +66,19 @@ async function main() {
     }
   };
   const server = net.createServer(client => {
-    client.setEncoding('utf8');
-    let authenticated = false, owner = null, buffered = '';
+    writers.set(client, createWriter(client));
+    let authenticated = false, owner = null;
     const authTimer = setTimeout(() => { if (!authenticated) client.destroy(); }, 3000);
     client.on('error', () => {});
-    client.on('data', chunk => {
-      buffered += chunk.toString('utf8');
-      if (buffered.length > 2 * 1024 * 1024) return client.destroy();
-      for (let end; (end = buffered.indexOf('\n')) >= 0;) {
-        const line = buffered.slice(0, end); buffered = buffered.slice(end + 1);
-        let request; try { request = JSON.parse(line); } catch { client.destroy(); return; }
-        if (!request || typeof request !== 'object' || Array.isArray(request)) { client.destroy(); return; }
-        if (!authenticated) {
-          if (request.token !== token || request.protocol !== 1 || typeof request.owner !== 'string' || request.owner.length > 100) { client.destroy(); return; }
-          authenticated = true; owner = request.owner; clients.add(client); clearTimeout(authTimer); send(client, { ready: true }); continue;
-        }
-        if (!Array.isArray(request.args) || request.args.length > 5 || !Number.isInteger(request.id)) { client.destroy(); return; }
-        Promise.resolve().then(() => dispatch(owner, request.method, request.args)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。' }));
+    readFrames(client, REQUEST_BYTES, request => {
+      if (!authenticated) {
+        if (request.token !== token || request.protocol !== 1 || typeof request.owner !== 'string' || request.owner.length > 100) { client.destroy(); return; }
+        authenticated = true; owner = request.owner; clients.add(client); clearTimeout(authTimer); send(client, { ready: true }); return;
       }
+      if (!Array.isArray(request.args) || request.args.length > 5 || !Number.isInteger(request.id)) { client.destroy(); return; }
+      Promise.resolve().then(() => dispatch(owner, request.method, request.args)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。' }));
     });
-    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); if (!shuttingDown) workspace.release(owner); });
+    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); if (!shuttingDown) workspace.release(owner); });
   });
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);
   const connection = path.join(dataDir, 'connection.json'); const tmp = `${connection}.tmp`;

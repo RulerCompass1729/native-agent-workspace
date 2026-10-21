@@ -753,6 +753,9 @@ async function switchMode(next, takeControl = false) {
     pendingMode = { id: s.id, revision }; mode = 'chat'; render();
     if (inputFocusAllowed()) $('message-input').focus();
   }
+  // Save the surface already shown to the person before waiting for native
+  // control. Closing now must reopen this view; input remains separately gated.
+  if (mode === next) { preference = next; attempt(persistView); }
   try {
     if (ending) await ending.done;
     if (!stillSelected()) return;

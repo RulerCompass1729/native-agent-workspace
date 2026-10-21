@@ -7,23 +7,17 @@ const { EventEmitter } = require('node:events');
 const { readLayout, writeLayout } = require('./service-layout.cjs');
 const { WorkspaceClient } = require('./workspace-client.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
+const { readFrames, RESPONSE_BYTES } = require('./service-transport.cjs');
 
 class ServiceClient extends EventEmitter {
   constructor(socket) {
-    super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); let buffer = '', received = 0;
-    socket.setEncoding('utf8');
-    socket.on('data', chunk => {
-      buffer += chunk;
-      if (buffer.length > 16 * 1024 * 1024) return socket.destroy();
-      for (let end; (end = buffer.indexOf('\n')) >= 0;) {
-        const line = buffer.slice(0, end); buffer = buffer.slice(end + 1); let m; try { m = JSON.parse(line); } catch { socket.destroy(); return; }
-        if (!m || typeof m !== 'object' || Array.isArray(m)) { socket.destroy(); return; }
-        const value = m.event ? m.data : m.value;
-        if (value && typeof value === 'object') this.receipts.set(value, ++received);
-        if (m.ready) this.emit('ready');
-        else if (m.event) this.emit(m.event, m.data);
-        else if (this.pending.has(m.id)) { const p = this.pending.get(m.id); this.pending.delete(m.id); clearTimeout(p.timer); m.ok ? p.resolve(m.value) : p.reject(new Error(m.error)); }
-      }
+    super(); this.socket = socket; this.sequence = 0; this.pending = new Map(); this.receipts = new WeakMap(); let received = 0;
+    readFrames(socket, RESPONSE_BYTES, m => {
+      const value = m.event ? m.data : m.value;
+      if (value && typeof value === 'object') this.receipts.set(value, ++received);
+      if (m.ready) this.emit('ready');
+      else if (m.event) this.emit(m.event, m.data);
+      else if (this.pending.has(m.id)) { const p = this.pending.get(m.id); this.pending.delete(m.id); clearTimeout(p.timer); m.ok ? p.resolve(m.value) : p.reject(new Error(m.error)); }
     });
     socket.on('error', () => {});
     socket.on('close', () => { for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('本地运行服务断开；原输入不会自动重发。')); } this.pending.clear(); this.emit('closed'); });
@@ -103,7 +97,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     if (alive) throw new Error('已有运行服务仍存在但无法连接；为保住会话，不启动替代进程。');
     fs.rmSync(lock); // Dead PID only; never kill or replace a live owner.
   }
-  const names = ['daemon.cjs', 'adapters.cjs', 'workspace.cjs', 'approval-policy.js', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
+  const names = ['service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'workspace.cjs', 'approval-policy.js', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
   const pluginFiles = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js'];
   const hash = crypto.createHash('sha256'); for (const name of names) hash.update(fs.readFileSync(path.join(__dirname, name)));
   for (const name of pluginFiles) hash.update(fs.readFileSync(path.join(__dirname, 'claude-bridge', name)));

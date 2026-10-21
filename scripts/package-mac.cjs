@@ -18,7 +18,7 @@ async function build() {
     for (const name of ['package.json', 'package-lock.json', 'LICENSE', 'NOTICE', 'COPYRIGHT', 'THIRD_PARTY_NOTICES.md']) fs.copyFileSync(path.join(root, name), path.join(stage, name));
     const sources = ['main.cjs', 'local-files.cjs', 'preload.cjs', 'startup.html', 'startup.js',
       'dsh-host.cjs', 'dsh-server.mjs', 'ui-errors.cjs', 'ui-parent-lease.cjs',
-      'service-client.cjs', 'service-layout.cjs', 'workspace-client.cjs', 'legacy-observation.cjs', 'legacy-input.cjs', 'legacy-codex.cjs', 'platform.cjs', 'runtime-locations.cjs', 'preflight.cjs', 'daemon.cjs',
+      'service-client.cjs', 'service-transport.cjs', 'service-layout.cjs', 'workspace-client.cjs', 'legacy-observation.cjs', 'legacy-input.cjs', 'legacy-codex.cjs', 'platform.cjs', 'runtime-locations.cjs', 'preflight.cjs', 'daemon.cjs',
       'adapters.cjs', 'workspace.cjs', 'approval-policy.js', 'observation.cjs', 'window-placement.cjs', 'pty_host.py', 'claude_hook.py',
       'claude-submit.cjs', 'submission-policy.cjs', 'session-labels.cjs', 'room-state.cjs', 'view-drafts.cjs', 'reading-state.cjs', 'view-store.cjs', 'claude-bridge/.claude-plugin/plugin.json',
       'claude-bridge/hooks/hooks.json', 'claude-bridge/hooks/register.js',

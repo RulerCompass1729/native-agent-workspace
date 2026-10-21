@@ -1147,3 +1147,48 @@ Private timestamped recordings cover the first portion of the task and the full
 later display-retry verification; they are not an uninterrupted full-task movie.
 Physical OS input, full team cold recovery, external-provider billing and broad
 native-version compatibility remain outside this acceptance.
+
+
+## Long-history transport and reopen continuity — alpha.45
+
+The previous app disconnected with 80 synthetic records totaling 19,457,001
+bytes. A separate 1,200-short-record probe passed its eleven reading checks;
+message count alone had missed the byte-size failure. The new bounded transport
+passes an actual slow-socket test with a response above the old 16 MiB receive
+cap and a backlog above the old 8 MiB send gate. Exact terminal bytes and RPC
+responses stay ordered, and only queued complete state snapshots coalesce.
+
+All 393 local checks pass with no skips. Source focus regression passes seven
+groups, and deterministic input/composition regression passes with no model
+calls. Foreground return is explicitly skipped to avoid taking the person's
+Space; physical IME is not newly certified by these checks.
+
+The final installed application passes all seven checks in
+`node scripts/test-long-continuity.cjs`: 80 long records, 19,450,131 bytes, full
+history hash, retained Chinese draft/membership/native ID, selection and reading
+while output arrives, conversation and GUI/TUI roundtrips, quit during a held
+native-control acknowledgement, normal reopen and forced local-service loss
+followed by the actual reconnect button. The installed history mount took
+4,763 ms in this sample; this is neither an end-to-end provider latency promise
+nor a scale benchmark. Recovered native records are `recoverable`; no native
+resume or model task is triggered. Cold reconnection exercises normal bootstrap
+and its privately copied new transport module.
+
+An additional actual alpha.44 daemon with 100 short synthetic records is retained
+by the installed alpha.45 frontend while its current backend starts separately.
+Normal reopen preserves the old daemon PID, native ID, exact history, draft and
+reading position, with no migration/replay. The first probe assumed a newly
+opened observer would default to chat; it actually used the saved/default
+terminal preference. The corrected probe explicitly selects chat, then verifies
+that choice on reopen. This does not assert that a retained old daemon gains the
+new large-backlog behavior.
+
+Final source/installed evidence is independently reviewed. All 40 shipped
+application files match source; strict signature verification passes after the
+installed tests. Five protected normal-profile data files remain byte-identical;
+application search finds one normal installed entry. Test windows stay hidden
+and non-focusable. No native provider process/model task is started by this
+increment's scenarios. Raw profiles, logs and screenshots stay private.
+
+See [M2 acceptance](acceptance/session-continuity.md) for finite frame/queue
+limits, old-service capability boundaries and the history-paging trigger.
