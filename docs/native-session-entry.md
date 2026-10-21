@@ -95,6 +95,18 @@ requires separate identity and history synchronization proof.
 
 ## Later: connection to a running outside session
 
+A further owned-history probe on 2.1.306 restored a previously completed Claude
+test conversation with `/resume` in its original working directory. The native
+root changed to that history's exact ID; `$.session.messages()` returned the
+prior user text and assistant answer unchanged. The same command from a different
+test directory reported no conversations. This proves one native recovery/read
+path, not a general cross-directory picker or Portal import. That message API
+returns at most the newest 4096 entries, without all temporary progress rows;
+it cannot replace the live terminal or certify complete historical trajectories.
+The portal keeps graphical submission guarded after this unimplemented native
+transition. Writer exclusion, duplicate local references, full history hydration
+and a usable entry flow must be resolved before enabling Claude outside history.
+
 Live attachment needs separate proof that an observer can leave without stopping
 its source, and that input ownership, unsent drafts, approvals and live events
 remain coherent between native and graphical views. Historical resume, live

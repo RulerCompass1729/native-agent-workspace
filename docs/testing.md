@@ -1,5 +1,41 @@
 # Bounded testing
 
+## PTY startup input — alpha.53
+
+A real Python PTY child reproduced a lost first input when its configuration and
+input command arrived in one pipe write: the old buffered configuration reader
+read ahead, and subsequent unbuffered reads could not recover those bytes.
+One byte-stream parser now retains and drains complete commands before waiting
+for another input event. No prompt rewriting or added per-key delay is involved.
+
+Five real-process checks cover coalesced startup/input, UTF-8 splits in both
+configuration and commands, startup resize ordering, later input, stop/EOF and
+incomplete configuration. The full local suite passes 465 checks without skips.
+`node scripts/test-pty-input.cjs` drives actual hidden Electron and a real Python
+echo PTY through ASCII/Unicode input, graphical/native switching, join/detach
+and app reopening. It verifies rendered text, the same PID/native reference,
+an unsent graphical draft and no duplicate echoes. The first UI runner missed
+an already restored terminal because its constructor observer was installed too
+late; the corrected runner reads visible rendered rows. Source and installed
+acceptance pass. The installed 41-file application payload matches source and
+retains its strict signature after testing. Four protected normal-profile files
+remain byte-identical, and application search returns one ordinary installed app.
+These PTY checks use no model; they do not certify a native completion menu or
+physical input method. Existing live backends retain their original runtime copy.
+Independent review of source, raw logs, rendered evidence and installed payload
+closes the startup-input defect within this scope.
+
+Separate Claude resume contract work had an unintended native `/claude-api`
+submission when fast automated typing was followed immediately by Enter. The
+owned trial was stopped. Native records show two model responses, a completed
+shell tool result and a subsequent question; Portal dispatches remained zero.
+Later tracing observed all 44 intended characters and the correct native edit
+line, but cannot retrospectively establish the original failure's cause. This
+is not evidence that the PTY startup defect caused that command. Native command
+tests now inspect the settled edit line/menu before Enter. A subsequent selected
+history recovery added no new question. Neither the failed probe nor counters
+alone may be reported as proof of zero native model use.
+
 ## Native Claude context continuity — alpha.52
 
 The installed alpha.51 application reproduced an actual Claude Code 2.1.306

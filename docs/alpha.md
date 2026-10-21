@@ -1,8 +1,18 @@
 # macOS alpha trial
 
-As of 2026-10-21. Version 0.1.0-alpha.52. Suitable for a small technical trial with
+As of 2026-10-21. Version 0.1.0-alpha.53. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.53 terminal startup input
+
+The terminal host now retains input arriving in the same pipe read as its startup
+configuration. Previously those bytes could be consumed by a buffered reader and
+lost. Five real-process regressions and 465 local checks pass. Actual source and
+installed Electron checks verify exact ASCII/Unicode input, view and membership
+changes, retained process identity, unsent drafts and app reopening without replay.
+These checks call no model. Existing running backends keep their original code;
+this update does not silently replace their native processes.
 
 ## Alpha.52 native Claude context continuity
 

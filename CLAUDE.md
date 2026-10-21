@@ -22,6 +22,12 @@ or start paid model runs as a side effect of editing documents.
 - Stop after the required evidence arrives. No polling prompts, automatic
   retry, extra acknowledgement loops, or fleet tests merely for completeness.
   Unverified capabilities remain explicitly unverified.
+- In native command tests, inspect the actual edit line and completion menu
+  before pressing Enter. Browser typing completion or IPC acknowledgement is
+  not proof that the native command UI has settled. If another command runs,
+  stop the owned trial and retain the native evidence; do not retry blindly.
+  Portal dispatch counters exclude direct native input. Account for native
+  model responses and tool results separately before claiming zero model use.
 - For both Claude and Codex, use the least expensive suitable available model
   in isolated tests. Verify current availability/pricing and the selected model
   before sending a task. Never silently fall back to a more expensive default;

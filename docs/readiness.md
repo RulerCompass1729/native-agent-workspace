@@ -1,11 +1,16 @@
 # Readiness and next gates
 
-As of 2026-10-21. Version 0.1.0-alpha.52 is a **local macOS technical-trial alpha**.
+As of 2026-10-21. Version 0.1.0-alpha.53 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.52 preserves the same portal session and terminal
+**Current increment:** alpha.53 fixes first-input loss when terminal configuration
+and input arrive together. Five real-process checks, 465 local checks and source/
+installed Electron input/switch/reopen scenarios pass, with no model calls for
+these PTY checks. Independent source/artifact review closes the scoped defect.
+Existing live backends retain their original code. Alpha.52
+preserves the same portal session and terminal
 when native Claude 2.1.306 clears its context. Old history and drafts remain
 local; old authorization does not cross the context boundary. All 460 local checks, five source/installed GUI groups, and native zero-inference
 checks pass. Independent source/artifact review closes this scoped increment. External Claude history and native `/resume` synchronization
@@ -27,7 +32,7 @@ at native delivery and completion, as well as on its timer. M4 is accepted withi
 M3 graphical follow-through, M2 continuity and M1 selected multi-session work
 remain accepted within their linked scopes below.
 
-## Execution queue after alpha.52
+## Execution queue after alpha.53
 
 As of 2026-10-20. This orders the remaining product work; it does not mark it
 implemented. M1 passed its scoped graphical material-to-result acceptance path;
