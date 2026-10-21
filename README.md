@@ -12,6 +12,11 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.47 enforces the finite exchange deadline before native delivery and reply
+sharing. Closing the window preserves an explicitly authorized exchange; expiry
+stops further handoffs while retaining late results privately. This does not
+cancel accepted native work. See [bounded-away evidence](docs/acceptance/bounded-away.md).
+
 Alpha.46 improves the path from a paused collaboration to its original session:
 use **查看会话**, inspect the private result and choose what to share. Shared
 notes and local search keep decisions available without another model call.

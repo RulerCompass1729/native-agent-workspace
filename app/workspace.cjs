@@ -18,7 +18,7 @@ class Workspace extends EventEmitter {
     this.room = { id: 'shared', name: '共同工作', revision: 0, run: null, messages: [] };
     this.versions = { shellModelCalls: 0, dispatches: 0 };
     this.saveTimer = null;
-    this.deadlineTimer = setInterval(() => { if (this.room.run?.status === 'running' && Date.now() > this.room.run.deadline) this.pause('达到本轮 10 分钟期限。'); }, 1000);
+    this.deadlineTimer = setInterval(() => this.expireRun(), 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map();
     this.approvalRoutes = new Map();
@@ -265,7 +265,10 @@ class Workspace extends EventEmitter {
     if (s.state !== 'idle' || s.pendingTag || s.approval) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
     if (runtime.chatAvailable === false) throw new Error(s.provider === 'claude' ? '安全发送接口尚未连接；请在原生终端继续，草稿已保留。' : '请先在原生终端完成第一条消息；草稿已保留。');
     const control = s.controlRevision; const member = s.memberRevision; const connection = s.connectionRevision;
-    const guard = () => s.state !== 'ended' && s.controlRevision === control && (!(route || forward) || (s.roomId === 'shared' && s.memberRevision === member)) && (!route || (this.room.run?.id === route.id && this.room.run.status === 'running'));
+    const guard = () => {
+      this.expireRun(route);
+      return s.state !== 'ended' && s.controlRevision === control && (!(route || forward) || (s.roomId === 'shared' && s.memberRevision === member)) && (!route || (this.room.run?.id === route.id && this.room.run.status === 'running'));
+    };
     if (!guard()) throw new Error('交接已经失效。');
     const tag = randomUUID(); s.pendingTag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
@@ -330,6 +333,12 @@ class Workspace extends EventEmitter {
   }
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }
   async interrupt(id, owner) { const s = this.get(id); this.claim(id, owner, s.view); s.controlRevision++; this.pause('真人中断当前回复'); await this.runtime(id).interrupt(); s.activity = '已请求原生中断；团队任务请在原生终端确认。'; this.changed(); }
+  expireRun(run = this.room.run) {
+    // The interval is only a wake-up aid. Native delivery/completion must also
+    // enforce the boundary, even if timers were delayed (for example, by sleep).
+    if (!run || run.id !== this.room.run?.id || run.status !== 'running' || Date.now() < run.deadline) return false;
+    this.pause('达到本轮 10 分钟期限。'); return true;
+  }
   pause(reason = '已暂停交接') {
     const run = this.room.run;
     if (run?.status === 'running') { run.status = 'paused'; run.reason = reason; this.room.revision++; this.runEvent(reason); this.changed(); }
@@ -369,6 +378,7 @@ class Workspace extends EventEmitter {
   }
   async advance(s, info) {
     const run = this.room.run; const a = run?.awaiting;
+    if (this.expireRun(run)) return;
     if (!run || run.status !== 'running' || a?.sessionId !== s.id || a.tag !== info.tag || s.memberRevision !== a.member || s.controlRevision !== a.control || s.roomId !== 'shared') return;
     run.awaiting = null;
     if (typeof info.text !== 'string' || !info.text.trim()) return this.pause('原生没有提供可交接的回复，请人工查看。');
@@ -385,7 +395,6 @@ class Workspace extends EventEmitter {
     // A separately authorized reply exchange does not certify fleet completion.
     // It never changes unknown native counts into zero or closes native work.
     if (run.steps >= run.maxSteps) { run.status = 'completed'; run.reason = '已达到本轮回复上限，交接结束；原生子任务是否结束需另行确认。'; this.runEvent(run.reason); this.changed(); return; }
-    if (Date.now() > run.deadline) return this.pause('达到本轮 10 分钟期限。');
     const normalized = info.text.trim();
     run.replies ||= {};
     if (run.replies[s.id] === normalized) return this.pause('同一成员重复了上一份回复，已停止交接。');

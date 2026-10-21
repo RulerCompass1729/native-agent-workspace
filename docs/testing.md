@@ -1,5 +1,15 @@
 # Bounded testing
 
+## Bounded unattended lifecycle — alpha.47
+
+`node scripts/test-bounded-away.cjs` drives the actual app through window closure,
+reply-cap completion, native error and human pause. Add `--real-deadline` to wait
+the full ten minutes, without changing time. Source timed acceptance and installed
+ordinary lifecycle checks pass, as does installed graphical follow-through.
+The deadline unit counterexamples and actual Claude completion method raise the
+local suite to 400 passes, zero skips. All new provider responses are controlled;
+zero new model calls. See [M4 scope and boundaries](acceptance/bounded-away.md).
+
 ## Graphical follow-through — alpha.46
 
 `node scripts/test-graphical-followthrough.cjs` drives the real application using

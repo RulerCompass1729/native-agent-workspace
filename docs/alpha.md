@@ -1,8 +1,16 @@
 # macOS alpha trial
 
-As of 2026-10-20. Version 0.1.0-alpha.46. Suitable for a small technical trial with
+As of 2026-10-20. Version 0.1.0-alpha.47. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.47 bounded unattended lifecycle
+
+Deadline enforcement now runs before native delivery and reply sharing, including
+when the timer callback is late. Closing the window preserves an authorized
+finite exchange; expiry/error/human pause prevents later handoffs. An accepted
+native task may still continue. Source ten-minute and installed lifecycle checks
+pass with zero new model calls; see [M4 scope](acceptance/bounded-away.md).
 
 ## Alpha.46 graphical follow-through
 
