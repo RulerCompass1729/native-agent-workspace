@@ -21,7 +21,7 @@ class Workspace extends EventEmitter {
     this.saveTimer = null;
     this.deadlineTimer = setInterval(() => this.expireRun(), 1000);
     this.deadlineTimer.unref();
-    this.forwards = new Map();
+    this.forwards = new Map(); this.pendingDrafts = new Map();
     this.approvalRoutes = new Map();
     this.stops = new Map();
     this.progress = new Map(); this.observedTerminals = new Map();
@@ -146,6 +146,8 @@ class Workspace extends EventEmitter {
       const update = this.progress.get(s.id)?.update(item);
       if (update) this.emit('progress', { id: s.id, ...update });
     });
+    on('contextEnd', info => this.endNativeContext(s, runtime, info));
+    on('contextClear', info => this.clearNativeContext(s, runtime, info));
     on('capability', () => this.changed());
     on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
     on('model', model => { s.model = model; this.changed(); });
@@ -255,7 +257,19 @@ class Workspace extends EventEmitter {
       if (!message) { message = { id: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
       message.text += item.text; this.changed();
     });
-    on('messageItem', item => { let m = s.messages.find(m => m.id === item.id); if (!m) { m = { id: item.id, role: 'assistant' }; s.messages.push(m); } Object.assign(m, { text: item.text, status: 'complete', phase: item.phase }); this.changed(); });
+    on('messageItem', item => {
+      let m = s.messages.find(m => m.id === item.id);
+      if (!m) {
+        m = { id: item.id, role: 'assistant' };
+        if (item.nativeId && item.nativeId !== s.nativeId) {
+          const context = s.nativeContexts?.find(c => c.nativeId === item.nativeId);
+          const index = s.messages.findIndex(message => message.id === context?.boundaryId);
+          if (index < 0) return;
+          s.messages.splice(index, 0, m);
+        } else s.messages.push(m);
+      }
+      Object.assign(m, { text: item.text, status: 'complete', phase: item.phase }); this.changed();
+    });
     on('complete', info => {
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
@@ -271,6 +285,49 @@ class Workspace extends EventEmitter {
       this.advance(s, info).catch(error => { this.pause(error.message, run); });
     });
     on('failed', (reason, info) => { if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pauseParticipant(s.id, reason); this.changed(); });
+  }
+  endNativeContext(s, runtime, info) {
+    if (this.runtimes.get(s.id) !== runtime || info.nativeId !== s.nativeId) return;
+    // send() may have cleared its draft before the native ACK. Preserve that
+    // exact pending draft now, before revoking its control generation, but never
+    // overwrite a newer human edit. A late acceptance will not clear it again.
+    const pending = this.pendingDrafts.get(s.id);
+    if (pending && pending.tag === s.pendingTag && this.draftRevisions.get(s.id) === pending.revision && !this.drafts.get(s.id)) {
+      this.drafts.set(s.id, pending.text); this.draftRevisions.set(s.id, (pending.revision || 0) + 1);
+    }
+    if (s.pendingTag) {
+      for (const list of [s.messages, this.room.messages]) {
+        const m = list.find(m => m.id === s.pendingTag);
+        if (m?.status === 'awaiting-native') m.status = 'unconfirmed';
+        else if (m && list === this.room.messages) m.status = 'reply-private';
+      }
+      this.forwards.delete(s.pendingTag);
+    }
+    s.pendingTag = null; s.approval = null; s.approvalResolved = false; this.approvalRoutes.delete(s.id);
+    s.controlRevision++; s.memberRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1;
+    s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
+    s.nativeContextPending = ['clear', 'resume'].includes(info.reason) ? { nativeId: info.nativeId, reason: info.reason } : null;
+    s.activity = info.reason === 'resume' ? '原生已切换会话，此连接尚不能同步新历史。请在原生终端继续；旧记录与草稿保留。' : info.reason === 'clear' ? '原生上下文已改变，正在核对连接。记录和草稿保留，未自动发送。' : '原生会话正在结束。';
+    this.pauseParticipant(s.id, '成员的原生上下文已改变；请重新确认共享内容。'); this.changed();
+  }
+  clearNativeContext(s, runtime, info) {
+    if (this.closed || this.stops.has(s.id) || this.runtimes.get(s.id) !== runtime ||
+      s.nativeContextPending?.nativeId !== info.previousId || s.nativeContextPending.reason !== 'clear') return;
+    if (this.storageWarning) return;
+    if (s.nativeId === info.previousId) {
+      const boundaryId = randomUUID(), time = Date.now();
+      s.nativeContexts ||= [];
+      s.nativeContexts.push({ nativeId: info.previousId, endedAt: time, boundaryId, reason: 'clear' });
+      s.messages.push({ id: boundaryId, role: 'system', name: '原生上下文', text: '已在原生终端清空上下文。上方记录仅作为本机历史保留，不会自动发给新上下文。草稿保留，发送前请核对。', nativeId: info.nativeId, time });
+      s.nativeId = info.nativeId; s.model = info.model; s.background = null; s.scheduled = null; s.usage = null;
+    } else if (s.nativeId !== info.nativeId || s.nativeContexts?.at(-1)?.nativeId !== info.previousId) return;
+    // Identity, old-context references and the boundary are one saved snapshot.
+    // A failed write leaves GUI submission closed; retrying metadata cannot add
+    // a second boundary or replay a model task.
+    const pending = s.nativeContextPending; s.nativeContextPending = null; s.activity = ''; this.persist();
+    if (this.storageWarning) s.nativeContextPending = pending;
+    else info.committed = true;
+    this.changed();
   }
   join(id, join) {
     const s = this.get(id);
@@ -300,6 +357,12 @@ class Workspace extends EventEmitter {
     if (typeof text !== 'string' || text.length > 16000) throw new Error('草稿过长。');
     this.drafts.set(id, text); this.draftRevisions.set(id, (this.draftRevisions.get(id) || 0) + 1); this.changed();
   }
+  assertNativeContext(id, expected) {
+    const s = this.get(id);
+    if (s.nativeContextPending || (expected === undefined ? this.runtimes.get(id)?.rootLease : expected !== s.nativeId)) {
+      throw Error('原生上下文已变化，请重新查看后发送；草稿保留。');
+    }
+  }
   async send(id, text, owner, route = null, forward = null) {
     text = cleanText(text); const s = this.get(id); const runtime = this.runtime(id);
     if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); this.pause('真人输入优先'); }
@@ -321,7 +384,7 @@ class Workspace extends EventEmitter {
     }
     this.versions.dispatches++;
     if (route) route.awaiting = { sessionId: id, tag, member, control };
-    else if (clearedDraft) this.drafts.set(id, '');
+    else if (clearedDraft) { this.pendingDrafts.set(id, { tag, text: draft, revision: draftRevision }); this.drafts.set(id, ''); }
     this.changed();
     try { await runtime.send(text, tag, guard); }
     catch (error) {
@@ -344,7 +407,7 @@ class Workspace extends EventEmitter {
         this.drafts.set(id, draft);
       }
       this.changed(); throw error;
-    }
+    } finally { if (this.pendingDrafts.get(id)?.tag === tag) this.pendingDrafts.delete(id); }
     return tag;
   }
   async terminal(id, owner) {
@@ -489,6 +552,7 @@ class Workspace extends EventEmitter {
   }
   async resume(id, owner) {
     const s = this.get(id);
+    if (s.nativeContextPending) throw Error('原生上下文已变化，但新身份尚未确认。请在原生终端核对；没有恢复旧上下文或重发任务。');
     const retained = this.runtimes.get(id);
     if ((s.state === 'disconnected' || (s.state === 'error' && retained?.transportDisconnected)) && s.provider === 'codex' && retained?.reconnect && !retained.backendExitConfirmed && !this.stops.has(id)) {
       if (s.pendingTag && s.messages.some(m => m.id === s.pendingTag && m.status === 'awaiting-native')) throw new Error('上一条输入的接收结果仍在核对；请稍后重连，不要重发。');

@@ -64,6 +64,14 @@ function createSubmissionServer(filename, targets) {
       let message;
       try { message = JSON.parse(body); } catch { res.writeHead(400); res.end('{}'); return; }
       if (!message || typeof message !== 'object' || Array.isArray(message)) { res.writeHead(400); res.end('{}'); return; }
+      if (['/root-bind', '/root-end', '/root-clear'].includes(req.url)) {
+        const method = { '/root-bind': 'bindRoot', '/root-end': 'endRoot', '/root-clear': 'clearRoot' }[req.url];
+        try {
+          if (typeof target[method] !== 'function') throw Error('Unavailable');
+          return res.end(JSON.stringify(await target[method](message)));
+        } catch { res.writeHead(409); res.end('{}'); return; }
+      }
+      if (target.rootLease && !target.validRootBinding(message)) { res.writeHead(409); res.end('{}'); return; }
       if (message.sessionId !== target.record.nativeId) { res.writeHead(409); res.end('{}'); return; }
       if (req.url === '/next') return target.submission.receive(res);
       if (req.url === '/authorize') {

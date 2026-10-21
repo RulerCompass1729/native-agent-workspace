@@ -74,6 +74,25 @@ handshake before this path is enabled. A same-path CLI replacement cannot lend
 its version to an older server. Unknown versions remain unavailable for outside
 history; existing workspace sessions retain their existing behavior.
 
+## Alpha.52: native clear within an existing Claude session
+
+This is continuity of an app-managed terminal, not outside-history import.
+Claude Code 2.1.306 keeps its process through `/clear` but changes the root UUID.
+Its mod `session.start` does not repeat. The original mod observes
+`session.end(reason=clear)` and verifies the new `classic.SessionStart` against
+`$.session.id()`. A private root binding, rotated at each confirmed transition,
+keeps child or retired identities from rebinding the parent. See the [official
+hook lifecycle](https://code.claude.com/docs/en/hooks) and [native commands](https://code.claude.com/docs/en/interactive-mode).
+
+The portal saves the old root reference and a history boundary before enabling
+submission on the new root. It preserves the same row, terminal, local history
+and drafts; prior messages are never replayed. Pending authorizations are revoked
+and observed late private replies stay before their original boundary. Sequential
+metadata processing covers rapid clears and lost acknowledgements. This exact
+native contract is enabled only for 2.1.306; unverified transitions remain visible
+in the native terminal with graphical submission closed. Native `/resume` still
+requires separate identity and history synchronization proof.
+
 ## Later: connection to a running outside session
 
 Live attachment needs separate proof that an observer can leave without stopping

@@ -37,7 +37,7 @@ async function main() {
   const dispatch = async (owner, method, args) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'retrySave': return workspace.retrySave();
       case 'nativeHistory': return workspace.nativeHistory.list(args[0]);
       case 'importHistory': return workspace.importHistory(args[0], owner);
@@ -45,16 +45,35 @@ async function main() {
       case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view);
       case 'join': if (typeof args[1] !== 'boolean') throw new Error('无效成员操作。'); return workspace.join(...args);
       case 'claim': return workspace.claim(args[0], owner, args[1]);
-      case 'send': if (/^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw new Error('原生命令请在终端执行；草稿已保留。'); return workspace.send(args[0], args[1], owner);
+      case 'send': {
+        workspace.assertNativeContext(args[0], args[2]);
+        if (/^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw new Error('原生命令请在终端执行；草稿已保留。');
+        const nativeId = workspace.get(args[0]).nativeId;
+        const tag = await workspace.send(args[0], args[1], owner);
+        const current = workspace.get(args[0]);
+        return current.nativeId !== nativeId || current.nativeContextPending ? { tag, contextChanged: true } : tag;
+      }
       case 'draft': return workspace.setDraft(args[0], args[1], owner);
       case 'terminal': return workspace.terminal(args[0], owner);
       case 'terminalSnapshot': return workspace.terminalSnapshot(args[0], owner);
       case 'input': return workspace.input(args[0], args[1], owner);
       case 'resize': return workspace.resize(args[0], owner, args[1], args[2]);
       case 'interrupt': return workspace.interrupt(args[0], owner);
-      case 'run': return workspace.startRun(...args);
+      case 'run': {
+        if (!Array.isArray(args[0])) throw Error('无效会话选择。');
+        for (const id of args[0]) workspace.assertNativeContext(id, args[5]?.[id]);
+        const contexts = args[0].map(id => [id, workspace.get(id).nativeId]);
+        await workspace.startRun(...args);
+        return { contextChanged: contexts.some(([id, nativeId]) => workspace.get(id).nativeId !== nativeId || workspace.get(id).nativeContextPending) };
+      }
       case 'pause': return workspace.pause('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。');
-      case 'forward': return workspace.forward(args[0], args[1], owner);
+      case 'forward': {
+        workspace.assertNativeContext(args[0], args[2]);
+        const nativeId = workspace.get(args[0]).nativeId;
+        await workspace.forward(args[0], args[1], owner);
+        const current = workspace.get(args[0]);
+        return { contextChanged: current.nativeId !== nativeId || Boolean(current.nativeContextPending) };
+      }
       case 'approve': return workspace.approve(args[0], args[1], args[2], owner);
       case 'stop': return workspace.stop(args[0]);
       case 'resume': return workspace.resume(args[0], owner);
@@ -78,7 +97,7 @@ async function main() {
         if (request.token !== token || request.protocol !== 1 || typeof request.owner !== 'string' || request.owner.length > 100) { client.destroy(); return; }
         authenticated = true; owner = request.owner; clients.add(client); clearTimeout(authTimer); send(client, { ready: true }); return;
       }
-      if (!Array.isArray(request.args) || request.args.length > 5 || !Number.isInteger(request.id)) { client.destroy(); return; }
+      if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 6 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
       Promise.resolve().then(() => dispatch(owner, request.method, request.args)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。' }));
     });
     client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); if (!shuttingDown) workspace.release(owner); });

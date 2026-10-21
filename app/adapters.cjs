@@ -113,7 +113,72 @@ class Claude extends EventEmitter {
       this.emit('state', result.confirmed ? 'ended' : 'error');
     });
   }
+  bindRoot(message) {
+    if (message.sessionId !== this.record.nativeId || this.rootEnding || !this.terminal?.alive) throw Error('Root unavailable');
+    // This credential stays in the root mod's memory. A child inheriting the
+    // environment token cannot bind its different engine session identity.
+    this.rootLease ||= crypto.randomBytes(32).toString('hex');
+    return { lease: this.rootLease };
+  }
+  validRootBinding(message) {
+    return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
+  }
+  contextEnding(reason = 'other') {
+    if (this.rootEnding?.sessionId === this.record.nativeId) return;
+    this.rootEnding = { sessionId: this.record.nativeId, reason };
+    this.pending = null; this.ready = false; this.lastPromptId = null;
+    this.submission.close?.();
+    this.emit('contextEnd', { nativeId: this.record.nativeId, reason });
+    this.emit('state', 'stopping');
+  }
+  endRoot(message) {
+    if (!this.rootLease || message.lease !== this.rootLease ||
+      (message.sessionId !== this.record.nativeId && message.sessionId !== this.rootEnding?.sessionId) ||
+      !['clear', 'resume', 'logout', 'prompt_input_exit', 'other'].includes(message.reason)) throw Error('Root changed');
+    if (!this.rootEnding) this.contextEnding(message.reason);
+    if (this.rootEnding?.sessionId === message.sessionId) this.rootEnding.reason = message.reason;
+    return { ended: true };
+  }
+  clearRoot(message) {
+    if (this.contextEventsOverflow) throw Error('Native context observation overflow');
+    const previous = this.lastRootTransition;
+    if (previous && previous.lease === message.lease && previous.sessionId === message.sessionId &&
+      previous.nextSessionId === message.nextSessionId && this.record.nativeId === message.nextSessionId) {
+      return { lease: this.rootLease }; // Lost metadata ACK, never a second clear.
+    }
+    if (!this.rootLease || message.lease !== this.rootLease || this.rootEnding?.sessionId !== message.sessionId ||
+      this.rootEnding.reason !== 'clear' || message.source !== 'clear' || message.agentId ||
+      typeof message.nextSessionId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(message.nextSessionId) ||
+      message.nextSessionId === message.sessionId || !this.terminal?.alive) throw Error('Unverified root transition');
+    const change = { previousId: message.sessionId, nativeId: message.nextSessionId,
+      model: typeof message.model === 'string' && message.model.length <= 120 ? message.model : '原生未报告', committed: false };
+    this.emit('contextClear', change);
+    if (!change.committed || this.record.nativeId !== change.nativeId) throw Error('Context not saved');
+    this.lastRootTransition = { sessionId: message.sessionId, nextSessionId: message.nextSessionId, lease: message.lease };
+    this.rootLease = crypto.randomBytes(32).toString('hex');
+    this.rootEnding = null; this.lastPromptId = null; this.pending = null; this.ready = true;
+    this.emit('state', 'idle'); this.emit('model', change.model);
+    const observed = (this.contextEvents || []).filter(e => e.session_id === change.nativeId);
+    this.contextEvents = (this.contextEvents || []).filter(e => e.session_id !== change.nativeId);
+    for (const event of observed) this.hook(event);
+    return { lease: this.rootLease };
+  }
   hook(event) {
+    // A new root can already be receiving human input while its identity is
+    // being saved. Buffer observations, but trust none until the mod proves the
+    // exact new root. Child identities cannot authorize a context transition.
+    if (this.rootEnding?.reason === 'clear' && !event.agent_id && event.session_id !== this.rootEnding.sessionId &&
+      !this.record.nativeContexts?.some(c => c.nativeId === event.session_id)) {
+      this.contextEvents ||= [];
+      if (this.contextEvents.length >= 256 || this.contextEvents.reduce((n, e) => n + JSON.stringify(e).length, 0) + JSON.stringify(event).length > 1024 * 1024) {
+        this.contextEventsOverflow = true;
+        this.emit('activity', '原生上下文同步记录已达上限；请在原生终端继续，图形输入保持关闭。');
+      } else this.contextEvents.push(event);
+      return;
+    }
+    // Late events from a retired root must not become the current context's
+    // replies, approvals, fleet or readiness. Its saved history stays intact.
+    if (event.session_id !== this.record.nativeId && this.record.nativeContexts?.some(c => c.nativeId === event.session_id)) return;
     // Teammates inherit hooks. Never attribute a child's final reply to its lead.
     const isChild = Boolean(event.agent_id) || event.session_id !== this.record.nativeId;
     if (['SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted'].includes(event.hook_event_name)) this.emit('fleet', {
@@ -130,7 +195,7 @@ class Claude extends EventEmitter {
       text: event.message || '', status: event.hook_event_name === 'StopFailure' ? 'failed' : 'observed',
     });
     switch (event.hook_event_name) {
-      case 'SessionStart': this.ready = true; this.emit('state', 'idle'); this.emit('model', event.model || '原生未报告'); break;
+      case 'SessionStart': if (this.rootEnding) break; this.ready = true; this.emit('state', 'idle'); this.emit('model', event.model || '原生未报告'); break;
       case 'UserPromptSubmit':
         // A settings hook observing a prompt is not its acceptance. The native
         // structured submission result acknowledges our own sends separately.
@@ -164,10 +229,14 @@ class Claude extends EventEmitter {
         break;
       }
       case 'StopFailure': this.pending = null; this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请在原生终端查看。'); break;
-      case 'SessionEnd': this.pending = null; this.ready = false; this.emit('state', 'stopping'); break;
+      case 'SessionEnd': this.contextEnding(event.reason); break;
     }
   }
   finishReply(pending, event) {
+        if (pending?.nativeId && (pending.nativeId !== this.record.nativeId || this.rootEnding?.sessionId === pending.nativeId)) {
+          if (event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id}`, nativeId: pending.nativeId, text: event.last_assistant_message });
+          return;
+        }
         if (pending && this.pending !== pending) {
           if (event.last_assistant_message) this.emit('messageItem', { id: crypto.randomUUID(), text: event.last_assistant_message });
           return;
@@ -184,12 +253,18 @@ class Claude extends EventEmitter {
   async send(text, tag, guard) {
     if (!this.ready || this.pending) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
     if (!guard()) throw new Error('这条交接已撤销。');
-    const pending = this.pending = { tag, text, guard, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
+    const pending = this.pending = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
     try {
       const receipt = await this.submission.request(text, tag, guard);
       pending.accepted = true;
       pending.promptId = receipt?.promptId || null;
       this.emit('submitted', tag);
+      if (pending.nativeId !== this.record.nativeId || this.rootEnding?.sessionId === pending.nativeId) {
+        // Correlation controls sharing, not retention of already observed old
+        // private results. A missing promptId must not discard those results.
+        for (const event of pending.replies.values()) this.finishReply(pending, event);
+        return;
+      }
       if (!pending.promptId || [...pending.prompts].some(id => id !== pending.promptId)) {
         if (this.pending === pending) {
           this.pending = null;

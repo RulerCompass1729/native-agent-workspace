@@ -6,12 +6,22 @@ const legacyOnly = false;
 let collecting = null;
 let foreignSubmissions = 0;
 let foreignRevision = 0;
+let rootBinding = null;
+const rootEnds = new Map();
+const rootTransitions = [];
+let syncingRoot = false;
+let syncRootAgain = false;
+let rootSyncBlocked = false;
+let contextTransitions = false;
 
 async function connection($) {
   const sessionId = await $.session.id();
   const socketPath = await $.env.get('NAW_SUBMIT_SOCKET');
   const token = await $.env.get('NAW_HOOK_TOKEN');
-  if (socketPath && token) return { socketPath, token, sessionId };
+  if (socketPath && token) {
+    if (rootBinding && rootBinding.sessionId !== sessionId) throw Error('Root context changed');
+    return { socketPath, token, sessionId, ...(rootBinding ? { lease: rootBinding.lease } : {}) };
+  }
   // Old workspace processes already have a private hooks directory. A
   // descriptor there lets this mod attach without restarting the native CLI.
   const hook = await $.env.get('NAW_HOOK_SOCKET');
@@ -23,11 +33,11 @@ async function connection($) {
 }
 
 async function request($, route, body, binding) {
-  const { socketPath, token, sessionId } = binding || await connection($);
+  const { socketPath, token, sessionId, lease } = binding || await connection($);
   if (!socketPath || !token) throw new Error('Workspace connection unavailable');
   const response = await $.http.fetch('http://localhost' + route, {
     socketPath, method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Token': token },
-    body: JSON.stringify({ ...body, sessionId }),
+    body: JSON.stringify({ ...body, sessionId, ...(lease ? { lease } : {}) }),
   });
   if (!response.ok) throw new Error('Workspace connection refused');
   return JSON.parse(response.text);
@@ -93,6 +103,55 @@ async function listen($, ownGeneration) {
   }
 }
 
+async function bindRoot($, ownGeneration) {
+  const binding = await connection($);
+  const result = await request($, '/root-bind', {}, binding);
+  if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
+  rootBinding = { ...binding, lease: result.lease };
+  await listen($, ownGeneration);
+}
+
+async function syncRoot($) {
+  if (rootSyncBlocked || !rootBinding) return;
+  if (syncingRoot) { syncRootAgain = true; return; }
+  syncingRoot = true;
+  syncRootAgain = false;
+  let retry = false;
+  try {
+    while (rootEnds.has(rootBinding.sessionId)) {
+      const ending = rootEnds.get(rootBinding.sessionId);
+      if (!ending.confirmed) {
+        await request($, '/root-end', { reason: ending.reason }, rootBinding);
+        ending.confirmed = true;
+      }
+      const transition = rootTransitions[0];
+      if (ending.reason !== 'clear' || !transition || transition.sessionId !== rootBinding.sessionId) return;
+      const result = await request($, '/root-clear', { nextSessionId: transition.nextSessionId,
+        source: 'clear', model: transition.model }, rootBinding);
+      if (typeof result.lease !== 'string') throw Error('Root lease missing');
+      rootEnds.delete(rootBinding.sessionId);
+      rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease };
+      rootTransitions.shift();
+    }
+    const revision = generation, currentId = await $.session.id();
+    if (revision !== generation || rootTransitions.length || rootEnds.has(rootBinding.sessionId)) {
+      syncRootAgain = true; return;
+    }
+    if (!rootSyncBlocked && stopped && currentId === rootBinding.sessionId) {
+      stopped = false; const ownGeneration = generation;
+      $.clock.after(0, () => listen($, ownGeneration));
+    }
+  } catch {
+    // Retry identity metadata only, in order. Never replay a native command or
+    // prompt. Each queued transition was proven by classic.SessionStart while
+    // $.session.id() still identified that root, even if it has since ended.
+    retry = true;
+  } finally {
+    syncingRoot = false;
+    if (!rootSyncBlocked && (syncRootAgain || retry)) $.clock.after(syncRootAgain ? 0 : 1000, () => syncRoot($));
+  }
+}
+
 export function register(on) {
   on('session.append', async ($, e, next) => {
     if (collecting && e.door === 'prompt') {
@@ -144,11 +203,35 @@ export function register(on) {
   on('session.start', async ($, e, next) => {
     if (collecting) collecting.invalid = true;
     const ownGeneration = ++generation;
-    const version = (await $.session.version()).version.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
+    const nativeVersion = (await $.session.version()).version;
+    contextTransitions = !legacyOnly && nativeVersion === '2.1.306';
+    const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
-    if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => listen($, ownGeneration));
+    if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => contextTransitions ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
     return next(e);
   });
-  on('session.end', async ($, e, next) => { if (collecting) collecting.invalid = true; stopped = true; generation++; return next(e); });
+  on('session.end', async ($, e, next) => {
+    if (collecting) collecting.invalid = true;
+    stopped = true; generation++;
+    const known = rootBinding && (e.sessionId === rootBinding.sessionId || rootTransitions.some(t => t.nextSessionId === e.sessionId));
+    if (known) {
+      if (rootEnds.size >= 64 && !rootEnds.has(e.sessionId)) rootSyncBlocked = true;
+      else rootEnds.set(e.sessionId, { reason: e.reason });
+      $.clock.after(0, () => syncRoot($));
+    }
+    return next(e);
+  });
+  on('classic.SessionStart', async ($, e, next) => {
+    const previousId = rootTransitions.at(-1)?.nextSessionId || rootBinding?.sessionId;
+    if (contextTransitions && rootEnds.get(previousId)?.reason === 'clear' && e.source === 'clear' && !e.agent_id &&
+      e.session_id !== previousId && e.session_id === await $.session.id()) {
+      if (collecting) collecting.invalid = true;
+      stopped = true; generation++;
+      if (rootTransitions.length >= 64) rootSyncBlocked = true;
+      else rootTransitions.push({ sessionId: previousId, nextSessionId: e.session_id, model: e.model });
+      $.clock.after(0, () => syncRoot($));
+    }
+    return next(e);
+  });
 }

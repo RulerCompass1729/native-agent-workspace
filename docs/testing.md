@@ -1,5 +1,45 @@
 # Bounded testing
 
+## Native Claude context continuity — alpha.52
+
+The installed alpha.51 application reproduced an actual Claude Code 2.1.306
+`/clear` changing its root ID while the portal retained its old identity and
+stopping state. Settings lifecycle events and a private native mod probe agree:
+`session.start` does not repeat; `session.end(reason=clear)` precedes the new
+`classic.SessionStart(source=clear)` and `$.session.id()` identifies that root.
+The implementation gates this contract to the verified version. It keeps the
+same PTY/row and records old context references with a local history boundary.
+
+Local counterexamples cover saved identity and drafts, rejected child/retired
+root events, writes failing before acknowledgement, repeated/rapid clears,
+metadata ACK loss, and a new transition during the final asynchronous identity
+read. Unverified root observations are bounded and replayed only after that ID
+is proven. Overflow leaves graphical submission closed. Real `Claude.send` and
+`SubmissionChannel` tests retain cached old replies before the old boundary,
+even when accepted input has no correlated prompt ID; they never authorize
+sharing. Frozen context checks span the GUI, awaited client operations and the
+final daemon dispatch. Old transports keep their existing argument format.
+Exact released compatibility-plugin bytes upgrade; edited copies are preserved.
+
+`node scripts/test-native-context.cjs` drives the actual hidden Electron UI.
+Five controlled-transport groups cover history/draft retention, accepted/rejected
+late private ACKs, clearing while the first shared ACK is pending, and reopen.
+Three synthetic submissions make no model calls. The added shared case exposed
+a six-argument request being rejected by the old five-argument transport limit;
+the scoped protocol fix passes the same UI path. Initial failed logs are retained.
+
+Actual source UI/TUI verification runs two `/clear` commands with Haiku selected,
+without sending an inference task. Both new IDs match native lifecycle evidence;
+the process, row, Chinese draft and collaboration membership remain intact and
+submission reconnects. The final installed bridge repeats both native clears successfully; its runtime
+copy matches the installed source. All five installed GUI groups and the seven
+existing source collaboration-waiting groups pass. The complete local suite
+passes 460 checks without skips. Independent source/artifact review passes;
+41 installed payload files match source, strict signature verification succeeds
+after native cleanup, four normal-profile files are unchanged and application
+search has one daily entry. This does not claim physical IME coverage, active-fleet restoration,
+external Claude import or `/resume` history synchronization.
+
 ## Visible waiting and cancellation — alpha.51
 
 The actual installed alpha.50 interface reproduced a pending first collaboration

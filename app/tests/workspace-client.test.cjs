@@ -503,3 +503,25 @@ test('outside history deduplicates across retained services including archived a
   next.real.sessions.push({ ...existing, id: 'duplicate' });
   await assert.rejects(c.call('importHistory', nativeId), /归属冲突/); c.close();
 });
+
+test('queued private, shared and automatic sends cannot cross a native context change', async () => {
+  for (const method of ['send', 'forward', 'run']) {
+    const { c, next } = fixture(); let release;
+    next.real.capabilities=[...next.real.capabilities,'nativeContextTransitions'];
+    next.real.sessions.push({ id:'new2',provider:'codex',state:'idle',roomId:'shared' });
+    next.real.sessions[0].roomId='shared';await c.refresh();next.calls.length=0;
+    c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+    const pending = method === 'run' ? c.call(method, ['new', 'new2'], 'Review', 2) : c.call(method, 'new', 'Review');
+    const checked = assert.rejects(pending, /上下文已变化/);
+    for(let i=0;i<20&&!release;i++)await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(typeof release,'function');next.state.sessions.find(s=>s.id==='new').nativeId='new-context';release();
+    await checked; assert.equal(next.calls.some(([m])=>m===method),false);c.close();
+  }
+});
+
+test('old run transports keep five arguments while the new context guard keeps visible identity',async()=>{
+ const {c,next}=fixture();Object.assign(next.real.sessions[0],{nativeId:'a',roomId:'shared'});next.real.sessions.push({id:'second',nativeId:'b',provider:'codex',state:'idle',roomId:'shared'});await c.refresh();
+ await c.call('run',['new','second'],'Old protocol',2,'strict',{}, {new:'a',second:'b'});
+ const request=next.calls.find(([method])=>method==='run');assert.equal(request.length,6,'Method plus five old-protocol arguments');
+ await c.call('pause');await assert.rejects(c.call('run',['new','second'],'Stale preview',2,'strict',{}, {new:'wrong',second:'b'}),/上下文已变化/);c.close();
+});

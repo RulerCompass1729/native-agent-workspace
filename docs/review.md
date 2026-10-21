@@ -1,6 +1,6 @@
 # Review and issue record
 
-As of 2026-10-20. This is a working acceptance record, not an independent security
+As of 2026-10-21. This is a working acceptance record, not an independent security
 certification. Private transcripts, screenshots, paths and account details stay
 outside the public repository. Use synthetic reproductions here.
 
@@ -18,6 +18,7 @@ contradicts it; keep the former result's scope and date.
 
 | ID | Source / trigger | Priority / owner | Status and evidence | Remaining check or trigger |
 | --- | --- | --- | --- | --- |
+| A52-1 | Actual installed native Claude 2.1.306: /clear changes the root identity while the portal retains the old ID and stopping state | High / adapter maintainer | Closed after independent source/artifact review: real source and installed native clears, five source/installed GUI groups and 460 local checks pass. Counterexamples cover queued old intent, interim events, rapid clears/ACK loss/final-read race, cached old private replies, pending shared material and exact legacy-plugin upgrade. Final payload, signature, normal data and unique-app checks pass | Native root proof required; child identities must never rebind the parent; /resume history synchronization is separate |
 | A51-1 | Actual installed GUI: a pending first collaboration has no visible wait reason or cancellation while a private send awaits acknowledgement | Medium / desktop maintainer | Closed after independent source/installed review: existing status/action show waiting, cancel pending authorization and retain drafts. Source and installed seven-group actual-GUI checks cover both acknowledgement/cancellation orders, pause failure, new authorization, directed sends and immediate typing; installed collaboration regression and payload integrity pass | Controlled provider transport, zero model calls; native accepted work is not cancelled |
 | A50-1 | Actual installed six-session workflow: an independent native permission request pauses an unrelated selected pair | Medium / workspace maintainer | Closed within scope after independent source/artifact review: selected/unselected events and delayed private/old-run failures stay scoped. Nineteen paired/async checks, 438 full-suite checks and five source/installed actual-GUI groups pass; 41 payload files match and protected normal data is unchanged | Controlled transport, no new native model tasks; explicit human interventions and membership changes remain conservative |
 | A49-1 | Planned outside-history entry; user requires native identity and no hidden context replay | High / adapter maintainer | Closed within scope after independent source/artifact review: source and installed six-group GUI checks, actual installed original history/model and GUI/TUI identity/draft checks pass without another model task | Stopped Codex 0.163.0 only. Live external attachment, active goals/fleets and Claude import remain separate compatibility work |

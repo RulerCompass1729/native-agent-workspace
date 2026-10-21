@@ -1,11 +1,15 @@
 # Readiness and next gates
 
-As of 2026-10-20. Version 0.1.0-alpha.51 is a **local macOS technical-trial alpha**.
+As of 2026-10-21. Version 0.1.0-alpha.52 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.51 makes pending shared submission visible and lets
+**Current increment:** alpha.52 preserves the same portal session and terminal
+when native Claude 2.1.306 clears its context. Old history and drafts remain
+local; old authorization does not cross the context boundary. All 460 local checks, five source/installed GUI groups, and native zero-inference
+checks pass. Independent source/artifact review closes this scoped increment. External Claude history and native `/resume` synchronization
+remain separate work. Alpha.51 makes pending shared submission visible and lets
 the person cancel a waiting finite exchange through the existing action.
 Cancellation intent protects task materials even when native acknowledgement
 and pause failure arrive in either order. Source and installed seven-group GUI
@@ -23,7 +27,7 @@ at native delivery and completion, as well as on its timer. M4 is accepted withi
 M3 graphical follow-through, M2 continuity and M1 selected multi-session work
 remain accepted within their linked scopes below.
 
-## Execution queue after alpha.51
+## Execution queue after alpha.52
 
 As of 2026-10-20. This orders the remaining product work; it does not mark it
 implemented. M1 passed its scoped graphical material-to-result acceptance path;

@@ -235,12 +235,12 @@ async function boot() {
     return submit(c, method, ...args);
   });
   register('uiReady', c => c.ready?.());
-  register('send', async (c, id, text) => {
+  register('send', async (c, id, text, nativeId) => {
     const draft = backups(c.view)[id];
-    const result = await submit(c, 'send', id, text);
+    const result = await submit(c, 'send', id, text, nativeId);
     // Every draft edit replaces this object, including retyping identical text.
     // A late acceptance must not clear a newer recovery copy.
-    if (acceptSentDraft(c.view, id, draft, text)) {
+    if (!result?.contextChanged && acceptSentDraft(c.view, id, draft, text)) {
       try { saveViews(); } catch { /* Native acceptance stands; the independent storage warning remains actionable. */ }
     }
     return result;

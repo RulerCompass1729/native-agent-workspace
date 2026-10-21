@@ -41,7 +41,8 @@ function installPlugin(cwd) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件路径不安全，未写入插件文件。');
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
-  const previousHook = '6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1';
+  const previousHooks = new Set(['6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1',
+    '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
@@ -50,7 +51,7 @@ function installPlugin(cwd) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('已有同名插件内容不同，未覆盖；原会话继续保留。');
     const prior = fs.readFileSync(filename, 'utf8');
     if (prior === content) continue;
-    if (name === 'hooks/register.js' && crypto.createHash('sha256').update(prior).digest('hex') === previousHook) upgrades.add(name);
+    if (name === 'hooks/register.js' && previousHooks.has(crypto.createHash('sha256').update(prior).digest('hex'))) upgrades.add(name);
     else throw Error('已有同名插件内容不同，未覆盖；原会话继续保留。');
   }
   for (const [name, content] of files) {

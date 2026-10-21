@@ -1,8 +1,22 @@
 # macOS alpha trial
 
-As of 2026-10-20. Version 0.1.0-alpha.51. Suitable for a small technical trial with
+As of 2026-10-21. Version 0.1.0-alpha.52. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.52 native Claude context continuity
+
+For the verified Claude Code 2.1.306 runtime, `/clear` in the native terminal
+keeps the same portal row and process, then reconnects graphical input to the
+new native root. Previous context IDs and history remain local, separated by an
+explicit context boundary. Drafts remain unsent, including pending private or
+shared task materials. Old authorizations and late replies never become a new
+context's authorization. This adds no model call or automatic context replay.
+
+Other native versions and `/resume` are not covered by this contract. An
+unconfirmed root change keeps the terminal usable and graphical input closed;
+the portal does not resume the obsolete root as a substitute. Source and installed GUI checks, actual installed zero-inference native checks,
+460 local regressions and independent source/artifact review pass.
 
 ## Alpha.49 existing Codex history
 

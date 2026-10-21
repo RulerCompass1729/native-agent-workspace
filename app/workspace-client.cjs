@@ -240,6 +240,34 @@ class WorkspaceClient extends EventEmitter {
   async call(method, ...args) {
     if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
     this.authorizeOperation?.(method, args);
+    // Capture the context displayed when the human acted, before refresh,
+    // pause or an earlier private ACK can yield to a native /clear.
+    let contextGuard = () => {};
+    if (['send', 'forward', 'run'].includes(method)) {
+      const ids = method === 'run' ? args[0] : [args[0]], index = method === 'run' ? 5 : 2;
+      if (!Array.isArray(ids)) throw Error('无效会话选择。');
+      const supplied = args[index];
+      const expected = ids.flatMap(id => {
+        // Retained pre-transition services historically discover run members
+        // during refresh. They cannot rebind a root in place. New services and
+        // explicit GUI context receipts always require an already known row.
+        if (method === 'run' && supplied === undefined && !this.entries.some(e => e.state.sessions.some(s => s.id === id)) &&
+          !this.entries.some(e => e.state.capabilities?.includes('nativeContextTransitions'))) return [];
+        const entry = this.route(id), record = entry.state.sessions.find(s => s.id === id);
+        const nativeId = supplied === undefined ? record?.nativeId : method === 'run' ? supplied?.[id] : supplied;
+        return [{ id, entry, nativeId }];
+      });
+      contextGuard = () => {
+        for (const { id, entry, nativeId } of expected) {
+          const current = entry.state.sessions.find(s => s.id === id);
+          if (!current || current.nativeContextPending || current.nativeId !== nativeId) throw Error('原生上下文已变化，请重新查看后发送；草稿保留。');
+        }
+      };
+      contextGuard();
+      if (expected.length === ids.length && expected.every(e => e.entry.state.capabilities?.includes('nativeContextTransitions'))) {
+        args[index] = method === 'run' ? Object.fromEntries(expected.map(e => [e.id, e.nativeId])) : expected[0].nativeId;
+      } else args.splice(index); // Retained protocols accept at most five run arguments.
+    }
     if (method === 'initial') return this.refresh();
     if (method === 'nativeHistory') {
       const guard = this.operationGuard(this.active); guard();
@@ -323,7 +351,7 @@ class WorkspaceClient extends EventEmitter {
       if (previousPause) await previousPause;
       if (revision !== this.control.revision || this.socket.destroyed) throw new Error('真人操作已使这次交接失效；请重新确认任务。');
       this.authorizeOperation?.(method, args);
-      guard();
+      guard(); contextGuard();
       const arm = this.control.armed.get(targets[0].key) || { entry: targets[0] };
       this.control.armed.set(targets[0].key, arm);
       return arm.entry.client.call(method, ...args);
@@ -378,6 +406,7 @@ class WorkspaceClient extends EventEmitter {
       return this.intervene(async () => {
         const revision = this.control.revision;
         await this.pauseExcept(null); await this.refresh(); guard();
+        contextGuard();
         const record = target.state.sessions.find(s => s.id === args[0]);
         if (shared && record?.roomId !== 'shared') throw Error('接收方已离开共同工作。');
         const control = record.controlRevision, member = record.memberRevision;
@@ -434,7 +463,7 @@ class WorkspaceClient extends EventEmitter {
     const ownView = ['claim', 'terminal'].includes(method) && typeof target.state.owner === 'string' && target.state.sessions.find(s => s.id === args[0])?.owner === target.state.owner;
     if (ownView) return target.client.call(method, ...args);
     if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && !isTerminalResponse(args[1]))) return this.intervene(async () => {
-      await this.pauseExcept(null); guard(); this.authorizeOperation?.(method, args); return target.client.call(method, ...args);
+      await this.pauseExcept(null); guard(); contextGuard(); this.authorizeOperation?.(method, args); return target.client.call(method, ...args);
     });
     return target.client.call(method, ...args);
   }

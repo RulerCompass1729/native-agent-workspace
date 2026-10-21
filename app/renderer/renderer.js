@@ -52,8 +52,8 @@ const viewClaims = new Map();
 const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = () => state?.room.archived ? [] : state?.sessions.filter(s => s.roomId === 'shared' && !s.archived) || [];
-const nativeUsable = s => s && !s.archived && !s.backendUnavailable && (['starting', 'idle', 'working', 'approval'].includes(s.state) || (s.state === 'error' && s.terminalAvailable));
-const canResume = s => s?.nativeId && !s.backendUnavailable &&
+const nativeUsable = s => s && !s.archived && !s.backendUnavailable && (['starting', 'idle', 'working', 'approval'].includes(s.state) || ((s.state === 'error' || s.nativeContextPending) && s.terminalAvailable));
+const canResume = s => s?.nativeId && !s.nativeContextPending && !s.backendUnavailable &&
   ((s.provider === 'codex' && s.transportDisconnected && ['error', 'disconnected'].includes(s.state) && (s.serviceCapabilities || state.capabilities || []).includes('transportReconnect')) ||
   (!s.terminalAvailable && (['ended', 'recoverable', 'error'].includes(s.state) || (s.provider === 'codex' && s.state === 'disconnected' && (s.serviceCapabilities || state.capabilities || []).includes('resubscribe'))))) &&
   ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
@@ -658,7 +658,7 @@ function renderAdvanced(s) {
     advancedControls = { id: s.id, info, usage, fleet, stop, forget };
   }
   const a = advancedControls;
-  a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
+  a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}${s.nativeContexts?.length ? '\n此前上下文（仅历史）：' + s.nativeContexts.map(c => c.nativeId).join('、') : ''}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
   a.usage.hidden = !s.usage; a.usage.textContent = s.usage ? `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}` : '';
   a.fleet.replaceChildren(...s.fleet.slice(-8).map(event => node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`)));
   a.stop.hidden = ['ended', 'stopping', 'recoverable'].includes(s.state);
@@ -1148,9 +1148,9 @@ $('composer').onsubmit = event => {
   // Return to editing now, before any asynchronous reply can change selection.
   if (inputFocusAllowed()) $('message-input').focus();
   attempt(async () => {
-    const id = activeSessionId(), text = $('message-input').value, revision = draftRevisions.get(id);
-    await api.send(id, text);
-    if (activeSessionId() === id && draftRevisions.get(id) === revision && $('message-input').value === text) $('message-input').value = '';
+    const id = activeSessionId(), nativeId = current()?.nativeId, text = $('message-input').value, revision = draftRevisions.get(id);
+    const receipt = await api.send(id, text, nativeId);
+    if (!receipt?.contextChanged && current()?.nativeId === nativeId && !current()?.nativeContextPending && activeSessionId() === id && draftRevisions.get(id) === revision && $('message-input').value === text) $('message-input').value = '';
   });
 };
 $('interrupt').onclick = () => {
@@ -1182,8 +1182,8 @@ async function submitRoom(automatic) {
   const submission = { automatic: Boolean(automatic), recipientName: participantLabel(recipient), cancelling: false, cancelRequested: false };
   roomSubmitting = submission; render();
   try {
-    await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels) : api.forward(first, text));
-    if (submission.cancelRequested) return;
+    const receipt = await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels, automatic.contexts) : api.forward(first, text, recipient.nativeId));
+    if (submission.cancelRequested || receipt?.contextChanged) return;
     if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
   }
   catch (error) { if (!submission.cancelRequested) throw error; }
@@ -1249,7 +1249,7 @@ $('run-button').onclick = () => {
   if ($('shared-input').value.length > 6000) { toast('一起核查的任务与材料合计最多 6000 字符。草稿保留；可缩短后核查，或定向发送。'); $('shared-input').focus(); return; }
   const recipient = $('recipient').value, candidates = handoffCandidates(recipient);
   runPreview = { text: $('shared-input').value, recipient, revision: roomDraftRevision,
-    members: members().map(s => [s.id, s.memberRevision, s.name]), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
+    members: members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
   $('run-preview').textContent = runPreview.text;
   $('run-consent').checked = false; $('run-error').hidden = true; renderRunChoices();
   $('run-dialog').showModal();
@@ -1261,12 +1261,13 @@ $('run-form').onsubmit = event => {
   event.preventDefault();
   if (!$('run-consent').checked || !runPreview) return;
   const eligible = handoffCandidates(runPreview.recipient);
-  const same = selected === 'room' && !roomSession && runPreview.text === $('shared-input').value && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name]));
+  const same = selected === 'room' && !roomSession && runPreview.text === $('shared-input').value && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]));
   const available = runPreview.ids.length >= 2 && runPreview.ids.every(id => eligible.some(s => s.id === id)) &&
     (runPreview.ids.length <= 2 || eligible.filter(s => runPreview.ids.includes(s.id)).every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs')));
   if (!same || !available || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
   const limit = Number($('run-limit').value), ids = [...runPreview.ids], labels = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[2]]));
-  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit, ids, labels }));
+  const contexts = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[3]]));
+  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit, ids, labels, contexts }));
 };
 $('recipient').onchange = () => { closeMentions(); attempt(persistView); render(); };
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };
@@ -1322,7 +1323,9 @@ $('confirm-share').onclick = () => attempt(async () => {
   const request = { revision: shareRevision, recipient: $('share-recipient').value, text: $('share-text').value };
   sharePending = request; updateSharingControls();
   try {
-    await api.forward(request.recipient, request.text);
+    const nativeId = members().find(s => s.id === request.recipient)?.nativeId;
+    const receipt = await api.forward(request.recipient, request.text, nativeId);
+    if (receipt?.contextChanged) return;
     // An old acceptance must not close a reopened preview or discard edits,
     // including a new edit whose text happens to match the submitted text.
     if ($('share-dialog').open && shareRevision === request.revision &&

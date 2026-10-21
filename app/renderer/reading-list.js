@@ -146,7 +146,7 @@ function messageList(el, messages, room = false, key = 'room') {
     const participant = room && state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
     let name = participant ? (m.role === 'human' ? `你 → ${participantLabel(participant, state.sessions)}` : participantLabel(participant, state.sessions)) : m.name;
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
-    if (m.role === 'system' && !m.sessionId) name = '工作区';
+    if (m.role === 'system' && !m.sessionId) name = room ? '工作区' : m.name || '原生会话';
     if (m.role === 'system' && m.runId) name = m.name || '协作';
     const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply]);
     if (entry.headingKey !== headingKey) {
