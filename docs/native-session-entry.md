@@ -1,6 +1,6 @@
 # Bringing an outside session into the workspace
 
-Contract and implementation record as of 2026-10-20. Alpha.49 implements the
+Contract and implementation record as of 2026-10-21. Alpha.49 implements the
 selected stopped Codex history path below; source and installed acceptance pass.
 This is not general compatibility certification. Locally inspected versions: Claude Code 2.1.306 and Codex 0.163.0.
 The assessment and protocol probe do not touch the person's outside sessions.
@@ -35,6 +35,24 @@ The initial probe wrongly required zero HTTP requests. It failed because native
 model-catalog refreshes reached the probe's loopback endpoint, with no inference.
 The corrected endpoint serves an empty catalog; the final probe passes with no
 turn start or inference request. The raw record, scripts and logs stay private.
+
+A separate installed Claude 2.1.306 check restored the same completed, owned
+test conversation in two isolated Portal profiles. Both native processes accepted
+the original conversation UUID and connected graphical input. The second native
+terminal reported another live session with the same name and changed its display
+name; it did not reject recovery or return a different conversation UUID. No task
+was sent and the disabled local inference endpoint received no requests. The
+original 52 history lines were preserved byte for byte; three name/prompt metadata
+records were appended, with no new user or assistant message. This does not prove
+concurrent task corruption or failure of normal single-profile deduplication.
+
+`Workspace.resume` checks the saved process identity and existing local runtime.
+The Claude adapter's root lease authenticates its own bridge; it is not a global
+native writer lock. Recovery already asks the person to close any other connection.
+These protections cannot automatically exclude an outside process newly opened
+on the same UUID. The Codex exclusion result must therefore not be generalized to
+Claude. Keep Claude outside-history entry unavailable until ownership is resolved;
+the independent review confirms this boundary, not universal provider behavior.
 
 ## Why these commands alone do not finish M5
 
@@ -104,7 +122,7 @@ path, not a general cross-directory picker or Portal import. That message API
 returns at most the newest 4096 entries, without all temporary progress rows;
 it cannot replace the live terminal or certify complete historical trajectories.
 The portal keeps graphical submission guarded after this unimplemented native
-transition. Writer exclusion, duplicate local references, full history hydration
+transition. Writer ownership, duplicate local references, full history hydration
 and a usable entry flow must be resolved before enabling Claude outside history.
 
 Live attachment needs separate proof that an observer can leave without stopping

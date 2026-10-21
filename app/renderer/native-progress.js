@@ -2,8 +2,11 @@
 class NativeProgressPanel {
   constructor(id, saved = {}) {
     this.id = id; this.index = 0; this.events = []; this.pendingEvents = []; this.progress = new Map(); this.progressRevision = 0; this.pendingBytes = 0;
+    this.traceReading = new Map(saved.traceRows || []); this.runtimeRevision = saved.runtimeRevision; this.nativeId = saved.nativeId;
+    this.traceAnchor = saved.traceAnchor; this.anchorPending = Boolean(this.traceAnchor);
     this.live = saved.live !== false; this.disposed = false; this.bytes = 0; this.paintRevision = 0;
     this.element = node('details', undefined, 'native-progress'); this.element.open = saved.open !== false; this.element.dataset.progressId = id;
+    this.cancelTraceAnchor = () => { this.anchorPending = false; };
     this.summary = node('summary'); this.heading = node('strong'); this.status = node('span', '', 'quiet');
     this.summary.append(this.heading, this.status);
     this.notice = node('p', '', 'quiet progress-notice'); this.notice.setAttribute('role', 'status');
@@ -27,6 +30,9 @@ class NativeProgressPanel {
     this.range.oninput = () => { this.live = false; this.replay(Number(this.range.value)); };
     this.trace = node('details', undefined, 'progress-trace'); this.traceSummary = node('summary', '运行记录'); this.traceList = node('div'); this.trace.append(this.traceSummary, this.traceList); this.trace.open = !!saved.traceOpen; this.savedScroll = saved.scroll; this.traceChosen = typeof saved.traceOpen === 'boolean';
     this.traceSummary.addEventListener('click', () => { this.traceChosen = true; });
+    for (const container of [this.element, this.trace]) container.addEventListener('toggle', event => {
+      if (event.target === container && container.open) for (const row of this.traceList.children) this.restoreTraceRow(row);
+    });
     // A new panel has no frame to display yet. In particular, selecting an
     // already-ended session must not manufacture an empty "last screen".
     this.viewport.hidden = true; this.controls.hidden = true; this.trace.hidden = true;
@@ -64,8 +70,33 @@ class NativeProgressPanel {
     entry.element.style.width = ''; entry.element.style.height = '';
     $('terminal-area').append(entry.element);
   }
+  moveTo(container) {
+    this.readingState(); this.traceMoving = true;
+    this.anchorPending = container.id === 'solo-progress' && Boolean(this.traceAnchor);
+    this.listenForReadingIntent(container);
+    container.append(this.element);
+    requestAnimationFrame(() => {
+      for (const row of this.traceList.children) this.restoreTraceRow(row);
+      this.restoreTraceAnchor();
+      this.traceMoving = false;
+    });
+  }
+  listenForReadingIntent(container) {
+    for (const event of ['pointerdown', 'wheel', 'keydown']) {
+      this.readingContainer?.removeEventListener(event, this.cancelTraceAnchor);
+      container?.addEventListener(event, this.cancelTraceAnchor, { passive: true });
+    }
+    this.readingContainer = container;
+  }
   update(record, capable, connected = true) {
     connected = connected && !record.backendUnavailable && !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
+    if ((this.runtimeRevision !== undefined && this.runtimeRevision !== (record.connectionRevision || 0)) || (this.nativeId && this.nativeId !== record.nativeId)) {
+      // Local item IDs may be reused by a new runtime/context. Reading state
+      // belongs to the observed session, never an unrelated replacement.
+      this.traceReading.clear(); this.traceList.replaceChildren();
+      this.traceAnchor = null; this.anchorPending = false;
+    }
+    this.nativeId = record.nativeId;
     if (this.connected !== connected || this.runtimeRevision !== (record.connectionRevision || 0)) {
       this.connectionGeneration = (this.connectionGeneration || 0) + 1;
       this.runtimeRevision = record.connectionRevision || 0;
@@ -261,6 +292,21 @@ class NativeProgressPanel {
           const latest = this.progress.get(item.id); const target = this.events.filter(event => event.time <= latest.updatedAt).at(-1);
           if (target) { this.live = false; this.replay(target.index); } else this.notice.textContent = '这段原生画面已不在当前保留范围内。';
         })); this.traceList.append(row);
+        const saved = this.traceReading.get(item.id) || { open: false, top: 0, left: 0 };
+        this.traceReading.set(item.id, saved); row.open = saved.open;
+        row.readingPending = true;
+        row.addEventListener('toggle', () => {
+          if (!row.isConnected || this.disposed) return;
+          const reading = this.traceReading.get(item.id); if (!reading) return;
+          reading.open = row.open; this.restoreTraceRow(row);
+        });
+        row.children[1].addEventListener('scroll', () => {
+          if (row.readingPending || this.traceMoving || !this.traceRowVisible(row)) return;
+          const reading = this.traceReading.get(item.id); if (!reading) return;
+          reading.top = row.children[1].scrollTop; reading.left = row.children[1].scrollLeft;
+        });
+        for (const event of ['pointerdown', 'wheel', 'keydown']) row.children[1].addEventListener(event, () => { row.readingPending = false; }, { passive: true });
+        requestAnimationFrame(() => this.restoreTraceRow(row));
       }
       const heading = `${new Date(item.time).toLocaleTimeString()} · ${item.title || item.kind} · ${{ running: '进行中', completed: '完成', failed: '失败', waiting: '等待确认', resolved: '已处理', unknown: '结果未确认', observed: '已观察' }[item.status] || item.status || ''}`;
       if (row.children[0].textContent !== heading) row.children[0].textContent = heading;
@@ -270,7 +316,46 @@ class NativeProgressPanel {
       existing.delete(item.id);
     }
     for (const row of existing.values()) row.remove();
+    for (const id of this.traceReading.keys()) if (!this.progress.has(id)) this.traceReading.delete(id);
+    if (this.traceAnchor && !this.progress.has(this.traceAnchor.id)) { this.traceAnchor = null; this.anchorPending = false; }
+    if (this.anchorPending) requestAnimationFrame(() => this.restoreTraceAnchor());
   }
-  readingState() { return { live: this.live, epoch: this.epoch, target: Number(this.range.value), open: this.element.open, traceOpen: this.trace.open, scroll: this.term ? this.viewport.scrollTop : undefined, followScreen: this.followScreen }; }
-  dispose() { this.disposed = true; this.paintRevision++; this.releaseNativeEntry(); api.unobserve(this.id).catch(() => {}); this.term?.dispose(); this.element.remove(); this.pendingEvents = []; this.pendingReplay = null; this.paintPending = []; }
+  captureTraceAnchor() {
+    const container = this.element.parentElement;
+    // Each solo session owns its reading anchor. A room has one shared grid
+    // scrollbar; restoring each member independently would make them compete.
+    if (this.anchorPending || this.traceMoving || this.disposed || container?.id !== 'solo-progress' || !container.clientHeight || !this.element.getClientRects().length) return;
+    const viewport = container.getBoundingClientRect();
+    const row = [...this.traceList.children].find(row => { const rect = row.getBoundingClientRect(); return rect.height && rect.bottom > viewport.top && rect.top < viewport.bottom; });
+    this.traceAnchor = row ? { id: row.dataset.itemId, offset: row.getBoundingClientRect().top - viewport.top } : null;
+  }
+  restoreTraceAnchor() {
+    const container = this.element.parentElement;
+    if (!this.anchorPending || this.disposed || container?.id !== 'solo-progress' || !container.clientHeight || !this.element.getClientRects().length) return;
+    const row = [...this.traceList.children].find(row => row.dataset.itemId === this.traceAnchor?.id);
+    if (!row?.getClientRects().length) return;
+    container.scrollTop += row.getBoundingClientRect().top - container.getBoundingClientRect().top - this.traceAnchor.offset;
+    this.anchorPending = false;
+  }
+  traceRowVisible(row) { return !this.disposed && row.isConnected && row.open && this.element.open && this.trace.open && row.children[1].getClientRects().length > 0; }
+  restoreTraceRow(row) {
+    const reading = this.traceReading.get(row.dataset.itemId);
+    if (!reading || !this.traceRowVisible(row)) return;
+    row.children[1].scrollTop = reading.top; row.children[1].scrollLeft = reading.left;
+    row.readingPending = false;
+  }
+  captureTraceReading() {
+    this.captureTraceAnchor();
+    for (const row of this.traceList.children) {
+      const reading = this.traceReading.get(row.dataset.itemId); if (!reading) continue;
+      reading.open = row.open;
+      if (!row.readingPending && !this.traceMoving && this.traceRowVisible(row)) { reading.top = row.children[1].scrollTop; reading.left = row.children[1].scrollLeft; }
+    }
+  }
+  readingState() {
+    this.captureTraceReading();
+    return { live: this.live, epoch: this.epoch, target: Number(this.range.value), open: this.element.open, traceOpen: this.trace.open, scroll: this.term ? this.viewport.scrollTop : undefined, followScreen: this.followScreen,
+      runtimeRevision: this.runtimeRevision, nativeId: this.nativeId, traceAnchor: this.traceAnchor && { ...this.traceAnchor }, traceRows: [...this.traceReading].map(([id, reading]) => [id, { ...reading }]) };
+  }
+  dispose() { this.disposed = true; this.paintRevision++; this.listenForReadingIntent(null); this.releaseNativeEntry(); api.unobserve(this.id).catch(() => {}); this.term?.dispose(); this.element.remove(); this.pendingEvents = []; this.pendingReplay = null; this.paintPending = []; }
 }

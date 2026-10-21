@@ -1,5 +1,38 @@
 # Bounded testing
 
+## Running-result reading — alpha.55
+
+An actual Electron reproduction on alpha.54 lost result expansion and its inner
+scroll position after switching sessions. Alpha.55 retains bounded per-session,
+per-native-connection reading state, including a solo-panel anchor. The room grid
+keeps one scrollbar, so member panels do not compete to restore it.
+
+`npm run test:progress-reading` rebuilds the actual DSH client before the source
+trial. `scripts/test-progress-reading.cjs` also accepts the installed executable
+and app-root overrides without rebuilding the signed installation. Five groups
+pass in source and installed Electron:
+
+- Pointer-read output and an unsent draft survive switching; identical item IDs
+  in another session remain independent.
+- GUI/TUI changes and intentionally collapsed containers/results retain intent.
+- Joining, room view, returning and detaching retain the result's exact inner
+  scroll offset and visible body, with no shared text added.
+- A held snapshot cannot restore an old anchor after newer pointer intent on the
+  outer container. This particular boundary check dispatches a synthetic DOM
+  event; it is not physical macOS scrollbar or input-method proof.
+- New native connection revisions and retention eviction retire obsolete state.
+
+The actual pointer scenarios and screenshots use the running Electron product
+with controlled transport fixtures. No real provider inference is started.
+Dispatches, sends and inputs stay at zero; the intentional TUI switch opens one
+fixture display and generates ordinary size updates. The eight-group raw-progress
+regression also passes in source and installed code. The 479 local tests pass
+with no skips. Private raw logs and screenshots remain outside Git.
+
+Reading state is in memory and bounded by retained items and the existing session
+cache; it does not persist temporary native output across a cold restart. Existing
+native provider evidence is reused because no provider/transport code changed.
+
 ## PTY startup input — alpha.53
 
 A real Python PTY child reproduced a lost first input when its configuration and

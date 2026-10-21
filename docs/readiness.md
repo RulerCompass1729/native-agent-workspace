@@ -1,11 +1,18 @@
 # Readiness and next gates
 
-As of 2026-10-21. Version 0.1.0-alpha.54 is a **local macOS technical-trial alpha**.
+As of 2026-10-21. Version 0.1.0-alpha.55 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
-**Current increment:** alpha.54 adds stored intermediate Claude response text and
+**Current increment:** alpha.55 preserves private running-result expansion and
+reading position across session, view and membership changes. Source and installed
+Electron checks cover five groups, including delayed observation and retired
+reading state; independent source/artifact review closes this scoped increment.
+It adds no model call and does not persist temporary observations.
+See [reading checks](testing.md#running-result-reading--alpha55).
+
+Alpha.54 adds stored intermediate Claude response text and
 tool-result text to the existing private running record, using the verified
 2.1.306 append contract. It does not change final-reply sharing or model input.
 Source/native/installed interface checks and 479 local tests pass; independent
@@ -40,9 +47,9 @@ at native delivery and completion, as well as on its timer. M4 is accepted withi
 M3 graphical follow-through, M2 continuity and M1 selected multi-session work
 remain accepted within their linked scopes below.
 
-## Execution queue after alpha.54
+## Execution queue after alpha.55
 
-As of 2026-10-20. This orders the remaining product work; it does not mark it
+As of 2026-10-21. This orders the remaining product work; it does not mark it
 implemented. M1 passed its scoped graphical material-to-result acceptance path;
 M2 passed its stated history/restart/reconnect scope; M3 passed its graphical
 follow-through scope; M4 passed its finite unattended-lifecycle scope. M5
@@ -51,6 +58,12 @@ contract verification; its wider live-entry requirement remains open. The mainta
 tests the actual affected interface and obtains independent review; later rows
 remain queued. Existing accepted checks are reused unless a change invalidates
 their evidence. Planning itself authorizes no new provider test call.
+
+Multi-level rooms and cross-parent child communication remain a design track,
+not a new runtime or prerequisite for ordinary collaboration. The [research and
+entry conditions](scoped-collaboration.md) separate native ownership, membership
+and message authorization. Existing daily-use reliability has priority; child
+addressability must be verified before a two-space routing pilot.
 
 | Order | Milestone | User outcome and exit condition |
 | --- | --- | --- |

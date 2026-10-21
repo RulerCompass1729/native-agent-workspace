@@ -12,6 +12,11 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.55 preserves expanded running results and their reading position when
+switching sessions, GUI/TUI views or collaboration membership. A newer reading
+gesture wins over a delayed restore. This adds no agent request or sharing;
+temporary process records remain bounded and are not a persistent archive.
+
 Alpha.54 adds Claude's stored intermediate response text and textual tool results
 to the existing private **运行记录**, alongside its live native terminal. It does
 not share that content or call another model. Observation remains bounded and

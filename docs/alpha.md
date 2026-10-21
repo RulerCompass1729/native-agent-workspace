@@ -1,8 +1,17 @@
 # macOS alpha trial
 
-As of 2026-10-21. Version 0.1.0-alpha.54. Suitable for a small technical trial with
+As of 2026-10-21. Version 0.1.0-alpha.55. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.55 running-result reading
+
+Expanded running results retain their own reading position across session,
+GUI/TUI and solo/shared view switches. Each session keeps an independent solo
+anchor; the room's shared grid is not scrolled separately by every member.
+New user intent cancels a delayed restore. Changed native connections and evicted
+items retire obsolete reading state. These are bounded in-memory reading aids,
+not new model calls, sharing or persistence of temporary native records.
 
 ## Alpha.54 native intermediate messages
 

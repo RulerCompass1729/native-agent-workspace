@@ -36,7 +36,7 @@ function renderProgressPanels() {
   for (const record of visible) {
     let panel = progressPanels.get(record.id);
     if (!panel) { panel = new NativeProgressPanel(record.id, progressReading.get(record.id)); progressPanels.set(record.id, panel); }
-    if (panel.element.parentElement !== container) container.append(panel.element);
+    if (panel.element.parentElement !== container) panel.moveTo(container);
     panel.update(record, record.legacyObservation || record.legacyProgress || (record.serviceCapabilities || state.capabilities || []).includes("observe"), !disconnected);
     if (record.provider === 'codex' && record.runtimeVersion === '0.1.0-alpha.2') panel.useNativeEntry(terminals.get(record.id));
   }
@@ -686,6 +686,7 @@ function renderMembers() {
 function render() {
   if (!state || rendering) return;
   captureReadingViews();
+  for (const panel of progressPanels.values()) panel.captureTraceReading();
   rendering = true;
   try {
     if (selected === 'room' && state.room.archived) { selected = ''; roomSession = ''; attempt(persistView); }
