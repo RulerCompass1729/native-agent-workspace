@@ -166,7 +166,7 @@ function messageList(el, messages, room = false, key = 'room') {
       if (room && Number.isFinite(m.time)) { const time = node('time', new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); time.title = new Date(m.time).toLocaleString(); entry.heading.append(time); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
-      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: '正在运行', failed: '原生报告失败', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
+      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
       if (status) entry.heading.append(node('span', status));
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
     }

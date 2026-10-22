@@ -11,6 +11,7 @@ const { SerializeAddon } = require('@xterm/addon-serialize');
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion } = require('./native-history.cjs');
+const { toolContent, toolStatus, toolTypes, fileChanges } = require('./codex-tool-content.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -436,7 +437,7 @@ class Rpc extends EventEmitter {
 
 class Codex extends EventEmitter {
   constructor(record, host) {
-    super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = !record.recovering && record.view !== 'terminal'; this.stopped = false; this.lifecycleRevision = 0; this.eventRevision = 0; this.stateRevision = 0; this.on('state', state => { this.latestState = state; this.stateRevision++; }); this.inputItems = new Set(); this.liveMessageItems = new Set(); this.historyMessageItems = new Set();
+    super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = !record.recovering && record.view !== 'terminal'; this.stopped = false; this.lifecycleRevision = 0; this.eventRevision = 0; this.stateRevision = 0; this.on('state', state => { this.latestState = state; this.stateRevision++; }); this.inputItems = new Set(); this.liveMessageItems = new Set(); this.liveToolItems = new Set(); this.historyMessageItems = new Set();
     this.nativeRequests = new Map();
     if (record.recovering) this.recoveryReady = new Promise(resolve => { this.finishRecoveryConnection = resolve; });
   }
@@ -563,7 +564,7 @@ class Codex extends EventEmitter {
       for (const entry of result.data) {
         const item = entry.item || entry;
         if (!item || typeof item.id !== 'string' || !item.id) throw new Error('原生历史缺少消息标识；请在原生终端继续。');
-        if (['agentMessage', 'userMessage'].includes(item.type)) items.set(item.id, { ...item, turnId: entry.turnId });
+        if (['agentMessage', 'userMessage'].includes(item.type) || toolTypes.has(item.type)) items.set(item.id, { ...item, turnId: entry.turnId });
       }
       cursor = result.nextCursor;
       if (cursor == null) {
@@ -571,7 +572,8 @@ class Codex extends EventEmitter {
           // A history snapshot has no delta watermark. If no live stream was
           // observed, wait for the authoritative completed item instead of
           // appending potentially overlapping deltas to that snapshot.
-          if (item.type === 'agentMessage' && !this.liveMessageItems.has(item.id)) this.historyMessageItems.add(item.id);
+          if ((item.type === 'agentMessage' && !this.liveMessageItems.has(item.id)) ||
+              (toolTypes.has(item.type) && !this.liveToolItems.has(item.id))) this.historyMessageItems.add(item.id);
         }
         this.emit('history', [...items.values()]); return true;
       }
@@ -634,18 +636,29 @@ class Codex extends EventEmitter {
     if (this.stopped) return;
     if (['item/started', 'item/completed'].includes(message.method) && p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) {
       const item = p.item;
+      this.liveToolItems.add(item.id);
       const fleetActivity = item.type === 'subAgentActivity';
       const fleetTitle = { started: '子任务已启动', completed: '子任务本轮已结束', interacted: '已联系子任务' }[item.kind] || '原生团队活动';
       this.emit('progress', { id: item.id, turnId: p.turnId, inputTag, source: 'codex-native', kind: item.type,
         title: fleetActivity ? `${fleetTitle}${item.agentPath ? ' · ' + item.agentPath : ''}` : item.command || item.tool || item.type,
-        status: fleetActivity ? 'observed' : message.method === 'item/started' ? 'running' : item.status || 'completed',
-        ...(typeof item.aggregatedOutput === 'string' ? { text: item.aggregatedOutput } : {}),
+        status: fleetActivity ? 'observed' : toolStatus(item, message.method === 'item/completed'),
+        ...toolContent(item),
       });
     }
-    if (['item/commandExecution/outputDelta', 'item/mcpToolCall/progress'].includes(message.method)) this.emit('progress', {
-      id: p.itemId, turnId: p.turnId, inputTag, source: 'codex-native', kind: message.method === 'item/commandExecution/outputDelta' ? 'commandExecution' : 'mcpToolCall',
-      ...(typeof p.delta === 'string' ? { delta: p.delta } : { text: p.message || '' }),
-    });
+    if (['item/commandExecution/outputDelta', 'item/mcpToolCall/progress'].includes(message.method) && !this.historyMessageItems.has(p.itemId)) {
+      this.liveToolItems.add(p.itemId);
+      this.emit('progress', {
+        id: p.itemId, turnId: p.turnId, inputTag, source: 'codex-native', kind: message.method === 'item/commandExecution/outputDelta' ? 'commandExecution' : 'mcpToolCall',
+        ...(typeof p.delta === 'string' ? { delta: p.delta } : { text: p.message || '' }),
+      });
+    }
+    if (message.method === 'item/fileChange/patchUpdated') {
+      this.liveToolItems.add(p.itemId);
+      this.emit('progress', {
+        id: p.itemId, turnId: p.turnId, inputTag, source: 'codex-native', kind: 'fileChange', title: '文件修改',
+        ...fileChanges(p.changes),
+      });
+    }
     if (message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: '原生会话错误', status: 'failed' });
     if (message.id !== undefined) {
       let request = this.nativeRequests.get(message.id);
@@ -858,7 +871,7 @@ class Codex extends EventEmitter {
     // thread/resume is not a new thread or a turn/start request.
     this.chatAvailable = false; this.stopped = false;
     this.pending = null; this.turnId = null; this.turns.clear();
-    this.liveMessageItems.clear();
+    this.liveMessageItems.clear(); this.liveToolItems.clear();
     for (const message of this.record.messages || []) {
       if (message.role === 'assistant') this.historyMessageItems.add(message.id);
     }

@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.61 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.62 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,19 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.62 native tool text increment:** Codex tool inputs, public text results
+and file-change diffs use the existing message blocks. Known tool items also
+hydrate from native history without authorizing sharing; new-connection live
+updates win over older snapshots. Actual source Electron/CLI proof creates and
+reads an isolated Unicode file, handles its native one-time permission, switches
+GUI/TUI, reloads and separately resubscribes through the real service protocol.
+The shared diff freezes when permission is requested; later output stays private.
+Two loopback Responses streams, zero paid inference. 612 local checks pass without
+skips; independent review reproduced and verified bootstrap-copy and stale-tool
+recovery fixes. Installed five groups, strict signature, exact 45-file source
+payload and original three-session hidden reopening pass independent review. This does not establish complete
+native UI/metadata/media parity or close U17 and older Claude display gaps.
 
 **Alpha.61 shared Codex increment:** the existing room composer steers a verified
 Codex 0.163.0 active turn. Only the exact accepted input and newly started native
