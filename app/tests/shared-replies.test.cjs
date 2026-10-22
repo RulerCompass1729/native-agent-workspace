@@ -43,6 +43,17 @@ test('ACK identity gates early content; parallel turns update stable blocks with
   assert.equal(w.room.messages.filter(m => m.role === 'assistant').length, 2);
   assert.equal(first.finalReply, true); assert.equal(first.status, 'complete');
 });
+test('human thread association survives unconfirmed acceptance without adding parent text to native input', async t => {
+  const { w, runtimes, ids, sent, directory } = await fixture(t);
+  const parent = await w.forward(ids[0], 'PARENT MATERIAL', 'owner');
+  runtimes[1].send = async (text, tag) => { sent.push({ text, tag }); throw Error('Unknown ACK'); };
+  await assert.rejects(w.forward(ids[1], 'Explicit reply only', 'owner', parent), /Unknown ACK/);
+  const row = w.room.messages.find(m => m.text === 'Explicit reply only');
+  assert.equal(row.replyTo, parent); assert.equal(row.status, 'unconfirmed');
+  assert.equal(sent[1].text, 'Explicit reply only');
+  w.persist();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'))).room.messages.find(m => m.id === row.id).replyTo, parent);
+});
 for (const reason of ['leave', 'takeover', 'disconnect', 'interrupt', 'gap', 'permission']) test(`${reason} freezes shared content; late native boundary is distinct from requesting a stop`, async t => {
   const { w, runtimes: [a], ids, sent, bind, block } = await fixture(t);
   await w.forward(ids[0], 'task', 'owner'); bind(0);

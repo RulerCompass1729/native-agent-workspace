@@ -1,8 +1,19 @@
 # macOS alpha trial
 
-As of 2026-10-21. Version 0.1.0-alpha.56. Suitable for a small technical trial with
+As of 2026-10-21. Version 0.1.0-alpha.57. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.57 explicit discussion threads
+
+Use a shared message’s **回复** action to continue its discussion in the same
+reader. Click an author to filter their shared trajectory, or **全部讨论** to
+return. A reply draft keeps its parent when searching or reopening. The composer
+names that discussion; historical text is not silently appended to the new task.
+Source and installed checks pass. Repeated-startup authentication cookies are
+retired before UI authentication, fixing a reproduced blank HTTP 431 page without
+clearing provider login, native history or drafts. Original-profile recovery passes;
+working-turn input and complete native mapping remain open.
 
 ## Alpha.56 inline native and shared readers
 

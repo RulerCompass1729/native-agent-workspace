@@ -122,6 +122,7 @@ function messageList(el, messages, room = false, key = 'room') {
       actions.append(button('复制', () => api.copy(entry.message.text)));
       entry.share = button('选择并分享', () => share(entry.message.text)); actions.append(entry.share);
       if (room) {
+        entry.reply = button('回复', () => openThread(entry.message.id)); actions.append(entry.reply);
         entry.delivery = node('details', undefined, 'message-delivery');
         entry.deliverySummary = node('summary'); entry.deliveryBody = node('div', undefined, 'delivery-body');
         entry.deliveryRows = new Map(); entry.deliveryNote = node('p'); entry.deliveryBody.append(entry.deliveryNote);
@@ -154,7 +155,10 @@ function messageList(el, messages, room = false, key = 'room') {
     if (m.role === 'system' && m.runId) name = m.name || '协作';
     const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply, m.title, m.incomplete, m.volatile, m.sharingStopped]);
     if (entry.headingKey !== headingKey) {
-      entry.heading.replaceChildren(node('strong', name)); entry.headingKey = headingKey;
+      const authorId = room && (m.sessionId || m.recipientId);
+      const author = authorId ? button(name, () => { $('room-filter').value = authorId; renderTimeline(); attempt(persistView); }, 'message-author') : node('strong', name);
+      if (authorId) { author.title = `查看 ${name} 的共享轨迹`; author.setAttribute('aria-label', `查看 ${name} 的共享轨迹`); }
+      entry.heading.replaceChildren(author); entry.headingKey = headingKey;
       if (m.title) entry.heading.append(node('span', m.title));
       if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
       if (m.volatile) entry.heading.append(node('span', '本次运行记录'));
@@ -167,6 +171,12 @@ function messageList(el, messages, room = false, key = 'room') {
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
     }
     entry.share.hidden = m.role === 'system';
+    if (entry.reply) {
+      entry.reply.dataset.replyTo = m.id;
+      const root = roomThreads.roots.get(m.id), count = roomThreads.groups.get(root)?.length || 1;
+      entry.reply.hidden = m.role === 'system';
+      entry.reply.textContent = count > 1 ? `回复 · ${count} 条讨论记录` : '回复';
+    }
     if (entry.delivery) {
       entry.delivery.hidden = m.role === 'system';
       const deliveries = (m.deliveries || []).map(d => {

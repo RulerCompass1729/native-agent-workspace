@@ -9,7 +9,7 @@ function openSearch(scope = 'all') {
   if (!state || document.querySelector('dialog[open]')) return;
   captureReadingViews();
   searchOrigin = { selected, roomSession, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
-    roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter };
+    roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread };
   const currentOption = $('search-scope').querySelector('[value="current"]');
   currentOption.disabled = !current();
   currentOption.textContent = current() ? `当前会话：${current().name}` : '当前会话';
@@ -69,7 +69,7 @@ async function openSearchResult(result) {
   const origin = searchOrigin, query = $('search-input').value;
   $('search-dialog').close();
   if (result.kind === 'shared' || result.kind === 'room') {
-    $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = '';
+    $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
     await selectRoom();
     if (result.messageId) pointToMessage($('room-messages'), 'room', result.messageId, query);
   } else {
@@ -87,12 +87,14 @@ async function returnToReading() {
   searchReturn = null; $('return-reading').hidden = true;
   document.querySelectorAll('[data-search-target]').forEach(el => delete el.dataset.searchTarget);
   $('room-search').value = target.roomSearch;
+  roomThread = target.roomThread || '';
   $('room-filter').value = target.roomFilter; pendingRoomFilter = target.roomFilter;
   await select(target.selected, target.mode, target.roomSession);
   // select() captures the outgoing view. Restore the original geometry only
   // after that capture, and only for the destination of this explicit action.
-  const key = target.selected === 'room' && !target.roomSession ? 'room' : target.sessionId;
-  const view = messageViews.get(key === 'room' ? $('room-messages') : $('messages'));
+  const inRoom = target.selected === 'room' && !target.roomSession;
+  const key = inRoom ? roomReadingKey() : target.sessionId;
+  const view = messageViews.get(inRoom ? $('room-messages') : $('messages'));
   if (target.reading[key] && view?.key === key) {
     saveReading(view, target.reading[key]); view.intent = { position: target.reading[key] }; scheduleReading(view);
   }

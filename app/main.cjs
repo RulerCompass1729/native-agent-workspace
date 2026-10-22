@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
-const { startDsh } = require('./dsh-host.cjs');
+const { startDsh, resetUiAuthentication } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
 const { preflight } = require('./preflight.cjs');
 const { setLocation } = require('./runtime-locations.cjs');
@@ -183,6 +183,8 @@ async function boot() {
   if (quitting) return;
   dsh = await startDsh(dataDir); entry = dsh.url;
   if (quitting) { dsh.stop(); return; }
+  // The fresh launch URL authenticates all restored windows after this cleanup.
+  await resetUiAuthentication(session.defaultSession);
   for (const view of views) { try { view.readingPositions = readingState(view.readingPositions || {}); } catch { view.readingPositions = {}; } }
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -364,6 +366,7 @@ async function boot() {
     if (next.roomSession !== undefined && (typeof next.roomSession !== 'string' || next.roomSession.length > 100)) throw new Error('无效协作视图。');
     if (next.roomRecipient !== undefined && (typeof next.roomRecipient !== 'string' || next.roomRecipient.length > 100)) throw new Error('无效协作接收方。');
     if (next.roomFilter !== undefined && (typeof next.roomFilter !== 'string' || next.roomFilter.length > 100)) throw new Error('无效成员筛选。');
+    for (const key of ['roomThread', 'roomReplyTo']) if (next[key] !== undefined) require('./room-threads.js').replyReference(next[key]);
     if (next.roomSearch !== undefined && (typeof next.roomSearch !== 'string' || next.roomSearch.length > 1000)) throw new Error('搜索词过长。');
     if (next.sharedDraft !== undefined && (typeof next.sharedDraft !== 'string' || next.sharedDraft.length > 16000)) throw new Error('协作草稿过长。');
     if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw new Error('无效终端显示设置。');
@@ -375,6 +378,7 @@ async function boot() {
     if (next.roomRecipient !== undefined) c.view.roomRecipient = next.roomRecipient;
     if (next.roomFilter !== undefined) c.view.roomFilter = next.roomFilter;
     if (next.roomSearch !== undefined) c.view.roomSearch = next.roomSearch;
+    for (const key of ['roomThread', 'roomReplyTo']) if (next[key] !== undefined) c.view[key] = next[key];
     if (next.terminalDisplay !== undefined) c.view.terminalDisplay = { fontSize: next.terminalDisplay.fontSize, palette: next.terminalDisplay.palette };
     saveViews();
   });

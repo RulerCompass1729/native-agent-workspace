@@ -101,7 +101,7 @@ class LegacyInput extends EventEmitter {
     return this.records.filter(row => row.shared === true).map(row => ({
       id: row.id, role: 'human', recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
       status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', manualReply: true,
-      deliveryTracked: true,
+      deliveryTracked: true, ...(row.replyTo ? { replyTo: row.replyTo } : {}),
       deliveries: [{ id: row.id, recipientId: row.sessionId, recipientName: row.recipientName || row.name, text: row.text,
         status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', time: row.time }],
     }));
@@ -111,7 +111,7 @@ class LegacyInput extends EventEmitter {
     const previous = this.records;
     this.records = previous.map(row => {
       if (!selected.has(row.id)) return row;
-      const { text, name, recipientName, shared, ...metadata } = row; return metadata;
+      const { text, name, recipientName, shared, replyTo, ...metadata } = row; return metadata;
     });
     try { this.save(); } catch (error) { this.records = previous; throw error; }
     this.emit('change');
@@ -199,7 +199,8 @@ class LegacyInput extends EventEmitter {
       if (record && eligible(entry.state, record)) await this.prepare(entry, record).catch(() => {});
     }
   }
-  async send(record, text, refresh, guard, shared = false) {
+  async send(record, text, refresh, guard, shared = false, replyTo) {
+    replyTo = require('./room-threads.js').replyReference(replyTo);
     const target = this.target(record);
     if (!target?.submission.connected) throw Error('原会话输入连接尚未就绪，草稿已保留。');
     if (typeof text !== 'string' || !text.trim() || text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw Error('请输入有效文字；一次最多 16,000 个字符。');
@@ -207,7 +208,7 @@ class LegacyInput extends EventEmitter {
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
     if (target.submission.pending) throw Error('上一条发送仍待确认。');
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
-    if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name });
+    if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
     this.records.push(row); this.save(); target.refresh = refresh;
     try {
       const pending = target.native ? target.native.send(text, row.id, refresh, guard) : target.submission.request(text, row.id, guard);

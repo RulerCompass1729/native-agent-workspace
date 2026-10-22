@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-21. Version 0.1.0-alpha.56 is a **local macOS technical-trial alpha**.
+As of 2026-10-21. Version 0.1.0-alpha.57 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,16 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Installed alpha.57, 2026-10-21:** explicit reply threads and member trajectories
+use the same shared reader. Scoped drafts survive search and reopening. Source
+and installed eleven-group Electron checks pass, with no model calls. Repeated
+startup could accumulate per-port UI cookies and cause a blank HTTP 431 page;
+the installed fix passes the actual failure/restart/reload/multi-window regression.
+Normal-profile reopening retains the original three native IDs/processes, selected
+view, draft and eight Codex messages, without another dispatch. Working-turn GUI
+input and older Claude native display coverage still require implementation and
+native evidence; U17 remains open.
 
 **Installed alpha.56, 2026-10-21:** native messages and tool results now update
 inside the main reader; the rejected camera/replay panels are removed. Explicitly

@@ -243,7 +243,12 @@ class WorkspaceClient extends EventEmitter {
     this.authorizeOperation?.(method, args);
     // Capture the context displayed when the human acted, before refresh,
     // pause or an earlier private ACK can yield to a native /clear.
-    let contextGuard = () => {};
+    const replyTo = ['forward', 'run'].includes(method) ? require('./room-threads.js').replyReference(args[method === 'run' ? 6 : 3]) : '';
+    const replyGuard = () => {
+      if (replyTo && !this.snapshot().room.messages.some(m => m.id === replyTo)) throw Error('原讨论记录已移除；草稿保留，没有发送。');
+    };
+    replyGuard();
+    let contextGuard = replyGuard;
     if (['send', 'forward', 'run'].includes(method)) {
       const ids = method === 'run' ? args[0] : [args[0]], index = method === 'run' ? 5 : 2;
       if (!Array.isArray(ids)) throw Error('无效会话选择。');
@@ -259,15 +264,25 @@ class WorkspaceClient extends EventEmitter {
         return [{ id, entry, nativeId }];
       });
       contextGuard = () => {
+        replyGuard();
         for (const { id, entry, nativeId } of expected) {
           const current = entry.state.sessions.find(s => s.id === id);
           if (!current || current.nativeContextPending || current.nativeId !== nativeId) throw Error('原生上下文已变化，请重新查看后发送；草稿保留。');
         }
       };
       contextGuard();
+      // Optional local metadata must not lengthen a retained protocol's wire
+      // frame when no thread was chosen (JSON encodes trailing undefined as null).
+      args.length = method === 'run' ? Math.min(args.length, 6) : Math.min(args.length, 3);
       if (expected.length === ids.length && expected.every(e => e.entry.state.capabilities?.includes('nativeContextTransitions'))) {
         args[index] = method === 'run' ? Object.fromEntries(expected.map(e => [e.id, e.nativeId])) : expected[0].nativeId;
       } else args.splice(index); // Retained protocols accept at most five run arguments.
+      if (replyTo) {
+        const targets = expected.map(e => e.entry);
+        const bridged = method === 'forward' && this.control.legacyInput?.connected(targets[0]?.state.sessions.find(s => s.id === args[0]));
+        if (!bridged && targets.some(e => !e.state.capabilities?.includes('replyThreads'))) throw Error('这个保留连接尚不支持回复关联；草稿保留，没有发送。');
+        if (!bridged) args[method === 'run' ? 6 : 3] = replyTo;
+      }
     }
     if (method === 'initial') return this.refresh();
     if (method === 'nativeHistory') {
@@ -413,7 +428,7 @@ class WorkspaceClient extends EventEmitter {
         const control = record.controlRevision, member = record.memberRevision;
         const draft = record.liveDraft, draftRevision = this.control.draftVersions?.get(record.id) || 0;
         const valid = () => {
-          try { guard(); this.authorizeOperation?.(method, args); } catch { return false; }
+          try { guard(); contextGuard(); this.authorizeOperation?.(method, args); } catch { return false; }
           const current = target.state.sessions.find(s => s.id === record.id);
           return this.control.revision === revision && current?.pid === record.pid && current.nativeId === record.nativeId
             && current.owner === target.state.owner && current.controlRevision === control && current.memberRevision === member
@@ -424,7 +439,7 @@ class WorkspaceClient extends EventEmitter {
         const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原会话已变化'); };
         // Native hooks remain the sole writer of conversation history.
         // Never call the old paste/Enter sender or launch a replacement CLI.
-        const tag = await this.control.legacyInput.send(record, args[1], refresh, valid, shared);
+        const tag = await this.control.legacyInput.send(record, args[1], refresh, valid, shared, replyTo);
         // An accepted native submission stays accepted even if cleanup loses
         // ownership or the connection. Never report that as a failed send.
         if (!shared && draft?.trim() === args[1].trim()) await this.legacyDraft(target, record.id, '', record, current =>
