@@ -13,6 +13,55 @@ function fixture() {
   const stop = (text, promptId = 'new-prompt') => runtime.hook({ prompt_id: promptId, session_id: runtime.record.nativeId, hook_event_name: 'Stop', last_assistant_message: text, background_tasks: [], session_crons: [], stop_hook_active: false });
   return { runtime, replies, states, stop, send: () => runtime.send('task', 'request-1', () => allowed), accept: (promptId = 'new-prompt') => accept({promptId}), reject: () => reject(Error('not confirmed')), revoke: () => { allowed = false; } };
 }
+test('Claude queued input preserves the original task and binds only when the native next prompt starts', async () => {
+  const f = fixture(), first = f.send(); f.accept('first'); await first;
+  const original = f.runtime.pending;
+  f.runtime.nativeQueue = true; f.runtime.rootLease = 'root'; f.runtime.chatAvailable = true;
+  f.runtime.submission.pending = null;
+  const queued = f.runtime.queue('next task', 'queue-id', () => true);
+  assert.equal(f.runtime.pending, original);
+  await assert.rejects(f.runtime.queue('duplicate', 'other', () => true), /等待输入/);
+  f.stop('first result', 'first'); assert.equal(f.replies[0].tag, 'request-1');
+  f.runtime.submission.pending = { authorized: true };
+  f.runtime.hook({ session_id: 'synthetic-session', hook_event_name: 'UserPromptSubmit', prompt_id: 'next', prompt: 'next task' });
+  f.stop('next result', 'next');
+  f.accept('next'); await queued;
+  assert.deepEqual(f.replies.map(r => [r.tag, r.text]), [['request-1', 'first result'], ['queue-id', 'next result']]);
+  assert.equal(f.runtime.queued, null); assert.equal(f.states.at(-1), 'idle');
+});
+test('late queued acceptance keeps a newer approval and an uncertain queued result remains private', async () => {
+  const f = fixture(); f.runtime.nativeQueue = true; f.runtime.rootLease = 'root'; f.runtime.chatAvailable = true; f.runtime.submission.pending = null;
+  const queued = f.runtime.queue('next task', 'queue-id', () => true);
+  f.runtime.submission.pending = { authorized: true };
+  f.runtime.hook({ session_id: 'synthetic-session', hook_event_name: 'UserPromptSubmit', prompt_id: 'next', prompt: 'next task' });
+  f.runtime.hook({ session_id: 'synthetic-session', hook_event_name: 'PermissionRequest' });
+  f.accept('next'); await queued;
+  assert.equal(f.states.at(-1), 'approval'); assert.deepEqual(f.replies, []);
+});
+for (const identity of ['next', null]) test(`queued prompt with ${identity ? 'known' : 'unknown'} receipt cannot be idled by the previous Stop`, async () => {
+  const f = fixture(), first = f.send(); f.accept('first'); await first;
+  f.runtime.nativeQueue = true; f.runtime.rootLease = 'root'; f.runtime.chatAvailable = true; f.runtime.submission.pending = null;
+  const queued = f.runtime.queue('next task', 'queue-id', () => true);
+  f.runtime.submission.pending = { authorized: true };
+  f.runtime.hook({ session_id: 'synthetic-session', hook_event_name: 'UserPromptSubmit', prompt_id: 'next', prompt: 'next task' });
+  f.stop('late old result', 'first'); assert.equal(f.states.at(-1), 'working');
+  f.stop('next result', 'next'); f.accept(identity); await queued;
+  assert.equal(f.states.at(-1), 'idle');
+  assert.equal(f.replies.at(-1).text, 'next result');
+  assert.equal(f.replies.at(-1).tag, identity ? 'queue-id' : undefined);
+});
+test('same-root reload retires an uncertain queue without stopping or replacing native work', async () => {
+  const { SubmissionChannel } = require('../claude-submit.cjs');
+  const f = fixture(); f.runtime.nativeQueue = true; f.runtime.rootLease = 'root'; f.runtime.chatAvailable = true;
+  f.runtime.terminal.alive = true; f.runtime.submission = new SubmissionChannel();
+  const response = new EventEmitter(); response.end = () => {};
+  f.runtime.submission.receive(response);
+  const queued = f.runtime.queue('next task', 'queue-id', () => true);
+  f.runtime.submission.authorize({ id: 'queue-id', text: 'next task' });
+  const rejected = assert.rejects(queued, /关闭/);
+  f.runtime.bindRoot({ sessionId: f.runtime.record.nativeId, nativeBlocks: true, nativeQueue: true });
+  await rejected; assert.equal(f.runtime.terminal.alive, true); assert.equal(f.runtime.queued, null);
+});
 test('Claude completion before ACK remains private until exact request acceptance', async () => {
   const f = fixture(), sent = f.send(); f.stop('answer'); assert.deepEqual(f.replies, []);
   f.accept(); await sent;

@@ -10,6 +10,29 @@ function poll(channel) {
   response.end = text => { response.value = JSON.parse(text); response.emit('close'); };
   channel.receive(response); return response;
 }
+test('native queued receipt outlives the normal deadline only after authorization and closes without replay', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  const first = poll(channel), request = channel.request('next task', 'queued', () => true, true);
+  assert.equal(channel.authorize(first.value), true);
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(channel.pending.tag, 'queued');
+  channel.result({ id: 'queued', status: 'accepted' }); await request;
+  const second = poll(channel), unapproved = channel.request('not authorized', 'no', () => true, true);
+  await assert.rejects(unapproved, /未确认/);
+  assert.equal(channel.authorize(second.value), false);
+  const third = poll(channel), closing = channel.request('waiting', 'closed', () => true, true);
+  channel.authorize(third.value); channel.close(); await assert.rejects(closing, /关闭/);
+  assert.equal(poll(channel).value, undefined);
+});
+test('native listener returning after an uncertain queued submit/result retires its wait without replay', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  const first = poll(channel), pending = channel.request('queued once', 'one', () => true, true);
+  channel.authorize(first.value);
+  const rejected = assert.rejects(pending, /结果未确认/);
+  const again = poll(channel); await rejected;
+  assert.equal(again.value, undefined); assert.equal(channel.pending, null);
+  assert.equal(channel.result({ id: 'one', status: 'accepted' }), false);
+});
 test('native acceptance needs fresh authorization; canceled and timed-out sends never replay', async t => {
   const channel = new SubmissionChannel(30); t.after(() => channel.close());
   let allowed = true;

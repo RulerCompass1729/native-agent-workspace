@@ -27,7 +27,10 @@ class ServiceClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       if (this.socket.destroyed) return reject(new Error('本地服务未连接。'));
       const id = ++this.sequence;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('本地操作等待确认超时；请检查原生会话，不会自动重试。')); }, 40000);
+      // A native Claude queued input acknowledges when its next turn starts.
+      // Its single pending operation is bounded by the native session/transport,
+      // not an arbitrary timer that would suggest retrying accepted native work.
+      const timer = method === 'queue' ? null : setTimeout(() => { this.pending.delete(id); reject(new Error('本地操作等待确认超时；请检查原生会话，不会自动重试。')); }, 40000);
       this.pending.set(id, { resolve, reject, timer }); this.socket.write(JSON.stringify({ id, method, args }) + '\n');
     });
   }

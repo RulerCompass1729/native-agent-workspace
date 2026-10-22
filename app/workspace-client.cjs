@@ -284,6 +284,18 @@ class WorkspaceClient extends EventEmitter {
         if (!bridged) args[method === 'run' ? 6 : 3] = replyTo;
       }
     }
+    if (method === 'queue') {
+      const [id, text, nativeId] = args, target = this.route(id), guard = this.operationGuard(target);
+      const original = target.state.sessions.find(s => s.id === id);
+      if (!target.state.capabilities?.includes('nativeQueue') || original?.nativeId !== nativeId) throw Error('此连接暂不支持原生等待输入；草稿保留。');
+      return this.intervene(async () => {
+        const revision = this.control.revision, control = original.controlRevision;
+        await this.pauseExcept(); await this.refresh(); guard(); this.authorizeOperation?.(method, args);
+        const current = target.state.sessions.find(s => s.id === id);
+        if (this.control.revision !== revision || current?.controlRevision !== control || current?.nativeId !== nativeId || current?.nativeContextPending || current?.owner !== target.state.owner || current?.state !== 'working' || current?.approval || current?.pendingQueue || !current?.queueAvailable) throw Error('当前原生会话或控制权已变化，草稿保留。');
+        return target.client.call(method, id, text, nativeId);
+      });
+    }
     if (method === 'steer') {
       const [id, text, nativeId, turnId] = args, target = this.route(id), guard = this.operationGuard(target);
       const original = target.state.sessions.find(s => s.id === id);

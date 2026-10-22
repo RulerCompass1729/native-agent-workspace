@@ -48,7 +48,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeBlockMapping: true, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeBlockMapping: true, queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.sharedReplies.refresh();
@@ -347,7 +347,7 @@ class Workspace extends EventEmitter {
   async send(id, text, owner, route = null, forward = null, sourceMessage = null) {
     text = cleanText(text); const s = this.get(id); const runtime = this.runtime(id);
     if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); this.pause('真人输入优先'); }
-    if (s.state !== 'idle' || s.pendingTag || s.approval) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
+    if (s.state !== 'idle' || s.pendingTag || runtime.pendingQueue || s.approval) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
     if (runtime.chatAvailable === false) throw new Error(s.provider === 'claude' ? '安全发送接口尚未连接；请在原生终端继续，草稿已保留。' : '请先在原生终端完成第一条消息；草稿已保留。');
     const control = s.controlRevision; const member = s.memberRevision; const connection = s.connectionRevision;
     const guard = () => {
@@ -397,6 +397,29 @@ class Workspace extends EventEmitter {
       this.changed(); throw error;
     } finally { if (this.pendingDrafts.get(id)?.tag === tag) this.pendingDrafts.delete(id); }
     return tag;
+  }
+  async queue(id, text, owner) {
+    text = cleanText(text);
+    if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
+    const s = this.get(id), runtime = this.runtime(id);
+    if (s.owner !== owner || s.provider !== 'claude' || s.state !== 'working' || s.approval || !runtime.queueAvailable || runtime.pendingQueue) throw Error('原生会话当前不能接收等待输入，草稿保留。');
+    this.pause('真人追加等待输入'); s.controlRevision++;
+    const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId;
+    const valid = () => this.runtimes.get(id) === runtime && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending &&
+      s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error'].includes(s.state);
+    const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
+    runtime.pendingQueue = tag;
+    const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'queue' };
+    s.messages.push(message); this.versions.dispatches++; this.changed();
+    try {
+      await runtime.queue(text, tag, valid);
+      message.status = 'submitted';
+      if (s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
+      return tag;
+    } catch (error) {
+      if (message.status !== 'submitted') message.status = 'unconfirmed';
+      throw error;
+    } finally { if (runtime.pendingQueue === tag) runtime.pendingQueue = null; this.changed(); }
   }
   async steer(id, text, owner, expectedTurnId) {
     text = cleanText(text);

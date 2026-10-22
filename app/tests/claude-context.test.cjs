@@ -91,16 +91,18 @@ test('observation overflow keeps graphical input closed instead of announcing id
  for(let i=0;i<257;i++)r.hook({hook_event_name:'PreToolUse',session_id:b,tool_name:'Tool'});
  assert.throws(()=>r.clearRoot({...a,nextSessionId:b,source:'clear'}),/overflow/);assert.equal(r.ready,false);assert.equal(r.contextEvents.length,256);
 });
-for(const correlated of [true,false])test(`cached Stop stays before the old boundary and cannot forward; correlated ${correlated}`,async t=>{
+for(const correlated of [true,false])for(const newerPrompt of [false,true])test(`cached Stop stays before the old boundary and cannot forward; correlated ${correlated}, newer prompt ${newerPrompt}`,async t=>{
  const f=await fixture(t),{w,id,s,r}=f,old=f.bind(),prompt=randomUUID();w.join(id,true);
  const poll=new EventEmitter();poll.end=()=>poll.emit('close');r.submission.receive(poll);
  const sending=w.forward(id,'Review material','owner');const tag=s.pendingTag;
  assert.equal(r.submission.authorize({id:tag,text:'Review material'}),true);
  r.hook({hook_event_name:'UserPromptSubmit',session_id:old.sessionId,prompt:'Review material',prompt_id:prompt});
  r.hook({hook_event_name:'Stop',session_id:old.sessionId,prompt_id:prompt,last_assistant_message:'Old answer'});
- r.submission.result({id:tag,status:'accepted',promptId:correlated?prompt:null});f.clear(old);await sending;
+ r.submission.result({id:tag,status:'accepted',promptId:correlated?prompt:null});f.clear(old);
+ if(newerPrompt)r.hook({hook_event_name:'UserPromptSubmit',session_id:s.nativeId,prompt:'Work after clear',prompt_id:randomUUID()});
+ await sending;
  const boundary=s.messages.findIndex(m=>m.role==='system'),answer=s.messages.findIndex(m=>m.text==='Old answer');
- assert.ok(answer>=0&&answer<boundary);assert.equal(w.room.messages.some(m=>m.text==='Old answer'),false);assert.equal(s.state,'idle');
+ assert.ok(answer>=0&&answer<boundary);assert.equal(w.room.messages.some(m=>m.text==='Old answer'),false);assert.equal(s.state,newerPrompt?'working':'idle');
 });
 test('final daemon context guard rejects old or missing identity after clear',async t=>{
  const f=await fixture(t),old=f.bind();f.w.assertNativeContext(f.id,old.sessionId);f.clear(old);

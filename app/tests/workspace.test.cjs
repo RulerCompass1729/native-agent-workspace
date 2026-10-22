@@ -14,6 +14,30 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('private queued input retains native work, rejects duplicates and preserves a newer draft after ACK', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); s.state = 'working'; s.pendingTag = 'original'; r.queueAvailable = true;
+  w.setDraft(id, 'next task', 'owner'); let accept;
+  r.queue = () => new Promise(resolve => { accept = resolve; });
+  const sending = w.queue(id, 'next task', 'owner');
+  assert.equal(s.pendingTag, 'original'); assert.equal(s.state, 'working');
+  assert.equal(w.snapshot().sessions[0].pendingQueue, s.messages.at(-1).id);
+  assert.equal(s.messages.at(-1).status, 'awaiting-native');
+  await assert.rejects(w.queue(id, 'duplicate', 'owner'), /不能接收/);
+  await assert.rejects(w.send(id, 'duplicate', 'owner'), /尚未就绪/);
+  w.setDraft(id, 'new draft', 'owner'); accept(); await sending;
+  assert.equal(w.snapshot().sessions[0].liveDraft, 'new draft');
+  assert.equal(s.messages.at(-1).status, 'submitted'); assert.equal(r.pendingQueue, null);
+});
+test('uncertain queued input preserves draft and exact message without automatic retry', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); s.state = 'working'; r.queueAvailable = true;
+  w.setDraft(id, 'next task', 'owner'); let calls = 0;
+  r.queue = async () => { calls++; throw Error('native disconnected'); };
+  await assert.rejects(w.queue(id, 'next task', 'owner'), /disconnected/);
+  assert.equal(calls, 1); assert.equal(s.messages.at(-1).status, 'unconfirmed');
+  assert.equal(w.snapshot().sessions[0].liveDraft, 'next task'); assert.equal(s.state, 'working');
+});
 test('native blocks share the private reader but never silently persist or share tool bodies', async t => {
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
   const s = w.get(id); w.join(id, true); r.nativeBlocks = true;
@@ -698,5 +722,27 @@ for (const accepted of [true, false]) test(`private GUI steering (${accepted ? '
   assert.ok(!w.room.messages.some(m => m.text?.includes('private')));
   const frozen = w.room.messages.find(m => m.text === 'shared prefix');
   assert.equal(frozen.status, 'unconfirmed'); assert.ok(frozen.sharingStopped);
+  assert.equal(w.versions.dispatches, 2);
+});
+
+for (const accepted of [true, false]) test(`private Claude queue (${accepted}) revokes current room reply before later native text`, async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); w.join(id, true); r.nativeBlocks = true;
+  const tag = await w.send(id, 'shared task', 'owner', null, true);
+  r.emit('submitted', tag); r.emit('replyBound', { tag, nativeId: s.nativeId, turnId: 'active', promptId: 'prompt-active' });
+  r.emit('state', 'working'); r.queueAvailable = true;
+  const block = { id: 'display:shared', nativeId: s.nativeId, turnId: 'active', promptId: 'prompt-active', kind: 'response', text: 'shared prefix', status: 'streaming' };
+  r.emit('nativeBlock', block); assert.ok(w.room.messages.some(m => m.text === 'shared prefix'));
+  r.queue = async (text, queueTag, guard) => {
+    assert.ok(guard()); r.emit('nativeBlock', { ...block, text: 'private continuation' });
+    if (!accepted) throw Error('No native receipt');
+    r.emit('submitted', queueTag);
+  };
+  const sending = w.queue(id, 'private requirement', 'owner');
+  if (accepted) await sending; else await assert.rejects(sending);
+  r.emit('complete', { tag, messageId: 'display:shared', text: 'private continuation' }); await tick();
+  assert.ok(s.messages.some(m => m.text === 'private continuation'));
+  assert.ok(!w.room.messages.some(m => m.text?.includes('private')));
+  assert.ok(w.room.messages.find(m => m.text === 'shared prefix').sharingStopped);
   assert.equal(w.versions.dispatches, 2);
 });
