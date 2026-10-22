@@ -110,6 +110,7 @@ class LegacyInput extends EventEmitter {
     return [...this.records.filter(row => row.shared === true).map(row => ({
       id: row.id, role: 'human', recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
       status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', manualReply: row.sharedReply !== true,
+      ...(row.inputMode ? { inputMode: row.inputMode } : {}),
       deliveryTracked: true, ...(row.replyTo ? { replyTo: row.replyTo } : {}),
       deliveries: [{ id: row.id, recipientId: row.sessionId, recipientName: row.recipientName || row.name, text: row.text,
         status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', time: row.time }],
@@ -280,17 +281,20 @@ class LegacyInput extends EventEmitter {
     if (typeof text !== 'string' || !text.trim() || text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw Error('请输入有效文字；一次最多 16,000 个字符。');
     text = text.trim();
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
-    if (expectedTurnId !== undefined ? shared || !target.native?.steerAvailable || target.native.pendingSteer : target.submission.pending) throw Error('上一条发送仍待确认，或当前连接无法追加指令。');
+    if (expectedTurnId !== undefined ? !target.native?.steerAvailable || target.native.pendingSteer : target.submission.pending) throw Error('上一条发送仍待确认，或当前连接无法追加指令。');
     if (waitForNativeTurn && (shared || !target.queueAvailable)) throw Error('当前连接不支持等待输入；草稿保留。');
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
+    if (expectedTurnId !== undefined) row.inputMode = 'steer';
     if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
     if (shared && this.sharedReplies.authorize(record, target.native || target, row.id, row, shareAuthority)) row.sharedReply = true;
+    if (shared && expectedTurnId !== undefined && !row.sharedReply) throw Error('共享回复连接不可用；草稿保留，没有发送。');
     this.records.push(row);
     try { this.save(); } catch (error) { this.sharedReplies.close(row.id); throw error; }
     target.refresh = refresh;
     try {
       const pending = waitForNativeTurn ? target.queue(text, row.id, guard)
-        : expectedTurnId !== undefined ? target.native.steer(text, row.id, expectedTurnId, refresh, guard)
+        : expectedTurnId !== undefined ? target.native.steer(text, row.id, expectedTurnId, refresh, guard, shared,
+          () => this.sharedReplies.valid(this.sharedReplies.grants.get(row.id)))
         : target.native ? target.native.send(text, row.id, refresh, guard) : target.submission.request(text, row.id, guard);
       this.emit('change'); const receipt = await pending;
       if (shared && !target.native) this.sharedReplies.receipt(row.id, receipt);

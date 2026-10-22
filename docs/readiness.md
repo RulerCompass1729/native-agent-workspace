@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.67 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.68 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,19 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.68 retained Codex working input:** fixes the full-router self-pending
+lock and exposes the existing native steering action in the room. Exact native
+input-item identity keeps previous private work outside the room. Sending still
+requires the active turn; late ACK processing can finalize an already completed
+turn only while the original sharing authority survives. Pre-send saved drafts
+clear after acceptance, while later same-text edits survive. Independent source
+and installed review pass: four solo and six shared native groups, 685 local checks
+without skips, 47 matching payload files and post-native strict signature. Normal
+hidden reopening preserves three original native identities/processes, selection,
+draft and eight Codex messages with zero new dispatch. Each native run uses two
+fixed task responses and one native title response over loopback, zero paid
+inference. This does not introduce force-send or automatic cross-service handoff.
 
 **Alpha.67 retained Codex shared reader:** explicitly addressed idle tasks use the
 original 0.163.0 server's turn acknowledgement and native item identity to stream

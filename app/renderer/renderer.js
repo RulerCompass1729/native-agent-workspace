@@ -1294,7 +1294,7 @@ $('forward-button').onclick = () => {
   if (nativeUsable(recipient)) selectRoom(recipient.id); else select(recipient.id, 'chat');
 };
 function roomSteerAvailable(s) {
-  return Boolean(s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && s.serviceCapabilities?.includes('nativeSharedSteer'));
+  return Boolean(s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && (s.legacySharedSteer || s.serviceCapabilities?.includes('nativeSharedSteer')));
 }
 function roomQueueAvailable(s) {
   return Boolean(s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && s.serviceCapabilities?.includes('nativeSharedQueue'));
