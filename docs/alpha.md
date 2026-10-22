@@ -1,8 +1,18 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.62. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.63. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.63 independent manual recipients
+
+A waiting room instruction to Claude no longer disables sending to another
+selected member. Manual input guards are scoped to their native session;
+same-session changes, global pause, history removal and connection loss still
+invalidate stale operations. Automatic handoff retains its existing global guard.
+The existing @ composer is reused, with no extra panel or inference call.
+Source and installed dual-native proof pass independent review. The original
+three sessions survive hidden reopening without an additional dispatch.
 
 ## Alpha.61 shared Codex steering
 

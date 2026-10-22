@@ -13,7 +13,7 @@ class WorkspaceClient extends EventEmitter {
   constructor(entries, active, scope = Symbol()) {
     super(); this.entries = entries; this.active = entries.find(e => e.key === active); this.closing = false; this.legacyObservers = new Map();
     this.scope = scope;
-    if (!controls.has(scope)) controls.set(scope, { revision: 0, clients: 0, armed: new Map(), interventions: new Set(), views: new Set(), maintenance: new Set(), generations: new Map() });
+    if (!controls.has(scope)) controls.set(scope, { revision: 0, manualEpoch: 0, sessionRevisions: new Map(), clients: 0, armed: new Map(), interventions: new Set(), views: new Set(), maintenance: new Set(), generations: new Map() });
     this.control = controls.get(scope); this.control.clients++; this.control.views.add(this);
     this.control.legacyOwners ||= new Map();
     for (const entry of entries) this.observeLegacyOwners(entry);
@@ -48,7 +48,7 @@ class WorkspaceClient extends EventEmitter {
       client.on('progress', data => { if (entry.client === client) this.emit('progress', data); });
       client.on('closed', () => {
         if (entry.client !== client) return;
-        entry.closed = true; entry.confirmClosed(); this.control.revision++;
+        entry.closed = true; entry.confirmClosed(); this.control.revision++; this.control.manualEpoch++;
         for (const s of entry.state.sessions) { this.legacyObservers.get(s.id)?.dispose(); this.legacyObservers.delete(s.id); }
         if (this.control.maintenance.has(entry.key)) return;
         this.socket.destroyed = true; if (!this.closing) this.emit('closed');
@@ -70,7 +70,7 @@ class WorkspaceClient extends EventEmitter {
   maintainService(key) {
     if (this.control.maintenance.has(key)) throw new Error('这个连接已在更新，请稍候。');
     this.control.maintenance.add(key);
-    this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1); this.control.revision++;
+    this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1); this.control.revision++; this.control.manualEpoch++;
     return () => {
       this.control.maintenance.delete(key);
       for (const view of this.control.views) if (view.entries.some(e => e.closed && !this.control.maintenance.has(e.key))) {
@@ -210,8 +210,16 @@ class WorkspaceClient extends EventEmitter {
     }).catch(error => { arm.pause = null; throw error; });
     return arm.pause;
   }
-  async intervene(operation) {
+  manualGuard(id) {
+    const epoch = this.control.manualEpoch, revision = this.control.sessionRevisions.get(id);
+    return () => this.control.manualEpoch === epoch && this.control.sessionRevisions.get(id) === revision;
+  }
+  async intervene(operation, id) {
+    // Every human action still invalidates pending automatic handoff intent.
+    // Independent manual submissions only invalidate the same recipient.
     this.control.revision++;
+    if (id) this.control.sessionRevisions.set(id, (this.control.sessionRevisions.get(id) || 0) + 1);
+    else this.control.manualEpoch++;
     const pending = operation(); this.control.interventions.add(pending);
     try { return await pending; } finally { this.control.interventions.delete(pending); }
   }
@@ -290,13 +298,13 @@ class WorkspaceClient extends EventEmitter {
       const shared = method === 'queueShared';
       if (!target.state.capabilities?.includes(shared ? 'nativeSharedQueue' : 'nativeQueue') || original?.nativeId !== nativeId || (shared && original?.roomId !== 'shared')) throw Error('此连接暂不支持原生等待输入；草稿保留。');
       return this.intervene(async () => {
-        const revision = this.control.revision, control = original.controlRevision, member = original.memberRevision;
+        const manualValid = this.manualGuard(id), control = original.controlRevision, member = original.memberRevision;
         await this.pauseExcept(); await this.refresh(); guard(); replyGuard(); this.authorizeOperation?.(method, args);
         const current = target.state.sessions.find(s => s.id === id);
-        if (this.control.revision !== revision || current?.controlRevision !== control || current?.nativeId !== nativeId || current?.nativeContextPending || current?.owner !== target.state.owner || current?.state !== 'working' || current?.approval || current?.pendingQueue || !current?.queueAvailable ||
+        if (!manualValid() || current?.controlRevision !== control || current?.nativeId !== nativeId || current?.nativeContextPending || current?.owner !== target.state.owner || current?.state !== 'working' || current?.approval || current?.pendingQueue || !current?.queueAvailable ||
           (shared && (current.roomId !== 'shared' || current.memberRevision !== member))) throw Error('当前原生会话或控制权已变化，草稿保留。');
         return target.client.call(method, id, text, nativeId, ...(shared ? [replyTo] : []));
-      });
+      }, id);
     }
     if (method === 'steer' || method === 'steerShared') {
       const [id, text, nativeId, turnId] = args, target = this.route(id), guard = this.operationGuard(target);
@@ -307,12 +315,12 @@ class WorkspaceClient extends EventEmitter {
       const bridged = !shared && target.state.runtimeVersion === '0.1.0-alpha.2' && this.control.legacyInput?.target(original)?.native;
       if (!(bridged?.steerAvailable || target.state.capabilities?.includes('nativeSteer'))) throw Error('此连接暂不支持工作中追加指令；请在原生终端继续。');
       return this.intervene(async () => {
-        const revision = this.control.revision, control = original.controlRevision, member = original.memberRevision;
+        const manualValid = this.manualGuard(id), control = original.controlRevision, member = original.memberRevision;
         const draftRevision = this.control.draftVersions?.get(id) || 0;
         const valid = () => {
           try { guard(); replyGuard(); this.authorizeOperation?.(method, args); } catch { return false; }
           const raw = target.state.sessions.find(s => s.id === id), current = this.snapshot().sessions.find(s => s.id === id);
-          return this.control.revision === revision && raw?.controlRevision === control && raw.owner === target.state.owner &&
+          return manualValid() && raw?.controlRevision === control && raw.owner === target.state.owner &&
             raw.nativeId === nativeId && !raw.nativeContextPending && current?.state === 'working' && !current.approval && !current.pendingSteer && current.activeTurnId === turnId &&
             (!shared || (raw.roomId === 'shared' && raw.memberRevision === member));
         };
@@ -324,7 +332,7 @@ class WorkspaceClient extends EventEmitter {
         if (original.liveDraft?.trim() === text.trim()) await this.legacyDraft(target, id, '', original, current =>
           current.liveDraft === original.liveDraft && (this.control.draftVersions?.get(id) || 0) === draftRevision).catch(() => {});
         return tag;
-      });
+      }, id);
     }
     if (method === 'initial') return this.refresh();
     if (method === 'nativeHistory') {
@@ -378,6 +386,7 @@ class WorkspaceClient extends EventEmitter {
       creationQueue = operation.catch(() => {}); return operation;
     }
     if (method === 'shutdown' || method === 'clearSharedHistory') {
+      this.control.revision++; this.control.manualEpoch++;
       const sharedIds = this.control.legacyInput?.sharedMessages?.().map(message => message.id) || [];
       const guards = this.entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
       const state = await this.refresh();
@@ -394,6 +403,7 @@ class WorkspaceClient extends EventEmitter {
     if (method === 'run') {
       const guards = new Map(this.entries.map(e => [e.key, this.operationGuard(e)]));
       const revision = ++this.control.revision;
+      this.control.manualEpoch++;
       const interventions = [...this.control.interventions];
       const state = await this.refresh();
       if (!Array.isArray(args[0]) || args[0].length < 2 || args[0].length > 6 || new Set(args[0]).size !== args[0].length) throw new Error('请选择 2–6 个不同会话。');
@@ -432,7 +442,7 @@ class WorkspaceClient extends EventEmitter {
         const result = await target.client.call(method, ...args);
         await this.refresh(); guard(); return result;
       });
-      return owned && method !== 'interrupt' ? operation() : this.intervene(operation);
+      return owned && method !== 'interrupt' ? operation() : this.intervene(operation, args[0]);
     }
     if (method === 'prepareInput') {
       await this.refresh(); guard();
@@ -462,7 +472,7 @@ class WorkspaceClient extends EventEmitter {
     if (['send', 'forward'].includes(method) && this.control.legacyInput?.connected(target.state.sessions.find(s => s.id === args[0]))) {
       const shared = method === 'forward';
       return this.intervene(async () => {
-        const revision = this.control.revision;
+        const manualValid = this.manualGuard(args[0]);
         await this.pauseExcept(null); await this.refresh(); guard();
         contextGuard();
         const record = target.state.sessions.find(s => s.id === args[0]);
@@ -472,7 +482,7 @@ class WorkspaceClient extends EventEmitter {
         const valid = () => {
           try { guard(); contextGuard(); this.authorizeOperation?.(method, args); } catch { return false; }
           const current = target.state.sessions.find(s => s.id === record.id);
-          return this.control.revision === revision && current?.pid === record.pid && current.nativeId === record.nativeId
+          return manualValid() && current?.pid === record.pid && current.nativeId === record.nativeId
             && current.owner === target.state.owner && current.controlRevision === control && current.memberRevision === member
             && (!shared || current.roomId === 'shared')
             && current.state === 'idle' && !current.pendingTag && !current.approval;
@@ -487,7 +497,7 @@ class WorkspaceClient extends EventEmitter {
         if (!shared && draft?.trim() === args[1].trim()) await this.legacyDraft(target, record.id, '', record, current =>
           current.liveDraft === draft && (this.control.draftVersions?.get(record.id) || 0) === draftRevision).catch(() => {});
         return tag;
-      });
+      }, args[0]);
     }
     if (method === 'unobserve') { this.legacyObservers.get(args[0])?.release(); return true; }
     if (method === 'draft') { this.control.draftVersions ||= new Map(); this.control.draftVersions.set(args[0], (this.control.draftVersions.get(args[0]) || 0) + 1); }
@@ -522,12 +532,12 @@ class WorkspaceClient extends EventEmitter {
     if (ownView) return target.client.call(method, ...args);
     if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && !isTerminalResponse(args[1]))) return this.intervene(async () => {
       await this.pauseExcept(null); guard(); contextGuard(); this.authorizeOperation?.(method, args); return target.client.call(method, ...args);
-    });
+    }, args[0]);
     return target.client.call(method, ...args);
   }
   close() {
     if (this.closing) return;
-    this.closing = true; this.socket.destroyed = true; this.control.revision++;
+    this.closing = true; this.socket.destroyed = true; this.control.revision++; this.control.manualEpoch++;
     for (const observer of this.legacyObservers.values()) observer.dispose(); this.legacyObservers.clear();
     for (const e of this.entries) { e.closing = true; e.client.close(); }
     this.control.views.delete(this);
