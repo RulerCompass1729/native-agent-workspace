@@ -85,6 +85,7 @@ class WorkspaceClient extends EventEmitter {
       if (entry.client !== client || (this.control.generations.get(entry.key) || 0) !== generation || entry.closed || this.closing) throw new Error('连接已变化，原操作没有重发；请重新确认。');
     };
   }
+  sessionState(record) { return this.control.legacyInput?.effectiveState?.(record) || record?.state; }
   snapshot() {
     const sessions = [], messages = new Map(), runs = [];
     const ids = new Set();
@@ -104,17 +105,19 @@ class WorkspaceClient extends EventEmitter {
         }).decisions : [];
         ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
+          nativeInputRequired: Boolean(s.nativeInputRequired || reader?.nativeInputRequired),
           legacyReaderPending: s.provider === 'claude' && legacySubmit && !reader?.initialized,
           legacyShare: legacySubmit,
           legacySharedReply: Boolean(legacySubmit && bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError),
           legacySharedSteer: Boolean(legacySubmit && native?.sharedReplyAvailable && native.steerAvailable && !bridge.sharedReplies?.storageError),
           legacySharedQueue: Boolean(legacySubmit && s.provider === 'claude' && bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError),
-          ...(s.provider === 'claude' && legacySubmit ? { queueAvailable: Boolean(bridge.target(s)?.queueAvailable), pendingQueue: bridge.target(s)?.pendingQueue || null } : {}),
+          ...(s.provider === 'claude' && legacySubmit ? { state: this.sessionState(s), nativeInputRequired: Boolean(bridge.target(s)?.nativeInputRequired), queueAvailable: Boolean(bridge.target(s)?.queueAvailable), pendingQueue: bridge.target(s)?.pendingQueue || null } : {}),
           ...(reader?.initialized ? { nativeBlockMapping: true, messages: reader.record.messages,
             ...(reader.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : {}) } : {}),
           ...(bridge?.readerUnavailable?.(s) ? { nativeBlockMapping: true, messages: [{ id: 'retained-reader-unavailable', role: 'system', kind: 'gap', incomplete: true,
             text: '原生阅读记录暂不可用；没有以旧后台内容替换，请在原生终端继续。' }] } : {}),
-          ...(legacyCodex && native ? { nativeBlockMapping: true, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告', ...(native.connected ? { activity: native.activity || '' } : {}) } : {}),
+          ...(legacyCodex && native ? { nativeBlockMapping: true, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告',
+            ...(native.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : native.connected ? { activity: native.activity || '' } : {}) } : {}),
           ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null,
             sharingNotice: bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError
               ? '只发送选定的内容；对应的原生回复实时显示在共同消息流中，不自动交给其他 agent。'
@@ -275,7 +278,7 @@ class WorkspaceClient extends EventEmitter {
         current?.nativeId === expected.nativeId && current.pid === expected.pid &&
         current.owner === entry.state.owner && current.controlRevision === expected.controlRevision && observed?.controlRevision === expected.controlRevision &&
         current.memberRevision === expected.memberRevision && current.roomId === 'shared' && !current.approval && !current.nativeContextPending &&
-        ['idle', 'working'].includes(current.state);
+        ['idle', 'working'].includes(this.sessionState(current));
     };
   }
   async call(method, ...args) {
@@ -331,7 +334,7 @@ class WorkspaceClient extends EventEmitter {
       const bridge = this.control.legacyInput;
       if (bridge?.target(original)?.queueAvailable) {
         const expected = { ...original };
-        if (expected.nativeId !== nativeId || expected.state !== 'working' || (shared &&
+        if (expected.nativeId !== nativeId || this.sessionState(expected) !== 'working' || (shared &&
           (expected.roomId !== 'shared' || !bridge.target(original).sharedReplyAvailable || bridge.sharedReplies.storageError))) throw Error('原生回合或共享连接已变化；草稿保留。');
         return this.intervene(async () => {
           const manualValid = this.manualGuard(id);
@@ -343,7 +346,7 @@ class WorkspaceClient extends EventEmitter {
             return manualValid() && current?.nativeId === nativeId && current.pid === expected.pid &&
               current.owner === target.state.owner && current.controlRevision === expected.controlRevision &&
               current.memberRevision === expected.memberRevision && !current.approval && !current.nativeContextPending &&
-              ['idle', 'working'].includes(current.state) && bridge.target(current)?.queueAvailable &&
+              ['idle', 'working'].includes(this.sessionState(current)) && bridge.target(current)?.queueAvailable &&
               (!shared || shareAuthority());
           };
           const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原会话或控制权已变化；草稿保留。'); };
@@ -557,7 +560,7 @@ class WorkspaceClient extends EventEmitter {
           return manualValid() && current?.pid === record.pid && current.nativeId === record.nativeId
             && current.owner === target.state.owner && current.controlRevision === control && current.memberRevision === member
             && (!shared || current.roomId === 'shared')
-            && current.state === 'idle' && !current.pendingTag && !current.approval;
+            && this.sessionState(current) === 'idle' && !this.control.legacyInput.target(current)?.nativeInputRequired && !current.pendingTag && !current.approval;
         };
         if (!valid()) throw Error('原会话状态或控制权已变化，草稿已保留。');
         const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原会话已变化'); };

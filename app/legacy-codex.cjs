@@ -11,6 +11,7 @@ const { ProgressJournal } = require('./observation.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
 const { applyNativeBlock, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress } = require('./native-blocks.cjs');
+const { readerPath, readReaderCache, writeReaderCache } = require('./reader-cache.cjs');
 
 function eligibleCodex(state, record) {
   return state.runtimeVersion === '0.1.0-alpha.2' && record?.provider === 'codex'
@@ -41,10 +42,18 @@ function retainedSocket(dataDir, entry, record) {
 }
 
 class LegacyCodex extends EventEmitter {
-  constructor(record) {
+  constructor(record, dataDir) {
     super(); this.record = { ...record, recovering: true, messages: structuredClone(record.messages || []) }; this.progress = new ProgressJournal();
     this.closed = false; this.connected = false; this.revision = 0;
     this.approvalScope = crypto.randomUUID(); this.approval = null;
+    this.filename = dataDir && readerPath(dataDir, record.nativeId);
+    const saved = this.filename && readReaderCache(this.filename, record);
+    this.initialized = Boolean(saved);
+    if (saved) {
+      this.record.messages = saved.messages;
+      for (const row of this.record.messages) if (['streaming', 'running', 'awaiting-native'].includes(row.status)) row.status = 'unconfirmed';
+    }
+    this.on('change', () => { if (!this.saving) this.scheduleSave(); });
   }
   get sharedReplyAvailable() { return this.connected && !this.closed && this.rpc?.nativeVersion === '0.163.0'; }
   get pending() { return this.adapter?.pending; }
@@ -136,7 +145,8 @@ class LegacyCodex extends EventEmitter {
       if (result.nextCursor === cursor) throw Error('原生会话列表无法确认。');
       cursor = result.nextCursor;
     }
-    if (!loaded || this.closed) throw Error('原生会话未处于可连接状态，没有恢复或重建它。');
+    if (this.closed) throw Error('连接操作已取消。');
+    if (!loaded) throw Error('原生会话未处于可连接状态，没有恢复或重建它。');
     const revision = adapter.stateRevision;
     // No model/cwd/permission overrides. This is an explicit connection action
     // to an already loaded thread, not a background observer or cold recovery.
@@ -153,8 +163,9 @@ class LegacyCodex extends EventEmitter {
       this.subscribed = false; this.state = this.record.state || 'idle';
     }
     if (this.subscribed && !await adapter.hydrateHistory(this.record.nativeId)) throw Error('原生历史连接已变化，没有重发任务。');
+    if (this.closed) throw Error('连接操作已取消。');
     this.record.recovering = false;
-    adapter.chatAvailable = true; this.connected = true; this.emit('change');
+    adapter.chatAvailable = true; this.connected = true; this.initialized = true; this.save(); this.emit('change');
   }
   async send(text, tag, refresh, guard) {
     if (!this.connected || this.closed || this.pending) throw Error('原 Codex 输入连接未就绪。');
@@ -211,12 +222,25 @@ class LegacyCodex extends EventEmitter {
     this.emit('change');
   }
   close() {
+    if (this.closed) return;
     this.closed = true; this.connected = false; this.revision++;
+    clearTimeout(this.saveTimer); this.saveTimer = null; this.save();
     if (this.adapter) { this.adapter.forgetNativeRequests(); this.adapter.stopped = true; }
     // Closing only this subscription must not invoke adapter.stop(), native
     // interrupt, thread/unsubscribe on another client, or server termination.
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.close();
     else this.ws?.terminate();
+  }
+  scheduleSave() {
+    if (this.closed || this.saveTimer || !this.initialized || !this.filename) return;
+    this.saveTimer = setTimeout(() => { this.saveTimer = null; this.save(); }, 200);
+  }
+  save() {
+    if (!this.initialized || !this.filename) return;
+    this.saving = true;
+    try { writeReaderCache(this.filename, this.record); this.storageError = false; }
+    catch { this.storageError = true; this.emit('change'); }
+    finally { this.saving = false; }
   }
 }
 module.exports = { LegacyCodex, eligibleCodex, retainedSocket };

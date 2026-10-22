@@ -127,7 +127,7 @@ class Claude extends EventEmitter {
     // observer independently of the native submission/control credential.
     if (this.observationEpoch) this.observeRootGap({ sessionId: message.sessionId, lease: this.rootLease, epoch: this.observationEpoch });
     this.observationEpoch = crypto.randomBytes(16).toString('hex');
-    this.rootObservation = null;
+    this.rootObservation = null; this.rootTurn = null;
     this.nativeBlocks = message.nativeBlocks === true;
     this.nativeQueue = message.nativeQueue === true;
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
@@ -157,7 +157,7 @@ class Claude extends EventEmitter {
   observeBlock(message) {
     if (!this.nativeBlocks || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
       !/^(display|tool|turn|prompt|control):[a-zA-Z0-9_:-]{1,160}$/.test(message.id || '') ||
-      !['response', 'tool', 'turn', ...(this.retainedReader ? ['input', 'control'] : [])].includes(message.kind) ||
+      !['response', 'tool', 'turn', 'control', ...(this.retainedReader ? ['input'] : [])].includes(message.kind) ||
       !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
       !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
       (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
@@ -166,8 +166,23 @@ class Claude extends EventEmitter {
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
     if (message.gap) this.observeRootGap(message);
     if (message.kind === 'control') {
-      if (!this.nativeSharedDisplay || !['control:permission', 'control:input'].includes(message.id)) throw Error('Invalid native control boundary');
-      this.emit('sharingBoundary', message.id); return { observed: true };
+      if (message.id === 'control:turn-start') {
+        if (!/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '') || message.status !== 'running') throw Error('Invalid native turn start');
+        this.seenRootTurns ||= new Set();
+        // Replayed starts are history, never fresh authority to release input.
+        // Keep bounded tombstones so a duplicate start cannot revive a stopped turn.
+        if (!this.seenRootTurns.has(message.turnId)) {
+          this.seenRootTurns.add(message.turnId);
+          while (this.seenRootTurns.size > 256) this.seenRootTurns.delete(this.seenRootTurns.values().next().value);
+          this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
+          if (this.rootTurn) { this.nativeInputRequired = false; this.emit('inputRequired', false); }
+        }
+      } else {
+        if (!['control:permission', 'control:input'].includes(message.id)) throw Error('Invalid native control boundary');
+        this.rootTurn = null;
+        if (this.nativeSharedDisplay) this.emit('sharingBoundary', message.id);
+      }
+      this.emit('capability'); return { observed: true };
     }
     const { id, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete } = message;
     const inputTag = kind === 'input' && /^[a-f0-9-]{36}$/i.test(message.inputTag || '') ? message.inputTag : undefined;
@@ -190,11 +205,25 @@ class Claude extends EventEmitter {
       if (status === 'complete' && !turn.incomplete && block?.final) { turn.safeText = block.text; turn.messageId = `native:${this.record.nativeId}:${message.finalDisplayId}`; }
     }
     this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag });
+    if (kind === 'turn' && this.rootTurn?.id === turnId && this.rootTurn.status === 'working' && !message.replayed && !message.gap) {
+      this.rootTurn.status = status === 'interrupted' ? 'idle' : null;
+      if (status === 'interrupted') this.finishInterrupted(turnId);
+    }
     if (kind === 'turn' && this.pending?.turnId === turnId && this.pending.stopEvent) this.finishReply(this.pending, this.pending.stopEvent);
     return { observed: true };
   }
+  finishInterrupted(turnId) {
+    if (this.rootTurn?.id !== turnId || this.rootTurn.status !== 'idle' || this.rootEnding ||
+      (!this.retainedReader && this.lastPromptId && this.lastPromptId !== this.rootTurn.promptId)) return;
+    const pending = this.pending?.turnId === turnId ? this.pending : null;
+    if (pending) { clearTimeout(pending.displayTimer); this.pending = null; }
+    this.nativeInputRequired = true; this.emit('inputRequired', true);
+    this.emit('interrupted', { turnId, tag: pending?.tag });
+    this.emit('state', 'idle'); // Root only: no successful reply or fleet completion.
+  }
   observeRootGap(message) {
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
+    this.rootTurn = null;
     this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
     this.emit('progress', { id: `claude-observation-gap-${this.record.nativeId}`,
       source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步',
@@ -204,7 +233,7 @@ class Claude extends EventEmitter {
   contextEnding(reason = 'other') {
     if (this.rootEnding?.sessionId === this.record.nativeId) return;
     this.rootEnding = { sessionId: this.record.nativeId, reason };
-    this.pending = null; this.ready = false; this.lastPromptId = null;
+    this.rootTurn = null; this.pending = null; this.ready = false; this.lastPromptId = null;
     this.submission.close?.();
     this.emit('contextEnd', { nativeId: this.record.nativeId, reason });
     this.emit('state', 'stopping');
@@ -279,6 +308,7 @@ class Claude extends EventEmitter {
       case 'UserPromptSubmit': {
         // A settings hook observing a prompt is not its acceptance. The native
         // structured submission result acknowledges our own sends separately.
+        if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
         this.lastPromptId = event.prompt_id || null;
         const entering = this.queued || this.pending;
         if (entering && !entering.accepted && this.submission.pending?.authorized && event.prompt === entering.text) {
@@ -290,9 +320,9 @@ class Claude extends EventEmitter {
         }
         break;
       }
-      case 'PermissionRequest': if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); break;
+      case 'PermissionRequest': this.rootTurn = null; if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); break;
       case 'Notification':
-        if (/permission|elicitation|auth/.test(event.notification_type || '')) { if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); }
+        if (/permission|elicitation|auth/.test(event.notification_type || '')) { this.rootTurn = null; if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); }
         break;
       case 'PreToolUse':
         if (this.pending) this.pending.replies.delete(event.prompt_id);
@@ -313,7 +343,7 @@ class Claude extends EventEmitter {
         this.finishReply(pending, event);
         break;
       }
-      case 'StopFailure': this.pending = null; this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请在原生终端查看。'); break;
+      case 'StopFailure': this.rootTurn = null; this.pending = null; this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请在原生终端查看。'); break;
       case 'SessionEnd': this.contextEnding(event.reason); break;
     }
   }
@@ -332,7 +362,7 @@ class Claude extends EventEmitter {
           if (!this.nativeBlocks && event.last_assistant_message) this.emit('messageItem', { id: crypto.randomUUID(), text: event.last_assistant_message });
           return;
         }
-        const accepted = pending?.accepted && pending.promptId && event.prompt_id === pending.promptId && this.pending === pending && pending.guard();
+        const accepted = pending?.accepted && !pending.interruptRequested && pending.promptId && event.prompt_id === pending.promptId && this.pending === pending && pending.guard();
         const proof = this.nativeBlocks && pending?.turnId ? this.displayProofs?.get(pending.turnId) : null;
         if (this.nativeBlocks && accepted && pending.turnId && !proof?.ended && !pending.displayTimedOut) {
           pending.stopEvent = event;
@@ -353,12 +383,13 @@ class Claude extends EventEmitter {
         this.emit('complete', { messageId: displayConfirmed ? proof?.messageId : undefined, tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
   }
   async send(text, tag, guard) {
+    if (this.nativeInputRequired) throw Error('Claude 已暂停插件输入；请在原生终端输入一次后继续，草稿保留。');
     if (!this.ready || this.pending || this.queued) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
     if (!guard()) throw new Error('这条交接已撤销。');
     const pending = this.pending = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
     return this.deliver(pending);
   }
-  get queueAvailable() { return Boolean(this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
+  get queueAvailable() { return Boolean(!this.nativeInputRequired && this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
   async queue(text, tag, guard) {
     if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Error('原生等待输入暂不可用；草稿保留。');
     const pending = this.queued = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
@@ -393,14 +424,15 @@ class Claude extends EventEmitter {
         return;
       }
       if (pending.turnId) this.emit('replyBound', { tag, nativeId: pending.nativeId, turnId: pending.turnId, promptId: pending.promptId });
-      if (pending.replies.has(pending.promptId)) this.finishReply(pending, pending.replies.get(pending.promptId));
+      if (this.rootTurn?.id === pending.turnId && this.rootTurn.status === 'idle') this.finishInterrupted(pending.turnId);
+      else if (pending.replies.has(pending.promptId)) this.finishReply(pending, pending.replies.get(pending.promptId));
       else if (this.pending === pending) this.emit('state', 'working');
     } catch (error) {
       if (this.pending === pending) this.pending = null;
       throw error;
     }
   }
-  interrupt() { this.pending = null; this.terminal.input('\x1b'); }
+  interrupt() { if (this.pending) this.pending.interruptRequested = true; this.terminal.input('\x1b'); }
   async openTerminal() { return this.terminal; }
   async stop() { await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
 }

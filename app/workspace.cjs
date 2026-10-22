@@ -48,7 +48,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeBlockMapping: true, queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeBlockMapping: true, queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.sharedReplies.refresh();
@@ -173,6 +173,7 @@ class Workspace extends EventEmitter {
     on('contextEnd', info => this.endNativeContext(s, runtime, info));
     on('contextClear', info => this.clearNativeContext(s, runtime, info));
     on('capability', () => this.changed());
+    on('inputRequired', () => this.changed());
     on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
     on('model', model => { s.model = model; this.changed(); });
     on('state', state => {
@@ -231,6 +232,13 @@ class Workspace extends EventEmitter {
     });
     on('history', items => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted')); this.changed(); });
     on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
+    on('interrupted', ({ tag }) => {
+      if (tag) {
+        if (s.pendingTag === tag) s.pendingTag = null;
+        this.forwards.delete(tag); this.sharedReplies.close(tag, '原生已中断本轮');
+      }
+      s.activity = ''; this.pauseParticipant(s.id, '原生已中断本轮'); this.changed();
+    });
     on('unattributed', tag => {
       if (s.pendingTag !== tag && !this.forwards.has(tag)) return;
       if (s.pendingTag === tag) s.pendingTag = null;
@@ -353,12 +361,12 @@ class Workspace extends EventEmitter {
   async send(id, text, owner, route = null, forward = null, sourceMessage = null) {
     text = cleanText(text); const s = this.get(id); const runtime = this.runtime(id);
     if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); this.pause('真人输入优先'); }
-    if (s.state !== 'idle' || s.pendingTag || runtime.pendingQueue || s.approval) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
+    if (s.state !== 'idle' || s.pendingTag || runtime.pendingQueue || s.approval || runtime.nativeInputRequired) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
     if (runtime.chatAvailable === false) throw new Error(s.provider === 'claude' ? '安全发送接口尚未连接；请在原生终端继续，草稿已保留。' : '请先在原生终端完成第一条消息；草稿已保留。');
     const control = s.controlRevision; const member = s.memberRevision; const connection = s.connectionRevision;
     const guard = () => {
       this.expireRun(route);
-      return s.state !== 'ended' && s.controlRevision === control && (!(route || forward) || (s.roomId === 'shared' && s.memberRevision === member)) && (!route || (this.room.run?.id === route.id && this.room.run.status === 'running'));
+      return !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control && (!(route || forward) || (s.roomId === 'shared' && s.memberRevision === member)) && (!route || (this.room.run?.id === route.id && this.room.run.status === 'running'));
     };
     if (!guard()) throw new Error('交接已经失效。');
     const tag = randomUUID(); s.pendingTag = tag;
@@ -416,7 +424,7 @@ class Workspace extends EventEmitter {
     // private input still revokes its output scope immediately.
     if (!shared) s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = s.memberRevision;
-    const valid = () => this.runtimes.get(id) === runtime && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending &&
+    const valid = () => this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending &&
       s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
       (!shared || (s.roomId === 'shared' && s.memberRevision === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed));
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
@@ -457,7 +465,7 @@ class Workspace extends EventEmitter {
       !runtime.steerAvailable || runtime.pendingSteer || typeof expectedTurnId !== 'string' || !expectedTurnId || runtime.turnId !== expectedTurnId) throw Error('当前原生回合或控制权已变化，草稿保留。');
     this.pause('真人追加指令'); s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = s.memberRevision;
-    const valid = () => this.runtimes.get(id) === runtime && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending && s.controlRevision === control &&
+    const valid = () => this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending && s.controlRevision === control &&
       s.connectionRevision === connection && !['ended', 'recoverable', 'error', 'disconnected', 'approval'].includes(s.state) && !s.approval && runtime.turnId === expectedTurnId &&
       (!shared || (s.roomId === 'shared' && s.memberRevision === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed));
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
@@ -551,7 +559,7 @@ class Workspace extends EventEmitter {
     if (!Array.isArray(ids) || ids.length < 2 || ids.length > 6 || new Set(ids).size !== ids.length || ![2, 3, 4, 5, 6].includes(maxSteps) || maxSteps < ids.length) throw new Error('请选择 2–6 个不同会话，回复上限需覆盖每位参与者且不超过 6 次。');
     if (this.room.run?.status === 'running') throw new Error('已有协作正在运行。');
     for (const id of ids) { const s = this.get(id); if (s.roomId !== 'shared' || s.state !== 'idle' || s.pendingTag || s.approval || [s.background, s.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) throw new Error('所选成员都需就绪、加入共同工作，且没有已报告的后台或定时工作。'); }
-    if (ids.some(id => this.runtime(id).chatAvailable === false)) throw new Error('有成员的安全发送接口尚未连接，请先在原生终端检查。');
+    if (ids.some(id => this.runtime(id).chatAvailable === false || this.runtime(id).nativeInputRequired)) throw new Error('有成员的安全发送接口尚未连接，请先在原生终端检查。');
     // Freeze the human-visible names with this authorization, not native defaults.
     const names = Object.fromEntries(ids.map(id => {
       const s = this.get(id), name = labels && Object.hasOwn(labels, id) ? labels[id] : s.name;

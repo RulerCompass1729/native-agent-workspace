@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.70 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.71 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,28 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.71 — native interruption and private-history retention:** exact native root boundaries
+repair retained Claude's stale working state after keyboard Escape. Partial
+message blocks retain the native cut; peers continue independently. Claude's
+native Stop refuses plugin submissions until new human terminal input, so the
+existing composer preserves its draft and offers the original terminal instead
+of an unusable Send. This pause survives reader-cache reopening and clears only
+on a fresh native turn. Current/retained source journeys verify this boundary.
+Independent review then found a second fault: retained Codex lost observed partial
+replies from the private reader after full GUI exit while the room kept them.
+The existing private cache now serves both readers. Missing native-history rows
+retain their observed turn boundary and position, without granting new sharing
+or modifying native history. Removing a record also cancels unpublished connection
+handshakes and later entries in an already-running restoration batch, so a late
+reply cannot recreate private records. All 751 local checks pass with no skips. Source and
+installed six-group native journeys verify both private/shared records immediately
+after full app reopen and after subsequent GUI work. Each uses five fixed
+loopback task responses, at most one native title response and zero paid inference.
+All 48 installed runtime files match source, post-native strict signature passes,
+and the three original sessions reopen with unchanged identities, drafts and zero
+new dispatch. Final independent source and installed-artifact review passes for this scope. This does not close
+U17 or provide seamless post-Escape Claude GUI input.
 
 **Alpha.70 retained Claude recovery:** fixes a real whole-app exit failure where
 the native queued task finished but its reader missed the output. The existing

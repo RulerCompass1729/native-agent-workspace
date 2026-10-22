@@ -56,7 +56,7 @@ function trimVolatileRows(messages, gapId = 'native-cache-gap') {
 }
 function applyCodexHistory(s, items, runtime, submitted = () => {}) {
   const { toolContent, toolStatus } = require('./codex-tool-content.cjs');
-  const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set();
+  const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set(), replacements = new Map();
   const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
   const legacyInputs = new Map();
   if (s.provider === 'codex' && s.recovering) {
@@ -85,7 +85,9 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
     // A cold connection's persisted partial text is not newer than native
     // history. Live items received on this connection still take precedence.
     if (own && s.recovering && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
-      Object.assign(own, { text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+      const interrupted = own.status === 'interrupted';
+      Object.assign(own, { text: interrupted && (!item.text || own.text?.startsWith(item.text)) ? own.text : item.text || '',
+        status: interrupted ? 'interrupted' : item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
     }
     if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) { own.status = 'submitted'; submitted(own.id); }
     const m = own || (item.type === 'userMessage'
@@ -97,13 +99,25 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
     if (!own && s.provider === 'codex' && s.recovering && item.type === 'userMessage' &&
       item.content?.length && item.content.every(i => i.type === 'text' && typeof i.text === 'string')) {
       const queue = legacyInputs.get(m.text);
-      if (queue && queue.next < queue.ids.length) used.add(queue.ids[queue.next++]);
+      if (queue && queue.next < queue.ids.length) {
+        const replaced = queue.ids[queue.next++]; used.add(replaced); replacements.set(replaced, m.id);
+      }
     }
     if (!used.has(m.id)) { imported.push(m); used.add(m.id); }
   }
-  // Keep live content and GUI submission status; only history supplies order.
+  // Native history orders its items. Preserve observed rows omitted by that
+  // history (including interrupted replies) immediately after their previous
+  // surviving display anchor, never after an unrelated later turn.
+  const before = [], after = new Map(), unplaced = []; let anchor = null;
+  for (const row of s.messages) {
+    if (used.has(row.id)) { anchor = replacements.get(row.id) || row.id; continue; }
+    if (!row.turnId || row.nativeId !== s.nativeId) { unplaced.push(row); continue; }
+    if (anchor === null) before.push(row);
+    else { if (!after.has(anchor)) after.set(anchor, []); after.get(anchor).push(row); }
+  }
   // No complete/nativeInput events: hydration cannot route or pause a task.
-  s.messages = trimVolatileRows(imported.concat(s.messages.filter(m => !used.has(m.id))));
+  const ordered = imported.flatMap(row => [row, ...(after.get(row.id) || [])]);
+  s.messages = trimVolatileRows((anchor === null ? ordered.concat(before) : before.concat(ordered)).concat(unplaced));
   runtime.recoveryNativeInputs?.clear();
 }
 function applyCodexDelta(s, item) {

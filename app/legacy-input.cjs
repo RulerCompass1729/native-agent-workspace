@@ -43,7 +43,8 @@ function installPlugin(cwd) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件路径不安全，未写入插件文件。');
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
-  const previousHooks = new Set(['069c66cb4889031f0cc460dcbb75d0892cf41835c9bac02e9dbf796cd52c7a40',
+  const previousHooks = new Set(['dcbff5190245c72761ef3e0d110b8976f5f49740b0ef3a839654cdcb933764ba',
+    '069c66cb4889031f0cc460dcbb75d0892cf41835c9bac02e9dbf796cd52c7a40',
     '6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1',
     '0833cbf4165cc439bfdd04ff7e7676886f5e40d518c47cfda25ba62e3292009a',
     '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6',
@@ -75,7 +76,7 @@ function installPlugin(cwd) {
 class LegacyInput extends EventEmitter {
   constructor(dataDir) {
     super(); this.dataDir = dataDir; this.servers = new Map(); this.targets = new Map(); this.readers = new Map(); this.pendingPrepare = new Map(); this.readerFailures = new Map();
-    this.filename = path.join(dataDir, 'legacy-dispatches.json'); this.records = []; this.closed = false; this.connecting = new Set();
+    this.filename = path.join(dataDir, 'legacy-dispatches.json'); this.records = []; this.closed = false; this.connecting = new Set(); this.readerGenerations = new Map();
     try { this.records = JSON.parse(fs.readFileSync(this.filename, 'utf8')); if (!Array.isArray(this.records)) throw Error('Invalid ledger'); }
     catch (e) { if (e.code !== 'ENOENT') this.storageError = true; }
     this.sharedReplies = new LegacyShared(dataDir, () => this.emit('change'));
@@ -103,6 +104,7 @@ class LegacyInput extends EventEmitter {
     const t = this.targets.get(record.id);
     return t && t.record.nativeId === record.nativeId && t.record.pid === record.pid ? t : null;
   }
+  effectiveState(record) { return this.target(record)?.effectiveState?.(record) || record?.state; }
   connected(record) { return !!this.target(record)?.submission.connected; }
   prepared(record) { return !!this.target(record); }
   reader(record) { const reader = this.readers.get(record.id); return reader?.record.nativeId === record.nativeId ? reader : null; }
@@ -157,6 +159,10 @@ class LegacyInput extends EventEmitter {
     this.emit('change');
   }
   forgetReader(record) {
+    this.readerGenerations.set(record.id, (this.readerGenerations.get(record.id) || 0) + 1);
+    // Revoke unpublished handshakes too. Their late RPC responses cannot
+    // recreate a projection, connection reference or writer after deletion.
+    for (const native of this.connecting) if (native.record.id === record.id && native.record.nativeId === record.nativeId) native.close();
     this.reader(record)?.close(); this.readers.delete(record.id);
     const target = this.targets.get(record.id);
     if (target?.record.nativeId === record.nativeId) {
@@ -165,7 +171,7 @@ class LegacyInput extends EventEmitter {
       if (target.descriptor) fs.rmSync(target.descriptor, { force: true });
       this.targets.delete(record.id);
     }
-    if (record.provider === 'claude' && record.nativeId) fs.rmSync(readerPath(this.dataDir, record.nativeId), { force: true });
+    if (['claude', 'codex'].includes(record.provider) && record.nativeId) fs.rmSync(readerPath(this.dataDir, record.nativeId), { force: true });
     const filename = path.join(this.dataDir, 'legacy-links.json');
     if (fs.existsSync(filename)) {
       const links = JSON.parse(fs.readFileSync(filename, 'utf8'));
@@ -185,7 +191,11 @@ class LegacyInput extends EventEmitter {
     this.pendingPrepare.set(record.id, work); return work;
   }
   async prepareOnce(entry, record) {
-    const checkOpen = () => { if (this.closed) throw Error('窗口连接已关闭。'); };
+    const generation = this.readerGenerations.get(record.id) || 0;
+    const checkOpen = () => {
+      if (this.closed) throw Error('窗口连接已关闭。');
+      if ((this.readerGenerations.get(record.id) || 0) !== generation) throw Error('会话记录已移除，连接操作已取消。');
+    };
     checkOpen();
     if (!eligible(entry.state, record) || record.processIdentity?.pid !== record.pid || !processMayBeAlive(record.processIdentity)) throw Error('原生会话状态已变化，未接入输入。');
     const existing = this.target(record);
@@ -202,13 +212,20 @@ class LegacyInput extends EventEmitter {
     const directory = path.dirname(connection.endpoint); privateDirectory(directory);
     if (record.provider === 'codex') {
       const cached = existing?.native?.record;
-      const native = new LegacyCodex(cached ? { ...record, messages: cached.messages } : record);
-      const target = { record: { ...record }, submission: native, native, get sharedReplyAvailable() { return native.sharedReplyAvailable; } };
+      this.reader(record)?.close();
+      let native;
+      try {
+        native = new LegacyCodex(cached ? { ...record, messages: cached.messages } : record, this.dataDir);
+        if (this.readerUnavailable(record) && !native.initialized) throw Error('原生阅读记录不可用，未以旧后台内容替换。请在原生终端继续。');
+      } catch (error) { this.readerFailures.set(record.id, record.nativeId); this.emit('change'); throw error; }
+      const target = { record: { ...record }, submission: native, native, reader: native, get sharedReplyAvailable() { return native.sharedReplyAvailable; } };
       this.connecting.add(native);
       try {
         await native.connect(retainedSocket(this.dataDir, entry, record)); checkOpen();
-        this.saveLink(entry, record);
+        if (native.storageError) throw Error('原生阅读记录未能保存，请检查磁盘与文件权限。');
+        this.saveLink(entry, record, true);
         this.targets.set(record.id, target);
+        this.readers.set(record.id, native); this.readerFailures.delete(record.id);
         native.on('change', () => this.emit('change'));
         native.on('progress', update => this.emit('progress', { id: record.id, ...update }));
         native.on('readerBlock', message => { if (message) this.sharedReplies.observed(native, message); });
@@ -276,12 +293,13 @@ class LegacyInput extends EventEmitter {
     this.emit('change'); return true;
   }
   async restore(entries) {
+    const generations = new Map(this.readerGenerations);
     let links = [];
     try { links = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'legacy-links.json'), 'utf8')); if (!Array.isArray(links)) links = []; } catch {}
     // Mark every previously projected reader before any asynchronous work.
     for (const link of links) if (link.readerStarted) this.readerFailures.set(link.id, link.nativeId);
     for (const entry of entries) for (const record of entry.state.sessions || []) {
-      if (record.provider !== 'claude' || typeof record.nativeId !== 'string') continue;
+      if (!['claude', 'codex'].includes(record.provider) || typeof record.nativeId !== 'string') continue;
       // Another window shares this bridge. Its restore must not replace the
       // live event recipient with a disconnected cache copy or write old text.
       const existing = this.reader(record);
@@ -292,11 +310,12 @@ class LegacyInput extends EventEmitter {
       try {
         fs.lstatSync(readerPath(this.dataDir, record.nativeId)); this.readerFailures.set(record.id, record.nativeId);
         // Reading ended history needs no live PID, transport or plugin install.
-        const reader = new LegacyClaude(record, this.dataDir, async () => record);
+        const reader = record.provider === 'claude' ? new LegacyClaude(record, this.dataDir, async () => record) : new LegacyCodex(record, this.dataDir);
         if (reader.initialized) { this.readers.set(record.id, reader); this.readerFailures.delete(record.id); }
       } catch (e) { if (e.code !== 'ENOENT') this.readerFailures.set(record.id, record.nativeId); }
     }
     for (const link of links) {
+      if ((this.readerGenerations.get(link.id) || 0) !== (generations.get(link.id) || 0)) continue;
       const entry = entries.find(e => e.key === link.key), record = entry?.state.sessions.find(s => s.id === link.id && s.pid === link.pid && s.nativeId === link.nativeId);
       if (record && eligible(entry.state, record)) {
         await this.prepare(entry, record).catch(() => { this.emit('change'); });
@@ -306,6 +325,7 @@ class LegacyInput extends EventEmitter {
   async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId, waitForNativeTurn = false, shareAuthority) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
     const target = this.target(record);
+    if (target?.nativeInputRequired) throw Error('Claude 已暂停插件输入；请在原生终端输入一次后继续，草稿保留。');
     if (!target?.submission.connected) throw Error('原会话输入连接尚未就绪，草稿已保留。');
     if (typeof text !== 'string' || !text.trim() || text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw Error('请输入有效文字；一次最多 16,000 个字符。');
     text = text.trim();

@@ -1,4 +1,5 @@
-// Actual Electron, Claude and Codex. Four bounded loopback responses; no paid inference.
+// Actual Electron, Claude and Codex. Four task responses (five for native interruption),
+// plus at most one native title response; all fixed loopback data, no paid inference.
 // Tests the existing room interaction, including real mouse drag and native streaming.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict'), { execFileSync, fork } = require('node:child_process');
@@ -7,6 +8,7 @@ const root = path.resolve(__dirname, '..');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
 const { connect, connectService } = require('../app/service-client.cjs');
 const retained = process.env.NAW_CONCURRENT_RETAINED === '1';
+const nativeInterrupt = process.env.NAW_CONCURRENT_INTERRUPT === '1';
 if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-concurrent-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work');
@@ -50,7 +52,7 @@ const server = http.createServer((req, res) => {
       event(res, 'response.completed', { response }); res.end(); return;
     }
     const number = ++counts[provider];
-    if (number > (2)) { res.writeHead(429); res.end(); return; }
+    if (number > (nativeInterrupt && provider === 'claude' ? 3 : 2)) { res.writeHead(429); res.end(); return; }
     const key = `${provider}-${number}`;
     fs.writeFileSync(path.join(base, `${key}-request.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -58,7 +60,7 @@ const server = http.createServer((req, res) => {
       event(res, 'message_start', { message: { id: 'msg_claude_local', type: 'message', role: 'assistant', model: input.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
       event(res, 'content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
       const append = text => event(res, 'content_block_delta', { index: 0, delta: { type: 'text_delta', text } });
-      append(number === 1 ? 'CLAUDE_SHARED_PREFIX: checking the small task.\n' : 'CLAUDE_QUEUED_PREFIX: following up.\n');
+      append(number === 1 ? 'CLAUDE_SHARED_PREFIX: checking the small task.\n' : nativeInterrupt && number === 2 ? 'CLAUDE_NATIVE_RECOVERY: private input after stop.\n' : 'CLAUDE_QUEUED_PREFIX: following up.\n');
       controls[key] = { append, finish: () => {
         event(res, 'content_block_stop', { index: 0 });
         event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 30 } });
@@ -150,6 +152,11 @@ async function sharedSend(id, text) {
   await recipient(id); await page.locator('#shared-input').fill(text); await page.locator('#forward-button').click();
   await until(async () => (await snapshot()).room.messages.some(m => m.text === text && m.status === 'submitted'), 'Shared native receipt');
 }
+async function openApplication() {
+  application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  await until(async () => { for (const candidate of application.windows()) if (!candidate.isClosed() && await candidate.locator('#new-session').count().catch(() => 0)) { page = candidate; return true; } return false; }, 'Main workspace');
+  page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
+}
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = `http://127.0.0.1:${server.address().port}`;
@@ -162,7 +169,7 @@ async function sharedSend(id, text) {
     fs.writeFileSync(shims[provider], '#!/usr/bin/python3\nimport os,sys\n' +
       'for key in ["OPENAI_API_KEY","CODEX_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]: os.environ.pop(key,None)\n' +
       `os.environ.update(${JSON.stringify(config)})\n` +
-      `os.execv(${JSON.stringify(binaries[provider])},[${JSON.stringify(provider)}]+sys.argv[1:]+${JSON.stringify(provider === 'claude' ? ['--model', 'haiku'] : [])})\n`, { mode: 0o700 });
+      `os.execv(${JSON.stringify(binaries[provider])},[${JSON.stringify(provider)}]+sys.argv[1:]+${JSON.stringify(provider === 'claude' ? ['--model', 'haiku', '--debug-file', path.join(base, 'claude-debug.log')] : [])})\n`, { mode: 0o700 });
   }
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify(shims), { mode: 0o600 });
   if (retained) {
@@ -176,9 +183,7 @@ async function sharedSend(id, text) {
     legacyClient = await connectService(profile, 'retained-concurrent-fixture');
     for (const provider of ['claude', 'codex']) retainedIds[provider] = await legacyClient.call('create', { provider, cwd, name: provider === 'claude' ? 'Claude review' : 'Codex build', view: 'terminal' });
   }
-  application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
-  await until(async () => { for (const candidate of application.windows()) if (!candidate.isClosed() && await candidate.locator('#new-session').count().catch(() => 0)) { page = candidate; return true; } return false; }, 'Main workspace');
-  page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
+  await openApplication();
   if (retained) await application.evaluate(({ app }) => {
     const load = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json');
     const { LegacyShared } = load('./app/legacy-shared.cjs'); globalThis.retainedShareTrace = [];
@@ -188,6 +193,17 @@ async function sharedSend(id, text) {
       try { const result = await rpcCall.call(this, method, params); globalThis.retainedShareTrace.push({ rpc: method, ok: true, status: result?.thread?.status }); return result; }
       catch (error) { globalThis.retainedShareTrace.push({ rpc: method, error: error.message, nativeMissingHistory: error.nativeMissingHistory }); throw error; }
     };
+    const { SubmissionChannel } = load('./app/claude-submit.cjs');
+    for (const name of ['receive', 'authorize', 'result', 'finish']) {
+      const original = SubmissionChannel.prototype[name];
+      SubmissionChannel.prototype[name] = function (...args) {
+        const tag = this.pending?.tag;
+        const result = original.apply(this, args);
+        globalThis.retainedShareTrace.push({ channel: name, tag, allowed: name === 'authorize' ? result : undefined,
+          status: name === 'result' ? args[0]?.status : undefined, reason: name === 'result' ? args[0]?.reason : undefined, error: name === 'finish' ? args[0]?.message : undefined });
+        return result;
+      };
+    }
     for (const name of ['authorize', 'bindNative', 'close']) {
       const original = LegacyShared.prototype[name];
       LegacyShared.prototype[name] = function (...args) {
@@ -199,6 +215,7 @@ async function sharedSend(id, text) {
     }
   });
   const claude = await create('claude'), codex = await create('codex'); if (!retained) assert.equal(codex.model, 'gpt-6-luna');
+
   for (const s of [claude, codex]) {
     await drag(page.locator(`[data-session-id="${s.id}"]`), page.locator('#room-nav'));
     await until(async () => (await session(s.id)).roomId === 'shared', 'Mouse join');
@@ -212,6 +229,124 @@ async function sharedSend(id, text) {
   controls['claude-1'].append('CLAUDE_AFTER_CODEX_START: still streaming.\n');
   await until(async () => (await page.locator('#room-messages').innerText()).includes('CLAUDE_AFTER_CODEX_START'), 'Other native stream survives targeted send');
   await save('concurrent'); checks.push('Two real native agents stream independently into one attributed room reader');
+  if (nativeInterrupt) {
+    for (const original of [claude, codex]) {
+      const key = original.provider + '-1', marker = original.provider.toUpperCase() + '_TRAILING_FRAGMENT';
+      controls[key].append(marker);
+      await page.locator(`[data-session-id="${original.id}"]`).click();
+      const keyboardInterrupt = retained || original.provider === 'claude';
+      let terminalText = '';
+      if (keyboardInterrupt) {
+        await page.locator('#terminal-tab').click();
+        // Claude batches complete lines even in its own terminal. Do not wait
+        // for an unfinished line before interrupting the real native stream.
+        await until(async () => (await page.locator('#terminal-area').innerText()).includes(original.provider.toUpperCase() + '_SHARED_PREFIX'), 'Native terminal displays the running reply');
+        fs.writeFileSync(path.join(base, original.provider + '-before-interrupt-terminal.txt'), await page.locator('#terminal-area').innerText());
+        await page.locator('#terminal-area .xterm-screen:visible').click(); await page.keyboard.press('Escape');
+      } else {
+        // A GUI-created first Codex turn cannot attach a TUI before its rollout
+        // exists. Use the real existing GUI interrupt, separately from the
+        // retained TUI keyboard path; do not seed a hidden model turn.
+        await page.locator('#chat-tab').click(); await page.locator('#interrupt').click();
+      }
+      await until(async () => (await session(original.id)).messages.some(m => m.kind === 'turn' && m.status === 'interrupted'), 'Exact native interruption boundary');
+      if (keyboardInterrupt) {
+        terminalText = await page.locator('#terminal-area').innerText();
+        fs.writeFileSync(path.join(base, original.provider + '-interrupted-terminal.txt'), terminalText);
+      }
+      await until(async () => (await session(original.id)).state === 'idle', 'Native idle after keyboard interruption');
+      const s = await session(original.id);
+      assert.equal(s.nativeId, original.nativeId);
+      if (retained || s.provider === 'claude') assert.equal(s.pid, original.pid);
+      else assert.deepEqual(s.serverIdentity, original.serverIdentity);
+      assert.equal(s.liveDraft, `Private ${s.provider} draft.`);
+      const visibleTail = terminalText.includes(marker) ? marker : original.provider.toUpperCase() + '_SHARED_PREFIX';
+      assert.ok(s.messages.some(m => m.role === 'assistant' && m.text?.includes(visibleTail)), 'Private reader preserves the native visible partial line');
+      await page.locator('#chat-tab').click();
+      assert.ok((await page.locator('#messages').innerText()).includes(visibleTail));
+      await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+      const room = (await snapshot()).room.messages;
+      assert.ok(room.some(m => m.sessionId === s.id && m.text?.includes(visibleTail)), 'Shared block preserves native visible partial line through confirmed interruption');
+      assert.ok(room.some(m => m.sessionId === s.id && m.status === 'interrupted'));
+      assert.ok(!room.some(m => m.sessionId === s.id && m.finalReply), 'Interrupted work is never a successful final reply');
+      assert.ok((await page.locator('#room-messages').innerText()).includes(visibleTail));
+      await save(original.provider + '-interrupted');
+      if (original.provider === 'claude') {
+        controls['codex-1'].append('CODEX_AFTER_CLAUDE_INTERRUPT: still working.\n');
+        await until(async () => (await page.locator('#room-messages').innerText()).includes('CODEX_AFTER_CLAUDE_INTERRUPT'), 'Other member stays live after native interruption');
+        assert.equal((await session(codex.id)).state, 'working');
+      }
+      checks.push(`Native ${s.provider} ${keyboardInterrupt ? 'Escape' : 'GUI interrupt'} preserves exact partial output and draft in solo/shared readers, without ending the peer task`);
+    }
+    const interruptedPrivate = (await session(codex.id)).messages.filter(m => m.status === 'interrupted').map(m => ({ id: m.id, text: m.text, status: m.status }));
+    assert.ok(interruptedPrivate.some(m => m.text?.includes('CODEX_SHARED_PREFIX')));
+    const assertPrivateRetained = async () => {
+      const current = await session(codex.id);
+      for (const row of interruptedPrivate) assert.ok(current.messages.some(m => m.id === row.id && m.text === row.text && m.status === row.status), 'Private interrupted row survives full app exit and later work');
+      await page.locator(`[data-session-id="${codex.id}"]`).click(); await page.locator('#chat-tab').click();
+      assert.ok((await page.locator('#messages').innerText()).includes('CODEX_SHARED_PREFIX'));
+      await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    };
+    // Claude's native Stop explicitly refuses plugin input until a new human
+    // native input arrives. The UI must keep drafts and explain that boundary,
+    // never synthesize Enter or quietly resubmit. Exercise the real route.
+    await recipient(claude.id);
+    assert.equal(await page.locator('#forward-button').textContent(), '打开原生终端');
+    assert.ok((await page.locator('#run-help').innerText()).includes('暂停插件输入'));
+    assert.equal((await session(claude.id)).nativeInputRequired, true);
+    await page.locator(`[data-session-id="${claude.id}"]`).click();
+    await page.locator('#chat-tab').click();
+    assert.equal(await page.locator('#send-button').textContent(), '打开原生终端');
+    assert.equal(await page.locator('#message-input').inputValue(), 'Private claude draft.');
+    assert.equal(await page.locator('#message-input').getAttribute('readonly'), null);
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await recipient(claude.id);
+    const beforeRecovery = (await snapshot()).diagnostics.dispatches;
+    if (process.env.NAW_CONCURRENT_REOPEN === '1') { await application.close(); application = null; await openApplication(); }
+    else { await page.reload(); await page.locator('#new-session').waitFor(); }
+    await until(async () => (await page.locator('#forward-button').textContent()) === '打开原生终端', 'Native pause survives reopening');
+    assert.equal((await session(claude.id)).nativeId, claude.nativeId); assert.equal((await session(claude.id)).pid, claude.pid);
+    assert.equal((await session(claude.id)).nativeInputRequired, true);
+    if (retained) await until(async () => (await session(claude.id)).legacySubmit && (await session(codex.id)).legacySubmit, 'Original native observers reconnect before the new user action');
+    await assertPrivateRetained(); await recipient(claude.id);
+    await save('interrupted-private-restored');
+    await page.locator('#forward-button').click();
+    await page.locator('#terminal-area .xterm-screen:visible').waitFor();
+    const recovery = 'Continue privately from the native terminal.';
+    await page.locator('#terminal-area .xterm-screen:visible').click(); await page.keyboard.type(recovery);
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes(recovery), 'Native recovery edit line is visible before Enter');
+    fs.writeFileSync(path.join(base, 'claude-recovery-edit-line.txt'), await page.locator('#terminal-area').innerText());
+    await page.keyboard.press('Enter');
+    await until(() => controls['claude-2'], 'Native human input resumes Claude after Stop');
+    await until(async () => (await session(claude.id)).nativeInputRequired === false, 'Fresh native turn releases plugin pause');
+    controls['claude-2'].finish();
+    await until(async () => (await session(claude.id)).state === 'idle', 'Private native recovery finishes');
+    assert.equal((await snapshot()).diagnostics.dispatches, beforeRecovery, 'Portal did not dispatch or replay the native recovery');
+    assert.equal((await session(claude.id)).liveDraft, 'Private claude draft.');
+    assert.ok(!(await snapshot()).room.messages.some(m => m.text?.includes('CLAUDE_NATIVE_RECOVERY')));
+    await page.locator('#room-record').click();
+    checks.push(`Claude native Stop remains visible through ${process.env.NAW_CONCURRENT_REOPEN === '1' ? 'whole-app reopening' : 'renderer reload'}; real human native input resumes the same session, with private draft and reply preserved`);
+    // Now verify GUI delivery against both native engines without replacement.
+    for (const original of [claude, codex]) {
+      const key = original.provider + (original.provider === 'claude' ? '-3' : '-2');
+      await sharedSend(original.id, `Continue the ${original.provider} task after interruption.`);
+      await until(() => controls[key], 'Same native session accepts the next task');
+      controls[key].finish();
+      await until(async () => (await session(original.id)).state === 'idle', 'Resumed task finishes');
+      assert.equal((await session(original.id)).nativeId, original.nativeId);
+    }
+    checks.push('After the required Claude native recovery, both sessions accept and finish a new GUI task without replacing either session');
+    assert.deepEqual(counts, { claude: 3, codex: 2 }); assert.deepEqual(errors, []);
+    await page.reload(); await page.locator('#new-session').waitFor();
+    await until(async () => (await page.locator('#room-messages').innerText()).includes('CODEX_SHARED_PREFIX'), 'Interrupted reader survives renderer reload');
+    await assertPrivateRetained();
+    checks.push('Private and shared Codex interrupted text and boundary survive full app reopening and later GUI work');
+    const final = await snapshot(); assert.equal(final.diagnostics.dispatches, 4); await save('interrupted-reopened');
+    assert.ok(final.room.messages.filter(m => m.role === 'human').every(m => m.status === 'submitted'));
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-interruption.png') }); }
+    console.log(JSON.stringify({ checks, versions, retained, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
+    return;
+  }
   const turn = (await session(codex.id)).activeTurnId;
   await recipient(claude.id); await page.locator('#shared-input').fill('Follow up on the Claude review.');
   await page.locator('#forward-button').click();
@@ -287,7 +422,7 @@ async function sharedSend(id, text) {
 })().catch(async error => {
   if (page && !page.isClosed()) {
     fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => ''));
-    if (retained) fs.writeFileSync(path.join(base, 'sharing-trace.json'), JSON.stringify(await application.evaluate(() => globalThis.retainedShareTrace).catch(() => []), null, 2));
+    if (retained) fs.writeFileSync(path.join(base, 'sharing-trace.json'), JSON.stringify(await application.evaluate(() => globalThis.retainedShareTrace || []).catch(() => []), null, 2));
     await save('failure').catch(() => {}); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {});
   }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;

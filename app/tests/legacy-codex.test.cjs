@@ -632,3 +632,95 @@ for (const newer of [false, true]) test(`retained solo steer clears the pre-send
   acknowledge(); await pending;
   assert.equal(f.record.liveDraft, newer ? 'adjust requirement' : '');
 });
+
+test('private interrupted text and boundary survive cold attachment with native history omissions', async t => {
+  const f = await fixture(t, { items(_request, reply) { reply({ data: [
+    { turnId: 'cut', item: { type: 'userMessage', id: 'native-human', content: [{ type: 'text', text: 'task' }] } },
+    { turnId: 'next', item: { type: 'userMessage', id: 'next-human', content: [{ type: 'text', text: 'next task' }] } },
+    { turnId: 'next', item: { type: 'agentMessage', id: 'next-answer', text: 'next answer' } },
+  ] }); } });
+  const { applyCodexDelta, applyNativeBlock } = require('../native-blocks.cjs');
+  const first = new LegacyCodex(f.record, f.directory);
+  first.initialized = true;
+  first.record.messages = [{ id: 'old-display-human', role: 'user', origin: 'native', text: 'task', status: 'submitted' }];
+  applyCodexDelta(first.record, { id: 'cut-answer', turnId: 'cut', text: 'observed partial' });
+  applyNativeBlock(first.record, { nativeId: f.record.nativeId, id: 'turn:cut', kind: 'turn', turnId: 'cut', status: 'interrupted' });
+  first.record.messages.push({ id: 'tool-secret', role: 'tool', volatile: true, text: 'ephemeral tool result' });
+  first.close();
+  assert.equal(fs.statSync(first.filename).mode & 0o777, 0o600);
+  assert.ok(!fs.readFileSync(first.filename, 'utf8').includes('ephemeral tool result'));
+  const second = new LegacyCodex(f.record, f.directory); t.after(() => second.close());
+  let routed = 0; for (const event of ['complete', 'nativeInput', 'readerBlock']) second.on(event, () => routed++);
+  await second.connect(f.socket);
+  assert.deepEqual(second.record.messages.map(m => m.id), ['native-human', 'cut-answer', `native:${f.record.nativeId}:turn:cut`, 'next-human', 'next-answer']);
+  assert.equal(second.record.messages[1].text, 'observed partial'); assert.equal(second.record.messages[1].status, 'interrupted');
+  assert.equal(second.record.messages[2].status, 'interrupted');
+  assert.equal(routed, 0, 'Cache and native history cannot route or complete a shared reply');
+  assert.equal(f.calls.some(c => ['turn/start', 'turn/interrupt', 'thread/start', 'thread/unsubscribe'].includes(c.method)), false);
+});
+
+test('cached interruption is not completed or shortened by an incomplete matching history item', () => {
+  const { applyCodexHistory } = require('../native-blocks.cjs');
+  const s = { provider: 'codex', recovering: true, messages: [{ id: 'cut', role: 'assistant', text: 'partial original', status: 'interrupted' }] };
+  applyCodexHistory(s, [{ id: 'cut', type: 'agentMessage', text: 'partial' }], {});
+  assert.equal(s.messages[0].text, 'partial original'); assert.equal(s.messages[0].status, 'interrupted');
+});
+
+for (const bad of ['identity', 'server', 'corrupt', 'permission', 'symlink']) test(`private Codex cache rejects ${bad} without attachment`, async t => {
+  const f = await fixture(t), { readerPath } = require('../reader-cache.cjs');
+  const filename = readerPath(f.directory, f.record.nativeId);
+  const saved = { ...f.record, messages: [] };
+  if (bad === 'identity') saved.nativeId = crypto.randomUUID();
+  if (bad === 'server') saved.serverIdentity = { pid: process.pid + 1 };
+  fs.writeFileSync(filename, bad === 'corrupt' ? '{' : JSON.stringify(saved), { mode: bad === 'permission' ? 0o644 : 0o600 });
+  if (bad === 'symlink') { fs.renameSync(filename, filename + '.outside'); fs.symlinkSync(filename + '.outside', filename); }
+  assert.throws(() => new LegacyCodex(f.record, f.directory)); assert.equal(f.calls.length, 0);
+});
+
+test('cache failure retains memory and reports unsaved content without a background retry loop', async t => {
+  const f = await fixture(t), target = new LegacyCodex(f.record, f.directory); t.after(() => target.close());
+  await target.connect(f.socket);
+  fs.unlinkSync(target.filename); fs.mkdirSync(target.filename);
+  target.record.messages.push({ id: 'partial', role: 'assistant', text: 'keep in memory', status: 'interrupted' });
+  target.emit('change'); await new Promise(r => setTimeout(r, 240));
+  assert.equal(target.storageError, true); assert.equal(target.saveTimer, null);
+  assert.ok(target.record.messages.some(m => m.text === 'keep in memory'));
+  fs.rmdirSync(target.filename); target.emit('change'); await new Promise(r => setTimeout(r, 240));
+  assert.equal(target.storageError, false); target.close();
+  const cold = new LegacyCodex(f.record, f.directory); t.after(() => cold.close());
+  assert.ok(cold.record.messages.some(m => m.text === 'keep in memory'));
+});
+
+test('ended Codex private cache restores without native connection and forget removes it permanently', async t => {
+  const f = await fixture(t), target = new LegacyCodex(f.record, f.directory);
+  target.initialized = true; target.record.messages = [{ id: 'cut', role: 'assistant', text: 'private partial', status: 'interrupted' }]; target.close();
+  const bridge = new LegacyInput(f.directory); t.after(() => bridge.close());
+  const ended = { ...f.record, pid: null, state: 'ended' };
+  await bridge.restore([{ ...f.entry, state: { ...f.entry.state, sessions: [ended] } }]);
+  assert.equal(bridge.reader(ended).record.messages[0].text, 'private partial'); assert.equal(f.calls.length, 0);
+  bridge.forgetReader(ended); bridge.close(); await new Promise(r => setTimeout(r, 240));
+  assert.equal(fs.existsSync(target.filename), false);
+});
+
+test('unmatched live text remains after native history when no cached ordering anchor exists', () => {
+  const { applyCodexHistory } = require('../native-blocks.cjs');
+  const s = { provider: 'codex', recovering: true, messages: [{ id: 'live', role: 'assistant', text: 'new text', status: 'streaming' }] };
+  applyCodexHistory(s, [{ id: 'old', type: 'agentMessage', text: 'older text' }], { liveMessageItems: new Set(['live']) });
+  assert.deepEqual(s.messages.map(m => m.id), ['old', 'live']);
+});
+
+for (const phase of ['loaded', 'history']) test(`forget during retained ${phase} handshake cannot recreate private records or a target`, async t => {
+  let release;
+  const options = phase === 'loaded' ? { loaded: done => { release = done; } } : { items(_request, reply) {
+    release = () => reply({ data: [{ turnId: 'private-turn', item: { type: 'agentMessage', id: 'private-answer', text: 'private native history' } }] });
+  } };
+  const f = await fixture(t, options), bridge = new LegacyInput(f.directory); t.after(() => bridge.close());
+  const connecting = bridge.prepare(f.entry, f.record);
+  const rejected = assert.rejects(connecting, /取消|关闭|变化|closed/i);
+  while (!release) await tick();
+  bridge.forgetReader(f.record); release(); await rejected; await tick();
+  assert.equal(bridge.target(f.record), null); assert.equal(bridge.reader(f.record), null);
+  assert.equal(fs.readdirSync(f.directory).some(n => n.startsWith('legacy-reader-')), false);
+  assert.equal(fs.existsSync(path.join(f.directory, 'legacy-links.json')), false);
+  assert.equal(f.calls.some(c => ['turn/start', 'turn/interrupt', 'thread/unsubscribe'].includes(c.method)), false);
+});
