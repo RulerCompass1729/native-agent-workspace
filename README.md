@@ -12,6 +12,14 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.70 repairs retained Claude output recovery when the whole app closes with
+input queued. The same native process keeps working; reopening restores buffered
+input and output without resending the task or restoring expired sharing grants.
+Source and installed native verification pass, including upgrading the previous
+released hook while preserving customized copies. Exact recovered input confirms
+its shared receipt; replies with expired sharing remain reachable in the original
+session through the existing session link.
+
 Alpha.69 extends the same retained Claude native waiting queue to its shared
 composer. The room distinguishes waiting from native acceptance; only the queued
 instruction's verified reply is shared, preserving prior private work and drafts.

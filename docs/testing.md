@@ -2049,6 +2049,67 @@ queue is accepted. Separate intent and display revisions prevent stale-input
 replay while retaining the authorized live stream. The full suite passes 709
 checks without skips.
 
-Final independent review accepts this bounded alpha.69 increment. A complete app
-exit while a native queued input is pending has not been verified by the real CLI
-journey; channel-close behavior has local counterexamples. Full U17 stays open.
+Final independent review accepts this bounded alpha.69 increment. Whole-app exit
+while queued was outside that verification; its subsequent failure and repair
+are recorded below. Full U17 stays open.
+
+## Retained Claude queued work across whole-app exit — alpha.70
+
+Add `NAW_RETAINED_QUEUE_QUIT=1` to the retained shared-queue native runner above.
+The actual Electron app queues one instruction, saves a newer draft and quits.
+The original 302 process completes both its active task and queued instruction
+before the GUI reopens. Source testing passes four groups with four fixed local
+responses and no paid inference. Native identity/process stay unchanged, the
+original final tail and queued response reappear, input is displayed exactly once
+and the draft survives. The room initially keeps its uncertain receipt, then confirms native acceptance
+only when a fresh recovered input exactly matches its tag, stored message UUID,
+session, native identity and text. This does not revive sharing; recovered output
+remains private. This test does
+not replace the previously verified 42-second live-queue wait.
+
+The initial installed alpha.69 reproduction showed old observer credentials
+receiving 403 until `prompt.submit` returned, after the native task had finished.
+Observation recovery now runs independently using the existing bounded queue and
+one retry timer. Commands and old receipts keep their original credentials. Local
+counterexamples exercise held submission, offline ordered batches, unchanged
+credential refusal, invalid-row gaps, root retirement and delayed metadata.
+Metadata waits time out without issuing another bind for the same credential;
+outstanding HTTP operations remain bounded. Installed verification also passes
+all four groups, with the original terminal's completed text captured after it
+connects. A follow-up installed run starts from the alpha.69 hook and checks its
+exact upgrade before exercising the same flow; user-edited hooks remain untouched
+in local counterexamples. All 727 local checks pass without skips. Final installed
+payload comparison covers 47 runtime files and post-native strict signature
+verification passes. Private screenshots and successful videos stay local.
+
+Original-profile verification initially failed its stronger input/reader check:
+both existing Claude processes had never activated the compatibility connection.
+The earlier identity-only reopen result did not establish GUI input readiness.
+Through the installed UI, each existing session was connected and its exact native
+`/reload-plugins` command inspected before Enter. Both readers and editable
+composers became available without restarting the original processes, changing
+models, sending a task or losing saved drafts. This is first-time activation,
+not automatic installation into an unrelated running session.
+
+Receipt recovery also exposed a real integration mistake: native append storage
+UUIDs differ from classic prompt IDs, and input blocks do not carry the latter.
+The final regression imports the actual hook and passes its event through the
+retained reader and saved receipt, without inventing a prompt-ID field. Incorrect
+identities, changed text, incomplete input, cleared shared text and retired
+readers cannot confirm delivery. Saving failure preserves uncertainty, displays
+the storage warning and rejects another dispatch.
+
+After first activation, the stronger normal-profile whole-app reopening check
+also passes: both original Claude readers/input reconnect, all three native
+identities/processes and saved drafts/selection remain unchanged, and zero new
+portal tasks are dispatched. Receipt recovery reuses the existing private-reply
+hint and session link; it does not leave a confirmed message with an unexplained
+missing shared answer.
+
+Final installed regression also repeats the five-group dual-native room journey:
+two independently streaming agents, original-turn Codex steering while Claude
+queues, reply threads/member filtering, real mouse departure/rejoin, native
+identity and private draft preservation. Two Claude task responses, two Codex task
+responses and one native title response are fixed on loopback; paid inference is
+zero. The successful raw app recording and a slower playback copy remain local.
+This verifies native client/UI mechanics, not hosted-model reasoning quality.

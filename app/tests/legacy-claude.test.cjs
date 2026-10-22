@@ -103,7 +103,7 @@ async function queueRouter(t) {
   const binding = { sessionId: f.record.nativeId, ...await f.r.bindRoot({ sessionId: f.record.nativeId, nativeBlocks: true, nativeQueue: true, nativeSharedDisplay: true }) };
   f.record.state = 'working'; f.r.record.provider = 'claude';
   const bridge = new LegacyInput(f.dir); bridge.targets.set(f.record.id, f.r); bridge.readers.set(f.record.id, f.r);
-  f.r.on('readerBlock', m => bridge.sharedReplies.observed(f.r, m));
+  f.r.on('readerBlock', m => bridge.observeReader(f.r, m));
   f.r.on('sharingBoundary', () => bridge.sharedReplies.revoke(f.record.id));
   f.r.on('contextEnd', () => bridge.sharedReplies.revoke(f.record.id));
   const state = { runtimeVersion: '0.1.0-alpha.2', owner: 'view', capabilities: [], sessions: [f.record], room: { messages: [] }, diagnostics: {} };
@@ -213,5 +213,53 @@ for (const boundary of ['owner', 'member', 'native', 'permission', 'manual', 'cl
   assert.equal(f.bridge.sharedMessages().filter(m => m.role === 'assistant').length, 0);
   assert.equal(f.wire.filter(row => row.id === tag).length, 1);
   assert.equal(f.record.liveDraft, 'PRIVATE DRAFT');
-  if (boundary === 'close') assert.equal(f.bridge.sharedMessages().find(m => m.id === tag).status, 'unconfirmed');
+  if (boundary === 'close') assert.equal(f.bridge.sharedMessages().find(m => m.id === tag).status, 'submitted');
+});
+
+test('fresh native queue input repairs a reopened receipt without reviving reply authority', async t => {
+  const f = await queueRouter(t), tag = crypto.randomUUID(), promptId = crypto.randomUUID();
+  const row = { id: tag, sessionId: f.record.id, nativeId: f.record.nativeId, shared: true, sharedReply: true, inputMode: 'queue', text: 'accepted while closed', status: 'unconfirmed' };
+  f.bridge.records.push(row); f.bridge.save();
+  assert.equal(f.bridge.sharedReplies.grants.size, 0);
+  f.event({ id: `prompt:${promptId}`, kind: 'input', text: row.text, inputTag: tag, promptId: undefined, turnId: 'offline-turn' });
+  f.event({ id: 'display:offline', promptId, turnId: 'offline-turn', delta: 'PRIVATE OFFLINE REPLY' });
+  assert.equal(f.bridge.sharedMessages().find(m => m.id === tag).status, 'submitted');
+  assert.equal(f.bridge.sharedMessages().find(m => m.id === tag).manualReply, true);
+  assert.equal(JSON.parse(fs.readFileSync(f.bridge.filename))[0].status, 'accepted');
+  assert.equal(f.bridge.sharedReplies.grants.size, 0);
+  assert.equal(f.bridge.sharedMessages().filter(m => m.role === 'assistant').length, 0);
+  assert.equal(f.wire.length, 0);
+});
+
+for (const mismatch of ['tag', 'text', 'session', 'native', 'kind', 'status', 'incomplete', 'prompt', 'cleared', 'retired']) test(`native receipt reconciliation rejects ${mismatch}`, async t => {
+  const f = await queueRouter(t), tag = crypto.randomUUID(), promptId = crypto.randomUUID();
+  const row = { id: tag, sessionId: f.record.id, nativeId: f.record.nativeId, shared: true, inputMode: 'queue', text: 'exact input', status: 'unconfirmed' };
+  f.bridge.records.push(row);
+  const message = { id: `native:${f.record.nativeId}:prompt:${promptId}`, nativeId: f.record.nativeId, nativeBlock: true,
+    kind: 'input', role: 'user', status: 'complete', text: row.text, inputTag: tag, promptId };
+  if (mismatch === 'tag') message.inputTag = crypto.randomUUID();
+  if (mismatch === 'text') message.text += ' changed';
+  if (mismatch === 'session') row.sessionId = 'another-session';
+  if (mismatch === 'native') message.nativeId = crypto.randomUUID();
+  if (mismatch === 'kind') message.kind = 'response';
+  if (mismatch === 'status') message.status = 'awaiting-native';
+  if (mismatch === 'incomplete') message.incomplete = true;
+  if (mismatch === 'prompt') message.id = `native:${f.record.nativeId}:prompt:not-a-native-uuid`;
+  if (mismatch === 'cleared') f.bridge.clearSharedHistory([tag]);
+  if (mismatch === 'retired') f.bridge.targets.delete(f.record.id);
+  f.bridge.observeReader(f.r, message);
+  assert.equal(f.bridge.records[0].status, 'unconfirmed');
+  assert.equal(f.bridge.sharedReplies.grants.size, 0);
+});
+
+test('receipt save failure preserves uncertainty and blocks further dispatch', async t => {
+  const f = await queueRouter(t), tag = crypto.randomUUID(), promptId = crypto.randomUUID();
+  const row = { id: tag, sessionId: f.record.id, nativeId: f.record.nativeId, shared: true, inputMode: 'queue', text: 'exact input', status: 'unconfirmed' };
+  f.bridge.records.push(row); const save = f.bridge.save; f.bridge.save = () => { throw Error('Disk unavailable'); };
+  f.event({ id: `prompt:${promptId}`, kind: 'input', text: row.text, inputTag: tag, promptId });
+  assert.equal(row.status, 'unconfirmed'); assert.equal(f.bridge.storageError, true);
+  assert.match(f.bridge.storageWarning, /没有重发/); assert.equal(f.wire.length, 0);
+  f.bridge.save = save;
+  await assert.rejects(f.bridge.send(f.record, 'another task', async () => {}, () => true), /无法读取/);
+  assert.equal(f.wire.length, 0);
 });

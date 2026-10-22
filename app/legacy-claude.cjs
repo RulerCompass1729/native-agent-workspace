@@ -21,7 +21,7 @@ class LegacyClaude extends Claude {
       const saved = JSON.parse(fs.readFileSync(this.filename, 'utf8'));
       if (saved.nativeId !== record.nativeId || JSON.stringify(saved.processIdentity) !== JSON.stringify(record.processIdentity) || !Array.isArray(saved.messages)) throw Error('Reader identity changed');
       this.record.messages = saved.messages; this.initialized = true;
-      this.gap('观察连接已重新打开；离线期间的临时内容无法补回，请在原生终端核对。');
+      this.gap('观察连接已重新打开；接入前或超出缓存的临时内容，请在原生终端核对。');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     this.on('nativeBlock', event => {
       // A late result from a tool started before this observer is not a new

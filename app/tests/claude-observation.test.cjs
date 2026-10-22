@@ -11,20 +11,21 @@ function adapter() {
   r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
   r.bindRoot({ sessionId: r.record.nativeId }); return r;
 }
-async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false } = {}) {
+async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
   const { register } = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + randomUUID()).toString('base64'));
   const r = runtime || adapter(), clock = [], hooks = new Map(), requests = [];
-  let native = r.record.nativeId;
+  let native = r.record.nativeId, token = 'a'.repeat(64);
   if (legacy) r.retainedReader = true;
   const $ = { session: { id: async () => native, version: async () => ({ version }) },
     env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? (legacy ? undefined : '/fixture/socket') : key === 'NAW_HOOK_SOCKET' ? '/fixture/hooks.sock' : 'fixture-token' },
-    fs: { read: async () => JSON.stringify({ sessionId: native, socketPath: '/fixture/gui-submit.sock', token: 'a'.repeat(64), compat: true, nativeBlocks: true }) },
+    fs: { read: async () => JSON.stringify({ sessionId: native, socketPath: '/fixture/gui-submit.sock', token, compat: true, nativeBlocks: true }) },
     clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; } },
-    prompt: { submit: async () => { throw Error('Observation must never submit'); } },
+    prompt: { read: async () => ({ text: '' }), submit: promptSubmit || (async () => { throw Error('Observation must never submit'); }) },
     http: { fetch: async (url, options) => {
       const body = JSON.parse(options.body); let result;
-      if (url.endsWith('/root-bind')) result = r.bindRoot(body);
+      if (requestHandler) { const response = await requestHandler(url, options, body, r); if (response) return response; }
+      if (url.endsWith('/root-bind')) result = await r.bindRoot(body);
       else if (url.endsWith('/next')) { if (body.observationGap) r.observeRootGap(body); result = { idle: true }; }
       else if (url.endsWith('/root-end')) result = r.endRoot(body);
       else if (url.endsWith('/root-clear')) {
@@ -37,9 +38,139 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
   register((name, fn) => { hooks.set(name, fn); return { catch() {} }; });
   const invoke = (name, e, next = async e => ({ uuid: e.uuid, message: e.message })) => hooks.get(name)($, e, next);
   await invoke('session.start', {}); await clock.shift()(); const poll = clock.shift(); clock.length = 0;
-  return { r, clock, requests, invoke, poll, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
+  return { r, clock, requests, invoke, poll, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
+
+test('real retained append hook reconciles receipt through reader without a classic prompt ID or sharing grant', async t => {
+  const { LegacyClaude } = require('../legacy-claude.cjs'), { LegacyInput } = require('../legacy-input.cjs');
+  const { processIdentity } = require('../platform.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'retained-receipt-'));
+  const record = { id: 'retained', provider: 'claude', nativeId: randomUUID(), pid: process.pid,
+    processIdentity: processIdentity(process.pid), state: 'idle', messages: [] };
+  const reader = new LegacyClaude(record, dir, async () => record), bridge = new LegacyInput(dir);
+  bridge.targets.set(record.id, reader); bridge.readers.set(record.id, reader);
+  reader.on('readerBlock', message => bridge.observeReader(reader, message));
+  t.after(() => { bridge.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const tag = randomUUID(), storedMessageId = randomUUID(), text = 'accepted native instruction';
+  bridge.records.push({ id: tag, sessionId: record.id, nativeId: record.nativeId, shared: true, sharedReply: true, inputMode: 'queue', text, status: 'unconfirmed' });
+  let offered = false, finish;
+  const f = await mod({ runtime: reader, legacy: true, version: '2.1.302',
+    promptSubmit: () => new Promise(resolve => { finish = resolve; }),
+    requestHandler: async url => {
+      if (url.endsWith('/next') && offered) { offered = false; return { ok: true, text: JSON.stringify({ id: tag, text }) }; }
+      if (url.endsWith('/authorize')) return { ok: true, text: '{"allowed":true}' };
+      if (url.endsWith('/result')) return { ok: true, text: '{}' };
+    } });
+  offered = true; const listening = f.poll(); await new Promise(resolve => setImmediate(resolve));
+  await f.invoke('classic.UserPromptSubmit', { session_id: record.nativeId, prompt_id: randomUUID(), prompt: text });
+  await f.append({ uuid: storedMessageId, door: 'prompt', origin: { kind: 'plugin', name: 'native-workspace-compat', asUser: true },
+    message: { type: 'user', role: 'user', content: [{ type: 'text', text }] } });
+  await f.clock.shift()();
+  const input = reader.record.messages.find(m => m.kind === 'input');
+  assert.equal(input.id, `native:${record.nativeId}:prompt:${storedMessageId}`);
+  assert.equal(input.promptId, undefined); assert.equal(input.inputTag, tag);
+  assert.equal(bridge.sharedMessages()[0].status, 'submitted');
+  assert.equal(bridge.sharedMessages()[0].manualReply, true);
+  assert.equal(bridge.sharedReplies.grants.size, 0);
+  assert.equal(JSON.parse(fs.readFileSync(bridge.filename))[0].status, 'accepted');
+  finish({ text, origin: { kind: 'plugin', name: 'native-workspace-compat' } }); await listening;
+});
+
+test('retained observer restores ordered offline output during held submit without replaying command or migrating receipt', async () => {
+  const tag = randomUUID(), promptId = randomUUID(), turnId = randomUUID(), nativeMessage = randomUUID();
+  let credential = 'a'.repeat(64), online = true, offered = false, finishSubmit, submits = 0, polls = 0, binds = 0;
+  const receipts = [], events = [];
+  const f = await mod({ version: '2.1.302', legacy: true,
+    promptSubmit: () => { submits++; return new Promise(resolve => { finishSubmit = resolve; }); },
+    requestHandler: async (url, options, body) => {
+      const token = options.headers['X-Workspace-Token'];
+      if (url.endsWith('/result')) receipts.push({ token, body });
+      if (!online) throw Error('Local GUI unavailable');
+      if (token !== credential) return { ok: false, status: 403 };
+      if (url.endsWith('/root-bind')) binds++;
+      if (url.endsWith('/next')) { polls++; if (offered) { offered = false; return { ok: true, text: JSON.stringify({ id: tag, text: 'queued instruction' }) }; } }
+      if (url.endsWith('/authorize')) return { ok: true, text: '{"allowed":true}' };
+    } });
+  const session = { nativeId: f.r.record.nativeId, messages: [] };
+  f.r.on('nativeBlock', row => { events.push(row); require('../native-blocks.cjs').applyNativeBlock(session, row); });
+  offered = true; const listening = f.poll(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(submits, 1); assert.equal(polls, 2);
+  online = false;
+  await f.invoke('classic.UserPromptSubmit', { session_id: session.nativeId, prompt_id: promptId, prompt: 'queued instruction' });
+  await f.append({ uuid: nativeMessage, door: 'prompt', origin: { kind: 'plugin', name: 'native-workspace-compat', asUser: true },
+    message: { type: 'user', role: 'user', content: [{ type: 'text', text: 'queued instruction' }] } });
+  await f.invoke('turn.start', { turnId });
+  const display = { session_id: session.nativeId, turn_id: randomUUID(), prompt_id: promptId, message_id: randomUUID(), index: 0, delta: 'visible ', final: false };
+  await f.invoke('classic.MessageDisplay', display, async () => ({}));
+  await f.clock.shift()(); assert.equal(events.length, 0); assert.deepEqual(f.clock.map(fn => fn.delay), [1000]);
+  await f.invoke('classic.MessageDisplay', { ...display, index: 1, delta: 'complete', final: true }, async () => ({}));
+  await f.invoke('turn.complete', { turnId, reason: 'answer', answer: 'visible complete' });
+  await f.clock.shift()(); assert.equal(events.length, 0); assert.equal(f.clock.length, 1);
+  credential = 'b'.repeat(64); f.setToken(credential); online = true;
+  // GUI owns the observer/receipt channel, not the still-running native submit.
+  f.r.rootLease = null; f.r.observationEpoch = null; f.r.rootObservation = null;
+  await f.clock.shift()();
+  assert.equal(binds, 2); assert.equal(polls, 2); assert.equal(submits, 1); assert.equal(receipts.length, 0);
+  assert.deepEqual(events.map(row => row.kind), ['input', 'response', 'response', 'turn']);
+  assert.equal(events[0].inputTag, tag); assert.equal(events[1].turnId, turnId);
+  assert.deepEqual(f.requests.map(row => row.sequence), [1, 2, 3, 4]);
+  assert.equal(session.messages.filter(row => row.role === 'user').length, 1);
+  assert.equal(session.messages.find(row => row.role === 'assistant').text, 'visible complete');
+  assert.equal(f.clock.length, 0, 'No standing observer poll after queue drains');
+  finishSubmit({ text: 'queued instruction', origin: { kind: 'plugin', name: 'native-workspace-compat' } }); await listening;
+  assert.equal(receipts.length, 1); assert.equal(receipts[0].token, 'a'.repeat(64));
+  assert.equal(receipts[0].body.promptId, promptId); assert.equal(submits, 1); assert.equal(polls, 2);
+});
+
+test('retained refusal with unchanged credential keeps exactly one retry timer; invalid rows disclose a gap', async () => {
+  let status = 403, calls = 0;
+  const f = await mod({ version: '2.1.302', legacy: true, requestHandler: async url => {
+    if (url.endsWith('/observation')) { calls++; return { ok: false, status }; }
+  } });
+  const display = { session_id: f.r.record.nativeId, turn_id: randomUUID(), message_id: randomUUID(), index: 0, delta: 'native tail', final: true };
+  await f.invoke('classic.MessageDisplay', display, async () => ({}));
+  for (let i = 0; i < 3; i++) { await f.clock.shift()(); assert.equal(calls, i + 1); assert.equal(f.clock.length, 1); assert.equal(f.clock[0].delay, 1000); }
+  status = 409; await f.clock.shift()(); assert.equal(f.clock.length, 0);
+  const gaps = []; f.r.on('nativeBlock', row => gaps.push(row)); await f.poll();
+  assert.equal(gaps.length, 1); assert.equal(gaps[0].kind, 'gap');
+});
+
+test('retained offline queue cannot cross a root end or unannounced native identity change', async () => {
+  for (const end of [false, true]) {
+    let online = false, binds = 0;
+    const f = await mod({ version: '2.1.302', legacy: true, requestHandler: async url => {
+      if (url.endsWith('/root-bind')) binds++;
+      if (url.endsWith('/observation') && !online) throw Error('Offline');
+    } });
+    await f.invoke('classic.MessageDisplay', { session_id: f.r.record.nativeId, turn_id: randomUUID(), message_id: randomUUID(), index: 0, delta: 'old private', final: true }, async () => ({}));
+    await f.clock.shift()();
+    if (end) await f.invoke('session.end', { sessionId: f.r.record.nativeId, reason: 'other' });
+    f.setNativeId(randomUUID()); f.setToken('b'.repeat(64)); online = true;
+    await f.clock.shift()(); assert.equal(f.requests.length, 0); assert.equal(binds, 1);
+    if (!end) assert.equal(f.clock.length, 0, 'Retired identity must not keep a retry timer');
+  }
+});
+
+test('retained metadata timeout reuses one request and releases the queued frame when that request settles', async () => {
+  let held = false, release, bindings = 0;
+  const f = await mod({ version: '2.1.302', legacy: true, requestHandler: async (url, options, body, r) => {
+    if (url.endsWith('/observation') && held && options.headers['X-Workspace-Token'] === 'a'.repeat(64)) return { ok: false, status: 403 };
+    if (url.endsWith('/root-bind')) { bindings++; if (held) return new Promise(resolve => { release = () => resolve({ ok: true, text: JSON.stringify(r.bindRoot(body)) }); }); }
+  } });
+  held = true; f.setToken('b'.repeat(64));
+  await f.invoke('classic.MessageDisplay', { session_id: f.r.record.nativeId, turn_id: randomUUID(), message_id: randomUUID(), index: 0, delta: 'after reconnect', final: true }, async () => ({}));
+  await f.clock.shift()();
+  for (let i = 0; i < 3; i++) {
+    const flushing = f.clock.shift()(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(bindings, 2); assert.equal(f.clock.length, 1); assert.equal(f.clock[0].delay, 1500);
+    f.clock.shift()(); await flushing;
+    assert.deepEqual(f.clock.map(fn => fn.delay), [1000]);
+  }
+  release(); await new Promise(resolve => setImmediate(resolve)); await f.clock.shift()();
+  assert.equal(bindings, 2); assert.equal(f.requests.length, 1); assert.equal(f.requests[0].delta, 'after reconnect');
+  assert.equal(f.clock.length, 0);
+});
 
 test('retained 302 observes only accepted root prompt and downstream display content without sending', async () => {
   const f = await mod({ version: '2.1.302', legacy: true }), rows = [], prompt = randomUUID(), turn = randomUUID();

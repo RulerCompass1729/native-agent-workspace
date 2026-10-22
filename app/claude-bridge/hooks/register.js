@@ -34,6 +34,9 @@ let observing = false;
 let observationGap = false;
 let observationGapRevision = 0;
 let observationRequests = 0;
+let observerReconnect = false;
+let observerRebinding = null;
+let observerBindRequest = null;
 function markObservationGap(binding) {
   if (binding && binding.lease === rootBinding?.lease) { observationGap = true; observationGapRevision++; }
 }
@@ -111,10 +114,20 @@ function observeAppend($, e, result, binding, turnId, candidate) {
 }
 
 async function flushObservations($) {
+  let retry = false;
   try {
     while (observations.length) {
-      const { row, binding } = observations.shift();
-      if (stopped || binding !== rootBinding) continue;
+      const entry = observations[0], { binding } = entry;
+      if (stopped || binding !== rootBinding) { observations.shift(); continue; }
+      if (legacyOnly && observerReconnect) {
+        try { await refreshLegacyObserver($, generation); observerReconnect = false; }
+        catch (error) {
+          if (error.code === 'OBSERVER_IDENTITY') { markObservationGap(binding); if (observations[0] === entry) observations.shift(); continue; }
+          retry = true; break;
+        }
+        if (stopped || binding !== rootBinding) continue;
+      }
+      const row = entry.row;
       const gap = observationGap, revision = observationGapRevision;
       try {
         // The native HTTP API exposes no abort option. Bound outstanding calls
@@ -126,10 +139,70 @@ async function flushObservations($) {
         let timer;
         const deadline = new Promise((_, reject) => { timer = $.clock.after(1500, () => reject(Error('Observation timeout'))); });
         try { await Promise.race([sending, deadline]); } finally { timer?.cancel(); }
+        if (entry.row !== row && binding === rootBinding) continue;
         if (binding === rootBinding && revision === observationGapRevision) observationGap = false;
-      } catch { markObservationGap(binding); }
+      } catch (error) {
+        if (entry.row !== row && binding === rootBinding) continue;
+        // A retained CLI outlives the GUI transport. Retry observation only,
+        // within the existing bounded queue; the native prompt is never replayed.
+        if (legacyOnly && !stopped && binding === rootBinding && error.status !== 409) {
+          observerReconnect = true;
+          retry = true; break;
+        }
+        markObservationGap(binding);
+      }
+      // A display-hook overrun may already have evicted this in-flight entry.
+      if (observations[0] === entry) observations.shift();
     }
-  } finally { observing = false; }
+  } finally {
+    // One observation retry timer, independent of the command listener held
+    // in prompt.submit. Stop/end drains it; hooks never await this transport.
+    if (retry) $.clock.after(1000, () => flushObservations($));
+    else observing = false;
+  }
+}
+
+async function refreshLegacyObserver($, ownGeneration) {
+  if (observerRebinding) return observerRebinding;
+  const previous = rootBinding;
+  const changed = () => Object.assign(Error('Observer identity changed'), { code: 'OBSERVER_IDENTITY' });
+  const refresh = async () => {
+    const binding = await connection($);
+    if (!legacyOnly || stopped || generation !== ownGeneration || rootBinding !== previous ||
+      !previous || binding.sessionId !== previous.sessionId || binding.socketPath !== previous.socketPath ||
+      rootEnds.has(previous.sessionId)) throw changed();
+    if (binding.token === previous.token) return;
+    const version = (await $.session.version()).version;
+    // Native HTTP cannot be aborted. Reuse one metadata request for this
+    // credential across wait timeouts; repeating root-bind would rotate epochs.
+    if (!observerBindRequest || observerBindRequest.token !== binding.token || observerBindRequest.generation !== ownGeneration) {
+      if (observationRequests >= 2) throw Error('Observation transport busy');
+      observationRequests++;
+      observerBindRequest = { token: binding.token, generation: ownGeneration,
+        promise: request($, '/root-bind', { nativeBlocks, nativeQueue: version === '2.1.302',
+          nativeSharedDisplay: nativeBlocks && version === '2.1.302' }, binding).finally(() => { observationRequests--; }) };
+    }
+    const pending = observerBindRequest;
+    let timer, result;
+    const deadline = new Promise((_, reject) => { timer = $.clock.after(1500, () => reject(Object.assign(Error('Observer rebind timeout'), { code: 'OBSERVER_TIMEOUT' }))); });
+    try { result = await Promise.race([pending.promise, deadline]); }
+    catch (error) { if (error.code !== 'OBSERVER_TIMEOUT' && observerBindRequest === pending) observerBindRequest = null; throw error; }
+    finally { timer?.cancel(); }
+    const current = await connection($);
+    if (stopped || generation !== ownGeneration || rootBinding !== previous ||
+      await $.session.id() !== previous.sessionId || typeof result.lease !== 'string' || result.nativeBlocks !== true) throw changed();
+    if (current.token !== binding.token || current.sessionId !== binding.sessionId || current.socketPath !== binding.socketPath) throw Error('Observer connection changed');
+    // Preserve native display/prompt links only for this same live root. Command
+    // listeners hold a separate connection value: their old receipt/grant must
+    // still go to its old credential, never to this new observer.
+    Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 });
+    for (const entry of observations) if (entry.binding === previous) {
+      entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence };
+    }
+    if (observerBindRequest === pending) observerBindRequest = null;
+  };
+  observerRebinding = refresh();
+  try { await observerRebinding; } finally { observerRebinding = null; }
 }
 
 async function connection($) {
@@ -161,7 +234,7 @@ async function request($, route, body, binding) {
     socketPath, method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Workspace-Token': token },
     body: JSON.stringify({ ...body, sessionId, ...(lease ? { lease } : {}), ...(reportGap ? { observationGap: true, epoch: rootBinding.observationEpoch } : {}) }),
   });
-  if (!response.ok) throw new Error('Workspace connection refused');
+  if (!response.ok) { const error = new Error('Workspace connection refused'); error.status = response.status; throw error; }
   if (reportGap && lease === rootBinding?.lease && gapRevision === observationGapRevision) observationGap = false;
   return JSON.parse(response.text);
 }
@@ -173,7 +246,11 @@ async function listen($, ownGeneration) {
     // A GUI reopen rotates only the compatibility credential. Rebind the
     // observer to that same native root; never repeat a pending submission.
     if (legacyOnly && binding.nativeBlocks && nativeBlocks &&
-      (!rootBinding || rootBinding.token !== binding.token)) return await bindRoot($, ownGeneration);
+      (!rootBinding || rootBinding.token !== binding.token)) {
+      if (!rootBinding) return await bindRoot($, ownGeneration);
+      await refreshLegacyObserver($, ownGeneration);
+      return await listen($, ownGeneration);
+    }
     const message = await request($, '/next', {}, binding);
     if (stopped || generation !== ownGeneration) return;
     if (message.closed) {

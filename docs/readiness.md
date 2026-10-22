@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.69 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.70 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,25 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.70 retained Claude recovery:** fixes a real whole-app exit failure where
+the native queued task finished but its reader missed the output. The existing
+bounded observation queue now reconnects independently of the held submission,
+without polling for another command or replaying the accepted task. Same-root
+identity and credential checks keep old receipts and expired sharing grants
+separate. Exact recovered input settles the shared receipt and reuses the existing
+private-reply hint/session link, without renewing sharing. Source actual Electron/302 testing passes with the task completed
+entirely while the GUI is closed, one input, restored final output/draft and the
+same process. Four fixed loopback responses per native run, zero paid inference.
+Installed verification also passes, including the immediately previous released
+hook upgrade; customized files remain untouched. All 727 local checks pass
+without skips, 47 installed runtime files match source and post-native strict
+signature verification passes. The final installed five-group dual-native regression
+also passes. Original three-session reopening preserves identities and drafts with
+zero new dispatch; the two never-connected Claude sessions first required the
+existing explicit attachment and local plugin reload, then reconnect automatically.
+Final independent review is recorded in
+[review.md](review.md); U17 remains open.
 
 **Alpha.69 retained Claude shared waiting:** uses the existing native queue and
 shared-reader binding, without interrupting the active task. Live pending input
@@ -460,7 +479,7 @@ not a claim that every retained backend supports all current features.
 | --- | --- | --- |
 | Single conversation | GUI/TUI use, draft/identity retention, input focus and normal reopen; visible System Pinyin/WeChat evidence from alpha.22 | Controlled guest OS events; no universal terminal or accessibility guarantee |
 | Live native progress | Main-reader native text/tool blocks; explicitly authorized shared streams with stable identities; native terminal remains available | Full temporary-state/menu parity and retained Claude 302 coverage remain open; no official Desktop synchronization |
-| Shared work | `@` selection, explicit recipient receipts, reply threads/member trajectories in one reader, notes, rename/archive/restore, pointer drag and detach | One room; private history is not automatically copied; working input is supported only on the verified new provider connections |
+| Shared work | `@` selection, explicit recipient receipts, reply threads/member trajectories in one reader, notes, rename/archive/restore, pointer drag and detach | One room; private history is not automatically copied; working input covers the inspected current connections and retained Claude 302/Codex 0.163.0 paths, not arbitrary versions |
 | Native collaboration | Claude→Codex→Claude completes a three-reply file check; detached Claude continues privately with same native identity | Explicit 2–6 reply exchange, ten-minute deadline; not arbitrary goal completion |
 | Human control | Input, membership, permission, failure, repetition and known native activity stop further handoffs; uncertain sends never auto-retry | An accepted native task and its billing may continue |
 | Native fleets | Historical Claude teammate/tasks/messages and idle continuity; current Codex Luna child start/completion/close request observed; current event mapping tested | No complete descendant inventory, termination or active-fleet recovery claim |
