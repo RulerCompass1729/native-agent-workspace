@@ -16,8 +16,8 @@ function fixture(method, target, value) { const id = ++sequence; return new Prom
   child.on('message', callback); child.send({ id, method, target, value });
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
-async function create(name) {
-  await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
+async function create(name, provider = 'claude') {
+  await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
   await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
   await until(async () => (await snapshot()).sessions.some(s => s.name === name), 'Session created');
   return (await snapshot()).sessions.find(s => s.name === name).id;
@@ -26,7 +26,7 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon');
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await application.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
-  const a = await create('Reading A'), b = await create('Reading B');
+  const a = await create('Reading A'), b = await create('Reading B', 'codex');
   const text = Array.from({ length: 100 }, (_, i) => `Result line ${i}: local output`).join('\n');
   await fixture('nativeBlock', a, { id: 'tool:read', kind: 'tool', turnId: 'a', title: 'Read', input: 'fixture.txt', text, status: 'complete' });
   await fixture('nativeBlock', b, { id: 'tool:read', kind: 'tool', turnId: 'b', title: 'Read', text: 'Other session result', status: 'complete' });
@@ -65,7 +65,58 @@ async function run() {
   await fixture('state', b, 'idle');
   await page.locator('#messages').getByText('Late disconnected event', { exact: true }).waitFor();
   checks.push('Retained connection loss freezes last records and ignores late live output; reconnection reloads native observations');
-  assert.deepEqual(errors, []); const stats = (await fixture('stats')).stats; assert.equal(stats.sends, 0);
+  assert.equal((await fixture('stats')).stats.sends, 0);
+  for (const id of [a, b]) {
+    await page.locator(`[data-session-id="${id}"]`).click();
+    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await fixture('bindSends', id);
+  }
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  async function sendTo(id, text) {
+    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
+    await page.locator('#shared-input').fill(text); await page.locator('#forward-button').click();
+    await until(async () => (await fixture('stats', id)).lastSend?.text === text, 'Directed native send');
+    return (await fixture('stats', id)).lastSend;
+  }
+  const sa = await sendTo(a, 'Shared task for A'), sb = await sendTo(b, 'Shared task for B');
+  await fixture('nativeBlock', a, { ...sa, id: 'display:shared-a', kind: 'response', text: 'Alpha shared output', status: 'streaming' });
+  await page.locator('#room-messages').getByText('Alpha shared output', { exact: true }).waitFor();
+  const ar = (await snapshot()).room.messages.find(m => m.text === 'Alpha shared output');
+  const arow = page.locator(`[data-message-id="${ar.id}"]`), element = await arow.elementHandle();
+  await fixture('nativeBlock', b, { ...sb, id: 'display:shared-b', kind: 'response', text: 'Beta shared output', status: 'streaming' });
+  await page.locator('#room-messages').getByText('Beta shared output', { exact: true }).waitFor();
+  assert.match(await arow.innerText(), /Reading A/);
+  await page.locator('#shared-input').fill('Unsent room draft'); await page.locator('#shared-input').focus();
+  await fixture('nativeBlock', a, { ...sa, id: 'display:shared-a', kind: 'response', text: 'Alpha shared output continued', status: 'streaming' });
+  await arow.getByText('Alpha shared output continued', { exact: true }).waitFor();
+  assert.equal(await element.evaluate(el => el.isConnected), true);
+  assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent room draft');
+  assert.equal(await page.locator('#shared-input').evaluate(el => document.activeElement === el), true);
+  assert.equal(await page.locator('.native-progress').count(), 0);
+  assert.ok(!(await page.locator('#room-messages').innerText()).includes('Result line'));
+  checks.push('Two directed agent streams update stable labelled blocks in one room reader, preserving draft/focus and excluding private history');
+  await page.locator('#room-filter').selectOption(a);
+  await arow.waitFor(); assert.ok(!(await page.locator('#room-messages').innerText()).includes('Beta shared output'));
+  await page.locator('#room-filter').selectOption('');
+  const finalText = 'Alpha shared output continued';
+  await fixture('complete', a, { messageId: ar.nativeMessageId, text: finalText });
+  await until(async () => (await snapshot()).room.messages.find(m => m.id === ar.id)?.finalReply, 'Final updates the same block');
+  assert.equal((await snapshot()).room.messages.filter(m => m.text === finalText).length, 1);
+  await arow.locator('.message-delivery summary').click();
+  assert.match(await arow.innerText(), /本条未由工作区转发/);
+  assert.equal((await fixture('stats')).stats.sends, 2);
+  checks.push('Member filter preserves stream identity; final replaces its block without duplicating or dispatching visible progress');
+  await page.locator(`[data-session-id="${b}"]`).click();
+  await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+  await until(async () => !(await snapshot()).sessions.find(s => s.id === b).roomId, 'Native membership confirmed');
+  await fixture('nativeBlock', b, { ...sb, id: 'display:shared-b', kind: 'response', text: 'Beta private continuation', status: 'streaming' });
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  assert.match(await page.locator('#room-messages').innerText(), /Beta shared output/);
+  assert.ok(!(await page.locator('#room-messages').innerText()).includes('Beta private continuation'));
+  assert.match(await page.locator('#room-messages').innerText(), /共享已停止/);
+  checks.push('Leaving freezes the already shared prefix while later native content remains private');
+  if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-streams.png') }); }
+  assert.deepEqual(errors, []); const stats = (await fixture('stats')).stats; assert.equal(stats.sends, 2);
   console.log(JSON.stringify({ checks, errors, modelCalls: 0, stats, profile }, null, 2));
 }
 run().catch(async e => { if (page && !page.isClosed()) { await page.screenshot({ path: path.join(profile, 'failure.png') }).catch(() => {}); fs.writeFileSync(path.join(profile, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); } console.error(e.stack); process.exitCode = 1; }).finally(async () => { if (application) await application.close(); if (child.exitCode === null) { await fixture('stop'); child.kill('SIGTERM'); } });

@@ -1,8 +1,18 @@
 # macOS alpha trial
 
-As of 2026-10-21. Version 0.1.0-alpha.55. Suitable for a small technical trial with
+As of 2026-10-21. Version 0.1.0-alpha.56. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.56 inline native and shared readers
+
+The main reader consumes native text/tool blocks; the terminal-camera and replay
+panels are removed. Explicitly authorized shared replies stream in stable blocks,
+with exact per-message delivery receipts. Retained Codex history/model/live tools
+reuse the same process and preserve last-known content through failed reconnects.
+Normal `--background` reopening restores the saved UI without showing windows;
+activate the app normally to reveal it. Installed checks and limits are recorded
+in [testing](testing.md#shared-streams-and-retained-readers--alpha56).
 
 ## Alpha.55 running-result reading
 

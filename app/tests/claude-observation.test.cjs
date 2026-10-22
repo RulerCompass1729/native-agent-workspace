@@ -223,6 +223,7 @@ test('display redaction survives Stop, shared room retention and the next automa
   const turnId = randomUUID(), promptId = randomUUID(), tag = randomUUID();
   r.pending = { nativeId: r.record.nativeId, accepted: true, promptId, turnId, tag, guard: () => true };
   w.get(id).pendingTag = tag; w.forwards.set(tag, { member: w.get(id).memberRevision, control: w.get(id).controlRevision });
+  w.sharedReplies.authorize(w.get(id), r, tag, { id: tag });
   const advanced = []; w.advance = async (_, info) => advanced.push(info);
   await f.invoke('classic.UserPromptSubmit', { session_id: r.record.nativeId, prompt_id: promptId });
   await f.invoke('turn.start', { turnId });

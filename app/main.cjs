@@ -44,7 +44,11 @@ if (testRequested) {
   } catch { /* An unverifiable profile must never fall through to foreground. */ }
   if (!backgroundTest) { console.error('Invalid isolated headed-test parent/profile; no window opened.'); process.exit(1); }
 }
-if (backgroundTest && process.platform === 'darwin') app.setActivationPolicy('accessory');
+// A normal background relaunch restores the user's real state without showing
+// a window in their current Space. The user's later activation restores normal
+// Dock behavior and reveals the restored window.
+let backgroundLaunch = process.argv?.includes('--background') === true;
+if ((backgroundTest || backgroundLaunch) && process.platform === 'darwin') app.setActivationPolicy('accessory');
 if (testParent > 1) {
   const checkParent = () => { if (process.ppid !== testParent) app.quit(); };
   const lease = setInterval(checkParent, 1000); lease.unref();
@@ -58,7 +62,7 @@ const trusted = url => { try { const parsed = new URL(url); return parsed.origin
 let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
 const startupFile = path.join(__dirname, 'startup.html');
-function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, show: !backgroundTest, focusable: !backgroundTest, minWidth: Math.min(850, view.bounds?.width || 850), minHeight: Math.min(600, view.bounds?.height || 600), backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
+function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, show: !backgroundTest && !backgroundLaunch, focusable: !backgroundTest, minWidth: Math.min(850, view.bounds?.width || 850), minHeight: Math.min(600, view.bounds?.height || 600), backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
 function createWindow(view) {
   const win = new BrowserWindow(windowOptions(view));
   return win;
@@ -437,12 +441,14 @@ async function start() {
 ipcMain.handle('workspace:retry-startup', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href) return start(); });
 ipcMain.handle('workspace:startup-data', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href && viewStore && !viewStore.loaded) return shell.openPath(dataDir); });
 function focusOrOpen() {
+  if (backgroundLaunch && !backgroundTest && process.platform === 'darwin') app.setActivationPolicy('regular');
+  backgroundLaunch = false;
   const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : windows.values().next().value?.win;
   if (win) { if (!backgroundTest) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } }
   else if (!starting && !quitting) { if (dsh && wired) openWindow(views.at(-1)).catch(() => start()); else start(); }
 }
 app.on('activate', focusOrOpen);
-app.on('second-instance', focusOrOpen);
+app.on('second-instance', (_event, argv) => { if (!argv?.includes('--background')) focusOrOpen(); });
 if (primary) app.whenReady().then(start);
 app.on('window-all-closed', () => {});
 app.on('before-quit', event => {

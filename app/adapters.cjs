@@ -174,9 +174,9 @@ class Claude extends EventEmitter {
     if (kind === 'turn') {
       turn.ended = true;
       const block = turn.blocks.get(message.finalDisplayId);
-      if (status === 'complete' && !turn.incomplete && block?.final) turn.safeText = block.text;
+      if (status === 'complete' && !turn.incomplete && block?.final) { turn.safeText = block.text; turn.messageId = `native:${this.record.nativeId}:${message.finalDisplayId}`; }
     }
-    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, text, delta, index, title, status, input, incomplete });
+    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete });
     if (kind === 'turn' && this.pending?.turnId === turnId && this.pending.stopEvent) this.finishReply(this.pending, this.pending.stopEvent);
     return { observed: true };
   }
@@ -326,7 +326,7 @@ class Claude extends EventEmitter {
         this.emit('background', { count: background, scheduled });
         this.emit('state', 'idle');
         // Observed child hooks cannot certify that all descendants are idle.
-        this.emit('complete', { tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
+        this.emit('complete', { messageId: displayConfirmed ? proof?.messageId : undefined, tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
   }
   async send(text, tag, guard) {
     if (!this.ready || this.pending) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
@@ -354,6 +354,7 @@ class Claude extends EventEmitter {
         }
         return;
       }
+      if (pending.turnId) this.emit('replyBound', { tag, nativeId: pending.nativeId, turnId: pending.turnId, promptId: pending.promptId });
       if (pending.replies.has(pending.promptId)) this.finishReply(pending, pending.replies.get(pending.promptId));
       else if (this.pending === pending) this.emit('state', 'working');
     } catch (error) {
@@ -650,7 +651,7 @@ class Codex extends EventEmitter {
         break;
       case 'item/completed':
         if (['userMessage', 'agentMessage'].includes(p.item?.type)) this.stateRevision++;
-        if (p.item?.type === 'agentMessage') { this.liveMessageItems.add(p.item.id); this.turn(p.turnId).text = p.item.text || ''; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase, turnId: p.turnId }); }
+        if (p.item?.type === 'agentMessage') { this.liveMessageItems.add(p.item.id); this.turn(p.turnId).text = p.item.text || ''; this.turn(p.turnId).messageId = p.item.id; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase, turnId: p.turnId }); }
         // A human may steer an active GUI turn from the native terminal. Only
         // our explicitly identified echo is redundant; matching text is not ID.
         if (p.item?.type === 'userMessage' && !this.ownInputs.has(p.item.clientId) && (!p.item.id || !this.inputItems.has(p.item.id))) {
@@ -680,7 +681,7 @@ class Codex extends EventEmitter {
     this.turns.delete(id); this.hasHistory = true;
     if (this.turnId === id) { this.turnId = null; this.emit('state', 'idle'); }
     if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag });
-    else this.emit('complete', { tag: pending?.tag, text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
+    else this.emit('complete', { tag: pending?.tag, messageId: turn.messageId, text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
   }
   async send(text, tag, guard) {
     if (!this.chatAvailable || this.pending || !guard()) throw new Error('会话忙碌、原生对话接口尚未连接，或交接已失效。');
@@ -693,6 +694,7 @@ class Codex extends EventEmitter {
       if (!this.turnId) this.turnId = r.turn.id;
       if (revision === this.stateRevision) this.emit('state', 'working');
       this.emit('submitted', tag);
+      this.emit('replyBound', { tag, nativeId: this.record.nativeId, turnId: pending.turnId });
       for (const id of this.turns.keys()) this.finishTurn(id);
     } catch (error) {
       if (this.pending === pending) this.pending = null;

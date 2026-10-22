@@ -10,6 +10,7 @@ const { Codex, Rpc } = require('./adapters.cjs');
 const { ProgressJournal } = require('./observation.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
+const { applyNativeBlock, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress } = require('./native-blocks.cjs');
 
 function eligibleCodex(state, record) {
   return state.runtimeVersion === '0.1.0-alpha.2' && record?.provider === 'codex'
@@ -41,7 +42,7 @@ function retainedSocket(dataDir, entry, record) {
 
 class LegacyCodex extends EventEmitter {
   constructor(record) {
-    super(); this.record = { ...record }; this.progress = new ProgressJournal();
+    super(); this.record = { ...record, recovering: true, messages: structuredClone(record.messages || []) }; this.progress = new ProgressJournal();
     this.closed = false; this.connected = false; this.revision = 0;
     this.approvalScope = crypto.randomUUID(); this.approval = null;
   }
@@ -59,19 +60,49 @@ class LegacyCodex extends EventEmitter {
     // it: start() owns native lifecycle and can launch or resume a TUI.
     const adapter = this.adapter = new Codex({ ...this.record, view: 'chat' }, host);
     adapter.chatAvailable = false;
+    adapter.recoveryNativeInputs = new Map(this.record.messages.filter(m => m.role === 'user' && m.origin === 'native').map(m => [m.id, m.text]));
+    for (const m of this.record.messages) {
+      if (m.role === 'assistant') adapter.historyMessageItems.add(m.id);
+      if (m.role === 'user' && ['human', 'room'].includes(m.origin)) adapter.ownInputs.add(m.id);
+    }
+    // Retain the original native writer; consume the same event/history
+    // reducers as the current service, rather than a second terminal image.
+    adapter.on('history', items => { applyCodexHistory(this.record, items, adapter); this.emit('change'); });
+    adapter.on('delta', item => { applyCodexDelta(this.record, item); this.emit('change'); });
+    adapter.on('messageItem', item => { applyCodexMessage(this.record, item); this.emit('change'); });
+    adapter.on('nativeBlock', item => { applyNativeBlock(this.record, item); this.emit('change'); });
+    adapter.on('model', model => { this.model = model; this.emit('change'); });
+    adapter.on('activity', text => { this.activity = text; this.emit('change'); });
+    adapter.on('nativeInput', (text, item) => {
+      if (!item?.id || !this.record.messages.some(m => m.id === item.id)) this.record.messages.push({ id: item?.id || crypto.randomUUID(), role: 'user', origin: 'native', text, status: 'submitted' });
+    });
     for (const event of ['state', 'nativeInput', 'approval', 'failed', 'fleet', 'background', 'complete', 'submitted']) {
       adapter.on(event, (...args) => {
-        if (event === 'state') { this.state = args[0]; if (this.state !== 'approval') this.approvalResolved = false; }
+        if (event === 'state') {
+          this.state = args[0]; if (this.state !== 'approval') this.approvalResolved = false;
+          if (this.state === 'idle') this.activity = '';
+          if (['disconnected', 'error', 'ended'].includes(this.state)) for (const m of this.record.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
+        }
         if (event === 'approval') {
           this.approval = { ...args[0], requestId: `legacy:${this.approvalScope}:${crypto.randomUUID()}` };
           this.approvalResolved = false;
           this.nativeRequestId = args[0].requestId;
         }
+        if (event === 'failed') {
+          this.activity = args[0];
+          for (const m of this.record.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
+          for (const item of this.progress.items.values()) if (['streaming', 'running'].includes(item.status)) {
+            this.emit('progress', this.progress.update({ id: item.id, status: 'unknown' }));
+          }
+        }
         if (['nativeInput', 'approval', 'failed', 'fleet'].includes(event)) this.revision++;
         this.emit(event, ...args); this.emit('change');
       });
     }
-    adapter.on('progress', item => { const update = this.progress.update(item); this.emit('progress', update); });
+    adapter.on('progress', item => {
+      const update = this.progress.update(item); this.emit('progress', update);
+      if (applyCodexProgress(this.record, item)) this.emit('change');
+    });
     adapter.on('approvalResolved', requestId => {
       if (requestId !== this.nativeRequestId) return;
       this.approval = null; this.nativeRequestId = undefined; this.approvalResolved = this.state === 'approval'; this.emit('change');
@@ -104,6 +135,7 @@ class LegacyCodex extends EventEmitter {
     try {
       const result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true });
       if (this.closed || result.thread?.id !== this.record.nativeId) throw Error('原生会话连接未确认。');
+      this.model = result.model || result.thread.model || null;
       if (revision === adapter.stateRevision) adapter.observeStatus(result.thread.status);
       this.subscribed = true;
     } catch (error) {
@@ -112,6 +144,8 @@ class LegacyCodex extends EventEmitter {
       // exact ID; only the person's first turn is allowed to create its history.
       this.subscribed = false; this.state = this.record.state || 'idle';
     }
+    if (this.subscribed && !await adapter.hydrateHistory(this.record.nativeId)) throw Error('原生历史连接已变化，没有重发任务。');
+    this.record.recovering = false;
     adapter.chatAvailable = true; this.connected = true; this.emit('change');
   }
   async send(text, tag, refresh, guard) {
@@ -120,7 +154,12 @@ class LegacyCodex extends EventEmitter {
     await refresh();
     const valid = () => this.connected && !this.closed && this.state === 'idle' && this.revision === revision && guard();
     if (!valid()) throw Error('原生状态已变化，输入未发送。');
-    const turnId = await this.adapter.send(text, tag, valid);
+    const message = { id: tag, role: 'user', text, status: 'awaiting-native', origin: 'human' };
+    this.record.messages.push(message); this.emit('change');
+    let turnId;
+    try { turnId = await this.adapter.send(text, tag, valid); message.status = 'submitted'; }
+    catch (error) { message.status = 'unconfirmed'; this.emit('change'); throw error; }
+    this.emit('change');
     if (this.closed) return;
     if (!this.subscribed) {
       // The accepted first turn created native history. Rejoin for its events;

@@ -95,10 +95,20 @@ async function cleanup() {
   assert.match(await page.locator('#messages').innerText(), /NATIVE_TOOL: 42/);
   assert.equal(await page.locator('.native-progress').count(), 0);
   checks.push('Native intermediate text and tool result appear in the main reading stream before final response');
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await page.locator('#room-messages').getByText('NATIVE_FIRST: checking locally.', { exact: true }).waitFor();
+  assert.match(await page.locator('#room-messages').innerText(), /NATIVE_TOOL: 42/);
+  const sharing = (await snapshot()).room.messages;
+  assert.ok(sharing.some(m => m.role === 'tool' && m.volatile));
+  assert.ok(sharing.filter(m => m.sharedStream).every(m => m.sessionId === before.id && m.replyTo));
+  assert.equal(calls, 2); assert.equal((await snapshot()).diagnostics.dispatches, 1);
+  checks.push('Actual native ACK binds intermediate and tool blocks into the shared main reader before final reply, without another dispatch');
   releaseFinal();
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.kind === 'turn'), 'Native turn boundary');
   await until(async () => (await snapshot()).room.messages.some(m => m.role === 'assistant' && m.text.includes('NATIVE_FINAL:')), 'Display-confirmed shared final reply');
   const first = (await snapshot()).sessions[0];
+  const sharedFinal = (await snapshot()).room.messages.filter(m => m.role === 'assistant' && m.text.includes('NATIVE_FINAL:'));
+  assert.equal(sharedFinal.length, 1); assert.equal(sharedFinal[0].finalReply, true);
   assert.equal(first.messages.filter(m => m.text.includes('NATIVE_FINAL:')).length, 1);
   assert.equal(first.messages.filter(m => m.text.includes('NATIVE_FIRST:')).length, 1);
   assert.equal(first.nativeId, before.nativeId); assert.equal(first.pid, before.pid);
@@ -107,6 +117,8 @@ async function cleanup() {
   await sleep(1100);
   assert.ok(!fs.readFileSync(path.join(profile, 'workspace.json'), 'utf8').includes('NATIVE_TOOL: 42'));
   checks.push('Stable block order, display-confirmed shared reply, same native process, tool content remains volatile');
+  if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-native-blocks.png') }); }
+  await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill('Start the interrupt check.'); await page.locator('#send-button').click();
   await until(() => calls === 3 && held, 'Held native stream');
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.text.includes('NATIVE_PARTIAL:')), 'Partial native display');

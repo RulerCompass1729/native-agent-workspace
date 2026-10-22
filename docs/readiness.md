@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-21. Version 0.1.0-alpha.55 is a **local macOS technical-trial alpha**.
+As of 2026-10-21. Version 0.1.0-alpha.56 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -15,16 +15,23 @@ and requested per-message delivery transparency; the current development increme
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
 
-**Development source, not installed:** rejected terminal-camera/replay panels are
-removed. Native Claude display batches, tool input/results and turn boundaries
-now enter the solo main reader. Actual CLI 2.1.307 and 2.1.308 trials use three
-local canned responses each, with no paid inference. Same-process GUI/TUI use,
-native interruption and context clearing are checked. Exact display provenance
-guards existing final-reply sharing; old progress journals remain readable inline
-with explicit stale/gap states. See [current evidence](testing.md#native-block-foundation--development-source).
-This is the content foundation, not complete 1:1 mapping: shared intermediate
-streams, threads and work-in-progress input remain open. The ordinary installed
-app stays alpha.55; no live user backend is replaced by this increment.
+**Installed alpha.56, 2026-10-21:** native messages and tool results now update
+inside the main reader; the rejected camera/replay panels are removed. Explicitly
+authorized shared replies stream in that same room reader with stable identity
+and provenance. Permission waits, departure, control changes, gaps and pauses
+close sharing without claiming that native tasks have stopped. Native final
+proof alone permits the existing finite handoff. Per-message delivery details
+show the exact content actually sent; visible progress is not automatically sent
+to other agents.
+
+Retained alpha.2 Codex sessions now read original native history and live items
+through the existing same-process connection. Reconnection preserves a read-only
+cache until successful reconciliation. Source checks and actual Electron flows
+pass independent review (515 local checks, no skips). Installed retained-reader, shared-reader and quiet-launch checks pass. The normal
+profile was reopened hidden: all three original sessions retained their native IDs
+and processes, the formerly empty Codex reader displayed eight original messages
+and its current model, and no portal dispatch was added. Full U17 remains open: threads, working-turn GUI input, complete native
+menu/permission mapping and older Claude display compatibility are not closed.
 
 **Integrated acceptance, 2026-10-21:** the installed alpha.55 passes the
 supported solo/shared daily-use journey in six actual Electron runners, including

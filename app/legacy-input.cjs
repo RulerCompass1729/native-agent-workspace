@@ -128,7 +128,10 @@ class LegacyInput extends EventEmitter {
     if (!eligible(entry.state, record) || record.processIdentity?.pid !== record.pid || !processMayBeAlive(record.processIdentity)) throw Error('原生会话状态已变化，未接入输入。');
     const existing = this.target(record);
     if (existing && (!existing.native || existing.native.connected)) return true;
-    if (existing) { existing.submission.close(); this.targets.delete(record.id); }
+    // Retain the last-known reader while reconnecting. A failed handshake must
+    // not erase history that the old service never recorded. close() disables
+    // sending; only a successful replacement may take over this target.
+    if (existing) existing.submission.close();
     const connectionFile = path.join(this.dataDir, entry.key, 'connection.json');
     const stat = fs.lstatSync(connectionFile);
     if (stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw Error('原连接文件权限不安全。');
@@ -136,7 +139,9 @@ class LegacyInput extends EventEmitter {
     if (connection.pid !== entry.state.servicePid) throw Error('原连接已变化，未接入输入。');
     const directory = path.dirname(connection.endpoint); privateDirectory(directory);
     if (record.provider === 'codex') {
-      const native = new LegacyCodex(record), target = { record: { ...record }, submission: native, native };
+      const cached = existing?.native?.record;
+      const native = new LegacyCodex(cached ? { ...record, messages: cached.messages } : record);
+      const target = { record: { ...record }, submission: native, native };
       this.connecting.add(native);
       try {
         await native.connect(retainedSocket(this.dataDir, entry, record)); checkOpen();

@@ -152,12 +152,13 @@ function messageList(el, messages, room = false, key = 'room') {
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
     if (m.role === 'system' && !m.sessionId) name = room ? '工作区' : m.name || '原生会话';
     if (m.role === 'system' && m.runId) name = m.name || '协作';
-    const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply, m.title, m.incomplete, m.volatile]);
+    const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply, m.title, m.incomplete, m.volatile, m.sharingStopped]);
     if (entry.headingKey !== headingKey) {
       entry.heading.replaceChildren(node('strong', name)); entry.headingKey = headingKey;
       if (m.title) entry.heading.append(node('span', m.title));
       if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
       if (m.volatile) entry.heading.append(node('span', '本次运行记录'));
+      if (m.sharingStopped) entry.heading.append(node('span', `共享已停止 · ${m.sharingStopped}`));
       if (room && Number.isFinite(m.time)) { const time = node('time', new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); time.title = new Date(m.time).toLocaleString(); entry.heading.append(time); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.

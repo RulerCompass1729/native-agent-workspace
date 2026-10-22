@@ -1,6 +1,52 @@
 # Bounded testing
 
-## Native block foundation — development source
+## Shared streams and retained readers — alpha.56
+
+As of 2026-10-21. Source checks pass independent review. The installed app passes
+the retained-reader (three groups) and shared-reader (seven groups) runners below. `npm test` passes 515 checks with no skips.
+
+- `test-progress-reading.cjs`: seven actual Electron groups, including two
+  interleaved agent replies, exact mention targeting, draft/focus retention,
+  member filtering, stable final blocks and departure during streaming.
+- `test-retained-reader.cjs`: three actual Electron groups using an old-service
+  transport fixture. Original history/current model, GUI input, live text/tool
+  content exactly once, unchanged identity and reopen/draft/no-replay pass.
+- `test-room-send.cjs`: nine existing room submission/receipt groups pass.
+- `test-native-blocks.cjs`: actual Claude 2.1.308 and Electron with three local
+  canned inference responses. Native intermediate/tool content appears in the
+  shared reader before final completion, with unchanged process and exact final
+  attribution, alongside interrupt/context-clear. The full runner makes two
+  Portal submissions (one shared, one solo interruption task), three local
+  inference responses and zero paid inference calls. The successful recording
+  remains private.
+
+A separate read of a retained native Codex process recovered eight original
+messages from its same loaded identity while the old portal stored zero. Current
+model identity was reconciled; no new turn or process was created. This supports
+the native read contract, not a hosted-provider inference test.
+
+Review counterexamples cover approval while streaming, revoked-grant eviction,
+nonempty old partial caches, history/live races, failed reconnect preservation
+and native error with unfinished text/tools. Failed earlier GUI runs remain in
+private evidence and are not counted as passes. Controlled providers are labeled
+fixtures; tool records remain bounded and volatile, not a durable full trace.
+
+The normal installed profile was reopened through `--background`, retaining all
+three native session IDs/processes, selected view and saved draft. Its previously
+empty Codex main reader displayed eight native messages and the current model;
+portal dispatch count did not increase. A private screenshot confirms the reader
+contains the original conversation and no terminal-camera panel. A separate
+actual-app runner confirms first and repeated background launch keep windows
+hidden. A read-only macOS observer recorded no foreground-application or Space
+change during the actual reopen. This is one controlled desktop observation,
+not a guarantee for every macOS configuration. Normal user activation restores
+ordinary Dock/window behavior; background startup temporarily uses accessory
+activation policy. No test-profile guard was relaxed.
+
+Still open: reply threads, working-turn GUI input, complete terminal-state
+mapping and older Claude display compatibility. These results do not close U17.
+
+## Native block foundation — earlier source validation
 
 As of 2026-10-21. This source-only increment replaces the rejected camera/replay
 panels with native content in the solo main reader. The installed alpha.55 is
@@ -41,9 +87,10 @@ runner rather than asserting the retired replay UI. Controlled progress fixtures
 do not establish native-provider compatibility. Separate unit/native results
 and independent review are required before closing a scoped issue.
 
-Still open: authorized room intermediate streaming and threads, input while a
-turn is working, complete native input/menu/permission mapping, installed delivery
-and old-runtime compatibility beyond the recorded fallback paths. No complete
+At that checkpoint, shared intermediate streaming and installed delivery were
+open; see the subsequent alpha.56 evidence above. Threads, working-turn input,
+complete native input/menu/permission mapping and wider old-runtime compatibility
+remain open. No complete
 U17, universal 1:1, zero-latency or zero-error claim follows from these checks.
 
 ## Integrated core acceptance — alpha.55
