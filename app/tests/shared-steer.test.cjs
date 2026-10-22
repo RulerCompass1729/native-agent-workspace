@@ -110,3 +110,17 @@ for (const beforeAck of [true, false]) test(`unscoped native error ${beforeAck ?
   assert.ok(!JSON.stringify(f.w.room.messages).includes('PRIVATE AFTER ERROR'));
   assert.equal(f.w.room.messages.filter(m => m.role === 'assistant').length, beforeAck ? 0 : 1);
 });
+
+test('summary sharing follows exact input provenance, preserves private tails and never becomes a final handoff', async t => {
+  const f = await fixture(t);
+  const startSummary = id => f.emit('item/started', {turnId: 'active', item: {id, type: 'reasoning', summary: [], content: []}});
+  const summary = (id, text) => f.emit('item/reasoning/summaryTextDelta', {turnId: 'active', itemId: id, summaryIndex: 0, delta: text});
+  startSummary('private-summary'); summary('private-summary', 'PRIVATE PREFIX');
+  const sending = f.w.steer(f.id, 'Shared request', 'owner', 'active', {}), tag = f.runtime.pendingSteer;
+  f.user(tag); f.ack(); await sending;
+  summary('private-summary', ' PRIVATE TAIL');
+  startSummary('shared-summary'); summary('shared-summary', 'Public progress');
+  assert.ok(!JSON.stringify(f.w.room.messages).includes('PRIVATE'));
+  const row = f.w.room.messages.find(m => m.title === '过程摘要'); assert.ok(row); assert.equal(row.sessionId, f.id); assert.equal(row.status, 'streaming');
+  f.end('interrupted'); assert.equal(row.status, 'interrupted'); assert.equal(row.finalReply, undefined);
+});

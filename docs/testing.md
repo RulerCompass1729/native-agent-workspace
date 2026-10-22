@@ -2251,3 +2251,42 @@ All 781 local checks pass without skips. Independent source and final installed
 review passes; 48 runtime files match, strict signature remains valid after native
 testing, and hidden reopening preserves three original sessions and drafts with
 zero new dispatch. This closes B31 only; full display/input parity remains open.
+
+
+## Codex public process summaries
+
+The [native app-server protocol](https://learn.chatgpt.com/docs/app-server) separates
+readable `reasoning.summary` / `summaryTextDelta` from raw `content` / `textDelta`.
+The locally generated 0.163.0 types were checked. This increment maps only the
+public summaries into the existing main reader; it adds no model request, terminal
+parser, polling loop or separate display surface. The previously inspected Orca
+transcript decoder also handles summaries separately; no third-party code is copied.
+
+`scripts/test-native-summaries.cjs` uses the actual Codex and Electron application,
+a private native configuration and two bounded task responses plus at most one
+separately counted native title response, all loopback. It checks
+streaming public summary sections, native/GUI comparison, shared attribution,
+reload with an unsent draft, authoritative completion and native Escape.
+`NAW_EXPECT_MISSING_SUMMARY=1` against the previous installed build reproduces
+the missing reader row while the native terminal displays the summary. The first
+runner attempt incorrectly waited for a heading that the TUI does not render in
+its working status; its failure is retained, not counted as a product pass.
+
+Source native tests pass normal completion, actual Escape and whole-app reopening
+with the same native identity/process, records and unsent draft. Two independent
+counterexamples exposed late frames changing an interrupted summary, and an old
+resume acknowledgement overriding newly observed progress. Both now pass regression
+checks and source review; 787 local tests pass without skips. An intermediate
+runner also incorrectly counted a native title request as the second task; fixed
+accounting separates it and bounds each request kind. Failed trials remain local.
+
+The actual screenshot exposed excess paragraph spacing. The DSH Markdown component
+did not forward the assumed class name, so the previous whitespace selector never
+matched. The existing assistant message container now owns the rule; actual UI
+reading checks preserve selection, scrolling and code whitespace. Final installed
+native/reading verification and independent source/artifact review pass. All 48
+runtime files match source, strict signature passes after native testing, and the
+original three sessions reopen hidden with IDs/processes, drafts and selected view
+unchanged and no task dispatch. Native cold-service hydration is covered by local
+protocol tests only; whole-app reopen retains the running native service. Raw reasoning, hosted inference quality and complete
+native transient/menu parity are not claimed.

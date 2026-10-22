@@ -51,6 +51,12 @@ async function run() {
   const began = Date.now(); await fixture('history', id, history);
   await page.locator('#messages [data-message-id="history-239"] .message-body p').first().waitFor();
   await until(() => page.locator('#messages .message-body p').count().then(n => n >= 480), 'Markdown history mounted');
+  const markdownBody = page.locator('#messages [data-message-id="history-239"] .message-body');
+  assert.equal(await markdownBody.evaluate(el => getComputedStyle(el).whiteSpace), 'normal');
+  const codeWhitespace = await markdownBody.locator('pre').first().evaluate(el => getComputedStyle(el).whiteSpace);
+  assert.ok(['pre', 'pre-wrap', 'break-spaces'].includes(codeWhitespace), 'Code retains its own whitespace semantics');
+  assert.match(await markdownBody.locator('pre').first().innerText(), /const record = 239;/);
+  observations.push({check:'Markdown paragraphs avoid duplicate whitespace; code formatting stays intact',pass:true});
   await resource('history-loaded');
   const initialLoadMs = Date.now() - began;
   await until(() => page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3), 'Initial history follows latest output');

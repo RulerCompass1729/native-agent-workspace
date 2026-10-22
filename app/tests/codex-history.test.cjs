@@ -155,3 +155,53 @@ test('reconnection refreshes cached partial tools while preserving tools observe
   f.notify('item/commandExecution/outputDelta', { turnId: 'old-turn', itemId: 'cached', delta: 'native complete' });
   assert.equal(f.s.messages[0].text, 'native complete'); assert.deepEqual(f.w.room.messages, []);
 });
+
+// Public summaries are display records, not an alternate final answer.
+test('summary sections stream in one native block; final snapshot replaces them without exposing raw reasoning', async t => {
+  const f = await fixture(t, () => ({data: []}));
+  f.notify('turn/started', {turn: {id: 'turn'}});
+  f.notify('item/started', {turnId: 'turn', item: {id: 'summary', type: 'reasoning', summary: [], content: ['SECRET RAW']}});
+  const delta = (summaryIndex, delta) => f.notify('item/reasoning/summaryTextDelta', {turnId: 'turn', itemId: 'summary', summaryIndex, delta});
+  delta(0, 'First '); delta(0, 'section'); delta(1, 'Second section');
+  f.notify('item/reasoning/textDelta', {turnId: 'turn', itemId: 'summary', delta: 'SECRET RAW DELTA'});
+  assert.equal(f.s.messages.length, 1); assert.equal(f.s.messages[0].text, 'First section\n\nSecond section');
+  assert.equal(f.s.messages[0].role, 'assistant'); assert.equal(f.s.messages[0].status, 'streaming');
+  f.notify('item/completed', {turnId: 'turn', item: {id: 'summary', type: 'reasoning', summary: ['Final public summary'], content: ['SECRET RAW']}});
+  delta(0, 'LATE');
+  assert.equal(f.s.messages.length, 1); assert.equal(f.s.messages[0].text, 'Final public summary'); assert.equal(f.s.messages[0].status, 'complete');
+  assert.equal(f.r.turn('turn').text, ''); assert.ok(!JSON.stringify(f.s).includes('SECRET RAW'));
+  assert.equal(f.w.room.messages.length, 0);
+});
+test('summary history hydration preserves live text; unknown-watermark deltas wait for final snapshot', async t => {
+  const f = await fixture(t, () => ({data: [entry('summary', 'reasoning', '', {summary: ['History'], content: ['SECRET RAW']})]}));
+  await f.r.hydrateHistory(f.s.nativeId);
+  assert.equal(f.s.messages[0].text, 'History');
+  f.notify('item/reasoning/summaryTextDelta', {turnId: 'old-turn', itemId: 'summary', summaryIndex: 0, delta: 'OVERLAP'});
+  assert.equal(f.s.messages[0].text, 'History');
+  f.notify('item/completed', {turnId: 'old-turn', item: {id: 'summary', type: 'reasoning', summary: ['Complete'], content: ['SECRET RAW']}});
+  assert.equal(f.s.messages.length, 1); assert.equal(f.s.messages[0].text, 'Complete');
+  await f.r.hydrateHistory(f.s.nativeId); assert.equal(f.s.messages[0].text, 'Complete');
+  assert.ok(!JSON.stringify(f.s).includes('SECRET RAW'));
+});
+test('interrupted summaries keep native cut and cold history never silently removes observed tail', async t => {
+  const f = await fixture(t, () => ({data: [entry('summary', 'reasoning', '', {summary: ['Partial']})]}));
+  f.notify('turn/started', {turn: {id: 'old-turn'}});
+  f.notify('item/reasoning/summaryTextDelta', {turnId: 'old-turn', itemId: 'summary', summaryIndex: 0, delta: 'Partial preserved tail'});
+  f.notify('turn/completed', {turn: {id: 'old-turn', status: 'interrupted'}});
+  assert.equal(f.s.messages[0].status, 'interrupted');
+  f.s.recovering = true; f.r.summaryParts.clear(); f.r.liveSummaryItems.clear();
+  await f.r.hydrateHistory(f.s.nativeId);
+  assert.equal(f.s.messages[0].text, 'Partial preserved tail'); assert.equal(f.s.messages[0].status, 'interrupted');
+});
+
+test('native interrupted summary rejects late deltas, completed snapshots and cold-history replacements', async t => {
+  const f = await fixture(t, () => ({data: [entry('summary', 'reasoning', '', {summary: ['LATE HISTORY REPLACEMENT']})]}));
+  f.notify('turn/started', {turn: {id: 'old-turn'}});
+  f.notify('item/reasoning/summaryTextDelta', {turnId:'old-turn',itemId:'summary',summaryIndex:0,delta:'VISIBLE CUT'});
+  f.notify('turn/completed', {turn: {id:'old-turn',status:'interrupted'}});
+  f.notify('item/reasoning/summaryTextDelta', {turnId:'old-turn',itemId:'summary',summaryIndex:0,delta:' LATE TAIL'});
+  f.notify('item/completed', {turnId:'old-turn',item:{id:'summary',type:'reasoning',summary:['LATE COMPLETED SNAPSHOT']}});
+  assert.equal(f.s.messages[0].text,'VISIBLE CUT'); assert.equal(f.s.messages[0].status,'interrupted');
+  f.s.recovering=true; f.r.liveSummaryItems.clear(); await f.r.hydrateHistory(f.s.nativeId);
+  assert.equal(f.s.messages[0].text,'VISIBLE CUT'); assert.equal(f.s.messages[0].status,'interrupted');
+});

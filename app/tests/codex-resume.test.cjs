@@ -259,3 +259,13 @@ for (const scenario of ['empty', 'pending', 'missing', 'wrong-error-id', 'wrong-
   assert.equal(calls.length, ['unknown-version', 'wrong-thread'].includes(scenario) ? 1 : 2);
   assert.ok(calls.every(c => c.params.threadId === record.nativeId && !/start|resume/.test(c.method)));
 });
+
+test('live public summary before resume ACK invalidates stale idle without inventing a turn', async () => {
+  const f = fixture(r => {
+    r.event({method:'item/reasoning/summaryTextDelta',params:{turnId:'active-turn',itemId:'summary',summaryIndex:0,delta:'Live public progress'}});
+    return idle(r);
+  });
+  const blocks=[]; f.r.on('nativeBlock', block=>blocks.push(block)); await f.r.start();
+  assert.ok(!f.states.includes('idle')); assert.equal(f.r.turnId,null);
+  assert.equal(blocks.length,1); assert.equal(blocks[0].text,'Live public progress');
+});

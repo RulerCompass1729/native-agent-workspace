@@ -11,7 +11,7 @@ const { SerializeAddon } = require('@xterm/addon-serialize');
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion } = require('./native-history.cjs');
-const { toolContent, toolStatus, toolTypes, fileChanges } = require('./codex-tool-content.cjs');
+const { toolContent, toolStatus, toolTypes, fileChanges, summaryText } = require('./codex-tool-content.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -490,6 +490,8 @@ class Codex extends EventEmitter {
   constructor(record, host) {
     super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = !record.recovering && record.view !== 'terminal'; this.stopped = false; this.lifecycleRevision = 0; this.eventRevision = 0; this.stateRevision = 0; this.on('state', state => { this.latestState = state; this.stateRevision++; }); this.inputItems = new Set(); this.liveMessageItems = new Set(); this.liveToolItems = new Set(); this.historyMessageItems = new Set();
     this.nativeRequests = new Map();
+    this.summaryParts = new Map(); this.liveSummaryItems = new Set();
+    this.summaryEndedTurns = new Set((record.messages || []).filter(m => m.kind === 'turn' || m.kind === 'summary' && m.status === 'interrupted').map(m => m.turnId).filter(Boolean));
     if (record.recovering) this.recoveryReady = new Promise(resolve => { this.finishRecoveryConnection = resolve; });
   }
   async start() {
@@ -506,7 +508,7 @@ class Codex extends EventEmitter {
       // Persisted text has no delta watermark; wait for authoritative completion
       // rather than appending an unknown suffix/prefix to an old partial reply.
       for (const message of this.record.messages || []) {
-        if (message.role === 'assistant') this.historyMessageItems.add(message.id);
+        if (message.role === 'assistant') this.historyMessageItems.add(message.kind === 'summary' ? message.id.slice(`native:${this.record.nativeId}:summary:`.length) : message.id);
         if (message.role === 'user' && ['human', 'room'].includes(message.origin)) this.ownInputs.add(message.id);
       }
       this.host.codexTargets.set(this.record.nativeId, this);
@@ -615,6 +617,7 @@ class Codex extends EventEmitter {
       for (const entry of result.data) {
         const item = entry.item || entry;
         if (!item || typeof item.id !== 'string' || !item.id) throw new Error('原生历史缺少消息标识；请在原生终端继续。');
+        if (item.type === 'reasoning') items.set(item.id, { id: item.id, type: item.type, summary: Array.isArray(item.summary) && item.summary.every(part => typeof part === 'string') ? item.summary : [], turnId: entry.turnId });
         if (['agentMessage', 'userMessage'].includes(item.type) || toolTypes.has(item.type)) items.set(item.id, { ...item, turnId: entry.turnId });
       }
       cursor = result.nextCursor;
@@ -624,7 +627,8 @@ class Codex extends EventEmitter {
           // observed, wait for the authoritative completed item instead of
           // appending potentially overlapping deltas to that snapshot.
           if ((item.type === 'agentMessage' && !this.liveMessageItems.has(item.id)) ||
-              (toolTypes.has(item.type) && !this.liveToolItems.has(item.id))) this.historyMessageItems.add(item.id);
+              (toolTypes.has(item.type) && !this.liveToolItems.has(item.id)) ||
+              (item.type === 'reasoning' && !this.liveSummaryItems.has(item.id) && !this.summaryParts.has(item.id))) this.historyMessageItems.add(item.id);
         }
         this.emit('history', [...items.values()]); return true;
       }
@@ -676,7 +680,7 @@ class Codex extends EventEmitter {
       !liveTurn.itemInputs.has(itemId) && liveTurn.itemInputs.size < 4096) {
       // A missing/late start is not permission to reassign an existing item.
       // Pin unknown on its first delta, completion, progress, or history row.
-      const existing = this.historyMessageItems.has(itemId) || this.record.messages?.some(row => row.id === itemId || row.id === `native:${this.record.nativeId}:tool:${itemId}`);
+      const existing = this.historyMessageItems.has(itemId) || this.record.messages?.some(row => row.id === itemId || row.id === `native:${this.record.nativeId}:tool:${itemId}` || row.id === `native:${this.record.nativeId}:summary:${itemId}`);
       liveTurn.itemInputs.set(itemId, message.method === 'item/started' && !existing ? liveTurn.inputTag || '' : '');
     }
     const inputTag = liveTurn?.itemInputs.get(itemId) || '';
@@ -714,6 +718,36 @@ class Codex extends EventEmitter {
         id: p.itemId, turnId: p.turnId, inputTag, source: 'codex-native', kind: 'fileChange', title: '文件修改',
         ...fileChanges(p.changes),
       });
+    }
+    // Public summaries keep their native item identity and input attribution.
+    // Raw reasoning deltas deliberately do not enter the reader or its cache.
+    const summaryLifecycle = ['item/started', 'item/completed'].includes(message.method) && p.item?.type === 'reasoning';
+    if (summaryLifecycle || ['item/reasoning/summaryTextDelta', 'item/reasoning/summaryPartAdded'].includes(message.method)) {
+      if (typeof itemId === 'string' && itemId && typeof p.turnId === 'string' && p.turnId && !this.summaryEndedTurns.has(p.turnId)) {
+        this.stateRevision++; // Live summary invalidates an older resume status.
+        const completed = message.method === 'item/completed';
+        let parts = this.summaryParts.get(itemId);
+        if (completed) {
+          const text = summaryText(p.item);
+          if (text || parts) this.emit('nativeBlock', { id: `summary:${itemId}`, nativeId: this.record.nativeId,
+            kind: 'summary', turnId: p.turnId, inputTag, title: '过程摘要', text, status: 'complete' });
+          this.liveSummaryItems.add(itemId); this.summaryParts.delete(itemId);
+        } else if (!this.historyMessageItems.has(itemId) && !this.liveSummaryItems.has(itemId)) {
+          // The set marks completed items; late deltas must not reopen them.
+          if (!parts) {
+            if (this.summaryParts.size < 4096) { parts = { turnId: p.turnId, sections: new Map() }; this.summaryParts.set(itemId, parts); }
+          }
+          if (parts?.turnId === p.turnId) {
+            if (summaryLifecycle && Array.isArray(p.item.summary)) p.item.summary.forEach((text, i) => { if (typeof text === 'string' && !parts.sections.has(i)) parts.sections.set(i, text); });
+            if (Number.isSafeInteger(p.summaryIndex) && p.summaryIndex >= 0 && p.summaryIndex < 4096 && typeof p.delta === 'string') {
+              parts.sections.set(p.summaryIndex, (parts.sections.get(p.summaryIndex) || '') + p.delta);
+            }
+            const text = [...parts.sections].sort((a, b) => a[0] - b[0]).map(part => part[1]).join('\n\n');
+            if (text) this.emit('nativeBlock', { id: `summary:${itemId}`, nativeId: this.record.nativeId,
+              kind: 'summary', turnId: p.turnId, inputTag, title: '过程摘要', text, status: 'streaming' });
+          }
+        }
+      }
     }
     if (message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: '原生会话错误', status: 'failed' });
     if (message.id !== undefined) {
@@ -777,6 +811,8 @@ class Codex extends EventEmitter {
         break;
       case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage); break;
       case 'turn/completed': {
+        this.summaryEndedTurns.add(p.turn.id);
+        for (const [id, parts] of this.summaryParts) if (parts.turnId === p.turn.id) this.summaryParts.delete(id);
         this.emit('nativeBlock', { id: `turn:${p.turn.id}`, kind: 'turn', turnId: p.turn.id, inputTag: this.turn(p.turn.id).inputTag || '', nativeId: this.record.nativeId,
           status: p.turn.status === 'completed' ? 'complete' : p.turn.status === 'interrupted' ? 'interrupted' : 'failed',
           text: p.turn.status === 'completed' ? '原生本轮已结束' : p.turn.status === 'interrupted' ? '原生已中断本轮' : '原生本轮未正常完成' });
@@ -964,9 +1000,9 @@ class Codex extends EventEmitter {
     // thread/resume is not a new thread or a turn/start request.
     this.chatAvailable = false; this.stopped = false;
     this.pending = null; this.turnId = null; this.turns.clear();
-    this.liveMessageItems.clear(); this.liveToolItems.clear();
+    this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveSummaryItems.clear(); this.summaryParts.clear();
     for (const message of this.record.messages || []) {
-      if (message.role === 'assistant') this.historyMessageItems.add(message.id);
+      if (message.role === 'assistant') this.historyMessageItems.add(message.kind === 'summary' ? message.id.slice(`native:${this.record.nativeId}:summary:`.length) : message.id);
     }
     this.host.codexTargets.set(this.record.nativeId, this);
     const revision = this.stateRevision;
