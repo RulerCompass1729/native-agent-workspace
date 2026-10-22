@@ -1,8 +1,20 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.67. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.68. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.68 retained Codex working input
+
+Use the existing **追加指令** action in a retained Codex conversation or its shared
+room. It targets the same running native turn. Only new items attributed to the
+accepted shared input enter the room, not earlier private work. Sending cannot
+fall back to a new turn when the original turn changes. Native results that finish
+before acknowledgement retain their identity and sharing boundaries. Saved-draft
+cleanup preserves newer edits. Independent source and installed review pass:
+four solo and six shared native groups, 685 local checks without skips, unchanged
+original native identities/processes, matching payload and post-native signature.
+Fixed loopback inference verifies native/UI mechanics, not hosted reasoning.
 
 ## Alpha.67 retained Codex shared replies
 

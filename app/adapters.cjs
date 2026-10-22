@@ -754,7 +754,7 @@ class Codex extends EventEmitter {
     else this.emit('complete', { tag: pending?.tag, supersededTag: pending?.supersededTag, messageId: turn.messageId, inputTag: turn.itemInputs.get(turn.messageId) || '', text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
   }
   get steerAvailable() { return this.host.rpc?.nativeVersion === '0.163.0' && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
-  async steer(text, tag, expectedTurnId, guard, shared = false) {
+  async steer(text, tag, expectedTurnId, guard, shared = false, acceptedGuard = guard) {
     if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw Error('当前原生回合已变化；追加指令未发送，草稿保留。');
     this.ownInputs.add(tag);
     const operation = this.steering = { tag, turnId: expectedTurnId, inputSeen: false };
@@ -764,7 +764,7 @@ class Codex extends EventEmitter {
       const receipt = await this.host.rpc.call('turn/steer', { threadId: this.record.nativeId, expectedTurnId, clientUserMessageId: tag, input: [{ type: 'text', text, text_elements: [] }] });
       if (receipt?.turnId !== expectedTurnId) throw Error('原生追加指令接收结果未确认；请核对终端，不会重发。');
       this.emit('submitted', tag);
-      if (shared && this.pending === previous && lifecycle === this.lifecycleRevision && !this.stopped && !this.transportDisconnected && guard()) {
+      if (shared && this.pending === previous && lifecycle === this.lifecycleRevision && !this.stopped && !this.transportDisconnected && acceptedGuard()) {
         this.pending = { tag, turnId: expectedTurnId, steered: true, supersededTag: previous?.supersededTag || previous?.tag };
         if (operation.inputSeen && this.turns.get(expectedTurnId)?.inputTag === tag) this.emit('replyBound', { tag, nativeId: this.record.nativeId, turnId: expectedTurnId, inputTag: tag });
       }

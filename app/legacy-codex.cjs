@@ -183,7 +183,7 @@ class LegacyCodex extends EventEmitter {
       }
     }
   }
-  async steer(text, tag, expectedTurnId, refresh, guard) {
+  async steer(text, tag, expectedTurnId, refresh, guard, shared = false, sharingGuard = guard) {
     if (!this.steerAvailable || this.pendingSteer) throw Error('原生追加指令连接尚未就绪。');
     this.pendingSteer = tag;
     const revision = this.revision;
@@ -194,7 +194,11 @@ class LegacyCodex extends EventEmitter {
       if (!valid()) throw Error('当前原生回合已变化，草稿保留。');
       message = { id: tag, role: 'user', text, status: 'awaiting-native', origin: 'human', inputMode: 'steer', turnId: expectedTurnId };
       this.record.messages.push(message); this.emit('change');
-      await this.adapter.steer(text, tag, expectedTurnId, valid); message.status = 'submitted';
+      // Native work can complete before the ACK. Sending still requires the
+      // working turn; accepting its proven result only requires intact authority.
+      const accepted = () => this.steerAvailable && this.revision === revision && ['idle', 'working'].includes(this.state) &&
+        !this.approval && this.turnId === expectedTurnId && sharingGuard();
+      await this.adapter.steer(text, tag, expectedTurnId, valid, shared, accepted); message.status = 'submitted';
     } catch (error) { if (message && message.status !== 'submitted') message.status = 'unconfirmed'; throw error; }
     finally { this.pendingSteer = null; this.emit('change'); }
   }

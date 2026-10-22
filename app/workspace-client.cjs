@@ -107,6 +107,7 @@ class WorkspaceClient extends EventEmitter {
           legacyReaderPending: s.provider === 'claude' && legacySubmit && !reader?.initialized,
           legacyShare: legacySubmit,
           legacySharedReply: Boolean(legacySubmit && bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError),
+          legacySharedSteer: Boolean(legacySubmit && native?.sharedReplyAvailable && native.steerAvailable && !bridge.sharedReplies?.storageError),
           ...(s.provider === 'claude' && legacySubmit ? { queueAvailable: Boolean(bridge.target(s)?.queueAvailable), pendingQueue: bridge.target(s)?.pendingQueue || null } : {}),
           ...(reader?.initialized ? { nativeBlockMapping: true, messages: reader.record.messages,
             ...(reader.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : {}) } : {}),
@@ -258,6 +259,18 @@ class WorkspaceClient extends EventEmitter {
       return entry.client.call('draft', id, text);
     });
   }
+  legacyShareAuthority(entry, record, manualValid) {
+    const guard = this.operationGuard(entry), expected = { ...record };
+    return () => {
+      try { guard(); } catch { return false; }
+      const current = entry.state.sessions.find(s => s.id === expected.id);
+      const observed = this.control.legacyOwners.get(expected.id);
+      return manualValid() && current?.nativeId === expected.nativeId && current.pid === expected.pid &&
+        current.owner === entry.state.owner && current.controlRevision === expected.controlRevision && observed?.controlRevision === expected.controlRevision &&
+        current.memberRevision === expected.memberRevision && current.roomId === 'shared' && !current.approval && !current.nativeContextPending &&
+        ['idle', 'working'].includes(current.state);
+    };
+  }
   async call(method, ...args) {
     if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
     this.authorizeOperation?.(method, args);
@@ -347,8 +360,8 @@ class WorkspaceClient extends EventEmitter {
       const original = target.state.sessions.find(s => s.id === id);
       if (typeof turnId !== 'string' || !turnId || turnId.length > 160 || original?.nativeId !== nativeId) throw Error('当前原生回合已变化，草稿保留。');
       const shared = method === 'steerShared';
-      if (shared && (!target.state.capabilities?.includes('nativeSharedSteer') || original?.roomId !== 'shared')) throw Error('此连接暂不支持共享追加指令；草稿保留。');
-      const bridged = !shared && target.state.runtimeVersion === '0.1.0-alpha.2' && this.control.legacyInput?.target(original)?.native;
+      const bridged = target.state.runtimeVersion === '0.1.0-alpha.2' && this.control.legacyInput?.target(original)?.native;
+      if (shared && (!(bridged?.sharedReplyAvailable && !this.control.legacyInput.sharedReplies.storageError || target.state.capabilities?.includes('nativeSharedSteer')) || original?.roomId !== 'shared')) throw Error('此连接暂不支持共享追加指令；草稿保留。');
       if (!(bridged?.steerAvailable || target.state.capabilities?.includes('nativeSteer'))) throw Error('此连接暂不支持工作中追加指令；请在原生终端继续。');
       return this.intervene(async () => {
         const manualValid = this.manualGuard(id), control = original.controlRevision, member = original.memberRevision;
@@ -357,16 +370,23 @@ class WorkspaceClient extends EventEmitter {
           try { guard(); replyGuard(); this.authorizeOperation?.(method, args); } catch { return false; }
           const raw = target.state.sessions.find(s => s.id === id), current = this.snapshot().sessions.find(s => s.id === id);
           return manualValid() && raw?.controlRevision === control && raw.owner === target.state.owner &&
-            raw.nativeId === nativeId && !raw.nativeContextPending && current?.state === 'working' && !current.approval && !current.pendingSteer && current.activeTurnId === turnId &&
+            raw.nativeId === nativeId && raw.pid === original.pid && !raw.nativeContextPending && current?.state === 'working' && !current.approval &&
+            // The retained transport owns its pending-send lock. Once acquired,
+            // this router must not mistake that same send for a competing one.
+            (!current.pendingSteer || bridged) && current.activeTurnId === turnId &&
             (!shared || (raw.roomId === 'shared' && raw.memberRevision === member));
         };
         await this.pauseExcept(null); await this.refresh();
         if (!valid()) throw Error('当前回合或控制权已变化；草稿保留，没有另开回合。');
         if (!bridged) return target.client.call(method, ...args);
+        // A draft write already queued before this send may have completed
+        // during refresh. Read its text now, retaining the click-time revision.
+        const draft = target.state.sessions.find(s => s.id === id)?.liveDraft;
         const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原生状态已变化'); };
-        const tag = await this.control.legacyInput.send(original, text, refresh, valid, false, undefined, turnId);
-        if (original.liveDraft?.trim() === text.trim()) await this.legacyDraft(target, id, '', original, current =>
-          current.liveDraft === original.liveDraft && (this.control.draftVersions?.get(id) || 0) === draftRevision).catch(() => {});
+        const shareAuthority = shared ? this.legacyShareAuthority(target, original, manualValid) : undefined;
+        const tag = await this.control.legacyInput.send(original, text, refresh, valid, shared, replyTo, turnId, false, shareAuthority);
+        if (!shared && draft?.trim() === text.trim()) await this.legacyDraft(target, id, '', original, current =>
+          current.liveDraft === draft && (this.control.draftVersions?.get(id) || 0) === draftRevision).catch(() => {});
         return tag;
       }, id);
     }
@@ -527,15 +547,7 @@ class WorkspaceClient extends EventEmitter {
         const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原会话已变化'); };
         // Native hooks remain the sole writer of conversation history.
         // Never call the old paste/Enter sender or launch a replacement CLI.
-        const shareAuthority = () => {
-          try { guard(); } catch { return false; }
-          const current = target.state.sessions.find(s => s.id === record.id);
-          const observed = this.control.legacyOwners.get(record.id);
-          return manualValid() && current?.nativeId === record.nativeId && current.pid === record.pid &&
-            current.owner === target.state.owner && current.controlRevision === control && observed?.controlRevision === control &&
-            current.memberRevision === member && current.roomId === 'shared' && !current.approval && !current.nativeContextPending &&
-            ['idle', 'working'].includes(current.state);
-        };
+        const shareAuthority = this.legacyShareAuthority(target, record, manualValid);
         const tag = await this.control.legacyInput.send(record, args[1], refresh, valid, shared, replyTo, undefined, false, shareAuthority);
         // An accepted native submission stays accepted even if cleanup loses
         // ownership or the connection. Never report that as a failed send.

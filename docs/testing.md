@@ -1969,3 +1969,32 @@ its requested structured format. This does not establish production inference
 cost or disable the user's native title behavior. Completed shared text is local
 history; tool text remains volatile. Full native display parity, retained shared
 steering and automatic cross-service handoff are not acceptance claims here.
+
+
+## Retained Codex working input — alpha.68
+
+`NAW_STEER_RETAINED=1 node scripts/test-native-steer.cjs` uses an actual alpha.2
+backend and native Codex 0.163.0. Add `NAW_STEER_SHARED=1` for the room path.
+The runner uses the real Electron controls, native acceptance and downstream
+provider requests, verifies the same native ID/process, and checks that terminal
+and conversation contain the same instruction and final answer. Solo reload must
+not restore an already submitted draft. Shared reload must retain a newer draft
+and the same live message identity while excluding earlier private items.
+
+Each run permits two loopback task responses and at most one separate native title
+response, with zero paid inference. Fixed inference validates native transport/UI
+mechanics, not hosted model reasoning or physical input-method behavior. A fresh
+retained thread may initially report no model until native history exists; each
+actual fixture request must use the isolated configured model.
+
+Local full-router/WebSocket regressions cover the self-pending lock, both
+ACK/user-item orders, completed-plus-idle before ACK, subsequent permission/private
+input/history removal, stale owner/native ID/PID/turn/membership and manual intent.
+Saved draft cleanup distinguishes a pre-send queued write from a newer same-text
+edit. Final source and installed independent review pass: four solo and six shared
+actual native/Electron groups, 685 local checks without skips. The installed app
+matches all 47 payload files and passes strict signature verification after native
+testing. Hidden reopening preserves the three original native IDs/processes,
+eight Codex messages, current model, selection and drafts without dispatch. Native
+late-ACK/idle permutations use the full-router/WebSocket counterexamples; the real
+CLI trial does not claim to force those exact scheduler orders.

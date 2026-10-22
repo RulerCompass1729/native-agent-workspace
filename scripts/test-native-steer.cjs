@@ -1,10 +1,11 @@
 // Actual Codex and Electron with two canned loopback Responses streams.
 // Private native configuration; no paid inference or normal-profile edits.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { execFileSync } = require('node:child_process');
+const assert = require('node:assert/strict'), { execFileSync, fork } = require('node:child_process');
 const { _electron } = require('playwright');
 const root = path.resolve(__dirname, '..');
-const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs'), { connect } = require('../app/service-client.cjs');
+if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
+const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs'), { connect, connectService } = require('../app/service-client.cjs');
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-steer-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex');
 for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, { mode: 0o700 });
@@ -12,8 +13,9 @@ const binary = executable('codex'); if (!binary) throw Error('Real Codex require
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 assert.equal(version, 'codex-cli 0.163.0');
 const shared = process.env.NAW_STEER_SHARED === '1';
+const retained = process.env.NAW_STEER_RETAINED === '1';
 const inputSelector = shared ? '#shared-input' : '#message-input', sendSelector = shared ? '#forward-button' : '#send-button';
-let application, page, calls = 0, release, releaseSecond, sequence = 0;
+let application, page, child, legacyClient, calls = 0, titleCalls = 0, release, releaseSecond, sequence = 0;
 const errors = [], requests = [], sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label, timeout = 30000) {
   const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
@@ -22,12 +24,14 @@ function event(res, type, body) { res.write(`event: ${type}\ndata: ${JSON.string
 const server = http.createServer((req, res) => {
   let body = ''; req.on('data', b => body += b); req.on('end', async () => {
     if (!req.url.endsWith('/responses')) { requests.push({ path: req.url.split('?')[0] }); res.writeHead(404); res.end(); return; }
-    const number = ++calls;
-    if (number > 2) { res.writeHead(429); res.end(); return; }
-    const input = JSON.parse(body); requests.push({ model: input.model, inputItems: input.input?.length });
-    fs.writeFileSync(path.join(base, `request-${number}.json`), JSON.stringify(input, null, 2));
+    const input = JSON.parse(body); assert.equal(input.model, 'gpt-6-luna');
+    const nativeTitle = input.input?.some(m => m.role === 'user' && m.content?.some(p => typeof p.text === 'string' && p.text.startsWith('Generate a concise, single-line task title')));
+    const number = nativeTitle ? 0 : ++calls; if (nativeTitle) titleCalls++;
+    if (calls > 2 || titleCalls > 1) { res.writeHead(429); res.end(); return; }
+    requests.push({ model: input.model, inputItems: input.input?.length, nativeTitle });
+    fs.writeFileSync(path.join(base, nativeTitle ? 'native-title-request.json' : `request-${number}.json`), JSON.stringify(input, null, 2));
     const response = { id: `resp_local_${number}`, object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'in_progress', model: input.model, output: [], usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 } };
-    const text = number === 1 ? 'NATIVE_STEER_PARTIAL: original work in progress.' : 'NATIVE_STEER_FINAL: current instruction received.';
+    const text = nativeTitle ? JSON.stringify({ title: 'Inspect current instruction' }) : number === 1 ? 'NATIVE_STEER_PARTIAL: original work in progress.' : 'NATIVE_STEER_FINAL: current instruction received.';
     const item = { id: `msg_local_${number}`, type: 'message', role: 'assistant', status: 'in_progress', content: [], phase: number === 1 ? 'commentary' : 'final_answer' };
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'response.created', { response });
@@ -35,7 +39,7 @@ const server = http.createServer((req, res) => {
     event(res, 'response.content_part.added', { output_index: 0, item_id: item.id, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
     event(res, 'response.output_text.delta', { output_index: 0, item_id: item.id, content_index: 0, delta: text });
     if (number === 1) await new Promise(resolve => { release = resolve; });
-    else await new Promise(resolve => { releaseSecond = resolve; });
+    else if (!nativeTitle) await new Promise(resolve => { releaseSecond = resolve; });
     item.status = 'completed'; item.content = [{ type: 'output_text', text, annotations: [] }];
     event(res, 'response.output_text.done', { output_index: 0, item_id: item.id, content_index: 0, text });
     event(res, 'response.content_part.done', { output_index: 0, item_id: item.id, content_index: 0, part: item.content[0] });
@@ -53,13 +57,38 @@ const snapshot = () => page.evaluate(() => workspace.initial());
     'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n' +
     `os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ codex: shim }), { mode: 0o600 });
+  let retainedId;
+  if (retained) {
+    const old = path.join(base, 'old'), bin = path.join(base, 'bin'); fs.mkdirSync(old); fs.mkdirSync(bin);
+    execFileSync('/usr/bin/tar', ['-x', '-C', old], { input: execFileSync('git', ['archive', 'a87653b', 'app', 'package.json'], { cwd: root, maxBuffer: 16 * 1024 * 1024 }) });
+    fs.symlinkSync(path.join(root, 'node_modules'), path.join(old, 'node_modules')); fs.symlinkSync(shim, path.join(bin, 'codex'));
+    child = fork(path.join(old, 'app/daemon.cjs'), [profile], { env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, NAW_APP_VERSION: '0.1.0-alpha.2', NAW_WORKSPACE: cwd }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+    await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Original backend boot');
+    legacyClient = await connectService(profile, 'retained-steer-fixture');
+    retainedId = await legacyClient.call('create', { provider: 'codex', cwd, name: 'Retained steering', view: 'terminal' });
+  }
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   await until(async () => { for (const candidate of application.windows()) if (!candidate.isClosed() && await candidate.locator('#new-session').count().catch(() => 0)) { page = candidate; return true; } return false; }, 'Main workspace');
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
+  if (retained) {
+    await page.locator(`[data-session-id="${retainedId}"]`).click(); await page.locator('#terminal-tab').click();
+    const takeover = page.getByRole('button', { name: '接管此窗口', exact: true }); if (await takeover.isVisible()) await takeover.click();
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('Trust this folder?') || (await snapshot()).sessions[0]?.state === 'idle', 'Native trust gate', 60000);
+    if ((await page.locator('#terminal-area').innerText()).includes('Trust this folder?')) {
+      const prompt = await page.locator('#terminal-area').innerText(); assert.ok(prompt.includes(cwd) || prompt.includes(fs.realpathSync(cwd))); assert.match(prompt, /› 1\. Trust and continue/);
+      await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
+    }
+    await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Retained native ready');
+    await page.locator('#chat-tab').click();
+    if (await page.locator('#send-button').textContent() === '接管此窗口') await page.locator('#send-button').click();
+    assert.equal(await page.locator('#send-button').textContent(), '接通原会话输入'); await page.locator('#send-button').click();
+  } else {
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
   await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('Native steering'); await page.locator('#confirm-create').click();
+  }
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
-  const before = (await snapshot()).sessions[0]; assert.equal(before.model, 'gpt-6-luna');
+  const before = (await snapshot()).sessions[0];
+  if (!retained) assert.equal(before.model, 'gpt-6-luna');
   await page.locator('#message-input').fill('Start the local protocol check.'); await page.locator('#send-button').click();
   await page.locator('#messages').getByText('NATIVE_STEER_PARTIAL: original work in progress.', { exact: true }).waitFor();
   const working = (await snapshot()).sessions[0]; assert.ok(working.activeTurnId); assert.equal(working.state, 'working');
@@ -119,14 +148,21 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   fs.writeFileSync(path.join(base, 'native-terminal.txt'), await page.locator('#terminal-area').innerText());
   await page.locator('#chat-tab').click();
   assert.equal((await snapshot()).sessions[0].nativeId, before.nativeId); assert.equal(calls, 2); assert.deepEqual(errors, []);
+  if (!shared) {
+    await page.reload(); await page.locator('#new-session').waitFor();
+    assert.equal(await page.locator('#message-input').inputValue(), '', 'Submitted solo draft must not return after reload');
+    assert.equal((await snapshot()).sessions[0].liveDraft, ''); assert.equal(calls, 2);
+  }
+  if (retained) assert.equal((await snapshot()).sessions[0].pid, before.pid);
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-steering.png') }); }
-  console.log(JSON.stringify({ version, shared, checks: ['GUI working input uses the existing native turn', 'ACK does not terminate streamed output', 'One visible input and one final native boundary', 'GUI and native TUI retain identity and both inputs/results', ...(shared ? ['Shared reply excludes prior private blocks and draft', 'Room reload preserves streaming item and draft without dispatch'] : [])], localResponses: calls, paidModelCalls: 0, requests, evidence: base }));
+  console.log(JSON.stringify({ version, shared, retained, checks: ['GUI working input uses the existing native turn', 'ACK does not terminate streamed output', 'One visible input and one final native boundary', 'GUI and native TUI retain identity and both inputs/results', ...(shared ? ['Shared reply excludes prior private blocks and draft', 'Room reload preserves streaming item and draft without dispatch'] : [])], taskResponses: calls, nativeTitleResponses: titleCalls, localResponses: calls + titleCalls, paidModelCalls: 0, requests, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
 }).finally(async () => {
   release?.(); releaseSecond?.(); server.closeAllConnections();
   if (application) await application.close().catch(() => {});
+  legacyClient?.close();
   try {
     const client = await connect(profile, 'native-steer-cleanup');
     try {
@@ -142,5 +178,6 @@ const snapshot = () => page.evaluate(() => workspace.initial());
       console.log('Owned service exit confirmed.');
     } finally { client.close(); }
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
+  if (child?.connected) child.disconnect();
   await new Promise(resolve => server.close(resolve));
 });

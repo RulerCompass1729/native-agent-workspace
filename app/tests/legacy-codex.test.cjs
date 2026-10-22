@@ -18,7 +18,7 @@ async function fixture(t, options = {}) {
       const m = JSON.parse(bytes); calls.push(m);
       const reply = result => ws.send(JSON.stringify({ id: m.id, result }));
       if (m.method === 'initialize') reply({ userAgent: 'codex/0.163.0' });
-      if (m.method === 'turn/steer') reply({ turnId: m.params.expectedTurnId });
+      if (m.method === 'turn/steer') { if (options.steer) options.steer(m, reply, event); else reply({ turnId: m.params.expectedTurnId }); }
       if (m.method === 'thread/loaded/list') {
         const result = { data: options.notLoaded ? [] : [record.nativeId], nextCursor: null };
         if (options.loaded) options.loaded(() => reply(result)); else reply(result);
@@ -457,4 +457,105 @@ test('retained Codex completed-before-ACK publishes exactly one verified final a
   const rows = bridge.sharedMessages().filter(m => m.role === 'assistant');
   assert.equal(rows.length, 1); assert.equal(rows[0].text, 'ACK_LATE_FINAL'); assert.equal(rows[0].finalReply, true);
   assert.equal(f.calls.filter(m => m.method === 'turn/start').length, 1);
+});
+
+async function routerFixture(t, options) {
+  const f = await fixture(t, options), { EventEmitter } = require('node:events');
+  const { WorkspaceClient } = require('../workspace-client.cjs');
+  Object.assign(f.record, { owner: 'view', name: 'Codex A', state: 'working', messages: [] });
+  const bridge = new LegacyInput(f.directory); t.after(() => bridge.close());
+  await bridge.prepare(f.entry, f.record);
+  const client = new EventEmitter(), state = { ...f.entry.state, owner: 'view', capabilities: [], sessions: [f.record], room: { messages: [] }, diagnostics: {} };
+  client.call = async (method, ...args) => { if (method === 'initial') return structuredClone(state); if (method === 'draft') f.record.liveDraft = args[1]; return true; };
+  client.close = () => client.emit('closed');
+  const entry = { key: '.', state: structuredClone(state), client };
+  const router = new WorkspaceClient([entry], '.'); router.control.legacyInput = bridge; t.after(() => router.close());
+  f.event('turn/started', { turn: { id: 'active' } }); await tick();
+  return { ...f, bridge, router, state };
+}
+
+test('retained solo steer passes through the real router while its own native send is pending', async t => {
+  const f = await routerFixture(t), { router } = f;
+  await router.call('steer', f.record.id, 'adjust requirement', f.record.nativeId, 'active');
+  assert.equal(f.calls.filter(c => c.method === 'turn/steer').length, 1);
+  assert.equal(f.calls.some(c => ['turn/start', 'turn/interrupt'].includes(c.method)), false);
+});
+
+for (const order of ['ack-first', 'input-first']) test(`retained shared steer projects only newly attributed items: ${order}`, async t => {
+  let acknowledge, inputTag;
+  const f = await routerFixture(t, { steer(m, reply) { inputTag = m.params.clientUserMessageId; acknowledge = () => reply({ turnId: 'active' }); } });
+  const { router, bridge } = f;
+  f.record.roomId = 'shared'; await router.refresh();
+  f.event('item/started', { turnId: 'active', item: { id: 'old', type: 'agentMessage' } });
+  f.event('item/agentMessage/delta', { turnId: 'active', itemId: 'old', delta: 'OLD PRIVATE' }); await tick();
+  const pending = router.call('steerShared', f.record.id, 'new shared instruction', f.record.nativeId, 'active');
+  while (!acknowledge) await tick();
+  const acceptedInput = () => f.event('item/completed', { turnId: 'active', item: { id: 'accepted-input', clientId: inputTag, type: 'userMessage', content: [{ type: 'text', text: 'new shared instruction' }] } });
+  if (order === 'input-first') { acceptedInput(); await tick(); }
+  acknowledge(); await pending;
+  if (order === 'ack-first') { acceptedInput(); await tick(); }
+  f.event('item/completed', { turnId: 'active', item: { id: 'old', type: 'agentMessage', text: 'OLD PRIVATE LATE' } });
+  f.event('item/started', { turnId: 'active', item: { id: 'new', type: 'agentMessage' } });
+  f.event('item/agentMessage/delta', { turnId: 'active', itemId: 'new', delta: 'SHARED PREFIX' }); await tick();
+  const row = bridge.sharedMessages().find(m => m.role === 'assistant'); assert.equal(row.text, 'SHARED PREFIX');
+  f.event('item/completed', { turnId: 'active', item: { id: 'new', type: 'agentMessage', text: 'SHARED FINAL' } });
+  f.event('turn/completed', { turn: { id: 'active', status: 'completed' } }); await tick();
+  assert.equal(row.finalReply, true); assert.equal(row.text, 'SHARED FINAL');
+  assert.ok(!JSON.stringify(bridge.sharedMessages()).includes('OLD PRIVATE'));
+  assert.equal(bridge.sharedMessages().find(m => m.role === 'human').inputMode, 'steer');
+  assert.equal(f.calls.filter(m => m.method === 'turn/steer').length, 1);
+  assert.equal(f.calls.some(m => ['turn/start', 'turn/interrupt'].includes(m.method)), false);
+});
+
+for (const change of ['owner', 'turn', 'native', 'pid', 'permission', 'leave', 'rejoin', 'intervention']) test(`retained shared steer refuses a changed ${change} before native delivery`, async t => {
+  const f = await routerFixture(t); f.record.roomId = 'shared'; await f.router.refresh();
+  let release; f.router.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+  const pending = f.router.call('steerShared', f.record.id, 'stale instruction', f.record.nativeId, 'active');
+  assert.equal(typeof release, 'function');
+  if (change === 'owner') f.record.owner = 'other';
+  if (change === 'native') f.record.nativeId = crypto.randomUUID();
+  if (change === 'pid') f.record.pid++;
+  if (change === 'turn') f.event('turn/started', { turn: { id: 'next' } });
+  if (change === 'permission') f.bridge.target(f.record).native.adapter.emit('approval', { requestId: 'permission' });
+  if (change === 'leave') f.record.roomId = null;
+  if (change === 'rejoin') f.record.memberRevision = 99;
+  if (change === 'intervention') await f.router.intervene(() => Promise.resolve(), f.record.id);
+  await tick(); release(); await assert.rejects(pending);
+  assert.equal(f.calls.some(m => ['turn/steer', 'turn/start', 'turn/interrupt'].includes(m.method)), false);
+});
+
+for (const boundary of ['none', 'permission', 'private-input', 'clear']) test(`retained shared steer completion and idle before ACK: ${boundary}`, async t => {
+  let acknowledge, inputTag;
+  const f = await routerFixture(t, { steer(m, reply) { inputTag = m.params.clientUserMessageId; acknowledge = () => reply({ turnId: 'active' }); } });
+  f.record.roomId = 'shared'; await f.router.refresh();
+  const pending = f.router.call('steerShared', f.record.id, 'finish before ack', f.record.nativeId, 'active');
+  while (!acknowledge) await tick();
+  f.event('item/completed', { turnId: 'active', item: { id: 'accepted-input', clientId: inputTag, type: 'userMessage', content: [{ type: 'text', text: 'finish before ack' }] } });
+  f.event('item/started', { turnId: 'active', item: { id: 'answer', type: 'agentMessage' } });
+  f.event('item/completed', { turnId: 'active', item: { id: 'answer', type: 'agentMessage', text: 'EARLY_FINAL' } });
+  f.event('turn/completed', { turn: { id: 'active', status: 'completed' } });
+  f.event('thread/status/changed', { status: { type: 'idle' } }); await tick();
+  assert.equal(f.bridge.sharedMessages().filter(m => m.role === 'assistant').length, 0);
+  if (boundary === 'permission') f.bridge.target(f.record).native.adapter.emit('approval', { requestId: 'late-permission' });
+  if (boundary === 'private-input') f.event('item/completed', { turnId: 'active', item: { id: 'private-input', type: 'userMessage', content: [{ type: 'text', text: 'PRIVATE' }] } });
+  if (boundary === 'clear') f.bridge.clearSharedHistory();
+  await tick(); acknowledge(); await pending; await tick();
+  const rows = f.bridge.sharedMessages().filter(m => m.role === 'assistant');
+  if (boundary === 'none') { assert.equal(rows.length, 1); assert.equal(rows[0].text, 'EARLY_FINAL'); assert.equal(rows[0].finalReply, true); }
+  else assert.equal(rows.length, 0);
+  assert.equal(f.calls.filter(m => m.method === 'turn/steer').length, 1);
+  assert.equal(f.calls.some(m => ['turn/start', 'turn/interrupt'].includes(m.method)), false);
+});
+
+for (const newer of [false, true]) test(`retained solo steer clears the pre-send saved draft, preserving newer same-text edits: ${newer}`, async t => {
+  let acknowledge;
+  const f = await routerFixture(t, { steer(m, reply) { acknowledge = () => reply({ turnId: 'active' }); } });
+  // The existing native write completes during the send's refresh, after the
+  // initial UI/route snapshot. A later human edit has a separate revision.
+  f.router.pauseExcept = async () => { f.record.liveDraft = 'adjust requirement'; };
+  const pending = f.router.call('steer', f.record.id, 'adjust requirement', f.record.nativeId, 'active');
+  while (!acknowledge) await tick();
+  if (newer) await f.router.call('draft', f.record.id, 'adjust requirement');
+  acknowledge(); await pending;
+  assert.equal(f.record.liveDraft, newer ? 'adjust requirement' : '');
 });
