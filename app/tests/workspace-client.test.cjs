@@ -525,3 +525,36 @@ test('old run transports keep five arguments while the new context guard keeps v
  const request=next.calls.find(([method])=>method==='run');assert.equal(request.length,6,'Method plus five old-protocol arguments');
  await c.call('pause');await assert.rejects(c.call('run',['new','second'],'Stale preview',2,'strict',{}, {new:'wrong',second:'b'}),/上下文已变化/);c.close();
 });
+test('thread references work across retained services without copying context; missing or removed parent prevents dispatch', async () => {
+  const { c, next, old } = fixture();
+  next.real.capabilities = [...next.real.capabilities, 'replyThreads', 'nativeContextTransitions'];
+  next.real.sessions[0].roomId = 'shared';
+  old.real.room.messages.push({ id: 'parent', text: 'DO NOT INJECT THIS', role: 'human' });
+  await c.refresh();
+  await c.call('forward', 'new', 'Only my new words', undefined, 'parent');
+  const sent = next.calls.find(row => row[0] === 'forward');
+  assert.equal(sent[2], 'Only my new words'); assert.equal(sent[4], 'parent');
+  await assert.rejects(c.call('forward', 'new', 'invalid', undefined, 'absent'), /已移除/);
+  let release; c.pauseExcept = () => new Promise(resolve => { release = resolve; });
+  const pending = c.call('forward', 'new', 'delayed', undefined, 'parent');
+  const rejected = assert.rejects(pending, /已移除/);
+  old.state.room.messages = []; release(); await rejected;
+  assert.equal(next.calls.filter(row => row[0] === 'forward').length, 1); c.close();
+});
+test('unsupported retained transports reject thread metadata rather than silently dropping it', async () => {
+  const { c, next } = fixture(); next.real.room.messages.push({ id: 'parent', text: 'Original' }); await c.refresh();
+  await assert.rejects(c.call('forward', 'new', 'Reply', undefined, 'parent'), /尚不支持/);
+  assert.equal(next.calls.some(row => row[0] === 'forward'), false); c.close();
+});
+
+test('empty optional thread metadata never lengthens a retained context-aware wire frame', async () => {
+  const { c, next } = fixture();
+  next.real.capabilities = [...next.real.capabilities, 'nativeContextTransitions'];
+  next.real.sessions[0].roomId = 'shared'; next.real.sessions.push({ id: 'second', provider: 'codex', state: 'idle', roomId: 'shared' });
+  await c.refresh();
+  await c.call('forward', 'new', 'plain', undefined, undefined);
+  assert.equal(next.calls.find(row => row[0] === 'forward').length, 4);
+  await c.call('run', ['new', 'second'], 'plain', 2, 'strict', {}, undefined, undefined);
+  assert.equal(next.calls.find(row => row[0] === 'run').length, 7);
+  c.close();
+});

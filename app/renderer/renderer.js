@@ -16,6 +16,9 @@ let sessionMenu;
 let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, notesRevision, contextTarget = null;
 let roomDraftRevision = 0;
 let pendingRoomFilter = '';
+let roomThread = '', roomReplyTo = '';
+let roomThreads = window.nativeWorkspaceThreads.threadIndex([]);
+const roomReadingKey = () => roomThread ? `room:${roomThread}` : 'room';
 const sessionRows = new Map();
 const memberRows = new Map();
 let headerControls, advancedControls;
@@ -217,7 +220,7 @@ function renderComposer(s) {
 }
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
-function persistView() { captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: $('recipient').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value }); }
+function persistView() { captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: $('recipient').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession) {
   captureReadingViews();
@@ -525,9 +528,24 @@ function timeline() {
 }
 function filteredTimeline() {
   const id = $('room-filter').value, query = $('room-search').value.trim().toLocaleLowerCase();
-  return timeline().filter(m => (!id || m.sessionId === id || m.recipientId === id || m.deliveries?.some(d => d.recipientId === id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
+  return timeline().filter(m => (!roomThread || roomThreads.roots.get(m.id) === roomThread) && (!id || m.sessionId === id || m.recipientId === id || m.deliveries?.some(d => d.recipientId === id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
+}
+function openThread(id) {
+  const root = roomThreads.roots.get(id);
+  if (!root) return toast('这条讨论已移除。草稿仍保留。');
+  captureReadingViews(); roomThread = root; roomReplyTo = root;
+  // Reply chooses an association, never a new recipient or extra model context.
+  roomDraftRevision++; $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = '';
+  render(); attempt(persistView); $('shared-input').focus();
 }
 function renderTimeline() {
+  roomThreads = window.nativeWorkspaceThreads.threadIndex(timeline());
+  $('thread-heading').hidden = !roomThread;
+  const root = roomThreads.rows.get(roomThread);
+  $('thread-title').textContent = roomThread ? (root ? `讨论 · ${root.text.slice(0, 80)}` : '原讨论已移除 · 返回全部讨论查看现有记录') : '';
+  $('reply-context').hidden = !roomReplyTo;
+  const reply = roomThreads.rows.get(roomReplyTo);
+  $('reply-label').textContent = roomReplyTo ? (reply ? `回复讨论：${reply.text.slice(0, 80)} · 历史不会自动附上` : '原讨论已移除。取消回复后可将草稿作为新消息发送。') : '';
   const candidates = new Map();
   for (const s of members()) candidates.set(s.id, s.name);
   for (const m of timeline()) {
@@ -544,8 +562,8 @@ function renderTimeline() {
     filter.value = candidates.has(chosen) ? chosen : ''; filter.dataset.signature = filterSignature;
   }
   const messages = filteredTimeline();
-  const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name]), filter.value, $('room-search').value]);
-  if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true); lastRoomMessages = signature; }
+  const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name]), filter.value, $('room-search').value, roomThread, [...roomThreads.groups].map(([id, rows]) => [id, rows.length])]);
+  if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true, roomReadingKey()); lastRoomMessages = signature; }
   $('timeline-count').textContent = `${messages.length} 条`; $('copy-timeline').disabled = !messages.length;
 }
 function draggableSession(element, id) {
@@ -832,13 +850,15 @@ function render() {
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
       $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : '发送 ↑';
       const unavailable = roomSubmitting || disconnected || !$('shared-input').value.trim();
+      const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
       const ready = s => s && s.state === 'idle' && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
-      $('forward-button').disabled = nativeRoute ? roomSubmitting || disconnected : unavailable || !ready(recipient);
-      $('run-button').disabled = unavailable || !recipient || !ready(recipient) || run?.status === 'running' || !safeHandoffs;
+      $('forward-button').disabled = nativeRoute ? roomSubmitting || disconnected : unavailable || !ready(recipient) || Boolean(threadUnsupported);
+      $('run-button').disabled = unavailable || !recipient || !ready(recipient) || run?.status === 'running' || !safeHandoffs || Boolean(threadUnsupported);
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
       if (recipient?.legacyShare) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
       if (nativeRoute) $('run-help').textContent = '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
+      if (threadUnsupported) $('run-help').textContent = roomThreads.rows.has(roomReplyTo) ? '此连接尚不支持讨论回复。草稿保留；取消回复可作为新消息发送。' : '原讨论已移除。草稿保留，请先取消回复。';
       $('pause-button').textContent = pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
       $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || (!pendingRun && run?.status !== 'running');
       if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
@@ -1240,7 +1260,7 @@ async function submitRoom(automatic) {
   const submission = { automatic: Boolean(automatic), recipientName: participantLabel(recipient), cancelling: false, cancelRequested: false };
   roomSubmitting = submission; render();
   try {
-    const receipt = await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels, automatic.contexts) : api.forward(first, text, recipient.nativeId));
+    const receipt = await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
     if (submission.cancelRequested || receipt?.contextChanged) return;
     if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
   }
@@ -1329,6 +1349,8 @@ $('run-form').onsubmit = event => {
 };
 $('recipient').onchange = () => { closeMentions(); attempt(persistView); render(); };
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };
+$('thread-back').onclick = () => { captureReadingViews(); roomThread = ''; if (!$('shared-input').value.trim() && !roomSubmitting) roomReplyTo = ''; render(); attempt(persistView); };
+$('cancel-reply').onclick = () => { roomReplyTo = ''; roomThread = ''; roomDraftRevision++; render(); attempt(persistView); $('shared-input').focus(); };
 $('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString() : '时间未记录'} · ${state.sessions.find(s => s.id === (m.recipientId || m.sessionId))?.name || m.name || '工作区'}${m.recipientId ? '（接收）' : ''}\n${m.text}`).join('\n\n')));
 $('room-notes').onclick = openNotes; $('cancel-notes').onclick = () => $('notes-dialog').close();
 $('notes-form').onsubmit = async event => {
@@ -1431,6 +1453,7 @@ attempt(async () => {
   if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;
   $('shared-input').value = typeof state.viewState.sharedDraft === 'string' ? state.viewState.sharedDraft : '';
   $('room-search').value = state.viewState.roomSearch || ''; pendingRoomFilter = state.viewState.roomFilter || '';
+  roomThread = state.viewState.roomThread || ''; roomReplyTo = state.viewState.roomReplyTo || '';
   const savedRecipient = state.viewState.roomRecipient;
   if (typeof savedRecipient === 'string' || $('shared-input').value.trim()) {
     // Older views have a draft but no recipient: require an explicit choice.

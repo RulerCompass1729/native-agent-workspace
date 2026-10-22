@@ -11,7 +11,7 @@ function validViews(views) {
     if (!object(view) || !text(view.owner, 100) || !view.owner || owners.has(view.owner)) return false;
     owners.add(view.owner);
     if (view.active !== undefined && typeof view.active !== 'boolean') return false;
-    for (const key of ['selected', 'roomSession', 'roomRecipient', 'roomFilter'])
+    for (const key of ['selected', 'roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo'])
       if (view[key] !== undefined && !text(view[key], 100)) return false;
     for (const key of ['mode', 'preference'])
       if (view[key] !== undefined && !['chat', 'terminal'].includes(view[key])) return false;

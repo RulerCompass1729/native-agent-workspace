@@ -1,5 +1,38 @@
 # Bounded testing
 
+## Explicit discussion threads — alpha.57
+
+Source checks pass independent review: 520 local tests with no skips. The actual
+Electron `test-progress-reading.cjs` runner passes eleven groups, with five
+controlled-provider sends and zero model calls. It covers opening a reply,
+streamed content under its original parent, member filtering, searching another
+discussion and returning, reopening with its scoped draft intact, and a finite
+two-agent exchange whose task, replies and system events stay in the same thread.
+Thread association itself adds no history. A directed send delivers the new
+body only; the existing explicitly authorized finite exchange still forwards its
+task and the confirmed preceding reply, as shown in its delivery receipt. Search and the nine-group room-send regressions pass.
+
+Counterexamples cover missing parents, malformed references, cycles, retired
+records, unsupported retained backends, and old RPC arity. Three intermediate
+GUI runs found incorrect test selectors/scope/expected IDs; those failed runs
+remain private, and only the final eleven-group run counts as a pass. Successful
+application recording and screenshots remain private. The installed alpha.57 also
+passes all eleven groups. This scope does not close working-turn input or all of U17.
+
+The normal profile then exposed a separate blank-page failure: accumulated DSH
+per-port authentication cookies exceeded the HTTP header limit. A real Electron
+regression seeds 80 synthetic cookies, reproduces HTTP 431, and verifies startup
+cleanup, unrelated-cookie retention, reload and a second window. Source and
+installed runs pass with no native sessions or model calls. Only this app's exact
+loopback DSH cookies are retired before the fresh launch URL authenticates the UI;
+provider credentials, history, drafts and preferences are not cleared.
+
+After the fix, the installed normal profile reopens hidden with its original
+three native IDs and processes, eight retained Codex messages, current model,
+saved selection/mode/draft, and no added Portal dispatch. Earlier blank runs remain
+failed evidence. The strict installed signature passes. No new physical IME or
+hosted-provider inference test is claimed.
+
 ## Shared streams and retained readers — alpha.56
 
 As of 2026-10-21. Source checks pass independent review. The installed app passes
@@ -43,7 +76,7 @@ not a guarantee for every macOS configuration. Normal user activation restores
 ordinary Dock/window behavior; background startup temporarily uses accessory
 activation policy. No test-profile guard was relaxed.
 
-Still open: reply threads, working-turn GUI input, complete terminal-state
+At this alpha.56 checkpoint: reply threads, working-turn GUI input, complete terminal-state
 mapping and older Claude display compatibility. These results do not close U17.
 
 ## Native block foundation — earlier source validation

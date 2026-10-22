@@ -206,3 +206,5 @@ header h1, header p { overflow-wrap: anywhere; }
 .native-history-row small { color: var(--muted); margin-top: 5px; line-height: 1.5; }
 .native-tool-input { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: 0.9em; }
 .message.tool .message-body { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.thread-heading,.reply-context{display:flex;align-items:center;gap:12px;padding:8px 20px;border-bottom:1px solid var(--border);font-size:13px;min-width:0}.thread-heading strong,.reply-context span{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.reply-context{padding:0 0 8px;margin-bottom:8px;color:var(--muted)}.thread-heading[hidden],.reply-context[hidden]{display:none}
+.message-author{font-weight:600;padding:0;border:0;border-radius:2px;background:transparent;color:inherit}.message-author:hover{text-decoration:underline;background:transparent}

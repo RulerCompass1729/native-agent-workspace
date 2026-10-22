@@ -3,6 +3,19 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+// DSH signs browser cookies for each listener authority, but Chromium sends
+// cookies across ports. Random ports otherwise accumulate enough old UI cookies
+// to exceed Node's request-header limit after repeated launches. Only retire
+// this composition's loopback authentication; native provider auth is elsewhere.
+async function resetUiAuthentication(browserSession) {
+  const cookies = await browserSession.cookies.get({ domain: '127.0.0.1' });
+  for (const cookie of cookies) {
+    if (cookie.domain === '127.0.0.1' && cookie.path === '/' && cookie.httpOnly && /^dsh-auth-[A-Za-z0-9_-]{43}$/.test(cookie.name)) {
+      await browserSession.cookies.remove(`${cookie.secure ? 'https' : 'http'}://127.0.0.1/`, cookie.name);
+    }
+  }
+  await browserSession.cookies.flushStore();
+}
 function alive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 1) return false;
   try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
@@ -43,4 +56,4 @@ async function startDsh(dataDir) {
   });
   return { child, stop, url, origin: new URL(url).origin };
 }
-module.exports = { startDsh };
+module.exports = { startDsh, resetUiAuthentication };

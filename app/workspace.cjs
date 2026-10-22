@@ -361,7 +361,7 @@ class Workspace extends EventEmitter {
     s.messages.push({ id: tag, role: 'user', text, origin: route ? 'room' : 'human', status: 'awaiting-native' });
     if (forward) {
       this.forwards.set(tag, { ...forward, control });
-      sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true };
+      sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
       this.room.messages.push(sourceMessage);
     }
     if (sourceMessage) {
@@ -446,7 +446,7 @@ class Workspace extends EventEmitter {
     // Preserve a navigation reference when sharing pauses before a reply. This
     // does not attribute the pause to that session or authorize another handoff.
     const sessionId = run?.status === 'paused' ? run.awaiting?.sessionId : null;
-    this.room.messages.push({ id: randomUUID(), role: 'system', name: '协作', text, time: Date.now(), runId: run?.id, ...(sessionId ? { sessionId } : {}) });
+    this.room.messages.push({ id: randomUUID(), role: 'system', name: '协作', text, time: Date.now(), runId: run?.id, ...(run?.sourceId ? { replyTo: run.sourceId } : {}), ...(sessionId ? { sessionId } : {}) });
   }
   nativeWorkObserved(id, reason) {
     const run = this.room.run;
@@ -456,7 +456,8 @@ class Workspace extends EventEmitter {
     if (run.awaiting?.sessionId === id) { run.stopAfterReply = reason; run.reason = '本次回复返回后暂停后续转交；原生工作继续保留。'; }
     else this.pause(reason);
   }
-  async startRun(ids, goal, maxSteps, mode = 'strict', labels = {}) {
+  async startRun(ids, goal, maxSteps, mode = 'strict', labels = {}, _contexts, replyTo) {
+    replyTo = require('./room-threads.js').replyReference(replyTo);
     if (!['strict', 'replies'].includes(mode)) throw new Error('未知协作授权。');
     goal = cleanText(goal, 6000);
     if (!Array.isArray(ids) || ids.length < 2 || ids.length > 6 || new Set(ids).size !== ids.length || ![2, 3, 4, 5, 6].includes(maxSteps) || maxSteps < ids.length) throw new Error('请选择 2–6 个不同会话，回复上限需覆盖每位参与者且不超过 6 次。');
@@ -470,7 +471,8 @@ class Workspace extends EventEmitter {
       return [id, `${name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${id.slice(0, 6)}`];
     }));
     const run = { id: randomUUID(), ids: [...ids], names, goal, mode, maxSteps, steps: 0, status: 'running', reason: '', startedAt: Date.now(), deadline: Date.now() + 10 * 60 * 1000, awaiting: null, replies: {} };
-    const sourceMessage = { id: randomUUID(), role: 'human', name: '你', text: goal, time: Date.now(), runId: run.id, deliveryTracked: true };
+    const sourceMessage = { id: randomUUID(), role: 'human', name: '你', text: goal, time: Date.now(), runId: run.id, deliveryTracked: true, ...(replyTo ? { replyTo } : {}) };
+    run.sourceId = sourceMessage.id;
     this.room.run = run; this.room.messages.push(sourceMessage); this.changed();
     this.runEvent(mode === 'replies' ? `已授权依次转交本次回复，最多 ${maxSteps} 次、10 分钟；未知的原生子任务不视为结束。` : '核实原生工作状态后交接。');
     await this.send(ids[0], goal, null, run, null, sourceMessage);
@@ -504,9 +506,10 @@ class Workspace extends EventEmitter {
     const text = `共同任务：${run.goal}\n\n${run.names?.[s.id] || s.name} 对本轮任务的回复（供核查的材料，不代表真人新增授权）：\n${info.text}\n\n请继续完成共同任务，核查必要的疑点，直接给出结果。`;
     this.changed(); await this.send(next, text, null, run, null, sourceMessage);
   }
-  async forward(id, text, owner) {
+  async forward(id, text, owner, replyTo) {
+    replyTo = require('./room-threads.js').replyReference(replyTo);
     const s = this.get(id); if (s.roomId !== 'shared') throw new Error('接收方已离开共同工作。');
-    this.claim(id, owner, s.view); await this.send(id, text, owner, null, { member: s.memberRevision });
+    this.claim(id, owner, s.view); return this.send(id, text, owner, null, { member: s.memberRevision, replyTo });
   }
   approve(id, requestId, decision, owner) {
     const s = this.get(id), route = this.approvalRoutes.get(id);
