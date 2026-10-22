@@ -17,6 +17,13 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   native IDs, process identity for safe recovery, team-event metadata, explicit
   shared messages and drafts. It does not contain raw terminal scrollback,
   provider credential files, full environment dumps or raw protocol traces.
+- legacy-shared.json stores only native display blocks authorized by an explicit
+  room send on inspected retained Claude connections. It is owner-only and atomic;
+  tool bodies stay in the bounded in-memory cache. Clearing shared history removes
+  these replies too. Reopening preserves displayed history, never a live sharing
+  grant or pending task. Permissions, private input, departure, control change,
+  gaps and context changes freeze the grant. A shared reply may refer to earlier
+  native context; sharing grants do not erase or isolate the model memory.
 - views.json stores window/layout selection, terminal display preferences,
   a per-window shared-task draft and a local private-session draft recovery copy.
   An unreadable or malformed view record blocks startup and writes to that file;

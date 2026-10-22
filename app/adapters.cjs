@@ -130,6 +130,7 @@ class Claude extends EventEmitter {
     this.rootObservation = null;
     this.nativeBlocks = message.nativeBlocks === true;
     this.nativeQueue = message.nativeQueue === true;
+    this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
     this.displayProofs = new Map(); this.displayGap = false;
     return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks };
   }
@@ -155,8 +156,8 @@ class Claude extends EventEmitter {
   }
   observeBlock(message) {
     if (!this.nativeBlocks || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
-      !/^(display|tool|turn|prompt):[a-zA-Z0-9_:-]{1,160}$/.test(message.id || '') ||
-      !['response', 'tool', 'turn', ...(this.retainedReader ? ['input'] : [])].includes(message.kind) ||
+      !/^(display|tool|turn|prompt|control):[a-zA-Z0-9_:-]{1,160}$/.test(message.id || '') ||
+      !['response', 'tool', 'turn', ...(this.retainedReader ? ['input', 'control'] : [])].includes(message.kind) ||
       !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
       !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
       (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
@@ -164,6 +165,10 @@ class Claude extends EventEmitter {
       !['text', 'delta', 'input', 'title'].every(k => message[k] === undefined || (typeof message[k] === 'string' && message[k].length <= 500000))) throw Error('Invalid native block');
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
     if (message.gap) this.observeRootGap(message);
+    if (message.kind === 'control') {
+      if (!this.nativeSharedDisplay || !['control:permission', 'control:input'].includes(message.id)) throw Error('Invalid native control boundary');
+      this.emit('sharingBoundary', message.id); return { observed: true };
+    }
     const { id, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete } = message;
     const inputTag = kind === 'input' && /^[a-f0-9-]{36}$/i.test(message.inputTag || '') ? message.inputTag : undefined;
     if (!['tool', 'input'].includes(kind) && (typeof turnId !== 'string' || !/^[a-zA-Z0-9_:-]{1,160}$/.test(turnId))) throw Error('Invalid native turn');

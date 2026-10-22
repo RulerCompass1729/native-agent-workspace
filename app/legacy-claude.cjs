@@ -33,7 +33,10 @@ class LegacyClaude extends Claude {
         const pending = this.record.messages.find(m => m.id === event.inputTag && m.inputMode === 'queue' && m.nativeId === event.nativeId && m.text === event.text);
         if (pending) { pending.id = `native:${event.nativeId}:${event.id}`; pending.nativeBlock = true; }
       }
-      if (applyNativeBlock(this.record, event)) { this.scheduleSave(); this.emit('change'); }
+      if (applyNativeBlock(this.record, event)) {
+        this.emit('readerBlock', this.record.messages.find(m => m.id === `native:${event.nativeId}:${event.id}`));
+        this.scheduleSave(); this.emit('change');
+      }
     });
     this.on('progress', update => { if (update.kind === 'gap') this.emit('change'); });
     this.on('contextEnd', () => { this.gap('原生上下文已结束或切换；此处保留原记录，请在原生终端继续。'); });
@@ -59,6 +62,7 @@ class LegacyClaude extends Claude {
   clearRoot() { throw Error('Retained context migration is not supported'); }
   send() { throw Error('Use the retained submission channel'); }
   get queueAvailable() { return Boolean(!this.disposed && this.initialized && this.nativeQueue && this.rootLease && !this.rootEnding && this.submission.connected); }
+  get sharedReplyAvailable() { return Boolean(this.queueAvailable && this.nativeSharedDisplay); }
   get pendingQueue() { return this.submission.pending?.waitForNativeTurn ? this.submission.pending.tag : null; }
   async queue(text, tag, guard) {
     if (!this.queueAvailable || this.submission.pending || !guard()) throw Error('原生等待输入暂不可用；草稿保留。');
@@ -82,7 +86,7 @@ class LegacyClaude extends Claude {
     const id = `retained-gap:${this.record.nativeId}`;
     let row = this.record.messages.find(m => m.id === id);
     if (!row) { row = { id, role: 'system', kind: 'gap', time: Date.now() }; this.record.messages.push(row); }
-    row.text = text; row.incomplete = true; this.scheduleSave(); this.emit('change');
+    row.text = text; row.incomplete = true; this.emit('readerBlock', row); this.scheduleSave(); this.emit('change');
   }
   scheduleSave() {
     if (this.disposed || this.saveTimer || !this.initialized) return;

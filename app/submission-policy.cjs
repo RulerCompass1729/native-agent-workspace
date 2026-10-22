@@ -7,7 +7,7 @@ function submissionState(snapshot) {
   return { ...snapshot, sessions: snapshot.sessions.map(s => ({ ...s,
     ...(!canSubmit(snapshot, s) ? { chatAvailable: false, submissionNotice: legacyNotice } : {}),
     shareAvailable: canSubmit(snapshot, s) && canShare(snapshot, s),
-    sharingNotice: s.legacyShare === true ? '回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。' : canShare(snapshot, s) ? null : legacyNotice,
+    sharingNotice: s.legacyShare === true && !s.legacySharedReply ? '回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。' : canShare(snapshot, s) ? null : legacyNotice,
   })) };
 }
 function assertSubmission(snapshot, ids) {

@@ -384,3 +384,34 @@ test('released alpha.51 compatibility hook upgrades, edited copies remain untouc
  installPlugin(cwd);const current=fs.readFileSync(file,'utf8');fs.writeFileSync(file,previous);installPlugin(cwd);assert.equal(fs.readFileSync(file,'utf8'),current);
  const edited=previous+'\n// Human customization\n';fs.writeFileSync(file,edited);assert.throws(()=>installPlugin(cwd),/未覆盖/);assert.equal(fs.readFileSync(file,'utf8'),edited);
 });
+
+test('explicit retained reply authorization updates the human receipt without changing dispatch count', async t => {
+  const f = fixture(t), bridge = new LegacyInput(f.root); t.after(() => bridge.close());
+  const target = { record: f.record, sharedReplyAvailable: true, rootLease: 'lease', nativeSharedDisplay: true,
+    submission: { connected: true, close() {}, request: async () => ({}) } };
+  bridge.targets.set(f.record.id, target);
+  await bridge.send(f.record, 'shared task', async () => {}, () => true, true, undefined, undefined, false, () => true);
+  assert.equal(bridge.sharedMessages()[0].manualReply, false);
+  assert.equal(bridge.records.length, 1);
+  const cold = new LegacyInput(f.root); t.after(() => cold.close());
+  assert.equal(cold.sharedMessages()[0].manualReply, false);
+  assert.equal(cold.sharedReplies.grants.size, 0);
+});
+
+for (const reason of ['working', 'permission', 'member', 'human', 'close']) test(`retained share authority ${reason} is separate from idle-only dispatch guard`, async t => {
+  const f = oldWindows(t); f.session.roomId = 'shared'; await f.a.client.refresh();
+  let shareAuthority;
+  f.a.client.control.legacyInput = { connected: () => true, prepared: () => true, target: () => ({}), records: [], close() {},
+    async send(record, text, refresh, valid, shared, replyTo, turnId, waiting, authority) {
+      assert.ok(valid()); assert.equal(shared, true); shareAuthority = authority; return 'tag';
+    } };
+  await f.a.client.call('forward', 'legacy', 'shared task', 'native');
+  assert.ok(shareAuthority());
+  if (reason === 'working') f.session.state = 'working';
+  if (reason === 'permission') f.session.approval = { id: 'native-approval' };
+  if (reason === 'member') f.session.memberRevision++;
+  if (reason === 'human') f.session.controlRevision++;
+  if (reason === 'close') f.a.client.close();
+  else await f.a.client.refresh();
+  assert.equal(shareAuthority(), reason === 'working');
+});

@@ -1899,3 +1899,39 @@ testing. Hidden reopening preserves the three original native IDs/processes,
 selection/draft and existing Codex messages without another dispatch. Full-app
 closure while a native queued input is pending is not a native acceptance claim;
 the authorized-close/no-retry branch is covered by the local channel check.
+
+
+## Retained Claude shared main reader — alpha.66
+
+`NAW_RETAINED_SHARED=1 NAW_CLAUDE_302=/path/to/claude-2.1.302 node scripts/test-native-retained-claude.cjs`
+uses the existing real old-backend/Claude/Electron fixture with at most five
+loopback responses and no paid inference. Source launch now rebuilds its UI to
+avoid testing stale generated client code. Seven source groups pass:
+
+- Retained native identity/process/history survive connecting the current reader.
+- An explicit room task streams only its attributed native text, tools and turn.
+- GUI/TUI switching, renderer reload and a second window retain input and output.
+- The final updates its original block without duplicated raw Stop content.
+- Completed shared history survives full GUI reopening with unchanged dispatches.
+- A real native permission hook precedes tool results and later private replies;
+  those remain private, including after GUI departure/rejoin.
+- Native exit and cold history reopening do not create a process or model turn.
+
+The ordered permission trace is captured from the real adapter without changing
+its behavior; the native prompt is answered through the actual terminal UI.
+Source evidence independently confirms the trace, full native requests, shared
+and private snapshots, stable identity, two explicit portal dispatches and five
+local responses. All 658 local checks pass, with zero skips. Independent review
+found obsolete manual-share labels; persisted delivery metadata and composer
+help now reflect this supported connection. The final source rerun verifies them.
+Installed seven groups pass independently, with five local responses and zero
+paid inference. All 47 application files match source; strict signature passes
+after native testing. Hidden reopening preserves the original three native IDs
+and processes, selection/draft and eight Codex messages, with zero new dispatch.
+
+Private screenshots, successful video, native output and request records remain
+outside Git. These are native/UI mechanics checks with fixed responses, not
+hosted reasoning quality, physical IME, universal provider compatibility, retained
+shared waiting, forced input or automatic cross-service collaboration. No private
+model context is erased or isolated by selective output sharing. Closing the
+observer freezes unfinished shared streams; reopening does not renew a grant.

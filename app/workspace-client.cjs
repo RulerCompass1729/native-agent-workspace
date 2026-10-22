@@ -106,13 +106,17 @@ class WorkspaceClient extends EventEmitter {
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           legacyReaderPending: s.provider === 'claude' && legacySubmit && !reader?.initialized,
           legacyShare: legacySubmit,
+          legacySharedReply: Boolean(legacySubmit && bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError),
           ...(s.provider === 'claude' && legacySubmit ? { queueAvailable: Boolean(bridge.target(s)?.queueAvailable), pendingQueue: bridge.target(s)?.pendingQueue || null } : {}),
           ...(reader?.initialized ? { nativeBlockMapping: true, messages: reader.record.messages,
             ...(reader.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : {}) } : {}),
           ...(bridge?.readerUnavailable?.(s) ? { nativeBlockMapping: true, messages: [{ id: 'retained-reader-unavailable', role: 'system', kind: 'gap', incomplete: true,
             text: '原生阅读记录暂不可用；没有以旧后台内容替换，请在原生终端继续。' }] } : {}),
           ...(legacyCodex && native ? { nativeBlockMapping: true, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告', ...(native.connected ? { activity: native.activity || '' } : {}) } : {}),
-          ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null, sharingNotice: '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。', ...(native?.state ? { state: native.state } : {}),
+          ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null,
+            sharingNotice: bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError
+              ? '只发送选定的内容；对应的原生回复实时显示在共同消息流中，不自动交给其他 agent。'
+              : '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。', ...(native?.state ? { state: native.state } : {}),
             pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
           ...(legacyCodex
             ? { approval: native?.connected ? native.approval : null, approvalResolved: Boolean(native?.connected && native.approvalResolved) } : {}),
@@ -144,7 +148,8 @@ class WorkspaceClient extends EventEmitter {
     return { ...this.active.state, sessions, capabilities,
       room: { ...this.active.state.room, revision: this.entries.reduce((n, e) => n + (e.state.room.revision || 0), 0), run: runs[0] || null, messages: [...messages.values()].sort((a, b) => (a.time || 0) - (b.time || 0)) },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
-      storageWarning: [...this.entries.map(e => e.state.storageWarning), this.control.legacyInput?.storageWarning].filter(Boolean).join('\n') || null,
+      storageWarning: [...this.entries.map(e => e.state.storageWarning), this.control.legacyInput?.storageWarning,
+        this.control.legacyInput?.sharedReplies?.storageError ? '本地共享回复未能保存；后续内容留在原会话，请检查磁盘与文件权限。' : null].filter(Boolean).join('\n') || null,
       storageRetryable: this.entries.some(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave')),
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),
       handoffNotice: memberServices.length > 1 ? '成员使用不同版本的后台，自动交接暂不可用。可在同一协作视图查看终端、选择内容并定向分享。' : null,
@@ -522,7 +527,16 @@ class WorkspaceClient extends EventEmitter {
         const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原会话已变化'); };
         // Native hooks remain the sole writer of conversation history.
         // Never call the old paste/Enter sender or launch a replacement CLI.
-        const tag = await this.control.legacyInput.send(record, args[1], refresh, valid, shared, replyTo);
+        const shareAuthority = () => {
+          try { guard(); } catch { return false; }
+          const current = target.state.sessions.find(s => s.id === record.id);
+          const observed = this.control.legacyOwners.get(record.id);
+          return manualValid() && current?.nativeId === record.nativeId && current.pid === record.pid &&
+            current.owner === target.state.owner && current.controlRevision === control && observed?.controlRevision === control &&
+            current.memberRevision === member && current.roomId === 'shared' && !current.approval && !current.nativeContextPending &&
+            ['idle', 'working'].includes(current.state);
+        };
+        const tag = await this.control.legacyInput.send(record, args[1], refresh, valid, shared, replyTo, undefined, false, shareAuthority);
         // An accepted native submission stays accepted even if cleanup loses
         // ownership or the connection. Never report that as a failed send.
         if (!shared && draft?.trim() === args[1].trim()) await this.legacyDraft(target, record.id, '', record, current =>
