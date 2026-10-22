@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
 const { ProgressJournal } = require('./observation.cjs');
-const { applyNativeBlock } = require('./native-blocks.cjs');
+const { applyNativeBlock, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress } = require('./native-blocks.cjs');
+const { SharedReplies } = require('./shared-replies.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
 const { NativeHistory, nativeId } = require('./native-history.cjs');
 
@@ -23,6 +24,7 @@ class Workspace extends EventEmitter {
     this.deadlineTimer = setInterval(() => this.expireRun(), 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map(); this.pendingDrafts = new Map();
+    this.sharedReplies = new SharedReplies(this);
     this.approvalRoutes = new Map();
     this.stops = new Map();
     this.progress = new Map(); this.observedTerminals = new Map();
@@ -35,6 +37,7 @@ class Workspace extends EventEmitter {
         if (message.status === 'streaming') message.status = 'unconfirmed';
       }
       this.room.messages = stored.room?.messages || [];
+      for (const m of this.room.messages) if (['streaming', 'running'].includes(m.status)) { m.status = 'unconfirmed'; m.sharingStopped = '运行连接曾中断，未重发任务'; }
       for (const m of this.room.messages) for (const delivery of m.deliveries || []) {
         if (delivery.status === 'awaiting-native') delivery.status = 'unconfirmed';
       }
@@ -48,6 +51,7 @@ class Workspace extends EventEmitter {
     return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeBlockMapping: true, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
+    this.sharedReplies.refresh();
     this.emit('change');
     if (this.storageWarning) return;
     // Keep burst coalescing, but a continuously streaming reply must not
@@ -64,7 +68,7 @@ class Workspace extends EventEmitter {
     try {
       // No terminal bytes, credentials, environment, hook secrets or raw protocol.
       const sessions = [...this.sessions.values()].map(({ owner, approval, approvalResolved, pid, ...s }) => ({ ...s, messages: s.messages.filter(m => !m.volatile), pendingTag: null }));
-      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: this.room.messages, ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
+      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: this.room.messages.filter(m => !m.volatile), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
       fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
     } catch { this.storageFailure = 'write'; this.storageWarning = '本地保存失败，当前会话仍在内存中；请保留窗口并检查磁盘，恢复后重试保存。'; this.emit('change'); }
   }
@@ -158,13 +162,14 @@ class Workspace extends EventEmitter {
           incomplete: value.truncated, title: value.title || '原生过程记录', status: value.status === 'completed' ? 'complete' : value.status });
         this.changed();
       }
-      if (item.id && item.source === 'codex-native' && (item.turnId || s.messages.some(m => m.id === `native:${s.nativeId}:tool:${item.id}`))) {
-        applyNativeBlock(s, { ...item, id: `tool:${item.id}`, nativeId: s.nativeId, kind: 'tool',
-          status: item.status === 'completed' ? 'complete' : item.status });
+      const nativeProgress = applyCodexProgress(s, item);
+      if (nativeProgress) {
+        this.sharedReplies.record(s, nativeProgress);
         this.changed();
       }
     });
-    on('nativeBlock', item => { if (applyNativeBlock(s, item)) this.changed(); });
+    on('nativeBlock', item => { if (applyNativeBlock(s, item)) { this.sharedReplies.record(s, s.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`)); this.changed(); } });
+    on('replyBound', identity => { this.sharedReplies.bind(s, identity.tag, identity); this.changed(); });
     on('contextEnd', info => this.endNativeContext(s, runtime, info));
     on('contextClear', info => this.clearNativeContext(s, runtime, info));
     on('capability', () => this.changed());
@@ -224,78 +229,19 @@ class Workspace extends EventEmitter {
       if (!item?.id || !s.messages.some(m => m.id === item.id)) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
       this.changed();
     });
-    on('history', items => {
-      const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set();
-      const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
-      const legacyInputs = new Map();
-      if (s.provider === 'codex' && s.recovering) {
-        for (const [id, text] of runtime.recoveryNativeInputs || []) {
-          const cached = existing.get(id);
-          if (!cached || exactIds.has(id) || cached.text !== text || cached.role !== 'user' || cached.origin !== 'native') continue;
-          if (!legacyInputs.has(text)) legacyInputs.set(text, { ids: [], next: 0 });
-          legacyInputs.get(text).ids.push(id);
-        }
-      }
-      for (const item of items) {
-        const own = item.type === 'userMessage' && item.clientId && existing.get(item.clientId)?.role === 'user' ? existing.get(item.clientId) : existing.get(item.id);
-        // A cold connection's persisted partial text is not newer than native
-        // history. Live items received on this connection still take precedence.
-        if (own && s.recovering && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
-          Object.assign(own, { text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
-        }
-        if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) { own.status = 'submitted'; this.deliveryStatus(own.id, 'submitted'); }
-        const m = own || (item.type === 'userMessage'
-          ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
-          : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
-        // Early backends assigned random display IDs to native user input.
-        // One unmatched pure-text history item may replace one pre-recovery
-        // cache row. This is display reconciliation, never reply attribution.
-        if (!own && s.provider === 'codex' && s.recovering && item.type === 'userMessage' &&
-          item.content?.length && item.content.every(i => i.type === 'text' && typeof i.text === 'string')) {
-          const queue = legacyInputs.get(m.text);
-          if (queue && queue.next < queue.ids.length) used.add(queue.ids[queue.next++]);
-        }
-        if (!used.has(m.id)) { imported.push(m); used.add(m.id); }
-      }
-      // Keep live content and GUI submission status; only history supplies order.
-      // No complete/nativeInput events: hydration cannot route or pause a task.
-      s.messages = imported.concat(s.messages.filter(m => !used.has(m.id)));
-      runtime.recoveryNativeInputs?.clear();
-      this.changed();
-    });
+    on('history', items => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted')); this.changed(); });
     on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
     on('unattributed', tag => {
       if (s.pendingTag !== tag) return;
       s.pendingTag = null;
       const shared = this.room.messages.find(m => m.id === tag);
       if (shared) shared.status = 'reply-private';
-      this.forwards.delete(tag);
+      this.forwards.delete(tag); this.sharedReplies.close(tag, '回复归属未确认');
       s.activity = '输入已接收；回复归属未确认，请在原生会话核对。';
       this.pauseParticipant(s.id, s.activity); this.changed();
     });
-    on('delta', item => {
-      let message = s.messages.find(m => m.id === item.id);
-      if (!message) { message = { id: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
-      message.text += item.text;
-      if (item.turnId) message.turnId = item.turnId;
-      message.nativeId = s.nativeId;
-      const ended = s.messages.find(m => m.kind === 'turn' && m.nativeId === s.nativeId && m.turnId === item.turnId);
-      if (ended) message.status = ended.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
-      this.changed();
-    });
-    on('messageItem', item => {
-      let m = s.messages.find(m => m.id === item.id);
-      if (!m) {
-        m = { id: item.id, role: 'assistant' };
-        if (item.nativeId && item.nativeId !== s.nativeId) {
-          const context = s.nativeContexts?.find(c => c.nativeId === item.nativeId);
-          const index = s.messages.findIndex(message => message.id === context?.boundaryId);
-          if (index < 0) return;
-          s.messages.splice(index, 0, m);
-        } else s.messages.push(m);
-      }
-      Object.assign(m, { text: item.text, status: 'complete', nativeId: item.nativeId || s.nativeId, phase: item.phase, ...(item.turnId ? { turnId: item.turnId } : {}) }); this.changed();
-    });
+    on('delta', item => { this.sharedReplies.record(s, applyCodexDelta(s, item)); this.changed(); });
+    on('messageItem', item => { this.sharedReplies.record(s, applyCodexMessage(s, item)); this.changed(); });
     on('complete', info => {
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
@@ -303,14 +249,15 @@ class Workspace extends EventEmitter {
       if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag) { s.pendingTag = null; s.activity = ''; s.approval = null; }
       if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete' });
       const forward = this.forwards.get(forwardTag);
-      if (forward && forwardTag === info.tag && s.roomId === 'shared' && forward.member === s.memberRevision && forward.control === s.controlRevision && info.text) this.room.messages.push({ id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, text: info.text, time: Date.now(), deliveryTracked: true });
-      else if (forward) { const message = this.room.messages.find(m => m.id === forwardTag); if (message) message.status = 'reply-private'; }
+      const shared = forward && forwardTag === info.tag && s.roomId === 'shared' && forward.member === s.memberRevision && forward.control === s.controlRevision && info.text && this.sharedReplies.final(s, info);
+      if (forward && !shared) { const message = this.room.messages.find(m => m.id === forwardTag); if (message) message.status = 'reply-private'; }
       this.forwards.delete(forwardTag);
       this.changed();
       const run = this.room.run;
       this.advance(s, info).catch(error => { this.pause(error.message, run); });
+      this.sharedReplies.close(forwardTag, '原生回复已结束；未确认内容留在原会话');
     });
-    on('failed', (reason, info) => { for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed'; this.deliveryStatus(info?.tag || s.pendingTag, 'unconfirmed'); if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pauseParticipant(s.id, reason); this.changed(); });
+    on('failed', (reason, info) => { this.sharedReplies.close(info ? info.tag : s.pendingTag, '原生状态未确认'); for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed'; this.deliveryStatus(info?.tag || s.pendingTag, 'unconfirmed'); if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pauseParticipant(s.id, reason); this.changed(); });
   }
   endNativeContext(s, runtime, info) {
     if (this.runtimes.get(s.id) !== runtime || info.nativeId !== s.nativeId) return;
@@ -421,6 +368,7 @@ class Workspace extends EventEmitter {
       sourceMessage.deliveries ||= [];
       sourceMessage.deliveries.push({ id: tag, recipientId: s.id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() });
     }
+    if ((route || forward) && sourceMessage) this.sharedReplies.authorize(s, runtime, tag, sourceMessage, route);
     this.versions.dispatches++;
     if (route) route.awaiting = { sessionId: id, tag, member, control };
     else if (clearedDraft) { this.pendingDrafts.set(id, { tag, text: draft, revision: draftRevision }); this.drafts.set(id, ''); }
@@ -429,7 +377,7 @@ class Workspace extends EventEmitter {
     catch (error) {
       const current = this.runtimes.get(id) === runtime && s.connectionRevision === connection && s.pendingTag === tag;
       const sameControl = s.controlRevision === control;
-      this.forwards.delete(tag);
+      this.forwards.delete(tag); this.sharedReplies.close(tag, '接收结果未确认');
       this.deliveryStatus(tag, 'unconfirmed');
       for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m?.status === 'awaiting-native') m.status = 'unconfirmed'; }
       if (current) {
@@ -533,9 +481,9 @@ class Workspace extends EventEmitter {
     if (!run || run.status !== 'running' || a?.sessionId !== s.id || a.tag !== info.tag || s.memberRevision !== a.member || s.controlRevision !== a.control || s.roomId !== 'shared') return;
     run.awaiting = null;
     if (typeof info.text !== 'string' || !info.text.trim()) return this.pause('原生没有提供可交接的回复，请人工查看。');
+    const sourceMessage = this.sharedReplies.final(s, info, run);
+    if (!sourceMessage) return this.pause('回复共享已失效，请在原会话核对。');
     run.steps++;
-    const sourceMessage = { id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, text: info.text, time: Date.now(), runId: run.id, deliveryTracked: true };
-    this.room.messages.push(sourceMessage);
     if (run.stopAfterReply) return this.pause(run.stopAfterReply);
     // Keep the reply even when it cannot be handed off. A root Stop/turn end
     // and a list of observed fleet events are not a complete fleet inventory.
@@ -647,7 +595,7 @@ class Workspace extends EventEmitter {
   }
   clearSharedHistory() {
     if (this.room.run?.status === 'running') throw new Error('请先暂停本轮交接，再清除共享记录。');
-    this.room.run = null; this.room.messages = []; this.forwards.clear(); this.room.revision++; this.changed(); this.persist();
+    this.room.run = null; this.room.messages = []; this.forwards.clear(); this.sharedReplies.grants.clear(); this.room.revision++; this.changed(); this.persist();
   }
   forget(id) {
     const s = this.get(id);

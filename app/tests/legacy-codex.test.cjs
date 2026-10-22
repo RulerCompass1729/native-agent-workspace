@@ -26,7 +26,11 @@ async function fixture(t, options = {}) {
       if (m.method === 'thread/resume') {
         if (options.empty && !started) ws.send(JSON.stringify({ id: m.id, error: { code: -32600, message: 'no rollout found for thread id ' + record.nativeId } }));
         else if (options.resume) options.resume(reply, event);
-        else reply({ thread: { id: record.nativeId, status: { type: 'idle' } } });
+        else reply({ model: 'synthetic-small', thread: { id: record.nativeId, status: { type: 'idle' } } });
+      }
+      if (m.method === 'thread/items/list') {
+        if (options.items) options.items(m, reply, event);
+        else reply({ data: [], nextCursor: null });
       }
       if (m.method === 'thread/turns/list') reply({ data: options.turns || [{ id: 'owned-turn', status: 'completed', items: [{ id: 'final', type: 'agentMessage', text: 'first reply' }] }] });
       if (m.method === 'turn/start') {
@@ -61,6 +65,63 @@ test('unloaded native identity is rejected without resume or model requests', as
   const f = await fixture(t, { notLoaded: true }), target = new LegacyCodex(f.record); t.after(() => target.close());
   await assert.rejects(target.connect(f.socket), /未处于可连接/);
   assert.equal(f.calls.some(c => c.method === 'thread/resume' || c.method === 'turn/start'), false);
+});
+
+test('retained native history, live deltas and input share one reader without changing the writer or creating a turn', async t => {
+  let release;
+  const f = await fixture(t, { items(_request, reply) { release = reply; } });
+  const target = new LegacyCodex(f.record); t.after(() => target.close());
+  const connecting = target.connect(f.socket); while (!release) await tick();
+  f.event('item/agentMessage/delta', { turnId: 'live-turn', itemId: 'live-answer', delta: 'new live text' }); await tick();
+  release({ data: [
+    { turnId: 'old', item: { type: 'userMessage', id: 'old-human', content: [{ type: 'text', text: 'hello' }] } },
+    { turnId: 'old', item: { type: 'agentMessage', id: 'old-answer', text: 'hello back' } },
+    { turnId: 'live-turn', item: { type: 'agentMessage', id: 'live-answer', text: 'stale prefix' } },
+  ], nextCursor: null }); await connecting;
+  assert.deepEqual(target.record.messages.map(m => m.text), ['hello', 'hello back', 'new live text']);
+  assert.equal(target.model, 'synthetic-small');
+  f.event('item/agentMessage/delta', { turnId: 'live-turn', itemId: 'live-answer', delta: ' more' }); await tick();
+  assert.equal(target.record.messages.at(-1).text, 'new live text more');
+  f.event('item/completed', { turnId: 'live-turn', item: { type: 'agentMessage', id: 'live-answer', text: 'final live answer' } }); await tick();
+  assert.equal(target.record.messages.at(-1).text, 'final live answer');
+  assert.equal(target.record.messages.filter(m => m.id === 'live-answer').length, 1);
+  assert.equal(f.calls.some(c => ['thread/start', 'turn/start', 'turn/interrupt', 'thread/unsubscribe'].includes(c.method)), false);
+  assert.equal(f.calls.filter(c => c.method === 'thread/resume').length, 1);
+});
+
+test('retained GUI input is immediately visible and later exact native echo does not duplicate it', async t => {
+  let release;
+  const f = await fixture(t, { start(_request, reply) { release = reply; } });
+  const target = new LegacyCodex(f.record); t.after(() => target.close()); await target.connect(f.socket);
+  const sending = target.send('visible input', 'gui-input', async () => {}, () => true);
+  while (!release) await tick();
+  assert.equal(target.record.messages.at(-1).text, 'visible input');
+  assert.equal(target.record.messages.at(-1).status, 'awaiting-native');
+  f.event('item/completed', { turnId: 'owned-turn', item: { type: 'userMessage', id: 'native-input', clientId: 'gui-input', content: [{ type: 'text', text: 'visible input' }] } });
+  release({ turn: { id: 'owned-turn' } }); await sending; await tick();
+  assert.equal(target.record.messages.filter(m => m.text === 'visible input').length, 1);
+  assert.equal(target.record.messages.at(-1).status, 'submitted');
+});
+
+test('retained nonempty cache reconciles native history once, replaces stale partials and retains newer live completion', async t => {
+  let release;
+  const f = await fixture(t, { items(_request, reply) { release = reply; } });
+  const target = new LegacyCodex({ ...f.record, messages: [
+    { id: 'legacy-random-user', role: 'user', origin: 'native', text: 'same question', status: 'submitted' },
+    { id: 'cached-answer', role: 'assistant', text: 'stale partial', status: 'streaming' },
+    { id: 'live-answer', role: 'assistant', text: 'old live cache', status: 'streaming' },
+  ] }); t.after(() => target.close());
+  const connecting = target.connect(f.socket); while (!release) await tick();
+  f.event('item/agentMessage/delta', { turnId: 'old', itemId: 'cached-answer', delta: 'unknown overlapping suffix' });
+  f.event('item/completed', { turnId: 'live', item: { type: 'agentMessage', id: 'live-answer', text: 'newest live completion' } }); await tick();
+  release({ data: [
+    { turnId: 'old', item: { type: 'userMessage', id: 'actual-user', content: [{ type: 'text', text: 'same question' }] } },
+    { turnId: 'old', item: { type: 'agentMessage', id: 'cached-answer', text: 'complete native history' } },
+    { turnId: 'live', item: { type: 'agentMessage', id: 'live-answer', text: 'outdated snapshot' } },
+  ] }); await connecting;
+  assert.deepEqual(target.record.messages.map(m => m.text), ['same question', 'complete native history', 'newest live completion']);
+  assert.equal(target.record.messages[0].id, 'actual-user');
+  assert.equal(f.calls.some(c => c.method === 'turn/start'), false);
 });
 
 test('empty retained thread receives exactly the requested first turn, then joins its native events', async t => {
@@ -237,6 +298,21 @@ test('human native messages invalidate a pending dispatch; progress needs no ter
   assert.equal(target.observe().progress.items[0].text, 'intermediate output');
   assert.equal(f.calls.some(c => c.method === 'turn/start'), false);
 });
+test('native error freezes retained partial text and inline tool status without claiming the native turn stopped', async t => {
+  const f = await fixture(t), target = new LegacyCodex(f.record); t.after(() => target.close());
+  await target.connect(f.socket);
+  f.event('turn/started', { turn: { id: 'active-turn' } });
+  f.event('item/agentMessage/delta', { turnId: 'active-turn', itemId: 'partial', delta: 'partial text' });
+  f.event('item/started', { turnId: 'active-turn', item: { id: 'cmd', type: 'commandExecution', command: 'synthetic command' } });
+  f.event('item/commandExecution/outputDelta', { turnId: 'active-turn', itemId: 'cmd', delta: 'intermediate tool text' }); await tick();
+  assert.equal(target.record.messages.find(m => m.kind === 'tool').text, 'intermediate tool text');
+  f.event('error', {}); await tick();
+  assert.equal(target.record.messages.find(m => m.id === 'partial').status, 'unconfirmed');
+  assert.equal(target.record.messages.find(m => m.kind === 'tool').status, 'unconfirmed');
+  assert.equal(target.observe().progress.items.find(m => m.id === 'cmd').status, 'unknown');
+  assert.equal(target.state, 'working');
+  assert.equal(f.calls.some(c => ['turn/start', 'turn/interrupt'].includes(c.method)), false);
+});
 
 test('manager records only metadata, preserves native history writer and refuses insecure connection files', async t => {
   const f = await fixture(t), manager = new LegacyInput(f.directory); t.after(() => manager.close());
@@ -249,6 +325,32 @@ test('manager records only metadata, preserves native history writer and refuses
   assert.equal(fs.readFileSync(path.join(f.directory, 'legacy-dispatches.json'), 'utf8').includes('synthetic private prompt'), false);
   assert.equal(fs.existsSync(path.join(f.directory, 'workspace.json')), false);
   assert.equal(fs.existsSync(path.join(f.directory, '.claude')), false);
+});
+test('failed retained reconnect keeps the read-only cache; successful reconnect reconciles that same history', async t => {
+  let fail = false;
+  const options = { items(_request, reply) {
+    reply({ data: [{ turnId: 'old', item: { type: 'agentMessage', id: 'old-answer', text: 'known native history' } }], nextCursor: null });
+  }, resume(reply) {
+    reply({ model: 'synthetic-small', thread: { id: fail ? 'wrong-thread' : f.record.nativeId, status: { type: 'idle' } } });
+  } };
+  const f = await fixture(t, options), manager = new LegacyInput(f.directory); t.after(() => manager.close());
+  await manager.prepare(f.entry, f.record);
+  const old = manager.target(f.record);
+  old.native.record.messages.push({ id: 'uncertain-input', role: 'user', origin: 'human', text: 'pending human input', status: 'unconfirmed' });
+  old.native.close(); fail = true;
+  await assert.rejects(manager.prepare(f.entry, f.record), /连接未确认/);
+  assert.equal(manager.target(f.record), old);
+  assert.equal(manager.connected(f.record), false);
+  assert.deepEqual(old.native.record.messages.map(m => m.text), ['known native history', 'pending human input']);
+  fail = false;
+  await manager.prepare(f.entry, f.record);
+  const replacement = manager.target(f.record);
+  assert.notEqual(replacement, old);
+  assert.equal(manager.connected(f.record), true);
+  assert.deepEqual(replacement.native.record.messages.map(m => m.text), ['known native history', 'pending human input']);
+  assert.equal(replacement.native.record.nativeId, f.record.nativeId);
+  assert.equal(replacement.native.record.pid, f.record.pid);
+  assert.equal(f.calls.some(c => ['thread/start', 'turn/start', 'turn/interrupt', 'thread/unsubscribe'].includes(c.method)), false);
 });
 test('closing while the empty first turn is acknowledged cannot start another observer request', async t => {
   let acknowledge;

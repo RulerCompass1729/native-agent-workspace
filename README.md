@@ -12,6 +12,13 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.56 replaces terminal-camera panels with native content in the
+main reader. Authorized shared replies stream as attributed message blocks;
+expand a sent message to inspect its recipients and exact payload. Retained
+Codex history and live text/tool updates reuse the original connection. Source
+checks and installed reader/quiet-reopen checks pass. This does not yet cover every
+native transient state or working-turn input. See [evidence](docs/testing.md).
+
 Alpha.55 preserves expanded running results and their reading position when
 switching sessions, GUI/TUI views or collaboration membership. A newer reading
 gesture wins over a delayed restore. This adds no agent request or sharing;

@@ -29,12 +29,20 @@ NativeHost.prototype.create = function (record) {
     snapshot: async () => ({ buffer: r.serializer.serialize(), sequence: r.sequence, cols: r.screen.cols, rows: r.screen.rows }),
   };
   r.start = async () => r.emit('state', 'idle'); r.stop = async () => ({ state: 'ended' });
-  r.send = async () => { stats.sends++; }; r.openTerminal = async () => { stats.opens++; return r.terminal; };
+  r.send = async (text, tag) => {
+    stats.sends++;
+    if (r.bindSends) {
+      r.lastSend = { text, tag, nativeId: record.nativeId, turnId: `turn-${stats.sends}`, promptId: `prompt-${stats.sends}` };
+      r.emit('submitted', tag); r.emit('replyBound', r.lastSend); r.emit('state', 'working');
+    }
+  }; r.openTerminal = async () => { stats.opens++; return r.terminal; };
   runtimes.set(record.id, r); return r;
 };
 process.on('message', async q => {
   try {
     const r = runtimes.get(q.target);
+    if (q.method === 'bindSends') r.bindSends = true;
+    if (q.method === 'complete') { r.emit('state', 'idle'); r.emit('complete', { tag: r.lastSend.tag, ...q.value }); }
     if (q.method === 'hold') held.add(q.target);
     if (q.method === 'connection') { r.record.connectionRevision = (r.record.connectionRevision || 0) + 1; r.emit('state', q.value); }
     if (q.method === 'rawUnavailable') q.value ? noRaw.add(q.target) : noRaw.delete(q.target);
@@ -62,6 +70,6 @@ process.on('message', async q => {
     if (q.method === 'gap') r.emit('terminal', { epoch: r.journal.epoch, index: r.journal.index + 2, data: 'must-not-paint', cols: 80, rows: 24 });
     if (q.method === 'stop') for (const x of runtimes.values()) x.emit('state', 'ended');
     const b = r?.screen.buffer.active;
-    process.send({ requestId: q.id, stats, waiting: [...waiting.keys()], screen: b && { cols: r.screen.cols, rows: r.screen.rows, type: b.type, cursor: [b.cursorX, b.cursorY], lines: Array.from({ length: b.length }, (_, i) => b.getLine(i).translateToString()) }, index: r?.journal.index });
+    process.send({ requestId: q.id, stats, lastSend: r?.lastSend, waiting: [...waiting.keys()], screen: b && { cols: r.screen.cols, rows: r.screen.rows, type: b.type, cursor: [b.cursorX, b.cursorY], lines: Array.from({ length: b.length }, (_, i) => b.getLine(i).translateToString()) }, index: r?.journal.index });
   } catch (error) { process.send({ requestId: q.id, error: error.message }); }
 });

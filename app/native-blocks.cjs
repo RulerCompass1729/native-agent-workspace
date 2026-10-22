@@ -18,7 +18,7 @@ function applyNativeBlock(session, event) {
   }
   if (typeof event.text === 'string') row.text = event.text;
   if (typeof event.delta === 'string') row.text += event.delta;
-  for (const field of ['title', 'status', 'turnId', 'displayTurnId']) if (typeof event[field] === 'string') row[field] = event[field];
+  for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId']) if (typeof event[field] === 'string') row[field] = event[field];
   if (typeof event.input === 'string') row.input = event.input;
   if (event.incomplete) row.incomplete = true;
   if (event.kind === 'response' && boundary && row.status === 'streaming') row.status = boundary.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
@@ -33,7 +33,11 @@ function applyNativeBlock(session, event) {
   // Retain the previous observation privacy/memory boundary even though tool
   // rows now sit in the main reader. Never silently pass an evicted body off
   // as a complete tool result.
-  const tools = session.messages.filter(m => m.volatile);
+  session.messages = trimVolatileRows(session.messages);
+  return true;
+}
+function trimVolatileRows(messages, gapId = 'native-cache-gap') {
+  const tools = messages.filter(m => m.volatile);
   const size = m => Buffer.byteLength(JSON.stringify(m));
   let bytes = tools.reduce((n, m) => n + size(m), 0), count = tools.length;
   const removed = new Set();
@@ -43,12 +47,80 @@ function applyNativeBlock(session, event) {
     removed.add(tool.id); bytes -= size(tool); count--;
   }
   if (removed.size) {
-    session.messages = session.messages.filter(m => !removed.has(m.id));
-    const gapId = 'native-cache-gap';
-    let gap = session.messages.find(m => m.id === gapId);
-    if (!gap) { gap = { id: gapId, role: 'system', volatile: true, kind: 'gap', time: Date.now() }; session.messages.push(gap); }
+    messages = messages.filter(m => !removed.has(m.id));
+    let gap = messages.find(m => m.id === gapId);
+    if (!gap) { gap = { id: gapId, role: 'system', volatile: true, kind: 'gap', time: Date.now() }; messages.push(gap); }
     gap.text = '部分工具记录超过本次运行缓存上限，请在原生终端核对。'; gap.incomplete = true;
   }
-  return true;
+  return messages;
 }
-module.exports = { applyNativeBlock };
+function applyCodexHistory(s, items, runtime, submitted = () => {}) {
+  const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set();
+  const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
+  const legacyInputs = new Map();
+  if (s.provider === 'codex' && s.recovering) {
+    for (const [id, text] of runtime.recoveryNativeInputs || []) {
+      const cached = existing.get(id);
+      if (!cached || exactIds.has(id) || cached.text !== text || cached.role !== 'user' || cached.origin !== 'native') continue;
+      if (!legacyInputs.has(text)) legacyInputs.set(text, { ids: [], next: 0 });
+      legacyInputs.get(text).ids.push(id);
+    }
+  }
+  for (const item of items) {
+    const own = item.type === 'userMessage' && item.clientId && existing.get(item.clientId)?.role === 'user' ? existing.get(item.clientId) : existing.get(item.id);
+    // A cold connection's persisted partial text is not newer than native
+    // history. Live items received on this connection still take precedence.
+    if (own && s.recovering && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
+      Object.assign(own, { text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+    }
+    if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) { own.status = 'submitted'; submitted(own.id); }
+    const m = own || (item.type === 'userMessage'
+      ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
+      : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+    // Early backends assigned random display IDs to native user input.
+    // One unmatched pure-text history item may replace one pre-recovery
+    // cache row. This is display reconciliation, never reply attribution.
+    if (!own && s.provider === 'codex' && s.recovering && item.type === 'userMessage' &&
+      item.content?.length && item.content.every(i => i.type === 'text' && typeof i.text === 'string')) {
+      const queue = legacyInputs.get(m.text);
+      if (queue && queue.next < queue.ids.length) used.add(queue.ids[queue.next++]);
+    }
+    if (!used.has(m.id)) { imported.push(m); used.add(m.id); }
+  }
+  // Keep live content and GUI submission status; only history supplies order.
+  // No complete/nativeInput events: hydration cannot route or pause a task.
+  s.messages = imported.concat(s.messages.filter(m => !used.has(m.id)));
+  runtime.recoveryNativeInputs?.clear();
+}
+function applyCodexDelta(s, item) {
+  let message = s.messages.find(m => m.id === item.id);
+  if (!message) { message = { id: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
+  message.text += item.text;
+  if (item.turnId) message.turnId = item.turnId;
+  message.nativeId = s.nativeId;
+  const ended = s.messages.find(m => m.kind === 'turn' && m.nativeId === s.nativeId && m.turnId === item.turnId);
+  if (ended) message.status = ended.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
+  return message;
+}
+function applyCodexProgress(s, item) {
+  const id = `native:${s.nativeId}:tool:${item.id}`;
+  if (!item.id || item.source !== 'codex-native' || (!item.turnId && !s.messages.some(m => m.id === id))) return null;
+  applyNativeBlock(s, { ...item, id: `tool:${item.id}`, nativeId: s.nativeId, kind: 'tool',
+    status: item.status === 'completed' ? 'complete' : item.status });
+  return s.messages.find(m => m.id === id);
+}
+function applyCodexMessage(s, item) {
+  let m = s.messages.find(m => m.id === item.id);
+  if (!m) {
+    m = { id: item.id, role: 'assistant' };
+    if (item.nativeId && item.nativeId !== s.nativeId) {
+      const context = s.nativeContexts?.find(c => c.nativeId === item.nativeId);
+      const index = s.messages.findIndex(message => message.id === context?.boundaryId);
+      if (index < 0) return null;
+      s.messages.splice(index, 0, m);
+    } else s.messages.push(m);
+  }
+  Object.assign(m, { text: item.text, status: 'complete', nativeId: item.nativeId || s.nativeId, phase: item.phase, ...(item.turnId ? { turnId: item.turnId } : {}) });
+  return m;
+}
+module.exports = { applyNativeBlock, trimVolatileRows, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress };

@@ -47,6 +47,7 @@ test('headed startup isolates before windows and rejects unsafe test flags befor
   try { for (const [label, env, parent, outcome] of [
     ['isolated', { NAW_DATA_DIR: isolated, NAW_TEST_PARENT_PID: '321' }, 321, 'background'],
     ['normal', {}, 321, 'normal'],
+    ['background relaunch', {}, 321, 'normal-hidden'],
     ['missing normal profile', { NAW_DATA_DIR: isolated, NAW_TEST_PARENT_PID: '321' }, 321, 'background'],
     ['normal profile', { NAW_DATA_DIR: normal, NAW_TEST_PARENT_PID: '321' }, 321, 'reject'],
     ['normal symlink', { NAW_DATA_DIR: alias, NAW_TEST_PARENT_PID: '321' }, 321, 'reject'],
@@ -62,14 +63,17 @@ test('headed startup isolates before windows and rejects unsafe test flags befor
       ipcMain: { handle: noop },
       BrowserWindow: class { constructor(options) { this.options = options; calls.push(['window']); } showInactive() { calls.push(['inactive']); } show() { calls.push(['show']); } focus() { calls.push(['focus']); } isDestroyed() { return false; } isMinimized() { return false; } },
     };
-    const context = vm.createContext({ require: n => n === 'electron' ? electron : nativeRequire(n), __dirname: path.dirname(main), process: { env, ppid: parent, platform: 'darwin', getuid: process.getuid, exit: () => { throw Error('TEST_EXIT'); } }, URL, setInterval: () => ({ unref: noop }), console: { error: noop } });
+    const context = vm.createContext({ require: n => n === 'electron' ? electron : nativeRequire(n), __dirname: path.dirname(main), process: { env, argv: outcome === 'normal-hidden' ? ['electron', '--background'] : [], ppid: parent, platform: 'darwin', getuid: process.getuid, exit: () => { throw Error('TEST_EXIT'); } }, URL, setInterval: () => ({ unref: noop }), console: { error: noop } });
     const load = () => vm.runInContext(fs.readFileSync(main, 'utf8'), context);
     if (outcome === 'reject') { assert.throws(load, /TEST_EXIT/, label); assert.deepEqual(calls, [], label); continue; }
     load();
-    const options = vm.runInContext('startupWindow = createWindow({ bounds: { show: true, focusable: true } }); focusOrOpen(); startupWindow.options', context);
+    const options = vm.runInContext('startupWindow = createWindow({ bounds: { show: true, focusable: true } }); startupWindow.options', context);
     const background = outcome === 'background';
-    assert.equal(options.show, background ? false : true, label);
+    assert.equal(options.show, background || outcome === 'normal-hidden' ? false : true, label);
     assert.equal(options.focusable, background ? false : true, label);
-    assert.deepEqual(calls, background ? [['policy', 'accessory'], ['lock'], ['window']] : [['lock'], ['window'], ['show'], ['focus']], label);
+    vm.runInContext('focusOrOpen()', context);
+    assert.deepEqual(calls, background ? [['policy', 'accessory'], ['lock'], ['window']] : outcome === 'normal-hidden'
+      ? [['policy', 'accessory'], ['lock'], ['window'], ['policy', 'regular'], ['show'], ['focus']]
+      : [['lock'], ['window'], ['show'], ['focus']], label);
   } } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });

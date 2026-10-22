@@ -9,7 +9,7 @@ function fixture() {
   const events = [], calls = [];
   let resolve, reject;
   host.rpc = { call(method, params) { calls.push({ method, params }); return new Promise((yes, no) => { resolve = yes; reject = no; }); } };
-  for (const event of ['submitted', 'nativeInput', 'complete', 'failed', 'state']) runtime.on(event, (...args) => events.push({ event, args }));
+  for (const event of ['submitted', 'replyBound', 'nativeInput', 'complete', 'failed', 'state']) runtime.on(event, (...args) => events.push({ event, args }));
   const notify = (method, params) => runtime.event({ method, params: { threadId: 'thread-test', ...params } });
   const user = (clientId, text) => notify('item/completed', { turnId: 'turn-test', item: { type: 'userMessage', clientId, content: [{ type: 'text', text }] } });
   const reply = (turnId, text) => notify('item/completed', { turnId, item: { type: 'agentMessage', id: `answer-${turnId}`, text } });
@@ -44,6 +44,10 @@ for (const beforeAck of [false, true]) test(`turn completion ${beforeAck ? 'befo
   }
   const own = f.events.filter(e => e.event === 'complete' && e.args[0].tag === 'gui-tag');
   assert.equal(own.length, 1); assert.equal(own[0].args[0].text, 'right answer');
+  assert.equal(own[0].args[0].messageId, 'answer-turn-test');
+  const bound = f.events.find(e => e.event === 'replyBound');
+  assert.deepEqual(bound.args[0], { tag: 'gui-tag', nativeId: 'thread-test', turnId: 'turn-test' });
+  assert.ok(f.events.indexOf(bound) < f.events.indexOf(own[0]));
   assert.ok(f.events.findIndex(e => e.event === 'submitted') < f.events.indexOf(own[0]));
   assert.equal(f.runtime.pending, null); assert.equal(f.runtime.turnId, null);
   assert.equal(f.runtime.turns.size, 0);
@@ -66,4 +70,5 @@ test('uncertain acknowledgement does not assign a buffered result or retry the i
   f.reject(Error('connection lost')); await assert.rejects(sending, /connection lost/);
   assert.equal(f.calls.length, 1); assert.equal(f.runtime.pending, null);
   assert.equal(f.events.find(e => e.event === 'complete').args[0].tag, undefined);
+  assert.ok(!f.events.some(e => e.event === 'replyBound'));
 });

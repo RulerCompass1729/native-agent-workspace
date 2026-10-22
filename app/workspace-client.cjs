@@ -104,6 +104,7 @@ class WorkspaceClient extends EventEmitter {
         ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           legacyShare: legacySubmit,
+          ...(legacyCodex && native ? { nativeBlockMapping: true, messages: native.record.messages, model: native.model || '原生未报告', ...(native.connected ? { activity: native.activity || '' } : {}) } : {}),
           ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null, sharingNotice: '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。', ...(native?.state ? { state: native.state } : {}),
             pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
           ...(legacyCodex
