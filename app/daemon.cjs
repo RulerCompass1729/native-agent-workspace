@@ -37,7 +37,7 @@ async function main() {
   const dispatch = async (owner, method, args) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'retrySave': return workspace.retrySave();
       case 'nativeHistory': return workspace.nativeHistory.list(args[0]);
       case 'importHistory': return workspace.importHistory(args[0], owner);
@@ -62,10 +62,11 @@ async function main() {
         const current = workspace.get(args[0]);
         return current.nativeId !== nativeId || current.nativeContextPending ? { tag, contextChanged: true } : tag;
       }
-      case 'steer': {
+      case 'steer':
+      case 'steerShared': {
         workspace.assertNativeContext(args[0], args[2]);
         const nativeId = workspace.get(args[0]).nativeId;
-        const tag = await workspace.steer(args[0], args[1], owner, args[3]);
+        const tag = await workspace.steer(args[0], args[1], owner, args[3], method === 'steerShared' ? { replyTo: args[4] } : null);
         const current = workspace.get(args[0]);
         return current.nativeId !== nativeId || current.nativeContextPending ? { tag, contextChanged: true } : tag;
       }

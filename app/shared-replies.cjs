@@ -8,7 +8,7 @@ class SharedReplies {
   authorize(s, runtime, tag, source, run) {
     this.grants.set(tag, { tag, sessionId: s.id, runtime, nativeId: s.nativeId,
       member: s.memberRevision, control: s.controlRevision, connection: s.connectionRevision,
-      sourceId: source.id, run, rows: new Map(), closed: false });
+      sourceId: source.id, requiredInputTag: source.inputMode === 'steer' ? tag : '', run, rows: new Map(), closed: false });
     for (const [key, grant] of this.grants) if (this.grants.size > 64 && grant.closed) this.grants.delete(key);
   }
   valid(g) {
@@ -32,6 +32,7 @@ class SharedReplies {
   bind(s, tag, identity) {
     const g = this.grants.get(tag);
     if (!g || !this.valid(g) || !identity || identity.nativeId !== g.nativeId || typeof identity.turnId !== 'string' || !identity.turnId) return;
+    if (g.requiredInputTag && identity.inputTag !== g.requiredInputTag) return;
     if (s.provider === 'claude' && (typeof identity.promptId !== 'string' || !identity.promptId)) return;
     if (g.turnId && (g.turnId !== identity.turnId || g.promptId !== identity.promptId)) { this.close(tag); return; }
     g.turnId = identity.turnId; g.promptId = identity.promptId;
@@ -51,6 +52,7 @@ class SharedReplies {
     for (const g of only ? [only] : this.grants.values()) {
       if (g.sessionId !== s.id || g.nativeId !== message.nativeId || !g.turnId || g.turnId !== message.turnId) continue;
       if (!this.valid(g)) { this.close(g.tag); this.boundary(g, message); continue; }
+      if (g.requiredInputTag && message.inputTag !== g.requiredInputTag) continue;
       if (!['assistant', 'tool'].includes(message.role) && message.kind !== 'turn') continue;
       if (s.provider === 'claude' && message.role === 'assistant' && message.promptId !== g.promptId) continue;
       let row = g.rows.get(message.id);
@@ -82,6 +84,7 @@ class SharedReplies {
     // The adapter supplies the final native item identity. Never deduplicate
     // equal text from two different messages, agents, or turns.
     let row = info.messageId && g?.rows.get(info.messageId);
+    if (g.requiredInputTag && (!g.turnId || info.inputTag !== g.requiredInputTag || !row || row.role !== 'assistant')) { this.close(info.tag); return null; }
     if (!row || row.role !== 'assistant') {
       row = { id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, time: Date.now(),
         ...(g ? { replyTo: g.sourceId, sourceTag: g.tag } : {}), ...(run ? { runId: run.id } : {}), deliveryTracked: true };

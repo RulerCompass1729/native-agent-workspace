@@ -246,7 +246,7 @@ class Workspace extends EventEmitter {
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
-      if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag) { s.pendingTag = null; s.activity = ''; s.approval = null; }
+      if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag || s.pendingTag === info.supersededTag) { s.pendingTag = null; s.activity = ''; s.approval = null; }
       if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete' });
       const forward = this.forwards.get(forwardTag);
       const shared = forward && forwardTag === info.tag && s.roomId === 'shared' && forward.member === s.memberRevision && forward.control === s.controlRevision && info.text && this.sharedReplies.final(s, info);
@@ -257,7 +257,13 @@ class Workspace extends EventEmitter {
       this.advance(s, info).catch(error => { this.pause(error.message, run); });
       this.sharedReplies.close(forwardTag, '原生回复已结束；未确认内容留在原会话');
     });
-    on('failed', (reason, info) => { this.sharedReplies.close(info ? info.tag : s.pendingTag, '原生状态未确认'); for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed'; this.deliveryStatus(info?.tag || s.pendingTag, 'unconfirmed'); if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pauseParticipant(s.id, reason); this.changed(); });
+    on('failed', (reason, info) => {
+      // An unscoped native error affects this observation connection, including
+      // a shared input waiting for its ACK while the older private tag remains.
+      if (!info) for (const grant of this.sharedReplies.grants.values()) {
+        if (grant.sessionId === s.id && grant.runtime === runtime) this.sharedReplies.close(grant.tag, '原生状态未确认');
+      }
+      this.sharedReplies.close(info ? info.tag : s.pendingTag, '原生状态未确认'); for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed'; this.deliveryStatus(info?.tag || s.pendingTag, 'unconfirmed'); if (!info || s.pendingTag === info.tag || s.pendingTag === info.supersededTag) s.pendingTag = null; s.activity = reason; this.pauseParticipant(s.id, reason); this.changed(); });
   }
   endNativeContext(s, runtime, info) {
     if (this.runtimes.get(s.id) !== runtime || info.nativeId !== s.nativeId) return;
@@ -438,28 +444,42 @@ class Workspace extends EventEmitter {
       throw error;
     } finally { if (runtime.pendingQueue === tag) runtime.pendingQueue = null; this.changed(); }
   }
-  async steer(id, text, owner, expectedTurnId) {
+  async steer(id, text, owner, expectedTurnId, shared = null) {
     text = cleanText(text);
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
     const s = this.get(id), runtime = this.runtime(id);
+    const replyTo = shared && require('./room-threads.js').replyReference(shared.replyTo);
+    if (shared && s.roomId !== 'shared') throw Error('接收方已离开共同工作。');
     if (s.owner !== owner || s.provider !== 'codex' || s.state !== 'working' || s.approval ||
       !runtime.steerAvailable || runtime.pendingSteer || typeof expectedTurnId !== 'string' || !expectedTurnId || runtime.turnId !== expectedTurnId) throw Error('当前原生回合或控制权已变化，草稿保留。');
     this.pause('真人追加指令'); s.controlRevision++;
-    const control = s.controlRevision, connection = s.connectionRevision;
-    const valid = () => this.runtimes.get(id) === runtime && s.owner === owner && s.controlRevision === control &&
-      s.connectionRevision === connection && s.state === 'working' && !s.approval && runtime.turnId === expectedTurnId;
+    const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = s.memberRevision;
+    const valid = () => this.runtimes.get(id) === runtime && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending && s.controlRevision === control &&
+      s.connectionRevision === connection && !['ended', 'recoverable', 'error', 'disconnected', 'approval'].includes(s.state) && !s.approval && runtime.turnId === expectedTurnId &&
+      (!shared || (s.roomId === 'shared' && s.memberRevision === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed));
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     runtime.pendingSteer = tag;
     const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId };
+    if (shared) {
+      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, text, status: 'awaiting-native', inputMode: 'steer', time: Date.now(), deliveryTracked: true,
+        ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
+      this.room.messages.push(source); this.forwards.set(tag, { member, control, replyTo });
+      this.sharedReplies.authorize(s, runtime, tag, source);
+    }
     s.messages.push(message); this.versions.dispatches++; this.changed();
     try {
-      await runtime.steer(text, tag, expectedTurnId, valid);
-      message.status = 'submitted';
-      if (s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
+      await runtime.steer(text, tag, expectedTurnId, valid, Boolean(shared));
+      message.status = 'submitted'; this.deliveryStatus(tag, 'submitted');
+      if (!shared && s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
       return tag;
     } catch (error) {
       // Do not relabel ongoing output as cancelled or retry this input.
       if (message.status !== 'submitted') message.status = 'unconfirmed';
+      if (shared) {
+        this.forwards.delete(tag); this.sharedReplies.close(tag, '接收结果未确认'); this.deliveryStatus(tag, 'unconfirmed');
+        const source = this.room.messages.find(row => row.id === tag);
+        if (source?.status === 'awaiting-native') source.status = 'unconfirmed';
+      }
       throw error;
     } finally { if (runtime.pendingSteer === tag) runtime.pendingSteer = null; this.changed(); }
   }

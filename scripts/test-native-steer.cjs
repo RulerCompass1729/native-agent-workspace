@@ -11,7 +11,9 @@ for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('codex'); if (!binary) throw Error('Real Codex required');
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 assert.equal(version, 'codex-cli 0.163.0');
-let application, page, calls = 0, release, sequence = 0;
+const shared = process.env.NAW_STEER_SHARED === '1';
+const inputSelector = shared ? '#shared-input' : '#message-input', sendSelector = shared ? '#forward-button' : '#send-button';
+let application, page, calls = 0, release, releaseSecond, sequence = 0;
 const errors = [], requests = [], sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label, timeout = 30000) {
   const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
@@ -33,6 +35,7 @@ const server = http.createServer((req, res) => {
     event(res, 'response.content_part.added', { output_index: 0, item_id: item.id, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
     event(res, 'response.output_text.delta', { output_index: 0, item_id: item.id, content_index: 0, delta: text });
     if (number === 1) await new Promise(resolve => { release = resolve; });
+    else await new Promise(resolve => { releaseSecond = resolve; });
     item.status = 'completed'; item.content = [{ type: 'output_text', text, annotations: [] }];
     event(res, 'response.output_text.done', { output_index: 0, item_id: item.id, content_index: 0, text });
     event(res, 'response.content_part.done', { output_index: 0, item_id: item.id, content_index: 0, part: item.content[0] });
@@ -50,7 +53,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
     'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n' +
     `os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ codex: shim }), { mode: 0o600 });
-  application = await _electron.launch({ executablePath: require('electron'), args: [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   await until(async () => { for (const candidate of application.windows()) if (!candidate.isClosed() && await candidate.locator('#new-session').count().catch(() => 0)) { page = candidate; return true; } return false; }, 'Main workspace');
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
@@ -61,14 +64,48 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   await page.locator('#messages').getByText('NATIVE_STEER_PARTIAL: original work in progress.', { exact: true }).waitFor();
   const working = (await snapshot()).sessions[0]; assert.ok(working.activeTurnId); assert.equal(working.state, 'working');
   assert.equal(await page.locator('#send-button').textContent(), '追加指令 ↑');
-  await page.locator('#message-input').fill('Use the current instruction.'); await page.keyboard.press('Enter');
+  if (shared) {
+    await page.locator('#message-input').fill('Unsent private draft.');
+    await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${before.id}"]`).click();
+    assert.ok(!(await page.locator('#room-messages').innerText()).includes('NATIVE_STEER_PARTIAL'));
+  }
+  assert.equal(await page.locator(sendSelector).textContent(), '追加指令 ↑');
+  await page.locator(inputSelector).fill('Use the current instruction.'); await page.keyboard.press('Enter');
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.text === 'Use the current instruction.' && m.status === 'submitted'), 'Native steer acknowledgement');
   const accepted = (await snapshot()).sessions[0]; assert.equal(accepted.activeTurnId, working.activeTurnId); assert.equal(accepted.nativeId, before.nativeId);
   assert.equal(accepted.messages.filter(m => m.text === 'Use the current instruction.').length, 1);
   assert.equal(accepted.messages.find(m => m.text.startsWith('NATIVE_STEER_PARTIAL')).status, 'streaming');
-  release();
+  await until(() => typeof releaseSecond === 'function', 'Native second response started');
+  if (shared) {
+    await page.locator('#room-messages').getByText('NATIVE_STEER_FINAL: current instruction received.', { exact: true }).waitFor();
+    const inFlight = await snapshot();
+    const row = inFlight.room.messages.find(m => m.role === 'assistant');
+    assert.equal(row.status, 'streaming'); assert.ok(row.nativeMessageId);
+    assert.equal(inFlight.room.messages.filter(m => m.role === 'human').length, 1);
+    assert.ok(!JSON.stringify(inFlight.room.messages).includes('NATIVE_STEER_PARTIAL'));
+    assert.ok(!JSON.stringify(inFlight.room.messages).includes('Unsent private draft'));
+    fs.writeFileSync(path.join(base, 'shared-streaming.json'), JSON.stringify(inFlight, null, 2));
+    await page.locator(inputSelector).fill('A newer shared draft.');
+    await page.reload(); await page.locator('#new-session').waitFor();
+    await until(async () => (await page.locator(inputSelector).inputValue()) === 'A newer shared draft.', 'Draft restored in room');
+    assert.equal((await snapshot()).sessions[0].activeTurnId, working.activeTurnId);
+    assert.equal(calls, 2);
+  }
+  release(); releaseSecond();
   await until(async () => (await snapshot()).sessions[0].state === 'idle', 'Native turn completes');
-  await page.locator('#messages').getByText('NATIVE_STEER_FINAL: current instruction received.', { exact: true }).waitFor();
+  await page.locator(shared ? '#room-messages' : '#messages').getByText('NATIVE_STEER_FINAL: current instruction received.', { exact: true }).waitFor();
+  if (shared) {
+    const done = await snapshot(), reply = done.room.messages.find(m => m.role === 'assistant');
+    assert.equal(reply.status, 'complete'); assert.equal(reply.finalReply, true);
+    assert.equal(done.room.messages.filter(m => m.role === 'assistant').length, 1);
+    assert.equal(done.sessions[0].pendingTag, null);
+    fs.writeFileSync(path.join(base, 'shared-completed.json'), JSON.stringify(done, null, 2));
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-steering.png') }); }
+    await page.locator(`[data-session-id="${before.id}"]`).click();
+    assert.equal(await page.locator('#message-input').inputValue(), 'Unsent private draft.');
+  }
   const after = (await snapshot()).sessions[0];
   fs.writeFileSync(path.join(base, 'accepted.json'), JSON.stringify(accepted, null, 2));
   fs.writeFileSync(path.join(base, 'completed.json'), JSON.stringify(after, null, 2));
@@ -83,12 +120,12 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   await page.locator('#chat-tab').click();
   assert.equal((await snapshot()).sessions[0].nativeId, before.nativeId); assert.equal(calls, 2); assert.deepEqual(errors, []);
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-steering.png') }); }
-  console.log(JSON.stringify({ version, checks: ['GUI working input uses the existing native turn', 'ACK does not terminate streamed output', 'One visible input and one final native boundary', 'GUI and native TUI retain identity and both inputs/results'], localResponses: calls, paidModelCalls: 0, requests, evidence: base }));
+  console.log(JSON.stringify({ version, shared, checks: ['GUI working input uses the existing native turn', 'ACK does not terminate streamed output', 'One visible input and one final native boundary', 'GUI and native TUI retain identity and both inputs/results', ...(shared ? ['Shared reply excludes prior private blocks and draft', 'Room reload preserves streaming item and draft without dispatch'] : [])], localResponses: calls, paidModelCalls: 0, requests, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
 }).finally(async () => {
-  release?.(); server.closeAllConnections();
+  release?.(); releaseSecond?.(); server.closeAllConnections();
   if (application) await application.close().catch(() => {});
   try {
     const client = await connect(profile, 'native-steer-cleanup');

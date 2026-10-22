@@ -607,6 +607,26 @@ class Codex extends EventEmitter {
     if (this.transportDisconnected) return;
     const p = message.params || {};
     this.eventRevision++;
+    // Pin live item provenance at its first start. A later user input never
+    // reassigns an old streaming item or a late completion to the new prompt.
+    const liveTurn = p.turnId && p.turnId === this.turnId ? this.turn(p.turnId) : null;
+    if (liveTurn && message.method === 'item/completed' && p.item?.type === 'userMessage' && p.item.id && !liveTurn.inputItems.has(p.item.id)) {
+      liveTurn.inputItems.add(p.item.id);
+      liveTurn.inputTag = this.ownInputs.has(p.item.clientId) ? p.item.clientId : '';
+      if (this.steering?.tag === liveTurn.inputTag && this.steering.turnId === p.turnId) this.steering.inputSeen = true;
+      if (this.pending?.steered && this.pending.tag === liveTurn.inputTag && this.pending.turnId === p.turnId) {
+        this.emit('replyBound', { tag: this.pending.tag, nativeId: this.record.nativeId, turnId: p.turnId, inputTag: liveTurn.inputTag });
+      }
+    }
+    const itemId = p.item?.id || p.itemId;
+    if (liveTurn && typeof itemId === 'string' && itemId && p.item?.type !== 'userMessage' &&
+      !liveTurn.itemInputs.has(itemId) && liveTurn.itemInputs.size < 4096) {
+      // A missing/late start is not permission to reassign an existing item.
+      // Pin unknown on its first delta, completion, progress, or history row.
+      const existing = this.historyMessageItems.has(itemId) || this.record.messages?.some(row => row.id === itemId || row.id === `native:${this.record.nativeId}:tool:${itemId}`);
+      liveTurn.itemInputs.set(itemId, message.method === 'item/started' && !existing ? liveTurn.inputTag || '' : '');
+    }
+    const inputTag = liveTurn?.itemInputs.get(itemId) || '';
     if (message.method === 'thread/closed') {
       this.forgetNativeRequests();
       this.closed = true; this.stopped = true; this.finishRecoveryConnection?.(false); this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
@@ -616,14 +636,14 @@ class Codex extends EventEmitter {
       const item = p.item;
       const fleetActivity = item.type === 'subAgentActivity';
       const fleetTitle = { started: '子任务已启动', completed: '子任务本轮已结束', interacted: '已联系子任务' }[item.kind] || '原生团队活动';
-      this.emit('progress', { id: item.id, turnId: p.turnId, source: 'codex-native', kind: item.type,
+      this.emit('progress', { id: item.id, turnId: p.turnId, inputTag, source: 'codex-native', kind: item.type,
         title: fleetActivity ? `${fleetTitle}${item.agentPath ? ' · ' + item.agentPath : ''}` : item.command || item.tool || item.type,
         status: fleetActivity ? 'observed' : message.method === 'item/started' ? 'running' : item.status || 'completed',
         ...(typeof item.aggregatedOutput === 'string' ? { text: item.aggregatedOutput } : {}),
       });
     }
     if (['item/commandExecution/outputDelta', 'item/mcpToolCall/progress'].includes(message.method)) this.emit('progress', {
-      id: p.itemId, turnId: p.turnId, source: 'codex-native', kind: message.method === 'item/commandExecution/outputDelta' ? 'commandExecution' : 'mcpToolCall',
+      id: p.itemId, turnId: p.turnId, inputTag, source: 'codex-native', kind: message.method === 'item/commandExecution/outputDelta' ? 'commandExecution' : 'mcpToolCall',
       ...(typeof p.delta === 'string' ? { delta: p.delta } : { text: p.message || '' }),
     });
     if (message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: '原生会话错误', status: 'failed' });
@@ -664,7 +684,7 @@ class Codex extends EventEmitter {
       case 'turn/started': this.turnId = p.turn.id; this.emit('state', 'working'); break;
       case 'item/agentMessage/delta':
         this.stateRevision++; // Live work invalidates an older resume status.
-        if (!this.historyMessageItems.has(p.itemId)) { this.liveMessageItems.add(p.itemId); this.emit('delta', { id: p.itemId, text: p.delta, turnId: p.turnId }); }
+        if (!this.historyMessageItems.has(p.itemId)) { this.liveMessageItems.add(p.itemId); this.emit('delta', { id: p.itemId, text: p.delta, turnId: p.turnId, inputTag }); }
         break;
       case 'item/started':
         if (p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) this.emit('activity', p.item.type);
@@ -678,7 +698,7 @@ class Codex extends EventEmitter {
         break;
       case 'item/completed':
         if (['userMessage', 'agentMessage'].includes(p.item?.type)) this.stateRevision++;
-        if (p.item?.type === 'agentMessage') { this.liveMessageItems.add(p.item.id); this.turn(p.turnId).text = p.item.text || ''; this.turn(p.turnId).messageId = p.item.id; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase, turnId: p.turnId }); }
+        if (p.item?.type === 'agentMessage') { this.liveMessageItems.add(p.item.id); this.turn(p.turnId).text = p.item.text || ''; this.turn(p.turnId).messageId = p.item.id; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase, turnId: p.turnId, inputTag }); }
         // A human may steer an active GUI turn from the native terminal. Only
         // our explicitly identified echo is redundant; matching text is not ID.
         if (p.item?.type === 'userMessage' && !this.ownInputs.has(p.item.clientId) && (!p.item.id || !this.inputItems.has(p.item.id))) {
@@ -688,7 +708,7 @@ class Codex extends EventEmitter {
         break;
       case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage); break;
       case 'turn/completed': {
-        this.emit('nativeBlock', { id: `turn:${p.turn.id}`, kind: 'turn', turnId: p.turn.id, nativeId: this.record.nativeId,
+        this.emit('nativeBlock', { id: `turn:${p.turn.id}`, kind: 'turn', turnId: p.turn.id, inputTag: this.turn(p.turn.id).inputTag || '', nativeId: this.record.nativeId,
           status: p.turn.status === 'completed' ? 'complete' : p.turn.status === 'interrupted' ? 'interrupted' : 'failed',
           text: p.turn.status === 'completed' ? '原生本轮已结束' : p.turn.status === 'interrupted' ? '原生已中断本轮' : '原生本轮未正常完成' });
         this.turn(p.turn.id).completed = p.turn;
@@ -700,26 +720,36 @@ class Codex extends EventEmitter {
       case 'error': this.emit('failed', '原生会话返回错误，请检查终端。'); break;
     }
   }
-  turn(id) { if (!this.turns.has(id)) this.turns.set(id, { text: '' }); return this.turns.get(id); }
+  turn(id) { if (!this.turns.has(id)) this.turns.set(id, { text: '', inputItems: new Set(), itemInputs: new Map(), inputTag: '' }); return this.turns.get(id); }
   finishTurn(id) {
-    const turn = this.turns.get(id); if (!turn?.completed) return;
+    const turn = this.turns.get(id); if (!turn?.completed || this.steering?.turnId === id) return;
     const pending = this.pending?.turnId === id ? this.pending : null;
     if (pending) this.pending = null;
     this.turns.delete(id); this.hasHistory = true;
     if (this.turnId === id) { this.turnId = null; this.emit('state', 'idle'); }
-    if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag });
-    else this.emit('complete', { tag: pending?.tag, messageId: turn.messageId, text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
+    if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag, supersededTag: pending?.supersededTag });
+    else this.emit('complete', { tag: pending?.tag, supersededTag: pending?.supersededTag, messageId: turn.messageId, inputTag: turn.itemInputs.get(turn.messageId) || '', text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
   }
   get steerAvailable() { return this.host.rpc?.nativeVersion === '0.163.0' && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
-  async steer(text, tag, expectedTurnId, guard) {
-    if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || !guard()) throw Error('当前原生回合已变化；追加指令未发送，草稿保留。');
+  async steer(text, tag, expectedTurnId, guard, shared = false) {
+    if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw Error('当前原生回合已变化；追加指令未发送，草稿保留。');
     this.ownInputs.add(tag);
-    // Native expectedTurnId is the atomic precondition. Never fall back to a
-    // new turn or infer that this request has interrupted the running response.
-    const receipt = await this.host.rpc.call('turn/steer', { threadId: this.record.nativeId, expectedTurnId, clientUserMessageId: tag, input: [{ type: 'text', text, text_elements: [] }] });
-    if (receipt?.turnId !== expectedTurnId) throw Error('原生追加指令接收结果未确认；请核对终端，不会重发。');
-    this.emit('submitted', tag);
-    return expectedTurnId;
+    const operation = this.steering = { tag, turnId: expectedTurnId, inputSeen: false };
+    const previous = this.pending, lifecycle = this.lifecycleRevision;
+    try {
+      // Native expectedTurnId is the atomic precondition. No new-turn fallback.
+      const receipt = await this.host.rpc.call('turn/steer', { threadId: this.record.nativeId, expectedTurnId, clientUserMessageId: tag, input: [{ type: 'text', text, text_elements: [] }] });
+      if (receipt?.turnId !== expectedTurnId) throw Error('原生追加指令接收结果未确认；请核对终端，不会重发。');
+      this.emit('submitted', tag);
+      if (shared && this.pending === previous && lifecycle === this.lifecycleRevision && !this.stopped && !this.transportDisconnected && guard()) {
+        this.pending = { tag, turnId: expectedTurnId, steered: true, supersededTag: previous?.supersededTag || previous?.tag };
+        if (operation.inputSeen && this.turns.get(expectedTurnId)?.inputTag === tag) this.emit('replyBound', { tag, nativeId: this.record.nativeId, turnId: expectedTurnId, inputTag: tag });
+      }
+      return expectedTurnId;
+    } finally {
+      if (this.steering === operation) this.steering = null;
+      this.finishTurn(expectedTurnId);
+    }
   }
   async send(text, tag, guard) {
     if (!this.chatAvailable || this.pending || !guard()) throw new Error('会话忙碌、原生对话接口尚未连接，或交接已失效。');

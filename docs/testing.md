@@ -1749,3 +1749,31 @@ repair. Full local suite: 573 passed, zero failed/skipped. The private installed
 run also records a success video. These checks verify native mechanics, not
 paid-model behavior, physical input methods, Claude force-send, Codex shared
 steering or complete retained 2.1.302 display compatibility.
+
+## Shared working Codex input — alpha.61
+
+`NAW_STEER_SHARED=1 node scripts/test-native-steer.cjs` opens real Electron and
+Codex 0.163.0 through normal bootstrap, with private config and exactly two
+loopback Responses streams. It creates a private task, keeps that response open,
+joins the room, selects @ and sends through the existing composer. The actual
+second native request contains the new instruction once in the same turn.
+The old private item and unsent solo draft do not enter the room. The new shared
+item streams with its native ID; renderer reload retains its identity and a newer
+room draft without dispatch. Native final completion and the same terminal's
+input/output are checked. Source six groups pass; screenshots and a successful
+recording remain private. Canned local responses prove native mechanics, not
+model quality, production routing or total task cost parity.
+
+606 local checks pass with no skips. Independent review reproduced two failures:
+late start after an unknown first delta could promote a private prefix, and an
+unscoped native error could leave the new shared grant open while the old input
+tag was still pending. Unknown first observations now stay unknown; native errors
+close the affected session/runtime grants before later output. Tests cover both
+ACK orders, completed-before-ACK, missing/wrong/history-only echo, turn mismatch,
+permission/departure/rejoin/control/context/disconnect and late private items.
+Router capability tests clone their fixture capability arrays, preventing one
+test from accidentally enabling the next retained service. Installed alpha.61 passes
+the same six native groups. Exact affected payload and strict signature pass;
+normal hidden reopening retains three original native IDs/processes, selected view,
+draft and eight original Codex messages, with zero new dispatch. Independent source
+and installed review passed. This does not close overall U17 or add Claude force-send.
