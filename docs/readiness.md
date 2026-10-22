@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.66 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.67 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,17 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.67 retained Codex shared reader:** explicitly addressed idle tasks use the
+original 0.163.0 server's turn acknowledgement and native item identity to stream
+into the existing room reader. Native history is not promoted; permission, private
+input, failure, control/membership change and disconnect stop sharing. Permission
+between completed items now leaves the existing sharing-stop label without
+misrepresenting tool completion. Four source and installed actual Electron/native
+groups pass, including approval followed by private output and departure/rejoin;
+668 local checks pass without skips. Each native run uses four fixed task responses
+and one native title response over loopback, with zero paid inference. Retained
+shared steering and automatic cross-service handoff remain separate.
 
 **Alpha.66 retained Claude shared reader:** an explicitly addressed idle task can
 stream its verified native text, tool results and final turn into the existing

@@ -25,8 +25,12 @@ class LegacyShared extends SharedReplies {
     return true;
   }
   valid(g) {
-    try { return !this.storageError && !g.runtime.disposed && !g.runtime.rootEnding && g.runtime.nativeSharedDisplay &&
-      g.runtime.rootLease === g.lease && g.authority() && super.valid(g); }
+    try {
+      const r = g.runtime, nativeValid = r.record.provider === 'codex'
+        ? r.sharedReplyAvailable && !r.approval && ['idle', 'working'].includes(r.state)
+        : !r.disposed && !r.rootEnding && r.nativeSharedDisplay && r.rootLease === g.lease;
+      return !this.storageError && nativeValid && g.authority() && super.valid(g);
+    }
     catch { return false; }
   }
   close(tag, reason) { super.close(tag, reason); this.scheduleSave(); }
@@ -42,6 +46,19 @@ class LegacyShared extends SharedReplies {
     const s = this.workspace.sessions.get(g.sessionId); s.messages = g.runtime.record.messages;
     super.bind(s, g.tag, g.receipt); this.scheduleSave();
   }
+  bindNative(runtime, identity) {
+    const g = this.grants.get(identity?.tag);
+    if (!g || g.runtime !== runtime || runtime.record.provider !== 'codex' || !this.valid(g)) return;
+    const s = this.workspace.sessions.get(g.sessionId); s.messages = runtime.record.messages;
+    super.bind(s, g.tag, identity); this.scheduleSave();
+  }
+  completeNative(runtime, info) {
+    const g = this.grants.get(info?.tag), row = g?.rows.get(info?.messageId);
+    // Completion only finalizes an already attributed native block. No raw fallback.
+    if (g?.runtime === runtime && this.valid(g) && row?.role === 'assistant' && row.turnId === g.turnId) {
+      super.final(this.workspace.sessions.get(g.sessionId), { ...info, text: row.text }); this.scheduleSave();
+    } else if (g) this.close(g.tag, '原生回复归属未确认');
+  }
   observed(runtime, message) {
     const s = this.workspace.sessions.get(runtime.record.id);
     if (!s || this.workspace.runtimes.get(s.id) !== runtime) return;
@@ -56,7 +73,7 @@ class LegacyShared extends SharedReplies {
   }
   record(s, message, only) {
     super.record(s, message, only);
-    if (message?.kind === 'turn') for (const g of only ? [only] : this.grants.values()) {
+    if (s.provider === 'claude' && message?.kind === 'turn') for (const g of only ? [only] : this.grants.values()) {
       if (g.sessionId !== s.id || g.turnId !== message.turnId || g.closed) continue;
       const proof = g.runtime.displayProofs?.get(g.turnId);
       // No raw Stop fallback, and no final row synthesized without display proof.

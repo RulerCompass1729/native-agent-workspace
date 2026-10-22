@@ -12,6 +12,12 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.67 applies the same explicitly addressed shared-reader behavior to retained
+Codex 0.163.0 connections. It preserves the loaded native thread, history, settings
+and process; permission/private-input boundaries stop further sharing. A completed
+tool keeps its completion status while explaining a later sharing stop. Source
+and installed native checks pass; full native parity remains open.
+
 Alpha.66 brings explicitly addressed replies from inspected retained Claude
 2.1.302 sessions into the shared main reader. Native text, tools and completion
 update in attributed blocks; original private history is not automatically shared.

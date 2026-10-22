@@ -129,3 +129,20 @@ test('room tool cache is bounded and volatile; restart retains interrupted readi
   assert.equal(restored.status, 'unconfirmed'); assert.ok(restored.sharingStopped);
   assert.equal(cold.sharedReplies.grants.size, 0); assert.equal(cold.versions.dispatches, 0); assert.equal(sent.length, 1);
 });
+
+test('sharing closure between completed items remains visible without calling a completed tool interrupted', () => {
+  const { SharedReplies } = require('../shared-replies.cjs');
+  const s = { id: 's', nativeId: 'n', provider: 'codex', roomId: 'shared', state: 'idle', messages: [] };
+  const runtime = {}, w = { sessions: new Map([['s', s]]), runtimes: new Map([['s', runtime]]), room: { messages: [] } };
+  const sharing = new SharedReplies(w); sharing.authorize(s, runtime, 'task', { id: 'human' });
+  sharing.bind(s, 'task', { nativeId: 'n', turnId: 'turn' });
+  sharing.record(s, { id: 'tool', role: 'tool', nativeId: 'n', turnId: 'turn', text: 'done', status: 'complete' });
+  sharing.close('task', 'Native permission pending');
+  assert.equal(w.room.messages[0].status, 'complete'); assert.equal(w.room.messages[0].sharingStopped, 'Native permission pending');
+  sharing.record(s, { id: 'late', role: 'assistant', nativeId: 'n', turnId: 'turn', text: 'PRIVATE', status: 'complete' });
+  assert.equal(w.room.messages.length, 1);
+  sharing.authorize(s, runtime, 'next', { id: 'next-human' }); sharing.bind(s, 'next', { nativeId: 'n', turnId: 'next-turn' });
+  sharing.record(s, { id: 'final', role: 'assistant', nativeId: 'n', turnId: 'next-turn', text: 'final', status: 'complete' });
+  sharing.final(s, { tag: 'next', messageId: 'final', text: 'final' });
+  assert.equal(w.room.messages.at(-1).sharingStopped, undefined, 'Normal final does not show an interrupted-sharing warning');
+});

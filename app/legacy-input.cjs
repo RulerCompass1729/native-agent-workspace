@@ -173,7 +173,7 @@ class LegacyInput extends EventEmitter {
     if (record.provider === 'codex') {
       const cached = existing?.native?.record;
       const native = new LegacyCodex(cached ? { ...record, messages: cached.messages } : record);
-      const target = { record: { ...record }, submission: native, native };
+      const target = { record: { ...record }, submission: native, native, get sharedReplyAvailable() { return native.sharedReplyAvailable; } };
       this.connecting.add(native);
       try {
         await native.connect(retainedSocket(this.dataDir, entry, record)); checkOpen();
@@ -181,6 +181,11 @@ class LegacyInput extends EventEmitter {
         this.targets.set(record.id, target);
         native.on('change', () => this.emit('change'));
         native.on('progress', update => this.emit('progress', { id: record.id, ...update }));
+        native.on('readerBlock', message => { if (message) this.sharedReplies.observed(native, message); });
+        native.on('replyBound', identity => this.sharedReplies.bindNative(native, identity));
+        native.on('complete', info => this.sharedReplies.completeNative(native, info));
+        for (const event of ['nativeInput', 'approval', 'failed', 'fleet']) native.on(event, () => this.sharedReplies.revoke(record.id, '原生输入、权限或运行状态已改变；后续内容留在原会话'));
+        native.on('state', state => { if (!['idle', 'working'].includes(state)) this.sharedReplies.revoke(record.id, '原生运行状态已改变；后续内容留在原会话'); });
         for (const event of ['complete', 'nativeInput', 'approval', 'failed', 'fleet']) native.on(event, (...args) => this.emit(event, record.id, ...args));
       } catch (error) { native.close(); throw error; }
       finally { this.connecting.delete(native); }
@@ -279,7 +284,7 @@ class LegacyInput extends EventEmitter {
     if (waitForNativeTurn && (shared || !target.queueAvailable)) throw Error('当前连接不支持等待输入；草稿保留。');
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
     if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
-    if (shared && this.sharedReplies.authorize(record, target, row.id, row, shareAuthority)) row.sharedReply = true;
+    if (shared && this.sharedReplies.authorize(record, target.native || target, row.id, row, shareAuthority)) row.sharedReply = true;
     this.records.push(row);
     try { this.save(); } catch (error) { this.sharedReplies.close(row.id); throw error; }
     target.refresh = refresh;
@@ -288,7 +293,7 @@ class LegacyInput extends EventEmitter {
         : expectedTurnId !== undefined ? target.native.steer(text, row.id, expectedTurnId, refresh, guard)
         : target.native ? target.native.send(text, row.id, refresh, guard) : target.submission.request(text, row.id, guard);
       this.emit('change'); const receipt = await pending;
-      if (shared) this.sharedReplies.receipt(row.id, receipt);
+      if (shared && !target.native) this.sharedReplies.receipt(row.id, receipt);
       // Clearing shared text may replace a pending ledger row while native
       // acceptance is in flight. Update the retained metadata by stable ID.
       const stored = this.records.find(record => record.id === row.id);
