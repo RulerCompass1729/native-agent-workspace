@@ -6,6 +6,8 @@ const { _electron } = require('playwright');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connectService } = require(path.join(code, 'app/service-client.cjs'));
 const { executable } = require(path.join(code, 'app/platform.cjs'));
+const shared = process.env.NAW_QUEUE_SHARED === '1';
+const input = shared ? '#shared-input' : '#message-input', send = shared ? '#forward-button' : '#send-button';
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-queue-test-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), config = path.join(base, 'claude');
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
@@ -83,16 +85,23 @@ async function cleanup() {
   await until(() => calls === 1 && held, 'Native original task');
   await until(async () => (await snapshot()).sessions[0].state === 'working', 'Working native state');
   await until(async () => (await page.locator('#send-button').innerText()) === '等本轮结束后发送 ↑', 'Working composer receives state');
-  await page.locator('#message-input').fill('Do the next local task.');
-  assert.equal(await page.locator('#send-button').innerText(), '等本轮结束后发送 ↑');
-  await page.locator('#send-button').click();
+  if (shared) {
+    await page.locator('#message-input').fill('Private solo draft.');
+    await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${before.id}"]`).click();
+    await until(async () => (await page.locator(send).innerText()) === '等本轮结束后发送 ↑', 'Shared native waiting action');
+  }
+  await page.locator(input).fill('Do the next local task.');
+  assert.equal(await page.locator(send).innerText(), '等本轮结束后发送 ↑');
+  await page.locator(send).click();
   await until(async () => (await snapshot()).sessions[0].pendingQueue, 'Waiting native input');
   const pending = (await snapshot()).sessions[0];
   assert.equal(pending.messages.filter(m => m.text === 'Do the next local task.').length, 1);
   assert.equal(pending.messages.at(-1).status, 'awaiting-native');
-  assert.equal(await page.locator('#message-input').inputValue(), 'Do the next local task.');
-  await until(() => page.locator('#send-button').isDisabled(), 'Pending queue reaches composer');
-  assert.equal(await page.locator('#send-button').isDisabled(), true);
+  assert.equal(await page.locator(input).inputValue(), 'Do the next local task.');
+  await until(() => page.locator(send).isDisabled(), 'Pending queue reaches composer');
+  assert.equal(await page.locator(send).isDisabled(), true);
   // Covers both the former 15 s submission and 40 s RPC deadlines with one
   // native task. No polling prompts or repeat inference.
   await sleep(42000);
@@ -102,15 +111,24 @@ async function cleanup() {
   assert.equal(waiting.messages.find(m => m.id === pending.pendingQueue).status, 'awaiting-native');
   assert.ok(!(await page.locator('#toast').innerText()).includes('超时'));
   fs.writeFileSync(path.join(base, 'waiting.json'), JSON.stringify(await snapshot(), null, 2));
+  if (shared) {
+    const room = (await snapshot()).room;
+    assert.equal(room.messages.filter(m => m.text === 'Do the next local task.').length, 1);
+    assert.equal(room.messages.find(m => m.id === pending.pendingQueue).deliveries[0].status, 'awaiting-native');
+    assert.ok(!JSON.stringify(room.messages).includes('FIRST_NATIVE_WORK'));
+    assert.ok(!JSON.stringify(room.messages).includes('Private solo draft'));
+  }
   checks.push('One native waiting input survives both old deadlines without interrupt, retry or extra inference');
-  await page.locator('#message-input').fill('A newer unsent draft.');
-  await until(async () => (await snapshot()).sessions[0].liveDraft === 'A newer unsent draft.', 'Newer draft persisted');
+  await page.locator(input).fill('A newer unsent draft.');
+  if (!shared) await until(async () => (await snapshot()).sessions[0].liveDraft === 'A newer unsent draft.', 'Newer draft persisted');
+  if (shared) await page.locator(`[data-session-id="${before.id}"]`).click();
   await page.locator('#terminal-tab').click();
   assert.equal((await snapshot()).sessions[0].pendingQueue, pending.pendingQueue);
   await page.locator('#chat-tab').click();
+  if (shared) { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
   await page.reload(); await page.locator('#new-session').waitFor();
-  await until(async () => await page.locator('#message-input').inputValue() === 'A newer unsent draft.', 'Pending queue draft after reload');
-  assert.equal(await page.locator('#send-button').isDisabled(), true);
+  await until(async () => await page.locator(input).inputValue() === 'A newer unsent draft.', 'Pending queue draft after reload');
+  assert.equal(await page.locator(send).isDisabled(), true);
   assert.equal((await snapshot()).sessions[0].pendingQueue, pending.pendingQueue);
   assert.equal(calls, 1);
   checks.push('View changes and actual renderer reload preserve the pending native task and editable draft without replay');
@@ -121,19 +139,32 @@ async function cleanup() {
   assert.equal(completed.nativeId, before.nativeId); assert.equal(completed.pid, before.pid);
   assert.equal(completed.messages.filter(m => m.text === 'Do the next local task.').length, 1);
   assert.equal(completed.messages.find(m => m.id === pending.pendingQueue).status, 'submitted');
-  assert.equal(await page.locator('#message-input').inputValue(), 'A newer unsent draft.');
+  assert.equal(await page.locator(input).inputValue(), 'A newer unsent draft.');
   const actual = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8'));
   assert.equal(actual.messages.filter(m => m.role === 'user').flatMap(m => typeof m.content === 'string' ? [m.content] : m.content.filter(b => b.type === 'text').map(b => b.text)).filter(t => t === 'Do the next local task.').length, 1);
   fs.writeFileSync(path.join(base, 'completed.json'), JSON.stringify(await snapshot(), null, 2));
   checks.push('Native consumes the queued prompt once after the original turn; native identity and newer draft remain intact');
+  if (shared) {
+    const room = (await snapshot()).room, source = room.messages.find(m => m.id === pending.pendingQueue);
+    assert.equal(source.deliveries[0].status, 'submitted');
+    assert.equal(source.deliveries[0].text, 'Do the next local task.');
+    assert.equal(room.messages.filter(m => m.text?.includes('QUEUED_NATIVE_REPLY')).length, 1);
+    assert.equal(room.messages.find(m => m.text?.includes('QUEUED_NATIVE_REPLY')).replyTo, source.id);
+    assert.ok(!JSON.stringify(room.messages).includes('FIRST_NATIVE_WORK'));
+    assert.equal(completed.liveDraft, 'Private solo draft.');
+    await until(async () => (await page.locator('#room-messages').innerText()).includes('QUEUED_NATIVE_REPLY'), 'Shared native reply in main reader');
+    assert.ok(!(await page.locator('#room-messages').innerText()).includes('FIRST_NATIVE_WORK'));
+    checks.push('Shared native next-prompt receipt publishes one attributed reply; original private output and solo draft stay private');
+  }
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-queue.png') }); }
+  if (shared) await page.locator(`[data-session-id="${before.id}"]`).click();
   await page.locator('#terminal-tab').click(); await sleep(250);
   const terminal = await page.locator('#terminal-area').innerText();
   fs.writeFileSync(path.join(base, 'terminal.txt'), terminal);
   assert.match(terminal, /Run the original local task/); assert.match(terminal, /Do the next local task/); assert.match(terminal, /QUEUED_NATIVE_REPLY/);
   assert.equal(calls, 2); assert.deepEqual(errors, []);
   checks.push('Actual native terminal and main conversation contain the same two inputs and replies');
-  console.log(JSON.stringify({ checks, nativeVersion, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
+  console.log(JSON.stringify({ checks, shared, nativeVersion, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;

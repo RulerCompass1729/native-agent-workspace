@@ -72,8 +72,8 @@ function bindClient(context) {
   // Rechecked by the router after awaited pauses as well as at IPC entry.
   // A task already accepted natively is not retroactively cancelled.
   client.authorizeOperation = (method, args) => {
-    if (['send', 'queue', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'draft', 'resume'].includes(method)) {
-      for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'run'].includes(method));
+    if (['send', 'queue', 'queueShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'draft', 'resume'].includes(method)) {
+      for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'run'].includes(method));
     }
   };
   const send = (channel, data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, data); };
@@ -230,7 +230,7 @@ async function boot() {
     for (const id of (method === 'run' ? args[0] : [args[0]])) roomState.assertAvailable(id, !['send', 'queue', 'steer'].includes(method));
     return c.client.call(method, ...args);
   };
-  for (const method of ['run', 'forward']) register(method, (c, ...args) => {
+  for (const method of ['run', 'forward', 'queueShared']) register(method, (c, ...args) => {
     if (method === 'run' && Array.isArray(args[0])) {
       if (args[4]) {
         const snapshot = sessionLabels.apply(c.client.snapshot());

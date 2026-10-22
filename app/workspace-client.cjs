@@ -243,7 +243,7 @@ class WorkspaceClient extends EventEmitter {
     this.authorizeOperation?.(method, args);
     // Capture the context displayed when the human acted, before refresh,
     // pause or an earlier private ACK can yield to a native /clear.
-    const replyTo = ['forward', 'run'].includes(method) ? require('./room-threads.js').replyReference(args[method === 'run' ? 6 : 3]) : '';
+    const replyTo = ['forward', 'run', 'queueShared'].includes(method) ? require('./room-threads.js').replyReference(args[method === 'run' ? 6 : 3]) : '';
     const replyGuard = () => {
       if (replyTo && !this.snapshot().room.messages.some(m => m.id === replyTo)) throw Error('原讨论记录已移除；草稿保留，没有发送。');
     };
@@ -284,16 +284,18 @@ class WorkspaceClient extends EventEmitter {
         if (!bridged) args[method === 'run' ? 6 : 3] = replyTo;
       }
     }
-    if (method === 'queue') {
+    if (method === 'queue' || method === 'queueShared') {
       const [id, text, nativeId] = args, target = this.route(id), guard = this.operationGuard(target);
       const original = target.state.sessions.find(s => s.id === id);
-      if (!target.state.capabilities?.includes('nativeQueue') || original?.nativeId !== nativeId) throw Error('此连接暂不支持原生等待输入；草稿保留。');
+      const shared = method === 'queueShared';
+      if (!target.state.capabilities?.includes(shared ? 'nativeSharedQueue' : 'nativeQueue') || original?.nativeId !== nativeId || (shared && original?.roomId !== 'shared')) throw Error('此连接暂不支持原生等待输入；草稿保留。');
       return this.intervene(async () => {
-        const revision = this.control.revision, control = original.controlRevision;
-        await this.pauseExcept(); await this.refresh(); guard(); this.authorizeOperation?.(method, args);
+        const revision = this.control.revision, control = original.controlRevision, member = original.memberRevision;
+        await this.pauseExcept(); await this.refresh(); guard(); replyGuard(); this.authorizeOperation?.(method, args);
         const current = target.state.sessions.find(s => s.id === id);
-        if (this.control.revision !== revision || current?.controlRevision !== control || current?.nativeId !== nativeId || current?.nativeContextPending || current?.owner !== target.state.owner || current?.state !== 'working' || current?.approval || current?.pendingQueue || !current?.queueAvailable) throw Error('当前原生会话或控制权已变化，草稿保留。');
-        return target.client.call(method, id, text, nativeId);
+        if (this.control.revision !== revision || current?.controlRevision !== control || current?.nativeId !== nativeId || current?.nativeContextPending || current?.owner !== target.state.owner || current?.state !== 'working' || current?.approval || current?.pendingQueue || !current?.queueAvailable ||
+          (shared && (current.roomId !== 'shared' || current.memberRevision !== member))) throw Error('当前原生会话或控制权已变化，草稿保留。');
+        return target.client.call(method, id, text, nativeId, ...(shared ? [replyTo] : []));
       });
     }
     if (method === 'steer') {
