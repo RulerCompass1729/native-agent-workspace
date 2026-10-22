@@ -1,5 +1,28 @@
 # Bounded testing
 
+## Concurrent native recipients — alpha.63
+
+`node scripts/test-native-concurrent.cjs` starts real Claude Code 2.1.308 and
+Codex 0.163.0 through normal Electron/service bootstrap. Both use private native
+configuration and a loopback provider, bounded to two responses each, zero paid
+inference. Actual GUI input and mouse drag cover simultaneous attributed streams,
+a waiting Claude instruction while Codex receives same-turn steering, discussion
+filtering and reload, departure/rejoin without publishing private tails, and
+GUI/TUI continuity. Native Claude PID and Codex server identity are retained;
+Codex may create a separate terminal display process. Exact downstream requests
+exclude the other recipient's instructions.
+
+The old installed composer fails the second-recipient enabled check as expected.
+Two runner errors (wrong thread-back selector and conflating Codex display/backend
+PIDs) remain failed evidence. Final source five groups pass; 622 local tests and
+nine existing room UI groups pass without model calls. Independent review also
+verified both acknowledgement orders preserve a newer shared draft. The installed
+five groups pass, followed by exact 45-file payload/strict signature checks and
+hidden reopening that retains the original three native identities/processes,
+selection/draft and eight Codex messages with zero new dispatch. Final independent
+review passes. This does not prove physical IME input, real model reasoning,
+or complete native state parity. Raw native records and recordings stay private.
+
 ## Explicit discussion threads — alpha.57
 
 Source checks pass independent review: 520 local tests with no skips. The actual

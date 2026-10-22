@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.62 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.63 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,14 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.63 concurrent input fix:** manual waiting is isolated by recipient in
+both the shared composer and cross-window routing guards. A real installed
+alpha.62 trial reproduced the blocked second recipient. The source dual-native
+scenario passes five groups with two local responses per provider; 622 local
+checks and nine existing room UI groups pass. Independent source and installed
+review pass: five dual-native groups, exact 45-file payload, strict signature and
+original three-session hidden reopening with zero new dispatch. U17 remains open.
 
 **Alpha.62 native tool text increment:** Codex tool inputs, public text results
 and file-change diffs use the existing message blocks. Known tool items also

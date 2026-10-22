@@ -571,7 +571,7 @@ for (const change of ['none', 'turn', 'context', 'owner', 'intervention']) test(
   if (change === 'turn') row.activeTurnId = 'turn-two';
   if (change === 'context') row.nativeId = 'native-two';
   if (change === 'owner') row.owner = 'other';
-  if (change === 'intervention') c.control.revision++;
+  if (change === 'intervention') await c.intervene(() => Promise.resolve(), 'new');
   release();
   if (change === 'none') await pending; else await assert.rejects(pending);
   assert.deepEqual(next.calls.filter(([method]) => method === 'steer'), change === 'none' ? [['steer', 'new', 'new direction', 'native-one', 'turn-one']] : []);
@@ -589,7 +589,7 @@ for (const change of ['none', 'context', 'owner', 'intervention', 'approval', 'p
   assert.equal(typeof release, 'function');
   if (change === 'context') row.nativeId = 'native-two';
   if (change === 'owner') row.owner = 'other';
-  if (change === 'intervention') c.control.revision++;
+  if (change === 'intervention') await c.intervene(() => Promise.resolve(), 'new');
   if (change === 'approval') row.approval = { requestId: 'new' };
   if (change === 'pending') row.pendingQueue = 'previous';
   if (change === 'archived') archived = true;
@@ -609,7 +609,7 @@ for (const change of ['none', 'context', 'owner', 'intervention', 'approval', 'p
   assert.equal(typeof release, 'function');
   if (change === 'context') row.nativeId = 'native-two';
   if (change === 'owner') row.owner = 'other';
-  if (change === 'intervention') c.control.revision++;
+  if (change === 'intervention') await c.intervene(() => Promise.resolve(), 'new');
   if (change === 'approval') row.approval = { requestId: 'new' };
   if (change === 'pending') row.pendingQueue = 'previous';
   if (change === 'leave') row.roomId = null;
@@ -649,7 +649,7 @@ for (const change of ['none', 'turn', 'context', 'owner', 'intervention', 'appro
   if (change === 'turn') row.activeTurnId = 'turn-two';
   if (change === 'context') row.nativeId = 'native-two';
   if (change === 'owner') row.owner = 'other';
-  if (change === 'intervention') c.control.revision++;
+  if (change === 'intervention') await c.intervene(() => Promise.resolve(), 'new');
   if (change === 'approval') row.approval = { requestId: 'new' };
   if (change === 'pending') row.pendingSteer = 'previous';
   if (change === 'leave') row.roomId = null;
@@ -665,4 +665,27 @@ test('old steer-only services cannot silently accept a shared steer', async () =
   Object.assign(next.real.sessions[0], { provider: 'codex', owner: 'view', nativeId: 'native-one', state: 'working', activeTurnId: 'turn-one', steerAvailable: true, roomId: 'shared' });
   await c.refresh(); await assert.rejects(c.call('steerShared', 'new', 'new words', 'native-one', 'turn-one'), /暂不支持/);
   assert.equal(next.calls.some(([m]) => ['steerShared', 'steer', 'input'].includes(m)), false); c.close();
+});
+
+for (const method of ['queueShared', 'steerShared']) for (const intervention of ['other-session', 'same-session', 'pause', 'clear', 'close']) test(`${method} delayed manual intent isolates ${intervention}`, async () => {
+  const first = fixture(), second = first.openWindow();
+  first.next.real.capabilities.push('nativeSharedQueue', 'nativeSteer', 'nativeSharedSteer');
+  Object.assign(first.next.real.sessions[0], { provider: method === 'queueShared' ? 'claude' : 'codex', nativeId: 'native-a', owner: 'view',
+    roomId: 'shared', memberRevision: 1, controlRevision: 1, state: 'working', queueAvailable: true, steerAvailable: true, activeTurnId: 'turn-a' });
+  first.next.real.sessions.push({ id: 'peer', provider: 'codex', nativeId: 'native-b', owner: 'view', roomId: 'shared', memberRevision: 1,
+    controlRevision: 1, state: 'working', steerAvailable: true, activeTurnId: 'turn-b' });
+  await first.c.refresh(); await second.c.refresh();
+  let release; first.c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+  const pending = first.c.call(method, 'new', 'Only A receives this', 'native-a', ...(method === 'steerShared' ? ['turn-a'] : []));
+  assert.equal(typeof release, 'function');
+  if (intervention === 'other-session') await second.c.call('steerShared', 'peer', 'Only B receives this', 'native-b', 'turn-b');
+  if (intervention === 'same-session') await second.c.call('interrupt', 'new');
+  if (intervention === 'pause') await second.c.call('pause');
+  if (intervention === 'clear') await second.c.call('clearSharedHistory');
+  if (intervention === 'close') second.c.close();
+  release();
+  if (intervention === 'other-session') await pending; else await assert.rejects(pending);
+  assert.equal(first.next.calls.filter(([m, id]) => m === method && id === 'new').length, intervention === 'other-session' ? 1 : 0);
+  assert.equal(second.next.calls.filter(([m, id]) => m === 'steerShared' && id === 'peer').length, intervention === 'other-session' ? 1 : 0);
+  first.c.close(); second.c.close();
 });

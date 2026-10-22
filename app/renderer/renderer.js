@@ -9,6 +9,7 @@ let state, owner, selected = '', mode = 'terminal', preference = 'terminal', fol
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSubmitting = null;
+const roomPendingRecipients = new Map();
 let shareRevision = 0, sharePending = null;
 let runPreview = null;
 let renamingId = '', renaming = false;
@@ -832,12 +833,13 @@ function render() {
       for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.roomSession === roomSession));
       $('run-status').textContent = run ? `${{ running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
       const pendingRun = roomSubmitting?.automatic;
-      $('run-status').parentElement.hidden = !run && !roomSubmitting;
+      const waiting = roomPendingRecipients.get($('recipient').value) || roomPendingRecipients.values().next().value;
+      $('run-status').parentElement.hidden = !run && !roomSubmitting && !waiting;
       const next = state.sessions.find(m => m.id === run?.awaiting?.sessionId);
       if (run?.status === 'running' && next) $('run-status').textContent += ` · 等待 ${next.name}`;
       if (pendingRun && roomSubmitting.cancelling) $('run-status').textContent = '正在取消后续交接；草稿保留，已接收的任务仍在原会话中。';
       else if (pendingRun && run?.status !== 'running') $('run-status').textContent = '正在准备核查，等待先前操作或原生接收确认。可取消本次等待；已开始的原生任务不受影响。';
-      if (roomSubmitting && !pendingRun) $('run-status').textContent = `正在发给 ${roomSubmitting.recipientName}，等待原生接收确认。请勿重复发送；草稿保留。`;
+      if (waiting && !pendingRun) $('run-status').textContent = `正在发给 ${waiting.recipientName}，等待原生接收确认。可以选择其他成员继续输入。`;
       renderTimeline();
       renderMembers();
       const previousRecipient = $('recipient').value;
@@ -852,11 +854,12 @@ function render() {
       $('shared-input').readOnly = Boolean(nativeRoute);
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
       $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : roomSteerAvailable(recipient) ? '追加指令 ↑' : '发送 ↑';
-      const unavailable = roomSubmitting || disconnected || !$('shared-input').value.trim();
+      const recipientPending = roomPendingRecipients.has(recipient?.id);
+      const unavailable = roomSubmitting || recipientPending || disconnected || !$('shared-input').value.trim();
       const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
       const ready = s => s && s.state === 'idle' && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
-      $('forward-button').disabled = nativeRoute ? roomSubmitting || disconnected : unavailable || (!ready(recipient) && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
-      $('run-button').disabled = unavailable || !recipient || !ready(recipient) || run?.status === 'running' || !safeHandoffs || Boolean(threadUnsupported);
+      $('forward-button').disabled = nativeRoute ? roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
+      $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || !safeHandoffs || Boolean(threadUnsupported);
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
       if (roomQueueAvailable(recipient) || recipient?.pendingQueue) $('run-help').textContent += ' · 等原生下一轮接收；当前工作继续，先前私人内容不会加入共享记录。';
       if (roomSteerAvailable(recipient)) $('run-help').textContent += ' · 追加到当前原生回合；接收后的新消息块进入共享记录，先前内容不补发。';
@@ -1257,7 +1260,7 @@ $('shared-input').onkeydown = event => {
 $('mention-button').onclick = () => { showMentions(true); $('shared-input').focus(); };
 $('shared-input').onblur = event => { if (!event.relatedTarget?.closest('#mention-list') && event.relatedTarget?.id !== 'mention-button') closeMentions(); };
 async function submitRoom(automatic) {
-  if (roomSubmitting || $('shared-input').readOnly || $(automatic ? 'run-button' : 'forward-button').disabled) return;
+  if (roomSubmitting || (automatic ? roomPendingRecipients.size > 0 : roomPendingRecipients.has($('recipient').value)) || $('shared-input').readOnly || $(automatic ? 'run-button' : 'forward-button').disabled) return;
   const first = $('recipient').value, text = $('shared-input').value, revision = roomDraftRevision;
   const ids = automatic?.ids;
   const recipient = members().find(s => s.id === first);
@@ -1266,7 +1269,9 @@ async function submitRoom(automatic) {
   // back asynchronously after the person has opened another view or dialog.
   $('shared-input').focus();
   const submission = { automatic: Boolean(automatic), recipientName: participantLabel(recipient), cancelling: false, cancelRequested: false };
-  roomSubmitting = submission; render();
+  if (automatic) roomSubmitting = submission;
+  else roomPendingRecipients.set(first, submission);
+  render();
   try {
     const receipt = await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
     if (submission.cancelRequested || receipt?.contextChanged) return;
@@ -1276,6 +1281,7 @@ async function submitRoom(automatic) {
   finally {
     submission.settled = true;
     if (roomSubmitting === submission && !submission.cancelling) roomSubmitting = null;
+    if (roomPendingRecipients.get(first) === submission) roomPendingRecipients.delete(first);
     render();
   }
 }
