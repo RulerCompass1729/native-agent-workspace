@@ -377,7 +377,7 @@ test('viewing an owned legacy session does not pause peer collaboration; stale v
   assert.equal(f.session.owner, 'B'); assert.equal(pauses, 1);
 });
 
-for (const [version, hash] of [['51', '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6'],
+for (const [version, hash] of [['72', '4bc48cb24744f5f4795d16ad95f13ccfa0583baaf35941ba11f43fb8cbed6ee3'], ['51', '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6'],
  ['69', 'a3462c9cb8bb11cdd6fdfb26baebf780bb9af9f7ef72535dd08bfa3f0ae7b359'],
  ['71', '39a213b15740f1723dfb9886d709a1a4dd92a71e651a261d42ceac188e29f388']]) test(`released alpha.${version} compatibility hook upgrades, edited copies remain untouched`, t => {
  const {cwd}=fixture(t),file=path.join(cwd,'.claude/skills/native-workspace-compat/hooks/register.js');

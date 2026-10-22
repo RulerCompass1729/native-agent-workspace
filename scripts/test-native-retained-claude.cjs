@@ -20,7 +20,8 @@ const quitQueueTrial = process.env.NAW_RETAINED_QUEUE_QUIT === '1';
 const queueTrial = sharedQueueTrial || process.env.NAW_RETAINED_QUEUE === '1', sharedTrial = process.env.NAW_RETAINED_SHARED === '1';
 assert.ok(!(queueTrial && sharedTrial), 'Choose one bounded scenario');
 assert.ok(!quitQueueTrial || sharedQueueTrial, 'Whole-app pending quit uses the shared waiting scenario');
-const budget = sharedTrial ? 5 : queueTrial ? 4 : 3;
+const modelOnly = process.env.NAW_MODEL_ONLY === '1';
+const budget = modelOnly ? 0 : sharedTrial ? 5 : queueTrial ? 4 : 3;
 let child, client, application, page, calls = 0, finishFinal;
 const checks = [], errors = [], sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) { const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label); }
@@ -102,8 +103,10 @@ async function launch() {
   }
   await until(async () => (await snapshot()).sessions.find(s => s.id === id)?.state === 'idle', 'Old native session ready');
   const before = (await snapshot()).sessions.find(s => s.id === id);
+  if (!modelOnly) {
   await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.type('Keep the original history.'); await page.keyboard.press('Enter');
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).messages.some(m => m.text.includes('RETAINED_HISTORY:')), 'Old hooks recorded native reply');
+  }
   await page.locator('#chat-tab').click();
   if (await page.locator('#send-button').textContent() === '接管此窗口') await page.locator('#send-button').click();
   assert.equal(await page.locator('#send-button').textContent(), '接通原会话输入'); await page.locator('#send-button').click();
@@ -125,6 +128,13 @@ async function launch() {
   await sleep(300); await page.keyboard.press('Enter');
   await until(async () => { const s = (await snapshot()).sessions.find(s => s.id === id); return s.nativeBlockMapping && s.legacySubmit; }, 'Same-process reader and input ready');
   await page.locator('#chat-tab').click();
+  if (modelOnly) {
+    await require('./native-model-check.cjs')({ page, snapshot, base, reopen: async () => {
+      await application.close(); application = null; await launch(); return page;
+    } });
+    assert.equal(calls, 0); assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ checks: ['Retained native model switches and whole-app reopen preserve identity/draft and match actual header'], nativeVersion: version, modelCalls: calls, errors, evidence: base })); return;
+  }
   assert.equal(await page.locator('#messages').getByText('RETAINED_HISTORY: original native answer.', { exact: true }).count(), 1);
   assert.equal(calls, 1); checks.push('Actual old backend and native TUI history retained on same-process input/reader attachment');
   if (sharedTrial) {

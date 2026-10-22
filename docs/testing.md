@@ -2224,3 +2224,30 @@ identities/processes, readers, drafts and selected view while staying hidden,
 with no new task dispatch. Final independent source/artifact review passes for
 B30. These are transport
 and interface checks, not tests of hosted model reasoning or complete U17 parity.
+
+
+## Native model selection without inference
+
+Use `NAW_MODEL_ONLY=1 node scripts/test-native-queue.cjs` after building the UI,
+or the same flag with `scripts/test-native-retained-claude.cjs` and its pinned
+302 executable. These actual Electron/native journeys reject every inference
+request. Native `/model` selection must update the existing title, preserve the
+same native identity/process and unsent draft, and survive GUI/whole-app reopen.
+Retained reopen ends on a model different from the original startup selection.
+Neither the user profile nor its native model configuration is changed.
+
+
+Final alpha.73 source and installed native 309/302 journeys pass three consecutive
+Sonnet/Haiku/Sonnet selections, with the native edit line inspected before each
+Enter. The native terminal confirmation, existing GUI title and session metadata
+agree; reload or whole-app reopening retains the final selection, identity and
+draft. No inference request is accepted. An earlier actual installed 302 run
+failed because querying inside PostModelSwitch could still read the previous
+selection. The fix uses the event's resolved value and rejects stale concurrent
+reads. That failed evidence is retained separately, along with the reviewer's
+held-query counterexample that initially blocked observer setup.
+
+All 781 local checks pass without skips. Independent source and final installed
+review passes; 48 runtime files match, strict signature remains valid after native
+testing, and hidden reopening preserves three original sessions and drafts with
+zero new dispatch. This closes B31 only; full display/input parity remains open.

@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.72 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.73 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,15 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.73 — native model metadata:** repairs the existing Claude title after
+native model selection and reads the current selection on observer reconnection.
+Metadata reads cannot hold input or buffered output, and never send inference.
+Source and installed current/retained native journeys pass, including three
+consecutive switches and GUI/whole-app reopening, with zero inference requests.
+All 781 local checks pass without skips; independent source/artifact review,
+48-file payload, strict signature and original three-session continuity pass.
+Full native parity and the post-Stop GUI limitation remain open.
 
 **Alpha.72 — first-use terminal continuity:** a GUI-created Codex session now
 explains its missing first user message instead of presenting an ineffective
