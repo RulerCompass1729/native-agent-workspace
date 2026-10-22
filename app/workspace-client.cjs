@@ -104,7 +104,7 @@ class WorkspaceClient extends EventEmitter {
         ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           legacyShare: legacySubmit,
-          ...(legacyCodex && native ? { nativeBlockMapping: true, messages: native.record.messages, model: native.model || '原生未报告', ...(native.connected ? { activity: native.activity || '' } : {}) } : {}),
+          ...(legacyCodex && native ? { nativeBlockMapping: true, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告', ...(native.connected ? { activity: native.activity || '' } : {}) } : {}),
           ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null, sharingNotice: '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。', ...(native?.state ? { state: native.state } : {}),
             pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
           ...(legacyCodex
@@ -283,6 +283,31 @@ class WorkspaceClient extends EventEmitter {
         if (!bridged && targets.some(e => !e.state.capabilities?.includes('replyThreads'))) throw Error('这个保留连接尚不支持回复关联；草稿保留，没有发送。');
         if (!bridged) args[method === 'run' ? 6 : 3] = replyTo;
       }
+    }
+    if (method === 'steer') {
+      const [id, text, nativeId, turnId] = args, target = this.route(id), guard = this.operationGuard(target);
+      const original = target.state.sessions.find(s => s.id === id);
+      if (typeof turnId !== 'string' || !turnId || turnId.length > 160 || original?.nativeId !== nativeId) throw Error('当前原生回合已变化，草稿保留。');
+      const bridged = target.state.runtimeVersion === '0.1.0-alpha.2' && this.control.legacyInput?.target(original)?.native;
+      if (!(bridged?.steerAvailable || target.state.capabilities?.includes('nativeSteer'))) throw Error('此连接暂不支持工作中追加指令；请在原生终端继续。');
+      return this.intervene(async () => {
+        const revision = this.control.revision, control = original.controlRevision;
+        const draftRevision = this.control.draftVersions?.get(id) || 0;
+        const valid = () => {
+          try { guard(); this.authorizeOperation?.(method, args); } catch { return false; }
+          const raw = target.state.sessions.find(s => s.id === id), current = this.snapshot().sessions.find(s => s.id === id);
+          return this.control.revision === revision && raw?.controlRevision === control && raw.owner === target.state.owner &&
+            raw.nativeId === nativeId && !raw.nativeContextPending && current?.state === 'working' && !current.approval && current.activeTurnId === turnId;
+        };
+        await this.pauseExcept(null); await this.refresh();
+        if (!valid()) throw Error('当前回合或控制权已变化；草稿保留，没有另开回合。');
+        if (!bridged) return target.client.call(method, ...args);
+        const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原生状态已变化'); };
+        const tag = await this.control.legacyInput.send(original, text, refresh, valid, false, undefined, turnId);
+        if (original.liveDraft?.trim() === text.trim()) await this.legacyDraft(target, id, '', original, current =>
+          current.liveDraft === original.liveDraft && (this.control.draftVersions?.get(id) || 0) === draftRevision).catch(() => {});
+        return tag;
+      });
     }
     if (method === 'initial') return this.refresh();
     if (method === 'nativeHistory') {

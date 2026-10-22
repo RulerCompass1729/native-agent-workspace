@@ -17,7 +17,8 @@ async function fixture(t, options = {}) {
     ws.on('message', bytes => {
       const m = JSON.parse(bytes); calls.push(m);
       const reply = result => ws.send(JSON.stringify({ id: m.id, result }));
-      if (m.method === 'initialize') reply({});
+      if (m.method === 'initialize') reply({ userAgent: 'codex/0.163.0' });
+      if (m.method === 'turn/steer') reply({ turnId: m.params.expectedTurnId });
       if (m.method === 'thread/loaded/list') {
         const result = { data: options.notLoaded ? [] : [record.nativeId], nextCursor: null };
         if (options.loaded) options.loaded(() => reply(result)); else reply(result);
@@ -365,4 +366,21 @@ test('closing while the empty first turn is acknowledged cannot start another ob
   const before = f.calls.filter(c => c.method === 'thread/resume').length;
   acknowledge(); await pending; await tick();
   assert.equal(f.calls.filter(c => c.method === 'thread/resume').length, before);
+});
+
+
+test('retained working turn accepts one native steer without a new turn or duplicate echo', async t => {
+  const f = await fixture(t), target = new LegacyCodex(f.record); t.after(() => target.close());
+  await target.connect(f.socket);
+  f.event('turn/started', { turn: { id: 'active' } }); await tick();
+  assert.equal(target.steerAvailable, true); assert.equal(target.turnId, 'active');
+  await target.steer('adjust requirement', 'steering-input', 'active', async () => {}, () => true);
+  f.event('item/completed', { turnId: 'active', item: { id: 'native-steering-input', clientId: 'steering-input', type: 'userMessage', content: [{ type: 'text', text: 'adjust requirement' }] } }); await tick();
+  assert.equal(target.record.messages.filter(m => m.text === 'adjust requirement').length, 1);
+  assert.equal(target.record.messages.at(-1).status, 'submitted');
+  assert.equal(target.state, 'working');
+  assert.equal(f.calls.filter(c => c.method === 'turn/steer').length, 1);
+  assert.equal(f.calls.some(c => ['turn/start', 'turn/interrupt'].includes(c.method)), false);
+  await assert.rejects(target.steer('stale', 'bad', 'old', async () => {}, () => true));
+  assert.equal(f.calls.filter(c => c.method === 'turn/steer').length, 1);
 });

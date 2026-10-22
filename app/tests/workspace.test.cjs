@@ -647,3 +647,56 @@ test('disconnected and failed native observations stop claiming in-flight tools 
   r.emit('nativeBlock', { nativeId: w.get(id).nativeId, id: 'tool:flight', kind: 'tool', status: 'running', delta: ' continued' });
   assert.equal(tool.status, 'running'); r.emit('failed', 'Provider unavailable'); assert.equal(tool.status, 'unconfirmed');
 });
+
+for (const accepted of [true, false]) test(`working-turn input ${accepted ? 'accepted' : 'unconfirmed'} preserves current output and newer draft`, async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); s.provider = 'codex'; r.steerAvailable = true; r.turnId = 'active';
+  s.state = 'working'; s.pendingTag = 'original';
+  s.messages.push({ id: 'response', role: 'assistant', text: 'Still running', status: 'streaming' });
+  w.setDraft(id, 'change requirement', 'owner');
+  let finish;
+  r.steer = async (text, tag, turnId, guard) => {
+    assert.equal(text, 'change requirement'); assert.equal(turnId, 'active'); assert.ok(guard());
+    await new Promise(resolve => { finish = resolve; });
+    if (!accepted) throw Error('native result unknown');
+    r.emit('submitted', tag);
+  };
+  const sending = w.steer(id, 'change requirement', 'owner', 'active');
+  assert.equal(w.snapshot().sessions[0].pendingSteer, s.messages.at(-1).id);
+  await assert.rejects(w.steer(id, 'duplicate click', 'owner', 'active'));
+  w.setDraft(id, 'newer draft', 'owner'); finish();
+  if (accepted) await sending; else await assert.rejects(sending);
+  assert.equal(w.drafts.get(id), 'newer draft');
+  assert.equal(s.messages.find(m => m.id === 'response').status, 'streaming');
+  assert.equal(s.pendingTag, 'original'); assert.equal(s.state, 'working');
+  assert.equal(s.messages.at(-1).status, accepted ? 'submitted' : 'unconfirmed');
+  assert.equal(w.versions.dispatches, 1); assert.equal(r.pendingSteer, null);
+  await assert.rejects(w.steer(id, 'stale click', 'owner', 'stale'));
+  await assert.rejects(w.steer(id, 'wrong owner', 'observer', 'active'));
+  assert.equal(w.versions.dispatches, 1);
+});
+
+for (const accepted of [true, false]) test(`private GUI steering (${accepted ? 'accepted' : 'unconfirmed'}) freezes the old room stream before native continuation`, async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); s.provider = 'codex'; w.join(id, true);
+  const tag = await w.send(id, 'shared task', 'owner', null, true);
+  r.emit('submitted', tag); r.emit('replyBound', { tag, nativeId: s.nativeId, turnId: 'active' });
+  r.emit('state', 'working'); r.turnId = 'active'; r.steerAvailable = true;
+  const block = { id: 'same-block', nativeId: s.nativeId, turnId: 'active', kind: 'response', text: 'shared prefix', status: 'streaming' };
+  r.emit('nativeBlock', block);
+  assert.ok(w.room.messages.some(m => m.text === 'shared prefix'));
+  r.steer = async (text, steerTag, turnId, guard) => {
+    assert.ok(guard());
+    r.emit('nativeBlock', { ...block, text: 'private continuation' });
+    if (!accepted) throw Error('Native acknowledgement unavailable');
+    r.emit('submitted', steerTag);
+  };
+  const sending = w.steer(id, 'private requirement', 'owner', 'active');
+  if (accepted) await sending; else await assert.rejects(sending);
+  r.emit('complete', { tag, messageId: 'same-block', text: 'private continuation' }); await tick();
+  assert.ok(s.messages.some(m => m.text === 'private continuation'));
+  assert.ok(!w.room.messages.some(m => m.text?.includes('private')));
+  const frozen = w.room.messages.find(m => m.text === 'shared prefix');
+  assert.equal(frozen.status, 'unconfirmed'); assert.ok(frozen.sharingStopped);
+  assert.equal(w.versions.dispatches, 2);
+});

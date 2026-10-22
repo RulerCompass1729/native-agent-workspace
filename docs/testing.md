@@ -1671,3 +1671,24 @@ reading checks also pass. A real mouse selection inside the expanded payload
 survives its native ACK; the receipt updates without replacing that text node.
 Independent review inspected source, callers, complete outputs and owned-window
 evidence. Installation acceptance remains pending for this development increment.
+
+## Working Codex input — alpha.58
+
+`node scripts/test-native-steer.cjs` launches real Codex 0.163.0 and Electron
+through normal service bootstrap, using an isolated native home and two canned
+loopback Responses streams. The running turn receives GUI Enter input through
+`turn/steer`; the second actual provider request contains that exact input.
+The original partial response stays visible, ACK does not end the turn, the
+final native boundary appears once, and the native TUI contains both inputs and
+the result in the same thread. No paid model calls. Owned services terminate.
+Native working input is gated to the inspected version and an observed turn ID.
+
+534 local checks pass with no skips. Accepted and unconfirmed private steering
+freeze an existing room stream before subsequent native output, retaining the
+private continuation and adding no automatic handoff. The retained-reader
+Electron regression exercises the original backend bridge, drafts and reopening.
+Earlier full runs exposed stale IPC mocks after the UI-cookie fix; those mocks
+now include the real bootstrap dependency. An initial native runner cleanup
+incorrectly equated unsubscribe with termination; the fixture now terminates only
+its exclusively owned isolated daemon and verifies its exit. Failures remain in
+private evidence. Physical IME and Claude queue/force-send are not covered here.

@@ -435,7 +435,7 @@ test('the registered desktop IPC run handler records intent before its first awa
     Menu: { setApplicationMenu: noop, buildFromTemplate: value => value },
   };
   const context = vm.createContext({
-    require: name => name === 'electron' ? electron : name === './service-client.cjs' ? { ensureService: async () => {}, connect: () => { throw new Error('No window should boot in this IPC ordering fixture'); } } : name === './dsh-host.cjs' ? { startDsh: async () => ({ origin: 'http://127.0.0.1:10101', url: 'http://127.0.0.1:10101/', stop: noop }) } : nativeRequire(name),
+    require: name => name === 'electron' ? electron : name === './service-client.cjs' ? { ensureService: async () => {}, connect: () => { throw new Error('No window should boot in this IPC ordering fixture'); } } : name === './dsh-host.cjs' ? { resetUiAuthentication: async () => {}, startDsh: async () => ({ origin: 'http://127.0.0.1:10101', url: 'http://127.0.0.1:10101/', stop: noop }) } : nativeRequire(name),
     __dirname: path.dirname(mainFile), process: { env: {}, execPath: process.execPath }, URL, setTimeout, clearTimeout,
   });
   vm.runInContext(fs.readFileSync(mainFile, 'utf8'), context, { filename: mainFile });
@@ -557,4 +557,23 @@ test('empty optional thread metadata never lengthens a retained context-aware wi
   await c.call('run', ['new', 'second'], 'plain', 2, 'strict', {}, undefined, undefined);
   assert.equal(next.calls.find(row => row[0] === 'run').length, 7);
   c.close();
+});
+
+
+for (const change of ['none', 'turn', 'context', 'owner', 'intervention']) test(`active-turn router guards ${change} across an awaited pause`, async () => {
+  const { c, next } = fixture(); next.real.capabilities.push('nativeSteer');
+  const row = next.real.sessions[0];
+  Object.assign(row, { provider: 'codex', owner: 'view', nativeId: 'native-one', state: 'working', activeTurnId: 'turn-one', steerAvailable: true, controlRevision: 1 });
+  await c.refresh();
+  let release; c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+  const pending = c.call('steer', 'new', 'new direction', 'native-one', 'turn-one');
+  assert.equal(typeof release, 'function');
+  if (change === 'turn') row.activeTurnId = 'turn-two';
+  if (change === 'context') row.nativeId = 'native-two';
+  if (change === 'owner') row.owner = 'other';
+  if (change === 'intervention') c.control.revision++;
+  release();
+  if (change === 'none') await pending; else await assert.rejects(pending);
+  assert.deepEqual(next.calls.filter(([method]) => method === 'steer'), change === 'none' ? [['steer', 'new', 'new direction', 'native-one', 'turn-one']] : []);
+  assert.equal(next.calls.some(([method]) => ['send', 'input'].includes(method)), false); c.close();
 });

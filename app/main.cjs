@@ -72,7 +72,7 @@ function bindClient(context) {
   // Rechecked by the router after awaited pauses as well as at IPC entry.
   // A task already accepted natively is not retroactively cancelled.
   client.authorizeOperation = (method, args) => {
-    if (['send', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'draft', 'resume'].includes(method)) {
+    if (['send', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'draft', 'resume'].includes(method)) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'run'].includes(method));
     }
   };
@@ -227,7 +227,7 @@ async function boot() {
   // The workspace router registers human/run intent before its first await and
   // applies the same capability gates for one or several retained services.
   const submit = (c, method, ...args) => {
-    for (const id of (method === 'run' ? args[0] : [args[0]])) roomState.assertAvailable(id, method !== 'send');
+    for (const id of (method === 'run' ? args[0] : [args[0]])) roomState.assertAvailable(id, !['send', 'steer'].includes(method));
     return c.client.call(method, ...args);
   };
   for (const method of ['run', 'forward']) register(method, (c, ...args) => {
@@ -241,9 +241,9 @@ async function boot() {
     return submit(c, method, ...args);
   });
   register('uiReady', c => c.ready?.());
-  register('send', async (c, id, text, nativeId) => {
+  for (const method of ['send', 'steer']) register(method, async (c, id, text, nativeId, turnId) => {
     const draft = backups(c.view)[id];
-    const result = await submit(c, 'send', id, text, nativeId);
+    const result = await submit(c, method, id, text, nativeId, ...(method === 'steer' ? [turnId] : []));
     // Every draft edit replaces this object, including retyping identical text.
     // A late acceptance must not clear a newer recovery copy.
     if (!result?.contextChanged && acceptSentDraft(c.view, id, draft, text)) {

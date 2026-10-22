@@ -72,3 +72,36 @@ test('uncertain acknowledgement does not assign a buffered result or retry the i
   assert.equal(f.events.find(e => e.event === 'complete').args[0].tag, undefined);
   assert.ok(!f.events.some(e => e.event === 'replyBound'));
 });
+for (const outcome of ['accepted', 'rejected', 'wrong-turn']) test(`active-turn steering ${outcome} preserves original turn correlation without retry`, async () => {
+  const f = fixture(); f.runtime.host.rpc.nativeVersion = '0.163.0';
+  f.notify('turn/started', { turn: { id: 'active' } });
+  const original = f.runtime.pending = { tag: 'original-task', turnId: 'active' };
+  const calls = [], sent = [];
+  f.runtime.on('submitted', tag => sent.push(tag));
+  f.runtime.host.rpc.call = async (method, params) => {
+    calls.push({ method, params });
+    if (outcome === 'rejected') throw Error('Native turn mismatch');
+    return { turnId: outcome === 'accepted' ? 'active' : 'other' };
+  };
+  const steering = f.runtime.steer('Change the requirement', 'steer-id', 'active', () => true);
+  if (outcome === 'accepted') await steering; else await assert.rejects(steering);
+  assert.equal(calls.length, 1); assert.equal(calls[0].method, 'turn/steer');
+  assert.equal(calls[0].params.expectedTurnId, 'active');
+  assert.equal(calls[0].params.clientUserMessageId, 'steer-id');
+  assert.equal(f.runtime.pending, original); assert.equal(f.runtime.turnId, 'active');
+  assert.deepEqual(sent, outcome === 'accepted' ? ['steer-id'] : []);
+  assert.equal(f.events.filter(e => ['complete', 'failed', 'replyBound'].includes(e.event)).length, 0);
+  f.user('steer-id', 'Change the requirement');
+  assert.equal(f.events.filter(e => e.event === 'nativeInput').length, 0);
+});
+
+test('stale, denied, unverified-version and permission-blocked steer never reach native RPC', async () => {
+  const f = fixture(); f.runtime.host.rpc.nativeVersion = '0.163.0'; f.runtime.turnId = 'current';
+  await assert.rejects(f.runtime.steer('text', 'a', 'old', () => true));
+  await assert.rejects(f.runtime.steer('text', 'b', 'current', () => false));
+  f.runtime.host.rpc.nativeVersion = 'unknown';
+  await assert.rejects(f.runtime.steer('text', 'c', 'current', () => true));
+  f.runtime.host.rpc.nativeVersion = '0.163.0'; f.runtime.nativeRequests.set(1, {});
+  await assert.rejects(f.runtime.steer('text', 'd', 'current', () => true));
+  assert.equal(f.calls.length, 0);
+});
