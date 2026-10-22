@@ -31,7 +31,7 @@ test('two confirmed root clears preserve row, history, draft and terminal but re
  const two=f.clear();assert.equal(s.nativeContexts.length,2);assert.equal(s.messages.filter(m=>m.role==='system').length,2);assert.equal(s.nativeId,two.next);
  assert.throws(()=>r.clearRoot({...old,nextSessionId:one.next,source:'clear'}));
  const stored=JSON.parse(fs.readFileSync(path.join(f.dir,'workspace.json')));assert.equal(stored.sessions[0].nativeId,two.next);assert.equal(stored.sessions[0].nativeContexts.length,2);assert.equal(stored.sessions[0].nativeContextPending,null);
- const restored=new Workspace({binaries:{},close(){}},f.dir);assert.equal(restored.get(id).nativeId,two.next);assert.equal(restored.get(id).messages.length,s.messages.length);restored.close();
+ const restored=new Workspace({binaries:{},close(){}},f.dir);assert.equal(restored.get(id).nativeId,two.next);assert.deepEqual(restored.get(id).messages,s.messages.filter(m=>!m.volatile));restored.close();
 });
 test('child IDs and late root events cannot change the current binding, readiness or messages',async t=>{
  const f=await fixture(t),{s,r}=f,old=f.bind(),child=randomUUID();

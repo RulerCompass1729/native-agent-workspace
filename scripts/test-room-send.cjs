@@ -12,6 +12,7 @@ function native(method, reply = '', fail = false) { const id = ++sequence; retur
   const cb = m => { if (m.requestId === id) { clearTimeout(timer); child.off('message', cb); resolve(m); } }; child.on('message', cb); child.send({ id, method, reply, fail });
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
+const messageRow = text => page.locator('#room-messages article').filter({ has: page.locator('.message-body').getByText(text, { exact: true }) });
 async function capture(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') }); } }
 async function create(provider) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(provider + ' · 共享测试'); await page.locator('#confirm-create').click();
@@ -31,7 +32,22 @@ async function run() {
   console.log('Fixture profile:', profile); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon'); client = await connect(profile, 'room-test'); await launch();
   const a = await create('claude'); await chooseRecipient(a); await page.locator('#shared-input').fill('单一接收方');
   // Test the HTML form default contract separately from real pointer/keyboard activation.
-  await page.locator('#room-composer').evaluate(form => form.requestSubmit()); await sent(1, a, '单一接收方'); assert.equal((await snapshot()).room.run, null); await complete('FIRST-REPLY');
+  await page.locator('#room-composer').evaluate(form => form.requestSubmit()); await sent(1, a, '单一接收方'); assert.equal((await snapshot()).room.run, null);
+  const first = messageRow('单一接收方');
+  await first.locator('.message-delivery summary').click();
+  assert.ok((await first.locator('summary').innerText()).includes('等待原生确认'));
+  assert.equal(await first.locator('.delivery-payload').innerText(), '单一接收方');
+  const payload = await first.locator('.delivery-payload').boundingBox();
+  await page.mouse.move(payload.x + 1, payload.y + payload.height / 2); await page.mouse.down();
+  await page.mouse.move(payload.x + 140, payload.y + payload.height / 2, { steps: 8 }); await page.mouse.up();
+  assert.equal(await page.evaluate(() => getSelection().toString()), '单一接收方');
+  await complete('FIRST-REPLY');
+  await until(async () => (await first.locator('summary').innerText()).includes('原生已接收'), 'Receipt acknowledged');
+  assert.equal(await first.locator('details').getAttribute('open'), '', 'Native ACK retains the expanded details');
+  assert.equal(await page.evaluate(() => getSelection().toString()), '单一接收方', 'Native ACK preserves the payload selection');
+  assert.ok((await first.locator('.delivery-body').innerText()).includes('不是其完整模型上下文'));
+  assert.equal(await first.locator('.delivery-payload').count(), 1);
+  passed.push('Submitted human message is visible before ACK; one native receipt updates without collapsing its exact payload');
   assert.equal(await page.locator('#run-button').isDisabled(), true); passed.push('One member: default form sends only to its recipient, without starting a run');
   const b = await create('codex'); await chooseRecipient(b); await page.locator('#shared-input').fill('只分享这段'); await page.locator('#shared-input').press('Shift+Enter');
   assert.equal(await page.locator('#shared-input').inputValue(), '只分享这段\n'); assert.equal((await native('stats')).sends.length, 1);
@@ -44,9 +60,21 @@ async function run() {
   await page.locator('#run-consent').check(); await page.locator('#confirm-run').click(); await sent(4, a, '显式自动核查');
   const running = (await snapshot()).room.run; assert.equal(running.mode, 'replies'); assert.deepEqual(running.ids, [a, b]);
   await native('release', 'FIRST-CHECK'); await until(async () => (await native('stats')).sends.length === 5, 'Second authorized turn');
+  const handoff = messageRow('FIRST-CHECK');
+  await handoff.locator('.message-delivery summary').click();
+  assert.equal(await handoff.locator('.delivery-payload').innerText(), (await native('stats')).sends.at(-1).text);
+  assert.ok((await handoff.locator('summary').innerText()).includes('codex · 共享测试'));
+  await page.locator('#room-filter').selectOption(b);
+  await handoff.waitFor(); assert.equal(await handoff.locator('.delivery-payload').count(), 1, 'Recipient filter includes the handoff source');
+  await page.locator('#room-filter').selectOption('');
   await native('release', 'SECOND-CHECK'); await until(async () => (await native('stats')).sends.length === 6, 'Third authorized turn');
   await native('release', 'FINAL-CHECK'); await until(async () => (await snapshot()).room.run.status === 'completed', 'Reply limit ends exchange');
   assert.equal((await snapshot()).room.run.nativeWorkUnknown, true); assert.equal((await native('stats')).sends.length, 6);
+  assert.equal(await messageRow('FINAL-CHECK').locator('summary').innerText(), '本条未由工作区转发');
+  await messageRow('SECOND-CHECK').locator('summary').focus(); await page.keyboard.press('Enter');
+  assert.equal(await messageRow('SECOND-CHECK').locator('details').getAttribute('open'), '');
+  await capture('handoff-delivery-details');
+  passed.push('Automatic handoff exposes its actual task wrapper, keyboard expansion and recipient filtering without an extra dispatch');
   passed.push('Explicit finite reply authorization routes three replies once, retains unknown native work, and stops at its limit');
   await chooseRecipient(b); await page.locator('#shared-input').fill('暂停后的定向发送'); await page.locator('#room-composer').evaluate(form => form.requestSubmit()); await sent(7, b, '暂停后的定向发送'); await complete('FINAL-REPLY');
   assert.equal((await snapshot()).room.run.id, running.id); assert.equal((await snapshot()).room.run.status, 'completed'); passed.push('Default submission after a paused run does not restart automatic collaboration');
@@ -56,9 +84,12 @@ async function run() {
   assert.equal(await page.locator('#forward-button').isDisabled(), true); assert.equal(await page.locator('#run-button').isDisabled(), true);
   await page.locator('#shared-input').fill('发送期间的新草稿'); await native('release', '', true);
   await page.locator('#toast').filter({ hasText: 'Synthetic acceptance failure' }).waitFor(); await delay(150);
+  assert.ok((await messageRow('等待确认的发送').locator('summary').innerText()).includes('接收结果未确认'));
   assert.equal((await native('stats')).sends.length, 8); assert.equal(await page.locator('#shared-input').inputValue(), '发送期间的新草稿');
   await app.close(); app = null; await launch(); await page.locator('#shared-input').waitFor();
   assert.equal(await page.locator('#shared-input').inputValue(), '发送期间的新草稿'); assert.equal((await native('stats')).sends.length, 8);
+  await messageRow('等待确认的发送').locator('summary').click();
+  assert.equal(await messageRow('等待确认的发送').locator('.delivery-payload').innerText(), '等待确认的发送');
   assert.equal(await page.locator('#recipient').inputValue(), b, 'Reopen retains the intended recipient, not the first member');
   assert.equal(await page.locator('#recipient').getAttribute('title'), 'codex · 共享测试');
   // Simulate an older view without this field, then an unavailable saved ID.

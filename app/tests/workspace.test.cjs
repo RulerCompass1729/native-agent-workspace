@@ -14,6 +14,77 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('native blocks share the private reader but never silently persist or share tool bodies', async t => {
+  const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
+  const s = w.get(id); w.join(id, true); r.nativeBlocks = true;
+  r.emit('nativeBlock', { id: 'display:one', nativeId: s.nativeId, kind: 'response', text: 'visible reply', status: 'complete' });
+  r.emit('nativeBlock', { id: 'tool:one', nativeId: s.nativeId, kind: 'tool', text: 'PRIVATE_TOOL_BODY', input: 'PRIVATE_INPUT', status: 'complete' });
+  r.emit('complete', { text: 'visible reply' });
+  assert.equal(s.messages.filter(m => m.text === 'visible reply').length, 1);
+  assert.ok(s.messages.some(m => m.text === 'PRIVATE_TOOL_BODY'));
+  assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE_TOOL_BODY'));
+  w.persist(); const stored = fs.readFileSync(path.join(directory, 'workspace.json'), 'utf8');
+  assert.ok(stored.includes('visible reply')); assert.ok(!stored.includes('PRIVATE_TOOL_BODY')); assert.ok(!stored.includes('PRIVATE_INPUT'));
+});
+test('shared human message survives uncertain delivery and restart without replay', async t => {
+  const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
+  w.join(id, true);
+  let reject;
+  r.send = () => new Promise((resolve, fail) => { reject = fail; });
+  const sending = w.forward(id, 'human message remains visible', 'owner');
+  const failed = assert.rejects(sending, /uncertain/);
+  const message = w.room.messages.at(-1);
+  assert.equal(message.text, 'human message remains visible');
+  assert.equal(message.deliveries[0].recipientId, id);
+  assert.equal(message.deliveries[0].status, 'awaiting-native');
+  w.persist();
+  const cold = new Workspace({ binaries: {}, close() {} }, directory); t.after(() => cold.close());
+  assert.equal(cold.room.messages.at(-1).deliveries[0].status, 'unconfirmed');
+  assert.equal(cold.versions.dispatches, 0);
+  reject(Error('uncertain')); await failed;
+  assert.equal(message.status, 'unconfirmed'); assert.equal(message.deliveries[0].status, 'unconfirmed');
+  assert.equal(w.room.messages.at(-1).text, 'human message remains visible');
+  assert.equal(w.versions.dispatches, 1);
+});
+test('native receipt is not revoked when the recipient leaves or reply sharing becomes private', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  w.join(id, true); await w.forward(id, 'explicit share', 'owner');
+  const message = w.room.messages.at(-1), tag = message.id;
+  r.emit('submitted', tag); w.join(id, false);
+  r.emit('complete', { tag, text: 'private after leaving' });
+  r.emit('failed', 'later failure', { tag });
+  assert.equal(message.status, 'reply-private');
+  assert.equal(message.deliveries[0].status, 'submitted');
+  assert.ok(!w.room.messages.some(m => m.text === 'private after leaving'));
+  assert.equal(w.versions.dispatches, 1);
+});
+test('bounded handoff records the exact native input on its source message without broadcasting private history', async t => {
+  const { workspace: w, runtimes, ids, directory } = await fixture(t, 2);
+  const sent = [];
+  runtimes.forEach((r, i) => { r.send = async (text, tag) => { sent.push({ id: ids[i], text, tag }); r.emit('submitted', tag); }; });
+  ids.forEach(id => w.join(id, true));
+  w.get(ids[0]).messages.push({ id: 'private', role: 'user', text: 'never share this previous private text' });
+  await w.startRun(ids, 'add 25 and 50', 2, 'replies');
+  const goal = w.room.messages.find(m => m.role === 'human');
+  assert.equal(goal.deliveries.length, 1); assert.equal(goal.deliveries[0].recipientId, ids[0]);
+  assert.equal(goal.deliveries[0].text, sent[0].text); assert.equal(goal.deliveries[0].status, 'submitted');
+  runtimes[0].emit('complete', { tag: sent[0].tag, text: '75' }); await tick();
+  const reply = w.room.messages.find(m => m.role === 'assistant');
+  assert.equal(reply.text, '75'); assert.equal(reply.deliveries[0].recipientId, ids[1]);
+  assert.equal(reply.deliveries[0].text, sent[1].text);
+  assert.ok(reply.deliveries[0].text.includes('add 25 and 50'));
+  assert.ok(!JSON.stringify(w.room.messages).includes('never share this previous private text'));
+  runtimes[1].emit('complete', { tag: sent[1].tag, text: 'checked: 75' }); await tick();
+  const final = w.room.messages.find(m => m.text === 'checked: 75');
+  assert.equal(final.deliveryTracked, true); assert.equal(final.deliveries, undefined);
+  assert.equal(sent.length, 2); assert.equal(w.versions.shellModelCalls, 0);
+  w.persist();
+  const cold = new Workspace({ binaries: {}, close() {} }, directory); t.after(() => cold.close());
+  assert.deepEqual(cold.room.messages, w.room.messages);
+  cold.clearSharedHistory();
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'))).room.messages, []);
+});
+
 test('a delayed reopened terminal snapshot cannot finish under an obsolete owner', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   r.terminal = { alive: false, nativeExited: true };
@@ -84,7 +155,7 @@ test('continuous output checkpoints before it becomes quiet and reload never sen
   let starts = 0, sends = 0;
   const recovered = new Workspace({ binaries: {}, close() {}, create() { starts++; return { send() { sends++; } }; } }, directory);
   t.after(() => recovered.close());
-  assert.deepEqual(recovered.get(id).messages, stored.sessions[0].messages);
+  assert.deepEqual(recovered.get(id).messages, stored.sessions[0].messages.map(m => ({ ...m, status: 'unconfirmed' })));
   assert.equal(recovered.get(id).state, 'recoverable');
   assert.equal(starts, 0); assert.equal(sends, 0);
   r.emit('delta', { id: 'continuous-reply', text: '最后一段。' });
@@ -567,4 +638,12 @@ test('bounded task length fails before dispatch and reports its actual limit', a
   const { workspace: w, ids } = await fixture(t, 2); ids.forEach(id => w.join(id, true));
   await assert.rejects(w.startRun(ids, 'x'.repeat(6001), 2, 'replies'), /6,000/);
   assert.equal(w.versions.dispatches, 0); assert.equal(w.room.run, null);
+});
+test('disconnected and failed native observations stop claiming in-flight tools are running', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  r.emit('nativeBlock', { nativeId: w.get(id).nativeId, id: 'tool:flight', kind: 'tool', turnId: 'turn', title: 'Command', status: 'running', text: 'partial' });
+  r.emit('state', 'disconnected'); const tool = w.get(id).messages.find(m => m.kind === 'tool');
+  assert.equal(tool.status, 'unconfirmed'); assert.equal(tool.text, 'partial');
+  r.emit('nativeBlock', { nativeId: w.get(id).nativeId, id: 'tool:flight', kind: 'tool', status: 'running', delta: ' continued' });
+  assert.equal(tool.status, 'running'); r.emit('failed', 'Provider unavailable'); assert.equal(tool.status, 'unconfirmed');
 });

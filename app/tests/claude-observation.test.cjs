@@ -39,6 +39,44 @@ async function mod({ version = '2.1.306', fetchObservation, runtime } = {}) {
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
 
+test('verified display contract carries indexed batches, empty final and interruption without waiting for HTTP', async () => {
+  const f = await mod({ version: '2.1.307' }), rows = [], turn = randomUUID(), id = randomUUID();
+  f.r.on('nativeBlock', row => rows.push(row));
+  const promptId = randomUUID(); await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId });
+  await f.invoke('turn.start', { turnId: turn });
+  const e = { session_id: f.r.record.nativeId, turn_id: randomUUID(), prompt_id: promptId, message_id: id, index: 0, final: false, delta: 'stream\n' };
+  await f.invoke('classic.MessageDisplay', e, async () => ({}));
+  await f.invoke('classic.MessageDisplay', { ...e, index: 1, final: true, delta: '' }, async () => ({}));
+  await f.invoke('turn.complete', { turnId: turn, reason: 'aborted', durationMs: 1200 });
+  assert.equal(rows.length, 0); await f.clock.shift()();
+  assert.deepEqual(rows.map(x => x.status), ['streaming', 'complete', 'interrupted']);
+  assert.deepEqual(rows.slice(0, 2).map(x => x.index), [0, 1]); assert.equal(rows[1].delta, '');
+  assert.ok(rows.every(row => row.turnId === turn));
+});
+test('display mapping excludes child text, respects downstream redaction, and never duplicates response append', async () => {
+  const f = await mod({ version: '2.1.307' }), rows = []; f.r.on('nativeBlock', row => rows.push(row));
+  const e = { session_id: f.r.record.nativeId, turn_id: randomUUID(), message_id: randomUUID(), index: 0, final: true, delta: 'PRIVATE ORIGINAL' };
+  await f.invoke('classic.MessageDisplay', { ...e, agent_id: 'child' }, async () => ({}));
+  await f.invoke('classic.MessageDisplay', e, async () => ({ displayContent: 'REDACTED' }));
+  await f.append(response('PRIVATE ORIGINAL'));
+  await f.clock.shift()(); assert.equal(rows.length, 1); assert.equal(rows[0].delta, 'REDACTED');
+});
+test('tool identity retains its original turn when append or background result crosses a later turn', async () => {
+  const f = await mod({ version: '2.1.307' }), rows = [], a = randomUUID(), b = randomUUID();
+  f.r.on('nativeBlock', row => rows.push(row));
+  await f.invoke('turn.start', { turnId: a });
+  const e = response(); e.message.content = [{ type: 'tool_use', id: 'toolu_background', name: 'Bash', input: { command: 'printf test' } }];
+  let release; const appending = f.append(e, () => new Promise(resolve => { release = resolve; }));
+  await f.invoke('turn.start', { turnId: b }); release({ uuid: e.uuid, message: e.message }); await appending;
+  const result = response(); result.door = 'tool-result'; result.origin = { kind: 'tool', tool: 'Bash' };
+  result.message = { type: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_background', content: 'background result' }] };
+  await f.append(result); await f.clock.shift()();
+  assert.equal(rows[0].turnId, a); assert.equal(rows[1].turnId, undefined); assert.equal(rows[0].id, rows[1].id);
+  const session = { nativeId: f.r.record.nativeId, messages: [] };
+  for (const row of rows) require('../native-blocks.cjs').applyNativeBlock(session, row);
+  assert.equal(session.messages[0].turnId, a); assert.equal(session.messages[0].text, 'background result');
+});
+
 test('observe only the stored native response, after append, without delaying or rewriting it', async () => {
   const f = await mod(), e = response(), saved = { uuid: e.uuid, message: { ...e.message, content: [{ type: 'text', text: 'Stored downstream text' }] } };
   const value = await f.append(e, async () => saved);
@@ -142,14 +180,15 @@ test('unresolved native HTTP calls remain capped while a normal poll can disclos
 test('unverified runtime versions do not enable native message observation', async () => {
   const f = await mod({ version: '2.1.307' }); await f.append(response()); assert.equal(f.clock.length, 0); assert.equal(f.requests.length, 0);
 });
-test('native observation remains volatile and cannot alter readiness, history, sharing or dispatch', async t => {
+test('legacy observation appears inline but remains volatile and cannot alter readiness, sharing or dispatch', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-observation-')); let r;
   const w = new Workspace({ binaries: {}, close() {}, create(record) { r = adapter(); r.record = record; r.chatAvailable = true; r.start = async () => r.emit('state', 'working'); return r; } }, dir);
   t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const id = await w.create('claude', dir, 'owner'); w.join(id, true); const before = JSON.stringify(w.snapshot());
   const body = { sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: 1, id: randomUUID(), kind: 'response', text: 'PRIVATE_NATIVE_OUTPUT', gap: true, truncated: true };
   r.observeRoot(body); assert.throws(() => r.observeRoot({ ...body, gap: false }), /Stale/);
-  assert.equal(JSON.stringify(w.snapshot()), before); const observed = await w.observe(id);
+  const after = w.snapshot(); assert.equal(after.sessions[0].messages.at(-1).text, body.text);
+  after.sessions[0].messages = []; assert.equal(JSON.stringify(after), before); const observed = await w.observe(id);
   assert.equal(observed.progress.items.length, 2); assert.equal(observed.progress.items.at(-1).truncated, true);
   w.persist(); assert.ok(!fs.readFileSync(path.join(dir, 'workspace.json'), 'utf8').includes(body.text));
 });
@@ -162,4 +201,69 @@ test('private observation transport rejects stale root leases, invalid IDs and o
   for (const patch of [{ lease: 'stale' }, { sessionId: randomUUID() }, { id: '<script>' }, { kind: 'prompt' }, { text: 'x'.repeat(12001) }, { sequence: 0 }, { sequence: 1.5 }, { sequence: null }]) assert.equal(await request({ ...row, ...patch }), 409);
   assert.equal(journal.items.size, 0); assert.equal(await request(row), 200); assert.equal(journal.items.size, 1);
   r.rootEnding = { sessionId: r.record.nativeId }; assert.equal(await request(row), 409);
+});
+test('held native turn completion cannot enter a newly cleared root', async () => {
+  const f = await mod({ version: '2.1.307' }), rows = [], turnId = randomUUID();
+  f.r.on('nativeBlock', row => rows.push(row));
+  let release; const finishing = f.invoke('turn.complete', { turnId, reason: 'aborted' }, () => new Promise(resolve => { release = resolve; }));
+  const previous = f.r.record.nativeId, next = randomUUID();
+  await f.invoke('session.end', { sessionId: previous, reason: 'clear' }); f.setNativeId(next);
+  await f.invoke('classic.SessionStart', { session_id: next, source: 'clear' });
+  for (let i = 0; i < 5 && f.clock.some(fn => fn.delay === 0); i++) { const j = f.clock.findIndex(fn => fn.delay === 0); await f.clock.splice(j, 1)[0](); }
+  release({}); await finishing;
+  for (let i = 0; i < 5 && f.clock.some(fn => fn.delay === 0); i++) { const j = f.clock.findIndex(fn => fn.delay === 0); await f.clock.splice(j, 1)[0](); }
+  assert.equal(rows.length, 0); assert.equal(f.r.record.nativeId, next);
+});
+test('display redaction survives Stop, shared room retention and the next automatic handoff', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-display-proof-')); let r;
+  const w = new Workspace({ binaries: {}, close() {}, create(record) { r = adapter(); r.record = record; r.chatAvailable = true; return r; } }, dir);
+  t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const id = await w.create('claude', dir, 'owner'); w.join(id, true);
+  const f = await mod({ runtime: r, version: '2.1.307' });
+  const turnId = randomUUID(), promptId = randomUUID(), tag = randomUUID();
+  r.pending = { nativeId: r.record.nativeId, accepted: true, promptId, turnId, tag, guard: () => true };
+  w.get(id).pendingTag = tag; w.forwards.set(tag, { member: w.get(id).memberRevision, control: w.get(id).controlRevision });
+  const advanced = []; w.advance = async (_, info) => advanced.push(info);
+  await f.invoke('classic.UserPromptSubmit', { session_id: r.record.nativeId, prompt_id: promptId });
+  await f.invoke('turn.start', { turnId });
+  const e = { session_id: r.record.nativeId, prompt_id: promptId, turn_id: randomUUID(), message_id: randomUUID(), index: 0, final: true, delta: 'PRIVATE ORIGINAL' };
+  await f.invoke('classic.MessageDisplay', e, async () => ({ displayContent: 'REDACTED' }));
+  // Stop arrives before the asynchronous display observation: it cannot leak.
+  r.finishReply(r.pending, { prompt_id: promptId, last_assistant_message: 'PRIVATE ORIGINAL', background_tasks: [], session_crons: [], stop_hook_active: false });
+  assert.equal(w.room.messages.length, 0); assert.equal(advanced.length, 0);
+  await f.invoke('turn.complete', { turnId, reason: 'answer', answer: 'PRIVATE ORIGINAL' }); await f.clock.shift()();
+  assert.equal(w.room.messages[0].text, 'REDACTED'); assert.equal(advanced[0].text, 'REDACTED'); assert.equal(advanced[0].tag, tag);
+  assert.ok(!JSON.stringify(w.snapshot()).includes('PRIVATE ORIGINAL')); w.persist();
+  assert.ok(!fs.readFileSync(path.join(dir, 'workspace.json'), 'utf8').includes('PRIVATE ORIGINAL'));
+});
+test('missing display identity or a display gap never falls back to raw Stop text', async () => {
+  for (const gap of [false, true]) {
+    const f = await mod({ version: '2.1.307' }), r = f.r, turnId = randomUUID(), promptId = randomUUID(), tag = randomUUID(), complete = [];
+    r.pending = { nativeId: r.record.nativeId, accepted: true, promptId, turnId, tag, guard: () => true };
+    r.on('complete', info => complete.push(info));
+    await f.invoke('classic.UserPromptSubmit', { session_id: r.record.nativeId, prompt_id: promptId });
+  await f.invoke('turn.start', { turnId });
+  const e = { session_id: r.record.nativeId, prompt_id: promptId, turn_id: randomUUID(), message_id: randomUUID(), index: 0, final: true, delta: 'PRIVATE' };
+    await f.invoke('classic.MessageDisplay', e, async () => ({ displayContent: 'MASKED' }));
+    await f.invoke('turn.complete', { turnId, reason: 'answer', answer: gap ? 'PRIVATE' : 'OTHER' });
+    if (gap) r.observeRootGap({ sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch });
+    await f.clock.shift()();
+    r.finishReply(r.pending, { prompt_id: promptId, last_assistant_message: 'PRIVATE' });
+    assert.equal(complete[0].tag, undefined); assert.equal(complete[0].text, '');
+  }
+});
+test('a gap or late batch after a valid final display revokes sharing before a delayed Stop', async () => {
+  for (const damage of ['gap', 'late']) {
+    const f = await mod({ version: '2.1.307' }), r = f.r, turnId = randomUUID(), promptId = randomUUID(), tag = randomUUID(), completed = [];
+    await f.invoke('classic.UserPromptSubmit', { session_id: r.record.nativeId, prompt_id: promptId }); await f.invoke('turn.start', { turnId });
+    r.pending = { nativeId: r.record.nativeId, accepted: true, promptId, turnId, tag, guard: () => true }; r.on('complete', info => completed.push(info));
+    const e = { session_id: r.record.nativeId, prompt_id: promptId, turn_id: randomUUID(), message_id: randomUUID(), index: 0, final: true, delta: 'Safe display\n' };
+    await f.invoke('classic.MessageDisplay', e, async () => ({}));
+    await f.invoke('turn.complete', { turnId, reason: 'answer', answer: 'Safe display' }); await f.clock.shift()();
+    assert.equal(r.displayProofs.get(turnId).safeText, 'Safe display\n');
+    if (damage === 'gap') r.observeRootGap({ sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch });
+    else { await f.invoke('classic.MessageDisplay', { ...e, index: 1, delta: 'late' }, async () => ({})); await f.clock.shift()(); }
+    r.finishReply(r.pending, { prompt_id: promptId, last_assistant_message: 'Safe display' });
+    assert.equal(completed[0].tag, undefined); assert.equal(completed[0].text, '');
+  }
 });

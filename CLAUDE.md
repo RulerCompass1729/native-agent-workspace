@@ -55,6 +55,21 @@ or start paid model runs as a side effect of editing documents.
 
 ## Architectural invariants
 
+- Before changing primary interaction, information organization, or system
+  architecture (including messaging and state synchronization), inspect
+  established products, protocols and actual implementations first. Compare their
+  fit against the user's native fidelity, usability, privacy and cost requirements.
+  For each substantial capability, check current competitors for overlap and
+  reusable mechanisms before building. Overlap is not disqualifying; do not
+  reinvent a mature mechanism or claim novelty without evidence. Verify source,
+  compatibility and license obligations before importing code or dependencies.
+  Present material limitations and tradeoffs to the user before implementing a
+  new design. Record what is reused, what needs adaptation, and what remains
+  unverified. Research or a design proposal is not implementation authorization.
+  Do not substitute extra monitoring panels or a newly invented interaction for
+  the requested seamless conversation/terminal experience. This gate applies to
+  design changes, not routine repairs within an already agreed interaction.
+
 - Native session identity and lifecycle are independent of rooms and windows.
 - Joining/leaving changes collaboration membership, not native process identity.
 - Never implement a GUI/TUI toggle by silently launching a second agent.

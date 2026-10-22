@@ -49,7 +49,6 @@
       <div id="approval" hidden></div>
       <div id="messages" class="messages" aria-label="会话内容" aria-live="polite"></div>
       <div id="terminal-area" hidden aria-label="原生终端"></div>
-      <div id="solo-progress" class="progress-panels"></div>
       <div id="composer-wrap"><details id="draft-recovery" hidden><summary>有草稿副本待处理</summary><p class="quiet">副本单独保存在本机，不会覆盖当前草稿或自动发送。可复制合并，用完后删除副本。</p><div id="draft-recovery-list"></div></details><form id="composer"><textarea id="message-input" rows="3" placeholder="直接说你想做什么…" aria-label="发送给当前 agent 的消息"></textarea><div class="composer-footer"><span id="compose-hint">Enter 发送 · Shift Enter 换行</span><button type="button" id="interrupt" class="subtle" hidden>中断回复</button><button type="submit" id="send-button" class="primary">发送 ↑</button></div></form></div>
       <details id="advanced"><summary>会话与原生团队</summary><div id="advanced-content"></div></details>
     </section>
@@ -62,7 +61,6 @@
       <div id="room-record-view" class="room-main">
         <div class="timeline-tools"><input id="room-search" type="search" aria-label="搜索共享记录" placeholder="搜索共享记录"><select id="room-filter" aria-label="按成员筛选"><option value="">全部成员</option></select><span id="timeline-count" role="status"></span><button id="copy-timeline" class="small">复制筛选结果</button><button id="room-files" type="button" class="small">文件…</button><button id="room-notes" class="small">共享笔记</button></div>
         <div id="room-messages" class="messages" aria-label="共同工作记录"></div>
-        <div id="room-progress" class="progress-panels"></div>
         <form id="room-composer"><label for="shared-input" class="visually-hidden">本次任务与共享材料</label><div class="mention-wrap"><textarea id="shared-input" rows="2" maxlength="16000" placeholder="输入消息，@ 选择一个 agent…" aria-controls="mention-list" aria-expanded="false"></textarea><div id="mention-list" role="listbox" aria-label="选择接收会话" hidden></div></div><div class="room-controls"><button id="mention-button" type="button" aria-label="选择接收者" aria-haspopup="listbox">@ 选择成员</button><select id="recipient" hidden aria-label="接收方"></select><span class="composer-spacer"></span><button id="forward-button" type="submit" class="primary">发送 ↑</button><details id="room-advanced"><summary aria-label="更多协作方式">⋯</summary><button id="attach-context" type="button">附上背景…</button><button id="run-button" type="button">一起核查…</button></details></div><p id="run-help" class="quiet"></p></form>
       </div>
     </section>
@@ -97,7 +95,6 @@
   <script src="../approval-policy.js"></script>
   <script src="fleet-observation.js"></script>
   <script src="reading-list.js"></script>
-  <script src="native-progress.js"></script>
   <script src="local-search.js"></script>
   <script src="search-view.js"></script>
   <script src="renderer.js"></script>

@@ -1,0 +1,42 @@
+const test = require('node:test'), assert = require('node:assert/strict');
+const { applyNativeBlock } = require('../native-blocks.cjs');
+test('native display identity preserves batches, empty final, duplicate delivery and distinct identical messages', () => {
+  const session = { nativeId: 'root', messages: [] }, send = e => applyNativeBlock(session, { nativeId: 'root', id: 'display:a', kind: 'response', turnId: 'turn-a', displayTurnId: 'native-display-turn', ...e });
+  send({ index: 0, delta: '你好\n', status: 'streaming' });
+  send({ index: 0, delta: '你好\n', status: 'streaming' });
+  send({ index: 1, delta: '', status: 'complete' });
+  send({ id: 'display:b', index: 0, delta: '你好\n', status: 'complete' });
+  assert.equal(session.messages.length, 2); assert.equal(session.messages[0].text, '你好\n'); assert.equal(session.messages[0].status, 'complete');
+  assert.equal(session.messages[0].incomplete, undefined);
+  assert.equal(session.messages[0].turnId, 'turn-a'); assert.equal(session.messages[0].displayTurnId, 'native-display-turn');
+});
+test('native gaps remain explicit; old-root content cannot enter a new root', () => {
+  const session = { nativeId: 'new-root', messages: [] };
+  assert.equal(applyNativeBlock(session, { nativeId: 'old-root', id: 'display:a', delta: 'PRIVATE' }), false);
+  applyNativeBlock(session, { nativeId: 'new-root', id: 'display:a', kind: 'response', index: 3, delta: 'tail' });
+  assert.equal(session.messages[0].incomplete, true); assert.equal(session.messages[0].text, 'tail');
+});
+test('native interrupted boundary preserves text, leaves background tools running and never alters another turn', () => {
+  const session = { nativeId: 'root', messages: [] }, send = e => applyNativeBlock(session, { nativeId: 'root', ...e });
+  send({ id: 'display:a', kind: 'response', turnId: 'turn-a', delta: 'partial', status: 'streaming' });
+  send({ id: 'tool:a', kind: 'tool', turnId: 'turn-a', title: 'Bash', input: 'command', status: 'running' });
+  send({ id: 'display:b', kind: 'response', turnId: 'turn-b', delta: 'other', status: 'streaming' });
+  send({ id: 'turn:a', kind: 'turn', turnId: 'turn-a', status: 'interrupted' });
+  assert.equal(session.messages[0].text, 'partial'); assert.equal(session.messages[0].status, 'interrupted');
+  assert.equal(session.messages[1].status, 'running'); assert.equal(session.messages[1].volatile, true);
+  assert.equal(session.messages[2].status, 'streaming');
+});
+test('late native batches cannot reopen an interrupted turn, including native Codex delta rows', () => {
+  const s = { nativeId: 'root', messages: [{ id: 'codex', role: 'assistant', nativeId: 'root', turnId: 'a', text: 'kept', status: 'streaming' }] };
+  applyNativeBlock(s, { nativeId: 'root', id: 'turn:a', kind: 'turn', turnId: 'a', status: 'interrupted' });
+  applyNativeBlock(s, { nativeId: 'root', id: 'display:a', kind: 'response', turnId: 'a', index: 0, delta: 'late native text', status: 'streaming' });
+  assert.equal(s.messages[0].status, 'interrupted'); assert.equal(s.messages[2].status, 'interrupted');
+  assert.equal(s.messages[2].text, 'late native text');
+});
+test('volatile cache bounds full serialized rows and count without unbounded placeholder accumulation', () => {
+  const s = { nativeId: 'root', messages: [{ id: 'keep', role: 'user', text: 'persistent' }] };
+  for (let i = 0; i < 600; i++) applyNativeBlock(s, { nativeId: 'root', id: 'tool:' + i, kind: 'tool', title: 'T'.repeat(6000), text: 'output', input: 'input' });
+  const volatile = s.messages.filter(m => m.volatile);
+  assert.ok(volatile.length <= 200); assert.ok(Buffer.byteLength(JSON.stringify(volatile)) <= 1024 * 1024);
+  assert.equal(s.messages[0].text, 'persistent'); assert.equal(volatile.filter(m => m.kind === 'gap').length, 1);
+});

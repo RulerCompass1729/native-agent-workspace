@@ -1,5 +1,51 @@
 # Bounded testing
 
+## Native block foundation — development source
+
+As of 2026-10-21. This source-only increment replaces the rejected camera/replay
+panels with native content in the solo main reader. The installed alpha.55 is
+unchanged. Earlier panel-specific results below describe those historical
+versions; they are not evidence for the replacement reader.
+
+`node scripts/test-native-blocks.cjs` launches actual Electron through normal
+service bootstrap and the installed real Claude CLI in an isolated test profile.
+Only its inference endpoint is replaced with a loopback SSE fixture. Native hooks,
+tool execution, submission, terminal and interruption are real. Three canned
+responses verify intermediate text and a Bash result before the final response,
+stable block identity/order, an authorized display-confirmed shared final reply,
+native interruption and `/clear` without replacing the process or losing local
+history. No paid model request is made. A successful application recording and
+screenshot remain private. This is not hosted-provider, physical IME or full
+terminal-state fidelity evidence.
+
+Both 2.1.307 and 2.1.308 pass this trial. An intervening recorded trial failed
+because automatic CLI updating crossed the explicit compatibility gate; that
+failure is retained and not counted as pass. The generated type declarations
+were compared before extending the gate, then the actual 2.1.308 trial passed.
+The runner checks the version before sending so a future update fails early.
+
+The local suite includes mixed native ID namespaces, duplicate/empty/final
+display batches, delayed old-root observations, tool results crossing turns,
+background tools after interruption, lost snapshot/live races, bounded volatile
+caches and final-proof invalidation. Redaction tests assert raw hidden text cannot
+reach the room, its persisted data or the next automatic handoff. A native turn
+ending does not claim all tools or child agents stopped.
+
+All 499 local tests pass with no skips. Actual source Electron regression
+evidence includes nine room-send groups, eleven reading/selection/focus checks,
+and four inline native/retained-backend groups, including disconnect → late event
+→ reconnect. Capability-only loss on the oldest bridge has a separate source
+counterexample; it is not described as an actual old-runtime GUI trial.
+The legacy test entry `test-native-progress.cjs` now invokes the inline-reader
+runner rather than asserting the retired replay UI. Controlled progress fixtures
+do not establish native-provider compatibility. Separate unit/native results
+and independent review are required before closing a scoped issue.
+
+Still open: authorized room intermediate streaming and threads, input while a
+turn is working, complete native input/menu/permission mapping, installed delivery
+and old-runtime compatibility beyond the recorded fallback paths. No complete
+U17, universal 1:1, zero-latency or zero-error claim follows from these checks.
+
 ## Integrated core acceptance — alpha.55
 
 On 2026-10-21, six runners operate the actual installed Electron/DeepSeek Harness
@@ -1524,3 +1570,24 @@ native testing, the four protected normal profile files remain unchanged, and
 application search finds one ordinary installed bundle. Owned trial processes
 are closed. No private screenshots, native history, tokens or full event payloads
 are published. Existing retained services keep their old observation capability.
+# Message delivery details — development, 2026-10-21
+
+The real Electron application and IPC/native-session service were exercised with
+controlled provider transport. Nine UI groups cover visible human submission before
+ACK, exact payload and target, pending/accepted/uncertain status, mouse and keyboard
+expansion, retained expansion across ACK, finite three-reply handoff payloads,
+recipient filtering, failure, reopen, changed draft and recipient departure.
+There were nine synthetic dispatches, one test window and zero native provider
+processes/model calls. This is UI/transport verification, not a new native API or
+physical IME test. The current installed build is not certified by this source run.
+
+Workspace and retained-input checks pass 104 cases, including pending receipts
+after cold recovery, no replay, accepted receipt surviving sharing revocation,
+exact automatic wrapper, private-history exclusion and shared-history clearing.
+The existing native input route is unchanged. These checks do not close U17's
+complete real-time mapping, working-turn input or full multi-agent message stream.
+Final full suite passes 482 checks without skips. Eleven existing actual Electron
+reading checks also pass. A real mouse selection inside the expanded payload
+survives its native ACK; the receipt updates without replacing that text node.
+Independent review inspected source, callers, complete outputs and owned-window
+evidence. Installation acceptance remains pending for this development increment.

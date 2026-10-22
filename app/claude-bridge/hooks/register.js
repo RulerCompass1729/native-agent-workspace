@@ -13,6 +13,22 @@ let syncingRoot = false;
 let syncRootAgain = false;
 let rootSyncBlocked = false;
 let contextTransitions = false;
+let nativeBlocks = false;
+let activeTurn = null;
+// Only native turn identity + a complete matching final display can authorize
+// a reply body. Raw Stop text must not bypass a display transform.
+const displayTurns = new Map();
+const promptTurns = new Map(), displayTurnLinks = new Map();
+let rootPrompt = null;
+function trimLinks(map) { while (map.size > 64) map.delete(map.keys().next().value); }
+function displayTurn(id, binding) {
+  let turn = displayTurns.get(id);
+  if (!turn || turn.binding !== binding) {
+    turn = { binding, blocks: new Map(), incomplete: false }; displayTurns.set(id, turn);
+    while (displayTurns.size > 8) displayTurns.delete(displayTurns.keys().next().value);
+  }
+  return turn;
+}
 const observations = [];
 let observing = false;
 let observationGap = false;
@@ -22,13 +38,43 @@ function markObservationGap(binding) {
   if (binding && binding.lease === rootBinding?.lease) { observationGap = true; observationGapRevision++; }
 }
 
-function observeAppend($, e, result, binding) {
+function enqueueBlock($, row, binding = rootBinding) {
+  if (!nativeBlocks || !binding || binding !== rootBinding || stopped) return;
+  // No synchronous IO in a display hook. Keep the entire accepted batch; an
+  // overrun is an explicit gap, never a sliced fragment presented as complete.
+  const size = JSON.stringify(row).length;
+  if (size > 500000) { markObservationGap(binding); return; }
+  while (observations.length >= 256 || observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000) {
+    observations.shift(); markObservationGap(binding);
+  }
+  observations.push({ row: { ...row, block: true, sequence: ++binding.observationSequence, epoch: binding.observationEpoch }, binding });
+  if (!observing) { observing = true; $.clock.after(0, () => flushObservations($)); }
+}
+
+function observeAppend($, e, result, binding, turnId) {
   if (!contextTransitions || !binding || stopped || rootBinding !== binding || e.agentId ||
     result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
   const message = result.message;
   if (!message || message.isMeta || !Array.isArray(message.content)) return;
   const text = blocks => typeof blocks === 'string' ? blocks : Array.isArray(blocks)
     ? blocks.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
+  if (nativeBlocks) {
+    // Display IDs and saved transcript IDs are different namespaces. Text is
+    // collected from MessageDisplay only, not guessed equal to an append/Stop.
+    if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
+      for (const block of message.content) if (block?.type === 'tool_use' && typeof block.id === 'string') {
+        enqueueBlock($, { id: `tool:${block.id}`, kind: 'tool', turnId,
+          title: block.name || '工具', input: JSON.stringify(block.input || {}, null, 2), status: 'running' });
+      }
+    } else if (e.door === 'tool-result' && e.origin?.kind === 'tool' && message.type === 'user') {
+      for (const block of message.content) if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        const nonText = Array.isArray(block.content) && block.content.some(b => b?.type !== 'text');
+        enqueueBlock($, { id: `tool:${block.tool_use_id}`, kind: 'tool',
+          title: e.origin.tool || '工具', text: text(block.content), status: block.is_error ? 'failed' : 'complete', incomplete: nonText });
+      }
+    }
+    return;
+  }
   const rows = [];
   if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
     rows.push({ id: result.uuid, kind: 'response', text: text(message.content) });
@@ -144,7 +190,7 @@ async function listen($, ownGeneration) {
             if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
             return;
           }
-          const candidate = { events: [], appends: 0, text: message.text, invalid: foreignSubmissions !== 0 };
+          const candidate = { events: [], turns: [], appends: 0, text: message.text, invalid: foreignSubmissions !== 0 };
           collecting = candidate;
           let result;
           try { result = await $.prompt.submit({ text: message.text, asUser: true }); }
@@ -160,7 +206,8 @@ async function listen($, ownGeneration) {
             ? event.prompt_id : undefined;
           // Acceptance and reply attribution are separate. Missing/ambiguous
           // identity never changes an accepted send into a retryable failure.
-          await request($, '/result', { id: message.id, status: result.drop ? 'blocked' : 'accepted', promptId }, binding);
+          await request($, '/result', { id: message.id, status: result.drop ? 'blocked' : 'accepted', promptId,
+            turnId: promptId && candidate.turns.length === 1 ? candidate.turns[0] : undefined }, binding);
         }
       }
     }
@@ -174,8 +221,9 @@ async function listen($, ownGeneration) {
 
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
-  const result = await request($, '/root-bind', {}, binding);
+  const result = await request($, '/root-bind', { nativeBlocks }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
+  nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
   await listen($, ownGeneration);
 }
@@ -223,8 +271,74 @@ async function syncRoot($) {
 }
 
 export function register(on) {
+  on('classic.MessageDisplay', async ($, e, next) => {
+    const binding = rootBinding;
+    const result = await next(e);
+    try {
+      if (nativeBlocks && !e.agent_id && binding === rootBinding && e.session_id === binding?.sessionId) {
+        const visible = typeof result?.displayContent === 'string' ? result.displayContent : e.delta;
+        // Classic display IDs and mod engine turn IDs are distinct namespaces.
+        // Join through native prompt_id, then pin the display-turn link. A later
+        // typed prompt must not reassign an already streaming display message.
+        const key = `${binding.sessionId}:${e.turn_id}`;
+        let link = displayTurnLinks.get(key);
+        const prompt = promptTurns.get(e.prompt_id);
+        if (!link && prompt?.binding === binding && !prompt.ambiguous) {
+          link = prompt; displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
+        }
+        const turnId = link?.turnId || `display:${e.turn_id}`;
+        const turn = displayTurn(turnId, binding);
+        if (!link || link.promptId !== e.prompt_id) turn.incomplete = true;
+        let block = turn.blocks.get(e.message_id);
+        if (!block) { block = { raw: '', index: -1 }; turn.blocks.set(e.message_id, block); }
+        if (block.index + 1 !== e.index || turn.ended) turn.incomplete = true;
+        block.index = e.index; block.raw += e.delta; block.final = e.final;
+        turn.last = e.message_id;
+        if (turn.blocks.size > 64 || [...turn.blocks.values()].reduce((n, b) => n + b.raw.length, 0) > 500000) {
+          turn.blocks.clear(); turn.incomplete = true;
+        }
+        enqueueBlock($, { id: `display:${e.message_id}`, turnId, displayTurnId: e.turn_id, promptId: e.prompt_id, kind: 'response', index: e.index,
+          delta: visible, status: e.final ? 'complete' : 'streaming' }, binding);
+      }
+    } catch { markObservationGap(binding); }
+    return result;
+  }).catch(($, e, next) => next(e));
+  on('turn.start', ($, e, next) => {
+    if (!e.agentId) {
+      activeTurn = e.turnId;
+      // Native contract: root turn.start follows UserPromptSubmit. Repeated
+      // starts for the same prompt are ambiguous, never a sharing authority.
+      if (rootPrompt?.binding === rootBinding) {
+        const previous = promptTurns.get(rootPrompt.id);
+        promptTurns.set(rootPrompt.id, { binding: rootBinding, turnId: e.turnId, promptId: rootPrompt.id,
+          ambiguous: Boolean(previous && previous.turnId !== e.turnId) }); trimLinks(promptTurns);
+      }
+      if (collecting) collecting.turns.push(e.turnId);
+    }
+    return next(e);
+  }).catch(($, e, next) => next(e));
+  on('turn.complete', async ($, e, next) => {
+    const binding = rootBinding;
+    const result = await next(e);
+    try {
+      if (!e.agentId && binding === rootBinding) {
+        const turn = displayTurns.get(e.turnId), final = turn?.blocks.get(turn.last);
+        // Text equality is only a completeness check inside an explicit native
+        // turn, never a substitute for prompt/turn identity. Forward the display
+        // ID, not the possibly unredacted answer.
+        const finalDisplayId = turn?.binding === binding && !turn.incomplete && final?.final &&
+          typeof e.answer === 'string' && final.raw.trimEnd() === e.answer.trimEnd() ? `display:${turn.last}` : undefined;
+        if (turn) turn.ended = true;
+        enqueueBlock($, { id: `turn:${e.turnId}`, turnId: e.turnId, kind: 'turn', finalDisplayId,
+          text: `${e.reason === 'aborted' ? '原生已中断本轮' : e.reason === 'answer' ? '原生本轮已结束' : '原生本轮未正常完成'}${Number.isFinite(e.durationMs) ? ` · ${(e.durationMs / 1000).toFixed(1)} 秒` : ''}`,
+          status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed' }, binding);
+      }
+    } catch { markObservationGap(binding); }
+    return result;
+  }).catch(($, e, next) => next(e));
   on('session.append', async ($, e, next) => {
     const observationBinding = rootBinding;
+    const observationTurn = activeTurn;
     if (collecting && e.door === 'prompt') {
       collecting.appends++;
       // The native engine pins origin. A previously queued foreign prompt also
@@ -240,7 +354,7 @@ export function register(on) {
     const candidate = collecting;
     try {
       const result = await next(e);
-      try { observeAppend($, e, result, observationBinding); }
+      try { observeAppend($, e, result, observationBinding, observationTurn); }
       catch { markObservationGap(observationBinding); } // Never fail native append.
       return result;
     }
@@ -263,6 +377,7 @@ export function register(on) {
     return next(e);
   });
   on('classic.UserPromptSubmit', async ($, e, next) => {
+    if (!e.agent_id && e.session_id === rootBinding?.sessionId && /^[a-f0-9-]{36}$/i.test(e.prompt_id || '')) rootPrompt = { id: e.prompt_id, binding: rootBinding };
     const candidate = collecting;
     if (candidate) {
       // Count all events, including malformed/unknown identities. Filtering
@@ -280,7 +395,8 @@ export function register(on) {
     if (collecting) collecting.invalid = true;
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
-    contextTransitions = !legacyOnly && nativeVersion === '2.1.306';
+    nativeBlocks = !legacyOnly && ['2.1.307', '2.1.308'].includes(nativeVersion);
+    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
