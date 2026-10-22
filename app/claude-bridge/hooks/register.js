@@ -51,7 +51,7 @@ function enqueueBlock($, row, binding = rootBinding) {
   if (!observing) { observing = true; $.clock.after(0, () => flushObservations($)); }
 }
 
-function observeAppend($, e, result, binding, turnId) {
+function observeAppend($, e, result, binding, turnId, candidate) {
   if ((!contextTransitions && !nativeBlocks) || !binding || stopped || rootBinding !== binding || e.agentId ||
     result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
   const message = result.message;
@@ -64,7 +64,8 @@ function observeAppend($, e, result, binding, turnId) {
     if (legacyOnly && e.door === 'prompt' && message.type === 'user') {
       const nonText = message.content.some(b => b?.type !== 'text');
       enqueueBlock($, { id: `prompt:${result.uuid}`, kind: 'input',
-        text: text(message.content), status: 'complete', incomplete: nonText });
+        text: text(message.content), status: 'complete', incomplete: nonText,
+        ...(candidate === collecting && !candidate?.invalid && candidate?.appends === 1 && candidate?.tag && text(message.content) === candidate.text ? { inputTag: candidate.tag } : {}) });
     }
     // Display IDs and saved transcript IDs are different namespaces. Text is
     // collected from MessageDisplay only, not guessed equal to an append/Stop.
@@ -201,7 +202,7 @@ async function listen($, ownGeneration) {
             if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
             return;
           }
-          const candidate = { events: [], turns: [], appends: 0, text: message.text, invalid: foreignSubmissions !== 0 };
+          const candidate = { tag: message.id, events: [], turns: [], appends: 0, text: message.text, invalid: foreignSubmissions !== 0 };
           collecting = candidate;
           let result;
           try { result = await $.prompt.submit({ text: message.text, asUser: true }); }
@@ -232,7 +233,7 @@ async function listen($, ownGeneration) {
 
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
-  const result = await request($, '/root-bind', { nativeBlocks, nativeQueue: (await $.session.version()).version === '2.1.308' && !legacyOnly }, binding);
+  const result = await request($, '/root-bind', { nativeBlocks, nativeQueue: (await $.session.version()).version === (legacyOnly ? '2.1.302' : '2.1.308') }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
@@ -365,7 +366,7 @@ export function register(on) {
     const candidate = collecting;
     try {
       const result = await next(e);
-      try { observeAppend($, e, result, observationBinding, observationTurn); }
+      try { observeAppend($, e, result, observationBinding, observationTurn, candidate); }
       catch { markObservationGap(observationBinding); } // Never fail native append.
       return result;
     }

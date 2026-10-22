@@ -12,6 +12,11 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.65 adds solo waiting input to those retained Claude sessions, preserving the
+current task and newer drafts. Native and installed checks verify the queued text
+only enters the next request once. It does not add force-send or retained room
+waiting.
+
 Alpha.64 connects inspected retained Claude 2.1.302 sessions to the main reader:
 accepted input, display batches and tool text use the original native process.
 Dual-window, reopen and ended-history native checks pass in source and installed

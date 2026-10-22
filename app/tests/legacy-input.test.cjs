@@ -150,6 +150,30 @@ function oldWindows(t) {
   return { a: open('A'), b: open('B'), session, calls };
 }
 
+for (const change of ['none', 'owner', 'membership', 'context', 'approval', 'human', 'close']) test(`retained queue rechecks ${change} before native authorization`, async t => {
+  const f = oldWindows(t); f.session.state = 'working'; f.session.liveDraft = 'next instruction';
+  await f.a.client.refresh(); let delivered = 0;
+  const bridge = { target: () => ({ queueAvailable: true }), connected: () => true, prepared: () => true, records: [], close() {},
+    async send(record, text, refresh, valid, shared, replyTo, turnId, waiting) {
+      assert.equal(waiting, true); assert.equal(shared, false); assert.equal(turnId, undefined);
+      if (change === 'owner') { f.session.owner = 'B'; f.session.controlRevision++; }
+      if (change === 'membership') f.session.memberRevision++;
+      if (change === 'context') f.session.nativeId = 'different-native';
+      if (change === 'approval') f.session.approval = { id: 'permission' };
+      if (change === 'human') f.session.controlRevision++;
+      if (change === 'close') f.a.client.close();
+      await refresh(); assert.equal(valid(), true); delivered++;
+      await f.a.client.call('draft', 'legacy', 'newer unsent draft');
+      return 'accepted';
+    } };
+  f.a.client.control.legacyInput = bridge;
+  const pending = f.a.client.call('queue', 'legacy', 'next instruction', 'native');
+  if (change === 'none') { assert.equal(await pending, 'accepted'); assert.equal(delivered, 1); assert.equal(f.session.liveDraft, 'newer unsent draft'); }
+  else { await assert.rejects(pending); assert.equal(delivered, 0); }
+  assert.ok(!f.calls.some(([, method]) => ['send', 'queue', 'input'].includes(method)), 'Old terminal/paste transport is never used');
+  await assert.rejects(f.b.client.call('queueShared', 'legacy', 'no implied share', f.session.nativeId));
+});
+
 test('old unguarded draft service cannot receive a former portal owner write after takeover', async t => {
   const f = oldWindows(t);
   await f.b.client.call('claim', 'legacy', 'chat'); await f.b.client.call('draft', 'legacy', 'B new private draft');

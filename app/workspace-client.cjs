@@ -106,6 +106,7 @@ class WorkspaceClient extends EventEmitter {
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           legacyReaderPending: s.provider === 'claude' && legacySubmit && !reader?.initialized,
           legacyShare: legacySubmit,
+          ...(s.provider === 'claude' && legacySubmit ? { queueAvailable: Boolean(bridge.target(s)?.queueAvailable), pendingQueue: bridge.target(s)?.pendingQueue || null } : {}),
           ...(reader?.initialized ? { nativeBlockMapping: true, messages: reader.record.messages,
             ...(reader.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : {}) } : {}),
           ...(bridge?.readerUnavailable?.(s) ? { nativeBlockMapping: true, messages: [{ id: 'retained-reader-unavailable', role: 'system', kind: 'gap', incomplete: true,
@@ -302,6 +303,30 @@ class WorkspaceClient extends EventEmitter {
       const [id, text, nativeId] = args, target = this.route(id), guard = this.operationGuard(target);
       const original = target.state.sessions.find(s => s.id === id);
       const shared = method === 'queueShared';
+      const bridge = this.control.legacyInput;
+      if (!shared && bridge?.target(original)?.queueAvailable) {
+        const expected = { ...original };
+        if (expected.nativeId !== nativeId || expected.state !== 'working') throw Error('原生回合已变化；草稿保留。');
+        return this.intervene(async () => {
+          const manualValid = this.manualGuard(id);
+          const valid = () => {
+            try { guard(); this.authorizeOperation?.(method, args); } catch { return false; }
+            const current = target.state.sessions.find(s => s.id === id);
+            return manualValid() && current?.nativeId === nativeId && current.pid === expected.pid &&
+              current.owner === target.state.owner && current.controlRevision === expected.controlRevision &&
+              current.memberRevision === expected.memberRevision && !current.approval && !current.nativeContextPending &&
+              ['idle', 'working'].includes(current.state) && bridge.target(current)?.queueAvailable;
+          };
+          const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原会话或控制权已变化；草稿保留。'); };
+          await this.pauseExcept(); await refresh();
+          const record = target.state.sessions.find(s => s.id === id);
+          const draft = record.liveDraft, revision = this.control.draftVersions?.get(id) || 0;
+          const tag = await bridge.send(record, text, refresh, valid, false, undefined, undefined, true);
+          if (draft?.trim() === text.trim()) await this.legacyDraft(target, id, '', record, current =>
+            current.liveDraft === draft && (this.control.draftVersions?.get(id) || 0) === revision).catch(() => {});
+          return tag;
+        }, id);
+      }
       if (!target.state.capabilities?.includes(shared ? 'nativeSharedQueue' : 'nativeQueue') || original?.nativeId !== nativeId || (shared && original?.roomId !== 'shared')) throw Error('此连接暂不支持原生等待输入；草稿保留。');
       return this.intervene(async () => {
         const manualValid = this.manualGuard(id), control = original.controlRevision, member = original.memberRevision;

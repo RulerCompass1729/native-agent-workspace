@@ -42,7 +42,8 @@ function installPlugin(cwd) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件路径不安全，未写入插件文件。');
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
-  const previousHooks = new Set(['6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1',
+  const previousHooks = new Set(['069c66cb4889031f0cc460dcbb75d0892cf41835c9bac02e9dbf796cd52c7a40',
+    '6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1',
     '0833cbf4165cc439bfdd04ff7e7676886f5e40d518c47cfda25ba62e3292009a',
     '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6']);
   const upgrades = new Set();
@@ -259,7 +260,7 @@ class LegacyInput extends EventEmitter {
       }
     }
   }
-  async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId) {
+  async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId, waitForNativeTurn = false) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
     const target = this.target(record);
     if (!target?.submission.connected) throw Error('原会话输入连接尚未就绪，草稿已保留。');
@@ -267,11 +268,13 @@ class LegacyInput extends EventEmitter {
     text = text.trim();
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
     if (expectedTurnId !== undefined ? shared || !target.native?.steerAvailable || target.native.pendingSteer : target.submission.pending) throw Error('上一条发送仍待确认，或当前连接无法追加指令。');
+    if (waitForNativeTurn && (shared || !target.queueAvailable)) throw Error('当前连接不支持等待输入；草稿保留。');
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
     if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
     this.records.push(row); this.save(); target.refresh = refresh;
     try {
-      const pending = expectedTurnId !== undefined ? target.native.steer(text, row.id, expectedTurnId, refresh, guard)
+      const pending = waitForNativeTurn ? target.queue(text, row.id, guard)
+        : expectedTurnId !== undefined ? target.native.steer(text, row.id, expectedTurnId, refresh, guard)
         : target.native ? target.native.send(text, row.id, refresh, guard) : target.submission.request(text, row.id, guard);
       this.emit('change'); await pending;
       // Clearing shared text may replace a pending ledger row while native

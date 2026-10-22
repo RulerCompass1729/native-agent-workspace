@@ -20,7 +20,8 @@ test('attach-only reader waits for old work to finish and never starts or contro
   f.record.messages.push({ id: 'last-old-final', role: 'assistant', text: 'finished old work' }); f.record.state = 'idle';
   await bind(f); assert.ok(f.r.record.messages.some(m => m.id === 'last-old-final'));
   assert.equal(f.r.record.pid, process.pid);
-  for (const method of ['send', 'queue', 'stop', 'interrupt', 'clearRoot']) assert.throws(() => f.r[method]());
+  for (const method of ['send', 'stop', 'interrupt', 'clearRoot']) assert.throws(() => f.r[method]());
+  await assert.rejects(f.r.queue('not ready', crypto.randomUUID(), () => true));
 });
 test('native inputs, transformed display and tool output use stable blocks without old final duplicates', async t => {
   const f = fixture(t), b = await bind(f);
@@ -52,4 +53,43 @@ test('unsafe or corrupt projection does not fall back to raw private content', t
   const f = fixture(t); fs.writeFileSync(f.r.filename, '{}', { mode: 0o600 });
   assert.throws(f.create, /identity/);
   fs.chmodSync(f.r.filename, 0o644); assert.throws(f.create, /Unsafe/);
+});
+
+test('retained queue waits without timeout or retry and reconciles only its exact native input tag', async t => {
+  const { EventEmitter } = require('node:events');
+  const f = fixture(t);
+  const b = { sessionId: f.record.nativeId, ...await f.r.bindRoot({ sessionId: f.record.nativeId, nativeBlocks: true, nativeQueue: true }) };
+  const wire = [], response = new EventEmitter(); response.end = body => wire.push(JSON.parse(body));
+  f.r.submission.timeout = 15; f.r.submission.receive(response);
+  const tag = crypto.randomUUID(), text = 'queued native instruction';
+  const done = f.r.queue(text, tag, () => true);
+  assert.equal(f.r.pendingQueue, tag); assert.equal(wire.length, 1);
+  assert.equal(f.r.submission.authorize({ id: tag, text }), true);
+  await new Promise(r => setTimeout(r, 45));
+  assert.equal(f.r.pendingQueue, tag);
+  await assert.rejects(f.r.queue('duplicate', crypto.randomUUID(), () => true));
+  block(f, b, 1, { id: 'prompt:foreign', kind: 'input', turnId: undefined, index: undefined, delta: undefined, text, status: 'complete' });
+  assert.equal(f.r.record.messages.find(m => m.id === tag).status, 'awaiting-native', 'Same text from another ingress is not acceptance');
+  block(f, b, 2, { id: 'prompt:ours', kind: 'input', turnId: undefined, index: undefined, delta: undefined, text, inputTag: tag, status: 'complete' });
+  f.r.submission.result({ id: tag, status: 'accepted' }); await done;
+  assert.equal(f.r.pendingQueue, null);
+  assert.equal(f.r.record.messages.filter(m => m.text === text).length, 2, 'Exactly one native row for each actual input');
+  assert.ok(!f.r.record.messages.some(m => m.id === tag));
+  assert.equal(wire.length, 1);
+  response.emit('close');
+});
+
+test('queued input becomes uncertain on observer close and is never replayed after reopen', async t => {
+  const { EventEmitter } = require('node:events');
+  const f = fixture(t); await f.r.bindRoot({ sessionId: f.record.nativeId, nativeBlocks: true, nativeQueue: true });
+  const wire = [], response = new EventEmitter(); response.end = body => wire.push(JSON.parse(body));
+  f.r.submission.receive(response);
+  const tag = crypto.randomUUID(), done = f.r.queue('preserved queue text', tag, () => true);
+  assert.equal(f.r.submission.authorize({ id: tag, text: 'preserved queue text' }), true);
+  const rejected = assert.rejects(done, /关闭/); f.r.close(); await rejected;
+  f.r = f.create();
+  assert.equal(f.r.pendingQueue, null); assert.equal(f.r.queueAvailable, false);
+  assert.equal(f.r.record.messages.find(m => m.id === tag).status, 'unconfirmed');
+  assert.equal(wire.filter(row => row.id === tag).length, 1);
+  response.emit('close');
 });

@@ -1,5 +1,5 @@
 // Actual alpha.2 backend + Claude 2.1.302 + current Electron. Three loopback
-// responses, zero paid inference. No original profile or global keyboard access.
+// responses (four with NAW_RETAINED_QUEUE=1), zero paid inference. No original profile or global keyboard access.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict'), { fork, execFileSync } = require('node:child_process');
 const { _electron } = require('playwright');
@@ -14,6 +14,7 @@ assert.ok(binary, 'Set NAW_CLAUDE_302 to the retained native executable');
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim(); assert.match(version, /^2\.1\.302\b/);
 const archive = execFileSync('git', ['archive', 'a87653b', 'app', 'package.json'], { cwd: root, maxBuffer: 16 * 1024 * 1024 });
 execFileSync('/usr/bin/tar', ['-x', '-C', old], { input: archive }); fs.symlinkSync(path.join(root, 'node_modules'), path.join(old, 'node_modules'));
+const queueTrial = process.env.NAW_RETAINED_QUEUE === '1', budget = queueTrial ? 4 : 3;
 let child, client, application, page, calls = 0, finishFinal;
 const checks = [], errors = [], sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) { const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label); }
@@ -26,7 +27,7 @@ function block(res, index, item) {
 const server = http.createServer((req, res) => {
   let body = ''; req.on('data', b => body += b); req.on('end', () => {
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":100,"data":[]}'); return; }
-    const number = ++calls; if (number > 3) { res.writeHead(429); res.end(); return; }
+    const number = ++calls; if (number > budget) { res.writeHead(429); res.end(); return; }
     const input = JSON.parse(body); fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'message_start', { message: { id: `msg_retained_${number}`, type: 'message', role: 'assistant', model: input.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
@@ -36,6 +37,7 @@ const server = http.createServer((req, res) => {
       block(res, 0, { type: 'text', text: 'RETAINED_PROGRESS: inspect the local result.\n' });
       block(res, 1, { type: 'tool_use', id: 'toolu_retained', name: 'Bash', input: { command: 'printf "RETAINED_TOOL: 42\\n"', description: 'Print the local fixture' } }); finish('tool_use');
     }
+    if (number === 4) { block(res, 0, { type: 'text', text: 'RETAINED_QUEUED_REPLY: next instruction received.\n' }); finish('end_turn'); }
     if (number === 3) {
       event(res, 'content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
       event(res, 'content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'RETAINED_FINAL_PREFIX: checking the native result.\n' } });
@@ -110,8 +112,27 @@ async function launch() {
   assert.equal(await page.locator('.native-progress').count(), 0);
   fs.writeFileSync(path.join(base, 'streaming.json'), JSON.stringify(await snapshot(), null, 2));
   checks.push('Actual 302 display and tool events stream into attributed main-reader blocks; one visible input and no camera panel');
+  let queuedTag;
+  if (queueTrial) {
+    await until(async () => (await page.locator('#send-button').innerText()) === '等本轮结束后发送 ↑', 'Retained working composer accepts a native waiting instruction');
+    await page.locator('#message-input').fill('Handle this one queued instruction.'); await page.locator('#send-button').click();
+    await until(async () => (await snapshot()).sessions.find(s => s.id === id).pendingQueue, 'Retained waiting receipt');
+    queuedTag = (await snapshot()).sessions.find(s => s.id === id).pendingQueue;
+    await page.locator('#messages').getByText('Handle this one queued instruction.', { exact: true }).waitFor();
+    await sleep(42000);
+    const waiting = (await snapshot()).sessions.find(s => s.id === id);
+    assert.equal(waiting.pendingQueue, queuedTag); assert.equal(waiting.state, 'working'); assert.equal(calls, 3);
+    assert.equal(waiting.messages.find(m => m.id === queuedTag).status, 'awaiting-native');
+    assert.ok(!(await page.locator('#toast').innerText()).includes('超时'));
+    fs.writeFileSync(path.join(base, 'waiting.json'), JSON.stringify(await snapshot(), null, 2));
+    checks.push('Retained native queue waits beyond both old deadlines, without interrupt, retry or extra model request');
+  }
   await page.locator('#message-input').fill('Unsent reader draft'); await sleep(300);
-  await application.close(); application = null; await launch();
+  if (queueTrial) {
+    await page.locator('#terminal-tab').click(); await page.locator('#chat-tab').click();
+    await page.reload(); await page.locator('#new-session').waitFor();
+    assert.equal((await snapshot()).sessions.find(s => s.id === id).pendingQueue, queuedTag);
+  } else { await application.close(); application = null; await launch(); }
   await until(async () => (await snapshot()).sessions.find(s => s.id === id)?.legacySubmit, 'Rebound observer after GUI reopen');
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
   await page.locator(`[data-session-menu="${id}"]`).click();
@@ -120,15 +141,24 @@ async function launch() {
   const secondPage = await secondOpened; await secondPage.locator('#new-session').waitFor();
   finishFinal();
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).messages.some(m => m.kind === 'turn'), 'Native completion after reopen');
+  if (queueTrial) {
+    await until(async () => { const s = (await snapshot()).sessions.find(s => s.id === id); return !s.pendingQueue && s.state === 'idle' && s.messages.some(m => m.text.includes('RETAINED_QUEUED_REPLY')); }, 'Queued instruction actually consumed by original native session');
+    const accepted = (await snapshot()).sessions.find(s => s.id === id);
+    assert.equal(accepted.messages.filter(m => m.text === 'Handle this one queued instruction.').length, 1);
+    assert.equal(accepted.messages.find(m => m.text === 'Handle this one queued instruction.').inputTag, queuedTag);
+    const actual = JSON.parse(fs.readFileSync(path.join(base, 'request-4.json'), 'utf8'));
+    assert.equal(actual.messages.filter(m => m.role === 'user').flatMap(m => typeof m.content === 'string' ? [m.content] : m.content.filter(b => b.type === 'text').map(b => b.text)).filter(t => t === 'Handle this one queued instruction.').length, 1);
+    checks.push('Native request contains queued text once; exact native tag replaces waiting row while preserving newer draft and both windows');
+  }
   const after = (await snapshot()).sessions.find(s => s.id === id);
   assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid);
   assert.equal(after.messages.filter(m => m.text.includes('RETAINED_FINAL_PREFIX:')).length, 1);
   assert.ok(after.messages.some(m => m.text.includes('RETAINED_FINAL_PREFIX:') && m.text.endsWith('42.\n')));
-  assert.equal(calls, 3); assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
+  assert.equal(calls, budget); assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
   await until(async () => (await secondPage.locator('#messages').innerText()).includes('42.'), 'Second window receives new final');
   await secondPage.close();
   fs.writeFileSync(path.join(base, 'completed.json'), JSON.stringify(await snapshot(), null, 2));
-  checks.push('GUI reopen retains native PID/identity, displayed partial and draft; new final updates the same block without duplicate old Stop text');
+  checks.push(`${queueTrial ? 'Renderer reload' : 'GUI reopen'} retains native PID/identity, displayed partial and draft; new final updates the same block without duplicate old Stop text`);
   await page.locator('#terminal-tab').click(); await until(async () => (await page.locator('#terminal-area').innerText()).includes('RETAINED_FINAL_PREFIX:'), 'Original terminal final');
   fs.writeFileSync(path.join(base, 'terminal.txt'), await page.locator('#terminal-area').innerText()); await page.locator('#chat-tab').click();
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'retained-claude-reader.png') }); }
@@ -145,7 +175,7 @@ async function launch() {
   assert.ok((await page.locator('#messages').innerText()).includes('RETAINED_FINAL_PREFIX:'));
   const ended = (await snapshot()).sessions.find(s => s.id === id);
   assert.equal(ended.pid, null); assert.equal(ended.nativeId, before.nativeId); assert.equal(ended.state, 'ended');
-  assert.equal(calls, 3);
+  assert.equal(calls, budget);
   checks.push('Second window receives new output; native exit and ended-history reopen preserve reader without a new process or model turn');
   fs.writeFileSync(path.join(base, 'ended.json'), JSON.stringify(await snapshot(), null, 2));
   assert.deepEqual(errors, []); console.log(JSON.stringify({ checks, nativeVersion: version, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));

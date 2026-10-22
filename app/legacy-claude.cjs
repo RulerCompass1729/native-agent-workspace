@@ -29,6 +29,10 @@ class LegacyClaude extends Claude {
       if (event.kind === 'tool' && !event.input && !this.record.messages.some(m => m.id === `native:${this.record.nativeId}:${event.id}`)) {
         this.gap('收到接入前工具的结果；该工具的起点未被观察，请在原生终端核对。'); return;
       }
+      if (event.kind === 'input' && event.inputTag) {
+        const pending = this.record.messages.find(m => m.id === event.inputTag && m.inputMode === 'queue' && m.nativeId === event.nativeId && m.text === event.text);
+        if (pending) { pending.id = `native:${event.nativeId}:${event.id}`; pending.nativeBlock = true; }
+      }
       if (applyNativeBlock(this.record, event)) { this.scheduleSave(); this.emit('change'); }
     });
     this.on('progress', update => { if (update.kind === 'gap') this.emit('change'); });
@@ -54,11 +58,27 @@ class LegacyClaude extends Claude {
   validRootBinding(message) { return !this.disposed && super.validRootBinding(message); }
   clearRoot() { throw Error('Retained context migration is not supported'); }
   send() { throw Error('Use the retained submission channel'); }
-  queue() { throw Error('Use the retained submission channel'); }
+  get queueAvailable() { return Boolean(!this.disposed && this.initialized && this.nativeQueue && this.rootLease && !this.rootEnding && this.submission.connected); }
+  get pendingQueue() { return this.submission.pending?.waitForNativeTurn ? this.submission.pending.tag : null; }
+  async queue(text, tag, guard) {
+    if (!this.queueAvailable || this.submission.pending || !guard()) throw Error('原生等待输入暂不可用；草稿保留。');
+    const row = { id: tag, role: 'user', kind: 'input', nativeId: this.record.nativeId, text, status: 'awaiting-native', inputMode: 'queue', time: Date.now() };
+    this.record.messages.push(row); this.save(); this.emit('change');
+    try {
+      if (this.storageError) throw Error('等待输入未能保存；没有发送，草稿保留。');
+      const pending = this.submission.request(text, tag, guard, true); this.emit('change');
+      const receipt = await pending;
+      if (row.status === 'awaiting-native') row.status = 'submitted';
+      return receipt;
+    } catch (error) {
+      if (row.status === 'awaiting-native') row.status = 'unconfirmed';
+      throw error;
+    } finally { this.save(); this.emit('change'); }
+  }
   interrupt() { throw Error('Native lifecycle belongs to the original host'); }
   stop() { throw Error('Native lifecycle belongs to the original host'); }
   gap(text) {
-    for (const row of this.record.messages) if (['streaming', 'running'].includes(row.status)) row.status = 'unconfirmed';
+    for (const row of this.record.messages) if (['streaming', 'running', 'awaiting-native'].includes(row.status)) row.status = 'unconfirmed';
     const id = `retained-gap:${this.record.nativeId}`;
     let row = this.record.messages.find(m => m.id === id);
     if (!row) { row = { id, role: 'system', kind: 'gap', time: Date.now() }; this.record.messages.push(row); }
