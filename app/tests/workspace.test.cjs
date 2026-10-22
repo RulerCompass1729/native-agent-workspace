@@ -38,6 +38,58 @@ test('uncertain queued input preserves draft and exact message without automatic
   assert.equal(calls, 1); assert.equal(s.messages.at(-1).status, 'unconfirmed');
   assert.equal(w.snapshot().sessions[0].liveDraft, 'next task'); assert.equal(s.state, 'working');
 });
+test('shared waiting input binds only its next native prompt and preserves the solo draft', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); w.join(id, true); s.state = 'working'; s.pendingTag = 'private-original'; r.queueAvailable = true; r.nativeBlocks = true;
+  w.setDraft(id, 'solo draft', 'owner'); let accept, tag, valid;
+  r.queue = (_text, value, guard) => { tag = value; valid = guard; return new Promise(resolve => { accept = resolve; }); };
+  const pending = w.queue(id, 'shared next task', 'owner', { replyTo: 'discussion-parent' });
+  const source = w.room.messages.find(m => m.id === tag);
+  assert.equal(source.status, 'awaiting-native'); assert.equal(source.replyTo, 'discussion-parent');
+  assert.equal(source.deliveries[0].text, 'shared next task'); assert.ok(valid());
+  r.emit('nativeBlock', { id: 'display:private', nativeId: s.nativeId, kind: 'response', turnId: 'private-turn', promptId: 'private-prompt', text: 'PRIVATE_ORIGINAL_BODY', status: 'streaming' });
+  r.emit('complete', { tag: 'private-original', text: 'PRIVATE_ORIGINAL_BODY' });
+  assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE_ORIGINAL_BODY'));
+  r.emit('submitted', tag);
+  r.emit('replyBound', { tag, nativeId: s.nativeId, turnId: 'queued-turn', promptId: 'queued-prompt' });
+  r.emit('nativeBlock', { id: 'display:next', nativeId: s.nativeId, kind: 'response', turnId: 'queued-turn', promptId: 'queued-prompt', text: 'SHARED_NEXT_BODY', status: 'complete' });
+  r.emit('complete', { tag, messageId: `native:${s.nativeId}:display:next`, text: 'SHARED_NEXT_BODY' });
+  accept(); await pending;
+  assert.equal(w.room.messages.filter(m => m.text === 'SHARED_NEXT_BODY').length, 1);
+  assert.equal(w.room.messages.find(m => m.text === 'SHARED_NEXT_BODY').replyTo, tag);
+  assert.equal(source.deliveries[0].status, 'submitted');
+  assert.equal(w.drafts.get(id), 'solo draft'); assert.equal(w.versions.dispatches, 1);
+});
+for (const change of ['leave', 'takeover', 'clear', 'context', 'approval']) test(`shared waiting input loses permission after ${change} without erasing receipt`, async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); w.join(id, true); s.state = 'working'; r.queueAvailable = true; r.nativeBlocks = true;
+  let accept, valid, tag;
+  r.queue = (_text, value, guard) => { tag = value; valid = guard; return new Promise(resolve => { accept = resolve; }); };
+  const pending = w.queue(id, 'queued public material', 'owner', {});
+  const source = w.room.messages.find(m => m.id === tag);
+  if (change === 'leave') w.join(id, false);
+  if (change === 'takeover') w.claim(id, 'other');
+  if (change === 'clear') w.clearSharedHistory();
+  if (change === 'context') s.nativeId = 'new-native';
+  if (change === 'approval') s.approval = { requestId: 'new-approval' };
+  assert.equal(valid(), false);
+  // Native may already have accepted it before the user changed membership.
+  r.emit('submitted', tag); r.emit('replyBound', { tag, nativeId: s.nativeId, turnId: 'next-turn', promptId: 'next-prompt' });
+  r.emit('nativeBlock', { id: 'display:late', nativeId: s.nativeId, kind: 'response', turnId: 'next-turn', promptId: 'next-prompt', text: 'PRIVATE_LATE_BODY', status: 'complete' });
+  r.emit('complete', { tag, text: 'PRIVATE_LATE_BODY' }); accept(); await pending;
+  assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE_LATE_BODY'));
+  if (change !== 'clear') assert.equal(source.deliveries[0].status, 'submitted');
+  else assert.equal(w.room.messages.length, 0);
+});
+test('unattributed waiting receipt stays visible but cannot share the next private reply', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); w.join(id, true); s.state = 'working'; r.queueAvailable = true; r.nativeBlocks = true;
+  r.queue = async (_text, tag) => { r.emit('submitted', tag); r.emit('unattributed', tag); r.emit('complete', { text: 'PRIVATE_UNKNOWN_REPLY' }); };
+  await w.queue(id, 'waiting instruction', 'owner', {});
+  const source = w.room.messages.find(m => m.text === 'waiting instruction');
+  assert.equal(source.status, 'reply-private'); assert.equal(source.deliveries[0].status, 'submitted');
+  assert.equal(w.forwards.size, 0); assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE_UNKNOWN_REPLY'));
+});
 test('native blocks share the private reader but never silently persist or share tool bodies', async t => {
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
   const s = w.get(id); w.join(id, true); r.nativeBlocks = true;

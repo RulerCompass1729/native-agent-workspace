@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.59 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.60 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,18 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.60 shared waiting increment:** working Claude Code 2.1.308 sessions can
+receive an explicitly addressed room instruction through the same native queue.
+The old private turn is not adopted as shared; only the exact next prompt binds
+its reply. Source actual Electron/CLI checks pass five groups with two loopback
+responses and no paid inference. Membership/control/context/permission/clear and
+missing-parent counterexamples pass; 573 local checks pass with no skips.
+The independent reviewer reproduced and verified the stale discussion-parent fix.
+The installed five groups, strict signature and exact affected payload pass
+independent review. Normal background reopening preserves three original native
+IDs/processes, selection/draft and existing Codex content with zero dispatch. This
+increment does not close U17 or implement force-send/working Codex room steering.
 
 **Installed alpha.59 increment:** the existing solo composer uses Claude Code
 2.1.308's native waiting queue. Actual Electron/CLI checks preserve a running

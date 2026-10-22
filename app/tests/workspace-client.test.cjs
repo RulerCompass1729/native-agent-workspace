@@ -597,3 +597,41 @@ for (const change of ['none', 'context', 'owner', 'intervention', 'approval', 'p
   assert.deepEqual(next.calls.filter(([m]) => m === 'queue'), change === 'none' ? [['queue', 'new', 'next task', 'native-one']] : []);
   assert.equal(next.calls.some(([m]) => ['send', 'input'].includes(m)), false); c.close();
 });
+
+for (const change of ['none', 'context', 'owner', 'intervention', 'approval', 'pending', 'archived', 'leave', 'rejoin']) test(`Claude shared queue router rechecks ${change} after its pause`, async () => {
+  const { c, next } = fixture(); next.real.capabilities.push('nativeSharedQueue');
+  const row = next.real.sessions[0];
+  Object.assign(row, { provider: 'claude', owner: 'view', nativeId: 'native-one', state: 'working', queueAvailable: true, controlRevision: 1, roomId: 'shared', memberRevision: 1 });
+  await c.refresh(); let release, archived = false;
+  c.authorizeOperation = () => { if (archived) throw Error('archived'); };
+  c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+  const pending = c.call('queueShared', 'new', 'next task', 'native-one');
+  assert.equal(typeof release, 'function');
+  if (change === 'context') row.nativeId = 'native-two';
+  if (change === 'owner') row.owner = 'other';
+  if (change === 'intervention') c.control.revision++;
+  if (change === 'approval') row.approval = { requestId: 'new' };
+  if (change === 'pending') row.pendingQueue = 'previous';
+  if (change === 'leave') row.roomId = null;
+  if (change === 'rejoin') row.memberRevision++;
+  if (change === 'archived') archived = true;
+  release(); if (change === 'none') await pending; else await assert.rejects(pending);
+  assert.deepEqual(next.calls.filter(([m]) => m === 'queueShared'), change === 'none' ? [['queueShared', 'new', 'next task', 'native-one', '']] : []);
+  assert.equal(next.calls.some(([m]) => ['send', 'input'].includes(m)), false); c.close();
+});
+
+for (const removed of ['before', 'during', 'never']) test(`shared queued reply checks its discussion parent ${removed} pause`, async () => {
+  const { c, next } = fixture(); next.real.capabilities.push('nativeSharedQueue');
+  Object.assign(next.real.sessions[0], { provider: 'claude', owner: 'view', nativeId: 'native-one', state: 'working', queueAvailable: true, roomId: 'shared', memberRevision: 1 });
+  next.real.room.messages = removed === 'before' ? [] : [{ id: 'parent', role: 'human', text: 'existing discussion' }];
+  await c.refresh(); let release;
+  c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+  const pending = c.call('queueShared', 'new', 'next task', 'native-one', 'parent');
+  if (removed === 'before') { await assert.rejects(pending, /原讨论/); assert.equal(release, undefined); }
+  else {
+    if (removed === 'during') next.real.room.messages = [];
+    release(); if (removed === 'never') await pending; else await assert.rejects(pending, /原讨论/);
+  }
+  assert.deepEqual(next.calls.filter(([m]) => m === 'queueShared'), removed === 'never' ? [['queueShared', 'new', 'next task', 'native-one', 'parent']] : []);
+  c.close();
+});

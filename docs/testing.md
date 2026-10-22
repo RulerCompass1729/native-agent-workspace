@@ -1724,3 +1724,28 @@ reuses the full notices from the previously reviewed alpha.58 archive only after
 verifying its SHA-256 and matching all 153 locked names, versions and integrities.
 All 155 notice/index files are retained; no license is omitted. This is evidence
 for this local artifact, not a new network fallback in the product or repository.
+
+
+## Shared waiting Claude input — alpha.60
+
+`NAW_QUEUE_SHARED=1 node scripts/test-native-queue.cjs` uses the actual Electron
+application and Claude Code 2.1.308 with two canned loopback responses, zero paid
+inference. It drives the actual composer, joins the room, selects the member with
+@, queues a new instruction while the original task runs, waits 42 seconds, changes
+GUI/TUI views, reloads the renderer and reads the complete native request and room
+records. Five groups pass in source and installed application:
+
+- A pending human message and receipt survive both former timeouts, without retry.
+- Navigation/reload keep the original task, native identity and newer room draft.
+- The next native provider request contains the queued text exactly once.
+- Only that prompt's attributed reply enters the shared reader; original private
+  output and the solo draft stay private. Source message shows exact delivery.
+- The same native terminal contains the original and queued inputs and responses.
+
+Local counterexamples cover departure, takeover, clear, context/approval changes,
+unattributed receipt and deleted discussion parents before/during an awaited
+pause. The parent guard defect was independently reproduced and rechecked after
+repair. Full local suite: 573 passed, zero failed/skipped. The private installed
+run also records a success video. These checks verify native mechanics, not
+paid-model behavior, physical input methods, Claude force-send, Codex shared
+steering or complete retained 2.1.302 display compatibility.

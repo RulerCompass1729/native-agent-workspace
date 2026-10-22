@@ -1,8 +1,23 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.59. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.60. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.60 shared waiting input
+
+The existing room composer also offers **等本轮结束后发送** for a working Claude
+Code 2.1.308 session with the new connection. Choose that member with **@** and
+send normally. The current task continues; the original human message shows its
+pending/native receipt, and only the next prompt's verified reply enters the
+shared reader. The current private task and the solo draft remain private.
+Leaving, takeover, context changes and permission waits revoke further sharing.
+If its discussion was cleared before native dispatch, the stale reply is not
+sent. Clearing afterward stops further sharing; already accepted native work
+may continue. No automatic retry or additional model call is introduced.
+
+This covers the waiting operation. Claude force-send, Codex working shared input
+and complete retained Claude 2.1.302 display coverage remain open.
 
 ## Alpha.59 waiting Claude input
 

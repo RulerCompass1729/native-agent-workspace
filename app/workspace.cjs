@@ -232,8 +232,8 @@ class Workspace extends EventEmitter {
     on('history', items => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted')); this.changed(); });
     on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
     on('unattributed', tag => {
-      if (s.pendingTag !== tag) return;
-      s.pendingTag = null;
+      if (s.pendingTag !== tag && !this.forwards.has(tag)) return;
+      if (s.pendingTag === tag) s.pendingTag = null;
       const shared = this.room.messages.find(m => m.id === tag);
       if (shared) shared.status = 'reply-private';
       this.forwards.delete(tag); this.sharedReplies.close(tag, '回复归属未确认');
@@ -398,26 +398,43 @@ class Workspace extends EventEmitter {
     } finally { if (this.pendingDrafts.get(id)?.tag === tag) this.pendingDrafts.delete(id); }
     return tag;
   }
-  async queue(id, text, owner) {
+  async queue(id, text, owner, shared = null) {
     text = cleanText(text);
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
     const s = this.get(id), runtime = this.runtime(id);
+    const replyTo = shared && require('./room-threads.js').replyReference(shared.replyTo);
+    if (shared && s.roomId !== 'shared') throw Error('接收方已离开共同工作。');
     if (s.owner !== owner || s.provider !== 'claude' || s.state !== 'working' || s.approval || !runtime.queueAvailable || runtime.pendingQueue) throw Error('原生会话当前不能接收等待输入，草稿保留。');
     this.pause('真人追加等待输入'); s.controlRevision++;
-    const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId;
+    const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = s.memberRevision;
     const valid = () => this.runtimes.get(id) === runtime && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending &&
-      s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error'].includes(s.state);
+      s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
+      (!shared || (s.roomId === 'shared' && s.memberRevision === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed));
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     runtime.pendingQueue = tag;
     const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'queue' };
+    if (shared) {
+      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, text, status: 'awaiting-native', inputMode: 'queue', time: Date.now(), deliveryTracked: true,
+        ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
+      this.room.messages.push(source); this.forwards.set(tag, { member, control, replyTo });
+      // No running private turn is adopted. Only the next native prompt's
+      // exact receipt can bind this grant; existing output stays private.
+      this.sharedReplies.authorize(s, runtime, tag, source);
+    }
     s.messages.push(message); this.versions.dispatches++; this.changed();
     try {
       await runtime.queue(text, tag, valid);
       message.status = 'submitted';
-      if (s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
+      this.deliveryStatus(tag, 'submitted');
+      if (!shared && s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
       return tag;
     } catch (error) {
       if (message.status !== 'submitted') message.status = 'unconfirmed';
+      if (shared) {
+        this.forwards.delete(tag); this.sharedReplies.close(tag, '接收结果未确认'); this.deliveryStatus(tag, 'unconfirmed');
+        const source = this.room.messages.find(row => row.id === tag);
+        if (source?.status === 'awaiting-native') source.status = 'unconfirmed';
+      }
       throw error;
     } finally { if (runtime.pendingQueue === tag) runtime.pendingQueue = null; this.changed(); }
   }
