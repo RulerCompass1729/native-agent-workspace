@@ -416,3 +416,15 @@ for (const reason of ['working', 'permission', 'member', 'human', 'close']) test
   else await f.a.client.refresh();
   assert.equal(shareAuthority(), reason === 'working');
 });
+
+test('forget also cancels a later session in an already-running restore batch', async t => {
+  const f = fixture(t), bridge = new LegacyInput(f.root); t.after(() => bridge.close());
+  const later = { ...f.record, id: 'later', nativeId: crypto.randomUUID() };
+  f.entry.state.sessions = [f.record, later];
+  fs.writeFileSync(path.join(f.root, 'legacy-links.json'), JSON.stringify([f.record, later].map(r => ({ id: r.id, pid: r.pid, nativeId: r.nativeId, key: '.' }))), { mode: 0o600 });
+  let release; const calls = [];
+  bridge.prepare = async (_entry, record) => { calls.push(record.id); if (record.id === f.record.id) await new Promise(r => { release = r; }); };
+  const restore = bridge.restore([f.entry]); while (!release) await new Promise(r => setImmediate(r));
+  bridge.forgetReader(later); release(); await restore;
+  assert.deepEqual(calls, [f.record.id]); assert.equal(bridge.reader(later), null);
+});

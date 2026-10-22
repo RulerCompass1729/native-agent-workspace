@@ -114,7 +114,9 @@ test('retained observer restores ordered offline output during held submit witho
   assert.equal(binds, 2); assert.equal(polls, 2); assert.equal(submits, 1); assert.equal(receipts.length, 0);
   assert.deepEqual(events.map(row => row.kind), ['input', 'response', 'response', 'turn']);
   assert.equal(events[0].inputTag, tag); assert.equal(events[1].turnId, turnId);
-  assert.deepEqual(f.requests.map(row => row.sequence), [1, 2, 3, 4]);
+  assert.deepEqual(f.requests.map(row => row.sequence), [1, 2, 3, 4, 5]);
+  assert.ok(f.requests.every(row => row.replayed));
+  assert.equal(f.r.rootTurn, null, 'Offline history never authorizes a live idle state');
   assert.equal(session.messages.filter(row => row.role === 'user').length, 1);
   assert.equal(session.messages.find(row => row.role === 'assistant').text, 'visible complete');
   assert.equal(f.clock.length, 0, 'No standing observer poll after queue drains');
@@ -419,4 +421,41 @@ test('a gap or late batch after a valid final display revokes sharing before a d
     r.finishReply(r.pending, { prompt_id: promptId, last_assistant_message: 'Safe display' });
     assert.equal(completed[0].tag, undefined); assert.equal(completed[0].text, '');
   }
+});
+
+for (const legacy of [false, true]) test(`fresh ${legacy ? 'retained' : 'current'} native root interruption releases only its own pending task`, async () => {
+  const f = await mod({ version: legacy ? '2.1.302' : '2.1.308', legacy });
+  const states = [], complete = [], background = [], interrupted = [], turnId = randomUUID(), promptId = randomUUID();
+  f.r.on('state', s => states.push(s)); f.r.on('complete', e => complete.push(e));
+  f.r.on('background', e => background.push(e)); f.r.on('interrupted', e => interrupted.push(e));
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId });
+  await f.invoke('turn.start', { turnId }); await f.clock.shift()();
+  f.r.pending = { tag: 'accepted-input', turnId, accepted: true, promptId };
+  const queued = { tag: 'next-waiting-input' }; f.r.queued = queued;
+  await f.invoke('turn.complete', { turnId, reason: 'aborted' }); await f.clock.shift()();
+  assert.deepEqual(states, ['idle']); assert.equal(f.r.pending, null); assert.equal(f.r.queued, queued);
+  assert.deepEqual(interrupted, [{ turnId, tag: 'accepted-input' }]); assert.deepEqual(complete, []); assert.deepEqual(background, []);
+});
+
+for (const boundary of ['new-turn', 'input', 'permission', 'gap', 'rebind', 'replay', 'end', 'duplicate-start'])
+test(`native interruption cannot override ${boundary}`, async () => {
+  const f = await mod({ version: '2.1.308' }), states = [], first = randomUUID(), next = randomUUID();
+  f.r.on('state', state => states.push(state));
+  await f.invoke('turn.start', { turnId: first }); await f.clock.shift()();
+  if (boundary === 'new-turn') { await f.invoke('turn.start', { turnId: next }); await f.clock.shift()(); }
+  if (['input', 'permission', 'duplicate-start'].includes(boundary)) {
+    await f.invoke(boundary === 'permission' ? 'classic.PermissionRequest' : 'prompt.submit', { session_id: f.r.record.nativeId });
+    await f.clock.shift()();
+    if (boundary === 'duplicate-start') { await f.invoke('turn.start', { turnId: first }); await f.clock.shift()(); }
+  }
+  if (boundary === 'gap') f.r.observeRootGap({ sessionId: f.r.record.nativeId, lease: f.r.rootLease, epoch: f.r.observationEpoch });
+  if (boundary === 'rebind') f.r.bindRoot({ sessionId: f.r.record.nativeId, nativeBlocks: true });
+  if (boundary === 'end') { f.r.contextEnding(); states.length = 0; }
+  if (boundary === 'replay') {
+    const body = { block: true, sessionId: f.r.record.nativeId, lease: f.r.rootLease, epoch: f.r.observationEpoch,
+      sequence: 2, id: 'control:turn-start', kind: 'control', turnId: next, status: 'running', replayed: true };
+    f.r.observeRoot(body);
+    f.r.observeRoot({ ...body, sequence: 3, id: 'turn:' + next, kind: 'turn', status: 'interrupted' });
+  } else { await f.invoke('turn.complete', { turnId: first, reason: 'aborted' }); await f.clock.shift()(); }
+  assert.ok(!states.includes('idle'));
 });

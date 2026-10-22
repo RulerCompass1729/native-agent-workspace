@@ -2113,3 +2113,46 @@ identity and private draft preservation. Two Claude task responses, two Codex ta
 responses and one native title response are fixed on loopback; paid inference is
 zero. The successful raw app recording and a slower playback copy remain local.
 This verifies native client/UI mechanics, not hosted-model reasoning quality.
+
+
+## Native interruption and recovery — alpha.71
+
+`scripts/test-native-concurrent.cjs` with `NAW_CONCURRENT_INTERRUPT=1` exercises
+two real native providers in the actual Electron UI, using only fixed loopback
+SSE responses. Current Claude 2.1.308 uses keyboard Escape; current Codex 0.163.0
+uses the existing graphical interrupt. With `NAW_CONCURRENT_RETAINED=1` and the
+inspected Claude 2.1.302 binary, both interruptions use the actual native terminal
+keyboard. They are distinct acceptance cases; a GUI-created empty Codex thread
+has no rollout to resume before its first input, so the test never creates a
+hidden seed task merely to attach a terminal.
+
+Five source groups pass for both connections: concurrent attributed streaming,
+Claude interruption while Codex continues, Codex interruption, explicit Claude
+native recovery with draft/private-output preservation, then graphical sending
+to the original two sessions. Native partial text/status, identity, drafts,
+acceptance receipts and four Portal dispatches are checked. Five native task
+responses plus at most one native title response are local fixed data, zero paid
+inference; this is not hosted model reasoning or a physical keyboard test.
+
+Claude's native log explicitly refuses plugin submit after Stop until human
+native input. The composer explains this limitation and preserves drafts; it
+does not synthesize input or resend. `NAW_CONCURRENT_REOPEN=1` additionally checks
+that the pause survives whole-application exit rather than only renderer reload.
+Independent review of the first installed run exposed B28: the private Codex
+partial reply and interrupted boundary vanished after full GUI exit, even though
+the room retained them. The old room-only assertion did not establish private
+history preservation. The test now checks exact private row IDs, text and status,
+opens the actual solo reader after full reopening, and checks again after another
+GUI task. Source and installed six-group runs pass after the cache repair; native
+history reconciliation keeps the interrupted reply before later turns. All 751
+local checks pass without skips, including unreadable/unsafe caches, write failure,
+ended-record removal, native history ordering and no routing from imported rows.
+A second independent counterexample caught a pending connection recreating a
+forgotten cache. Delayed loaded/history responses with and without an old cache
+now reject without republishing cache/index/reader/target; queued restoration
+also respects removal. The independent four-case counterexample passes.
+All 48 installed runtime files match and post-native strict signature passes.
+Normal hidden reopening also retains the original three native processes, current
+model, drafts, input connections and selection with zero dispatch. Successful
+private recordings include the complete pre-exit and post-reopen UI journeys.
+Final independent source and installed-artifact review passes for this scope. Full U17 remains open.

@@ -197,7 +197,7 @@ async function refreshLegacyObserver($, ownGeneration) {
     // still go to its old credential, never to this new observer.
     Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 });
     for (const entry of observations) if (entry.binding === previous) {
-      entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence };
+      entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence, replayed: true };
     }
     if (observerBindRequest === pending) observerBindRequest = null;
   };
@@ -275,7 +275,7 @@ async function listen($, ownGeneration) {
           if (stopped || generation !== ownGeneration || await $.session.id() !== binding.sessionId) return;
           if (stopped || generation !== ownGeneration) return;
           if (foreignRevision !== intentRevision || foreignSubmissions) {
-            await request($, '/result', { id: message.id, status: 'blocked' }, binding);
+            await request($, '/result', { id: message.id, status: 'blocked', reason: 'input-changed' }, binding);
             if (!stopped && generation === ownGeneration) $.clock.after(0, () => listen($, ownGeneration));
             return;
           }
@@ -295,7 +295,7 @@ async function listen($, ownGeneration) {
             ? event.prompt_id : undefined;
           // Acceptance and reply attribution are separate. Missing/ambiguous
           // identity never changes an accepted send into a retryable failure.
-          await request($, '/result', { id: message.id, status: result.drop ? 'blocked' : 'accepted', promptId,
+          await request($, '/result', { id: message.id, status: result.drop ? 'blocked' : 'accepted', reason: result.drop ? 'native-rejection' : undefined, promptId,
             turnId: promptId && candidate.turns.length === 1 ? candidate.turns[0] : undefined }, binding);
         }
       }
@@ -365,7 +365,7 @@ export function register(on) {
   on('classic.PermissionRequest', ($, e, next) => {
     // Ordered with display observations, before native permission handling.
     // No permission decision or tool payload is copied into the shared room.
-    if (legacyOnly && e.session_id === rootBinding?.sessionId) enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete' });
+    if (!e.agent_id && e.session_id === rootBinding?.sessionId) enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete' });
     return next(e);
   }).catch(($, e, next) => { markObservationGap(rootBinding); return next(e); });
   on('classic.MessageDisplay', async ($, e, next) => {
@@ -403,6 +403,7 @@ export function register(on) {
   on('turn.start', ($, e, next) => {
     if (!e.agentId) {
       activeTurn = e.turnId;
+      enqueueBlock($, { id: 'control:turn-start', kind: 'control', turnId: e.turnId, promptId: rootPrompt?.id, status: 'running' });
       // Native contract: root turn.start follows UserPromptSubmit. Repeated
       // starts for the same prompt are ambiguous, never a sharing authority.
       if (rootPrompt?.binding === rootBinding) {
@@ -466,7 +467,7 @@ export function register(on) {
     foreignSubmissions++;
     foreignRevision++;
     if (collecting) collecting.invalid = true;
-    if (legacyOnly) enqueueBlock($, { id: 'control:input', kind: 'control', status: 'complete' });
+    enqueueBlock($, { id: 'control:input', kind: 'control', status: 'complete' });
     try { return await next(e); }
     finally { foreignSubmissions--; }
   }).catch(async ($, e, next) => {

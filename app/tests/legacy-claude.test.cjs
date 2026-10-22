@@ -263,3 +263,27 @@ test('receipt save failure preserves uncertainty and blocks further dispatch', a
   await assert.rejects(f.bridge.send(f.record, 'another task', async () => {}, () => true), /无法读取/);
   assert.equal(f.wire.length, 0);
 });
+
+
+test('retained native interruption blocks plugin sends until a fresh native start, including after reopen', async t => {
+  const f = await queueRouter(t);
+  f.event({ id: 'control:turn-start', kind: 'control', turnId: 'A', status: 'running' });
+  f.event({ id: 'turn:A', kind: 'turn', turnId: 'A', status: 'interrupted' });
+  assert.equal(f.router.snapshot().sessions[0].state, 'idle');
+  assert.equal(f.router.snapshot().sessions[0].nativeInputRequired, true);
+  for (const method of ['send', 'forward', 'queue', 'queueShared']) await assert.rejects(f.router.call(method, f.record.id, 'must stay in draft', f.record.nativeId));
+  assert.equal(f.wire.length, 0); assert.equal(f.record.liveDraft, 'PRIVATE DRAFT');
+  f.r.submission.status(false);
+  assert.equal(f.router.snapshot().sessions[0].nativeInputRequired, true, 'Saved native pause remains visible while reconnecting');
+  assert.equal(f.router.snapshot().sessions[0].chatAvailable, false);
+  f.r.submission.status(true);
+  f.r.save(); const restored = f.create(); assert.equal(restored.nativeInputRequired, true);
+  f.event({ id: 'control:turn-start', kind: 'control', turnId: 'A', status: 'running' });
+  assert.equal(f.r.nativeInputRequired, true, 'Duplicate start never removes the native pause');
+  f.event({ id: 'control:turn-start', kind: 'control', turnId: 'B', status: 'running', replayed: true });
+  assert.equal(f.r.nativeInputRequired, true, 'Replayed start cannot reopen input');
+  f.event({ id: 'control:turn-start', kind: 'control', turnId: 'C', status: 'running' });
+  assert.equal(f.r.nativeInputRequired, false);
+  f.event({ id: 'turn:A', kind: 'turn', turnId: 'A', status: 'interrupted' });
+  assert.equal(f.r.nativeInputRequired, false, 'Old interruption cannot pause newer work');
+});

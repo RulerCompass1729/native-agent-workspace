@@ -197,6 +197,7 @@ function soloAction(s) {
     ? { kind: 'resume', label: '继续原生会话', hint: '记录和草稿已保留；恢复不会重发旧任务。' }
     : { kind: 'none', label: '暂不可发送', hint: '请检查原生会话状态。记录和草稿保留，不会自动重发。' };
   if (s.owner !== owner) return { kind: 'claim', label: '接管此窗口', hint: '此窗口只读。接管后继续使用原会话，草稿保留。' };
+  if (s.nativeInputRequired) return { kind: 'terminal', label: '打开原生终端', hint: 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；这里的草稿保留，不会自动发送。' };
   if (s.chatAvailable === false && s.legacyInputEligible && s.provider === 'codex') return { kind: 'connect', label: '接通原会话输入', hint: '连接正在运行的原生 Codex 会话，保留上下文、模型与权限设置；不会新建对话。' };
   if (s.chatAvailable === false && s.legacyInputEligible) return s.legacyInputPrepared
     ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
@@ -215,10 +216,10 @@ function soloAction(s) {
 function renderComposer(s) {
   renderDraftRecovery(s?.id);
   const action = soloAction(s), send = $('send-button');
-  const legacyDraft = s?.legacyInputEligible && s.owner === owner && !disconnected && !s.archived && ['connect', 'terminal'].includes(action.kind);
+  const legacyDraft = (s?.legacyInputEligible || s?.nativeInputRequired) && s.owner === owner && !disconnected && !s.archived && ['connect', 'terminal'].includes(action.kind);
   $('message-input').readOnly = action.kind !== 'send' && !legacyDraft;
   $('message-input').disabled = false; // Saved drafts remain selectable/copyable.
-  $('message-input').placeholder = action.kind === 'send' ? '直接说你想做什么…' : legacyDraft ? '可以先写草稿；接通原会话后发送。' : '草稿保留在这里；请使用下方操作继续。';
+  $('message-input').placeholder = action.kind === 'send' ? '直接说你想做什么…' : legacyDraft ? '可以继续编辑草稿。' : '草稿保留在这里；请使用下方操作继续。';
   send.textContent = action.label; send.type = action.kind === 'send' ? 'submit' : 'button';
   send.disabled = action.kind === 'none' || (action.kind === 'send' && (s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : s.state !== 'idle' || s.pendingTag)) || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
   $('compose-hint').textContent = inputRecoveries.get(s?.id)?.text.value ? '上一段原生输入未确认。草稿可继续编辑；请在原生终端查看保留的文字。' : pendingMode?.id === s?.id ? '正在切换输入方式，可以先编辑草稿。' : action.hint;
@@ -635,9 +636,9 @@ function share(text) {
 }
 function updateSharingControls() {
   const target = members().find(s => s.id === $('share-recipient').value);
-  $('confirm-share').disabled = Boolean(sharePending) || !$('share-text').value.trim() || !target || target.shareAvailable === false || target.chatAvailable === false || disconnected;
+  $('confirm-share').disabled = Boolean(sharePending) || !$('share-text').value.trim() || !target || target.nativeInputRequired || target.shareAvailable === false || target.chatAvailable === false || disconnected;
   $('confirm-share').textContent = sharePending ? '发送中…' : '发送这段内容';
-  $('share-help').textContent = sharePending ? '正在发送刚才确认的内容；你可以继续编辑，新的修改不会随这次发送。' : target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
+  $('share-help').textContent = sharePending ? '正在发送刚才确认的内容；你可以继续编辑，新的修改不会随这次发送。' : target?.nativeInputRequired ? 'Claude 已停止本轮；请在原生终端输入一次后继续，所选内容保留。' : target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
 }
 function visibleSelectionTerminal() {
   const s = current(); if (!s || s.archived) return null;
@@ -851,14 +852,14 @@ function render() {
       const recipient = people.find(s => s.id === $('recipient').value);
       $('mention-button').textContent = recipient ? `@ ${participantLabel(recipient)} ⌄` : '@ 选择成员';
       $('mention-button').title = recipient ? `接收者：${participantLabel(recipient)}；点击更换` : '选择接收者，也可以在消息中输入 @';
-      const nativeRoute = recipient && (recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient));
+      const nativeRoute = recipient && (recipient.nativeInputRequired || recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient));
       $('shared-input').readOnly = Boolean(nativeRoute);
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
       $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : roomSteerAvailable(recipient) ? '追加指令 ↑' : '发送 ↑';
       const recipientPending = roomPendingRecipients.has(recipient?.id);
       const unavailable = roomSubmitting || recipientPending || disconnected || !$('shared-input').value.trim();
       const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
-      const ready = s => s && s.state === 'idle' && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
+      const ready = s => s && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
       $('forward-button').disabled = nativeRoute ? roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
       $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || !safeHandoffs || Boolean(threadUnsupported);
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
@@ -866,7 +867,7 @@ function render() {
       if (roomSteerAvailable(recipient)) $('run-help').textContent += ' · 追加到当前原生回合；接收后的新消息块进入共享记录，先前内容不补发。';
       if (recipient?.legacyShare && !recipient.legacySharedReply) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
-      if (nativeRoute) $('run-help').textContent = '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
+      if (nativeRoute) $('run-help').textContent = recipient?.nativeInputRequired ? 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；共享草稿保留，不会自动发送。' : '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
       if (threadUnsupported) $('run-help').textContent = roomThreads.rows.has(roomReplyTo) ? '此连接尚不支持讨论回复。草稿保留；取消回复可作为新消息发送。' : '原讨论已移除。草稿保留，请先取消回复。';
       $('pause-button').textContent = pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
       $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || (!pendingRun && run?.status !== 'running');
@@ -1297,7 +1298,7 @@ function roomSteerAvailable(s) {
   return Boolean(s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && (s.legacySharedSteer || s.serviceCapabilities?.includes('nativeSharedSteer')));
 }
 function roomQueueAvailable(s) {
-  return Boolean(s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && (s.legacySharedQueue || s.serviceCapabilities?.includes('nativeSharedQueue')));
+  return Boolean(!s?.nativeInputRequired && s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && (s.legacySharedQueue || s.serviceCapabilities?.includes('nativeSharedQueue')));
 }
 function handoffCandidates(firstId) {
   const first = members().find(s => s.id === firstId);
@@ -1305,7 +1306,7 @@ function handoffCandidates(firstId) {
   return members().filter(s => {
     const caps = s.serviceCapabilities || state.capabilities || [];
     return s.handoffGroup === first.handoffGroup && caps.includes('boundedReplyHandoffs') &&
-      s.state === 'idle' && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false &&
+      s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false &&
       ![s.background, s.scheduled].some(n => Number.isSafeInteger(n) && n > 0);
   });
 }

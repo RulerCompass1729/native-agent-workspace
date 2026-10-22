@@ -1,6 +1,6 @@
 # Local alpha privacy and release conditions
 
-As of 2026-10-19. The macOS alpha runs locally. There is no product account
+As of 2026-10-22. The macOS alpha runs locally. There is no product account
 system, cloud sync, analytics service, remote crash upload or shell model call.
 The renderer permits network requests only to its local DSH host. The UI host
 mounts an explicit UI composition; model/tool/account/telemetry plugins are not
@@ -58,12 +58,17 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   shared records strips the selected rows' text/name/sharing flag while retaining
   dispatch accounting. A later submission is not part of that earlier clear.
   Provider history and material already delivered to another agent remain separate.
-- legacy-reader-*.json stores the explicitly connected retained Claude reader's
-  private local projection: native/process identity, accepted inputs, displayed
+- legacy-reader-*.json stores explicitly connected retained Claude and Codex
+  private local projections: native/process identity, accepted inputs, displayed
   response text and turn/gap metadata. It is atomically saved with owner-only
   permissions. Volatile tool bodies are excluded. Invalid or missing projection
   data after attachment cannot silently fall back to the old raw-response cache.
-  Removing an ended application record removes its projection and connection
+  Observed Codex partial replies and interrupted turn boundaries survive GUI exit
+  even when native history omits them. Reopening never renews a sharing grant,
+  resumes a task or sends a model request. The cache is limited to 64 MiB per
+  native session; write failures remain visible, with the previous file intact.
+  This is a local display copy, not an edit to provider history or a crash-proof
+  backup. Removing an ended application record removes its projection and connection
   metadata; native-provider history and separately shared room records remain.
 - room-state.json contains the room name, human-written shared notes and their
   saved versions, confirmed membership events, archive indexes and the original
