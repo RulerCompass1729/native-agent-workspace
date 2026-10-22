@@ -189,6 +189,30 @@ async function run() {
   assert.equal(await page.locator('#message-input').inputValue(), draft);
   await shot('paused-exchange-private-result');
   checks.push('Finite two-session exchange → permission pause → exact original session → one visible approval → locate private result with existing search; result enters viewport, system authorship and invalid sharing stay intact');
+  // A new explicit share is independent of the paused automatic authorization.
+  // Preview/cancel is observation only; confirmation delivers only this selection.
+  const checkedMessage = (await snapshot()).sessions.find(s => s.id === b).messages.find(m => m.text === checked);
+  const checkedRow = page.locator(`#messages [data-message-id="${checkedMessage.id}"]`);
+  await checkedRow.getByRole('button', { name: '选择并分享', exact: true }).click();
+  await page.locator('#share-text').fill('核验结果：合计 75 元，人均 25 元。');
+  await page.locator('#share-recipient').selectOption(a);
+  await page.locator('#cancel-share').click();
+  assert.equal((await native()).sends.length, 4);
+  assert.equal((await snapshot()).room.run.status, 'paused');
+  await checkedRow.getByRole('button', { name: '选择并分享', exact: true }).click();
+  const selectedCheck = '核验结果：合计 75 元，人均 25 元。请确认这一结论。';
+  await page.locator('#share-text').fill(selectedCheck);
+  await page.locator('#share-recipient').selectOption(a);
+  await page.locator('#confirm-share').click();
+  await until(async () => (await native()).sends.length === 5, 'New explicit share after permission pause');
+  assert.deepEqual((await native()).sends.at(-1), { id: a, text: selectedCheck });
+  const acceptedCheck = '确认预算结论，可以继续安排。';
+  await native('release', { text: acceptedCheck });
+  await until(async () => (await snapshot()).room.messages.some(m => m.text === acceptedCheck), 'Only newly authorized reply shared');
+  assert.equal((await snapshot()).room.run.status, 'paused');
+  assert.equal((await snapshot()).room.messages.some(m => m.text === checked), false);
+  assert.equal(await page.locator('#message-input').inputValue(), draft);
+  checks.push('Cancel then explicitly share a selected private result after permission pause: one exact new delivery, no revival of the old exchange or automatic full-result disclosure');
   await page.locator(`[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).archived, 'Session archived');
   await room();
@@ -206,10 +230,10 @@ async function run() {
   assert.deepEqual(after.room.messages, before.room.messages); assert.equal(after.room.notes, before.room.notes);
   await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
   assert.equal(await page.locator('#message-input').inputValue(), draft);
-  const log = await native(); assert.equal(log.sends.length, 4); assert.equal(log.modelCalls, 0); assert.deepEqual(errors, []);
+  const log = await native(); assert.equal(log.sends.length, 5); assert.equal(log.modelCalls, 0); assert.deepEqual(errors, []);
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
-  checks.push('Close/reopen retains history, local decision, private draft and native identities; one hidden non-focusable window, four authorized synthetic submissions and no model calls');
+  checks.push('Close/reopen retains history, local decision, private draft and native identities; one hidden non-focusable window, five authorized synthetic submissions and no model calls');
   console.log(JSON.stringify({ checks, errors, syntheticDispatches: log.sends.length, modelCalls: log.modelCalls, nativeProcesses: log.nativeProcesses, windows, profile }, null, 2));
 }
 run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(async () => {

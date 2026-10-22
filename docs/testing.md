@@ -1,5 +1,49 @@
 # Bounded testing
 
+## Integrated core acceptance — alpha.55
+
+On 2026-10-21, six runners operate the actual installed Electron/DeepSeek Harness
+application, sequentially with isolated profiles. Provider events and replies are
+controlled transport fixtures; these are not new native reasoning trials. The
+main scenarios use a three-person travel budget (75 total, 25 each) and a weekly
+study plan (35 minutes each day, 175 over five days).
+
+| Runner | User path and checked boundary |
+| --- | --- |
+| `test-desktop-workflow.cjs` | Preview material → explicit ordered three-session task → exact result copy → detach → private draft → archive/restore → app reopen. Both provider arrangements, duplicate labels, an excluded member, save failure and delayed picker/ownership loss pass. File-picker selections and the result file are controlled fixtures. |
+| `test-collaboration.cjs` | Actual pointer drag-in/out, cancelled/invalid/duplicate drops, keyboard `@`, exact recipient, notes, rename, archive/restore and late private results. Shared-history removal preserves native records; no hidden dispatch. |
+| `test-six-session-workflow.cjs` | Six independent sessions, ordered reply cap, departure during work, reopening, an unrelated permission request and a pending private acknowledgement. No wrong recipient, private-context spill or automatic replay. |
+| `test-bounded-away.cjs` | Close UI during an authorized exchange → completion at its reply cap → reopen. Error and explicit pause keep later results private; pause does not pretend to stop accepted native work. |
+| `test-graphical-followthrough.cjs` | Native confirmation/intervention → find private result → edit/select share → local note/search → explicit graphical approval → private result → cancel/reopen sharing → one newly authorized delivery → archive/restore/reopen. The old finite run remains paused and the unsent draft survives. |
+| `test-progress-reading.cjs` | Read/scroll a private result → switch sessions, GUI/TUI and room membership → retain expansion and reading position. A newer gesture defeats delayed restoration; a retired connection/item loses stale state. The held outer-container gesture uses a synthetic DOM event; other navigation uses Electron mouse/keyboard actions. |
+
+All six complete without renderer errors. Together they make 32 explicitly
+controlled synthetic submissions and no provider model call. The added
+follow-through branch makes five submissions in that runner: cancelling its
+preview sends nothing, confirming sends the exact selected text once, and the
+new reply never revives the paused automatic exchange. This extends the earlier
+four-submission M3 evidence without rewriting that historical result.
+
+Previously reviewed real native task/identity evidence is retained under
+[M1](acceptance/desktop-workflow.md#observed-outcome--alpha44),
+[native progress](#native-claude-intermediate-observation--alpha54) and
+[session continuity](acceptance/session-continuity.md). Runtime code is unchanged
+in this checkpoint. The previously observed natural ten-minute deadline is
+reused; the new installed away runner does not fast-forward or repeat it.
+
+Final artifact checks match all 41 shipped source files, verify the installed
+bundle's strict signature, retain hashes of four protected normal-profile files
+and find one ordinary application entry. No owned test runner remains. A short
+one-frame-per-second recording and screenshots of the installed task are retained
+privately; they are application frames, not physical macOS/IME evidence.
+
+This closes only the supported local-core path after independent review. Outside
+live-session attachment, Claude outside history/native `/resume` synchronization,
+full active-fleet cold restoration and official provider Desktop synchronization
+remain open. Multi-level rooms are parked design research, and public installer
+distribution remains deferred. No universal compatibility, full cost parity or
+security certification is inferred from this acceptance.
+
 ## Running-result reading — alpha.55
 
 An actual Electron reproduction on alpha.54 lost result expansion and its inner

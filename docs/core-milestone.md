@@ -1,5 +1,14 @@
 # Core product acceptance
 
+Latest integrated checkpoint: **alpha.55, 2026-10-21**. The currently supported
+local single/shared-session workflow passes six installed-application journeys,
+including private-result follow-through after a permission pause. Independent
+final source/artifact review passes; [evidence and exact limits](testing.md#integrated-core-acceptance--alpha55)
+distinguish real application interaction, controlled provider transport and
+reused native task evidence. This checkpoint introduces no runtime change or
+additional product feature. M5 live entry and the wider product vision are not
+declared complete by this local-core acceptance.
+
 Active scope authorized 2026-10-18 after alpha.22 solo acceptance. This supersedes
 the earlier pause on collaboration expansion; the acceptance below defines its local-trial completion boundary.
 

@@ -5,6 +5,13 @@ The accepted core increment is defined in [core-milestone.md](core-milestone.md)
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
+**Integrated acceptance, 2026-10-21:** the installed alpha.55 passes the
+supported solo/shared daily-use journey in six actual Electron runners, including
+permission interruption and a new explicit share without reviving the paused
+exchange. Final independent source/artifact review passes. This is a core local-trial gate,
+not completion of M5 live attachment or every product goal. No runtime change or
+new installer is needed for this checkpoint. See [combined evidence](testing.md#integrated-core-acceptance--alpha55).
+
 **Current increment:** alpha.55 preserves private running-result expansion and
 reading position across session, view and membership changes. Source and installed
 Electron checks cover five groups, including delayed observation and retired
@@ -59,11 +66,12 @@ tests the actual affected interface and obtains independent review; later rows
 remain queued. Existing accepted checks are reused unless a change invalidates
 their evidence. Planning itself authorizes no new provider test call.
 
-Multi-level rooms and cross-parent child communication remain a design track,
-not a new runtime or prerequisite for ordinary collaboration. The [research and
+Multi-level rooms and cross-parent child communication are parked for possible
+future design research at the user's request, outside the current implementation
+queue. They are not a prerequisite for ordinary collaboration. The [research and
 entry conditions](scoped-collaboration.md) separate native ownership, membership
 and message authorization. Existing daily-use reliability has priority; child
-addressability must be verified before a two-space routing pilot.
+addressability must be verified before any future two-space routing pilot.
 
 | Order | Milestone | User outcome and exit condition |
 | --- | --- | --- |
