@@ -851,14 +851,15 @@ function render() {
       const nativeRoute = recipient && (recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient));
       $('shared-input').readOnly = Boolean(nativeRoute);
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
-      $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : '发送 ↑';
+      $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : roomSteerAvailable(recipient) ? '追加指令 ↑' : '发送 ↑';
       const unavailable = roomSubmitting || disconnected || !$('shared-input').value.trim();
       const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
       const ready = s => s && s.state === 'idle' && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
-      $('forward-button').disabled = nativeRoute ? roomSubmitting || disconnected : unavailable || (!ready(recipient) && !roomQueueAvailable(recipient)) || Boolean(threadUnsupported);
+      $('forward-button').disabled = nativeRoute ? roomSubmitting || disconnected : unavailable || (!ready(recipient) && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
       $('run-button').disabled = unavailable || !recipient || !ready(recipient) || run?.status === 'running' || !safeHandoffs || Boolean(threadUnsupported);
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
       if (roomQueueAvailable(recipient) || recipient?.pendingQueue) $('run-help').textContent += ' · 等原生下一轮接收；当前工作继续，先前私人内容不会加入共享记录。';
+      if (roomSteerAvailable(recipient)) $('run-help').textContent += ' · 追加到当前原生回合；接收后的新消息块进入共享记录，先前内容不补发。';
       if (recipient?.legacyShare) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
       if (nativeRoute) $('run-help').textContent = '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
@@ -1267,7 +1268,7 @@ async function submitRoom(automatic) {
   const submission = { automatic: Boolean(automatic), recipientName: participantLabel(recipient), cancelling: false, cancelRequested: false };
   roomSubmitting = submission; render();
   try {
-    const receipt = await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
+    const receipt = await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
     if (submission.cancelRequested || receipt?.contextChanged) return;
     if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
   }
@@ -1285,6 +1286,9 @@ $('forward-button').onclick = () => {
   if (!recipient) return;
   if (nativeUsable(recipient)) selectRoom(recipient.id); else select(recipient.id, 'chat');
 };
+function roomSteerAvailable(s) {
+  return Boolean(s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && s.serviceCapabilities?.includes('nativeSharedSteer'));
+}
 function roomQueueAvailable(s) {
   return Boolean(s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && s.serviceCapabilities?.includes('nativeSharedQueue'));
 }

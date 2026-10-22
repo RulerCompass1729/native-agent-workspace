@@ -243,7 +243,7 @@ class WorkspaceClient extends EventEmitter {
     this.authorizeOperation?.(method, args);
     // Capture the context displayed when the human acted, before refresh,
     // pause or an earlier private ACK can yield to a native /clear.
-    const replyTo = ['forward', 'run', 'queueShared'].includes(method) ? require('./room-threads.js').replyReference(args[method === 'run' ? 6 : 3]) : '';
+    const replyTo = ['forward', 'run', 'queueShared', 'steerShared'].includes(method) ? require('./room-threads.js').replyReference(args[method === 'run' ? 6 : method === 'steerShared' ? 4 : 3]) : '';
     const replyGuard = () => {
       if (replyTo && !this.snapshot().room.messages.some(m => m.id === replyTo)) throw Error('原讨论记录已移除；草稿保留，没有发送。');
     };
@@ -298,20 +298,23 @@ class WorkspaceClient extends EventEmitter {
         return target.client.call(method, id, text, nativeId, ...(shared ? [replyTo] : []));
       });
     }
-    if (method === 'steer') {
+    if (method === 'steer' || method === 'steerShared') {
       const [id, text, nativeId, turnId] = args, target = this.route(id), guard = this.operationGuard(target);
       const original = target.state.sessions.find(s => s.id === id);
       if (typeof turnId !== 'string' || !turnId || turnId.length > 160 || original?.nativeId !== nativeId) throw Error('当前原生回合已变化，草稿保留。');
-      const bridged = target.state.runtimeVersion === '0.1.0-alpha.2' && this.control.legacyInput?.target(original)?.native;
+      const shared = method === 'steerShared';
+      if (shared && (!target.state.capabilities?.includes('nativeSharedSteer') || original?.roomId !== 'shared')) throw Error('此连接暂不支持共享追加指令；草稿保留。');
+      const bridged = !shared && target.state.runtimeVersion === '0.1.0-alpha.2' && this.control.legacyInput?.target(original)?.native;
       if (!(bridged?.steerAvailable || target.state.capabilities?.includes('nativeSteer'))) throw Error('此连接暂不支持工作中追加指令；请在原生终端继续。');
       return this.intervene(async () => {
-        const revision = this.control.revision, control = original.controlRevision;
+        const revision = this.control.revision, control = original.controlRevision, member = original.memberRevision;
         const draftRevision = this.control.draftVersions?.get(id) || 0;
         const valid = () => {
-          try { guard(); this.authorizeOperation?.(method, args); } catch { return false; }
+          try { guard(); replyGuard(); this.authorizeOperation?.(method, args); } catch { return false; }
           const raw = target.state.sessions.find(s => s.id === id), current = this.snapshot().sessions.find(s => s.id === id);
           return this.control.revision === revision && raw?.controlRevision === control && raw.owner === target.state.owner &&
-            raw.nativeId === nativeId && !raw.nativeContextPending && current?.state === 'working' && !current.approval && current.activeTurnId === turnId;
+            raw.nativeId === nativeId && !raw.nativeContextPending && current?.state === 'working' && !current.approval && !current.pendingSteer && current.activeTurnId === turnId &&
+            (!shared || (raw.roomId === 'shared' && raw.memberRevision === member));
         };
         await this.pauseExcept(null); await this.refresh();
         if (!valid()) throw Error('当前回合或控制权已变化；草稿保留，没有另开回合。');

@@ -18,7 +18,7 @@ function applyNativeBlock(session, event) {
   }
   if (typeof event.text === 'string') row.text = event.text;
   if (typeof event.delta === 'string') row.text += event.delta;
-  for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId']) if (typeof event[field] === 'string') row[field] = event[field];
+  for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag']) if (typeof event[field] === 'string') row[field] = event[field];
   if (typeof event.input === 'string') row.input = event.input;
   if (event.incomplete) row.incomplete = true;
   if (event.kind === 'response' && boundary && row.status === 'streaming') row.status = boundary.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
@@ -98,6 +98,7 @@ function applyCodexDelta(s, item) {
   message.text += item.text;
   if (item.turnId) message.turnId = item.turnId;
   message.nativeId = s.nativeId;
+  if (typeof item.inputTag === 'string') message.inputTag = item.inputTag;
   const ended = s.messages.find(m => m.kind === 'turn' && m.nativeId === s.nativeId && m.turnId === item.turnId);
   if (ended) message.status = ended.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
   return message;
@@ -120,7 +121,7 @@ function applyCodexMessage(s, item) {
       s.messages.splice(index, 0, m);
     } else s.messages.push(m);
   }
-  Object.assign(m, { text: item.text, status: 'complete', nativeId: item.nativeId || s.nativeId, phase: item.phase, ...(item.turnId ? { turnId: item.turnId } : {}) });
+  Object.assign(m, { text: item.text, status: 'complete', nativeId: item.nativeId || s.nativeId, phase: item.phase, ...(typeof item.inputTag === 'string' ? { inputTag: item.inputTag } : {}), ...(item.turnId ? { turnId: item.turnId } : {}) });
   return m;
 }
 module.exports = { applyNativeBlock, trimVolatileRows, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress };

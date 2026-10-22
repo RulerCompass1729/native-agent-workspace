@@ -131,7 +131,7 @@ function fixture() {
     };
   };
   const oldView = make('old', ['resume', 'forget', 'clearSharedHistory'], [{ id: 'old', nativeId: 'same-native', pid: 321, provider: 'claude', state: 'idle', liveDraft: 'private draft', messages: [{ text: 'PRIVATE' }] }, { id: 'old-codex', provider: 'codex', state: 'idle' }]);
-  const nextView = make('next', current, [{ id: 'new', provider: 'claude', state: 'idle' }]);
+  const nextView = make('next', [...current], [{ id: 'new', provider: 'claude', state: 'idle' }]);
   const openWindow = (includeNext = true) => { const old = oldView(), next = nextView(); return { old, next, c: new WorkspaceClient(includeNext ? [old, next] : [old], includeNext ? 'next' : 'old', scope) }; };
   return { ...openWindow(), openWindow };
 }
@@ -634,4 +634,35 @@ for (const removed of ['before', 'during', 'never']) test(`shared queued reply c
   }
   assert.deepEqual(next.calls.filter(([m]) => m === 'queueShared'), removed === 'never' ? [['queueShared', 'new', 'next task', 'native-one', 'parent']] : []);
   c.close();
+});
+
+for (const change of ['none', 'turn', 'context', 'owner', 'intervention', 'approval', 'pending', 'archived', 'leave', 'rejoin', 'parent-removed']) test(`shared Codex steer router rechecks ${change} after pause`, async () => {
+  const { c, next } = fixture(); next.real.capabilities.push('nativeSteer', 'nativeSharedSteer');
+  const row = next.real.sessions[0];
+  Object.assign(row, { provider: 'codex', owner: 'view', nativeId: 'native-one', state: 'working', activeTurnId: 'turn-one', steerAvailable: true, controlRevision: 1, roomId: 'shared', memberRevision: 1 });
+  next.real.room.messages = [{ id: 'parent', text: 'DO NOT SEND THIS PARENT', role: 'human' }];
+  await c.refresh(); let release, archived = false;
+  c.authorizeOperation = () => { if (archived) throw Error('archived'); };
+  c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+  const pending = c.call('steerShared', 'new', 'new words only', 'native-one', 'turn-one', 'parent');
+  assert.equal(typeof release, 'function');
+  if (change === 'turn') row.activeTurnId = 'turn-two';
+  if (change === 'context') row.nativeId = 'native-two';
+  if (change === 'owner') row.owner = 'other';
+  if (change === 'intervention') c.control.revision++;
+  if (change === 'approval') row.approval = { requestId: 'new' };
+  if (change === 'pending') row.pendingSteer = 'previous';
+  if (change === 'leave') row.roomId = null;
+  if (change === 'rejoin') row.memberRevision++;
+  if (change === 'archived') archived = true;
+  if (change === 'parent-removed') next.real.room.messages = [];
+  release(); if (change === 'none') await pending; else await assert.rejects(pending);
+  assert.deepEqual(next.calls.filter(([m]) => m === 'steerShared'), change === 'none' ? [['steerShared', 'new', 'new words only', 'native-one', 'turn-one', 'parent']] : []);
+  assert.equal(next.calls.some(([m]) => ['send', 'input', 'steer'].includes(m)), false); c.close();
+});
+test('old steer-only services cannot silently accept a shared steer', async () => {
+  const { c, next } = fixture(); next.real.capabilities.push('nativeSteer');
+  Object.assign(next.real.sessions[0], { provider: 'codex', owner: 'view', nativeId: 'native-one', state: 'working', activeTurnId: 'turn-one', steerAvailable: true, roomId: 'shared' });
+  await c.refresh(); await assert.rejects(c.call('steerShared', 'new', 'new words', 'native-one', 'turn-one'), /暂不支持/);
+  assert.equal(next.calls.some(([m]) => ['steerShared', 'steer', 'input'].includes(m)), false); c.close();
 });

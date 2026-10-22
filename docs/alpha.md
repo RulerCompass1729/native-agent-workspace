@@ -1,8 +1,24 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.60. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.61. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.61 shared Codex steering
+
+A working Codex 0.163.0 session on the new connection accepts **追加指令** from
+its existing room composer. Choose the member with **@**. Native turn identity
+and the exact input echo determine which newly started message blocks enter the
+shared reader. Previously started private blocks, late completions and unknown
+item origins are excluded. The native session still has its original context;
+a new reply can refer to that context. This is selective output sharing, not
+model-context isolation or a forced interruption.
+
+Receipt details remain on the human message. Streaming, native completion,
+private drafts and room drafts survive switching views and reloading the window.
+An uncertain acceptance is never retried. Native errors, permission waits,
+departure and control/context changes stop further sharing. Native behavior for
+Claude force-send and complete retained 2.1.302 display coverage remain open.
 
 ## Alpha.60 shared waiting input
 

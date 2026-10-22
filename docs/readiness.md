@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.60 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.61 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,15 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.61 shared Codex increment:** the existing room composer steers a verified
+Codex 0.163.0 active turn. Only the exact accepted input and newly started native
+items authorize shared output; prior or unknown items stay private. Source actual
+Electron/CLI passes six groups using two loopback Responses streams, no paid
+inference. All 606 local checks pass without skips. Independent review reproduced
+and verified late-start provenance and native-error revocation fixes. The installed six native groups, exact source payload, strict signature and normal
+three-session hidden reopening passed independent review, with zero new dispatch. This does not close U17 or claim model-context
+isolation, Claude force-send or complete retained 2.1.302 display coverage.
 
 **Alpha.60 shared waiting increment:** working Claude Code 2.1.308 sessions can
 receive an explicitly addressed room instruction through the same native queue.
@@ -357,7 +366,7 @@ not a claim that every retained backend supports all current features.
 | --- | --- | --- |
 | Single conversation | GUI/TUI use, draft/identity retention, input focus and normal reopen; visible System Pinyin/WeChat evidence from alpha.22 | Controlled guest OS events; no universal terminal or accessibility guarantee |
 | Live native progress | Main-reader native text/tool blocks; explicitly authorized shared streams with stable identities; native terminal remains available | Full temporary-state/menu parity and retained Claude 302 coverage remain open; no official Desktop synchronization |
-| Shared work | `@` selection, explicit recipient receipts, reply threads/member trajectories in one reader, notes, rename/archive/restore, pointer drag and detach | One room; private history is not automatically copied; working shared input remains open |
+| Shared work | `@` selection, explicit recipient receipts, reply threads/member trajectories in one reader, notes, rename/archive/restore, pointer drag and detach | One room; private history is not automatically copied; working input is supported only on the verified new provider connections |
 | Native collaboration | Claude→Codex→Claude completes a three-reply file check; detached Claude continues privately with same native identity | Explicit 2–6 reply exchange, ten-minute deadline; not arbitrary goal completion |
 | Human control | Input, membership, permission, failure, repetition and known native activity stop further handoffs; uncertain sends never auto-retry | An accepted native task and its billing may continue |
 | Native fleets | Historical Claude teammate/tasks/messages and idle continuity; current Codex Luna child start/completion/close request observed; current event mapping tested | No complete descendant inventory, termination or active-fleet recovery claim |
