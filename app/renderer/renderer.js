@@ -864,7 +864,7 @@ function render() {
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
       if (roomQueueAvailable(recipient) || recipient?.pendingQueue) $('run-help').textContent += ' · 等原生下一轮接收；当前工作继续，先前私人内容不会加入共享记录。';
       if (roomSteerAvailable(recipient)) $('run-help').textContent += ' · 追加到当前原生回合；接收后的新消息块进入共享记录，先前内容不补发。';
-      if (recipient?.legacyShare) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
+      if (recipient?.legacyShare && !recipient.legacySharedReply) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
       if (nativeRoute) $('run-help').textContent = '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
       if (threadUnsupported) $('run-help').textContent = roomThreads.rows.has(roomReplyTo) ? '此连接尚不支持讨论回复。草稿保留；取消回复可作为新消息发送。' : '原讨论已移除。草稿保留，请先取消回复。';

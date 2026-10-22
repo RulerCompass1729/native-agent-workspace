@@ -11,6 +11,7 @@ const { supportsLegacyObservation } = require('./legacy-observation.cjs');
 const { processMayBeAlive, processIdentity } = require('./platform.cjs');
 const { LegacyCodex, eligibleCodex, retainedSocket } = require('./legacy-codex.cjs');
 const { LegacyClaude, readerPath } = require('./legacy-claude.cjs');
+const { LegacyShared } = require('./legacy-shared.cjs');
 
 function eligible(state, record) {
   return eligibleCodex(state, record) || (supportsLegacyObservation(state, record) && /^[a-f0-9-]{36}$/i.test(record.nativeId || '')
@@ -45,7 +46,8 @@ function installPlugin(cwd) {
   const previousHooks = new Set(['069c66cb4889031f0cc460dcbb75d0892cf41835c9bac02e9dbf796cd52c7a40',
     '6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1',
     '0833cbf4165cc439bfdd04ff7e7676886f5e40d518c47cfda25ba62e3292009a',
-    '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6']);
+    '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6',
+    'dc1140fd7d19d57cafd7f8545be466efd177012960763a43c769b79a92229687']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
@@ -75,6 +77,7 @@ class LegacyInput extends EventEmitter {
     this.filename = path.join(dataDir, 'legacy-dispatches.json'); this.records = []; this.closed = false; this.connecting = new Set();
     try { this.records = JSON.parse(fs.readFileSync(this.filename, 'utf8')); if (!Array.isArray(this.records)) throw Error('Invalid ledger'); }
     catch (e) { if (e.code !== 'ENOENT') this.storageError = true; }
+    this.sharedReplies = new LegacyShared(dataDir, () => this.emit('change'));
   }
   save() {
     if (this.storageError) throw Error('本地发送记录无法读取，未发送。');
@@ -104,15 +107,16 @@ class LegacyInput extends EventEmitter {
   reader(record) { const reader = this.readers.get(record.id); return reader?.record.nativeId === record.nativeId ? reader : null; }
   readerUnavailable(record) { return this.readerFailures.get(record.id) === record.nativeId; }
   sharedMessages() {
-    return this.records.filter(row => row.shared === true).map(row => ({
+    return [...this.records.filter(row => row.shared === true).map(row => ({
       id: row.id, role: 'human', recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
-      status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', manualReply: true,
+      status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', manualReply: row.sharedReply !== true,
       deliveryTracked: true, ...(row.replyTo ? { replyTo: row.replyTo } : {}),
       deliveries: [{ id: row.id, recipientId: row.sessionId, recipientName: row.recipientName || row.name, text: row.text,
         status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', time: row.time }],
-    }));
+    })), ...this.sharedReplies.snapshot()];
   }
-  clearSharedHistory(ids = this.records.filter(row => row.shared === true).map(row => row.id)) {
+  clearSharedHistory(ids = this.sharedMessages().map(row => row.id)) {
+    this.sharedReplies.clear(ids);
     const selected = new Set(ids);
     const previous = this.records;
     this.records = previous.map(row => {
@@ -226,6 +230,10 @@ class LegacyInput extends EventEmitter {
       this.readerFailures.delete(record.id);
       submission.on('change', () => this.emit('change'));
       target.on('change', () => this.emit('change'));
+      target.on('readerBlock', message => { if (message) this.sharedReplies.observed(target, message); });
+      target.on('sharingBoundary', kind => this.sharedReplies.revoke(record.id,
+        kind === 'control:permission' ? '等待原生权限确认；后续内容留在原会话' : '原生输入已改变；后续内容留在原会话'));
+      target.on('contextEnd', () => this.sharedReplies.revoke(record.id, '原生上下文已结束'));
     } catch (error) {
       for (const file of [temp, ...(published ? [target.descriptor] : [])]) try { fs.unlinkSync(file); } catch {}
       target.close(); throw error;
@@ -260,7 +268,7 @@ class LegacyInput extends EventEmitter {
       }
     }
   }
-  async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId, waitForNativeTurn = false) {
+  async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId, waitForNativeTurn = false, shareAuthority) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
     const target = this.target(record);
     if (!target?.submission.connected) throw Error('原会话输入连接尚未就绪，草稿已保留。');
@@ -271,12 +279,16 @@ class LegacyInput extends EventEmitter {
     if (waitForNativeTurn && (shared || !target.queueAvailable)) throw Error('当前连接不支持等待输入；草稿保留。');
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
     if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
-    this.records.push(row); this.save(); target.refresh = refresh;
+    if (shared && this.sharedReplies.authorize(record, target, row.id, row, shareAuthority)) row.sharedReply = true;
+    this.records.push(row);
+    try { this.save(); } catch (error) { this.sharedReplies.close(row.id); throw error; }
+    target.refresh = refresh;
     try {
       const pending = waitForNativeTurn ? target.queue(text, row.id, guard)
         : expectedTurnId !== undefined ? target.native.steer(text, row.id, expectedTurnId, refresh, guard)
         : target.native ? target.native.send(text, row.id, refresh, guard) : target.submission.request(text, row.id, guard);
-      this.emit('change'); await pending;
+      this.emit('change'); const receipt = await pending;
+      if (shared) this.sharedReplies.receipt(row.id, receipt);
       // Clearing shared text may replace a pending ledger row while native
       // acceptance is in flight. Update the retained metadata by stable ID.
       const stored = this.records.find(record => record.id === row.id);
@@ -287,10 +299,12 @@ class LegacyInput extends EventEmitter {
         this.storageWarning = '原生会话已接收消息，但本地发送记录未能保存。请在原生会话核对；没有重发，后续发送暂停。';
       }
       return row.id;
-    } finally { target.refresh = null; this.emit('change'); }
+    } catch (error) { this.sharedReplies.close(row.id, '接收结果未确认'); throw error; }
+    finally { target.refresh = null; this.emit('change'); }
   }
   close() {
     this.closed = true;
+    this.sharedReplies.dispose();
     for (const native of this.connecting) native.close();
     this.connecting.clear();
     for (const t of this.targets.values()) { t.reader?.close(); t.submission.close(); if (t.descriptor) try { fs.unlinkSync(t.descriptor); } catch {} }

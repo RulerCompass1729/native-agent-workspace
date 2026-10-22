@@ -1,9 +1,10 @@
 // Actual alpha.2 backend + Claude 2.1.302 + current Electron. Three loopback
-// responses (four with NAW_RETAINED_QUEUE=1), zero paid inference. No original profile or global keyboard access.
+// responses (four with NAW_RETAINED_QUEUE=1, five with NAW_RETAINED_SHARED=1), zero paid inference. No original profile or global keyboard access.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict'), { fork, execFileSync } = require('node:child_process');
 const { _electron } = require('playwright');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
+if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const { connectService, connect } = require(path.join(code, 'app/service-client.cjs'));
 const { installPlugin } = require(path.join(code, 'app/legacy-input.cjs'));
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-retained-claude-'));
@@ -14,7 +15,9 @@ assert.ok(binary, 'Set NAW_CLAUDE_302 to the retained native executable');
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim(); assert.match(version, /^2\.1\.302\b/);
 const archive = execFileSync('git', ['archive', 'a87653b', 'app', 'package.json'], { cwd: root, maxBuffer: 16 * 1024 * 1024 });
 execFileSync('/usr/bin/tar', ['-x', '-C', old], { input: archive }); fs.symlinkSync(path.join(root, 'node_modules'), path.join(old, 'node_modules'));
-const queueTrial = process.env.NAW_RETAINED_QUEUE === '1', budget = queueTrial ? 4 : 3;
+const queueTrial = process.env.NAW_RETAINED_QUEUE === '1', sharedTrial = process.env.NAW_RETAINED_SHARED === '1';
+assert.ok(!(queueTrial && sharedTrial), 'Choose one bounded scenario');
+const budget = sharedTrial ? 5 : queueTrial ? 4 : 3;
 let child, client, application, page, calls = 0, finishFinal;
 const checks = [], errors = [], sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) { const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label); }
@@ -37,7 +40,12 @@ const server = http.createServer((req, res) => {
       block(res, 0, { type: 'text', text: 'RETAINED_PROGRESS: inspect the local result.\n' });
       block(res, 1, { type: 'tool_use', id: 'toolu_retained', name: 'Bash', input: { command: 'printf "RETAINED_TOOL: 42\\n"', description: 'Print the local fixture' } }); finish('tool_use');
     }
-    if (number === 4) { block(res, 0, { type: 'text', text: 'RETAINED_QUEUED_REPLY: next instruction received.\n' }); finish('end_turn'); }
+    if (number === 4 && !sharedTrial) { block(res, 0, { type: 'text', text: 'RETAINED_QUEUED_REPLY: next instruction received.\n' }); finish('end_turn'); }
+    if (number === 4 && sharedTrial) {
+      block(res, 0, { type: 'text', text: 'RETAINED_PERMISSION_PREFIX: await native permission.\n' });
+      block(res, 1, { type: 'tool_use', id: 'toolu_permission', name: 'Bash', input: { command: 'node -e "process.stdout.write(\'RETAINED_APPROVED_TOOL\')"', description: 'Print an approval fixture' } }); finish('tool_use');
+    }
+    if (number === 5) { block(res, 0, { type: 'text', text: 'RETAINED_PRIVATE_AFTER_PERMISSION: task complete.\n' }); finish('end_turn'); }
     if (number === 3) {
       event(res, 'content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
       event(res, 'content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'RETAINED_FINAL_PREFIX: checking the native result.\n' } });
@@ -51,6 +59,16 @@ async function launch() {
     ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}),
     env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await application.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
+  if (sharedTrial) await application.evaluate(({ app }) => {
+    const load = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json');
+    const { Claude } = load('./app/adapters.cjs'), original = Claude.prototype.observeBlock;
+    globalThis.retainedBoundaryTrace = [];
+    Claude.prototype.observeBlock = function (message) {
+      const result = original.call(this, message);
+      globalThis.retainedBoundaryTrace.push({ kind: message.kind, id: message.id, sequence: message.sequence, epoch: message.epoch });
+      return result;
+    };
+  });
 }
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -103,7 +121,20 @@ async function launch() {
   await page.locator('#chat-tab').click();
   assert.equal(await page.locator('#messages').getByText('RETAINED_HISTORY: original native answer.', { exact: true }).count(), 1);
   assert.equal(calls, 1); checks.push('Actual old backend and native TUI history retained on same-process input/reader attachment');
-  await page.locator('#message-input').fill('Read the local result in the unified interface.'); await page.locator('#send-button').click();
+  if (sharedTrial) {
+    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
+    await page.locator('#shared-input').fill('Read the local result in the unified interface.'); await page.locator('#forward-button').click();
+    await until(async () => (await snapshot()).room.messages.some(m => m.role === 'assistant'), 'Shared reply in retained main reader');
+    await page.locator('#room-messages').getByText('RETAINED_PROGRESS: inspect the local result.', { exact: true }).waitFor();
+    await until(async () => (await page.locator('#room-messages').innerText()).includes('RETAINED_TOOL: 42'), 'Shared native tool');
+    assert.ok(!JSON.stringify((await snapshot()).room.messages).includes('RETAINED_HISTORY'));
+    assert.ok(!(await page.locator('#run-help').innerText()).includes('回复在成员视图'));
+    assert.equal((await snapshot()).room.messages.find(m => m.role === 'human').manualReply, false);
+    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click();
+    checks.push('Explicit retained room task streams attributed native text/tools in main reader without private history');
+  } else { await page.locator('#message-input').fill('Read the local result in the unified interface.'); await page.locator('#send-button').click(); }
   await until(() => calls === 3 && finishFinal, 'Native tool and held final');
   await page.locator('#messages').getByText('RETAINED_PROGRESS: inspect the local result.', { exact: true }).waitFor();
   await until(async () => (await page.locator('#messages').innerText()).includes('RETAINED_TOOL: 42'), 'Native tool in main reader');
@@ -128,10 +159,10 @@ async function launch() {
     checks.push('Retained native queue waits beyond both old deadlines, without interrupt, retry or extra model request');
   }
   await page.locator('#message-input').fill('Unsent reader draft'); await sleep(300);
-  if (queueTrial) {
+  if (queueTrial || sharedTrial) {
     await page.locator('#terminal-tab').click(); await page.locator('#chat-tab').click();
     await page.reload(); await page.locator('#new-session').waitFor();
-    assert.equal((await snapshot()).sessions.find(s => s.id === id).pendingQueue, queuedTag);
+    if (queueTrial) assert.equal((await snapshot()).sessions.find(s => s.id === id).pendingQueue, queuedTag);
   } else { await application.close(); application = null; await launch(); }
   await until(async () => (await snapshot()).sessions.find(s => s.id === id)?.legacySubmit, 'Rebound observer after GUI reopen');
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
@@ -154,14 +185,62 @@ async function launch() {
   assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid);
   assert.equal(after.messages.filter(m => m.text.includes('RETAINED_FINAL_PREFIX:')).length, 1);
   assert.ok(after.messages.some(m => m.text.includes('RETAINED_FINAL_PREFIX:') && m.text.endsWith('42.\n')));
-  assert.equal(calls, budget); assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
+  assert.equal(calls, sharedTrial ? 3 : budget); assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
   await until(async () => (await secondPage.locator('#messages').innerText()).includes('42.'), 'Second window receives new final');
   await secondPage.close();
   fs.writeFileSync(path.join(base, 'completed.json'), JSON.stringify(await snapshot(), null, 2));
-  checks.push(`${queueTrial ? 'Renderer reload' : 'GUI reopen'} retains native PID/identity, displayed partial and draft; new final updates the same block without duplicate old Stop text`);
+  checks.push(`${queueTrial || sharedTrial ? 'Renderer reload' : 'GUI reopen'} retains native PID/identity, displayed partial and draft; new final updates the same block without duplicate old Stop text`);
   await page.locator('#terminal-tab').click(); await until(async () => (await page.locator('#terminal-area').innerText()).includes('RETAINED_FINAL_PREFIX:'), 'Original terminal final');
   fs.writeFileSync(path.join(base, 'terminal.txt'), await page.locator('#terminal-area').innerText()); await page.locator('#chat-tab').click();
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'retained-claude-reader.png') }); }
+  if (sharedTrial) {
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await until(async () => (await snapshot()).room.messages.some(m => m.finalReply && m.text.includes('RETAINED_FINAL_PREFIX:')), 'Final shared display proof');
+    const room = (await snapshot()).room.messages, final = room.find(m => m.finalReply);
+    assert.equal(room.filter(m => m.text?.includes('RETAINED_FINAL_PREFIX:')).length, 1);
+    assert.equal(final.sessionId, id); assert.ok(final.replyTo);
+    assert.equal((await snapshot()).diagnostics.dispatches, 1);
+    assert.ok(!JSON.stringify(room).includes('Unsent reader draft'));
+    fs.writeFileSync(path.join(base, 'shared-completed.json'), JSON.stringify(await snapshot(), null, 2));
+    if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'retained-shared-success.png') });
+    await application.close(); application = null; await launch();
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await page.locator('#room-messages').getByText(final.text.trim(), { exact: true }).waitFor();
+    assert.equal(calls, 3);
+    assert.ok(!fs.readFileSync(path.join(profile, 'legacy-shared.json'), 'utf8').includes('RETAINED_TOOL: 42'));
+    checks.push('Shared final appears once, survives app reopen and keeps delivery count; volatile tools stay memory-only');
+    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click();
+    if (await page.locator('#send-button').textContent() === '接管此窗口') await page.locator('#send-button').click();
+    await until(async () => (await snapshot()).sessions.find(s => s.id === id).legacySubmit, 'Retained rebind for second task');
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
+    await page.locator('#shared-input').fill('Check native permission without exposing later output.'); await page.locator('#forward-button').click();
+    await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'approval', 'Actual retained native permission prompt');
+    fs.writeFileSync(path.join(base, 'shared-permission.json'), JSON.stringify(await snapshot(), null, 2));
+    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#terminal-tab').click();
+    await until(async () => /Do you want to proceed|Allow this/.test(await page.locator('#terminal-area').innerText()), 'Native permission choice visible');
+    const permissionText = await page.locator('#terminal-area').innerText();
+    assert.ok(permissionText.includes('RETAINED_APPROVED_TOOL'));
+    fs.writeFileSync(path.join(base, 'native-permission.txt'), permissionText);
+    await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('Enter');
+    await until(async () => (await snapshot()).sessions.find(s => s.id === id).messages.some(m => m.text.includes('RETAINED_PRIVATE_AFTER_PERMISSION')), 'Post-permission native answer');
+    const verified = await snapshot(); assert.equal(calls, 5);
+    assert.ok(!JSON.stringify(verified.room.messages).includes('RETAINED_PRIVATE_AFTER_PERMISSION'));
+    assert.ok(!verified.room.messages.some(m => m.role === 'tool' && m.text?.includes('RETAINED_APPROVED_TOOL')));
+    const boundaries = await application.evaluate(() => globalThis.retainedBoundaryTrace);
+    const permission = boundaries.find(event => event.id === 'control:permission');
+    assert.ok(permission, 'Actual 302 permission hook reached the ordered observation channel');
+    assert.ok(boundaries.some(event => event.kind === 'response' && event.epoch === permission.epoch && event.sequence > permission.sequence));
+    fs.writeFileSync(path.join(base, 'native-boundaries.json'), JSON.stringify(boundaries, null, 2));
+    assert.equal(verified.sessions.find(s => s.id === id).nativeId, before.nativeId);
+    assert.equal(verified.sessions.find(s => s.id === id).pid, before.pid);
+    await page.locator('#chat-tab').click();
+    await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    assert.ok(!JSON.stringify((await snapshot()).room.messages).includes('RETAINED_PRIVATE_AFTER_PERMISSION'));
+    fs.writeFileSync(path.join(base, 'shared-final.json'), JSON.stringify(await snapshot(), null, 2));
+    checks.push('Real native permission and GUI leave/rejoin retain original process without promoting later private output or replay');
+  }
   const debug = fs.readFileSync(path.join(base, 'native-debug.log'), 'utf8');
   assert.ok(!debug.includes('Plugin loading errors:'), 'Native plugin discovery/reload has no load errors');
   await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen').click();

@@ -1,8 +1,31 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.64. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.66. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.66 retained Claude shared replies
+
+Choose the retained member with **@** in the existing room composer. For inspected
+Claude Code 2.1.302 connections, a new idle task's native response and textual tool
+results appear in the shared main reader with that member's name. Only exact
+native acceptance authorizes the corresponding response; joining does not share
+prior history. Permission waits, private input, departure and control changes
+stop subsequent sharing. Continuing in the private native terminal does not
+silently resume the previous shared stream.
+
+Completed shared text survives reopening; native tool output stays volatile.
+There is no additional model call, duplicate native process or camera panel.
+Source and installed native evidence pass independent review.
+Retained shared queues, force-send and full native parity remain open.
+
+## Alpha.65 retained Claude waiting input
+
+The solo composer can submit one instruction after the running native turn.
+Exact native acceptance, rather than a matching text guess, updates its waiting
+status. The current task and newer draft are preserved through view switching
+and renderer reload. Source and installed native checks pass independently.
+This does not add forced interruption or retained shared waiting.
 
 ## Alpha.64 retained Claude main reader
 

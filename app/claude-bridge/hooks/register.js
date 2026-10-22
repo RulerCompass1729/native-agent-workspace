@@ -233,7 +233,9 @@ async function listen($, ownGeneration) {
 
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
-  const result = await request($, '/root-bind', { nativeBlocks, nativeQueue: (await $.session.version()).version === (legacyOnly ? '2.1.302' : '2.1.308') }, binding);
+  const version = (await $.session.version()).version;
+  const result = await request($, '/root-bind', { nativeBlocks, nativeQueue: version === (legacyOnly ? '2.1.302' : '2.1.308'),
+    nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
@@ -283,6 +285,12 @@ async function syncRoot($) {
 }
 
 export function register(on) {
+  on('classic.PermissionRequest', ($, e, next) => {
+    // Ordered with display observations, before native permission handling.
+    // No permission decision or tool payload is copied into the shared room.
+    if (legacyOnly && e.session_id === rootBinding?.sessionId) enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete' });
+    return next(e);
+  }).catch(($, e, next) => { markObservationGap(rootBinding); return next(e); });
   on('classic.MessageDisplay', async ($, e, next) => {
     const binding = rootBinding;
     const result = await next(e);
@@ -381,6 +389,7 @@ export function register(on) {
     foreignSubmissions++;
     foreignRevision++;
     if (collecting) collecting.invalid = true;
+    if (legacyOnly) enqueueBlock($, { id: 'control:input', kind: 'control', status: 'complete' });
     try { return await next(e); }
     finally { foreignSubmissions--; }
   }).catch(async ($, e, next) => {
