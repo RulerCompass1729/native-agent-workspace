@@ -12,6 +12,14 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.64 connects inspected retained Claude 2.1.302 sessions to the main reader:
+accepted input, display batches and tool text use the original native process.
+Dual-window, reopen and ended-history native checks pass in source and installed
+builds. Alpha.59–63 also add Claude waiting input, Codex shared steering and
+independent recipient sending. Complete native transient-state parity and Claude
+force-send remain open; see the current [readiness](docs/readiness.md) and
+[testing boundaries](docs/testing.md).
+
 Alpha.58 adds working-turn input for Codex 0.163.0 when its native turn identity
 is known. It steers that existing turn, preserves drafts, and stops prior room
 sharing before private instructions. Actual native/Electron and installed retained

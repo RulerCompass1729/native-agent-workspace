@@ -95,6 +95,7 @@ class WorkspaceClient extends EventEmitter {
         const bridge = this.control.legacyInput;
         const legacySubmit = legacyInputEligible(e.state, s) && ['idle', 'working', 'approval', 'starting'].includes(s.state) && !!bridge?.connected(s);
         const native = bridge?.target(s)?.native;
+        const reader = bridge?.reader?.(s);
         const legacyCodex = e.state.runtimeVersion === '0.1.0-alpha.2' && s.provider === 'codex';
         const approvalDecisionAvailable = legacyCodex ? Boolean(native?.connected) : Boolean(e.state.capabilities?.includes('nativeApprovalSync'));
         const approval = legacyCodex ? native?.approval : s.approval;
@@ -103,7 +104,12 @@ class WorkspaceClient extends EventEmitter {
         }).decisions : [];
         ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
+          legacyReaderPending: s.provider === 'claude' && legacySubmit && !reader?.initialized,
           legacyShare: legacySubmit,
+          ...(reader?.initialized ? { nativeBlockMapping: true, messages: reader.record.messages,
+            ...(reader.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : {}) } : {}),
+          ...(bridge?.readerUnavailable?.(s) ? { nativeBlockMapping: true, messages: [{ id: 'retained-reader-unavailable', role: 'system', kind: 'gap', incomplete: true,
+            text: '原生阅读记录暂不可用；没有以旧后台内容替换，请在原生终端继续。' }] } : {}),
           ...(legacyCodex && native ? { nativeBlockMapping: true, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告', ...(native.connected ? { activity: native.activity || '' } : {}) } : {}),
           ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null, sharingNotice: '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。', ...(native?.state ? { state: native.state } : {}),
             pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
@@ -526,6 +532,13 @@ class WorkspaceClient extends EventEmitter {
       return result;
     }
     if (method === 'resume') assertNativeCreation(target.state);
+    if (method === 'forget') {
+      const record = target.state.sessions.find(s => s.id === args[0]);
+      const result = await target.client.call(method, ...args);
+      try { this.control.legacyInput?.forgetReader(record); }
+      catch { throw Error('会话已移除，但本地阅读副本未能全部清理。请检查本机数据权限与磁盘空间。'); }
+      return result;
+    }
     if (['send', 'forward'].includes(method)) assertSubmission(target.state, [args[0]]);
     if (method === 'forward') assertSharing(target.state, [args[0]]);
     const ownView = ['claim', 'terminal'].includes(method) && typeof target.state.owner === 'string' && target.state.sessions.find(s => s.id === args[0])?.owner === target.state.owner;

@@ -51,6 +51,13 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   shared records strips the selected rows' text/name/sharing flag while retaining
   dispatch accounting. A later submission is not part of that earlier clear.
   Provider history and material already delivered to another agent remain separate.
+- legacy-reader-*.json stores the explicitly connected retained Claude reader's
+  private local projection: native/process identity, accepted inputs, displayed
+  response text and turn/gap metadata. It is atomically saved with owner-only
+  permissions. Volatile tool bodies are excluded. Invalid or missing projection
+  data after attachment cannot silently fall back to the old raw-response cache.
+  Removing an ended application record removes its projection and connection
+  metadata; native-provider history and separately shared room records remain.
 - room-state.json contains the room name, human-written shared notes and their
   saved versions, confirmed membership events, archive indexes and the original
   member IDs for explicit restoration. Its file is owner-only. These are local

@@ -6,10 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
-const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
+const { createSubmissionServer } = require('./claude-submit.cjs');
 const { supportsLegacyObservation } = require('./legacy-observation.cjs');
 const { processMayBeAlive, processIdentity } = require('./platform.cjs');
 const { LegacyCodex, eligibleCodex, retainedSocket } = require('./legacy-codex.cjs');
+const { LegacyClaude, readerPath } = require('./legacy-claude.cjs');
 
 function eligible(state, record) {
   return eligibleCodex(state, record) || (supportsLegacyObservation(state, record) && /^[a-f0-9-]{36}$/i.test(record.nativeId || '')
@@ -42,6 +43,7 @@ function installPlugin(cwd) {
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
   const previousHooks = new Set(['6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1',
+    '0833cbf4165cc439bfdd04ff7e7676886f5e40d518c47cfda25ba62e3292009a',
     '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6']);
   const upgrades = new Set();
   for (const [name, content] of files) {
@@ -68,7 +70,7 @@ function installPlugin(cwd) {
 
 class LegacyInput extends EventEmitter {
   constructor(dataDir) {
-    super(); this.dataDir = dataDir; this.servers = new Map(); this.targets = new Map(); this.pendingPrepare = new Map();
+    super(); this.dataDir = dataDir; this.servers = new Map(); this.targets = new Map(); this.readers = new Map(); this.pendingPrepare = new Map(); this.readerFailures = new Map();
     this.filename = path.join(dataDir, 'legacy-dispatches.json'); this.records = []; this.closed = false; this.connecting = new Set();
     try { this.records = JSON.parse(fs.readFileSync(this.filename, 'utf8')); if (!Array.isArray(this.records)) throw Error('Invalid ledger'); }
     catch (e) { if (e.code !== 'ENOENT') this.storageError = true; }
@@ -78,14 +80,15 @@ class LegacyInput extends EventEmitter {
     const temp = this.filename + '.tmp';
     fs.writeFileSync(temp, JSON.stringify(this.records), { mode: 0o600 }); fs.renameSync(temp, this.filename);
   }
-  saveLink(entry, record) {
+  saveLink(entry, record, readerStarted = false) {
     // Read at the synchronous commit point: another session may have connected
     // while this one awaited its native handshake.
     const filename = path.join(this.dataDir, 'legacy-links.json');
     let links = []; try { links = JSON.parse(fs.readFileSync(filename, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
     if (!Array.isArray(links)) throw Error('原会话连接记录无法读取。');
-    if (links.some(link => link.id === record.id && link.pid === record.pid && link.nativeId === record.nativeId)) return;
-    links.push({ id: record.id, pid: record.pid, nativeId: record.nativeId, key: entry.key });
+    const previous = links.find(link => link.id === record.id && link.pid === record.pid && link.nativeId === record.nativeId);
+    if (previous) { if (!readerStarted || previous.readerStarted) return; previous.readerStarted = true; }
+    else links.push({ id: record.id, pid: record.pid, nativeId: record.nativeId, key: entry.key, ...(readerStarted ? { readerStarted: true } : {}) });
     const temp = filename + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
     try { fs.writeFileSync(temp, JSON.stringify(links), { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, filename); }
     finally { try { fs.unlinkSync(temp); } catch {} }
@@ -97,6 +100,8 @@ class LegacyInput extends EventEmitter {
   }
   connected(record) { return !!this.target(record)?.submission.connected; }
   prepared(record) { return !!this.target(record); }
+  reader(record) { const reader = this.readers.get(record.id); return reader?.record.nativeId === record.nativeId ? reader : null; }
+  readerUnavailable(record) { return this.readerFailures.get(record.id) === record.nativeId; }
   sharedMessages() {
     return this.records.filter(row => row.shared === true).map(row => ({
       id: row.id, role: 'human', recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
@@ -115,6 +120,28 @@ class LegacyInput extends EventEmitter {
     });
     try { this.save(); } catch (error) { this.records = previous; throw error; }
     this.emit('change');
+  }
+  forgetReader(record) {
+    this.reader(record)?.close(); this.readers.delete(record.id);
+    const target = this.targets.get(record.id);
+    if (target?.record.nativeId === record.nativeId) {
+      target.reader?.close(); target.submission.close();
+      target.server?.targets.delete(target.token);
+      if (target.descriptor) fs.rmSync(target.descriptor, { force: true });
+      this.targets.delete(record.id);
+    }
+    if (record.provider === 'claude' && record.nativeId) fs.rmSync(readerPath(this.dataDir, record.nativeId), { force: true });
+    const filename = path.join(this.dataDir, 'legacy-links.json');
+    if (fs.existsSync(filename)) {
+      const links = JSON.parse(fs.readFileSync(filename, 'utf8'));
+      if (!Array.isArray(links)) throw Error('原连接索引无法清理。');
+      const temporary = filename + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
+      try {
+        fs.writeFileSync(temporary, JSON.stringify(links.filter(link => link.id !== record.id || link.nativeId !== record.nativeId)), { mode: 0o600, flag: 'wx' });
+        fs.renameSync(temporary, filename);
+      } finally { fs.rmSync(temporary, { force: true }); }
+    }
+    this.readerFailures.delete(record.id);
   }
   async prepare(entry, record) {
     if (this.closed) throw Error('窗口连接已关闭。');
@@ -173,30 +200,63 @@ class LegacyInput extends EventEmitter {
       catch (e) { transport.server.closeAllConnections(); transport.server.close(); fs.unlinkSync(ownerFile); throw e; }
       server = { transport, targets, socket, ownerFile }; this.servers.set(directory, server);
     }
-    const token = crypto.randomBytes(32).toString('hex'), submission = new SubmissionChannel();
-    const target = { record: { ...record }, submission, token, server, descriptor: path.join(directory, `gui-${record.nativeId}.json`) };
+    let target;
+    try {
+      this.reader(record)?.close();
+      target = new LegacyClaude(record, this.dataDir, async () => {
+        const state = await entry.client.call('initial');
+        return state.sessions.find(s => s.id === record.id);
+      });
+      if (this.readerUnavailable(record) && !target.initialized) { target.close(); throw Error('原生阅读记录不可用，未以旧后台内容替换。请在原生终端继续。'); }
+    } catch (error) { this.readerFailures.set(record.id, record.nativeId); this.emit('change'); throw error; }
+    target.markReader = () => this.saveLink(entry, record, true);
+    const { token, submission } = target;
+    Object.assign(target, { server, descriptor: path.join(directory, `gui-${record.nativeId}.json`) });
     target.beforeAuthorize = async () => { if (!target.refresh) throw Error('No active send'); await target.refresh(); };
     const temp = target.descriptor + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
     let published = false;
     try {
       checkOpen();
-      fs.writeFileSync(temp, JSON.stringify({ sessionId: record.nativeId, socketPath: server.socket, token, compat: true }), { mode: 0o600, flag: 'wx' });
+      fs.writeFileSync(temp, JSON.stringify({ sessionId: record.nativeId, socketPath: server.socket, token, compat: true, nativeBlocks: true }), { mode: 0o600, flag: 'wx' });
       this.saveLink(entry, record);
       fs.renameSync(temp, target.descriptor); published = true;
       server.targets.set(token, target); this.targets.set(record.id, target);
+      this.readers.set(record.id, target);
+      this.readerFailures.delete(record.id);
       submission.on('change', () => this.emit('change'));
+      target.on('change', () => this.emit('change'));
     } catch (error) {
       for (const file of [temp, ...(published ? [target.descriptor] : [])]) try { fs.unlinkSync(file); } catch {}
-      submission.close(); throw error;
+      target.close(); throw error;
     }
     this.emit('change'); return true;
   }
   async restore(entries) {
-    let links; try { links = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'legacy-links.json'), 'utf8')); } catch { return; }
-    if (!Array.isArray(links)) return;
+    let links = [];
+    try { links = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'legacy-links.json'), 'utf8')); if (!Array.isArray(links)) links = []; } catch {}
+    // Mark every previously projected reader before any asynchronous work.
+    for (const link of links) if (link.readerStarted) this.readerFailures.set(link.id, link.nativeId);
+    for (const entry of entries) for (const record of entry.state.sessions || []) {
+      if (record.provider !== 'claude' || typeof record.nativeId !== 'string') continue;
+      // Another window shares this bridge. Its restore must not replace the
+      // live event recipient with a disconnected cache copy or write old text.
+      const existing = this.reader(record);
+      if (existing) {
+        if (existing.initialized) this.readerFailures.delete(record.id);
+        continue;
+      }
+      try {
+        fs.lstatSync(readerPath(this.dataDir, record.nativeId)); this.readerFailures.set(record.id, record.nativeId);
+        // Reading ended history needs no live PID, transport or plugin install.
+        const reader = new LegacyClaude(record, this.dataDir, async () => record);
+        if (reader.initialized) { this.readers.set(record.id, reader); this.readerFailures.delete(record.id); }
+      } catch (e) { if (e.code !== 'ENOENT') this.readerFailures.set(record.id, record.nativeId); }
+    }
     for (const link of links) {
       const entry = entries.find(e => e.key === link.key), record = entry?.state.sessions.find(s => s.id === link.id && s.pid === link.pid && s.nativeId === link.nativeId);
-      if (record && eligible(entry.state, record)) await this.prepare(entry, record).catch(() => {});
+      if (record && eligible(entry.state, record)) {
+        await this.prepare(entry, record).catch(() => { this.emit('change'); });
+      }
     }
   }
   async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId) {
@@ -230,7 +290,8 @@ class LegacyInput extends EventEmitter {
     this.closed = true;
     for (const native of this.connecting) native.close();
     this.connecting.clear();
-    for (const t of this.targets.values()) { t.submission.close(); if (t.descriptor) try { fs.unlinkSync(t.descriptor); } catch {} }
+    for (const t of this.targets.values()) { t.reader?.close(); t.submission.close(); if (t.descriptor) try { fs.unlinkSync(t.descriptor); } catch {} }
+    for (const reader of this.readers.values()) reader.close(); this.readers.clear();
     for (const s of this.servers.values()) { s.transport.server.closeAllConnections(); s.transport.server.close(() => { try { fs.unlinkSync(s.ownerFile); } catch {} }); }
     this.targets.clear(); this.servers.clear();
   }
