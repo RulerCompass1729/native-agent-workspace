@@ -122,6 +122,10 @@ function messageList(el, messages, room = false, key = 'room') {
       actions.append(button('复制', () => api.copy(entry.message.text)));
       entry.share = button('选择并分享', () => share(entry.message.text)); actions.append(entry.share);
       if (room) {
+        entry.delivery = node('details', undefined, 'message-delivery');
+        entry.deliverySummary = node('summary'); entry.deliveryBody = node('div', undefined, 'delivery-body');
+        entry.deliveryRows = new Map(); entry.deliveryNote = node('p'); entry.deliveryBody.append(entry.deliveryNote);
+        entry.delivery.append(entry.deliverySummary, entry.deliveryBody); item.append(entry.delivery);
         entry.openRecipient = button('查看会话', () => {
           if (!state.sessions.some(s => s.id === entry.openSessionId)) return toast('这个会话当前不可用，记录仍保留。');
           return select(entry.openSessionId, 'chat');
@@ -148,17 +152,54 @@ function messageList(el, messages, room = false, key = 'room') {
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
     if (m.role === 'system' && !m.sessionId) name = room ? '工作区' : m.name || '原生会话';
     if (m.role === 'system' && m.runId) name = m.name || '协作';
-    const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply]);
+    const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply, m.title, m.incomplete, m.volatile]);
     if (entry.headingKey !== headingKey) {
       entry.heading.replaceChildren(node('strong', name)); entry.headingKey = headingKey;
+      if (m.title) entry.heading.append(node('span', m.title));
+      if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
+      if (m.volatile) entry.heading.append(node('span', '本次运行记录'));
       if (room && Number.isFinite(m.time)) { const time = node('time', new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); time.title = new Date(m.time).toLocaleString(); entry.heading.append(time); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
-      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '提交结果未确认', streaming: '已收到的部分回复', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
+      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: '正在运行', failed: '原生报告失败', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
       if (status) entry.heading.append(node('span', status));
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
     }
     entry.share.hidden = m.role === 'system';
+    if (entry.delivery) {
+      entry.delivery.hidden = m.role === 'system';
+      const deliveries = (m.deliveries || []).map(d => {
+        const recipient = state.sessions.find(s => s.id === d.recipientId);
+        return { ...d, label: recipient ? participantLabel(recipient, state.sessions) : d.recipientName || '原接收会话' };
+      });
+      const deliveryKey = JSON.stringify([m.deliveryTracked, deliveries]);
+      if (entry.deliveryKey !== deliveryKey) {
+        entry.deliveryKey = deliveryKey;
+        const status = d => ({ submitted: '原生已接收', 'awaiting-native': '等待原生确认', unconfirmed: '接收结果未确认' }[d.status] || '接收结果未记录');
+        entry.deliverySummary.textContent = deliveries.length
+          ? `发送详情 · ${deliveries.map(d => `${d.label}：${status(d)}`).join('；')}`
+          : m.deliveryTracked ? '本条未由工作区转发' : '旧记录 · 发送详情未记录';
+        const retainedDeliveries = new Set();
+        for (const d of deliveries) {
+          let row = entry.deliveryRows.get(d.id);
+          if (!row) {
+            row = { item: node('div'), label: node('strong'), payload: node('pre', undefined, 'delivery-payload') };
+            row.item.append(row.label, row.payload); entry.deliveryBody.insertBefore(row.item, entry.deliveryNote);
+            entry.deliveryRows.set(d.id, row);
+          }
+          retainedDeliveries.add(d.id);
+          const label = `发给 ${d.label} · ${status(d)}`;
+          if (row.label.textContent !== label) row.label.textContent = label;
+          if (row.payload.textContent !== d.text) row.payload.textContent = d.text;
+        }
+        for (const [id, row] of entry.deliveryRows) if (!retainedDeliveries.has(id)) { row.item.remove(); entry.deliveryRows.delete(id); }
+        const note = deliveries.length
+          ? '以上是本次交给原生 agent 的正文，不是其完整模型上下文；原生历史、系统指令和 hooks 仍由原生管理。列入共享记录不会自动发送给其他成员。'
+          : m.deliveryTracked ? '这条消息保留在共享记录中，工作区没有将本条转发给其他 agent。'
+          : '这条旧记录没有完整的发送凭据，不能据此判断哪些 agent 已收到。';
+        if (entry.deliveryNote.textContent !== note) entry.deliveryNote.textContent = note;
+      }
+    }
     if (entry.openRecipient) {
       // A paused handoff keeps only a reference, never a private answer or a
       // renewed sharing grant. Archived sessions use the existing read-only view.
@@ -167,6 +208,11 @@ function messageList(el, messages, room = false, key = 'room') {
       entry.item.classList.toggle('has-session-link', !entry.openRecipient.hidden);
     }
     if (entry.context) entry.context.hidden = !($('room-search').value || $('room-filter').value);
+    if (entry.input !== m.input) {
+      entry.input = m.input;
+      if (!entry.inputBody) { entry.inputBody = node('pre', undefined, 'native-tool-input'); entry.item.insertBefore(entry.inputBody, entry.body); }
+      entry.inputBody.textContent = m.input || ''; entry.inputBody.hidden = !m.input;
+    }
     if (entry.text !== m.text || entry.role !== m.role || entry.streaming !== (m.status === 'streaming')) {
       if (entry.role && entry.role !== m.role) ui.clearMarkdown(entry.body);
       entry.text = m.text; entry.role = m.role; entry.streaming = m.status === 'streaming';

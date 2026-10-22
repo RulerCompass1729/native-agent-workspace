@@ -16,8 +16,37 @@ An untested case remains **unverified**. A code change, mock or skipped test alo
 does not close a native-user-experience issue. Reopen the same item when evidence
 contradicts it; keep the former result's scope and date.
 
+**U17 follow-up, 2026-10-21 (high; desktop/adapter maintainer):** the user rejects
+separate terminal snapshot/replay panels in solo and shared conversations and
+requires the same native session's input, intermediate work and results in the
+conversation itself. Source review confirms separate message, progress and PTY
+paths; the legacy input bridge does not replace the old history writer. It does
+not establish whether the particular reported input was an unsubmitted draft,
+a command or an accepted prompt. Subsequent user direction authorizes the agreed
+single-reader/message-block foundation. Its scoped source/native tests are below;
+U17 remains open. CORE-55's scoped mechanics do not close this
+experience gap. Future verification must cover both input surfaces, native
+intermediate content, event identity/order, retained sessions and private versus
+shared visibility; another screen-preview panel is not acceptance evidence.
+
+The user's subsequent clarification keeps solo 1:1 mapping ahead of optional
+folding and prioritizes shared streaming message blocks, reply threads and member
+trajectory filtering. The user sets the interaction direction; official native
+docs and inspected adapter source constrain implementation semantics, exposing
+idle-only GUI sending and distinct queue/steer/abort
+semantics. The [message-block discussion](interaction.md)
+records the contracts and unresolved human-without-mention routing rule. Source
+and documentation review is not a native runtime test; U17 remains open.
+
 | ID | Source / trigger | Priority / owner | Status and evidence | Remaining check or trigger |
 | --- | --- | --- | --- | --- |
+| U17-B1 | User rejects camera/replay panels and requires native content in the main reader | High / desktop and adapter maintainer | Scoped source increment passes independent review: stable display batches, native tool input/results and actual turn boundaries; real CLI 2.1.307/2.1.308 with local responses, GUI/TUI identity, interruption and context-clear checks pass | Source only. Shared intermediate streaming, work-in-progress input, complete native state mapping and installed delivery remain open |
+| U17-B2 | Review: raw Stop can bypass display redaction; late gaps can leave a previously safe reply eligible | High / adapter maintainer | Source fixed and independently rechecked: native prompt/turn/display identity plus complete final proof required; missing/late/gapped proof keeps the reply private, including persisted room and next handoff counterexamples | No inference from text similarity; no full-model-context or all-hook-order guarantee |
+| U17-B3 | Actual CLI distinguishes display turn IDs from Mods engine turn IDs; final answer omits a display trailing newline | High / adapter maintainer | Native prompt linkage preserves both IDs, and normalizes trailing whitespace only for proof comparison. Real native shared final-reply check passes without rewriting the visible body | Other native versions remain explicitly gated; unknown/ambiguous links cannot authorize sharing |
+| U17-B4 | Review: retained progress can lose in-flight history or display stale running state after disconnect/capability loss | Medium / desktop maintainer | Source fix passes independent review: merge snapshot plus newer events, bound caches, freeze late updates while disconnected, mark last-known running as unknown, reobserve on reconnection. 499 local checks and four actual inline-reader GUI groups pass | Old records have no authoritative merged chronology; no cold persistence of volatile tool output; oldest bridge capability-only loss uses a source counterexample |
+| U17-B5 | Recorded test begins after native CLI automatically upgrades to an unverified version | Compatibility / adapter maintainer | Reproduced fallback, not counted as pass. Generated 2.1.308 types differ from 2.1.307 only in version header; expanded exact gate and reran actual three-response trial successfully | Runner now checks version before sending; do not automatically widen support to future versions |
+| U19 | User: submitted human messages must remain visible; show which agent received which content | High / desktop maintainer | Development source reviewed: native ACK receipts and exact directed/automatic payloads expand within the original message; uncertain sends remain visible; ACK preserves selection. 104 scoped units, 482 full units, nine Electron room groups and eleven reading checks pass | Installed delivery pending; no new native API validation. U17 full native mapping and the no-mention routing decision remain open |
+| WATCH-1 | User: daily broad competitor discovery and incumbent follow-up, with a continue/pivot/stop recommendation | Maintainer research / maintainer | Local launchd first run completed and archived; subsequent tick started no second research. Seven infrastructure checks cover PT/DST, catch-up, timeout/SIGTERM cleanup, single-attempt behavior, report format and native usage accounting. Independent reviewer verified the initial report with two scope corrections | Mac must be logged in, awake and online. First native child review failed in ephemeral mode; future runner uses normal native rollout, that future child path remains unverified. Human decides whether to stop |
 | CORE-55 | User: finish a substantial real-use milestone; reviewer identifies permission-paused collaboration → explicit new sharing as the missing combined branch | Acceptance / product maintainer | Closed after independent source/artifact review: six installed Electron journeys pass; preview cancel/confirm sends only selected text once, preserves the draft and leaves the old exchange paused. Reviewer verifies complete outputs, screenshots, 41 payload files, signature, four unchanged normal data files and the unique app entry | Controlled providers, zero new model calls; unchanged native evidence reused. No runtime defect found in this checkpoint; wider M5/fleet compatibility gates remain open |
 | A55-1 | Actual Electron navigation: expanded private result and inner reading offset disappear after switching sessions/views | Medium / desktop maintainer | Closed after independent source/installed artifact review: five-group reading checks pass; session/native identity, eviction and membership boundaries covered; eight-group progress regression and 479 local checks pass | Reading state is bounded and volatile; no new model calls, native inputs or sharing |
 | A55-2 | Independent review: newer gesture on the outer container may be overwritten by a late saved reading anchor | Medium / desktop maintainer | Closed after independent source/installed review: parent-container listeners cancel the old anchor and are removed on move/dispose; held-snapshot boundary passes in source and installed UI | Boundary event is synthetic DOM input, not physical scrollbar proof; other reading cases use actual Electron pointer/keyboard actions |

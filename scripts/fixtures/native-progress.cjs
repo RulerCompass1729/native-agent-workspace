@@ -6,6 +6,8 @@ const { SerializeAddon } = require('@xterm/addon-serialize');
 const root = process.env.NAW_TEST_APP_ROOT || path.resolve(__dirname, '../..');
 const { NativeHost, Claude } = require(path.join(root, 'app/adapters.cjs'));
 const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
+const legacyServices = new Set(), originalSnapshot = Workspace.prototype.snapshot;
+Workspace.prototype.snapshot = function() { const value = originalSnapshot.call(this); for (const s of value.sessions) if (legacyServices.has(s.id)) { delete s.nativeBlockMapping; s.messages = s.messages.filter(m => !m.volatile); } return value; };
 const held = new Set(), waiting = new Map(), noRaw = new Set(), observe = Workspace.prototype.observe;
 Workspace.prototype.observe = async function(id) { const result = await observe.call(this, id); if (noRaw.has(id)) result.terminal = null; if (held.delete(id)) await new Promise(resolve => waiting.set(id, resolve)); return result; };
 const { TerminalJournal } = require(path.join(root, 'app/observation.cjs'));
@@ -49,6 +51,9 @@ process.on('message', async q => {
         if (item.delay) await new Promise(resolve => setTimeout(resolve, item.delay));
       }
     }
+    if (q.method === 'legacyService') legacyServices.add(q.target);
+    if (q.method === 'state') r.emit('state', q.value);
+    if (q.method === 'nativeBlock') r.emit('nativeBlock', { ...q.value, nativeId: r.record.nativeId });
     if (q.method === 'progress') r.emit('progress', q.value);
     if (q.method === 'nativeObservation') Claude.prototype.observeRoot.call(r, { ...q.value, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1 });
     if (q.method === 'fleet') r.emit('fleet', q.value);

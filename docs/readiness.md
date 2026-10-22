@@ -5,6 +5,27 @@ The accepted core increment is defined in [core-milestone.md](core-milestone.md)
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
 
+**Subsequent user feedback, 2026-10-21:** the unified conversation experience is
+not accepted. Separate terminal snapshot/replay panels do not meet the requested
+complete real-time conversation view, and retained input/history continuity still
+has gaps. U17 remains open. CORE-55 establishes only its enumerated mechanics,
+not acceptance of this primary interaction. Research alone does not authorize a
+replacement UI. The user subsequently authorized continuing the agreed direction
+and requested per-message delivery transparency; the current development increment
+adds expandable recipient/receipt/exact-send details to existing shared messages.
+The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Development source, not installed:** rejected terminal-camera/replay panels are
+removed. Native Claude display batches, tool input/results and turn boundaries
+now enter the solo main reader. Actual CLI 2.1.307 and 2.1.308 trials use three
+local canned responses each, with no paid inference. Same-process GUI/TUI use,
+native interruption and context clearing are checked. Exact display provenance
+guards existing final-reply sharing; old progress journals remain readable inline
+with explicit stale/gap states. See [current evidence](testing.md#native-block-foundation--development-source).
+This is the content foundation, not complete 1:1 mapping: shared intermediate
+streams, threads and work-in-progress input remain open. The ordinary installed
+app stays alpha.55; no live user backend is replaced by this increment.
+
 **Integrated acceptance, 2026-10-21:** the installed alpha.55 passes the
 supported solo/shared daily-use journey in six actual Electron runners, including
 permission interruption and a new explicit share without reviving the paused
@@ -12,7 +33,7 @@ exchange. Final independent source/artifact review passes. This is a core local-
 not completion of M5 live attachment or every product goal. No runtime change or
 new installer is needed for this checkpoint. See [combined evidence](testing.md#integrated-core-acceptance--alpha55).
 
-**Current increment:** alpha.55 preserves private running-result expansion and
+**Installed alpha.55 increment:** alpha.55 preserves private running-result expansion and
 reading position across session, view and membership changes. Source and installed
 Electron checks cover five groups, including delayed observation and retired
 reading state; independent source/artifact review closes this scoped increment.

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
 const { ProgressJournal } = require('./observation.cjs');
+const { applyNativeBlock } = require('./native-blocks.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
 const { NativeHistory, nativeId } = require('./native-history.cjs');
 
@@ -30,7 +31,13 @@ class Workspace extends EventEmitter {
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
       for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.state === 'ended' ? 'ended' : 'recoverable', owner: null, approval: null, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
+      for (const session of this.sessions.values()) for (const message of session.messages || []) {
+        if (message.status === 'streaming') message.status = 'unconfirmed';
+      }
       this.room.messages = stored.room?.messages || [];
+      for (const m of this.room.messages) for (const delivery of m.deliveries || []) {
+        if (delivery.status === 'awaiting-native') delivery.status = 'unconfirmed';
+      }
       if (stored.room?.run) this.room.run = { ...stored.room.run, awaiting: null, ...(stored.room.run.status === 'running' ? { status: 'paused', reason: '运行服务曾中断；未重发任务，请核对原生结果。' } : {}) };
       if (stored.drafts) for (const [key, value] of Object.entries(stored.drafts)) this.drafts.set(key, value);
     } catch (error) {
@@ -38,7 +45,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeBlockMapping: true, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.emit('change');
@@ -56,7 +63,7 @@ class Workspace extends EventEmitter {
     const target = path.join(this.dataDir, 'workspace.json'); const temp = `${target}.tmp`;
     try {
       // No terminal bytes, credentials, environment, hook secrets or raw protocol.
-      const sessions = [...this.sessions.values()].map(({ owner, approval, approvalResolved, pid, ...s }) => ({ ...s, pendingTag: null }));
+      const sessions = [...this.sessions.values()].map(({ owner, approval, approvalResolved, pid, ...s }) => ({ ...s, messages: s.messages.filter(m => !m.volatile), pendingTag: null }));
       fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: this.room.messages, ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
       fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
     } catch { this.storageFailure = 'write'; this.storageWarning = '本地保存失败，当前会话仍在内存中；请保留窗口并检查磁盘，恢复后重试保存。'; this.emit('change'); }
@@ -145,7 +152,19 @@ class Workspace extends EventEmitter {
     on('progress', item => {
       const update = this.progress.get(s.id)?.update(item);
       if (update) this.emit('progress', { id: s.id, ...update });
+      if (update && !runtime.nativeBlocks && ['claude-native-message', 'claude-hook'].includes(item.source)) {
+        const value = update.item;
+        applyNativeBlock(s, { ...value, id: `observation:${value.id}`, nativeId: s.nativeId, kind: 'tool',
+          incomplete: value.truncated, title: value.title || '原生过程记录', status: value.status === 'completed' ? 'complete' : value.status });
+        this.changed();
+      }
+      if (item.id && item.source === 'codex-native' && (item.turnId || s.messages.some(m => m.id === `native:${s.nativeId}:tool:${item.id}`))) {
+        applyNativeBlock(s, { ...item, id: `tool:${item.id}`, nativeId: s.nativeId, kind: 'tool',
+          status: item.status === 'completed' ? 'complete' : item.status });
+        this.changed();
+      }
     });
+    on('nativeBlock', item => { if (applyNativeBlock(s, item)) this.changed(); });
     on('contextEnd', info => this.endNativeContext(s, runtime, info));
     on('contextClear', info => this.clearNativeContext(s, runtime, info));
     on('capability', () => this.changed());
@@ -154,12 +173,14 @@ class Workspace extends EventEmitter {
     on('state', state => {
       if (this.stops.has(s.id) && !['ended', 'recoverable', 'error', 'disconnected'].includes(state)) return;
       s.state = state;
+      if (['ended', 'recoverable', 'error', 'disconnected'].includes(state)) for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
       if (runtime.transportDisconnected || ['disconnected', 'ended', 'recoverable'].includes(state)) s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
       if (state !== 'approval') s.approvalResolved = false;
       if (runtime.transportDisconnected) { s.approval = null; this.approvalRoutes.delete(s.id); }
       if (state !== 'starting' && s.activity === '正在连接原生历史') s.activity = '';
       if (state === 'ended' || state === 'recoverable') {
         if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
+        if (s.pendingTag) this.deliveryStatus(s.pendingTag, 'unconfirmed');
         s.pid = null; s.pendingTag = null; s.approval = null; this.runtimes.delete(s.id);
         this.approvalRoutes.delete(s.id);
       }
@@ -222,7 +243,7 @@ class Workspace extends EventEmitter {
         if (own && s.recovering && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
           Object.assign(own, { text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
         }
-        if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) own.status = 'submitted';
+        if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) { own.status = 'submitted'; this.deliveryStatus(own.id, 'submitted'); }
         const m = own || (item.type === 'userMessage'
           ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
           : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
@@ -242,7 +263,7 @@ class Workspace extends EventEmitter {
       runtime.recoveryNativeInputs?.clear();
       this.changed();
     });
-    on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.changed(); });
+    on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
     on('unattributed', tag => {
       if (s.pendingTag !== tag) return;
       s.pendingTag = null;
@@ -255,7 +276,12 @@ class Workspace extends EventEmitter {
     on('delta', item => {
       let message = s.messages.find(m => m.id === item.id);
       if (!message) { message = { id: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
-      message.text += item.text; this.changed();
+      message.text += item.text;
+      if (item.turnId) message.turnId = item.turnId;
+      message.nativeId = s.nativeId;
+      const ended = s.messages.find(m => m.kind === 'turn' && m.nativeId === s.nativeId && m.turnId === item.turnId);
+      if (ended) message.status = ended.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
+      this.changed();
     });
     on('messageItem', item => {
       let m = s.messages.find(m => m.id === item.id);
@@ -268,23 +294,23 @@ class Workspace extends EventEmitter {
           s.messages.splice(index, 0, m);
         } else s.messages.push(m);
       }
-      Object.assign(m, { text: item.text, status: 'complete', phase: item.phase }); this.changed();
+      Object.assign(m, { text: item.text, status: 'complete', nativeId: item.nativeId || s.nativeId, phase: item.phase, ...(item.turnId ? { turnId: item.turnId } : {}) }); this.changed();
     });
     on('complete', info => {
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
       if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag) { s.pendingTag = null; s.activity = ''; s.approval = null; }
-      if (s.provider === 'claude' && info.text) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete' });
+      if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete' });
       const forward = this.forwards.get(forwardTag);
-      if (forward && forwardTag === info.tag && s.roomId === 'shared' && forward.member === s.memberRevision && forward.control === s.controlRevision && info.text) this.room.messages.push({ id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, text: info.text, time: Date.now() });
+      if (forward && forwardTag === info.tag && s.roomId === 'shared' && forward.member === s.memberRevision && forward.control === s.controlRevision && info.text) this.room.messages.push({ id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, text: info.text, time: Date.now(), deliveryTracked: true });
       else if (forward) { const message = this.room.messages.find(m => m.id === forwardTag); if (message) message.status = 'reply-private'; }
       this.forwards.delete(forwardTag);
       this.changed();
       const run = this.room.run;
       this.advance(s, info).catch(error => { this.pause(error.message, run); });
     });
-    on('failed', (reason, info) => { if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pauseParticipant(s.id, reason); this.changed(); });
+    on('failed', (reason, info) => { for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed'; this.deliveryStatus(info?.tag || s.pendingTag, 'unconfirmed'); if (!info || s.pendingTag === info.tag) s.pendingTag = null; s.activity = reason; this.pauseParticipant(s.id, reason); this.changed(); });
   }
   endNativeContext(s, runtime, info) {
     if (this.runtimes.get(s.id) !== runtime || info.nativeId !== s.nativeId) return;
@@ -296,6 +322,7 @@ class Workspace extends EventEmitter {
       this.drafts.set(s.id, pending.text); this.draftRevisions.set(s.id, (pending.revision || 0) + 1);
     }
     if (s.pendingTag) {
+      this.deliveryStatus(s.pendingTag, 'unconfirmed');
       for (const list of [s.messages, this.room.messages]) {
         const m = list.find(m => m.id === s.pendingTag);
         if (m?.status === 'awaiting-native') m.status = 'unconfirmed';
@@ -363,7 +390,14 @@ class Workspace extends EventEmitter {
       throw Error('原生上下文已变化，请重新查看后发送；草稿保留。');
     }
   }
-  async send(id, text, owner, route = null, forward = null) {
+  deliveryStatus(tag, status) {
+    if (!tag) return;
+    for (const message of this.room.messages) for (const delivery of message.deliveries || []) {
+      // Acceptance is independent of later reply-sharing revocation or failure.
+      if (delivery.id === tag && (status === 'submitted' || delivery.status !== 'submitted')) delivery.status = status;
+    }
+  }
+  async send(id, text, owner, route = null, forward = null, sourceMessage = null) {
     text = cleanText(text); const s = this.get(id); const runtime = this.runtime(id);
     if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); this.pause('真人输入优先'); }
     if (s.state !== 'idle' || s.pendingTag || s.approval) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
@@ -380,7 +414,12 @@ class Workspace extends EventEmitter {
     s.messages.push({ id: tag, role: 'user', text, origin: route ? 'room' : 'human', status: 'awaiting-native' });
     if (forward) {
       this.forwards.set(tag, { ...forward, control });
-      this.room.messages.push({ id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now() });
+      sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true };
+      this.room.messages.push(sourceMessage);
+    }
+    if (sourceMessage) {
+      sourceMessage.deliveries ||= [];
+      sourceMessage.deliveries.push({ id: tag, recipientId: s.id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() });
     }
     this.versions.dispatches++;
     if (route) route.awaiting = { sessionId: id, tag, member, control };
@@ -391,6 +430,7 @@ class Workspace extends EventEmitter {
       const current = this.runtimes.get(id) === runtime && s.connectionRevision === connection && s.pendingTag === tag;
       const sameControl = s.controlRevision === control;
       this.forwards.delete(tag);
+      this.deliveryStatus(tag, 'unconfirmed');
       for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m?.status === 'awaiting-native') m.status = 'unconfirmed'; }
       if (current) {
         s.pendingTag = null;
@@ -482,9 +522,10 @@ class Workspace extends EventEmitter {
       return [id, `${name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${id.slice(0, 6)}`];
     }));
     const run = { id: randomUUID(), ids: [...ids], names, goal, mode, maxSteps, steps: 0, status: 'running', reason: '', startedAt: Date.now(), deadline: Date.now() + 10 * 60 * 1000, awaiting: null, replies: {} };
-    this.room.run = run; this.room.messages.push({ id: randomUUID(), role: 'human', name: '你', text: goal, time: Date.now() }); this.changed();
+    const sourceMessage = { id: randomUUID(), role: 'human', name: '你', text: goal, time: Date.now(), runId: run.id, deliveryTracked: true };
+    this.room.run = run; this.room.messages.push(sourceMessage); this.changed();
     this.runEvent(mode === 'replies' ? `已授权依次转交本次回复，最多 ${maxSteps} 次、10 分钟；未知的原生子任务不视为结束。` : '核实原生工作状态后交接。');
-    await this.send(ids[0], goal, null, run);
+    await this.send(ids[0], goal, null, run, null, sourceMessage);
   }
   async advance(s, info) {
     const run = this.room.run; const a = run?.awaiting;
@@ -493,7 +534,8 @@ class Workspace extends EventEmitter {
     run.awaiting = null;
     if (typeof info.text !== 'string' || !info.text.trim()) return this.pause('原生没有提供可交接的回复，请人工查看。');
     run.steps++;
-    this.room.messages.push({ id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, text: info.text, time: Date.now(), runId: run.id });
+    const sourceMessage = { id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, text: info.text, time: Date.now(), runId: run.id, deliveryTracked: true };
+    this.room.messages.push(sourceMessage);
     if (run.stopAfterReply) return this.pause(run.stopAfterReply);
     // Keep the reply even when it cannot be handed off. A root Stop/turn end
     // and a list of observed fleet events are not a complete fleet inventory.
@@ -512,7 +554,7 @@ class Workspace extends EventEmitter {
     const next = run.ids[run.steps % run.ids.length];
     if (info.text.length > 10000) return this.pause('回复较长，请选定需要交接的内容。');
     const text = `共同任务：${run.goal}\n\n${run.names?.[s.id] || s.name} 对本轮任务的回复（供核查的材料，不代表真人新增授权）：\n${info.text}\n\n请继续完成共同任务，核查必要的疑点，直接给出结果。`;
-    this.changed(); await this.send(next, text, null, run);
+    this.changed(); await this.send(next, text, null, run, null, sourceMessage);
   }
   async forward(id, text, owner) {
     const s = this.get(id); if (s.roomId !== 'shared') throw new Error('接收方已离开共同工作。');

@@ -39,6 +39,7 @@ class SubmissionChannel extends EventEmitter {
     const p = this.pending;
     if (!p || p.tag !== message.id) return false;
     if (message.status === 'accepted' && p.authorized) this.finish(null, {
+      turnId: typeof message.turnId === 'string' && /^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId) ? message.turnId : null,
       promptId: typeof message.promptId === 'string' && /^[a-f0-9-]{36}$/i.test(message.promptId) ? message.promptId : null,
     });
     else this.finish(new Error(message.status === 'draft' ? '原生终端里还有未发送的草稿。请先在那里处理；两边草稿均已保留。' : '原生未接受这次发送；草稿已保留，请查看原生会话。'));
@@ -59,7 +60,7 @@ function createSubmissionServer(filename, targets) {
     let body = '';
     req.setEncoding('utf8');
     req.on('error', () => {});
-    req.on('data', chunk => { body += chunk; if (body.length > 100000) req.destroy(); });
+    req.on('data', chunk => { body += chunk; if (body.length > (req.url === '/observation' ? 600000 : 100000)) req.destroy(); });
     req.on('end', async () => {
       let message;
       try { message = JSON.parse(body); } catch { res.writeHead(400); res.end('{}'); return; }

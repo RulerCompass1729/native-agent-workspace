@@ -123,12 +123,15 @@ class Claude extends EventEmitter {
     if (this.observationEpoch) this.observeRootGap({ sessionId: message.sessionId, lease: this.rootLease, epoch: this.observationEpoch });
     this.observationEpoch = crypto.randomBytes(16).toString('hex');
     this.rootObservation = null;
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch };
+    this.nativeBlocks = message.nativeBlocks === true;
+    this.displayProofs = new Map(); this.displayGap = false;
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks };
   }
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
   }
   observeRoot(message) {
+    if (message.block === true) return this.observeBlock(message);
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch || !/^[a-f0-9-]{36}(?::\d{1,5})?$/i.test(message.id || '') ||
       !['response', 'tool-output'].includes(message.kind) || typeof message.text !== 'string' || message.text.length > 12000 ||
       !Number.isSafeInteger(message.sequence) || message.sequence < 1) throw Error('Invalid native observation');
@@ -144,11 +147,46 @@ class Claude extends EventEmitter {
       text: message.text + (message.nonText === true ? '\n含非文本结果，请在原生终端查看。' : ''), truncated: message.truncated === true });
     return { observed: true };
   }
+  observeBlock(message) {
+    if (!this.nativeBlocks || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
+      !/^(display|tool|turn):[a-zA-Z0-9_:-]{1,160}$/.test(message.id || '') ||
+      !['response', 'tool', 'turn'].includes(message.kind) ||
+      !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
+      !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
+      (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
+      !['text', 'delta', 'input', 'title'].every(k => message[k] === undefined || (typeof message[k] === 'string' && message[k].length <= 500000))) throw Error('Invalid native block');
+    this.rootObservation = { lease: message.lease, sequence: message.sequence };
+    if (message.gap) this.observeRootGap(message);
+    const { id, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete } = message;
+    if (kind !== 'tool' && (typeof turnId !== 'string' || !/^[a-zA-Z0-9_:-]{1,160}$/.test(turnId))) throw Error('Invalid native turn');
+    this.displayProofs ||= new Map();
+    let turn = this.displayProofs.get(turnId);
+    if (!turn) { turn = { blocks: new Map(), incomplete: this.displayGap }; this.displayProofs.set(turnId, turn); }
+    while (this.displayProofs.size > 8) this.displayProofs.delete(this.displayProofs.keys().next().value);
+    if (kind === 'response') {
+      let block = turn.blocks.get(id);
+      if (!block) { block = { index: -1, text: '' }; turn.blocks.set(id, block); }
+      if (block.index + 1 !== index || turn.ended || (turn.promptId && turn.promptId !== promptId)) turn.incomplete = true;
+      turn.promptId = promptId;
+      block.index = index; block.text += delta; block.final = status === 'complete';
+      if (turn.blocks.size > 64 || [...turn.blocks.values()].reduce((n, b) => n + b.text.length, 0) > 500000) { turn.blocks.clear(); turn.incomplete = true; }
+    }
+    if (kind === 'turn') {
+      turn.ended = true;
+      const block = turn.blocks.get(message.finalDisplayId);
+      if (status === 'complete' && !turn.incomplete && block?.final) turn.safeText = block.text;
+    }
+    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, text, delta, index, title, status, input, incomplete });
+    if (kind === 'turn' && this.pending?.turnId === turnId && this.pending.stopEvent) this.finishReply(this.pending, this.pending.stopEvent);
+    return { observed: true };
+  }
   observeRootGap(message) {
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
+    this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
     this.emit('progress', { id: `claude-observation-gap-${this.record.nativeId}`,
       source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步',
       text: '本地观察连接或队列出现缺口，请核对原生终端。没有重发任务。' });
+    if (this.nativeBlocks) this.emit('nativeBlock', { id: `gap:${this.observationEpoch}`, nativeId: this.record.nativeId, kind: 'gap', status: 'unconfirmed', text: '部分原生内容未能同步，请在原生终端核对。没有重发任务。' });
   }
   contextEnding(reason = 'other') {
     if (this.rootEnding?.sessionId === this.record.nativeId) return;
@@ -185,6 +223,7 @@ class Claude extends EventEmitter {
     this.rootLease = crypto.randomBytes(32).toString('hex');
     this.observationEpoch = crypto.randomBytes(16).toString('hex'); this.rootObservation = null;
     this.rootEnding = null; this.lastPromptId = null; this.pending = null; this.ready = true;
+    this.displayProofs = new Map(); this.displayGap = false;
     this.emit('state', 'idle'); this.emit('model', change.model);
     const observed = (this.contextEvents || []).filter(e => e.session_id === change.nativeId);
     this.contextEvents = (this.contextEvents || []).filter(e => e.session_id !== change.nativeId);
@@ -250,7 +289,7 @@ class Claude extends EventEmitter {
         }
         if ((pending && event.prompt_id !== pending.promptId) ||
           (!pending && this.lastPromptId && event.prompt_id !== this.lastPromptId)) {
-          if (event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id || crypto.randomUUID()}`, text: event.last_assistant_message });
+          if (!this.nativeBlocks && event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id || crypto.randomUUID()}`, text: event.last_assistant_message });
           return;
         }
         this.finishReply(pending, event);
@@ -262,21 +301,32 @@ class Claude extends EventEmitter {
   }
   finishReply(pending, event) {
         if (pending?.nativeId && (pending.nativeId !== this.record.nativeId || this.rootEnding?.sessionId === pending.nativeId)) {
-          if (event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id}`, nativeId: pending.nativeId, text: event.last_assistant_message });
+          if (!this.nativeBlocks && event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id}`, nativeId: pending.nativeId, text: event.last_assistant_message });
           return;
         }
         if (pending && this.pending !== pending) {
-          if (event.last_assistant_message) this.emit('messageItem', { id: crypto.randomUUID(), text: event.last_assistant_message });
+          if (!this.nativeBlocks && event.last_assistant_message) this.emit('messageItem', { id: crypto.randomUUID(), text: event.last_assistant_message });
           return;
         }
         const accepted = pending?.accepted && pending.promptId && event.prompt_id === pending.promptId && this.pending === pending && pending.guard();
+        const proof = this.nativeBlocks && pending?.turnId ? this.displayProofs?.get(pending.turnId) : null;
+        if (this.nativeBlocks && accepted && pending.turnId && !proof?.ended && !pending.displayTimedOut) {
+          pending.stopEvent = event;
+          pending.displayTimer ||= setTimeout(() => {
+            pending.displayTimedOut = true;
+            if (this.pending === pending) this.finishReply(pending, event);
+          }, 2000).unref();
+          return;
+        }
+        clearTimeout(pending?.displayTimer);
+        const displayConfirmed = !this.nativeBlocks || (proof?.ended && !proof.incomplete && proof.promptId === pending?.promptId && typeof proof.safeText === 'string');
         if (this.pending === pending) this.pending = null;
         const background = Array.isArray(event.background_tasks) ? event.background_tasks.length : null;
         const scheduled = Array.isArray(event.session_crons) ? event.session_crons.length : null;
         this.emit('background', { count: background, scheduled });
         this.emit('state', 'idle');
         // Observed child hooks cannot certify that all descendants are idle.
-        this.emit('complete', { tag: accepted ? pending.tag : undefined, text: event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
+        this.emit('complete', { tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
   }
   async send(text, tag, guard) {
     if (!this.ready || this.pending) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
@@ -286,6 +336,7 @@ class Claude extends EventEmitter {
       const receipt = await this.submission.request(text, tag, guard);
       pending.accepted = true;
       pending.promptId = receipt?.promptId || null;
+      pending.turnId = receipt?.turnId || null;
       this.emit('submitted', tag);
       if (pending.nativeId !== this.record.nativeId || this.rootEnding?.sessionId === pending.nativeId) {
         // Correlation controls sharing, not retention of already observed old
@@ -585,7 +636,7 @@ class Codex extends EventEmitter {
       case 'turn/started': this.turnId = p.turn.id; this.emit('state', 'working'); break;
       case 'item/agentMessage/delta':
         this.stateRevision++; // Live work invalidates an older resume status.
-        if (!this.historyMessageItems.has(p.itemId)) { this.liveMessageItems.add(p.itemId); this.emit('delta', { id: p.itemId, text: p.delta }); }
+        if (!this.historyMessageItems.has(p.itemId)) { this.liveMessageItems.add(p.itemId); this.emit('delta', { id: p.itemId, text: p.delta, turnId: p.turnId }); }
         break;
       case 'item/started':
         if (p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) this.emit('activity', p.item.type);
@@ -599,7 +650,7 @@ class Codex extends EventEmitter {
         break;
       case 'item/completed':
         if (['userMessage', 'agentMessage'].includes(p.item?.type)) this.stateRevision++;
-        if (p.item?.type === 'agentMessage') { this.liveMessageItems.add(p.item.id); this.turn(p.turnId).text = p.item.text || ''; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase }); }
+        if (p.item?.type === 'agentMessage') { this.liveMessageItems.add(p.item.id); this.turn(p.turnId).text = p.item.text || ''; this.emit('messageItem', { id: p.item.id, text: p.item.text || '', phase: p.item.phase, turnId: p.turnId }); }
         // A human may steer an active GUI turn from the native terminal. Only
         // our explicitly identified echo is redundant; matching text is not ID.
         if (p.item?.type === 'userMessage' && !this.ownInputs.has(p.item.clientId) && (!p.item.id || !this.inputItems.has(p.item.id))) {
@@ -609,6 +660,9 @@ class Codex extends EventEmitter {
         break;
       case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage); break;
       case 'turn/completed': {
+        this.emit('nativeBlock', { id: `turn:${p.turn.id}`, kind: 'turn', turnId: p.turn.id, nativeId: this.record.nativeId,
+          status: p.turn.status === 'completed' ? 'complete' : p.turn.status === 'interrupted' ? 'interrupted' : 'failed',
+          text: p.turn.status === 'completed' ? '原生本轮已结束' : p.turn.status === 'interrupted' ? '原生已中断本轮' : '原生本轮未正常完成' });
         this.turn(p.turn.id).completed = p.turn;
         // Events can arrive before the RPC acknowledgement names our turn.
         // Wait for that identity instead of assigning whichever turn finishes.

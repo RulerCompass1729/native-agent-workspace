@@ -160,6 +160,9 @@ test('only explicitly shared text persists in the shared timeline; no automatic 
   const cold = new LegacyInput(f.root); t.after(() => cold.close());
   assert.deepEqual(cold.sharedMessages().map(m => [m.text, m.status, m.role, m.manualReply]),
     [['explicit shared task', 'submitted', 'human', true]]);
+  const receipt = cold.sharedMessages()[0].deliveries[0];
+  assert.equal(receipt.text, 'explicit shared task'); assert.equal(receipt.recipientId, f.record.id);
+  assert.equal(receipt.recipientName, 'Test agent'); assert.equal(receipt.status, 'submitted');
   bridge.emit('complete', f.record.id, { text: 'private unrelated reply' });
   assert.equal(bridge.sharedMessages().length, 1);
   cold.clearSharedHistory();

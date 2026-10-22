@@ -26,21 +26,76 @@ const terminalThemes = {
 };
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
 const terminals = new Map();
-const progressPanels = new Map();
-const progressReading = new Map();
-function renderProgressPanels() {
-  const visible = selected === "room" && !roomSession ? members() : current() && mode === "chat" ? [current()] : [];
-  const container = selected === "room" && !roomSession ? $("room-progress") : $("solo-progress");
-  for (const [id, panel] of progressPanels) if (!visible.some(record => record.id === id)) { progressReading.set(id, panel.readingState()); panel.dispose(); progressPanels.delete(id); }
-  while (progressReading.size > 50) progressReading.delete(progressReading.keys().next().value);
-  for (const record of visible) {
-    let panel = progressPanels.get(record.id);
-    if (!panel) { panel = new NativeProgressPanel(record.id, progressReading.get(record.id)); progressPanels.set(record.id, panel); }
-    if (panel.element.parentElement !== container) panel.moveTo(container);
-    panel.update(record, record.legacyObservation || record.legacyProgress || (record.serviceCapabilities || state.capabilities || []).includes("observe"), !disconnected);
-    if (record.provider === 'codex' && record.runtimeVersion === '0.1.0-alpha.2') panel.useNativeEntry(terminals.get(record.id));
+
+// Older retained services expose a bounded progress journal, not native blocks.
+// Read its existing records inline without creating a second terminal surface.
+const legacyProgress = new Map();
+const legacyProgressGeneration = s => JSON.stringify([s.nativeId, s.connectionRevision, s.backendId, s.runtimeVersion]);
+const legacyProgressOffline = s => disconnected || !s || s.transportDisconnected || s.backendUnavailable || ['disconnected', 'error', 'recoverable', 'ended'].includes(s.state) ||
+  (!s.legacyProgress && !(s.serviceCapabilities || state.capabilities || []).includes('observe'));
+function freezeLegacyProgress(s) {
+  const cache = legacyProgress.get(s.id);
+  if (!cache) return;
+  cache.suspended = true; cache.loading = false; cache.pending = []; cache.pendingBytes = 0;
+}
+function applyLegacyProgress(cache, event) {
+  if (event.revision <= cache.revision) return;
+  if (cache.revision >= 0 && event.revision !== cache.revision + 1) cache.truncated = true;
+  cache.revision = event.revision; cache.truncated ||= event.truncated;
+  for (const id of event.removed || []) cache.items.delete(id);
+  if (event.item) cache.items.set(event.item.id, event.item);
+  let bytes = [...cache.items.values()].reduce((n, item) => n + JSON.stringify(item).length, 0);
+  while (cache.items.size > 200 || bytes > 1024 * 1024) {
+    const first = cache.items.keys().next().value; bytes -= JSON.stringify(cache.items.get(first)).length;
+    cache.items.delete(first); cache.truncated = true;
   }
-  for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id));
+}
+function readLegacyProgress(s) {
+  if (s.nativeBlockMapping) return;
+  if (legacyProgressOffline(s)) { freezeLegacyProgress(s); return; }
+  const generation = legacyProgressGeneration(s);
+  const previous = legacyProgress.get(s.id);
+  if (previous?.generation === generation && !previous.suspended) return;
+  const cache = { items: new Map(previous?.generation === generation ? previous.items : []), revision: -1, truncated: false, generation, loading: true, pending: [], pendingBytes: 0, refreshing: !!previous?.suspended }; legacyProgress.set(s.id, cache);
+  while (legacyProgress.size > 12) legacyProgress.delete(legacyProgress.keys().next().value);
+  api.observe(s.id).then(value => {
+    const latest = state?.sessions.find(item => item.id === s.id);
+    if (legacyProgress.get(s.id) !== cache || cache.suspended || !latest || legacyProgressGeneration(latest) !== generation) return;
+    if (legacyProgressOffline(latest)) { freezeLegacyProgress(latest); return; }
+    if (!value?.progress) throw new Error('Missing progress snapshot');
+    const progress = value.progress;
+    cache.items = new Map(progress.items.map(item => [item.id, item])); cache.revision = progress.revision; cache.truncated ||= progress.truncated;
+    for (const event of cache.pending) applyLegacyProgress(cache, event);
+    cache.pending = []; cache.pendingBytes = 0; cache.loading = false; cache.refreshing = false; render();
+  }).catch(() => { if (legacyProgress.get(s.id) !== cache || cache.suspended) return; cache.pending = []; cache.pendingBytes = 0; cache.loading = false; cache.unavailable = true; render(); });
+}
+function sessionMessages(s) {
+  const cache = legacyProgress.get(s.id);
+  if (s.nativeBlockMapping || !cache) return s.messages;
+  if (legacyProgressOffline(s)) freezeLegacyProgress(s);
+  const stale = cache.suspended || cache.refreshing || cache.unavailable;
+  const rows = [...cache.items.values()].map(item => ({ ...item, id: `legacy-observation:${item.id}`, role: 'tool',
+    title: `${item.title || '原生过程'} · ${stale ? '最后记录' : '旧连接记录'}`, status: stale && ['running', 'streaming'].includes(item.status) ? 'unconfirmed' : item.status,
+    volatile: true, incomplete: item.truncated }));
+  if (stale) rows.push({ id: 'legacy-observation-offline', role: 'system', text: '连接状态尚未确认。保留最后收到的过程记录，当前运行情况未知。' });
+  if (cache.unavailable || cache.truncated) rows.push({ id: 'legacy-observation-gap', role: 'system', text: '旧连接的过程记录不完整，请核对原生终端。', incomplete: true });
+  // Legacy records have no authoritative ordering against saved final replies.
+  // Keep their own original order, rather than inventing a merged chronology.
+  return s.messages.concat(rows);
+}
+function updateLegacyProgress(event) {
+  const s = state?.sessions.find(s => s.id === event.id);
+  if (!s || s.nativeBlockMapping) return;
+  if (legacyProgressOffline(s)) { freezeLegacyProgress(s); return; }
+  let cache = legacyProgress.get(s.id);
+  if (!cache || cache.suspended || cache.generation !== legacyProgressGeneration(s)) { readLegacyProgress(s); cache = legacyProgress.get(s.id); }
+  if (!cache || event.revision <= cache.revision) return;
+  if (cache.loading) {
+    cache.pending.push(event); cache.pendingBytes += JSON.stringify(event).length;
+    while (cache.pending.length > 200 || cache.pendingBytes > 1024 * 1024) { cache.pendingBytes -= JSON.stringify(cache.pending.shift()).length; cache.truncated = true; }
+  }
+  applyLegacyProgress(cache, event);
+  if (activeSessionId() === s.id && mode === 'chat') render();
 }
 
 const inputRecoveries = new Map();
@@ -61,6 +116,7 @@ const inputFocusAllowed = () => !sessionMenu && !roomMenu && !document.querySele
 function updateState(next) {
   const before = current(), id = activeSessionId();
   state = { ...state, ...next };
+  for (const s of state.sessions || []) if (legacyProgressOffline(s)) freezeLegacyProgress(s);
   if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
   const after = current();
   if (before && after && (before.owner !== owner || after.owner !== owner)) {
@@ -469,7 +525,7 @@ function timeline() {
 }
 function filteredTimeline() {
   const id = $('room-filter').value, query = $('room-search').value.trim().toLocaleLowerCase();
-  return timeline().filter(m => (!id || m.sessionId === id || m.recipientId === id) && (!query || m.text.toLocaleLowerCase().includes(query)));
+  return timeline().filter(m => (!id || m.sessionId === id || m.recipientId === id || m.deliveries?.some(d => d.recipientId === id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
 }
 function renderTimeline() {
   const candidates = new Map();
@@ -477,6 +533,7 @@ function renderTimeline() {
   for (const m of timeline()) {
     const id = m.sessionId || m.recipientId;
     if (id && !candidates.has(id)) candidates.set(id, state.sessions.find(s => s.id === id)?.name || m.name || '历史成员');
+    for (const d of m.deliveries || []) if (!candidates.has(d.recipientId)) candidates.set(d.recipientId, state.sessions.find(s => s.id === d.recipientId)?.name || d.recipientName || '历史成员');
   }
   const filter = $('room-filter'), chosen = filter.value || pendingRoomFilter; pendingRoomFilter = '';
   const filterSignature = JSON.stringify([...candidates]);
@@ -562,8 +619,7 @@ function updateSharingControls() {
 function visibleSelectionTerminal() {
   const s = current(); if (!s || s.archived) return null;
   if (mode === 'terminal') return terminals.get(s.id)?.ready ? terminals.get(s.id).term : null;
-  const panel = progressPanels.get(s.id);
-  return panel?.element.open && !panel.viewport.hidden ? panel.borrowed?.term || panel.term : null;
+  return null;
 }
 function selectedSharingText() {
   const s = current(); if (!s || s.archived) return '';
@@ -573,7 +629,7 @@ function selectedSharingText() {
       // Only the displayed conversation/trace/permission content is a source.
       // A selection in another pane or dialog must not become this agent's text.
       const visible = value => (value?.nodeType === Node.ELEMENT_NODE ? value : value?.parentElement)?.getClientRects().length > 0;
-      const inside = visible(selection.anchorNode) && visible(selection.focusNode) && ['messages', 'solo-progress', 'approval'].some(id => {
+      const inside = visible(selection.anchorNode) && visible(selection.focusNode) && ['messages', 'approval'].some(id => {
         const el = $(id);
         return !el.hidden && el.contains(selection.anchorNode) && el.contains(selection.focusNode);
       });
@@ -686,7 +742,6 @@ function renderMembers() {
 function render() {
   if (!state || rendering) return;
   captureReadingViews();
-  for (const panel of progressPanels.values()) panel.captureTraceReading();
   rendering = true;
   try {
     if (selected === 'room' && state.room.archived) { selected = ''; roomSession = ''; attempt(persistView); }
@@ -732,8 +787,10 @@ function render() {
       $('messages').hidden = mode !== 'chat'; $('terminal-area').hidden = mode !== 'terminal'; $('composer-wrap').hidden = mode !== 'chat';
       renderComposer(s);
       $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
-      const signature = JSON.stringify(s.messages);
-      if (mode === 'chat' && (signature !== lastMessages || messageViews.get($('messages'))?.key !== s.id)) { messageList($('messages'), s.messages, false, s.id); lastMessages = signature; }
+      if (mode === 'chat') readLegacyProgress(s);
+      const visibleMessages = sessionMessages(s);
+      const signature = JSON.stringify(visibleMessages);
+      if (mode === 'chat' && (signature !== lastMessages || messageViews.get($('messages'))?.key !== s.id)) { messageList($('messages'), visibleMessages, false, s.id); lastMessages = signature; }
       renderApproval(s, own);
       renderAdvanced(s);
       for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)); }
@@ -786,7 +843,7 @@ function render() {
       $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || (!pendingRun && run?.status !== 'running');
       if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
     }
-    renderProgressPanels();
+    for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id));
     updateSelectedSharing();
   } finally { restoreVisibleReading(); rendering = false; }
 }
@@ -986,18 +1043,18 @@ function fitTerminal(id) {
   if (!entry?.ready || activeSessionId() !== id || mode !== 'terminal' || s?.owner !== owner) return;
   requestAnimationFrame(() => { if (activeSessionId() !== id || mode !== 'terminal' || !entry.element.isConnected || !entry.element.checkVisibility() || state.sessions.find(s => s.id === id)?.owner !== owner) return; entry.fit.fit(); attempt(() => api.resize(id, entry.term.cols, entry.term.rows)); });
 }
-function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => progressPanels.get(event.id)?.followNativeEntry()); entry.sequence = event.sequence; } }
+function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data); entry.sequence = event.sequence; } }
 const disposers = [
-  api.onProgress(event => progressPanels.get(event.id)?.receiveProgress(event)),
-  api.onTerminal(event => { progressPanels.get(event.id)?.receive(event); const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
+  api.onProgress(updateLegacyProgress),
+  api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
   api.onState(next => { updateState(next); render(); }),
   api.onSessionName(({ id, name }) => {
     const record = state?.sessions.find(s => s.id === id);
     if (record) { record.name = name; render(); }
   }),
-  api.onDisconnected(message => { disconnected = true; render(); toast(message); }),
+  api.onDisconnected(message => { disconnected = true; for (const s of state?.sessions || []) freezeLegacyProgress(s); render(); toast(message); }),
   api.onViewStorage(warning => { latestViewStorage = warning; if (state) { state.viewStorageWarning = warning; render(); } }),
-  api.onReconnected(next => { disconnected = false; for (const panel of progressPanels.values()) panel.started = false; updateState(next); render(); }),
+  api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
   api.onNew(() => openCreate()),
 ];
 const observer = new ResizeObserver(() => { if (activeSessionId()) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
@@ -1391,4 +1448,4 @@ attempt(async () => {
   }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); for (const panel of progressPanels.values()) panel.dispose(); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

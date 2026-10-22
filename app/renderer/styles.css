@@ -94,6 +94,13 @@ header h1, header p { overflow-wrap: anywhere; }
 #room-messages .message-body { font-size: 13px; }
 #room-messages .message.human .message-body { padding: 0; background: transparent; }
 .message-heading time { font-size: 11px; font-weight: 400; color: var(--muted); }
+.message-delivery { margin-top: 6px; color: var(--muted); font-size: 11px; }
+.message-delivery summary { cursor: pointer; overflow-wrap: anywhere; }
+.message-delivery summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.delivery-body { margin-top: 8px; padding: 10px 12px; border-left: 2px solid var(--border); }
+.delivery-body strong { color: var(--ink); font-weight: 500; }
+.delivery-payload { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; font: inherit; font-size: 12px; line-height: 1.7; color: var(--ink); user-select: text; }
+.delivery-body p { margin: 6px 0 0; line-height: 1.6; }
 .timeline-day { display: flex; align-items: center; gap: 12px; font-size: 11px; color: var(--muted); margin: 12px 0 20px; }
 .timeline-day::before, .timeline-day::after { content: ''; height: 1px; flex: 1; background: var(--border); }
 #room-messages .system { color: var(--muted); border-left: 2px solid var(--border); padding-left: 10px; }
@@ -175,25 +182,8 @@ header h1, header p { overflow-wrap: anywhere; }
 
 #draft-recovery{margin-bottom:10px;padding:10px;border:1px solid var(--border);border-radius:8px}#draft-recovery summary{cursor:pointer;font-size:12px;color:var(--muted)}.draft-recovery-text{display:block;width:100%;margin-bottom:8px}.draft-recovery-copy+.draft-recovery-copy{margin-top:12px}.draft-recovery-copy button+button{margin-left:8px}
 
-.progress-panels { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; margin:0 24px; flex-shrink:1; min-height:40px; max-height:42vh; overflow:auto; }
-.progress-panels:empty { display:none; }
 .messages { min-height:140px; }
 #composer-wrap { flex-shrink:0; max-height:35vh; overflow:auto; }
-.native-progress { border:1px solid var(--border); border-radius:10px; min-width:0; background:var(--surface); }
-.native-progress>summary { padding:9px 12px; cursor:pointer; display:flex; align-items:center; gap:12px; }
-.native-progress>summary .quiet { margin-left:auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.progress-notice { margin:0; padding:4px 12px 8px; font-size:10px; }
-.progress-fleet { padding:10px 12px; border-top:1px solid var(--border); font-size:12px; display:grid; gap:6px; }
-.progress-fleet-row { display:flex; justify-content:space-between; gap:12px; overflow-wrap:anywhere; }
-.progress-viewport { overflow:auto; max-height:210px; background:#191b1e; }
-.progress-screen { padding:6px; }
-.progress-controls { display:flex; align-items:center; flex-wrap:wrap; gap:6px; padding:6px 10px; }
-.progress-controls input[type=range] { flex:1; min-width:70px; padding:0; width:100px; }
-.progress-controls button { font-size:11px; padding:4px 7px; }
-.progress-trace { padding:6px 12px; border-top:1px solid var(--border); font-size:12px; }
-.progress-trace summary { cursor:pointer; padding:4px 0; overflow-wrap:anywhere; }
-.progress-trace pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:150px; overflow:auto; font-size:11px; }
-.progress-trace button { font-size:10px; padding:3px 6px; }
 
 .run-person { display: flex; align-items: center; gap: 8px; min-height: 36px; }
 .run-person label { display: flex; align-items: center; gap: 8px; margin: 0; flex: 1; }
@@ -214,3 +204,5 @@ header h1, header p { overflow-wrap: anywhere; }
 .native-history-row span { min-width: 0; }
 .native-history-row strong, .native-history-row small { display: block; overflow-wrap: anywhere; }
 .native-history-row small { color: var(--muted); margin-top: 5px; line-height: 1.5; }
+.native-tool-input { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: 0.9em; }
+.message.tool .message-body { white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
