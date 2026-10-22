@@ -377,10 +377,11 @@ test('viewing an owned legacy session does not pause peer collaboration; stale v
   assert.equal(f.session.owner, 'B'); assert.equal(pauses, 1);
 });
 
-test('released alpha.51 compatibility hook upgrades, edited copies remain untouched', t => {
+for (const [version, hash] of [['51', '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6'],
+ ['69', 'a3462c9cb8bb11cdd6fdfb26baebf780bb9af9f7ef72535dd08bfa3f0ae7b359']]) test(`released alpha.${version} compatibility hook upgrades, edited copies remain untouched`, t => {
  const {cwd}=fixture(t),file=path.join(cwd,'.claude/skills/native-workspace-compat/hooks/register.js');
- const previous=fs.readFileSync(path.join(__dirname,'fixtures/claude-compat-alpha51.js'),'utf8');
- assert.equal(crypto.createHash('sha256').update(previous).digest('hex'),'79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6');
+ const previous=fs.readFileSync(path.join(__dirname,`fixtures/claude-compat-alpha${version}.js`),'utf8');
+ assert.equal(crypto.createHash('sha256').update(previous).digest('hex'),hash);
  installPlugin(cwd);const current=fs.readFileSync(file,'utf8');fs.writeFileSync(file,previous);installPlugin(cwd);assert.equal(fs.readFileSync(file,'utf8'),current);
  const edited=previous+'\n// Human customization\n';fs.writeFileSync(file,edited);assert.throws(()=>installPlugin(cwd),/未覆盖/);assert.equal(fs.readFileSync(file,'utf8'),edited);
 });

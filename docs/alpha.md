@@ -1,8 +1,22 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.69. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.70. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.70 reopening during queued work
+
+Closing the app leaves the retained native task running. The reader reconnects
+and restores buffered native input/output when reopened, including work that
+finished while the app was closed. This does not send the input again or restart
+the native session. Your unsent draft stays intact. A previous room sharing grant
+does not restart automatically; recovered output stays in the private session.
+An exact recovered native input confirms the existing shared receipt. Its existing
+session link and manual-sharing hint make that private reply reachable.
+The buffer is bounded, and a lost/evicted portion is explicitly marked rather
+than reported as complete. Source and installed native checks pass, including
+upgrading the immediately previous unmodified compatibility hook. Customized
+copies remain untouched.
 
 ## Alpha.69 retained Claude shared waiting
 

@@ -47,7 +47,8 @@ function installPlugin(cwd) {
     '6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1',
     '0833cbf4165cc439bfdd04ff7e7676886f5e40d518c47cfda25ba62e3292009a',
     '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6',
-    'dc1140fd7d19d57cafd7f8545be466efd177012960763a43c769b79a92229687']);
+    'dc1140fd7d19d57cafd7f8545be466efd177012960763a43c769b79a92229687',
+    'a3462c9cb8bb11cdd6fdfb26baebf780bb9af9f7ef72535dd08bfa3f0ae7b359']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
@@ -106,12 +107,38 @@ class LegacyInput extends EventEmitter {
   prepared(record) { return !!this.target(record); }
   reader(record) { const reader = this.readers.get(record.id); return reader?.record.nativeId === record.nativeId ? reader : null; }
   readerUnavailable(record) { return this.readerFailures.get(record.id) === record.nativeId; }
+  observeReader(target, message) {
+    if (!message || this.closed || this.targets.get(target.record.id) !== target) return;
+    // A fresh, authenticated native input can settle its historical receipt
+    // after GUI exit. This is not a submission ACK or authority to share replies.
+    if (target.retainedReader && target.record.provider === 'claude' &&
+      message.nativeBlock === true && message.role === 'user' && message.kind === 'input' &&
+      message.status === 'complete' && !message.incomplete && typeof message.inputTag === 'string' &&
+      message.nativeId === target.record.nativeId &&
+      message.id?.startsWith(`native:${message.nativeId}:prompt:`) &&
+      /^[a-f0-9-]{36}$/i.test(message.id.slice(`native:${message.nativeId}:prompt:`.length))) {
+      const row = this.records.find(row => row.id === message.inputTag && row.shared === true && row.inputMode === 'queue' &&
+        row.sessionId === target.record.id && row.nativeId === message.nativeId && row.text === message.text);
+      if (row && row.status !== 'accepted' && !this.storageError) {
+        const previous = { status: row.status, replyPrivate: row.replyPrivate }; row.status = 'accepted';
+        const grant = this.sharedReplies.grants.get(row.id);
+        if (!grant || grant.closed) row.replyPrivate = true;
+        try { this.save(); }
+        catch {
+          Object.assign(row, previous); this.storageError = true;
+          this.storageWarning = '已核实原生接收，但本地发送记录未能保存。没有重发，后续发送暂停；请检查磁盘与文件权限。';
+        }
+        this.emit('change');
+      }
+    }
+    this.sharedReplies.observed(target, message);
+  }
   sharedMessages() {
     const status = row => row.status === 'accepted' ? 'submitted' :
       this.targets.get(row.sessionId)?.pendingQueue === row.id ? 'awaiting-native' : 'unconfirmed';
     return [...this.records.filter(row => row.shared === true).map(row => ({
       id: row.id, role: 'human', recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
-      status: status(row), manualReply: row.sharedReply !== true,
+      status: status(row), manualReply: row.sharedReply !== true || row.replyPrivate === true,
       ...(row.inputMode ? { inputMode: row.inputMode } : {}),
       deliveryTracked: true, ...(row.replyTo ? { replyTo: row.replyTo } : {}),
       deliveries: [{ id: row.id, recipientId: row.sessionId, recipientName: row.recipientName || row.name, text: row.text,
@@ -238,7 +265,7 @@ class LegacyInput extends EventEmitter {
       this.readerFailures.delete(record.id);
       submission.on('change', () => this.emit('change'));
       target.on('change', () => this.emit('change'));
-      target.on('readerBlock', message => { if (message) this.sharedReplies.observed(target, message); });
+      target.on('readerBlock', message => this.observeReader(target, message));
       target.on('sharingBoundary', kind => this.sharedReplies.revoke(record.id,
         kind === 'control:permission' ? '等待原生权限确认；后续内容留在原会话' : '原生输入已改变；后续内容留在原会话'));
       target.on('contextEnd', () => this.sharedReplies.revoke(record.id, '原生上下文已结束'));

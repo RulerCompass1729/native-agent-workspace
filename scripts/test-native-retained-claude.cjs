@@ -16,8 +16,10 @@ const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim()
 const archive = execFileSync('git', ['archive', 'a87653b', 'app', 'package.json'], { cwd: root, maxBuffer: 16 * 1024 * 1024 });
 execFileSync('/usr/bin/tar', ['-x', '-C', old], { input: archive }); fs.symlinkSync(path.join(root, 'node_modules'), path.join(old, 'node_modules'));
 const sharedQueueTrial = process.env.NAW_RETAINED_SHARED_QUEUE === '1';
+const quitQueueTrial = process.env.NAW_RETAINED_QUEUE_QUIT === '1';
 const queueTrial = sharedQueueTrial || process.env.NAW_RETAINED_QUEUE === '1', sharedTrial = process.env.NAW_RETAINED_SHARED === '1';
 assert.ok(!(queueTrial && sharedTrial), 'Choose one bounded scenario');
+assert.ok(!quitQueueTrial || sharedQueueTrial, 'Whole-app pending quit uses the shared waiting scenario');
 const budget = sharedTrial ? 5 : queueTrial ? 4 : 3;
 let child, client, application, page, calls = 0, finishFinal;
 const checks = [], errors = [], sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -77,7 +79,7 @@ async function launch() {
   // Boot with the already released compatibility hook, then exercise the
   // actual explicit reload upgrade in this same native process.
   fs.writeFileSync(path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js'),
-    execFileSync('git', ['show', '2fe9784:app/claude-bridge/hooks/register.js'], { cwd: root, encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;'), { mode: 0o600 });
+    execFileSync('git', ['show', (quitQueueTrial ? '03c44d8' : '2fe9784') + ':app/claude-bridge/hooks/register.js'], { cwd: root, encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;'), { mode: 0o600 });
   fs.writeFileSync(path.join(bin, 'claude'), '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
     `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")\n` +
     `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--debug-file",${JSON.stringify(path.join(base, 'native-debug.log'))},"--allowedTools","Bash(printf:*)"])\n`, { mode: 0o700 });
@@ -108,6 +110,9 @@ async function launch() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === id)?.legacySubmit, 'Existing input plugin connected');
   await page.locator('#chat-tab').click();
   const linked = (await snapshot()).sessions.find(s => s.id === id);
+  if (quitQueueTrial) assert.equal(fs.readFileSync(path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js'), 'utf8'),
+    fs.readFileSync(path.join(code, 'app/claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', 'const legacyOnly = true;'),
+    'Released alpha.69 hook is upgraded to the exact current hook without replacing the native process');
   // The native file watcher may already have reloaded the updated project
   // plugin. Explain the pending case, but never require an obsolete warning.
   if (linked.legacyReaderPending) await until(async () => (await page.locator('#compose-hint').innerText()).includes('实时过程尚待更新') ||
@@ -169,22 +174,62 @@ async function launch() {
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).pendingQueue, 'Retained waiting receipt');
     queuedTag = (await snapshot()).sessions.find(s => s.id === id).pendingQueue;
     await page.locator('#messages').getByText('Handle this one queued instruction.', { exact: true }).waitFor();
-    await sleep(42000);
+    await sleep(quitQueueTrial ? 1000 : 42000);
     const waiting = (await snapshot()).sessions.find(s => s.id === id);
     assert.equal(waiting.pendingQueue, queuedTag); assert.equal(waiting.state, 'working'); assert.equal(calls, 3);
     assert.equal(waiting.messages.find(m => m.id === queuedTag).status, 'awaiting-native');
     assert.ok(!(await page.locator('#toast').innerText()).includes('超时'));
     fs.writeFileSync(path.join(base, 'waiting.json'), JSON.stringify(await snapshot(), null, 2));
-    checks.push('Retained native queue waits beyond both old deadlines, without interrupt, retry or extra model request');
+    checks.push(quitQueueTrial ? 'Shared input waits in the original native queue without starting a second task'
+      : 'Retained native queue waits beyond both old deadlines, without interrupt, retry or extra model request');
   }
   await page.locator('#message-input').fill('Unsent reader draft'); await sleep(300);
-  if (queueTrial || sharedTrial) {
+  if (quitQueueTrial) {
+    await application.close(); application = null; finishFinal();
+    await until(async () => calls === 4 && (await client.call('initial')).sessions.find(s => s.id === id)?.state === 'idle', 'Native queued task completes while GUI is closed');
+    fs.writeFileSync(path.join(base, 'pending-quit-native.json'), JSON.stringify(await client.call('initial'), null, 2));
+    await launch();
+  }
+  else if (queueTrial || sharedTrial) {
     await page.locator('#terminal-tab').click(); await page.locator('#chat-tab').click();
     await page.reload(); await page.locator('#new-session').waitFor();
     if (queueTrial) assert.equal((await snapshot()).sessions.find(s => s.id === id).pendingQueue, queuedTag);
   } else { await application.close(); application = null; await launch(); }
-  await until(async () => (await snapshot()).sessions.find(s => s.id === id)?.legacySubmit, 'Rebound observer after GUI reopen');
+  if (!quitQueueTrial) await until(async () => (await snapshot()).sessions.find(s => s.id === id)?.legacySubmit, 'Rebound observer after GUI reopen');
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
+  if (quitQueueTrial) {
+    const reopened = await snapshot(), session = reopened.sessions.find(s => s.id === id);
+    fs.writeFileSync(path.join(base, 'pending-reopen.json'), JSON.stringify(reopened, null, 2));
+    assert.equal(session.nativeId, before.nativeId); assert.equal(session.pid, before.pid); assert.equal(calls, 4);
+    assert.ok(['unconfirmed', 'submitted'].includes(reopened.room.messages.find(m => m.id === queuedTag).status));
+    await until(async () => (await snapshot()).sessions.find(s => s.id === id).messages.some(m => m.text.includes('RETAINED_QUEUED_REPLY')), 'Original queued native work continues after whole-app reopen');
+    const completed = await snapshot(), s = completed.sessions.find(s => s.id === id);
+    assert.equal(completed.room.messages.find(m => m.id === queuedTag).status, 'submitted', 'Exact recovered native input confirms receipt without replay');
+    assert.equal(completed.room.messages.find(m => m.id === queuedTag).deliveries[0].status, 'submitted');
+    assert.equal(completed.room.messages.find(m => m.id === queuedTag).manualReply, true, 'Recovered receipt explains that output remains in original session');
+    fs.writeFileSync(path.join(base, 'pending-reopen-completed.json'), JSON.stringify(completed, null, 2));
+    await page.locator('#terminal-tab').click();
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('RETAINED_QUEUED_REPLY'), 'Same native terminal shows completed queued reply');
+    fs.writeFileSync(path.join(base, 'pending-reopen-terminal.txt'), await page.locator('#terminal-area').innerText()); await page.locator('#chat-tab').click();
+    assert.equal(s.messages.filter(m => m.text === 'Handle this one queued instruction.').length, 1, 'Pending input and native acceptance must reconcile without duplicate displayed input');
+    assert.equal(s.nativeId, before.nativeId); assert.equal(s.pid, before.pid); assert.equal(calls, 4);
+    const actual = JSON.parse(fs.readFileSync(path.join(base, 'request-4.json')));
+    assert.equal(actual.messages.filter(m => m.role === 'user').flatMap(m => typeof m.content === 'string' ? [m.content] : m.content.filter(b => b.type === 'text').map(b => b.text)).filter(t => t === 'Handle this one queued instruction.').length, 1);
+    assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
+    assert.ok(s.messages.some(m => m.text.includes('RETAINED_FINAL_PREFIX:') && m.text.endsWith('42.\n')), 'Original task tail is restored, not only the next reply');
+    assert.equal(completed.room.messages.filter(m => m.role === 'assistant').length, 0, 'Reopening does not resurrect old sharing authority');
+    assert.deepEqual(errors, []);
+    if (process.env.NAW_EVIDENCE_DIR) {
+      fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'pending-quit-success.png') });
+      await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+      assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent room draft');
+      await page.locator('#room-messages').getByText('原生已接收 · 回复由你选定后分享', { exact: true }).waitFor();
+      await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'pending-receipt-success.png') });
+    }
+    checks.push('Whole-app reopen recovers output completed while closed, original pending work, draft and identity without replay, duplicate input or restored sharing grant');
+    console.log(JSON.stringify({ checks, version, calls, paidModelCalls: 0, evidence: base })); return;
+  }
   await page.locator(`[data-session-menu="${id}"]`).click();
   const secondOpened = application.waitForEvent('window');
   await page.getByRole('menuitem', { name: '在独立窗口打开', exact: true }).click();
