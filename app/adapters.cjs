@@ -115,6 +115,7 @@ class Claude extends EventEmitter {
   }
   bindRoot(message) {
     if (message.sessionId !== this.record.nativeId || this.rootEnding || !this.terminal?.alive) throw Error('Root unavailable');
+    if (this.rootLease) this.submission?.close?.(); // Reload retires uncertain receipts, never the native task.
     // This credential stays in the root mod's memory. A child inheriting the
     // environment token cannot bind its different engine session identity.
     this.rootLease ||= crypto.randomBytes(32).toString('hex');
@@ -124,6 +125,7 @@ class Claude extends EventEmitter {
     this.observationEpoch = crypto.randomBytes(16).toString('hex');
     this.rootObservation = null;
     this.nativeBlocks = message.nativeBlocks === true;
+    this.nativeQueue = message.nativeQueue === true;
     this.displayProofs = new Map(); this.displayGap = false;
     return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks };
   }
@@ -263,25 +265,30 @@ class Claude extends EventEmitter {
     });
     switch (event.hook_event_name) {
       case 'SessionStart': if (this.rootEnding) break; this.ready = true; this.emit('state', 'idle'); this.emit('model', event.model || '原生未报告'); break;
-      case 'UserPromptSubmit':
+      case 'UserPromptSubmit': {
         // A settings hook observing a prompt is not its acceptance. The native
         // structured submission result acknowledges our own sends separately.
         this.lastPromptId = event.prompt_id || null;
-        if (this.pending && !this.pending.accepted && this.submission.pending?.authorized && event.prompt === this.pending.text) {
-          this.pending.prompts.add(event.prompt_id || null);
+        const entering = this.queued || this.pending;
+        if (entering && !entering.accepted && this.submission.pending?.authorized && event.prompt === entering.text) {
+          entering.prompts.add(event.prompt_id || null);
+          if (entering === this.queued) this.emit('state', 'working');
         } else if (!this.pending || event.prompt !== this.pending.text || event.prompt_id !== this.pending.promptId) {
-          this.pending = null; this.emit('state', 'working'); this.emit('nativeInput', event.prompt || '原生输入');
+          if (this.queued) this.queued.superseded = true;
+          this.pending = null; this.emit('state', 'working'); this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: `claude-prompt-${event.prompt_id}` } : undefined);
         }
         break;
-      case 'PermissionRequest': this.pending = null; this.emit('state', 'approval'); break;
+      }
+      case 'PermissionRequest': if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); break;
       case 'Notification':
-        if (/permission|elicitation|auth/.test(event.notification_type || '')) { this.pending = null; this.emit('state', 'approval'); }
+        if (/permission|elicitation|auth/.test(event.notification_type || '')) { if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); }
         break;
       case 'PreToolUse':
         if (this.pending) this.pending.replies.delete(event.prompt_id);
+        if (this.queued) this.queued.replies.delete(event.prompt_id);
         this.emit('activity', event.tool_name || '原生工具'); this.emit('state', 'working'); break;
       case 'Stop': {
-        const pending = this.pending;
+        const pending = this.queued?.prompts.has(event.prompt_id) ? this.queued : this.pending;
         // Native IDs, not arrival time or matching text, select the reply.
         if (pending && !pending.accepted) {
           if (pending.replies.size < 8 && event.prompt_id) pending.replies.set(event.prompt_id, event);
@@ -302,6 +309,12 @@ class Claude extends EventEmitter {
   finishReply(pending, event) {
         if (pending?.nativeId && (pending.nativeId !== this.record.nativeId || this.rootEnding?.sessionId === pending.nativeId)) {
           if (!this.nativeBlocks && event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id}`, nativeId: pending.nativeId, text: event.last_assistant_message });
+          return;
+        }
+        // A delayed completion of A cannot mark B idle once native has started
+        // B. Private raw fallback is retained; shared attribution stays closed.
+        if (pending?.promptId && this.lastPromptId && pending.promptId !== this.lastPromptId) {
+          if (!this.nativeBlocks && event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id}`, text: event.last_assistant_message });
           return;
         }
         if (pending && this.pending !== pending) {
@@ -329,14 +342,28 @@ class Claude extends EventEmitter {
         this.emit('complete', { messageId: displayConfirmed ? proof?.messageId : undefined, tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
   }
   async send(text, tag, guard) {
-    if (!this.ready || this.pending) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
+    if (!this.ready || this.pending || this.queued) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
     if (!guard()) throw new Error('这条交接已撤销。');
     const pending = this.pending = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
+    return this.deliver(pending);
+  }
+  get queueAvailable() { return Boolean(this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
+  async queue(text, tag, guard) {
+    if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Error('原生等待输入暂不可用；草稿保留。');
+    const pending = this.queued = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
+    try { return await this.deliver(pending, true); }
+    finally { if (this.queued === pending) this.queued = null; }
+  }
+  async deliver(pending, queued = false) {
+    const { text, tag, guard } = pending;
     try {
-      const receipt = await this.submission.request(text, tag, guard);
+      const receipt = await this.submission.request(text, tag, guard, queued);
       pending.accepted = true;
       pending.promptId = receipt?.promptId || null;
       pending.turnId = receipt?.turnId || null;
+      // The older task keeps its pending identity until native starts this one.
+      // A late receipt cannot overwrite unrelated newer work or a retired root.
+      if (queued && !pending.superseded && pending.promptId && this.lastPromptId === pending.promptId && pending.nativeId === this.record.nativeId && !this.rootEnding) this.pending = pending;
       this.emit('submitted', tag);
       if (pending.nativeId !== this.record.nativeId || this.rootEnding?.sessionId === pending.nativeId) {
         // Correlation controls sharing, not retention of already observed old
@@ -345,7 +372,7 @@ class Claude extends EventEmitter {
         return;
       }
       if (!pending.promptId || [...pending.prompts].some(id => id !== pending.promptId)) {
-        if (this.pending === pending) {
+        if (this.pending === pending || (queued && !pending.superseded && this.lastPromptId && pending.prompts.has(this.lastPromptId))) {
           this.pending = null;
           this.emit('unattributed', tag);
           const observed = this.lastPromptId && pending.replies.get(this.lastPromptId);

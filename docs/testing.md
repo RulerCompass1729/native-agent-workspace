@@ -1692,3 +1692,35 @@ now include the real bootstrap dependency. An initial native runner cleanup
 incorrectly equated unsubscribe with termination; the fixture now terminates only
 its exclusively owned isolated daemon and verifies its exit. Failures remain in
 private evidence. Physical IME and Claude queue/force-send are not covered here.
+
+
+## Waiting Claude input — alpha.59
+
+`npm run test:native-queue` rebuilds the DSH client before launching real Electron
+and Claude Code 2.1.308 with an isolated profile and two loopback Anthropic
+responses. The actual native submit queue waits for 42 seconds, crossing the old
+15-second submission and 40-second RPC deadlines. Original task/ID/PID remain;
+the next provider request contains the queued text once. GUI/TUI changes and
+renderer reload preserve the pending message and newer unsent draft. The native
+terminal contains both inputs and results. Four groups pass with no page errors
+and zero paid model calls. Raw requests, snapshots, terminal output and recording
+stay private. This does not prove physical IME, force-send or other versions.
+
+Independent review found and corrected lost-result waits, reload retirement,
+late previous-prompt completion and cross-context raw attribution. Counterexamples
+also cover newer approvals, uncertain receipts, duplicate clicks, draft revisions,
+owner/context changes across awaited pauses and revocation of old room sharing.
+The waiting command is not retried. It cannot mark native work cancelled or
+complete merely because the UI closed or a receipt became uncertain.
+
+The installed alpha.59 repeats the four groups using its normal service bootstrap,
+with two local responses and no paid inference. Strict installed signature remains
+valid afterward. Normal-profile background reopening retains three original native
+IDs/processes, selection, draft and eight Codex messages with zero new dispatch.
+Application source matches the installed payload.
+
+Build note: public-registry retrieval of browser notices timed out. The build
+reuses the full notices from the previously reviewed alpha.58 archive only after
+verifying its SHA-256 and matching all 153 locked names, versions and integrities.
+All 155 notice/index files are retained; no license is omitted. This is evidence
+for this local artifact, not a new network fallback in the product or repository.

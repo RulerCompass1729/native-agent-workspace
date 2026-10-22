@@ -1,8 +1,20 @@
 # macOS alpha trial
 
-As of 2026-10-21. Version 0.1.0-alpha.58. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.59. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.59 waiting Claude input
+
+For the verified Claude Code 2.1.308 connection, the solo composer offers
+**等本轮结束后发送** while work is running. One instruction can wait in the native
+queue without interrupting the original task. The message remains visible as
+waiting until the native submit operation acknowledges it. A later draft stays
+editable and is not cleared by the earlier acknowledgement. View changes and
+renderer reload do not replay the input. Uncertain delivery is never retried.
+
+This is the native waiting behavior, not Ctrl+Enter force-send. Older connections,
+working shared sends and universal native display parity remain open.
 
 ## Alpha.58 working Codex input
 

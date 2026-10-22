@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-21. Version 0.1.0-alpha.58 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.59 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,18 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Installed alpha.59 increment:** the existing solo composer uses Claude Code
+2.1.308's native waiting queue. Actual Electron/CLI checks preserve a running
+original task, one queued instruction and a newer draft across a 42-second wait,
+GUI/TUI switches and renderer reload. Two loopback provider responses verify the
+queued text reaches the next native request once; no paid inference. Late results,
+reload, unknown identity and cross-context completion have local counterexamples.
+The installed application passes the same four native groups; strict signature
+and exact application-source payload checks pass. Normal background reopening
+retains three original native IDs/processes, selection and draft, with zero dispatch.
+Claude force-send, retained 2.1.302 display
+coverage and working shared input remain open; this does not close U17.
 
 **Installed alpha.58 increment:** the existing solo composer can send an instruction into a known running Codex 0.163.0 turn through native `turn/steer`. The exact turn precondition prevents a stale click from starting another turn. Acceptance does not imply interruption or completion. Private steering revokes earlier room sharing before later output arrives. Native Electron/TUI proof uses two local Responses streams and checks the actual second provider request, with no paid inference. Installed retained-reader checks and normal-profile reopening retain all three original native IDs/processes and add no dispatch. Unknown turn IDs, other native versions, Claude queue/force-send and working shared sends remain separate open cases.
 
@@ -332,8 +344,8 @@ not a claim that every retained backend supports all current features.
 | Area | Current evidence | Boundary |
 | --- | --- | --- |
 | Single conversation | GUI/TUI use, draft/identity retention, input focus and normal reopen; visible System Pinyin/WeChat evidence from alpha.22 | Controlled guest OS events; no universal terminal or accessibility guarantee |
-| Live native progress | Read-only per-session raw output, structured tool states, bounded rewind, two private room panes, gap/overflow notices | 19–20 ms synthetic paint P95 under declared load; volatile retention, no Desktop synchronization |
-| Shared work | `@` selection, one visible recipient, timeline/search/filter, notes, room/session rename/archive/restore, pointer drag and detach | One room; private history is not automatically copied |
+| Live native progress | Main-reader native text/tool blocks; explicitly authorized shared streams with stable identities; native terminal remains available | Full temporary-state/menu parity and retained Claude 302 coverage remain open; no official Desktop synchronization |
+| Shared work | `@` selection, explicit recipient receipts, reply threads/member trajectories in one reader, notes, rename/archive/restore, pointer drag and detach | One room; private history is not automatically copied; working shared input remains open |
 | Native collaboration | Claude→Codex→Claude completes a three-reply file check; detached Claude continues privately with same native identity | Explicit 2–6 reply exchange, ten-minute deadline; not arbitrary goal completion |
 | Human control | Input, membership, permission, failure, repetition and known native activity stop further handoffs; uncertain sends never auto-retry | An accepted native task and its billing may continue |
 | Native fleets | Historical Claude teammate/tasks/messages and idle continuity; current Codex Luna child start/completion/close request observed; current event mapping tested | No complete descendant inventory, termination or active-fleet recovery claim |

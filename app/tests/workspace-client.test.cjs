@@ -577,3 +577,23 @@ for (const change of ['none', 'turn', 'context', 'owner', 'intervention']) test(
   assert.deepEqual(next.calls.filter(([method]) => method === 'steer'), change === 'none' ? [['steer', 'new', 'new direction', 'native-one', 'turn-one']] : []);
   assert.equal(next.calls.some(([method]) => ['send', 'input'].includes(method)), false); c.close();
 });
+
+for (const change of ['none', 'context', 'owner', 'intervention', 'approval', 'pending', 'archived']) test(`Claude queue router rechecks ${change} after its pause`, async () => {
+  const { c, next } = fixture(); next.real.capabilities.push('nativeQueue');
+  const row = next.real.sessions[0];
+  Object.assign(row, { provider: 'claude', owner: 'view', nativeId: 'native-one', state: 'working', queueAvailable: true, controlRevision: 1 });
+  await c.refresh(); let release, archived = false;
+  c.authorizeOperation = () => { if (archived) throw Error('archived'); };
+  c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
+  const pending = c.call('queue', 'new', 'next task', 'native-one');
+  assert.equal(typeof release, 'function');
+  if (change === 'context') row.nativeId = 'native-two';
+  if (change === 'owner') row.owner = 'other';
+  if (change === 'intervention') c.control.revision++;
+  if (change === 'approval') row.approval = { requestId: 'new' };
+  if (change === 'pending') row.pendingQueue = 'previous';
+  if (change === 'archived') archived = true;
+  release(); if (change === 'none') await pending; else await assert.rejects(pending);
+  assert.deepEqual(next.calls.filter(([m]) => m === 'queue'), change === 'none' ? [['queue', 'new', 'next task', 'native-one']] : []);
+  assert.equal(next.calls.some(([m]) => ['send', 'input'].includes(m)), false); c.close();
+});

@@ -3,7 +3,7 @@ const api = {};
 for (const name of ['nativeHistory', 'importHistory', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'prepareInput', 'observe', 'unobserve', 'continueConnection', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'retainDraftRecovery', 'discardDraftRecovery', 'readingState', 'runtimeLocation', 'retrySave']) {
   api[name] = async (...args) => { const result = await ipcRenderer.invoke(`workspace:${name}`, ...args); if (!result.ok) throw new Error(result.error); return result.value; };
 }
-for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create', 'rename', 'roomRename', 'roomNotes', 'join', 'claim', 'send', 'steer', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve', 'stop', 'resume', 'forget', 'reconnect', 'preflight', 'dataDirectory', 'quitService', 'clearSharedHistory', 'newWindow', 'copy', 'pasteText', 'openExternal']) {
+for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create', 'rename', 'roomRename', 'roomNotes', 'join', 'claim', 'send', 'queue', 'steer', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve', 'stop', 'resume', 'forget', 'reconnect', 'preflight', 'dataDirectory', 'quitService', 'clearSharedHistory', 'newWindow', 'copy', 'pasteText', 'openExternal']) {
   api[name] = async (...args) => {
     const result = await ipcRenderer.invoke(`workspace:${name}`, ...args);
     if (!result.ok) throw new Error(result.error);

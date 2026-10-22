@@ -8,18 +8,22 @@ class SubmissionChannel extends EventEmitter {
   constructor(timeout = 15000) { super(); this.timeout = timeout; this.poll = null; this.pending = null; this.connected = false; }
   status(connected) { if (this.connected !== connected) { this.connected = connected; this.emit('change'); } }
   receive(response) {
+    // The native listener asks for another command only after the previous
+    // submit/result attempt has settled. If its result was lost, end this
+    // uncertain wait; never redeliver the already-authorized native input.
+    if (this.pending?.waitForNativeTurn && this.pending.delivered && this.pending.authorized) this.finish(new Error('原生等待输入的结果未确认；不会重发，请核对原生会话，草稿保留。'));
     if (this.poll) this.poll.end(JSON.stringify({ idle: true }));
     this.poll = response; this.status(true);
     const timer = setTimeout(() => { if (this.poll === response) { this.poll = null; response.end(JSON.stringify({ idle: true })); } }, 20000);
     response.once('close', () => { clearTimeout(timer); if (this.poll === response) { this.poll = null; this.status(false); } });
     this.flush();
   }
-  request(text, tag, guard) {
+  request(text, tag, guard, waitForNativeTurn = false) {
     if (!this.connected) return Promise.reject(new Error('安全发送连接尚未就绪；请在原生终端继续，草稿已保留。'));
     if (this.pending) return Promise.reject(new Error('上一条发送仍待原生确认。'));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.finish(new Error('原生提交未确认；不会自动重发，请检查原生会话。')), this.timeout);
-      this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, deadline: Date.now() + this.timeout };
+      this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, deadline: Date.now() + this.timeout };
       this.flush();
     });
   }
@@ -33,7 +37,12 @@ class SubmissionChannel extends EventEmitter {
   authorize(message) {
     const p = this.pending;
     if (!p || p.tag !== message.id || p.text !== message.text || !p.delivered || p.authorized || Date.now() >= p.deadline || !p.guard()) return false;
-    p.authorized = true; return true;
+    p.authorized = true;
+    // Claude's own submit promise may wait until its queued turn starts. Once
+    // authorized, a wall-clock timeout would invite a duplicate of native work
+    // that is still queued. Connection/context closure still rejects the wait.
+    if (p.waitForNativeTurn) clearTimeout(p.timer);
+    return true;
   }
   result(message) {
     const p = this.pending;

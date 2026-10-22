@@ -221,7 +221,7 @@ async function listen($, ownGeneration) {
 
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
-  const result = await request($, '/root-bind', { nativeBlocks }, binding);
+  const result = await request($, '/root-bind', { nativeBlocks, nativeQueue: (await $.session.version()).version === '2.1.308' && !legacyOnly }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
