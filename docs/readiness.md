@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.64 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.65 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,17 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.65 retained solo waiting input:** the existing solo composer can queue
+one instruction for inspected retained alpha.2 / Claude Code 2.1.302 sessions.
+The native process continues its current work; the private reader shows waiting
+input, and only an exact native input tag reconciles its acceptance. Source actual
+Electron/CLI passes six groups with four loopback responses and no paid inference:
+42-second waiting, renderer reload, two windows, actual request text exactly once,
+newer draft preservation and ended-history reopening. Final independent installed review passes: six native groups, 46 matching payload
+files, post-native strict signature and three original sessions reopened hidden
+with unchanged identities and no dispatch. Retained shared queues and Claude force-send remain separate, and U17 is
+not closed.
 
 **Alpha.64 retained Claude reader:** inspected alpha.2 hosts running Claude Code
 2.1.302 can project accepted input, native display batches, text tool results and

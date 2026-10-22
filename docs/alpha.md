@@ -1402,3 +1402,20 @@ marks unsupported nontext content. A permission wait still freezes room sharing;
 continuing native work does not silently restart the previous share. Source
 and installed actual Electron/CLI checks pass independent review; signature,
 exact source payload and original-session reopening also pass.
+
+
+## Retained waiting input
+
+The existing solo composer offers waiting input for inspected Claude Code 2.1.302
+sessions retained by alpha.2. This uses `prompt.submit`, not terminal key injection
+or stop-and-resend. It waits for a new native turn; it is not Claude's typed
+mid-tool queue or “send now” behavior. A local pending message remains visible and
+is reconciled only with the accepted native append's exact dispatch tag. Changed
+control before authorization rejects dispatch; after authorization, no rollback
+of native queued work is claimed. A newer draft survives acceptance.
+
+The native 2.1.302 generated `PromptSubmitArgs` contract reserves `wait`/`turnId`
+for the engine. The official [interactive-mode queue documentation](https://code.claude.com/docs/en/interactive-mode#when-claude-code-sends-what-you-queued)
+distinguishes typed waiting and immediate sending, including backgroundable tools.
+No equivalence between `turn.abort` plus submission and Ctrl+Enter is claimed.
+Retained room waiting and force-send are not enabled by this increment.

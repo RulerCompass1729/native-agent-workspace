@@ -1876,3 +1876,26 @@ private. No paid model inference or normal-provider settings are changed.
 These checks are bounded native mechanics evidence. They do not establish actual
 MCP-server behavior, binary/media rendering, hidden reasoning visibility, arbitrary
 provider version compatibility, physical IME behavior or complete U17 acceptance.
+
+
+## Retained Claude waiting input — alpha.65
+
+`NAW_RETAINED_QUEUE=1 NAW_CLAUDE_302=/path/to/claude-2.1.302 node scripts/test-native-retained-claude.cjs`
+extends the existing actual old-backend/native/Electron scenario with a bounded
+four-response loopback task. Source passes six groups: original history and PID,
+streaming display/tool text, waiting beyond 42 seconds without extra requests,
+exact native request payload once, newer draft and two-window continuity, and
+ended-history reopening. Private full native requests, state and video are kept
+outside Git. This is actual UI/CLI mechanics with canned provider output, not
+hosted-model reasoning, physical IME or all native-state parity.
+
+Local counterexamples check queue identity rather than matching text, unknown
+acceptance after closing, no replay on reopen, and changed owner, member, root,
+permission or human control before authorization. After native authorization,
+leaving or closing does not claim to retract input already queued in the CLI.
+Final installed six groups pass with the same four-response budget. The 46-file
+application payload matches source; strict signature remains valid after native
+testing. Hidden reopening preserves the three original native IDs/processes,
+selection/draft and existing Codex messages without another dispatch. Full-app
+closure while a native queued input is pending is not a native acceptance claim;
+the authorized-close/no-retry branch is covered by the local channel check.

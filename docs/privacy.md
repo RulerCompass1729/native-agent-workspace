@@ -235,3 +235,11 @@ an explicit send shares the draft with the selected native agent; any native
 provider/tool access still follows its own permissions. “另存副本” writes the
 previewed bytes, refuses existing destinations, and does not reread a changed
 source. Previewing or saving calls no model.
+
+
+Retained Claude private reader caches also retain explicitly queued solo text
+with its native acceptance status. The metadata-only dispatch ledger still does
+not store private prompt text. Closing before receipt leaves an uncertain local
+row, does not resend it, and does not claim that native accepted work was canceled.
+These private caches remain local, follow the existing private reader removal,
+and never become room-sharing authority.
