@@ -384,3 +384,77 @@ test('retained working turn accepts one native steer without a new turn or dupli
   await assert.rejects(target.steer('stale', 'bad', 'old', async () => {}, () => true));
   assert.equal(f.calls.filter(c => c.method === 'turn/steer').length, 1);
 });
+
+for (const boundary of ['complete', 'permission', 'private-input', 'failure', 'departure', 'clear', 'reconnect']) test(`retained Codex room projection binds only the native ACK and respects ${boundary}`, async t => {
+  let accept;
+  const f = await fixture(t, { start(_m, reply) { accept = reply; } });
+  Object.assign(f.record, { name: 'Codex A', roomId: 'shared', state: 'idle', memberRevision: 1, controlRevision: 2 });
+  const bridge = new LegacyInput(f.directory); t.after(() => bridge.close());
+  await bridge.prepare(f.entry, f.record);
+  const native = bridge.target(f.record).native; let authorized = true;
+  const pending = bridge.send(f.record, 'shared task', async () => {}, () => true, true, undefined, undefined, false, () => authorized);
+  while (!accept) await tick();
+  f.event('turn/started', { turn: { id: 'owned-turn' } });
+  f.event('item/agentMessage/delta', { turnId: 'private-turn', itemId: 'private-answer', delta: 'PRIVATE HISTORY' });
+  f.event('item/agentMessage/delta', { turnId: 'owned-turn', itemId: 'answer', delta: 'visible prefix' });
+  await tick();
+  assert.equal(bridge.sharedMessages().filter(m => m.role === 'assistant').length, 0);
+  accept({ turn: { id: 'owned-turn' } }); await pending; await tick();
+  const row = bridge.sharedMessages().find(m => m.role === 'assistant');
+  assert.equal(row.text, 'visible prefix'); assert.equal(row.sessionId, f.record.id);
+  assert.equal(bridge.sharedMessages().find(m => m.role === 'human').manualReply, false);
+  if (boundary === 'permission') native.adapter.emit('approval', { requestId: 'permission-1' });
+  if (boundary === 'private-input') f.event('item/completed', { turnId: 'owned-turn', item: { id: 'other-input', type: 'userMessage', content: [{ type: 'text', text: 'private instruction' }] } });
+  if (boundary === 'failure') f.event('error', {});
+  if (boundary === 'departure') { authorized = false; bridge.sharedMessages(); authorized = true; }
+  if (boundary === 'clear') bridge.clearSharedHistory();
+  if (boundary === 'reconnect') { native.close(); bridge.sharedMessages(); }
+  await tick();
+  if (boundary !== 'reconnect') {
+    f.event('item/completed', { turnId: 'owned-turn', item: { id: 'answer', type: 'agentMessage', text: 'visible prefix LATER' } });
+    f.event('turn/completed', { turn: { id: 'owned-turn', status: 'completed' } });
+    await tick();
+    assert.ok(native.record.messages.some(m => m.text === 'visible prefix LATER'));
+  }
+  const shared = bridge.sharedMessages();
+  if (boundary === 'complete') { assert.equal(row.text, 'visible prefix LATER'); assert.equal(row.finalReply, true); }
+  else assert.ok(!JSON.stringify(shared).includes('LATER'));
+  assert.ok(!JSON.stringify(shared).includes('PRIVATE HISTORY'));
+  assert.equal(f.calls.filter(m => m.method === 'turn/start').length, 1);
+  bridge.sharedReplies.save();
+  const { LegacyShared } = require('../legacy-shared.cjs'), reopened = new LegacyShared(f.directory, () => {});
+  assert.equal(reopened.grants.size, 0); reopened.dispose();
+});
+
+test('retained Codex permission before ACK cannot publish cached output or fabricate a final', async t => {
+  let accept;
+  const f = await fixture(t, { start(_m, reply) { accept = reply; } });
+  Object.assign(f.record, { name: 'Codex A', roomId: 'shared', state: 'idle' });
+  const bridge = new LegacyInput(f.directory); t.after(() => bridge.close()); await bridge.prepare(f.entry, f.record);
+  const send = bridge.send(f.record, 'task', async () => {}, () => true, true, undefined, undefined, false, () => true);
+  while (!accept) await tick();
+  f.event('turn/started', { turn: { id: 'owned-turn' } });
+  f.event('item/agentMessage/delta', { turnId: 'owned-turn', itemId: 'answer', delta: 'PRIVATE before ACK' }); await tick();
+  bridge.target(f.record).native.adapter.emit('approval', { requestId: 'permission-2' });
+  accept({ turn: { id: 'owned-turn' } }); await send;
+  f.event('turn/completed', { turn: { id: 'owned-turn', status: 'completed' } }); await tick();
+  assert.equal(bridge.sharedMessages().filter(m => m.role !== 'human').length, 0);
+});
+
+test('retained Codex completed-before-ACK publishes exactly one verified final and no other turn', async t => {
+  let accept;
+  const f = await fixture(t, { start(_m, reply) { accept = reply; } });
+  Object.assign(f.record, { name: 'Codex A', roomId: 'shared', state: 'idle' });
+  const bridge = new LegacyInput(f.directory); t.after(() => bridge.close()); await bridge.prepare(f.entry, f.record);
+  const send = bridge.send(f.record, 'task', async () => {}, () => true, true, undefined, undefined, false, () => true);
+  while (!accept) await tick();
+  f.event('turn/started', { turn: { id: 'owned-turn' } });
+  f.event('item/completed', { turnId: 'private-turn', item: { id: 'private', type: 'agentMessage', text: 'UNRELATED' } });
+  f.event('item/completed', { turnId: 'owned-turn', item: { id: 'answer', type: 'agentMessage', text: 'ACK_LATE_FINAL' } });
+  f.event('turn/completed', { turn: { id: 'owned-turn', status: 'completed' } }); await tick();
+  assert.equal(bridge.sharedMessages().filter(m => m.role !== 'human').length, 0);
+  accept({ turn: { id: 'owned-turn' } }); await send; await tick();
+  const rows = bridge.sharedMessages().filter(m => m.role === 'assistant');
+  assert.equal(rows.length, 1); assert.equal(rows[0].text, 'ACK_LATE_FINAL'); assert.equal(rows[0].finalReply, true);
+  assert.equal(f.calls.filter(m => m.method === 'turn/start').length, 1);
+});

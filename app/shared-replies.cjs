@@ -21,6 +21,10 @@ class SharedReplies {
   close(tag, reason = '后续内容留在原会话') {
     const g = this.grants.get(tag); if (!g || g.closed) return;
     g.closed = true;
+    const rows = [...g.rows.values()];
+    // A permission can arrive between completed items, with nothing currently
+    // streaming. Keep the completed status but explain why no continuation follows.
+    if (rows.length && !rows.some(row => row.finalReply)) rows.at(-1).sharingStopped ||= reason;
     for (const row of g.rows.values()) if (!row.finalReply && ['streaming', 'running'].includes(row.status)) {
       row.sharingStopped = reason;
       row.status = 'unconfirmed';

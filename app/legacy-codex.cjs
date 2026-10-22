@@ -46,6 +46,7 @@ class LegacyCodex extends EventEmitter {
     this.closed = false; this.connected = false; this.revision = 0;
     this.approvalScope = crypto.randomUUID(); this.approval = null;
   }
+  get sharedReplyAvailable() { return this.connected && !this.closed && this.rpc?.nativeVersion === '0.163.0'; }
   get pending() { return this.adapter?.pending; }
   get steerAvailable() { return this.connected && !this.closed && this.adapter?.steerAvailable === true; }
   get turnId() { return this.adapter?.turnId || null; }
@@ -70,9 +71,13 @@ class LegacyCodex extends EventEmitter {
     // Retain the original native writer; consume the same event/history
     // reducers as the current service, rather than a second terminal image.
     adapter.on('history', items => { applyCodexHistory(this.record, items, adapter); this.emit('change'); });
-    adapter.on('delta', item => { applyCodexDelta(this.record, item); this.emit('change'); });
-    adapter.on('messageItem', item => { applyCodexMessage(this.record, item); this.emit('change'); });
-    adapter.on('nativeBlock', item => { applyNativeBlock(this.record, item); this.emit('change'); });
+    adapter.on('delta', item => { this.emit('readerBlock', applyCodexDelta(this.record, item)); this.emit('change'); });
+    adapter.on('messageItem', item => { this.emit('readerBlock', applyCodexMessage(this.record, item)); this.emit('change'); });
+    adapter.on('nativeBlock', item => {
+      if (applyNativeBlock(this.record, item)) this.emit('readerBlock', this.record.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`));
+      this.emit('change');
+    });
+    adapter.on('replyBound', identity => this.emit('replyBound', identity));
     adapter.on('model', model => { this.model = model; this.emit('change'); });
     adapter.on('activity', text => { this.activity = text; this.emit('change'); });
     adapter.on('nativeInput', (text, item) => {
@@ -103,7 +108,8 @@ class LegacyCodex extends EventEmitter {
     }
     adapter.on('progress', item => {
       const update = this.progress.update(item); this.emit('progress', update);
-      if (applyCodexProgress(this.record, item)) this.emit('change');
+      const row = applyCodexProgress(this.record, item);
+      if (row) { this.emit('readerBlock', row); this.emit('change'); }
     });
     adapter.on('approvalResolved', requestId => {
       if (requestId !== this.nativeRequestId) return;

@@ -1935,3 +1935,37 @@ hosted reasoning quality, physical IME, universal provider compatibility, retain
 shared waiting, forced input or automatic cross-service collaboration. No private
 model context is erased or isolated by selective output sharing. Closing the
 observer freezes unfinished shared streams; reopening does not renew a grant.
+
+
+## Retained Codex shared main reader — alpha.67
+
+`node scripts/test-native-retained-codex.cjs` boots the real alpha.2 host, native
+Codex 0.163.0 and current Electron with an isolated configuration. It operates the
+native folder-trust gate, types an original private task in the terminal, connects
+the graphical reader, addresses a shared task with **@**, reloads while streaming,
+reopens the application and requests a native command permission for one isolated
+file read. The test retains full native requests, UI snapshots and successful video
+outside the public repository. Source and installed versions pass four groups:
+
+- Original private history attaches to the same native identity/process without
+  starting another model request.
+- The addressed room reply streams into one attributed block, remains stable
+  across renderer reload, and excludes private history and unsent drafts.
+- Closing/reopening the application restores room history and both drafts without
+  replacing the native process or replaying the task.
+- A real native command permission stops sharing, including a visible explanation
+  when the preceding tool already completed. Approval executes the selected file
+  read; its output and final reply remain private, including after departure/rejoin.
+
+All 668 local checks pass without skips. Exact installed payload (47 files) and
+strict post-native signature checks pass. Normal-profile hidden reopening retains
+the original three native identities/processes, selected view, draft and eight
+Codex messages without another dispatch. Native evidence is independently reviewed.
+
+Budget: four fixed task responses and at most one fixed native title response,
+all loopback with zero paid inference. The native TUI's automatic title request is
+counted separately rather than hidden in portal dispatch totals; the test returns
+its requested structured format. This does not establish production inference
+cost or disable the user's native title behavior. Completed shared text is local
+history; tool text remains volatile. Full native display parity, retained shared
+steering and automatic cross-service handoff are not acceptance claims here.

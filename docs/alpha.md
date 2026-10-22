@@ -1,8 +1,20 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.66. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.67. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.67 retained Codex shared replies
+
+A new idle task addressed through **@** to an inspected retained Codex 0.163.0
+connection can stream native text and tools into the same shared reading area.
+Native acknowledgement identifies its turn; prior private history stays separate.
+Normal completion updates the original message. Permission/private input or a
+changed connection stops sharing without claiming the original task is cancelled.
+The sharing-stop explanation also appears when the previous tool already finished.
+Four source and installed actual Electron/native groups and 668 local checks pass
+without skips. Retained shared steering, cross-service automatic handoff and full
+native parity are not included in this increment.
 
 ## Alpha.66 retained Claude shared replies
 
