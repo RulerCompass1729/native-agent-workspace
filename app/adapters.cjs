@@ -417,6 +417,7 @@ class Rpc extends EventEmitter {
         if (message.error) {
           const error = new Error(`原生接口拒绝请求（${message.error.code}），请查看原生会话。`);
           error.nativeMissingHistory = message.error.code === -32600 && /^no rollout found for thread id /.test(message.error.message || '');
+          error.nativeUnsupportedTurns = message.error.code === -32601 && message.error.message === 'list_turns is not supported yet';
           if (message.error.code === -32600 && /already has an active writer/.test(message.error.message || '')) {
             error.message = '该会话仍在其他原生连接中使用。请先在那里结束连接，再继续；原连接未被修改。';
             error.nativeActiveWriter = true;
@@ -644,6 +645,11 @@ class Codex extends EventEmitter {
       this.closed = true; this.stopped = true; this.finishRecoveryConnection?.(false); this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
     }
     if (this.stopped) return;
+    if (message.method === 'item/completed' && p.item?.type === 'userMessage' &&
+      p.turnId && this.ownInputs.has(p.item.clientId)) {
+      this.nativeAcceptedInput = { turnId: p.turnId, tag: p.item.clientId, rpc: this.host.rpc, lifecycle: this.lifecycleRevision };
+      this.emit('nativeAcceptedInput');
+    }
     if (['item/started', 'item/completed'].includes(message.method) && p.item?.type && !['agentMessage', 'userMessage', 'reasoning'].includes(p.item.type)) {
       const item = p.item;
       this.liveToolItems.add(item.id);
@@ -793,7 +799,7 @@ class Codex extends EventEmitter {
       throw error;
     }
     if (this.needsSubscription) {
-      try { await this.observeAcceptedTurn(pending.turnId); }
+      try { await this.observeAcceptedTurn(pending.turnId, tag); }
       catch {
         // The native ACK already accepted this one turn. An observation error
         // must never be returned as a send failure that invites a paid retry.
@@ -805,10 +811,31 @@ class Codex extends EventEmitter {
     }
     return pending.turnId;
   }
-  async observeAcceptedTurn(turnId) {
+  async observeAcceptedTurn(turnId, inputTag) {
     if (this.stopped || !turnId) throw Error('原生观察连接已变化。');
-    const revision = this.stateRevision, lifecycle = this.lifecycleRevision;
-    const result = await this.host.rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true });
+    const revision = this.stateRevision, lifecycle = this.lifecycleRevision, rpc = this.host.rpc;
+    let result;
+    try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
+    catch (error) {
+      // Some retained TUI-backed 0.163.0 threads cannot list turns during their
+      // first live input. The same connection can already deliver that input's
+      // native events. Require its exact client ID and accepted turn, never an
+      // ACK alone, arbitrary delta, private input, or a different connection.
+      if (!error.nativeUnsupportedTurns || rpc?.nativeVersion !== '0.163.0' || !inputTag) throw error;
+      const observed = () => !this.stopped && !this.transportDisconnected && lifecycle === this.lifecycleRevision &&
+        this.host.rpc === rpc && this.nativeAcceptedInput?.rpc === rpc && this.nativeAcceptedInput.lifecycle === lifecycle &&
+        this.nativeAcceptedInput.turnId === turnId && this.nativeAcceptedInput.tag === inputTag;
+      if (!observed()) await new Promise((resolve, reject) => {
+        const cleanup = () => { clearTimeout(timer); this.off('nativeAcceptedInput', accepted); this.off('state', changed); };
+        const accepted = () => { if (observed()) { cleanup(); resolve(); } };
+        const changed = state => { if (['ended', 'disconnected', 'error'].includes(state)) { cleanup(); reject(error); } };
+        const timer = setTimeout(() => { cleanup(); reject(error); }, 2000);
+        this.on('nativeAcceptedInput', accepted); this.on('state', changed); accepted();
+      });
+      if (!observed()) throw error;
+      this.needsSubscription = false; this.hasHistory = true;
+      return;
+    }
     if (this.stopped || lifecycle !== this.lifecycleRevision || result.thread?.id !== this.record.nativeId) throw Error('原生观察连接已变化。');
     this.needsSubscription = false; this.hasHistory = true;
     if (revision === this.stateRevision && this.latestState !== 'approval') this.observeStatus(result.thread.status);

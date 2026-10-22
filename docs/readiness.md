@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.68 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.69 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,21 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.69 retained Claude shared waiting:** uses the existing native queue and
+shared-reader binding, without interrupting the active task. Live pending input
+shows waiting; exact native acceptance updates its receipt and binds the next
+reply. Prior private turns and newer drafts remain separate. Seven source actual
+Electron/Claude 2.1.302 groups pass, using four fixed loopback responses and zero
+paid inference. Seven installed single-path groups also pass. Added dual-native
+checks exposed first-turn Codex subscription, unrelated-member revocation and
+premature queued-input display closure; all three have targeted regressions.
+Five source groups pass for both retained and current connections, including
+waiting output through native completion. All 709 local checks pass without skips.
+Final installed dual-native verification passes five groups; 47 runtime payload
+files match, post-native strict signature and original three-session hidden
+reopening pass with zero dispatch. Final independent source and artifact review passes.
+No force-send or automatic cross-service handoff is added.
 
 **Alpha.68 retained Codex working input:** fixes the full-router self-pending
 lock and exposes the existing native steering action in the room. Exact native

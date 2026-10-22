@@ -26,7 +26,7 @@ async function fixture(t, options = {}) {
       if (m.method === 'thread/read') reply({ thread: { id: record.nativeId, status: { type: options.notLoaded ? 'notLoaded' : 'idle' } } });
       if (m.method === 'thread/resume') {
         if (options.empty && !started) ws.send(JSON.stringify({ id: m.id, error: { code: -32600, message: 'no rollout found for thread id ' + record.nativeId } }));
-        else if (options.resume) options.resume(reply, event);
+        else if (options.resume) options.resume(reply, event, error => ws.send(JSON.stringify({ id: m.id, error })));
         else reply({ model: 'synthetic-small', thread: { id: record.nativeId, status: { type: 'idle' } } });
       }
       if (m.method === 'thread/items/list') {
@@ -136,6 +136,47 @@ test('empty retained thread receives exactly the requested first turn, then join
   assert.equal(f.calls.find(c => c.method === 'turn/start').params.threadId, f.record.nativeId);
   assert.equal(target.subscribed, true);
   assert.equal(completed.find(r => r.tag === 'first-tag').text, 'first reply');
+});
+
+for (const mode of ['before-ack', 'after-error', 'foreign-input', 'other-turn', 'permission', 'disconnect', 'other-error']) test(`first retained shared input with unsupported live turn listing: ${mode}`, async t => {
+  let tag, native;
+  const accepted = event => {
+    event('item/completed', { turnId: mode === 'other-turn' ? 'foreign-turn' : 'owned-turn',
+      item: { type: 'userMessage', id: 'native-input', clientId: mode === 'foreign-input' ? 'foreign-tag' : tag, content: [{ type: 'text', text: 'shared first task' }] } });
+  };
+  const f = await fixture(t, { empty: true, start(m, reply, event) {
+    tag = m.params.clientUserMessageId;
+    event('turn/started', { turn: { id: 'owned-turn' } });
+    if (mode === 'before-ack') accepted(event);
+    reply({ turn: { id: 'owned-turn' } });
+  }, resume(_reply, event, reject) {
+    reject({ code: -32601, message: mode === 'other-error' ? 'unrelated native failure' : 'list_turns is not supported yet' });
+    if (mode !== 'before-ack') setTimeout(() => {
+      if (mode === 'disconnect') { native.close(); return; }
+      if (mode === 'permission') native.adapter.emit('approval', { requestId: 'permission' });
+      accepted(event);
+    }, 20);
+  } });
+  Object.assign(f.record, { name: 'Codex A', roomId: 'shared', state: 'idle', messages: [] });
+  const bridge = new LegacyInput(f.directory); t.after(() => bridge.close()); await bridge.prepare(f.entry, f.record);
+  native = bridge.target(f.record).native;
+  await bridge.send(f.record, 'shared first task', async () => {}, () => true, true, undefined, undefined, false, () => true);
+  await tick();
+  assert.equal(f.calls.filter(c => c.method === 'turn/start').length, 1);
+  assert.equal(bridge.records[0].status, 'accepted', 'Observation failure must not turn accepted input into a retry');
+  if (mode !== 'disconnect') {
+    f.event('item/started', { turnId: 'owned-turn', item: { id: 'answer', type: 'agentMessage' } });
+    f.event('item/agentMessage/delta', { turnId: 'owned-turn', itemId: 'answer', delta: 'first shared answer' });
+    await tick();
+    f.event('item/completed', { turnId: 'owned-turn', item: { id: 'answer', type: 'agentMessage', text: 'first shared answer complete' } });
+    f.event('turn/completed', { turn: { id: 'owned-turn', status: 'completed' } }); await tick();
+  }
+  const shared = bridge.sharedMessages().filter(m => m.role === 'assistant');
+  if (['before-ack', 'after-error'].includes(mode)) {
+    assert.equal(native.subscribed, true); assert.equal(shared.length, 1);
+    assert.equal(shared[0].text, 'first shared answer complete'); assert.equal(shared[0].finalReply, true);
+  } else assert.equal(shared.length, 0, 'Unverified input or revoked authority cannot share a reply');
+  assert.equal(native.adapter.listenerCount('nativeAcceptedInput'), 0);
 });
 
 test('provider socket redirect requires a private owned endpoint', async t => {
@@ -473,6 +514,38 @@ async function routerFixture(t, options) {
   f.event('turn/started', { turn: { id: 'active' } }); await tick();
   return { ...f, bridge, router, state };
 }
+
+for (const change of ['peer-leave-rejoin', 'peer-archive', 'own-leave', 'room-pause', 'room-archive']) test(`real room membership path preserves only unaffected retained sharing: ${change}`, async t => {
+  const f = await routerFixture(t, { steer(m, reply, event) {
+    event('item/completed', { turnId: 'active', item: { type: 'userMessage', id: 'steer-user', clientId: m.params.clientUserMessageId, content: [{ type: 'text', text: 'shared work' }] } });
+    reply({ turnId: 'active' });
+  } });
+  Object.assign(f.record, { roomId: 'shared', memberRevision: 1 });
+  f.state.sessions.push({ id: 'peer', provider: 'claude', name: 'Peer', roomId: 'shared', state: 'working' });
+  const transport = f.router.entries[0].client, original = transport.call;
+  transport.call = async (method, ...args) => {
+    if (method === 'join') { const row = f.state.sessions.find(s => s.id === args[0]); row.roomId = args[1] ? 'shared' : null; row.memberRevision = (row.memberRevision || 0) + 1; }
+    return original(method, ...args);
+  };
+  await f.router.refresh();
+  const { RoomState } = require('../room-state.cjs'), room = new RoomState(f.directory);
+  await f.router.call('steerShared', f.record.id, 'shared work', f.record.nativeId, 'active');
+  f.event('item/started', { turnId: 'active', item: { id: 'answer', type: 'agentMessage' } });
+  f.event('item/agentMessage/delta', { turnId: 'active', itemId: 'answer', delta: 'before' }); await tick();
+  assert.equal(f.bridge.sharedMessages().find(m => m.role === 'assistant').text, 'before');
+  if (change === 'peer-leave-rejoin') { await room.membership(f.router, 'peer', false); await room.membership(f.router, 'peer', true); }
+  if (change === 'peer-archive') await room.archiveSession(f.router, 'peer');
+  if (change === 'own-leave') await room.membership(f.router, f.record.id, false);
+  if (change === 'room-pause') await f.router.call('pause');
+  if (change === 'room-archive') await room.archiveRoom(f.router);
+  f.event('item/completed', { turnId: 'active', item: { id: 'answer', type: 'agentMessage', text: 'before after' } });
+  f.event('turn/completed', { turn: { id: 'active', status: 'completed' } }); await tick();
+  const row = f.bridge.sharedMessages().find(m => m.role === 'assistant');
+  assert.equal(row.text, change.startsWith('peer-') ? 'before after' : 'before');
+  assert.equal(Boolean(row.finalReply), change.startsWith('peer-'));
+  assert.equal(f.calls.filter(c => c.method === 'turn/steer').length, 1);
+  assert.equal(f.calls.some(c => ['turn/start', 'turn/interrupt'].includes(c.method)), false);
+});
 
 test('retained solo steer passes through the real router while its own native send is pending', async t => {
   const f = await routerFixture(t), { router } = f;

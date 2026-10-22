@@ -54,6 +54,26 @@ test('human thread association survives unconfirmed acceptance without adding pa
   w.persist();
   assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'))).room.messages.find(m => m.id === row.id).replyTo, parent);
 });
+test('current shared queue keeps already public output live without adopting unrelated private work', async t => {
+  const { w, runtimes: [a], ids, bind, block } = await fixture(t);
+  const oldTag = await w.forward(ids[0], 'original task', 'owner'); bind(0);
+  block(0, { id: 'display:old', kind: 'response', text: 'Public prefix', status: 'streaming' });
+  const old = w.room.messages.find(m => m.role === 'assistant');
+  w.get(ids[0]).state = 'working'; a.queueAvailable = true;
+  let accept, nextTag;
+  a.queue = (_text, tag) => { nextTag = tag; return new Promise(resolve => { accept = resolve; }); };
+  const done = w.queue(ids[0], 'next task', 'owner', {});
+  block(0, { id: 'display:old', kind: 'response', text: 'Public prefix with live tail', status: 'streaming' });
+  block(0, { id: 'display:foreign', kind: 'response', turnId: 'foreign', promptId: 'foreign', text: 'PRIVATE FOREIGN', status: 'complete' });
+  assert.equal(old.text, 'Public prefix with live tail'); assert.equal(old.status, 'streaming');
+  a.emit('complete', { tag: oldTag, messageId: old.nativeMessageId, text: old.text });
+  assert.equal(old.finalReply, true); assert.equal(old.sharingStopped, undefined);
+  a.emit('submitted', nextTag); a.emit('replyBound', { tag: nextTag, nativeId: w.get(ids[0]).nativeId, turnId: 'next', promptId: 'next' });
+  block(0, { id: 'display:next', kind: 'response', turnId: 'next', promptId: 'next', text: 'Next reply', status: 'complete' });
+  accept(); await done;
+  assert.equal(w.room.messages.find(m => m.text === 'Next reply').replyTo, nextTag);
+  assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE')); assert.equal(w.versions.dispatches, 2);
+});
 for (const reason of ['leave', 'takeover', 'disconnect', 'interrupt', 'gap', 'permission']) test(`${reason} freezes shared content; late native boundary is distinct from requesting a stop`, async t => {
   const { w, runtimes: [a], ids, sent, bind, block } = await fixture(t);
   await w.forward(ids[0], 'task', 'owner'); bind(0);

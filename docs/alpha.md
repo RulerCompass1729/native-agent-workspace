@@ -1,8 +1,21 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.68. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.69. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.69 retained Claude shared waiting
+
+In a retained Claude 2.1.302 session, **等本轮结束后发送** now works in the room
+through the same native queue as the solo conversation. The visible message stays
+waiting until native acceptance. Its next verified reply appears in the main
+reading area; the prior private task does not become shared. Reloading preserves
+both drafts and does not retry input. Already-public work continues displaying
+while input waits, through its actual native end. Moving one member leaves the
+other member’s manual stream active. The first retained Codex turn also survives
+a narrowly identified native history-listing limitation, without retrying input.
+Both new and retained dual-native source journeys and the final installed
+retained workflow pass. This is waiting input, not forced interruption.
 
 ## Alpha.68 retained Codex working input
 

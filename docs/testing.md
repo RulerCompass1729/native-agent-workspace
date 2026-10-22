@@ -1998,3 +1998,57 @@ testing. Hidden reopening preserves the three original native IDs/processes,
 eight Codex messages, current model, selection and drafts without dispatch. Native
 late-ACK/idle permutations use the full-router/WebSocket counterexamples; the real
 CLI trial does not claim to force those exact scheduler orders.
+
+
+## Retained Claude shared waiting — alpha.69
+
+`NAW_RETAINED_SHARED_QUEUE=1 NAW_CLAUDE_302=<native-executable> node scripts/test-native-retained-claude.cjs`
+exercises the actual alpha.2 host, Claude 2.1.302 and Electron UI. The isolated
+native configuration uses Haiku with four fixed loopback responses, zero paid
+inference. It starts private work, holds the final stream, joins the room and
+queues one instruction. Waiting persists beyond the old deadlines, through view
+switches and renderer reload without interrupt/retry. Only the fourth native
+request contains the queued instruction, exactly once. The corresponding native
+reply appears once in the room; old private turns and drafts remain private.
+A newer room draft and private draft survive, along with native identity/PID,
+second-window observation, native exit and ended-history reopen. Seven source
+and installed groups pass. Successful private video is kept
+locally. The first runner had an ambiguous text locator matching the body and
+collapsed delivery details; the corrected check locates only the message body.
+
+Full router/retained adapter/submission checks cover both receipt/input orders,
+waiting display, prior-private final completion, and permission, native identity,
+member/control, manual intent, history clear and disconnect boundaries. These
+checks do not establish forced-send semantics or hosted model reasoning.
+
+
+The dual-native runner `scripts/test-native-concurrent.cjs` also accepts
+`NAW_CONCURRENT_RETAINED=1 NAW_CLAUDE_302=<native-executable>` to use the actual
+old host and both retained providers. It checks two simultaneous streams, Claude
+waiting input, Codex same-turn steering, thread/member filtering, renderer reload,
+mouse departure/rejoin and exact downstream payloads. The already-public Claude
+reply must continue while its next input waits and finish at its native boundary;
+a different member leaving must not stop it. Departure tails remain private.
+Both retained and current source paths pass five groups, with two fixed task
+responses per provider. Retained Codex additionally requests one native title;
+all responses are local and paid inference is zero. No hosted reasoning, physical
+IME or unrestricted agent-to-agent work is implied. Final installed dual-native verification also passes all five groups. The 47
+runtime payload files match source; strict signature verification passes after
+native tests. Hidden normal-profile reopening retains three native identities
+and processes, eight Codex messages, selection and drafts with zero dispatch.
+
+The first empty retained Codex task exposed `list_turns is not supported yet`
+on native 0.163.0 resume. Compatibility is limited to that exact native error,
+version, original connection and exact accepted input/turn identity; an ACK or
+arbitrary output alone does not authorize display. Seven counterexamples cover
+wrong input/turn, permissions, disconnect and unrelated errors. Five membership
+regressions exercise RoomState through the actual retained router/native transport.
+Three shared-queue regressions preserve previous public work without adopting
+foreign private work and reject an older delayed send after a newer same-recipient
+queue is accepted. Separate intent and display revisions prevent stale-input
+replay while retaining the authorized live stream. The full suite passes 709
+checks without skips.
+
+Final independent review accepts this bounded alpha.69 increment. A complete app
+exit while a native queued input is pending has not been verified by the real CLI
+journey; channel-close behavior has local counterexamples. Full U17 stays open.
