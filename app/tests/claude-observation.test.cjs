@@ -42,6 +42,12 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
 
+for (const version of ['2.1.308', '2.1.309', '2.1.310']) test('native queue/display compatibility remains version scoped: ' + version, async () => {
+  const f = await mod({ version });
+  assert.equal(f.r.nativeQueue === true, version !== '2.1.310');
+  assert.equal(f.r.nativeBlocks === true, version !== '2.1.310');
+});
+
 test('real retained append hook reconciles receipt through reader without a classic prompt ID or sharing grant', async t => {
   const { LegacyClaude } = require('../legacy-claude.cjs'), { LegacyInput } = require('../legacy-input.cjs');
   const { processIdentity } = require('../platform.cjs');

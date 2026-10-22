@@ -141,7 +141,7 @@ test('remote display reopening rejects unknown exits and stale control, and conc
   const { Codex } = require('../adapters.cjs');
   let releaseRead, reads = 0, creations = 0;
   const record = { nativeId: 'same-thread', cwd: os.tmpdir() };
-  const host = { codexTargets: new Map(), binaries: { codex: 'codex' }, rpc: { call: async () => { reads++; await new Promise(resolve => { releaseRead = resolve; }); return { thread: { id: record.nativeId, turns: [{}] } }; } } };
+  const host = { codexTargets: new Map(), binaries: { codex: 'codex' }, rpc: { call: async () => { reads++; await new Promise(resolve => { releaseRead = resolve; }); return { thread: { id: record.nativeId, turns: [{ id: 'first-turn' }] } }; } } };
   const runtime = new Codex(record, host);
   runtime.terminal = { alive: false, nativeExited: false };
   runtime.makeTerminal = () => { creations++; return (runtime.terminal = { alive: true }); };

@@ -2156,3 +2156,71 @@ Normal hidden reopening also retains the original three native processes, curren
 model, drafts, input connections and selection with zero dispatch. Successful
 private recordings include the complete pre-exit and post-reopen UI journeys.
 Final independent source and installed-artifact review passes for this scope. Full U17 remains open.
+
+
+## First Codex task and terminal attachment — alpha.72
+
+The actual empty-session GUI path reproduced an ineffective terminal retry.
+Native 0.163.0 rejects `thread/read` with `includeTurns: true`; its verified path
+uses metadata plus `thread/turns/list`. An exact same-thread unmaterialized
+rejection becomes the existing first-message instruction. Metadata alone, wrong
+IDs, malformed turn entries, unrelated errors and changed connections cannot
+prove that a terminal can attach. Independent review supplied three malformed
+turn counterexamples; those now fail before any terminal starts.
+
+`NAW_CONCURRENT_EMPTY_TERMINAL=1 node scripts/test-native-concurrent.cjs` exercises
+the actual Electron UI, native Codex and isolated loopback response transport.
+It creates through the dialog, selects terminal before any task, verifies a
+persistent actionable instruction and zero dispatch, returns to chat and sends
+one requested task, then opens the same terminal while the task is still working.
+New response text arrives in that terminal; after completion the main reader
+retains both pre-attachment and later text. Thread/server identity and one dispatch
+are checked. The source journey passes three groups with one local task response,
+no native title response and zero paid inference; a success video stays local.
+
+An earlier active-turn check failed because native TUI attachment did not replay
+a partial delta sent before attachment. The terminal had successfully attached,
+showed the original input and Working, while the private reader retained that
+delta. This remains a native display limitation, not a claim of complete transient
+parity. The later test verifies newly arriving text and final full content. A
+separate runner selector typo was corrected without changing product behavior.
+All failure evidence remains private. The installed three-group journey also
+passes, with one fixed local response and no paid inference. All 48 runtime files
+match source, post-native strict signing verification passes, and hidden reopening
+preserves all three original sessions, drafts, selected view and current model,
+with zero new task dispatch. B29 passes final independent source/artifact review.
+
+## Claude native compatibility — alpha.72
+
+During the first-use work the local Claude binary updated to 2.1.309. An isolated
+zero-task boot showed the native queue gate disabled. The full generated plugin
+types were compared with 2.1.308: changes add an optional prompt-fill cursor and
+clarify existing model naming, without changing the submission/display/turn
+interfaces used by the application. The [official Mods reference](https://code.claude.com/docs/en/plugins/mods/reference)
+identifies installed-version generated types as the relevant contract. Those
+provider-generated files remain outside the repository.
+
+The gate now includes exactly 2.1.309; a regression keeps an unverified future
+version disabled. The immediately previous app-owned hook has an exact-hash
+upgrade fixture; customized copies still reject replacement. Native test shims
+resolve the selected binary once and disable their own auto-updater, without
+changing the user's agent settings.
+
+`NAW_QUEUE_SHARED=1 node scripts/test-native-queue.cjs` runs the actual Electron
+app and native 2.1.309 with two fixed loopback responses, zero paid inference. It
+sends a private task, holds it for 42 seconds, joins the room and queues an
+explicitly addressed next task. Switching GUI/TUI views and reloading preserves
+the waiting receipt and newer draft. The next prompt appears in the actual native
+request exactly once; only its attributed reply appears in the shared reader.
+The earlier private output and solo draft remain private. Full native terminal
+output, request bodies, state snapshots, screenshot and success recording stay
+local. An interrupted installed attempt is retained as a failed test: a concurrent
+normal-profile quit/reopen check closed the test window through the shared bundle
+identifier. Lifecycle checks are now serialized; that attempt is not a pass.
+All five source and installed groups and 772 local tests pass with no skips.
+All 48 installed runtime files match source; strict signature passes after native
+testing. The subsequent normal-profile check preserves three original native
+identities/processes, readers, drafts and selected view while staying hidden,
+with no new task dispatch. Final independent source/artifact review passes for
+B30. These are transport
+and interface checks, not tests of hosted model reasoning or complete U17 parity.

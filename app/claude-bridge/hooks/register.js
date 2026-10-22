@@ -311,7 +311,7 @@ async function listen($, ownGeneration) {
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
   const version = (await $.session.version()).version;
-  const result = await request($, '/root-bind', { nativeBlocks, nativeQueue: version === (legacyOnly ? '2.1.302' : '2.1.308'),
+  const result = await request($, '/root-bind', { nativeBlocks, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309'].includes(version)),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
@@ -494,9 +494,9 @@ export function register(on) {
     if (collecting) collecting.invalid = true;
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
-    nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308'].includes(nativeVersion)
-      : ['2.1.307', '2.1.308'].includes(nativeVersion);
-    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308'].includes(nativeVersion);
+    nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion)
+      : ['2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion);
+    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;

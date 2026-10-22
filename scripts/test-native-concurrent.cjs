@@ -9,17 +9,20 @@ const { executable, processIdentity, processMayBeAlive } = require('../app/platf
 const { connect, connectService } = require('../app/service-client.cjs');
 const retained = process.env.NAW_CONCURRENT_RETAINED === '1';
 const nativeInterrupt = process.env.NAW_CONCURRENT_INTERRUPT === '1';
+const emptyTerminal = process.env.NAW_CONCURRENT_EMPTY_TERMINAL === '1';
+const providers = emptyTerminal ? ['codex'] : ['claude', 'codex'];
 if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-concurrent-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work');
 const claudeHome = path.join(base, 'claude'), codexHome = path.join(base, 'codex');
 for (const dir of [profile, cwd, claudeHome, codexHome]) fs.mkdirSync(dir, { mode: 0o700 });
-const binaries = Object.fromEntries(['claude', 'codex'].map(p => [p, executable(p)]));
+const binaries = Object.fromEntries(providers.map(p => [p, executable(p) && fs.realpathSync(executable(p))]));
 if (retained) { assert.ok(process.env.NAW_CLAUDE_302); binaries.claude = process.env.NAW_CLAUDE_302; }
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => {
   assert.ok(file, `Real ${p} required`); return [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()];
 }));
-assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.308\b/); assert.equal(versions.codex, 'codex-cli 0.163.0');
+if (!emptyTerminal) assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.(308|309)\b/);
+assert.equal(versions.codex, 'codex-cli 0.163.0');
 const retainedIds = {};
 let application, page, child, legacyClient, sequence = 0, titleCalls = 0;
 const counts = { claude: 0, codex: 0 }, controls = {}, errors = [], checks = [];
@@ -163,8 +166,8 @@ async function openApplication() {
   fs.writeFileSync(path.join(codexHome, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local fixture"\nbase_url = "${address}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   fs.writeFileSync(path.join(claudeHome, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   const shims = {};
-  for (const provider of ['claude', 'codex']) {
-    const config = provider === 'codex' ? { CODEX_HOME: codexHome } : { ANTHROPIC_BASE_URL: address, ANTHROPIC_API_KEY: 'local-fixture', CLAUDE_CONFIG_DIR: claudeHome, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+  for (const provider of providers) {
+    const config = provider === 'codex' ? { CODEX_HOME: codexHome } : { ANTHROPIC_BASE_URL: address, ANTHROPIC_API_KEY: 'local-fixture', CLAUDE_CONFIG_DIR: claudeHome, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' };
     shims[provider] = path.join(base, `${provider}-local`);
     fs.writeFileSync(shims[provider], '#!/usr/bin/python3\nimport os,sys\n' +
       'for key in ["OPENAI_API_KEY","CODEX_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]: os.environ.pop(key,None)\n' +
@@ -184,6 +187,37 @@ async function openApplication() {
     for (const provider of ['claude', 'codex']) retainedIds[provider] = await legacyClient.call('create', { provider, cwd, name: provider === 'claude' ? 'Claude review' : 'Codex build', view: 'terminal' });
   }
   await openApplication();
+  if (emptyTerminal) {
+    assert.equal(retained, false);
+    const codex = await create('codex');
+    await page.locator('#terminal-tab').click();
+    await page.locator('.terminal-loading').getByText('请先在对话中发送第一条消息，再打开同一会话的原生终端。', { exact: true }).waitFor();
+    assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.deepEqual(counts, { claude: 0, codex: 0 });
+    assert.equal(await page.locator('#terminal-area .xterm-helper-textarea').isVisible(), false);
+    await save('empty-terminal-guidance');
+    await page.screenshot({ path: path.join(base, 'empty-terminal-guidance.png') });
+    await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('Start the first Codex task.'); await page.locator('#send-button').click();
+    await until(() => controls['codex-1'], 'Requested first turn');
+    await page.locator('#terminal-tab').click();
+    await until(async () => { const text = await page.locator('#terminal-area').innerText(); return text.includes('Start the first Codex task.') && text.includes('Working'); }, 'The same native terminal displays the active first input');
+    assert.equal((await session(codex.id)).state, 'working');
+    // Native TUI attachment may not replay deltas emitted before it subscribed.
+    // Verify newly arriving output, without claiming backfilled partial text.
+    controls['codex-1'].append('AFTER_ATTACH: the original task is still streaming.\n');
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('AFTER_ATTACH'), 'New native output reaches the attached terminal');
+    await save('first-terminal-working');
+    controls['codex-1'].finish();
+    await until(async () => (await session(codex.id)).state === 'idle', 'First native response ends');
+    assert.equal((await session(codex.id)).nativeId, codex.nativeId);
+    assert.deepEqual((await session(codex.id)).serverIdentity, codex.serverIdentity);
+    assert.equal((await snapshot()).diagnostics.dispatches, 1); assert.deepEqual(counts, { claude: 0, codex: 1 }); assert.deepEqual(errors, []);
+    await save('first-terminal-ready');
+    await page.screenshot({ path: path.join(base, 'first-terminal-ready.png') });
+    await page.locator('#chat-tab').click();
+    await until(async () => { const text = await page.locator('#messages').innerText(); return text.includes('CODEX_SHARED_PREFIX') && text.includes('AFTER_ATTACH'); }, 'The main reader retains both pre-attachment and later output');
+    console.log(JSON.stringify({ checks: ['An empty native Codex session shows the necessary first-message step with zero seed tasks', 'During the single requested first GUI turn, terminal displays its input and new output after attachment', 'The original turn finishes and the main reader retains the complete reply without another submission'], versions, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
+    return;
+  }
   if (retained) await application.evaluate(({ app }) => {
     const load = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json');
     const { LegacyShared } = load('./app/legacy-shared.cjs'); globalThis.retainedShareTrace = [];

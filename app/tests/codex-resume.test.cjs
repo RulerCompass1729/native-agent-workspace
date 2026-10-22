@@ -203,7 +203,7 @@ for (const succeeds of [true, false]) test('early terminal attachment waits for 
   if (succeeds) { release(); await starting; await attachment; assert.equal(created, 1); }
   else { const outcomes = Promise.allSettled([starting, attachment]); release(); assert.deepEqual((await outcomes).map(x => x.status), ['rejected', 'rejected']); assert.equal(created, 0); }
 });
-for (const scenario of ['pending', 'empty', 'wrong-thread', 'disconnected', 'changed-rpc', 'stopped', 'concurrent']) test('first-turn terminal attachment verifies native rollout: ' + scenario, async () => {
+for (const scenario of ['pending', 'empty', 'missing-history', 'missing-disconnected', 'wrong-thread', 'disconnected', 'changed-rpc', 'stopped', 'concurrent']) test('first-turn terminal attachment verifies native rollout: ' + scenario, async () => {
   const calls = [], record = { nativeId: 'first-thread', cwd: '/synthetic', view: 'chat' };
   let r;
   const host = { binaries: { codex: 'synthetic' }, codexSocket: '/synthetic/socket', rpc: { call: async (method, params) => {
@@ -211,6 +211,8 @@ for (const scenario of ['pending', 'empty', 'wrong-thread', 'disconnected', 'cha
     if (scenario === 'disconnected') r.transportDisconnected = true;
     if (scenario === 'changed-rpc') host.rpc = {};
     if (scenario === 'stopped') r.stopped = true;
+    if (scenario === 'missing-disconnected') r.transportDisconnected = true;
+    if (scenario.startsWith('missing-')) throw Object.assign(Error('Native fixture: no rollout'), { nativeMissingHistory: true, nativeMissingHistoryThread: record.nativeId });
     return { thread: { id: scenario === 'wrong-thread' ? 'another-thread' : record.nativeId, turns: scenario === 'empty' ? [] : [{ id: 'active', status: 'inProgress' }] } };
   } } };
   r = new Codex(record, host); let starts = 0, argv;
@@ -220,6 +222,40 @@ for (const scenario of ['pending', 'empty', 'wrong-thread', 'disconnected', 'cha
     assert.equal(starts, 1); assert.ok(results.every(result => result === r.terminal));
     assert.equal(argv.at(-1), record.nativeId); assert.ok(argv.includes('resume'));
     assert.equal(r.hasHistory, true);
-  } else { await assert.rejects(r.openTerminal()); assert.equal(starts, 0); assert.equal(r.hasHistory, false); }
+  } else {
+    await assert.rejects(r.openTerminal(), ['empty', 'missing-history'].includes(scenario) ? /请先在对话中发送第一条消息/ : /原生/);
+    assert.equal(starts, 0); assert.equal(r.hasHistory, false);
+  }
   assert.ok(calls.every(c => c.method === 'thread/read' && c.params.threadId === record.nativeId && c.params.includeTurns));
+});
+
+for (const scenario of ['empty', 'pending', 'missing', 'wrong-error-id', 'wrong-thread', 'bad-page', 'null-turn', 'missing-turn-id', 'blank-turn-id', 'wrong-missing-history', 'unrelated', 'changed-rpc', 'unknown-version']) test('paginated first-turn terminal check: ' + scenario, async () => {
+  const record = { nativeId: 'first-thread', cwd: '/synthetic', view: 'chat' }, calls = [];
+  let r;
+  const host = { binaries: { codex: 'synthetic' }, codexSocket: '/synthetic/socket', rpc: {
+    nativeVersion: scenario === 'unknown-version' ? '0.164.0' : '0.163.0',
+    call: async (method, params) => {
+      calls.push({ method, params });
+      if (method === 'thread/read' && params.includeTurns) throw Object.assign(Error('Native turns unavailable'), { nativeUnsupportedTurns: true });
+      if (method === 'thread/read') return { thread: { id: scenario === 'wrong-thread' ? 'another-thread' : record.nativeId } };
+      assert.equal(method, 'thread/turns/list'); assert.equal(params.limit, 1);
+      if (scenario === 'changed-rpc') host.rpc = {};
+      if (scenario === 'unrelated') throw Error('Native connection error');
+      if (scenario === 'wrong-missing-history') throw Object.assign(Error('Native no rollout'), { nativeMissingHistory: true, nativeMissingHistoryThread: 'another-thread' });
+      if (['missing', 'wrong-error-id'].includes(scenario)) throw Object.assign(Error('Native empty thread'), { nativeUnmaterializedThread: scenario === 'missing' ? record.nativeId : 'another-thread' });
+      if (scenario === 'null-turn') return { data: [null] };
+      if (scenario === 'missing-turn-id') return { data: [{}] };
+      if (scenario === 'blank-turn-id') return { data: [{ id: ' ' }] };
+      return scenario === 'bad-page' ? {} : { data: scenario === 'empty' ? [] : [{ id: 'first-turn', status: 'inProgress' }] };
+    },
+  } };
+  r = new Codex(record, host); let starts = 0;
+  r.makeTerminal = args => { starts++; assert.equal(args.at(-1), record.nativeId); return { alive: true }; };
+  if (scenario === 'pending') { await r.openTerminal(); assert.equal(starts, 1); }
+  else {
+    await assert.rejects(r.openTerminal(), ['empty', 'missing'].includes(scenario) ? /请先在对话中发送第一条消息/ : /原生|Native/);
+    assert.equal(starts, 0); assert.equal(r.hasHistory, false);
+  }
+  assert.equal(calls.length, ['unknown-version', 'wrong-thread'].includes(scenario) ? 1 : 2);
+  assert.ok(calls.every(c => c.params.threadId === record.nativeId && !/start|resume/.test(c.method)));
 });

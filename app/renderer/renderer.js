@@ -1061,7 +1061,10 @@ async function ensureTerminal(id, explicit = false) {
     } catch (error) {
       if (terminals.get(id) === entry) {
         entry.failed = true; entry.ready = false; entry.queued = []; entry.pending = Promise.resolve();
-        loading.textContent = '终端未连接，重新选择此会话或视图可重试。';
+        // Only this known local instruction may replace the generic failure.
+        // Never persist a raw native error (which can contain private paths).
+        const firstMessage = '请先在对话中发送第一条消息，再打开同一会话的原生终端。';
+        loading.textContent = error.message?.includes(firstMessage) ? firstMessage : '终端未连接，重新选择此会话或视图可重试。';
         throw error;
       }
     }

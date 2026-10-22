@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.71 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.72 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,29 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.72 — first-use terminal continuity:** a GUI-created Codex session now
+explains its missing first user message instead of presenting an ineffective
+retry. Native 0.163.0 is checked through its actual paginated turn API; malformed
+history, mismatched identity and changed connections cannot enable attachment.
+The first requested task can open the same terminal while still working, with no
+seed task or replacement thread. Source and installed actual Electron/native checks pass with
+one fixed loopback task response and zero paid inference per run. Native TUI attachment
+mid-turn does not replay already-emitted partial deltas, while subsequent output
+and final full text are verified. B29 passes independent source and installed
+review. The original three sessions retain identity, drafts and selected view on
+hidden reopening, with no new task dispatch.
+
+The same increment checks Claude Code 2.1.309 after an actual local auto-update.
+Its generated plugin contract preserves the submission/display/turn interfaces
+used here; compatibility remains limited to explicitly checked versions. Source
+native testing verifies private work followed by a queued shared task through
+view switching and reload, with two fixed loopback responses and zero paid
+inference. Installed verification and independent source/artifact review also
+pass: five native groups, 48 matching runtime files, strict signature and the
+original three-session hidden reopening with no new dispatch. All
+772 local checks pass without skips. U17 and Claude's post-Stop GUI input
+limitation remain open.
 
 **Alpha.71 — native interruption and private-history retention:** exact native root boundaries
 repair retained Claude's stale working state after keyboard Escape. Partial

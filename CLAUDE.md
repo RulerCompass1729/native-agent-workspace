@@ -37,6 +37,8 @@ or start paid model runs as a side effect of editing documents.
   launches focus the existing instance; isolated test launches and their repeated
   launches remain hidden. Extra windows require an intentional test case.
   Clean up only processes owned by that test, preserving native user sessions.
+  Finish isolated installed tests before normal-profile quit/reopen checks:
+  quitting by bundle ID can target an isolated instance of the same application.
 - Keep one daily launchable installed app in `/Applications`. Build bundles are
   temporary; keep distribution/rollback archives, not extra discoverable `.app`
   copies. Do not leave test/backup bundles registered as ordinary applications.

@@ -378,7 +378,8 @@ test('viewing an owned legacy session does not pause peer collaboration; stale v
 });
 
 for (const [version, hash] of [['51', '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6'],
- ['69', 'a3462c9cb8bb11cdd6fdfb26baebf780bb9af9f7ef72535dd08bfa3f0ae7b359']]) test(`released alpha.${version} compatibility hook upgrades, edited copies remain untouched`, t => {
+ ['69', 'a3462c9cb8bb11cdd6fdfb26baebf780bb9af9f7ef72535dd08bfa3f0ae7b359'],
+ ['71', '39a213b15740f1723dfb9886d709a1a4dd92a71e651a261d42ceac188e29f388']]) test(`released alpha.${version} compatibility hook upgrades, edited copies remain untouched`, t => {
  const {cwd}=fixture(t),file=path.join(cwd,'.claude/skills/native-workspace-compat/hooks/register.js');
  const previous=fs.readFileSync(path.join(__dirname,`fixtures/claude-compat-alpha${version}.js`),'utf8');
  assert.equal(crypto.createHash('sha256').update(previous).digest('hex'),hash);
