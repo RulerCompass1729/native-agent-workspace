@@ -1,8 +1,17 @@
 # macOS alpha trial
 
-As of 2026-10-21. Version 0.1.0-alpha.57. Suitable for a small technical trial with
+As of 2026-10-21. Version 0.1.0-alpha.58. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.58 working Codex input
+
+While a supported Codex turn is running, the existing composer shows **追加指令**.
+The input uses the same native turn. Acceptance does not claim the previous output
+was interrupted. Unknown turn identity, unsupported versions or a pending permission
+keep this action unavailable. A private instruction freezes earlier room sharing;
+the continuation stays in the session. No hidden summary or model call is added.
+Source/native and installed retained-reader checks pass.
 
 ## Alpha.57 explicit discussion threads
 

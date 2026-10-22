@@ -9,7 +9,7 @@ async function desktop(t) {
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, dialog: { showMessageBox: async () => ({ response: 1 }) },
     session: { defaultSession: { setPermissionRequestHandler: noop, setPermissionCheckHandler: noop, webRequest: { onBeforeRequest: noop } } }, Menu: { setApplicationMenu: noop, buildFromTemplate: value => value },
   };
-  const sandbox = vm.createContext({ require: name => name === 'electron' ? electron : name === './service-client.cjs' ? { ensureService: async () => {} } : name === './dsh-host.cjs' ? { startDsh: async () => ({ origin: 'http://127.0.0.1:10101', url: 'http://127.0.0.1:10101/', stop: noop }) } : nativeRequire(name), __dirname: path.dirname(main), process: { env: {}, execPath: process.execPath }, URL, setTimeout, clearTimeout });
+  const sandbox = vm.createContext({ require: name => name === 'electron' ? electron : name === './service-client.cjs' ? { ensureService: async () => {} } : name === './dsh-host.cjs' ? { resetUiAuthentication: async () => {}, startDsh: async () => ({ origin: 'http://127.0.0.1:10101', url: 'http://127.0.0.1:10101/', stop: noop }) } : nativeRequire(name), __dirname: path.dirname(main), process: { env: {}, execPath: process.execPath }, URL, setTimeout, clearTimeout });
   vm.runInContext(fs.readFileSync(main, 'utf8'), sandbox); vm.runInContext('openWindow = async () => {};', sandbox); await vm.runInContext('boot()', sandbox);
   const state = { sessions: [], room: { messages: [] } }, client = { socket: { destroyed: false }, call: async () => structuredClone(state) };
   sandbox.actor = { client, win: { isDestroyed: () => false, webContents: { send: noop } } };

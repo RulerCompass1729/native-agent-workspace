@@ -683,6 +683,17 @@ class Codex extends EventEmitter {
     if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag });
     else this.emit('complete', { tag: pending?.tag, messageId: turn.messageId, text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
   }
+  get steerAvailable() { return this.host.rpc?.nativeVersion === '0.163.0' && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  async steer(text, tag, expectedTurnId, guard) {
+    if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || !guard()) throw Error('当前原生回合已变化；追加指令未发送，草稿保留。');
+    this.ownInputs.add(tag);
+    // Native expectedTurnId is the atomic precondition. Never fall back to a
+    // new turn or infer that this request has interrupted the running response.
+    const receipt = await this.host.rpc.call('turn/steer', { threadId: this.record.nativeId, expectedTurnId, clientUserMessageId: tag, input: [{ type: 'text', text, text_elements: [] }] });
+    if (receipt?.turnId !== expectedTurnId) throw Error('原生追加指令接收结果未确认；请核对终端，不会重发。');
+    this.emit('submitted', tag);
+    return expectedTurnId;
+  }
   async send(text, tag, guard) {
     if (!this.chatAvailable || this.pending || !guard()) throw new Error('会话忙碌、原生对话接口尚未连接，或交接已失效。');
     const pending = this.pending = { tag, turnId: null }; this.ownInputs.add(tag);

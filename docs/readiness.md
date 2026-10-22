@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-21. Version 0.1.0-alpha.57 is a **local macOS technical-trial alpha**.
+As of 2026-10-21. Version 0.1.0-alpha.58 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,8 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Installed alpha.58 increment:** the existing solo composer can send an instruction into a known running Codex 0.163.0 turn through native `turn/steer`. The exact turn precondition prevents a stale click from starting another turn. Acceptance does not imply interruption or completion. Private steering revokes earlier room sharing before later output arrives. Native Electron/TUI proof uses two local Responses streams and checks the actual second provider request, with no paid inference. Installed retained-reader checks and normal-profile reopening retain all three original native IDs/processes and add no dispatch. Unknown turn IDs, other native versions, Claude queue/force-send and working shared sends remain separate open cases.
 
 **Installed alpha.57, 2026-10-21:** explicit reply threads and member trajectories
 use the same shared reader. Scoped drafts survive search and reopening. Source

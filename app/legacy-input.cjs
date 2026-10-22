@@ -199,19 +199,20 @@ class LegacyInput extends EventEmitter {
       if (record && eligible(entry.state, record)) await this.prepare(entry, record).catch(() => {});
     }
   }
-  async send(record, text, refresh, guard, shared = false, replyTo) {
+  async send(record, text, refresh, guard, shared = false, replyTo, expectedTurnId) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
     const target = this.target(record);
     if (!target?.submission.connected) throw Error('原会话输入连接尚未就绪，草稿已保留。');
     if (typeof text !== 'string' || !text.trim() || text.length > 16000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) throw Error('请输入有效文字；一次最多 16,000 个字符。');
     text = text.trim();
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
-    if (target.submission.pending) throw Error('上一条发送仍待确认。');
+    if (expectedTurnId !== undefined ? shared || !target.native?.steerAvailable || target.native.pendingSteer : target.submission.pending) throw Error('上一条发送仍待确认，或当前连接无法追加指令。');
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
     if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
     this.records.push(row); this.save(); target.refresh = refresh;
     try {
-      const pending = target.native ? target.native.send(text, row.id, refresh, guard) : target.submission.request(text, row.id, guard);
+      const pending = expectedTurnId !== undefined ? target.native.steer(text, row.id, expectedTurnId, refresh, guard)
+        : target.native ? target.native.send(text, row.id, refresh, guard) : target.submission.request(text, row.id, guard);
       this.emit('change'); await pending;
       // Clearing shared text may replace a pending ledger row while native
       // acceptance is in flight. Update the retained metadata by stable ID.

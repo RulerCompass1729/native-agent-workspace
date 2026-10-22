@@ -201,6 +201,7 @@ function soloAction(s) {
     ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
     : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
   if (s.chatAvailable === false || s.state === 'starting' || s.state === 'error') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
+  if (s.state === 'working' && s.steerAvailable && s.activeTurnId && !s.approval) return { kind: 'send', label: '追加指令 ↑', hint: '发送到当前原生回合；不会另开回合或强制中断。' };
   return { kind: 'send', label: '发送 ↑', hint: s.state === 'approval'
     ? s.approvalResolved ? '确认已处理，等待原生状态更新；可以继续编辑草稿。'
       : s.approval?.pending ? '已提交决定，等待原生确认；可以继续编辑草稿。'
@@ -215,7 +216,7 @@ function renderComposer(s) {
   $('message-input').disabled = false; // Saved drafts remain selectable/copyable.
   $('message-input').placeholder = action.kind === 'send' ? '直接说你想做什么…' : legacyDraft ? '可以先写草稿；接通原会话后发送。' : '草稿保留在这里；请使用下方操作继续。';
   send.textContent = action.label; send.type = action.kind === 'send' ? 'submit' : 'button';
-  send.disabled = action.kind === 'none' || (action.kind === 'send' && (s.state !== 'idle' || s.pendingTag || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
+  send.disabled = action.kind === 'none' || (action.kind === 'send' && ((s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : s.state !== 'idle' || s.pendingTag) || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
   $('compose-hint').textContent = inputRecoveries.get(s?.id)?.text.value ? '上一段原生输入未确认。草稿可继续编辑；请在原生终端查看保留的文字。' : pendingMode?.id === s?.id ? '正在切换输入方式，可以先编辑草稿。' : action.hint;
 }
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
@@ -1227,7 +1228,9 @@ $('composer').onsubmit = event => {
   if (inputFocusAllowed()) $('message-input').focus();
   attempt(async () => {
     const id = activeSessionId(), nativeId = current()?.nativeId, text = $('message-input').value, revision = draftRevisions.get(id);
-    const receipt = await api.send(id, text, nativeId);
+    const s = current();
+    const receipt = s?.state === 'working' && s.steerAvailable && s.activeTurnId
+      ? await api.steer(id, text, nativeId, s.activeTurnId) : await api.send(id, text, nativeId);
     if (!receipt?.contextChanged && current()?.nativeId === nativeId && !current()?.nativeContextPending && activeSessionId() === id && draftRevisions.get(id) === revision && $('message-input').value === text) $('message-input').value = '';
   });
 };

@@ -47,6 +47,8 @@ class LegacyCodex extends EventEmitter {
     this.approvalScope = crypto.randomUUID(); this.approval = null;
   }
   get pending() { return this.adapter?.pending; }
+  get steerAvailable() { return this.connected && !this.closed && this.adapter?.steerAvailable === true; }
+  get turnId() { return this.adapter?.turnId || null; }
   async connect(socket) {
     const ws = this.ws = new WebSocket('ws://localhost', {
       createConnection: () => net.connect(socket), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 5000,
@@ -115,7 +117,7 @@ class LegacyCodex extends EventEmitter {
         adapter.emit('fleet', { event: 'thread/started', id: p.thread.id, active: true });
       }
     });
-    await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace_compat', version: '1' }, capabilities: { experimentalApi: true } });
+    rpc.nativeVersion = require('./native-history.cjs').serverVersion(await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace_compat', version: '1' }, capabilities: { experimentalApi: true } }));
     if (this.closed) throw Error('连接操作已取消。');
     ws.send(JSON.stringify({ method: 'initialized', params: {} }));
     let loaded = false, cursor;
@@ -174,6 +176,21 @@ class LegacyCodex extends EventEmitter {
         this.state = 'error'; this.emit('failed', '消息已被原生接受，但后续状态尚未同步；请核对原生终端，不要重发。');
       }
     }
+  }
+  async steer(text, tag, expectedTurnId, refresh, guard) {
+    if (!this.steerAvailable || this.pendingSteer) throw Error('原生追加指令连接尚未就绪。');
+    this.pendingSteer = tag;
+    const revision = this.revision;
+    let message;
+    try {
+      await refresh();
+      const valid = () => this.steerAvailable && this.revision === revision && this.state === 'working' && !this.approval && this.turnId === expectedTurnId && guard();
+      if (!valid()) throw Error('当前原生回合已变化，草稿保留。');
+      message = { id: tag, role: 'user', text, status: 'awaiting-native', origin: 'human', inputMode: 'steer', turnId: expectedTurnId };
+      this.record.messages.push(message); this.emit('change');
+      await this.adapter.steer(text, tag, expectedTurnId, valid); message.status = 'submitted';
+    } catch (error) { if (message && message.status !== 'submitted') message.status = 'unconfirmed'; throw error; }
+    finally { this.pendingSteer = null; this.emit('change'); }
   }
   observe() { return { terminal: null, progress: this.progress.snapshot() }; }
   approve(requestId, decision) {

@@ -19,7 +19,12 @@ NativeHost.prototype.start = async function () {
       const m = JSON.parse(bytes); requests.push(m.method);
       const reply = result => ws.send(JSON.stringify({ id: m.id, result }));
       const event = (method, params) => ws.send(JSON.stringify({ method, params: { threadId: record.nativeId, ...params } }));
-      if (m.method === 'initialize') reply({});
+      if (m.method === 'initialize') reply({ userAgent: 'codex/0.163.0' });
+      if (m.method === 'turn/steer') {
+        const item = { id: 'steer-human', type: 'userMessage', clientId: m.params.clientUserMessageId, content: m.params.input };
+        history.push({ turnId: 'gui-turn', item }); reply({ turnId: 'gui-turn' });
+        event('item/completed', { turnId: 'gui-turn', item });
+      }
       if (m.method === 'thread/loaded/list') reply({ data: [record.nativeId] });
       if (m.method === 'thread/resume') reply({ model: 'synthetic-current-model', thread: { id: record.nativeId, status: { type: 'idle' } } });
       if (m.method === 'thread/items/list') reply({ data: history, nextCursor: null });

@@ -48,7 +48,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeBlockMapping: true, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeBlockMapping: true, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.sharedReplies.refresh();
@@ -397,6 +397,31 @@ class Workspace extends EventEmitter {
       this.changed(); throw error;
     } finally { if (this.pendingDrafts.get(id)?.tag === tag) this.pendingDrafts.delete(id); }
     return tag;
+  }
+  async steer(id, text, owner, expectedTurnId) {
+    text = cleanText(text);
+    if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
+    const s = this.get(id), runtime = this.runtime(id);
+    if (s.owner !== owner || s.provider !== 'codex' || s.state !== 'working' || s.approval ||
+      !runtime.steerAvailable || runtime.pendingSteer || typeof expectedTurnId !== 'string' || !expectedTurnId || runtime.turnId !== expectedTurnId) throw Error('当前原生回合或控制权已变化，草稿保留。');
+    this.pause('真人追加指令'); s.controlRevision++;
+    const control = s.controlRevision, connection = s.connectionRevision;
+    const valid = () => this.runtimes.get(id) === runtime && s.owner === owner && s.controlRevision === control &&
+      s.connectionRevision === connection && s.state === 'working' && !s.approval && runtime.turnId === expectedTurnId;
+    const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
+    runtime.pendingSteer = tag;
+    const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId };
+    s.messages.push(message); this.versions.dispatches++; this.changed();
+    try {
+      await runtime.steer(text, tag, expectedTurnId, valid);
+      message.status = 'submitted';
+      if (s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
+      return tag;
+    } catch (error) {
+      // Do not relabel ongoing output as cancelled or retry this input.
+      if (message.status !== 'submitted') message.status = 'unconfirmed';
+      throw error;
+    } finally { if (runtime.pendingSteer === tag) runtime.pendingSteer = null; this.changed(); }
   }
   async terminal(id, owner) {
     this.claim(id, owner, 'terminal');
