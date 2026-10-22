@@ -74,7 +74,7 @@ class LegacyCodex extends EventEmitter {
     adapter.chatAvailable = false;
     adapter.recoveryNativeInputs = new Map(this.record.messages.filter(m => m.role === 'user' && m.origin === 'native').map(m => [m.id, m.text]));
     for (const m of this.record.messages) {
-      if (m.role === 'assistant') adapter.historyMessageItems.add(m.id);
+      if (m.role === 'assistant') adapter.historyMessageItems.add(m.kind === 'summary' ? m.id.slice(`native:${this.record.nativeId}:summary:`.length) : m.id);
       if (m.role === 'user' && ['human', 'room'].includes(m.origin)) adapter.ownInputs.add(m.id);
     }
     // Retain the original native writer; consume the same event/history

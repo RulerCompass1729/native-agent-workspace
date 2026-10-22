@@ -2,6 +2,12 @@
 // parsing of terminal text. Item IDs and lifecycle stay with the native adapter.
 const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'functionCallOutput']);
 const json = value => value === undefined || value === null ? '' : JSON.stringify(value, null, 2);
+// The native protocol separates user-readable summaries from raw reasoning.
+// Never fall back to `content`, `text`, encrypted content or metadata here.
+function summaryText(item) {
+  return item?.type === 'reasoning' && Array.isArray(item.summary) && item.summary.every(part => typeof part === 'string')
+    ? item.summary.join('\n\n') : '';
+}
 function contentText(content) {
   if (typeof content === 'string') return { text: content, incomplete: false };
   if (!Array.isArray(content)) return { text: '', incomplete: content !== null && content !== undefined };
@@ -56,4 +62,4 @@ function toolStatus(item, completed) {
   if (item.status === 'interrupted') return 'interrupted';
   return completed ? 'completed' : 'running';
 }
-module.exports = { contentText, fileChanges, toolContent, toolStatus, toolTypes };
+module.exports = { contentText, fileChanges, toolContent, toolStatus, toolTypes, summaryText };
