@@ -1,5 +1,48 @@
 # Bounded testing
 
+## Retained Claude main reader — alpha.64
+
+`scripts/test-native-retained-claude.cjs` uses this repository's actual alpha.2
+backend, an explicitly supplied Claude Code 2.1.302 binary and the actual Electron
+application. The provider endpoint is local and serves three bounded canned
+responses; this is native client/protocol evidence, not hosted reasoning quality.
+No provider executable or private transcript is included in the repository.
+
+Four source and installed groups pass: original native history and identity
+survive same-process
+compatibility-plugin upgrade; accepted GUI input, intermediate display batches and
+tool output appear in the main reader once; GUI close/reopen during a held final
+preserves the original PID, native ID and unsent draft; a second actual window
+receives later output, and native `/exit` plus cold reopening preserves projected
+history with a null PID. The raw evidence includes requests, complete native
+terminal text, streaming/completed/ended snapshots, native debug log and screenshot.
+The installed run also records a successful video; all 46 runtime payload files
+match source and the strict application signature remains valid after native
+testing. Normal hidden reopening preserves three original native IDs/processes,
+selected view and drafts with zero additional dispatch.
+
+The local suite passes 633 checks, no skips. Independent counterexamples cover
+missing/corrupt/private-cache restoration, raw old-final suppression, stop/PID-null,
+reopening ended records without a transport, second-window event continuity,
+explicit record cleanup and child/stale observation rejection.
+
+Failed intermediate trials are retained privately and are not counted as passes:
+missing native ownership before key confirmation; incorrectly formed fixture SSE;
+an incomplete line withheld by the native display event; duplicate plugin loading
+in the runner. The last was diagnosed from the native debug log and fixed by using
+ordinary project discovery without a duplicate `--plugin-dir`. Both final trials
+assert there are no plugin-loading errors. An intermediate installed trial
+incorrectly required a pending-upgrade hint after the native file watcher had
+already reloaded successfully. The corrected test accepts only a pending
+explanation or a confirmed reader, and keeps input editable. That failed trial
+is retained separately.
+
+The reader preserves downstream display content, not raw pre-transform text. It
+cannot reconstruct transient content before attachment or while disconnected.
+Tool bodies remain volatile under the existing observation privacy boundary;
+reopening does not guarantee their restoration. Physical IME, native menus and
+all transient-state parity are not established. U17 remains open.
+
 ## Concurrent native recipients — alpha.63
 
 `node scripts/test-native-concurrent.cjs` starts real Claude Code 2.1.308 and

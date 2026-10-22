@@ -1,8 +1,24 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.63. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.64. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.64 retained Claude main reader
+
+An inspected retained Claude Code 2.1.302 session uses its existing native
+process and context while accepted input, display batches, tool text and native
+turn boundaries appear in the main conversation reader. The native file watcher may reload the updated project plugin. When the
+reader is still pending, the existing composer explains how to run native
+`/reload-plugins`; desktop replacement alone is not proof of native reload.
+
+Private response history survives GUI reopening and native exit. Multiple windows
+share the live reader. Damaged local projection files show a gap instead of an
+untransformed old response. Native lifecycle and fleets remain with the original
+host. Source and installed four-group native checks pass. Original sessions, drafts
+and selection survive hidden reopening with no additional dispatch.
+This is not complete 1:1 parity: unfinished-line display buffering, menus and
+transient states remain; tool output stays volatile. See [testing](testing.md).
 
 ## Alpha.63 independent manual recipients
 

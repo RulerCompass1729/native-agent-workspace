@@ -86,11 +86,14 @@ class Terminal extends EventEmitter {
 }
 
 class Claude extends EventEmitter {
-  constructor(record, host) {
+  constructor(record, host, { attachOnly = false } = {}) {
     super(); this.record = record; this.host = host; this.pending = null; this.ready = false; this.chatAvailable = false;
     this.submission = new SubmissionChannel();
     this.submission.on('change', () => { this.chatAvailable = this.submission.connected; this.emit('capability'); });
     this.token = crypto.randomBytes(32).toString('hex');
+    // A retained reader uses these same native validators and channel, but
+    // cannot write settings, register command hooks or launch another CLI.
+    if (attachOnly) return;
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};
@@ -152,16 +155,17 @@ class Claude extends EventEmitter {
   }
   observeBlock(message) {
     if (!this.nativeBlocks || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
-      !/^(display|tool|turn):[a-zA-Z0-9_:-]{1,160}$/.test(message.id || '') ||
-      !['response', 'tool', 'turn'].includes(message.kind) ||
+      !/^(display|tool|turn|prompt):[a-zA-Z0-9_:-]{1,160}$/.test(message.id || '') ||
+      !['response', 'tool', 'turn', ...(this.retainedReader ? ['input'] : [])].includes(message.kind) ||
       !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
       !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
       (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
+      (message.kind === 'input' && (!message.id.startsWith('prompt:') || typeof message.text !== 'string' || message.status !== 'complete')) ||
       !['text', 'delta', 'input', 'title'].every(k => message[k] === undefined || (typeof message[k] === 'string' && message[k].length <= 500000))) throw Error('Invalid native block');
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
     if (message.gap) this.observeRootGap(message);
     const { id, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete } = message;
-    if (kind !== 'tool' && (typeof turnId !== 'string' || !/^[a-zA-Z0-9_:-]{1,160}$/.test(turnId))) throw Error('Invalid native turn');
+    if (!['tool', 'input'].includes(kind) && (typeof turnId !== 'string' || !/^[a-zA-Z0-9_:-]{1,160}$/.test(turnId))) throw Error('Invalid native turn');
     this.displayProofs ||= new Map();
     let turn = this.displayProofs.get(turnId);
     if (!turn) { turn = { blocks: new Map(), incomplete: this.displayGap }; this.displayProofs.set(turnId, turn); }

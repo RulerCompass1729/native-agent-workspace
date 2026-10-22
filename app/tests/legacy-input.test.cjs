@@ -34,6 +34,88 @@ test('failed initialization never publishes a prepared target; fixing the store 
   assert.ok(code.includes('const legacyOnly = true;')); assert.equal(bridge.records.length, 0);
 });
 
+for (const cache of ['corrupt', 'missing', 'valid']) test(`restored ${cache} reader cannot expose raw old final in initial or later snapshots`, async t => {
+  const f = fixture(t), { EventEmitter } = require('node:events');
+  const { WorkspaceClient } = require('../workspace-client.cjs');
+  const { readerPath } = require('../legacy-claude.cjs');
+  f.record.messages = [{ id: 'old-raw', role: 'assistant', text: 'RAW_UNTRANSFORMED_FINAL' }]; f.record.state = 'idle';
+  Object.assign(f.entry.state, { owner: 'test', sessions: [f.record], room: { messages: [], revision: 0 }, diagnostics: {}, capabilities: [] });
+  const transport = new EventEmitter(); transport.call = async () => f.entry.state; transport.close = () => {};
+  f.entry.client = transport;
+  fs.writeFileSync(path.join(f.root, 'legacy-links.json'), JSON.stringify([{ id: f.record.id, pid: f.record.pid, nativeId: f.record.nativeId, key: '.', readerStarted: true }]), { mode: 0o600 });
+  if (cache !== 'missing') fs.writeFileSync(readerPath(f.root, f.record.nativeId), cache === 'corrupt' ? '{}' : JSON.stringify({ nativeId: f.record.nativeId,
+    processIdentity: f.record.processIdentity, messages: [{ id: 'visible', role: 'assistant', text: 'transformed visible text' }] }), { mode: 0o600 });
+  const client = new WorkspaceClient([f.entry], '.', f.root); t.after(() => client.close());
+  assert.ok(!JSON.stringify(client.snapshot().sessions[0].messages).includes('RAW_UNTRANSFORMED_FINAL'));
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const rows = client.snapshot().sessions[0].messages;
+  assert.ok(!JSON.stringify(rows).includes('RAW_UNTRANSFORMED_FINAL'));
+  assert.ok(rows.some(m => cache === 'valid' ? m.text === 'transformed visible text' : m.kind === 'gap'));
+});
+
+test('explicit record removal also removes only its retained projection and connection metadata', async t => {
+  const f = fixture(t), bridge = new LegacyInput(f.root); t.after(() => bridge.close());
+  const { readerPath } = require('../legacy-claude.cjs');
+  const file = readerPath(f.root, f.record.nativeId), other = readerPath(f.root, crypto.randomUUID());
+  fs.writeFileSync(file, '{}', { mode: 0o600 }); fs.writeFileSync(other, '{}', { mode: 0o600 });
+  fs.writeFileSync(path.join(f.root, 'legacy-links.json'), JSON.stringify([{ id: f.record.id, nativeId: f.record.nativeId }, { id: 'other' }]), { mode: 0o600 });
+  bridge.forgetReader(f.record);
+  assert.equal(fs.existsSync(file), false); assert.equal(fs.existsSync(other), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.root, 'legacy-links.json'))), [{ id: 'other' }]);
+});
+
+test('ended retained Claude keeps its projected history with a null PID and after reopening', async t => {
+  const f = fixture(t), { EventEmitter } = require('node:events');
+  const { WorkspaceClient } = require('../workspace-client.cjs');
+  const { readerPath } = require('../legacy-claude.cjs');
+  f.record.messages = [{ id: 'old-raw', role: 'assistant', text: 'RAW_UNTRANSFORMED_FINAL' }]; f.record.state = 'idle';
+  Object.assign(f.entry.state, { owner: 'test', sessions: [f.record], room: { messages: [], revision: 0 }, diagnostics: {}, capabilities: [] });
+  const transport = new EventEmitter(); transport.call = async () => f.entry.state; transport.close = () => {};
+  f.entry.client = transport;
+  fs.writeFileSync(path.join(f.root, 'legacy-links.json'), JSON.stringify([{ id: f.record.id, pid: f.record.pid, nativeId: f.record.nativeId, key: '.', readerStarted: true }]), { mode: 0o600 });
+  fs.writeFileSync(readerPath(f.root, f.record.nativeId), JSON.stringify({ nativeId: f.record.nativeId, processIdentity: f.record.processIdentity,
+    messages: [{ id: 'visible', role: 'assistant', text: 'transformed visible text' }] }), { mode: 0o600 });
+  let client = new WorkspaceClient([f.entry], '.', f.root); t.after(() => client.close());
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.ok(client.control.legacyInput.target(f.record));
+  f.record.pid = null; f.record.state = 'ended';
+  await client.refresh();
+  const check = () => {
+    const session = client.snapshot().sessions[0];
+    assert.equal(session.state, 'ended'); assert.equal(session.pid, null);
+    assert.ok(!JSON.stringify(session.messages).includes('RAW_UNTRANSFORMED_FINAL'));
+    assert.ok(session.messages.some(m => m.text === 'transformed visible text'));
+    assert.equal(client.control.legacyInput.target(f.record), null);
+  };
+  check(); client.close();
+  client = new WorkspaceClient([f.entry], '.', f.root);
+  check(); await new Promise(resolve => setTimeout(resolve, 40)); check();
+  assert.equal(client.control.legacyInput.servers.size, 0, 'Ended history needs no new input transport');
+});
+
+test('a second window keeps the live retained reader and receives later native output', async t => {
+  const f = fixture(t), { EventEmitter } = require('node:events');
+  const { WorkspaceClient } = require('../workspace-client.cjs');
+  f.record.state = 'idle'; f.record.messages = [];
+  Object.assign(f.entry.state, { owner: 'test', sessions: [f.record], room: { messages: [], revision: 0 }, diagnostics: {}, capabilities: [] });
+  const transport = new EventEmitter(); transport.call = async () => f.entry.state; transport.close = () => {};
+  f.entry.client = transport;
+  const a = new WorkspaceClient([f.entry], '.', f.root); t.after(() => a.close());
+  const bridge = a.control.legacyInput; await bridge.prepare(f.entry, f.record);
+  const live = bridge.target(f.record), binding = await live.bindRoot({ sessionId: f.record.nativeId, nativeBlocks: true });
+  const push = (sequence, index, delta) => live.observeRoot({ sessionId: f.record.nativeId, ...binding,
+    epoch: binding.observationEpoch, sequence, block: true, id: 'display:live', kind: 'response', turnId: 'turn-live', promptId: 'prompt-live', index, delta, status: 'streaming' });
+  push(1, 0, 'visible prefix'); live.save();
+  const b = new WorkspaceClient([f.entry], '.', f.root); t.after(() => b.close());
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(bridge.reader(f.record), live);
+  push(2, 1, ' and fresh output');
+  for (const view of [a, b]) assert.ok(view.snapshot().sessions[0].messages.some(m => m.text === 'visible prefix and fresh output'));
+  assert.equal(bridge.readerUnavailable(f.record), false);
+  await new Promise(resolve => setTimeout(resolve, 230));
+  assert.ok(fs.readFileSync(live.filename, 'utf8').includes('visible prefix and fresh output'));
+});
+
 test('closing while listen is pending cannot publish a late descriptor or listener', async t => {
   const f = fixture(t), bridge = new LegacyInput(f.root);
   const pending = bridge.prepare(f.entry, f.record); bridge.close();

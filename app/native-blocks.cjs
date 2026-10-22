@@ -7,7 +7,7 @@ function applyNativeBlock(session, event) {
   if (row?.turnId && event.turnId && row.turnId !== event.turnId) { row.incomplete = true; return true; }
   const boundary = event.turnId && session.messages.find(m => m.nativeId === event.nativeId && m.kind === 'turn' && m.turnId === event.turnId);
   if (!row) {
-    row = { id, role: event.kind === 'response' ? 'assistant' : event.kind === 'tool' ? 'tool' : 'system',
+    row = { id, role: event.kind === 'input' ? 'user' : event.kind === 'response' ? 'assistant' : event.kind === 'tool' ? 'tool' : 'system',
       nativeId: event.nativeId, nativeBlock: true, volatile: event.kind === 'tool', kind: event.kind, turnId: event.turnId, text: '', time: Date.now() };
     session.messages.push(row);
   }

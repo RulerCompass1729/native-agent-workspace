@@ -52,13 +52,20 @@ function enqueueBlock($, row, binding = rootBinding) {
 }
 
 function observeAppend($, e, result, binding, turnId) {
-  if (!contextTransitions || !binding || stopped || rootBinding !== binding || e.agentId ||
+  if ((!contextTransitions && !nativeBlocks) || !binding || stopped || rootBinding !== binding || e.agentId ||
     result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
   const message = result.message;
   if (!message || message.isMeta || !Array.isArray(message.content)) return;
   const text = blocks => typeof blocks === 'string' ? blocks : Array.isArray(blocks)
     ? blocks.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
   if (nativeBlocks) {
+    // Retained hosts have no stable GUI user-row ID. Observe the accepted
+    // native append instead of guessing a match to a random legacy cache ID.
+    if (legacyOnly && e.door === 'prompt' && message.type === 'user') {
+      const nonText = message.content.some(b => b?.type !== 'text');
+      enqueueBlock($, { id: `prompt:${result.uuid}`, kind: 'input',
+        text: text(message.content), status: 'complete', incomplete: nonText });
+    }
     // Display IDs and saved transcript IDs are different namespaces. Text is
     // collected from MessageDisplay only, not guessed equal to an append/Stop.
     if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
@@ -139,7 +146,7 @@ async function connection($) {
   const directory = hook.slice(0, -'hooks.sock'.length);
   const descriptor = JSON.parse(await $.fs.read(directory + 'gui-' + sessionId + '.json'));
   if (descriptor.sessionId !== sessionId || descriptor.socketPath !== directory + 'gui-submit.sock' || !/^[a-f0-9]{64}$/.test(descriptor.token)) throw Error('Workspace connection unavailable');
-  return descriptor;
+  return { ...descriptor, ...(rootBinding?.token === descriptor.token && rootBinding.sessionId === sessionId ? { lease: rootBinding.lease } : {}) };
 }
 
 async function request($, route, body, binding) {
@@ -162,6 +169,10 @@ async function listen($, ownGeneration) {
   if (stopped || generation !== ownGeneration) return;
   try {
     const binding = await connection($);
+    // A GUI reopen rotates only the compatibility credential. Rebind the
+    // observer to that same native root; never repeat a pending submission.
+    if (legacyOnly && binding.nativeBlocks && nativeBlocks &&
+      (!rootBinding || rootBinding.token !== binding.token)) return await bindRoot($, ownGeneration);
     const message = await request($, '/next', {}, binding);
     if (stopped || generation !== ownGeneration) return;
     if (message.closed) {
@@ -395,7 +406,8 @@ export function register(on) {
     if (collecting) collecting.invalid = true;
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
-    nativeBlocks = !legacyOnly && ['2.1.307', '2.1.308'].includes(nativeVersion);
+    nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308'].includes(nativeVersion)
+      : ['2.1.307', '2.1.308'].includes(nativeVersion);
     contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));

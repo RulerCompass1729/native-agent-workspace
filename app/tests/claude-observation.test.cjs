@@ -11,13 +11,15 @@ function adapter() {
   r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
   r.bindRoot({ sessionId: r.record.nativeId }); return r;
 }
-async function mod({ version = '2.1.306', fetchObservation, runtime } = {}) {
-  const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8');
+async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false } = {}) {
+  const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
   const { register } = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + randomUUID()).toString('base64'));
   const r = runtime || adapter(), clock = [], hooks = new Map(), requests = [];
   let native = r.record.nativeId;
+  if (legacy) r.retainedReader = true;
   const $ = { session: { id: async () => native, version: async () => ({ version }) },
-    env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? '/fixture/socket' : 'fixture-token' },
+    env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? (legacy ? undefined : '/fixture/socket') : key === 'NAW_HOOK_SOCKET' ? '/fixture/hooks.sock' : 'fixture-token' },
+    fs: { read: async () => JSON.stringify({ sessionId: native, socketPath: '/fixture/gui-submit.sock', token: 'a'.repeat(64), compat: true, nativeBlocks: true }) },
     clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; } },
     prompt: { submit: async () => { throw Error('Observation must never submit'); } },
     http: { fetch: async (url, options) => {
@@ -38,6 +40,25 @@ async function mod({ version = '2.1.306', fetchObservation, runtime } = {}) {
   return { r, clock, requests, invoke, poll, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
+
+test('retained 302 observes only accepted root prompt and downstream display content without sending', async () => {
+  const f = await mod({ version: '2.1.302', legacy: true }), rows = [], prompt = randomUUID(), turn = randomUUID();
+  f.r.on('nativeBlock', row => rows.push(row));
+  const input = { uuid: randomUUID(), door: 'prompt', origin: { kind: 'human' }, message: { type: 'user', role: 'user', content: [{ type: 'text', text: 'original' }] } };
+  await f.append(input, async e => ({ uuid: e.uuid, message: { ...e.message, content: [{ type: 'text', text: 'accepted text' }] } }));
+  await f.append({ ...input, agentId: 'child' });
+  await f.append({ ...input, uuid: randomUUID() }, async () => ({ deny: 'not accepted' }));
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  await f.invoke('turn.start', { turnId: turn });
+  const display = { session_id: f.r.record.nativeId, turn_id: randomUUID(), prompt_id: prompt, message_id: randomUUID(), index: 0, delta: 'raw private text', final: true };
+  await f.invoke('classic.MessageDisplay', display, async () => ({ displayContent: 'visible transformed text' }));
+  await f.invoke('classic.MessageDisplay', { ...display, agent_id: 'child', message_id: randomUUID() }, async () => ({}));
+  while (f.clock.length) await f.clock.shift()();
+  assert.equal(rows.length, 2); assert.equal(rows[0].kind, 'input'); assert.equal(rows[0].text, 'accepted text');
+  assert.equal(rows[1].delta, 'visible transformed text'); assert.equal(rows[1].turnId, turn);
+  assert.equal(JSON.stringify(rows).includes('raw private text'), false);
+  assert.ok(f.requests.every(row => row.lease === f.r.rootLease && row.epoch === f.r.observationEpoch));
+});
 
 test('verified display contract carries indexed batches, empty final and interruption without waiting for HTTP', async () => {
   const f = await mod({ version: '2.1.307' }), rows = [], turn = randomUUID(), id = randomUUID();
