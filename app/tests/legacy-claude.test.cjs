@@ -93,3 +93,125 @@ test('queued input becomes uncertain on observer close and is never replayed aft
   assert.equal(wire.filter(row => row.id === tag).length, 1);
   response.emit('close');
 });
+
+
+async function queueRouter(t) {
+  const { EventEmitter } = require('node:events');
+  const { WorkspaceClient } = require('../workspace-client.cjs'), { LegacyInput } = require('../legacy-input.cjs');
+  const f = fixture(t);
+  Object.assign(f.record, { provider: 'claude', name: 'Claude A', terminalAvailable: true, owner: 'view', roomId: 'shared', memberRevision: 2, controlRevision: 1, liveDraft: 'PRIVATE DRAFT' });
+  const binding = { sessionId: f.record.nativeId, ...await f.r.bindRoot({ sessionId: f.record.nativeId, nativeBlocks: true, nativeQueue: true, nativeSharedDisplay: true }) };
+  f.record.state = 'working'; f.r.record.provider = 'claude';
+  const bridge = new LegacyInput(f.dir); bridge.targets.set(f.record.id, f.r); bridge.readers.set(f.record.id, f.r);
+  f.r.on('readerBlock', m => bridge.sharedReplies.observed(f.r, m));
+  f.r.on('sharingBoundary', () => bridge.sharedReplies.revoke(f.record.id));
+  f.r.on('contextEnd', () => bridge.sharedReplies.revoke(f.record.id));
+  const state = { runtimeVersion: '0.1.0-alpha.2', owner: 'view', capabilities: [], sessions: [f.record], room: { messages: [] }, diagnostics: {} };
+  const client = new EventEmitter(); client.call = async (method, ...args) => {
+    if (method === 'initial') return structuredClone(state);
+    if (method === 'draft') f.record.liveDraft = args[1];
+    return true;
+  }; client.close = () => client.emit('closed');
+  const router = new WorkspaceClient([{ key: '.', state: structuredClone(state), client }], '.'); router.control.legacyInput = bridge;
+  t.after(() => { router.close(); bridge.close(); });
+  const wire = [], response = new EventEmitter(); response.end = body => wire.push(JSON.parse(body));
+  f.r.submission.timeout = 15; f.r.submission.receive(response);
+  t.after(() => response.emit('close'));
+  let sequence = 0;
+  const event = extra => f.r.observeRoot({ ...binding, epoch: binding.observationEpoch, sequence: ++sequence, block: true,
+    id: 'display:private', kind: 'response', turnId: 'private-turn', promptId: crypto.randomUUID(), index: 0, delta: '', status: 'complete', ...extra });
+  return { ...f, bridge, router, wire, event };
+}
+const settle = () => new Promise(resolve => setImmediate(resolve));
+test('a newer shared queue cancels an older delayed send intent without replaying it after acceptance', async t => {
+  const f = await queueRouter(t); let release, calls = 0;
+  const pause = f.router.pauseExcept.bind(f.router);
+  f.router.pauseExcept = async (...args) => { if (++calls === 1) await new Promise(resolve => { release = resolve; }); return pause(...args); };
+  const old = f.router.call('queueShared', f.record.id, 'obsolete delayed input', f.record.nativeId);
+  const rejected = assert.rejects(old, /已变化|草稿保留/);
+  await settle();
+  const current = f.router.call('queueShared', f.record.id, 'newer input', f.record.nativeId);
+  current.catch(() => {}); await settle(); const tag = f.r.pendingQueue;
+  assert.equal(f.r.submission.authorize({ id: tag, text: 'newer input' }), true);
+  const promptId = crypto.randomUUID();
+  f.event({ id: `prompt:${promptId}`, kind: 'input', text: 'newer input', inputTag: tag, turnId: 'newer-turn', promptId });
+  f.r.submission.result({ id: tag, status: 'accepted', turnId: 'newer-turn', promptId }); await current;
+  release(); await rejected;
+  assert.equal(f.r.pendingQueue, null); assert.equal(f.wire.filter(row => row.text === 'newer input').length, 1);
+  assert.ok(!JSON.stringify(f.wire).includes('obsolete delayed input'));
+});
+test('retained shared waiting input preserves the running public reply until its native boundary', async t => {
+  const f = await queueRouter(t), sharing = f.bridge.sharedReplies, oldTag = crypto.randomUUID(), oldPrompt = crypto.randomUUID();
+  sharing.authorize(f.record, f.r, oldTag, { id: oldTag }, f.router.legacyShareAuthority(f.router.entries[0], f.record));
+  f.event({ id: `prompt:${oldPrompt}`, kind: 'input', text: 'original shared task', inputTag: oldTag, turnId: 'old-public', promptId: oldPrompt });
+  sharing.receipt(oldTag, { turnId: 'old-public', promptId: oldPrompt });
+  let index = 0;
+  const output = extra => f.event({ id: 'display:old-public', turnId: 'old-public', promptId: oldPrompt, index: index++, status: 'streaming', ...extra });
+  output({ delta: 'Original public prefix. ' });
+  const old = sharing.snapshot().find(m => m.role === 'assistant'); assert.ok(old);
+  const done = f.router.call('queueShared', f.record.id, 'next public task', f.record.nativeId);
+  done.catch(() => {}); // Cleanup may close a still-waiting native request after a failed assertion.
+  await settle(); const nextTag = f.r.pendingQueue; assert.ok(nextTag);
+  assert.equal(f.r.submission.authorize({ id: nextTag, text: 'next public task' }), true);
+  assert.equal(sharing.valid(sharing.grants.get(oldTag)), true);
+  output({ delta: 'Still working while input waits.' });
+  assert.match(old.text, /Still working while input waits/); assert.equal(old.status, 'streaming');
+  output({ status: 'complete' });
+  f.event({ id: 'turn:old-public', kind: 'turn', turnId: 'old-public', promptId: oldPrompt, finalDisplayId: 'display:old-public', text: 'native end' });
+  assert.equal(old.finalReply, true); assert.equal(old.sharingStopped, undefined);
+  const nextPrompt = crypto.randomUUID();
+  f.event({ id: `prompt:${nextPrompt}`, kind: 'input', text: 'next public task', inputTag: nextTag, turnId: 'next-public', promptId: nextPrompt });
+  f.r.submission.result({ id: nextTag, status: 'accepted', turnId: 'next-public', promptId: nextPrompt }); await done;
+  f.event({ id: 'display:next-public', turnId: 'next-public', promptId: nextPrompt, delta: 'Next public reply.' });
+  const next = sharing.snapshot().find(m => m.text === 'Next public reply.');
+  assert.equal(next.replyTo, nextTag); assert.equal(old.replyTo, oldTag); assert.equal(f.record.liveDraft, 'PRIVATE DRAFT');
+});
+for (const order of ['input-first', 'ack-first']) test(`retained shared queue uses original native waiting path; ${order}; old work and drafts stay private`, async t => {
+  const f = await queueRouter(t), text = 'queued room instruction';
+  const done = f.router.call('queueShared', f.record.id, text, f.record.nativeId);
+  await settle(); const tag = f.r.pendingQueue; assert.ok(tag);
+  assert.equal(f.router.snapshot().sessions[0].legacySharedQueue, true);
+  assert.equal(f.r.submission.authorize({ id: tag, text }), true);
+  await new Promise(resolve => setTimeout(resolve, 45));
+  assert.equal(f.wire.filter(row => row.id === tag).length, 1);
+  assert.equal(f.r.pendingQueue, tag);
+  assert.equal(f.bridge.sharedMessages().find(m => m.id === tag).status, 'awaiting-native');
+  assert.equal(f.bridge.sharedMessages().find(m => m.id === tag).deliveries[0].status, 'awaiting-native');
+  f.event({ delta: 'PRIVATE OLD WORK' }); f.event({ id: 'turn:private-turn', kind: 'turn', text: 'old work finished', finalDisplayId: 'display:private' });
+  assert.equal(f.bridge.sharedMessages().filter(m => m.role === 'assistant').length, 0);
+  const promptId = crypto.randomUUID();
+  const input = () => f.event({ id: `prompt:${promptId}`, kind: 'input', text, inputTag: tag, turnId: 'queued-turn', promptId, status: 'complete' });
+  const ack = () => f.r.submission.result({ id: tag, status: 'accepted', turnId: 'queued-turn', promptId });
+  if (order === 'input-first') input();
+  ack(); assert.equal(await done, tag);
+  if (order === 'ack-first') input();
+  f.event({ id: 'display:queue', turnId: 'queued-turn', promptId, delta: 'ROOM REPLY', status: 'complete' });
+  f.event({ id: 'turn:queued-turn', kind: 'turn', turnId: 'queued-turn', promptId, text: 'native ended', finalDisplayId: 'display:queue' });
+  const messages = f.bridge.sharedMessages(), finals = messages.filter(m => m.finalReply);
+  assert.equal(finals.length, 1); assert.equal(finals[0].text, 'ROOM REPLY'); assert.equal(finals[0].replyTo, tag);
+  assert.equal(messages.find(m => m.id === tag).status, 'submitted');
+  assert.equal(f.record.liveDraft, 'PRIVATE DRAFT'); assert.ok(!JSON.stringify(messages).includes('PRIVATE'));
+  assert.equal(f.r.record.messages.filter(m => m.text === text).length, 1);
+});
+for (const boundary of ['owner', 'member', 'native', 'permission', 'manual', 'clear', 'close']) test(`retained shared queued ${boundary} cannot publish a late accepted reply`, async t => {
+  const f = await queueRouter(t), text = 'queued room instruction';
+  const done = f.router.call('queueShared', f.record.id, text, f.record.nativeId);
+  const result = done.catch(error => error); await settle(); const tag = f.r.pendingQueue;
+  assert.equal(f.r.submission.authorize({ id: tag, text }), true);
+  if (boundary === 'owner') f.record.owner = 'other';
+  if (boundary === 'member') { f.record.roomId = null; f.record.memberRevision++; }
+  if (boundary === 'native') f.record.nativeId = crypto.randomUUID();
+  if (boundary === 'permission') f.event({ id: 'control:permission', kind: 'control' });
+  if (boundary === 'manual') await f.router.intervene(async () => {}, f.record.id);
+  if (boundary === 'clear') f.bridge.clearSharedHistory([tag]);
+  if (boundary === 'close') f.r.submission.close();
+  await f.router.refresh();
+  const promptId = crypto.randomUUID();
+  f.event({ id: `prompt:${promptId}`, kind: 'input', text, inputTag: tag, turnId: 'queued-turn', promptId });
+  f.r.submission.result({ id: tag, status: 'accepted', turnId: 'queued-turn', promptId }); await result;
+  f.event({ id: 'display:private-later', turnId: 'queued-turn', promptId, delta: 'PRIVATE LATER' });
+  assert.equal(f.bridge.sharedMessages().filter(m => m.role === 'assistant').length, 0);
+  assert.equal(f.wire.filter(row => row.id === tag).length, 1);
+  assert.equal(f.record.liveDraft, 'PRIVATE DRAFT');
+  if (boundary === 'close') assert.equal(f.bridge.sharedMessages().find(m => m.id === tag).status, 'unconfirmed');
+});

@@ -1297,7 +1297,7 @@ function roomSteerAvailable(s) {
   return Boolean(s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && (s.legacySharedSteer || s.serviceCapabilities?.includes('nativeSharedSteer')));
 }
 function roomQueueAvailable(s) {
-  return Boolean(s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && s.serviceCapabilities?.includes('nativeSharedQueue'));
+  return Boolean(s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && (s.legacySharedQueue || s.serviceCapabilities?.includes('nativeSharedQueue')));
 }
 function handoffCandidates(firstId) {
   const first = members().find(s => s.id === firstId);

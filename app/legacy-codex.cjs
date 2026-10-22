@@ -173,7 +173,7 @@ class LegacyCodex extends EventEmitter {
       // The accepted first turn created native history. Rejoin for its events;
       // if it already ended, reconcile by the exact native turn ID.
       try {
-        await this.adapter.observeAcceptedTurn(turnId);
+        await this.adapter.observeAcceptedTurn(turnId, tag);
         if (this.closed) throw Error('原生观察连接已变化。');
         this.subscribed = true;
       } catch {

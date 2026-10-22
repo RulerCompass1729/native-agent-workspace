@@ -48,8 +48,8 @@ class RoomState {
   }
   // Register human intervention immediately, then serialize membership changes
   // across windows. Record only acknowledged state transitions, not drag intent.
-  enqueue(client, action) {
-    const pause = client.call('pause'); pause.catch(() => {});
+  enqueue(client, action, sessionId) {
+    const pause = sessionId ? client.call('pause', sessionId) : client.call('pause'); pause.catch(() => {});
     const operation = this.queue.then(async () => { await pause; return action(); });
     this.queue = operation.catch(() => {}); return operation;
   }
@@ -58,7 +58,7 @@ class RoomState {
     return this.enqueue(client, () => {
       if (join) this.assertAvailable(id, true);
       return this.changeMember(client, id, join, label);
-    });
+    }, id);
   }
   async changeMember(client, id, join, label) {
       const before = (await client.call('initial')).sessions.find(s => s.id === id);
@@ -83,7 +83,7 @@ class RoomState {
       if (this.value.archivedSessions.includes(id)) return;
       await this.changeMember(client, id, false, label);
       this.update({ archivedSessions: [...this.value.archivedSessions, id] });
-    }).finally(() => this.gates.delete(id));
+    }, id).finally(() => this.gates.delete(id));
   }
   restoreSession(id) {
     if (this.gates.has(id)) throw Error('这个会话正在归档，请稍候。');

@@ -107,13 +107,15 @@ class LegacyInput extends EventEmitter {
   reader(record) { const reader = this.readers.get(record.id); return reader?.record.nativeId === record.nativeId ? reader : null; }
   readerUnavailable(record) { return this.readerFailures.get(record.id) === record.nativeId; }
   sharedMessages() {
+    const status = row => row.status === 'accepted' ? 'submitted' :
+      this.targets.get(row.sessionId)?.pendingQueue === row.id ? 'awaiting-native' : 'unconfirmed';
     return [...this.records.filter(row => row.shared === true).map(row => ({
       id: row.id, role: 'human', recipientId: row.sessionId, name: row.name, text: row.text, time: row.time,
-      status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', manualReply: row.sharedReply !== true,
+      status: status(row), manualReply: row.sharedReply !== true,
       ...(row.inputMode ? { inputMode: row.inputMode } : {}),
       deliveryTracked: true, ...(row.replyTo ? { replyTo: row.replyTo } : {}),
       deliveries: [{ id: row.id, recipientId: row.sessionId, recipientName: row.recipientName || row.name, text: row.text,
-        status: row.status === 'accepted' ? 'submitted' : 'unconfirmed', time: row.time }],
+        status: status(row), time: row.time }],
     })), ...this.sharedReplies.snapshot()];
   }
   clearSharedHistory(ids = this.sharedMessages().map(row => row.id)) {
@@ -282,12 +284,13 @@ class LegacyInput extends EventEmitter {
     text = text.trim();
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw Error('原生命令请在终端执行；草稿已保留。');
     if (expectedTurnId !== undefined ? !target.native?.steerAvailable || target.native.pendingSteer : target.submission.pending) throw Error('上一条发送仍待确认，或当前连接无法追加指令。');
-    if (waitForNativeTurn && (shared || !target.queueAvailable)) throw Error('当前连接不支持等待输入；草稿保留。');
+    if (waitForNativeTurn && !target.queueAvailable) throw Error('当前连接不支持等待输入；草稿保留。');
     const row = { id: crypto.randomUUID(), sessionId: record.id, nativeId: record.nativeId, time: Date.now(), status: 'unconfirmed' };
     if (expectedTurnId !== undefined) row.inputMode = 'steer';
+    if (waitForNativeTurn) row.inputMode = 'queue';
     if (shared) Object.assign(row, { shared: true, text, name: `你 → ${record.name}`, recipientName: record.name, ...(replyTo ? { replyTo } : {}) });
     if (shared && this.sharedReplies.authorize(record, target.native || target, row.id, row, shareAuthority)) row.sharedReply = true;
-    if (shared && expectedTurnId !== undefined && !row.sharedReply) throw Error('共享回复连接不可用；草稿保留，没有发送。');
+    if (shared && (expectedTurnId !== undefined || waitForNativeTurn) && !row.sharedReply) throw Error('共享回复连接不可用；草稿保留，没有发送。');
     this.records.push(row);
     try { this.save(); } catch (error) { this.sharedReplies.close(row.id); throw error; }
     target.refresh = refresh;

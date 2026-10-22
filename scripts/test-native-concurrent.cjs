@@ -1,21 +1,25 @@
 // Actual Electron, Claude and Codex. Four bounded loopback responses; no paid inference.
 // Tests the existing room interaction, including real mouse drag and native streaming.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { execFileSync } = require('node:child_process');
+const assert = require('node:assert/strict'), { execFileSync, fork } = require('node:child_process');
 const { _electron } = require('playwright');
 const root = path.resolve(__dirname, '..');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
-const { connect } = require('../app/service-client.cjs');
+const { connect, connectService } = require('../app/service-client.cjs');
+const retained = process.env.NAW_CONCURRENT_RETAINED === '1';
+if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-concurrent-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work');
 const claudeHome = path.join(base, 'claude'), codexHome = path.join(base, 'codex');
 for (const dir of [profile, cwd, claudeHome, codexHome]) fs.mkdirSync(dir, { mode: 0o700 });
 const binaries = Object.fromEntries(['claude', 'codex'].map(p => [p, executable(p)]));
+if (retained) { assert.ok(process.env.NAW_CLAUDE_302); binaries.claude = process.env.NAW_CLAUDE_302; }
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => {
   assert.ok(file, `Real ${p} required`); return [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()];
 }));
-assert.match(versions.claude, /^2\.1\.308\b/); assert.equal(versions.codex, 'codex-cli 0.163.0');
-let application, page, sequence = 0;
+assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.308\b/); assert.equal(versions.codex, 'codex-cli 0.163.0');
+const retainedIds = {};
+let application, page, child, legacyClient, sequence = 0, titleCalls = 0;
 const counts = { claude: 0, codex: 0 }, controls = {}, errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
@@ -26,9 +30,28 @@ const server = http.createServer((req, res) => {
   let body = ''; req.on('data', b => body += b); req.on('end', () => {
     const provider = req.url.endsWith('/responses') ? 'codex' : req.url.startsWith('/v1/messages') && !req.url.includes('count_tokens') ? 'claude' : null;
     if (!provider) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":100,"data":[]}'); return; }
+    const input = JSON.parse(body);
+    if (provider === 'codex') assert.equal(input.model, 'gpt-6-luna');
+    const nativeTitle = provider === 'codex' && input.input?.some(m => m.role === 'user' && m.content?.some(p => typeof p.text === 'string' && p.text.startsWith('Generate a concise, single-line task title')));
+    if (nativeTitle) {
+      if (++titleCalls > 1) { res.writeHead(429); res.end(); return; }
+      fs.writeFileSync(path.join(base, 'native-title-request.json'), body);
+      const response = { id: 'resp_local_title', object: 'response', status: 'completed', model: input.model,
+        output: [{ id: 'msg_local_title', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: JSON.stringify({ title: 'Check a small task' }), annotations: [] }] }] };
+      const item = response.output[0], text = item.content[0].text;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      event(res, 'response.created', { response: { ...response, status: 'in_progress', output: [] } });
+      event(res, 'response.output_item.added', { output_index: 0, item: { ...item, status: 'in_progress', content: [] } });
+      event(res, 'response.content_part.added', { output_index: 0, item_id: item.id, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
+      event(res, 'response.output_text.delta', { output_index: 0, item_id: item.id, content_index: 0, delta: text });
+      event(res, 'response.output_text.done', { output_index: 0, item_id: item.id, content_index: 0, text });
+      event(res, 'response.content_part.done', { output_index: 0, item_id: item.id, content_index: 0, part: item.content[0] });
+      event(res, 'response.output_item.done', { output_index: 0, item });
+      event(res, 'response.completed', { response }); res.end(); return;
+    }
     const number = ++counts[provider];
     if (number > (2)) { res.writeHead(429); res.end(); return; }
-    const input = JSON.parse(body), key = `${provider}-${number}`;
+    const key = `${provider}-${number}`;
     fs.writeFileSync(path.join(base, `${key}-request.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     if (provider === 'claude') {
@@ -71,19 +94,48 @@ async function drag(source, target) {
   await page.mouse.move(b.x + b.width / 2 + 1, b.y + b.height / 2 + 1); await page.mouse.up();
 }
 async function create(provider) {
+  let retainedId;
+  if (retained) {
+    retainedId = retainedIds[provider];
+    await page.locator(`[data-session-id="${retainedId}"]`).waitFor(); await page.locator(`[data-session-id="${retainedId}"]`).click();
+    await page.locator('#terminal-tab').click();
+    const takeover = page.getByRole('button', { name: '接管此窗口', exact: true }); if (await takeover.isVisible()) await takeover.click();
+  } else {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
   await page.locator('#initial-view').selectOption(provider === 'claude' ? 'terminal' : 'chat');
   await page.locator('#session-name').fill(provider === 'claude' ? 'Claude review' : 'Codex build'); await page.locator('#confirm-create').click();
+  }
   if (provider === 'claude') {
-    await until(async () => /Yes, I trust this folder|Do you want to use this API key/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Claude startup');
+    await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Claude startup');
     if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
       assert.ok((await page.locator('#terminal-area').innerText()).includes(fs.realpathSync(cwd)));
       await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowDown'); await sleep(200); await page.keyboard.press('Enter');
     }
-    await until(async () => (await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key') || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Claude key selection');
+    await until(async () => /Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Claude key selection');
     if ((await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key')) {
       await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowUp'); await sleep(200); await page.keyboard.press('Enter');
     }
+  }
+  if (retained) {
+    if (provider === 'codex') {
+      await until(async () => /Trust this folder\?/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.id === retainedId)?.state === 'idle', 'Codex native boot', 60000);
+      if ((await page.locator('#terminal-area').innerText()).includes('Trust this folder?')) {
+        const text = await page.locator('#terminal-area').innerText(); assert.ok(text.includes(cwd) || text.includes(fs.realpathSync(cwd))); assert.match(text, /› 1\. Trust and continue/);
+        await page.locator(`[data-terminal-id="${retainedId}"] .xterm-helper-textarea:not([readonly])`).press('Enter');
+      }
+    }
+    await until(async () => (await snapshot()).sessions.find(s => s.id === retainedId)?.state === 'idle', 'Retained native idle');
+    await page.locator('#chat-tab').click();
+    if (await page.locator('#send-button').textContent() === '接管此窗口') await page.locator('#send-button').click();
+    assert.equal(await page.locator('#send-button').textContent(), '接通原会话输入'); await page.locator('#send-button').click();
+    await until(async () => (await snapshot()).sessions.find(s => s.id === retainedId)?.legacySubmit, 'Same-process retained input');
+    if (provider === 'claude') {
+      await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.type('/reload-plugins');
+      await until(async () => (await page.locator('#terminal-area').innerText()).includes('/reload-plugins'), 'Native reload command visible');
+      await sleep(300); await page.keyboard.press('Enter');
+      await until(async () => (await snapshot()).sessions.find(s => s.id === retainedId)?.nativeBlockMapping, 'Retained native reader bound');
+    }
+    await page.locator('#chat-tab').click();
   }
   await until(async () => { const s = (await snapshot()).sessions.find(s => s.provider === provider); return s?.state === 'idle' && s.chatAvailable; }, `${provider} ready`, 60000);
   const s = (await snapshot()).sessions.find(s => s.provider === provider);
@@ -113,10 +165,40 @@ async function sharedSend(id, text) {
       `os.execv(${JSON.stringify(binaries[provider])},[${JSON.stringify(provider)}]+sys.argv[1:]+${JSON.stringify(provider === 'claude' ? ['--model', 'haiku'] : [])})\n`, { mode: 0o700 });
   }
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify(shims), { mode: 0o600 });
+  if (retained) {
+    const old = path.join(base, 'old'), bin = path.join(base, 'bin'); fs.mkdirSync(old); fs.mkdirSync(bin);
+    execFileSync('/usr/bin/tar', ['-x', '-C', old], { input: execFileSync('git', ['archive', 'a87653b', 'app', 'package.json'], { cwd: root, maxBuffer: 16 * 1024 * 1024 }) });
+    fs.symlinkSync(path.join(root, 'node_modules'), path.join(old, 'node_modules'));
+    for (const provider of ['claude', 'codex']) fs.symlinkSync(shims[provider], path.join(bin, provider));
+    require('../app/legacy-input.cjs').installPlugin(cwd);
+    child = fork(path.join(old, 'app/daemon.cjs'), [profile], { env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, NAW_APP_VERSION: '0.1.0-alpha.2', NAW_WORKSPACE: cwd }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+    await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Original backend boot');
+    legacyClient = await connectService(profile, 'retained-concurrent-fixture');
+    for (const provider of ['claude', 'codex']) retainedIds[provider] = await legacyClient.call('create', { provider, cwd, name: provider === 'claude' ? 'Claude review' : 'Codex build', view: 'terminal' });
+  }
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   await until(async () => { for (const candidate of application.windows()) if (!candidate.isClosed() && await candidate.locator('#new-session').count().catch(() => 0)) { page = candidate; return true; } return false; }, 'Main workspace');
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
-  const claude = await create('claude'), codex = await create('codex'); assert.equal(codex.model, 'gpt-6-luna');
+  if (retained) await application.evaluate(({ app }) => {
+    const load = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json');
+    const { LegacyShared } = load('./app/legacy-shared.cjs'); globalThis.retainedShareTrace = [];
+    const { Rpc } = load('./app/adapters.cjs'), rpcCall = Rpc.prototype.call;
+    Rpc.prototype.call = async function (method, params) {
+      if (!this.traceErrors) { this.traceErrors = true; this.ws.on('message', bytes => { const message = JSON.parse(bytes.toString()); if (message.error) globalThis.retainedShareTrace.push({ rawError: message.error }); }); }
+      try { const result = await rpcCall.call(this, method, params); globalThis.retainedShareTrace.push({ rpc: method, ok: true, status: result?.thread?.status }); return result; }
+      catch (error) { globalThis.retainedShareTrace.push({ rpc: method, error: error.message, nativeMissingHistory: error.nativeMissingHistory }); throw error; }
+    };
+    for (const name of ['authorize', 'bindNative', 'close']) {
+      const original = LegacyShared.prototype[name];
+      LegacyShared.prototype[name] = function (...args) {
+        const tag = name === 'authorize' ? args[2] : name === 'bindNative' ? args[1]?.tag : args[0];
+        const describe = () => { const g = this.grants.get(tag); return g ? { closed: g.closed, turnId: g.turnId, state: g.runtime.state, authority: g.authority?.(), nativeValid: g.runtime.sharedReplyAvailable, rows: g.rows.size } : null; };
+        const before = describe(), result = original.apply(this, args);
+        globalThis.retainedShareTrace.push({ name, tag, before, after: describe(), ...(name === 'close' ? { reason: args[1] } : {}) }); return result;
+      };
+    }
+  });
+  const claude = await create('claude'), codex = await create('codex'); if (!retained) assert.equal(codex.model, 'gpt-6-luna');
   for (const s of [claude, codex]) {
     await drag(page.locator(`[data-session-id="${s.id}"]`), page.locator('#room-nav'));
     await until(async () => (await session(s.id)).roomId === 'shared', 'Mouse join');
@@ -134,6 +216,8 @@ async function sharedSend(id, text) {
   await recipient(claude.id); await page.locator('#shared-input').fill('Follow up on the Claude review.');
   await page.locator('#forward-button').click();
   await until(async () => (await session(claude.id)).pendingQueue, 'Claude queued input pending');
+  controls['claude-1'].append('CLAUDE_WHILE_WAITING: original public work continues.\n');
+  await until(async () => (await page.locator('#room-messages').innerText()).includes('CLAUDE_WHILE_WAITING'), 'Original public output stays live while queued input waits');
   await recipient(codex.id); await page.locator('#shared-input').fill('Refine only the Codex task.');
   assert.equal(await page.locator('#forward-button').isEnabled(), true, 'Waiting Claude input must not block another recipient');
   await page.locator('#forward-button').click();
@@ -141,6 +225,8 @@ async function sharedSend(id, text) {
   controls['claude-1'].finish();
   await until(() => controls['claude-2'], 'Claude queued native task begins');
   await until(async () => !(await session(claude.id)).pendingQueue, 'Claude queue acknowledged');
+  const originalReply = (await snapshot()).room.messages.find(m => m.role === 'assistant' && m.text?.includes('CLAUDE_WHILE_WAITING'));
+  assert.equal(originalReply.finalReply, true); assert.equal(originalReply.sharingStopped, undefined);
   await until(() => controls['codex-2'], 'Codex steer starts revised response');
   assert.equal((await session(codex.id)).activeTurnId, turn);
   await until(async () => (await page.locator('#room-messages').innerText()).includes('CODEX_STEER_PREFIX'), 'Steered native block');
@@ -178,7 +264,7 @@ async function sharedSend(id, text) {
   checks.push('Departure and rejoin preserve native work while revoked output stays private; the other agent completes normally');
   for (const original of [claude, codex]) {
     const s = done.sessions.find(s => s.id === original.id); assert.equal(s.nativeId, original.nativeId);
-    if (s.provider === 'claude') assert.equal(s.pid, original.pid);
+    if (s.provider === 'claude' || retained) assert.equal(s.pid, original.pid);
     else assert.deepEqual(s.serverIdentity, original.serverIdentity);
     assert.equal(s.liveDraft, `Private ${s.provider} draft.`);
     await page.locator(`[data-session-id="${s.id}"]`).click(); await page.locator('#terminal-tab').click();
@@ -196,10 +282,12 @@ async function sharedSend(id, text) {
   checks.push('Native GUI/TUI identities, native backends, private drafts and exact recipient payloads remain separate; four dispatches only');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'concurrent-room.png') }); }
-  console.log(JSON.stringify({ checks, versions, counts, paidModelCalls: 0, evidence: base }));
+  if (retained) fs.writeFileSync(path.join(base, 'sharing-trace.json'), JSON.stringify(await application.evaluate(() => globalThis.retainedShareTrace), null, 2));
+  console.log(JSON.stringify({ checks, versions, retained, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) {
     fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => ''));
+    if (retained) fs.writeFileSync(path.join(base, 'sharing-trace.json'), JSON.stringify(await application.evaluate(() => globalThis.retainedShareTrace).catch(() => []), null, 2));
     await save('failure').catch(() => {}); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {});
   }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
@@ -215,5 +303,6 @@ async function sharedSend(id, text) {
       console.log('Owned service exit confirmed.');
     } finally { client.close(); }
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
-  await new Promise(resolve => server.close(resolve));
+  legacyClient?.close(); if (child?.connected) child.disconnect();
+  await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
 });

@@ -12,6 +12,14 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.69 extends the same retained Claude native waiting queue to its shared
+composer. The room distinguishes waiting from native acceptance; only the queued
+instruction's verified reply is shared, preserving prior private work and drafts.
+Shared waiting now preserves the already-public running reply until its native
+boundary. Moving one member no longer freezes another member’s stream. Source
+checks pass for both new and retained connections, and the installed retained
+workflow passes. Force-send and full native parity remain open.
+
 Alpha.68 repairs working-turn input for retained Codex connections and extends
 its existing native steering path to the shared composer. Only newly attributed
 native items enter the room; old private items do not. Late native acknowledgements

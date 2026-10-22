@@ -411,7 +411,10 @@ class Workspace extends EventEmitter {
     const replyTo = shared && require('./room-threads.js').replyReference(shared.replyTo);
     if (shared && s.roomId !== 'shared') throw Error('接收方已离开共同工作。');
     if (s.owner !== owner || s.provider !== 'claude' || s.state !== 'working' || s.approval || !runtime.queueAvailable || runtime.pendingQueue) throw Error('原生会话当前不能接收等待输入，草稿保留。');
-    this.pause('真人追加等待输入'); s.controlRevision++;
+    this.pause('真人追加等待输入');
+    // A shared queue continues the current public task until native pickup;
+    // private input still revokes its output scope immediately.
+    if (!shared) s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = s.memberRevision;
     const valid = () => this.runtimes.get(id) === runtime && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending &&
       s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
