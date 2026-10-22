@@ -1777,3 +1777,36 @@ the same six native groups. Exact affected payload and strict signature pass;
 normal hidden reopening retains three original native IDs/processes, selected view,
 draft and eight original Codex messages, with zero new dispatch. Independent source
 and installed review passed. This does not close overall U17 or add Claude force-send.
+
+## Native tool text and history — alpha.62
+
+`node scripts/test-native-tools.cjs` launches the actual Electron application and
+Codex 0.163.0 through normal service bootstrap. Two canned loopback Responses
+streams issue one native `functions.exec` call: apply a one-file patch, then read
+that file through native command execution. It checks the actual Unicode file,
+full tool text in the solo reader, the next native provider request, GUI/TUI
+identity and renderer reload. The native one-time file permission is checked
+against the exact fixture diff and selected TUI choice before Enter. The shared
+reader contains only the file diff observed while authorized; its sharing-stop
+marker remains, and command output/final response after permission stay private.
+
+A separate service-protocol stop/resume step uses the real native thread history:
+tool rows rehydrate with the same native thread/backend and no new room record,
+dispatch or provider request. This step is not a physical test of the OS recovery
+confirmation dialog. The display process may be replaced when reconnecting;
+that is distinct from the preserved native thread and backend.
+
+Source five groups pass. 612 local checks pass with zero skips. Independent
+review reproduced normal-bootstrap failure when the new module was absent from
+the private-runtime allowlist, and stale cached tool text winning after reconnect.
+Both are fixed and rechecked. New tests cover public text/structured output,
+explicit unsupported-media placeholders, discarded private metadata/reasoning,
+patch updates, native failure/refusal, pagination, current-connection live data,
+snapshot/delta overlap and the existing bounded volatile cache. Installed five
+groups, strict signature, all 45 allowlisted source files and original three-session
+hidden reopening pass independent review. A successful installed recording remains
+private. No paid model inference or normal-provider settings are changed.
+
+These checks are bounded native mechanics evidence. They do not establish actual
+MCP-server behavior, binary/media rendering, hidden reasoning visibility, arbitrary
+provider version compatibility, physical IME behavior or complete U17 acceptance.

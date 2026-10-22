@@ -78,11 +78,36 @@ test('snapshot without a live delta watermark waits for completion instead of du
   f.notify('item/completed', { turnId: 'old-turn', item: entry('a', 'agentMessage', 'final answer').item });
   assert.equal(f.s.messages[0].text, 'final answer'); assert.equal(f.s.messages[0].status, 'complete');
 });
-test('overlapping pages and tool items neither duplicate text nor enter shared records', async t => {
-  const tools = Array.from({ length: 100 }, (_, i) => entry('tool-' + i, i % 2 ? 'reasoning' : 'commandExecution'));
-  const f = await fixture(t, p => p.cursor ? { data: [entry('u'), entry('a', 'agentMessage')] } : { data: [...tools, entry('u')], nextCursor: 'p2' });
-  await f.r.observeFirstTurn(); assert.deepEqual(f.s.messages.map(m => m.id), ['u', 'a']); assert.deepEqual(f.w.room.messages, []);
+test('overlapping pages retain known tool bodies once and never import hidden reasoning or share history', async t => {
+  const tools = Array.from({ length: 100 }, (_, i) => entry('tool-' + i, i % 2 ? 'reasoning' : 'commandExecution', 'PRIVATE reasoning',
+    i % 2 ? {} : { command: 'read sample', aggregatedOutput: 'visible-' + i, status: 'completed' }));
+  const f = await fixture(t, p => p.cursor ? { data: [tools[0], entry('u'), entry('a', 'agentMessage')] } : { data: [...tools, entry('u')], nextCursor: 'p2' });
+  await f.r.observeFirstTurn();
+  assert.equal(f.s.messages.length, 52); assert.equal(f.s.messages[0].text, 'visible-0');
+  assert.equal(f.s.messages[0].status, 'complete'); assert.equal(f.s.messages[0].inputTag, undefined);
+  assert.deepEqual(f.s.messages.slice(-2).map(m => m.id), ['u', 'a']); assert.deepEqual(f.w.room.messages, []);
+  assert.ok(!JSON.stringify(f.s.messages).includes('PRIVATE reasoning'));
   assert.equal(f.w.versions.shellModelCalls, 0); assert.equal(f.w.versions.dispatches, 0);
+});
+test('tool history preserves live results; snapshots without watermarks wait for authoritative output', async t => {
+  const f = await fixture(t, (_p, { notify }) => {
+    notify('item/completed', { turnId: 'old-turn', item: { id: 'live', type: 'commandExecution', command: 'read', aggregatedOutput: 'new output', status: 'completed' } });
+    return { data: [entry('live', 'commandExecution', '', { command: 'read', aggregatedOutput: 'old output', status: 'inProgress' }),
+      entry('snapshot', 'commandExecution', '', { command: 'read', aggregatedOutput: 'prefix', status: 'inProgress' })] };
+  });
+  await f.r.observeFirstTurn(); assert.equal(f.s.messages[0].text, 'new output');
+  f.notify('item/commandExecution/outputDelta', { turnId: 'old-turn', itemId: 'snapshot', delta: 'prefix' });
+  assert.equal(f.s.messages[1].text, 'prefix');
+  f.notify('item/completed', { turnId: 'old-turn', item: { id: 'snapshot', type: 'commandExecution', command: 'read', aggregatedOutput: 'prefix + final', status: 'completed' } });
+  assert.equal(f.s.messages[1].text, 'prefix + final'); assert.equal(f.s.messages.length, 2);
+  assert.deepEqual(f.w.room.messages, []);
+});
+test('hydrated tools obey the existing volatile cache bound and mark omitted rows', async t => {
+  const f = await fixture(t, () => ({ data: Array.from({ length: 240 }, (_, i) => entry('tool-' + i, 'functionCallOutput', '', { output: 'body-' + i, name: 'read' })) }));
+  await f.r.observeFirstTurn();
+  assert.ok(f.s.messages.length <= 200); assert.equal(f.s.messages.filter(m => m.kind === 'gap').length, 1);
+  assert.ok(f.s.messages.some(m => m.text === 'body-239')); assert.ok(!f.s.messages.some(m => m.text === 'body-0'));
+  assert.deepEqual(f.w.room.messages, []);
 });
 for (const event of ['turn', 'approval']) test('late thread/read cannot overwrite a newer ' + event, async t => {
   const f = await fixture(t, () => ({ data: [entry('u')] }));
@@ -114,4 +139,19 @@ for (const kind of ['approval', 'closed', 'stop', 'failure', 'cursor-loop', 'mal
   else { assert.equal(f.s.messages.length, 0); assert.equal(f.r.chatAvailable, false); }
   if (kind === 'closed') assert.equal(f.s.state, 'ended');
   assert.equal(f.calls.filter(c => c.method === 'thread/items/list').length, 2); assert.equal(f.w.versions.dispatches, 0);
+});
+
+test('reconnection refreshes cached partial tools while preserving tools observed on the new connection', async t => {
+  const f = await fixture(t, (_p, { r, notify }) => {
+    notify('item/completed', { turnId: 'old-turn', item: { id: 'fresh', type: 'commandExecution', command: 'read', aggregatedOutput: 'new live', status: 'completed' } });
+    return { data: [entry('cached', 'commandExecution', '', { command: 'read', aggregatedOutput: 'native complete', status: 'completed' }),
+      entry('fresh', 'commandExecution', '', { command: 'read', aggregatedOutput: 'old snapshot', status: 'inProgress' })] };
+  });
+  f.s.recovering = true;
+  f.s.messages.push({ id: 'native:history-thread:tool:cached', role: 'tool', kind: 'tool', volatile: true, text: 'cached partial', status: 'unconfirmed', inputTag: 'old-private-tag' });
+  await f.r.observeFirstTurn();
+  assert.equal(f.s.messages[0].text, 'native complete'); assert.equal(f.s.messages[0].status, 'complete'); assert.equal(f.s.messages[0].inputTag, undefined);
+  assert.equal(f.s.messages[1].text, 'new live');
+  f.notify('item/commandExecution/outputDelta', { turnId: 'old-turn', itemId: 'cached', delta: 'native complete' });
+  assert.equal(f.s.messages[0].text, 'native complete'); assert.deepEqual(f.w.room.messages, []);
 });

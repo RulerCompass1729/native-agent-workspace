@@ -55,6 +55,7 @@ function trimVolatileRows(messages, gapId = 'native-cache-gap') {
   return messages;
 }
 function applyCodexHistory(s, items, runtime, submitted = () => {}) {
+  const { toolContent, toolStatus } = require('./codex-tool-content.cjs');
   const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set();
   const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
   const legacyInputs = new Map();
@@ -67,6 +68,19 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
     }
   }
   for (const item of items) {
+    const tool = toolContent(item);
+    if (tool) {
+      const id = `native:${s.nativeId}:tool:${item.id}`;
+      // History has no live watermark or submission attribution. Keep a newer
+      // live row and never fabricate an inputTag that could authorize sharing.
+      const row = (runtime.liveToolItems?.has(item.id) && existing.get(id)) || { id, role: 'tool', nativeId: s.nativeId,
+        nativeBlock: true, volatile: true, kind: 'tool', turnId: item.turnId, text: '',
+        ...tool, status: toolStatus(item, item.type === 'functionCallOutput' || item.status === 'completed' || typeof item.success === 'boolean') };
+      if (row.status === 'completed') row.status = 'complete';
+      if (!used.has(id)) { imported.push(row); used.add(id); }
+      continue;
+    }
+    if (!['userMessage', 'agentMessage'].includes(item.type)) continue;
     const own = item.type === 'userMessage' && item.clientId && existing.get(item.clientId)?.role === 'user' ? existing.get(item.clientId) : existing.get(item.id);
     // A cold connection's persisted partial text is not newer than native
     // history. Live items received on this connection still take precedence.
@@ -89,7 +103,7 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
   }
   // Keep live content and GUI submission status; only history supplies order.
   // No complete/nativeInput events: hydration cannot route or pause a task.
-  s.messages = imported.concat(s.messages.filter(m => !used.has(m.id)));
+  s.messages = trimVolatileRows(imported.concat(s.messages.filter(m => !used.has(m.id))));
   runtime.recoveryNativeInputs?.clear();
 }
 function applyCodexDelta(s, item) {

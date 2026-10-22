@@ -1,6 +1,6 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.61. Suitable for a small technical trial with
+As of 2026-10-22. Version 0.1.0-alpha.62. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
 
@@ -1368,3 +1368,11 @@ A real retained alpha.44 backend also survives the alpha.45 frontend/reopen.
 The [M2 acceptance](acceptance/session-continuity.md) records tests and limits:
 64 MiB complete-response bound, retained old daemon behavior and explicit native
 resume remain distinct from unlimited history or full fleet recovery.
+
+
+Alpha.62 adds documented native Codex tool text and file diffs to the existing
+reader, including native-history resubscription. It keeps metadata private and
+marks unsupported nontext content. A permission wait still freezes room sharing;
+continuing native work does not silently restart the previous share. Source
+and installed actual Electron/CLI checks pass independent review; signature,
+exact source payload and original-session reopening also pass.
