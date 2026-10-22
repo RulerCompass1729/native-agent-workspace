@@ -87,3 +87,25 @@ test('a closed native RPC refuses a new call immediately without creating a time
   await assert.rejects(rpc.call('thread/read', { threadId: 'synthetic' }), /连接已断开/);
   assert.equal(rpc.pending.size, 0);
 });
+
+test('empty-turn error is recognized exactly without leaking the native body', async () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  const message = `thread ${id} is not materialized yet; thread/turns/list is unavailable before first user message`;
+  for (const [code, text, expected] of [[-32600, message, id], [-32601, message, undefined], [-32600, message + ' private detail', undefined], [-32600, 'other native error', undefined]]) {
+    const socket = new EventEmitter(); let sent;
+    socket.send = text => { sent = JSON.parse(text); };
+    const rpc = new Rpc(socket), pending = rpc.call('thread/turns/list', { threadId: id });
+    socket.emit('message', JSON.stringify({ id: sent.id, error: { code, message: text } }));
+    await assert.rejects(pending, error => error.nativeUnmaterializedThread === expected && !error.message.includes(id) && !error.message.includes('private detail'));
+  }
+});
+
+test('missing-rollout classification carries only the exact native thread identity', async () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  for (const [text, expected] of [[`no rollout found for thread id ${id}`, id], [`no rollout found for thread id ${id} private detail`, undefined]]) {
+    const socket = new EventEmitter(); let sent; socket.send = text => { sent = JSON.parse(text); };
+    const rpc = new Rpc(socket), pending = rpc.call('thread/read', { threadId: id });
+    socket.emit('message', JSON.stringify({ id: sent.id, error: { code: -32600, message: text } }));
+    await assert.rejects(pending, error => error.nativeMissingHistoryThread === expected && !error.message.includes(id) && !error.message.includes('private detail'));
+  }
+});

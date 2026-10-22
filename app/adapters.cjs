@@ -449,7 +449,10 @@ class Rpc extends EventEmitter {
         if (message.error) {
           const error = new Error(`原生接口拒绝请求（${message.error.code}），请查看原生会话。`);
           error.nativeMissingHistory = message.error.code === -32600 && /^no rollout found for thread id /.test(message.error.message || '');
+          if (error.nativeMissingHistory) error.nativeMissingHistoryThread = /^no rollout found for thread id ([^\s]+)$/.exec(message.error.message || '')?.[1];
           error.nativeUnsupportedTurns = message.error.code === -32601 && message.error.message === 'list_turns is not supported yet';
+          if (message.error.code === -32600) error.nativeUnmaterializedThread =
+            /^thread ([\da-f-]{36}) is not materialized yet; thread\/turns\/list is unavailable before first user message$/i.exec(message.error.message || '')?.[1];
           if (message.error.code === -32600 && /already has an active writer/.test(message.error.message || '')) {
             error.message = '该会话仍在其他原生连接中使用。请先在那里结束连接，再继续；原连接未被修改。';
             error.nativeActiveWriter = true;
@@ -919,9 +922,25 @@ class Codex extends EventEmitter {
       // its actual rollout rather than demanding that blocked turn finish.
       // Never create a seed turn or change native permissions to attach a TUI.
       const rpc = this.host.rpc, revision = this.lifecycleRevision, id = this.record.nativeId;
-      const { thread } = await rpc.call('thread/read', { threadId: id, includeTurns: true });
+      let thread, missingHistory = false;
+      try {
+        const paginated = rpc.nativeVersion === '0.163.0';
+        ({ thread } = await rpc.call('thread/read', { threadId: id, includeTurns: !paginated }));
+        if (paginated) {
+          // This native version paginates turns separately. Metadata alone
+          // cannot prove a rollout exists or that a first turn has started.
+          if (thread?.id === id) {
+            let page;
+            try { page = await rpc.call('thread/turns/list', { threadId: id, limit: 1, itemsView: 'full' }); }
+            catch (error) { if (error.nativeUnmaterializedThread !== id) throw error; page = { data: [] }; }
+            if (!Array.isArray(page?.data) || page.data.length > 1) throw new Error('原生历史尚未确认，请重新打开终端。');
+            thread = { ...thread, turns: page.data };
+          }
+        }
+      } catch (error) { if (!error.nativeMissingHistory || error.nativeMissingHistoryThread !== id) throw error; missingHistory = true; }
       if (this.stopped || this.transportDisconnected || this.host.rpc !== rpc || this.lifecycleRevision !== revision || this.record.nativeId !== id) throw new Error('原生连接已变化，请重新打开终端。');
-      if (thread?.id !== id || !Array.isArray(thread.turns) || !thread.turns.length) throw new Error('请先发送一条消息，再打开同一会话的原生终端。');
+      if (missingHistory || thread?.id === id && Array.isArray(thread.turns) && !thread.turns.length) throw new Error('请先在对话中发送第一条消息，再打开同一会话的原生终端。');
+      if (thread?.id !== id || !Array.isArray(thread.turns) || !thread.turns.every(turn => typeof turn?.id === 'string' && turn.id.trim())) throw new Error('原生历史尚未确认，请重新打开终端。');
       this.hasHistory = true;
     }
     // Another attachment can finish while the initial rollout read is pending.

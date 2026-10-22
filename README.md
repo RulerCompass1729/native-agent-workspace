@@ -12,6 +12,17 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.72 repairs first-task Codex terminal attachment and verifies the existing
+Claude queue/display integration against native 2.1.309. An empty Codex history
+now explains the first-message step without creating a seed task or new thread.
+The application remains a technical trial; full native display parity is open.
+
+Alpha.71 preserves interrupted native output across both private and shared
+readers and full app reopening. Claude's native Stop currently requires new
+terminal input before plugin submissions resume; the GUI keeps the draft and
+exposes that requirement. This is a remaining continuity limitation, not a
+completed seamless-input feature. See [current evidence](docs/readiness.md).
+
 Alpha.70 repairs retained Claude output recovery when the whole app closes with
 input queued. The same native process keeps working; reopening restores buffered
 input and output without resending the task or restoring expired sharing grants.
