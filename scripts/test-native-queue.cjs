@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT
 const { connectService } = require(path.join(code, 'app/service-client.cjs'));
 const { executable } = require(path.join(code, 'app/platform.cjs'));
 const shared = process.env.NAW_QUEUE_SHARED === '1';
+const modelOnly = process.env.NAW_MODEL_ONLY === '1';
 const input = shared ? '#shared-input' : '#message-input', send = shared ? '#forward-button' : '#send-button';
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-queue-test-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), config = path.join(base, 'claude');
@@ -32,7 +33,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
     }
     const number = ++calls;
-    if (number > 2) { res.writeHead(429); res.end(); return; }
+    if (number > (modelOnly ? 0 : 2)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'message_start', { message: { id: `msg_local_${number}`, type: 'message', role: 'assistant', model: request.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
@@ -78,6 +79,11 @@ async function cleanup() {
     await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowUp'); await sleep(200); await page.keyboard.press('Enter');
   }
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Native submission bridge', 60000);
+  if (modelOnly) {
+    await require('./native-model-check.cjs')({ page, snapshot, base });
+    assert.equal(calls, 0); assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ checks: ['Native model switches and GUI reload preserve identity/draft and match actual header'], nativeVersion, modelCalls: calls, errors, evidence: base })); return;
+  }
   const before = (await snapshot()).sessions[0];
   assert.equal(before.queueAvailable, true);
   await page.locator('#chat-tab').click();

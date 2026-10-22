@@ -11,13 +11,13 @@ function adapter() {
   r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
   r.bindRoot({ sessionId: r.record.nativeId }); return r;
 }
-async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit } = {}) {
+async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
-  const { register } = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + randomUUID()).toString('base64'));
+  const { register, testObserveModel } = await import('data:text/javascript;base64,' + Buffer.from(source + '\nexport { observeModel as testObserveModel };\n//' + randomUUID()).toString('base64'));
   const r = runtime || adapter(), clock = [], hooks = new Map(), requests = [];
   let native = r.record.nativeId, token = 'a'.repeat(64);
   if (legacy) r.retainedReader = true;
-  const $ = { session: { id: async () => native, version: async () => ({ version }) },
+  const $ = { session: { id: async () => native, version: async () => ({ version }), ...(modelReader ? { model: modelReader } : {}) },
     env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? (legacy ? undefined : '/fixture/socket') : key === 'NAW_HOOK_SOCKET' ? '/fixture/hooks.sock' : 'fixture-token' },
     fs: { read: async () => JSON.stringify({ sessionId: native, socketPath: '/fixture/gui-submit.sock', token, compat: true, nativeBlocks: true }) },
     clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; } },
@@ -38,7 +38,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
   register((name, fn) => { hooks.set(name, fn); return { catch() {} }; });
   const invoke = (name, e, next = async e => ({ uuid: e.uuid, message: e.message })) => hooks.get(name)($, e, next);
   await invoke('session.start', {}); await clock.shift()(); const poll = clock.shift(); clock.length = 0;
-  return { r, clock, requests, invoke, poll, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
+  return { r, clock, requests, invoke, poll, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
 
@@ -464,4 +464,107 @@ test(`native interruption cannot override ${boundary}`, async () => {
     f.r.observeRoot({ ...body, sequence: 3, id: 'turn:' + next, kind: 'turn', status: 'interrupted' });
   } else { await f.invoke('turn.complete', { turnId: first, reason: 'aborted' }); await f.clock.shift()(); }
   assert.ok(!states.includes('idle'));
+});
+
+
+test('native model metadata preserves the active task and ignores children, stale roots and late startup', async () => {
+  const f = await mod({ version: '2.1.309' }), models = [];
+  f.r.on('model', value => models.push(value)); f.setModelReader(async () => 'claude-sonnet-test');
+  const turn = { id: 'active', status: 'working' }; f.r.rootTurn = turn; f.r.nativeInputRequired = true;
+  let boundaries = 0; f.r.on('sharingBoundary', () => boundaries++);
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test' }); await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  assert.deepEqual(models, ['claude-sonnet-test']); assert.equal(f.r.rootTurn, turn);
+  assert.equal(f.r.nativeInputRequired, true); assert.equal(boundaries, 0);
+  // Independently transported classic startup cannot overwrite a newer observation.
+  f.r.hook({ hook_event_name: 'SessionStart', session_id: f.r.record.nativeId, model: 'old-startup' });
+  assert.deepEqual(models, ['claude-sonnet-test']);
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, agent_id: 'child' });
+  await f.invoke('classic.PostModelSwitch', { session_id: randomUUID() });
+  assert.equal(f.clock.length, 0);
+  const stale = f.requests[0]; f.r.bindRoot({ sessionId: f.r.record.nativeId, nativeBlocks: true });
+  assert.throws(() => f.r.observeBlock({ ...stale, sequence: 999 }), /Invalid/);
+});
+
+test('slow model read cannot overwrite a later native selection or survive root retirement', async () => {
+  const f = await mod({ version: '2.1.309' }), models = []; f.r.on('model', value => models.push(value));
+  let resolve; f.setModelReader(() => new Promise(r => { resolve = r; }));
+  const older = f.readModel();
+  await new Promise(r => setImmediate(r));
+  f.setModelReader(async () => 'claude-latest');
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-latest' });
+  resolve('claude-older'); await older; await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  assert.deepEqual(models, ['claude-latest']);
+  f.setModelReader(() => new Promise(r => { resolve = r; }));
+  const retiring = f.readModel();
+  await new Promise(r => setImmediate(r));
+  await f.invoke('session.end', { sessionId: f.r.record.nativeId, reason: 'other' });
+  resolve('claude-retired'); await retiring;
+  assert.equal(f.requests.length, 1);
+});
+
+test('model metadata rejects invalid payloads and ignores offline replay without accepting input', async () => {
+  const f = await mod({ version: '2.1.309' }), models = []; f.r.on('model', x => models.push(x));
+  f.setModelReader(async () => 'claude-sonnet-test');
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test' }); await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  const base = { ...f.requests[0], sequence: 2 };
+  for (const model of [null, {}, '', 'x'.repeat(161), 'bad\nmodel'])
+    assert.throws(() => f.r.observeBlock({ ...base, model }), /Invalid/);
+  f.r.observeBlock({ ...base, model: 'claude-old', replayed: true });
+  assert.deepEqual(models, ['claude-sonnet-test']);
+  const unknown = await mod({ version: '2.1.310' });
+  unknown.setModelReader(async () => { throw Error('Unknown version must not be queried'); });
+  await unknown.invoke('classic.PostModelSwitch', { session_id: unknown.r.record.nativeId });
+  assert.equal(unknown.requests.length, 0);
+});
+
+
+test('held initial model metadata never blocks native input polling', async () => {
+  let reads = 0, polls = 0;
+  const f = await mod({ version: '2.1.309', modelReader: () => { reads++; return new Promise(() => {}); },
+    requestHandler: async url => { if (url.endsWith('/next')) polls++; } });
+  assert.equal(reads, 1); assert.equal(polls, 1);
+  for (let i = 0; i < 10; i++) f.readModel();
+  assert.equal(reads, 2, 'Unabortable metadata requests are bounded');
+  await f.poll(); assert.equal(polls, 2);
+});
+
+test('retained rebind with held model metadata still flushes offline native output', async () => {
+  let token = 'a'.repeat(64), online = true, reads = 0;
+  const f = await mod({ version: '2.1.302', legacy: true,
+    modelReader: () => { reads++; return new Promise(() => {}); },
+    requestHandler: async (url, options) => {
+      if (!online) throw Error('offline');
+      if (options.headers['X-Workspace-Token'] !== token) return { ok: false, status: 403 };
+    } });
+  online = false;
+  await f.invoke('classic.MessageDisplay', { session_id: f.r.record.nativeId, turn_id: randomUUID(),
+    message_id: randomUUID(), prompt_id: randomUUID(), index: 0, delta: 'offline output', final: false }, async () => ({}));
+  await f.clock.shift()();
+  token = 'b'.repeat(64); f.setToken(token); online = true;
+  await f.clock.shift()();
+  assert.equal(reads, 2); assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].delta, 'offline output');
+});
+
+
+test('invalid native model query cannot become a plausible string label', async () => {
+  const f = await mod({ version: '2.1.309' });
+  for (const value of [undefined, null, {}, 123, 'bad\nmodel']) {
+    f.setModelReader(async () => value);
+    await f.readModel();
+    await new Promise(r => setImmediate(r));
+  }
+  assert.equal(f.clock.length, 0); assert.equal(f.requests.length, 0);
+});
+
+
+test('native switch event wins over lagging query and delayed older switch hook', async () => {
+  const f = await mod({ version: '2.1.302', legacy: true }), models = [];
+  f.r.on('model', model => models.push(model)); f.setModelReader(async () => 'claude-old-query');
+  let finish;
+  const first = f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-first' },
+    () => new Promise(resolve => { finish = resolve; }));
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-second' });
+  finish({}); await first; await f.clock.shift()();
+  assert.deepEqual(models, ['claude-second']);
 });

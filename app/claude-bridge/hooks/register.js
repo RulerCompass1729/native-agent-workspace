@@ -14,6 +14,30 @@ let syncRootAgain = false;
 let rootSyncBlocked = false;
 let contextTransitions = false;
 let nativeBlocks = false;
+let nativeModelSupported = false;
+let modelReadRevision = 0;
+let modelReads = 0, modelReadAgain = false;
+async function observeModel($) {
+  const binding = rootBinding, revision = ++modelReadRevision, ownGeneration = generation;
+  if (!nativeModelSupported || !binding || stopped) return;
+  // Metadata cannot hold input polling or buffered native output. Native API
+  // reads are not abortable; cap in-flight reads and coalesce later switches.
+  if (modelReads >= 2) { modelReadAgain = true; return; }
+  const epoch = binding.observationEpoch;
+  modelReads++;
+  try {
+    const model = await $.session.model();
+    const sessionId = await $.session.id();
+    if (stopped || generation !== ownGeneration || revision !== modelReadRevision ||
+      rootBinding !== binding || binding.observationEpoch !== epoch || sessionId !== binding.sessionId || typeof model !== 'string' ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(model)) return;
+    enqueueBlock($, { id: 'control:model', kind: 'control', status: 'complete', model }, binding);
+  } catch { /* Missing native metadata never triggers a model request or fallback. */ }
+  finally {
+    modelReads--;
+    if (modelReadAgain) { modelReadAgain = false; observeModel($); }
+  }
+}
 let activeTurn = null;
 // Only native turn identity + a complete matching final display can authorize
 // a reply body. Raw Stop text must not bypass a display transform.
@@ -200,6 +224,7 @@ async function refreshLegacyObserver($, ownGeneration) {
       entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence, replayed: true };
     }
     if (observerBindRequest === pending) observerBindRequest = null;
+    observeModel($);
   };
   observerRebinding = refresh();
   try { await observerRebinding; } finally { observerRebinding = null; }
@@ -316,6 +341,7 @@ async function bindRoot($, ownGeneration) {
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
+  observeModel($);
   await listen($, ownGeneration);
 }
 
@@ -362,6 +388,20 @@ async function syncRoot($) {
 }
 
 export function register(on) {
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    const binding = rootBinding, ownGeneration = generation;
+    const watching = nativeModelSupported && !stopped && binding && !e.agent_id && e.session_id === binding.sessionId;
+    const revision = watching ? ++modelReadRevision : null;
+    if (watching) modelReadAgain = false;
+    const result = await next(e);
+    // The native post-switch event carries the resolved selection. A query
+    // inside this hook can still see the previous value on retained runtimes.
+    if (watching && !stopped && rootBinding === binding && generation === ownGeneration && revision === modelReadRevision &&
+      typeof e.to_model === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(e.to_model)) {
+      enqueueBlock($, { id: 'control:model', kind: 'control', status: 'complete', model: e.to_model }, binding);
+    }
+    return result;
+  }).catch(($, e, next) => next(e));
   on('classic.PermissionRequest', ($, e, next) => {
     // Ordered with display observations, before native permission handling.
     // No permission decision or tool payload is copied into the shared room.
@@ -494,6 +534,7 @@ export function register(on) {
     if (collecting) collecting.invalid = true;
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
+    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309'].includes(nativeVersion);
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion)
       : ['2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion);
     contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion);

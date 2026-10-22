@@ -160,13 +160,18 @@ class Claude extends EventEmitter {
       !['response', 'tool', 'turn', 'control', ...(this.retainedReader ? ['input'] : [])].includes(message.kind) ||
       !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
       !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
+      (message.id === 'control:model' && (message.kind !== 'control' || message.status !== 'complete' || typeof message.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(message.model))) ||
       (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
       (message.kind === 'input' && (!message.id.startsWith('prompt:') || typeof message.text !== 'string' || message.status !== 'complete')) ||
       !['text', 'delta', 'input', 'title'].every(k => message[k] === undefined || (typeof message[k] === 'string' && message[k].length <= 500000))) throw Error('Invalid native block');
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
     if (message.gap) this.observeRootGap(message);
     if (message.kind === 'control') {
-      if (message.id === 'control:turn-start') {
+      if (message.id === 'control:model') {
+        // Metadata is not an input/turn boundary and grants no sharing authority.
+        if (!message.replayed) { this.nativeModelEpoch = this.observationEpoch; this.emit('model', message.model); }
+        return { observed: true };
+      } else if (message.id === 'control:turn-start') {
         if (!/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId || '') || message.status !== 'running') throw Error('Invalid native turn start');
         this.seenRootTurns ||= new Set();
         // Replayed starts are history, never fresh authority to release input.
@@ -304,7 +309,7 @@ class Claude extends EventEmitter {
       text: event.message || '', status: event.hook_event_name === 'StopFailure' ? 'failed' : 'observed',
     });
     switch (event.hook_event_name) {
-      case 'SessionStart': if (this.rootEnding) break; this.ready = true; this.emit('state', 'idle'); this.emit('model', event.model || '原生未报告'); break;
+      case 'SessionStart': if (this.rootEnding) break; this.ready = true; this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告'); break;
       case 'UserPromptSubmit': {
         // A settings hook observing a prompt is not its acceptance. The native
         // structured submission result acknowledges our own sends separately.

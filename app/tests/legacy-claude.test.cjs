@@ -287,3 +287,15 @@ test('retained native interruption blocks plugin sends until a fresh native star
   f.event({ id: 'turn:A', kind: 'turn', turnId: 'A', status: 'interrupted' });
   assert.equal(f.r.nativeInputRequired, false, 'Old interruption cannot pause newer work');
 });
+
+
+test('retained model projection uses current native metadata rather than old host startup or cache', async t => {
+  const f = await queueRouter(t);
+  assert.equal(f.router.snapshot().sessions[0].model, '原生未报告');
+  const before = f.r.record.messages.length;
+  f.event({ id: 'control:model', kind: 'control', model: 'claude-native-selected' });
+  assert.equal(f.router.snapshot().sessions[0].model, 'claude-native-selected');
+  assert.equal(f.r.record.messages.length, before);
+  f.r.save(); const reopened = f.create();
+  assert.equal(reopened.model, undefined, 'Saved history is not proof of a live model selection');
+});
