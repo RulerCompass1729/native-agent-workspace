@@ -12,7 +12,7 @@ for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = require('node:child_process').execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 assert.match(nativeVersion, /^2\.1\.(307|308|309)\b/, 'Verify the updated native contract before sending a test task');
-let application, page, client, calls = 0;
+let application, page, client, calls = 0, recovering = false, recoveryCalls = 0;
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
@@ -23,8 +23,20 @@ const server = http.createServer((req, res) => {
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
     }
-    const number = ++calls; if(number > 6){ res.destroy(); server.close(); return; }
+    const number = ++calls; if(number > 7){ res.destroy(); server.close(); return; }
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
+    if (recovering) {
+      assert.equal(++recoveryCalls, 1, 'One explicit new task, no portal retry');
+      const request = JSON.parse(body);
+      const event = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({type, ...data})}\n\n`);
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      event('message_start', {message:{id:'msg_local_recovery',type:'message',role:'assistant',model:request.model,content:[],stop_reason:null,usage:{input_tokens:10,output_tokens:0}}});
+      event('content_block_start', {index:0,content_block:{type:'text',text:''}});
+      event('content_block_delta', {index:0,delta:{type:'text_delta',text:'NATIVE_RECOVERY: the new task completed.\n'}});
+      event('content_block_stop', {index:0});
+      event('message_delta', {delta:{stop_reason:'end_turn',stop_sequence:null},usage:{output_tokens:10}});
+      event('message_stop', {}); res.end(); return;
+    }
     res.writeHead(400, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'NATIVE_FAILURE_FIXTURE: selected model is unavailable.' } }));
 
@@ -68,7 +80,7 @@ async function cleanup() {
   await until(async () => (await snapshot()).sessions[0].state === 'error' || (await snapshot()).sessions[0].messages.some(m=>m.kind==='turn'&&m.status==='failed'), 'Native failure boundary');
   await sleep(1000);
   const state = await snapshot(); fs.writeFileSync(path.join(base,'error-state.json'),JSON.stringify(state,null,2));
-  assert.match(await page.locator('#compose-hint').innerText(), /原生请求未完成/);
+  assert.match(await page.locator('#compose-hint').innerText(), /原生请求未完成|上次请求失败/);
   const reader = await page.locator('#messages').innerText();fs.writeFileSync(path.join(base,'error-reader.txt'),reader);
   await page.locator('#terminal-tab').click();
   await until(async()=> (await page.locator('#terminal-area').innerText()).includes('NATIVE_FAILURE_FIXTURE'), 'Native terminal displays error');
@@ -81,7 +93,26 @@ async function cleanup() {
   assert.equal(state.diagnostics.dispatches,1);
   assert.equal(state.sessions[0].messages.filter(m=>m.kind==='turn'&&m.text.includes('NATIVE_FAILURE_FIXTURE')).length,1);
   assert.ok(!state.room.messages.some(m=>m.finalReply));
-  console.log(JSON.stringify({checks:['One native error is visible in the unified reader and original terminal'],nativeVersion,localResponses:calls,paidModelCalls:0,evidence:base}));
+  if (process.env.NAW_ERROR_RECOVERY === '1') {
+    assert.equal(await page.locator('#message-input').getAttribute('readonly'), null, 'Explicit new human input is available after a confirmed request failure');
+    assert.equal(state.sessions[0].failedTurnInputAvailable, true);
+    recovering = true;
+    await page.locator('#message-input').fill('Continue with a new small task after the failed request.');
+    await page.locator('#send-button').click();
+    await until(async () => (await snapshot()).sessions[0].state === 'idle' && (await page.locator('#messages').innerText()).includes('NATIVE_RECOVERY'), 'Explicit GUI task after native API failure');
+    const after = await snapshot();
+    assert.equal(recoveryCalls, 1); assert.equal(after.diagnostics.dispatches, 2);
+    assert.equal(after.sessions[0].nativeId, before.nativeId); assert.equal(after.sessions[0].pid, before.pid);
+    assert.equal(after.sessions[0].failedTurnInputAvailable, false);
+    assert.match(await page.locator('#messages').innerText(), /NATIVE_FAILURE_FIXTURE/);
+    await page.screenshot({path:path.join(base,'recovered-reader.png')});
+    await page.locator('#terminal-tab').click();
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('NATIVE_RECOVERY'), 'Same native terminal shows recovery');
+    fs.writeFileSync(path.join(base,'recovered-terminal.txt'),await page.locator('#terminal-area').innerText());
+    await page.screenshot({path:path.join(base,'recovered-terminal.png')});
+    fs.writeFileSync(path.join(base,'recovered-state.json'),JSON.stringify(after,null,2));
+  }
+  console.log(JSON.stringify({checks:['One native error is visible in the unified reader and original terminal', ...(recovering ? ['Explicit new GUI input succeeds once in the same session, retaining its failure record'] : [])],nativeVersion,localResponses:calls,paidModelCalls:0,evidence:base}));
 
 })().catch(async error => {
   if (page && !page.isClosed()) { await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); }

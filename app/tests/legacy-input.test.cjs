@@ -415,7 +415,9 @@ for (const reason of ['working', 'permission', 'member', 'human', 'close']) test
   if (reason === 'human') f.session.controlRevision++;
   if (reason === 'close') f.a.client.close();
   else await f.a.client.refresh();
-  assert.equal(shareAuthority(), reason === 'working');
+  const authority = shareAuthority();
+  assert.equal(Boolean(authority), reason === 'working');
+  if (authority) assert.equal(authority.state, 'working', 'Sharing reads the latest retained state, not its pre-send snapshot');
 });
 
 test('forget also cancels a later session in an already-running restore batch', async t => {

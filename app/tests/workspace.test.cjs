@@ -14,6 +14,18 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('a completed failed request permits only an explicit new task, never an automatic run or queue', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); s.state = 'error'; r.failedTurnInputId = 'failed-turn'; r.failedTurnInputMatches = id => id === 'failed-turn';
+  r.chatAvailable = true; r.queueAvailable = true; let calls = 0, accept, guard;
+  r.send = (_text, _tag, valid) => { calls++; guard = valid; return new Promise(resolve => { accept = resolve; }); };
+  await assert.rejects(w.send(id, 'automatic', null, { id: 'run' }), /尚未就绪/);
+  await assert.rejects(w.queue(id, 'queued', 'owner'), /不能接收/);
+  const sent = w.send(id, 'new user task', 'owner');
+  assert.equal(calls, 1); assert.equal(s.state, 'error'); assert.ok(guard());
+  await assert.rejects(w.send(id, 'duplicate', 'owner'), /尚未就绪/);
+  accept(); await sent;
+});
 test('private queued input retains native work, rejects duplicates and preserves a newer draft after ACK', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   const s = w.get(id); s.state = 'working'; s.pendingTag = 'original'; r.queueAvailable = true;

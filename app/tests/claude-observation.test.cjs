@@ -574,6 +574,7 @@ for (const legacy of [false, true]) for (const order of ['append-first', 'failur
 test(`native API failure uses only processed same-turn text: ${legacy ? 'retained' : 'current'} ${order}`, async () => {
   const f = await mod({ version: legacy ? '2.1.302' : '2.1.309', legacy }), rows = [], prompt = randomUUID(), turn = randomUUID();
   f.r.on('nativeBlock', row => rows.push(row));
+  f.r.lastPromptId = prompt; f.r.submission.status(true);
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
   await f.invoke('turn.start', { turnId: turn });
   const append = () => f.append(response('API Error: PRIVATE RAW', { origin: { kind: 'model', model: '<synthetic>' } }), async e =>
@@ -590,6 +591,56 @@ test(`native API failure uses only processed same-turn text: ${legacy ? 'retaine
   const session = { nativeId: f.r.record.nativeId, messages: [] };
   for (const row of rows) require('../native-blocks.cjs').applyNativeBlock(session, row);
   assert.equal(session.messages.length, 1); assert.equal(session.messages[0].role, 'system');
+  assert.equal(f.r.failedTurnInputId, turn, 'Only the confirmed failed native turn permits a new explicit input');
+  f.r.claimFailedTurnInput(); assert.equal(f.r.failedTurnInputId, null);
+  await failure(); while (f.clock.length) await f.clock.shift()();
+  assert.equal(f.r.failedTurnInputId, null, 'A delayed failure update cannot grant another send');
+});
+
+test('late root failure cannot erase a newer native task or child work', () => {
+  const r = adapter(), current = randomUUID(), old = randomUUID(), states = [];
+  r.lastPromptId = current; r.rootTurn = { id: 'new-turn', promptId: current, status: 'working' };
+  const pending = r.pending = { promptId: current, tag: 'new-input' };
+  r.on('state', state => states.push(state));
+  r.hook({ hook_event_name: 'StopFailure', session_id: r.record.nativeId, prompt_id: old });
+  r.hook({ hook_event_name: 'StopFailure', session_id: r.record.nativeId, prompt_id: current, agent_id: 'child' });
+  assert.equal(r.pending, pending); assert.equal(r.rootTurn.id, 'new-turn'); assert.deepEqual(states, []);
+});
+for (const boundary of ['pending-send', 'ordered-start']) test(`late failed A cannot erase B at ${boundary} before settings hook catches up`, () => {
+  const r = adapter(), a = randomUUID(), b = randomUUID(), states = [];
+  r.nativeBlocks = true;
+  r.lastPromptId = a; r.rootTurn = { id: 'failed-A', promptId: a, status: 'error', inputUsed: true };
+  const pending = r.pending = { tag: 'new-B', failedPromptId: a, promptId: null, accepted: false };
+  r.on('state', s => states.push(s)); r.on('failed', () => states.push('failed'));
+  if (boundary === 'ordered-start') r.observeBlock({ sessionId: r.record.nativeId, lease: r.rootLease,
+    epoch: r.observationEpoch, sequence: 1, block: true, id: 'control:turn-start', kind: 'control',
+    turnId: 'new-B', promptId: b, status: 'running' });
+  r.hook({ hook_event_name: 'StopFailure', session_id: r.record.nativeId, prompt_id: a });
+  assert.equal(r.pending, pending); assert.deepEqual(states, []);
+  if (boundary === 'ordered-start') {
+    assert.equal(r.rootTurn.id, 'new-B');
+    r.hook({ hook_event_name: 'StopFailure', session_id: r.record.nativeId, prompt_id: b });
+    assert.equal(r.pending, null); assert.deepEqual(states, ['error', 'failed'], 'B failure remains actionable despite stale settings lastPromptId');
+  }
+});
+
+for (const boundary of ['input', 'permission', 'gap', 'rebind', 'end', 'stop', 'disconnect', 'dead-process'])
+test(`explicit failure recovery cannot outlive ${boundary}`, async () => {
+  const r = new Claude({ nativeId: randomUUID() }, null, { attachOnly: true });
+  r.terminal = { alive: true }; r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true }); r.submission.status(true);
+  const prompt = randomUUID(), turn = randomUUID(); r.lastPromptId = prompt;
+  r.rootTurn = { id: turn, promptId: prompt, status: 'error' };
+  assert.equal(r.failedTurnInputId, turn);
+  if (['input', 'permission'].includes(boundary)) r.observeRoot({ block: true, sessionId: r.record.nativeId, lease: r.rootLease,
+    epoch: r.observationEpoch, sequence: 1, id: `control:${boundary}`, kind: 'control', status: 'complete' });
+  if (boundary === 'gap') r.observeRootGap({ sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch });
+  if (boundary === 'rebind') r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true });
+  if (boundary === 'end') r.contextEnding();
+  if (boundary === 'stop') r.nativeInputRequired = true;
+  if (boundary === 'disconnect') { r.submission.status(false); r.submission.status(true); }
+  if (boundary === 'dead-process') r.terminal.alive = false;
+  assert.equal(r.failedTurnInputId, null); assert.equal(r.failedTurnInputMatches(turn), false);
+  r.submission.close();
 });
 for (const rejection of ['empty-transform', 'ordinary-model', 'unknown-shape', 'child', 'old-prompt', 'aborted', 'changed-uuid', 'reinitialized'])
 test(`native API failure does not disclose uncertain or transformed-away content: ${rejection}`, async () => {

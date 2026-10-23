@@ -8,15 +8,31 @@ class SharedReplies {
   authorize(s, runtime, tag, source, run) {
     this.grants.set(tag, { tag, sessionId: s.id, runtime, nativeId: s.nativeId,
       member: s.memberRevision, control: s.controlRevision, connection: s.connectionRevision,
+      failedTurnId: !run && s.state === 'error' ? runtime.failedTurnInputId : null,
+      recoveryLease: runtime.rootLease,
       sourceId: source.id, requiredInputTag: source.inputMode === 'steer' ? tag : '', run, rows: new Map(), closed: false });
     for (const [key, grant] of this.grants) if (this.grants.size > 64 && grant.closed) this.grants.delete(key);
   }
   valid(g) {
     const w = this.workspace, s = w.sessions.get(g.sessionId);
+    const explicitRecovery = this.recovering(g);
     return !g.closed && s && w.runtimes.get(s.id) === g.runtime && s.nativeId === g.nativeId &&
       s.roomId === 'shared' && s.memberRevision === g.member && s.controlRevision === g.control && s.connectionRevision === g.connection &&
-      !['ended', 'recoverable', 'error', 'disconnected', 'approval'].includes(s.state) && !s.approval && !g.runtime.transportDisconnected && !g.runtime.backendExitConfirmed &&
+      !['ended', 'recoverable', 'disconnected', 'approval'].includes(s.state) && (s.state !== 'error' || explicitRecovery) && !s.approval && !g.runtime.transportDisconnected && !g.runtime.backendExitConfirmed &&
       (!g.run || (w.room.run === g.run && g.run.status === 'running' && Date.now() < g.run.deadline));
+  }
+  recovering(g) {
+    const r = g.runtime;
+    const acceptedTurn = g.turnId || g.receipt?.turnId || (r.pending?.tag === g.tag && r.pending.accepted ? r.pending.turnId : null);
+    // Only this new human send may cross the lag between ordered native B
+    // start/acceptance and the settings hook changing A's old error state.
+    // Neither an old grant nor an automatic run inherits that permission.
+    return Boolean(g.failedTurnId && !g.run && g.recoveryLease === r.rootLease &&
+      !r.nativeInputRequired && !r.rootEnding && !r.disposed && r.submission?.connected !== false &&
+      (r.failedTurnInputMatches?.(g.failedTurnId) ||
+        (r.submission?.pending?.tag === g.tag && r.submission.pending.authorized) ||
+        (acceptedTurn && r.rootTurn?.id === acceptedTurn &&
+          (r.rootTurn.status === 'working' || (r.rootTurn.status === null && r.rootTurn.completed === true)))));
   }
   close(tag, reason = '后续内容留在原会话') {
     const g = this.grants.get(tag); if (!g || g.closed) return;

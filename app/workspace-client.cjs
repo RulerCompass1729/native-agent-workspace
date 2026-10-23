@@ -94,7 +94,8 @@ class WorkspaceClient extends EventEmitter {
       for (const s of state.sessions) {
         if (ids.has(s.id)) throw new Error('会话归属冲突；未向任何原生会话发送输入。');
         const bridge = this.control.legacyInput;
-        const legacySubmit = legacyInputEligible(e.state, s) && ['idle', 'working', 'approval', 'starting'].includes(s.state) && !!bridge?.connected(s);
+        const failedTurnInputAvailable = s.state === 'error' && Boolean(bridge?.target(s)?.failedTurnInputId);
+        const legacySubmit = legacyInputEligible(e.state, s) && (['idle', 'working', 'approval', 'starting'].includes(s.state) || failedTurnInputAvailable) && !!bridge?.connected(s);
         const native = bridge?.target(s)?.native;
         const reader = bridge?.reader?.(s);
         const legacyCodex = e.state.runtimeVersion === '0.1.0-alpha.2' && s.provider === 'codex';
@@ -106,6 +107,7 @@ class WorkspaceClient extends EventEmitter {
         ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           nativeInputRequired: Boolean(s.nativeInputRequired || reader?.nativeInputRequired),
+          failedTurnInputAvailable: Boolean(s.failedTurnInputAvailable || failedTurnInputAvailable),
           legacyReaderPending: s.provider === 'claude' && legacySubmit && !reader?.initialized,
           legacyShare: legacySubmit,
           legacySharedReply: Boolean(legacySubmit && bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError),
@@ -270,8 +272,9 @@ class WorkspaceClient extends EventEmitter {
   }
   legacyShareAuthority(entry, record) {
     const guard = this.operationGuard(entry), expected = { ...record };
+    const failedTurn = record.state === 'error' ? this.control.legacyInput?.target(record)?.failedTurnInputId : null;
     const epoch = this.control.manualEpoch, revision = this.control.streamRevisions.get(record.id);
-    return () => {
+    return grant => {
       try { guard(); } catch { return false; }
       const current = entry.state.sessions.find(s => s.id === expected.id);
       const observed = this.control.legacyOwners.get(expected.id);
@@ -279,7 +282,8 @@ class WorkspaceClient extends EventEmitter {
         current?.nativeId === expected.nativeId && current.pid === expected.pid &&
         current.owner === entry.state.owner && current.controlRevision === expected.controlRevision && observed?.controlRevision === expected.controlRevision &&
         current.memberRevision === expected.memberRevision && current.roomId === 'shared' && !current.approval && !current.nativeContextPending &&
-        ['idle', 'working'].includes(this.sessionState(current));
+        (['idle', 'working'].includes(this.sessionState(current)) || current.state === 'error' && failedTurn &&
+          grant?.failedTurnId === failedTurn && this.control.legacyInput.sharedReplies.recovering(grant)) && current;
     };
   }
   async call(method, ...args) {
@@ -554,6 +558,7 @@ class WorkspaceClient extends EventEmitter {
         const record = target.state.sessions.find(s => s.id === args[0]);
         if (shared && record?.roomId !== 'shared') throw Error('接收方已离开共同工作。');
         const control = record.controlRevision, member = record.memberRevision;
+        const failedTurn = record.state === 'error' ? this.control.legacyInput.target(record)?.failedTurnInputId : null;
         const draft = record.liveDraft, draftRevision = this.control.draftVersions?.get(record.id) || 0;
         const valid = () => {
           try { guard(); contextGuard(); this.authorizeOperation?.(method, args); } catch { return false; }
@@ -561,7 +566,8 @@ class WorkspaceClient extends EventEmitter {
           return manualValid() && current?.pid === record.pid && current.nativeId === record.nativeId
             && current.owner === target.state.owner && current.controlRevision === control && current.memberRevision === member
             && (!shared || current.roomId === 'shared')
-            && this.sessionState(current) === 'idle' && !this.control.legacyInput.target(current)?.nativeInputRequired && !current.pendingTag && !current.approval;
+            && (this.sessionState(current) === 'idle' || current.state === 'error' && failedTurn && this.control.legacyInput.target(current)?.failedTurnInputMatches(failedTurn))
+            && !this.control.legacyInput.target(current)?.nativeInputRequired && !current.pendingTag && !current.approval;
         };
         if (!valid()) throw Error('原会话状态或控制权已变化，草稿已保留。');
         const refresh = async () => { await this.refresh(); if (!valid()) throw Error('原会话已变化'); };

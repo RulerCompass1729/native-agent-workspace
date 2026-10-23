@@ -89,7 +89,11 @@ class Claude extends EventEmitter {
   constructor(record, host, { attachOnly = false } = {}) {
     super(); this.record = record; this.host = host; this.pending = null; this.ready = false; this.chatAvailable = false;
     this.submission = new SubmissionChannel();
-    this.submission.on('change', () => { this.chatAvailable = this.submission.connected; this.emit('capability'); });
+    this.submission.on('change', () => {
+      this.chatAvailable = this.submission.connected;
+      if (!this.chatAvailable && this.rootTurn?.status === 'error') this.rootTurn = null;
+      this.emit('capability');
+    });
     this.token = crypto.randomBytes(32).toString('hex');
     // A retained reader uses these same native validators and channel, but
     // cannot write settings, register command hooks or launch another CLI.
@@ -210,9 +214,11 @@ class Claude extends EventEmitter {
       if (status === 'complete' && !turn.incomplete && block?.final) { turn.safeText = block.text; turn.messageId = `native:${this.record.nativeId}:${message.finalDisplayId}`; }
     }
     this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag });
-    if (kind === 'turn' && this.rootTurn?.id === turnId && this.rootTurn.status === 'working' && !message.replayed && !message.gap) {
-      this.rootTurn.status = status === 'interrupted' ? 'idle' : null;
+    if (kind === 'turn' && this.rootTurn?.id === turnId && ['working', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
+      this.rootTurn.status = status === 'interrupted' ? 'idle' : status === 'failed' && message.failedRequest === true ? 'error' : null;
+      this.rootTurn.completed = status === 'complete';
       if (status === 'interrupted') this.finishInterrupted(turnId);
+      this.emit('capability');
     }
     if (kind === 'turn' && this.pending?.turnId === turnId && this.pending.stopEvent) this.finishReply(this.pending, this.pending.stopEvent);
     return { observed: true };
@@ -300,6 +306,16 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
     });
     if (isChild) return;
+    if (event.hook_event_name === 'StopFailure') {
+      // Settings hooks may arrive after ordered native events, or after a
+      // human has submitted B while A's failure is still being reported.
+      const prompt = event.prompt_id, current = this.rootTurn?.promptId;
+      if ((current && current !== prompt) ||
+        (!current && this.lastPromptId && this.lastPromptId !== prompt) ||
+        (this.pending && (this.pending.failedPromptId === prompt ||
+          (this.rootTurn?.inputUsed && current === prompt) ||
+          (this.pending.promptId && this.pending.promptId !== prompt)))) return;
+    }
     if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) this.emit('progress', {
       id: event.tool_use_id, source: 'claude-hook', kind: 'tool', title: event.tool_name || '原生工具',
       status: event.hook_event_name === 'PreToolUse' ? 'running' : event.hook_event_name === 'PostToolUse' ? 'completed' : 'failed',
@@ -348,7 +364,10 @@ class Claude extends EventEmitter {
         this.finishReply(pending, event);
         break;
       }
-      case 'StopFailure': this.rootTurn = null; this.pending = null; this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请在原生终端查看。'); break;
+      case 'StopFailure':
+        if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
+        clearTimeout(this.pending?.displayTimer); this.pending = null;
+        this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请查看失败记录。'); break;
       case 'SessionEnd': this.contextEnding(event.reason); break;
     }
   }
@@ -391,8 +410,19 @@ class Claude extends EventEmitter {
     if (this.nativeInputRequired) throw Error('Claude 已暂停插件输入；请在原生终端输入一次后继续，草稿保留。');
     if (!this.ready || this.pending || this.queued) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
     if (!guard()) throw new Error('这条交接已撤销。');
-    const pending = this.pending = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
+    const failedPromptId = this.failedTurnInputId ? this.rootTurn.promptId : null;
+    this.claimFailedTurnInput();
+    const pending = this.pending = { tag, text, guard, nativeId: this.record.nativeId, failedPromptId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
     return this.deliver(pending);
+  }
+  failedTurnInputMatches(id) {
+    return Boolean(id && this.rootTurn?.id === id && this.rootTurn.status === 'error' &&
+      this.rootLease && !this.rootEnding && !this.disposed && this.terminal?.alive && this.submission.connected &&
+      !this.nativeInputRequired && (this.retainedReader || this.lastPromptId === this.rootTurn.promptId));
+  }
+  get failedTurnInputId() { return !this.rootTurn?.inputUsed && this.failedTurnInputMatches(this.rootTurn?.id) ? this.rootTurn.id : null; }
+  claimFailedTurnInput() {
+    if (this.failedTurnInputId) { this.rootTurn.inputUsed = true; this.emit('capability'); }
   }
   get queueAvailable() { return Boolean(!this.nativeInputRequired && this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
   async queue(text, tag, guard) {
