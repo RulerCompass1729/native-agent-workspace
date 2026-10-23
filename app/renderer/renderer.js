@@ -318,7 +318,7 @@ async function showTrust() {
   const snapshot = await api.initial();
   const content = $('trust-status'); content.replaceChildren();
   const section = (title, text) => { const item = node('section'); item.append(node('h3', title), node('p', text)); content.append(item); return item; };
-  section('数据去向', '会话副本和草稿保存在本机。实时画面和工具片段仅在本机内存暂存，不写入本应用的持久记录，也不自动分享。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
+  section('数据去向', '会话副本和草稿保存在本机。原始终端画面只在本机内存暂存；对话中已显示的结构化工具输入与结果会随记录保存在本机，受保留上限约束，不自动分享。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
   section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。每轮核查由你确认 2–6 次回复上限和 10 分钟期限；原生工具和子 agent 的用量不受这些交接限制约束。');
   const dispatches = snapshot.diagnostics?.dispatches;
   section('应用派发记录', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。包含未确认或被拒绝的尝试，不代表付费调用；不含原生终端直接输入，也不是总用量或账单。普通后台计数从本次运行开始，旧会话输入连接保留本地发送计数。`);

@@ -161,7 +161,7 @@ function messageList(el, messages, room = false, key = 'room') {
       entry.heading.replaceChildren(author); entry.headingKey = headingKey;
       if (m.title) entry.heading.append(node('span', m.title));
       if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
-      if (m.volatile) entry.heading.append(node('span', '本次运行记录'));
+      if (m.volatile) entry.heading.append(node('span', (m.nativeMessageId || m.id || '').startsWith(`native:${m.nativeId}:tool:`) ? '工具记录' : '本次运行记录'));
       if (m.sharingStopped) entry.heading.append(node('span', `共享已停止 · ${m.sharingStopped}`));
       if (room && Number.isFinite(m.time)) { const time = node('time', new Date(m.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(m.time).toISOString(); time.title = new Date(m.time).toLocaleString(); entry.heading.append(time); }
       // A stored fragment is not proof that its native turn is still running.

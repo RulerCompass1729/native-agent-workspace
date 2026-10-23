@@ -11,7 +11,7 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = require('node:child_process').execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(307|308)\b/, 'Verify the updated native contract before sending a test task');
+assert.match(nativeVersion, /^2\.1\.(307|308|309)\b/, 'Verify the updated native contract before sending a test task');
 let application, page, client, calls = 0, held, releaseFinal;
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -115,8 +115,8 @@ async function cleanup() {
   const tool = first.messages.find(m => m.kind === 'tool'); assert.match(tool.input, /printf/); assert.equal(tool.status, 'complete');
   assert.ok(first.messages.findIndex(m => m.kind === 'tool') < first.messages.findIndex(m => m.text.includes('NATIVE_FINAL:')));
   await sleep(1100);
-  assert.ok(!fs.readFileSync(path.join(profile, 'workspace.json'), 'utf8').includes('NATIVE_TOOL: 42'));
-  checks.push('Stable block order, display-confirmed shared reply, same native process, tool content remains volatile');
+  assert.ok(fs.readFileSync(path.join(profile, 'workspace.json'), 'utf8').includes('NATIVE_TOOL: 42'));
+  checks.push('Stable block order, display-confirmed shared reply, same native process, bounded structured tool history retained locally');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-native-blocks.png') }); }
   await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill('Start the interrupt check.'); await page.locator('#send-button').click();

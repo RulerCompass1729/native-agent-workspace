@@ -299,3 +299,16 @@ test('retained model projection uses current native metadata rather than old hos
   f.r.save(); const reopened = f.create();
   assert.equal(reopened.model, undefined, 'Saved history is not proof of a live model selection');
 });
+
+
+test('native tool input, result and identity survive private reader reopening with uncertain running state', async t => {
+  const f = fixture(t), b = await bind(f);
+  block(f, b, 1, { id: 'tool:done', kind: 'tool', input: '{"path":"synthetic.txt"}', text: 'saved result', delta: undefined, index: undefined, status: 'complete' });
+  block(f, b, 2, { id: 'tool:working', kind: 'tool', input: '{"command":"synthetic"}', text: 'partial result', delta: undefined, index: undefined, status: 'running' });
+  f.r.close(); const restored = f.create();
+  const done = restored.record.messages.find(m => m.id.endsWith('tool:done'));
+  assert.equal(done.text, 'saved result'); assert.equal(done.input, '{"path":"synthetic.txt"}'); assert.equal(done.status, 'complete');
+  assert.equal(restored.record.messages.find(m => m.id.endsWith('tool:working')).status, 'unconfirmed');
+  assert.equal(restored.rootLease, undefined); assert.equal(restored.queueAvailable, false);
+  assert.equal(fs.statSync(restored.filename).mode & 0o777, 0o600);
+});

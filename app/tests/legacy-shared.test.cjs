@@ -65,10 +65,15 @@ test('permission before native ACK prevents retroactive publication; wrong input
   f.shared.receipt(tag, { turnId: 'turn-1', promptId: crypto.randomUUID() });
   assert.equal(f.shared.snapshot().length, 0);
 });
-test('shared cache failure blocks further publication and volatile tool text stays memory-only', async t => {
+test('shared native tool history survives save; cache failure still blocks further publication', async t => {
   const f = await fixture(t); f.input(); f.receipt();
-  f.event({ id: 'tool:one', kind: 'tool', input: '{"x":1}', title: 'Read', text: 'VOLATILE BODY', status: 'complete' });
-  f.shared.save(); assert.ok(!fs.readFileSync(f.shared.filename, 'utf8').includes('VOLATILE BODY'));
+  f.event({ id: 'tool:one', kind: 'tool', input: '{"x":1}', title: 'Read', text: 'VOLATILE BODY', delta: undefined, index: undefined, status: 'complete' });
+  f.shared.save(); assert.ok(fs.readFileSync(f.shared.filename, 'utf8').includes('VOLATILE BODY'));
+  const reopened = new LegacyShared(f.dir, () => {});
+  assert.ok(reopened.snapshot().some(m => m.role === 'tool' && m.text === 'VOLATILE BODY'));
+  assert.equal(reopened.grants.size, 0);
+  reopened.clear(reopened.snapshot().map(m => m.id)); reopened.dispose();
+  assert.equal(fs.readFileSync(f.shared.filename, 'utf8'), '[]');
   f.event({}); f.shared.storageError = true;
   f.event({ index: 1, delta: ' NOT SAVED', status: 'complete' });
   assert.ok(!JSON.stringify(f.shared.snapshot()).includes('NOT SAVED'));

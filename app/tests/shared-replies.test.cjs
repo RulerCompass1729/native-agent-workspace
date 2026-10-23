@@ -134,7 +134,7 @@ test('only the native final block is delivered; progress is visible but absent f
   assert.ok(!sent[1].text.includes('intermediate')); assert.ok(!sent[1].text.includes('TOOL BODY'));
   assert.equal(w.room.messages.find(m => m.text === 'intermediate').deliveries, undefined);
 });
-test('room tool cache is bounded and volatile; restart retains interrupted reading without replaying any input', async t => {
+test('bounded native tool history survives restart without replaying any input', async t => {
   const { w, directory, ids, sent, bind, block } = await fixture(t);
   await w.forward(ids[0], 'task', 'owner'); bind(0);
   block(0, { id: 'display:partial', kind: 'response', text: 'retained partial', status: 'streaming' });
@@ -143,10 +143,14 @@ test('room tool cache is bounded and volatile; restart retains interrupted readi
   assert.ok(volatile.length <= 200); assert.ok(Buffer.byteLength(JSON.stringify(volatile)) < 1024 * 1024);
   assert.ok(volatile.some(m => m.kind === 'gap'));
   w.persist(); const stored = fs.readFileSync(path.join(directory, 'workspace.json'), 'utf8');
-  assert.ok(!stored.includes('VOLATILE'));
+  assert.ok(stored.includes('VOLATILE BODY'));
+  assert.equal(fs.statSync(path.join(directory, 'workspace.json')).mode & 0o777, 0o600);
   const cold = new Workspace({ binaries: {}, close() {} }, directory); t.after(() => cold.close());
   const restored = cold.room.messages.find(m => m.text === 'retained partial');
   assert.equal(restored.status, 'unconfirmed'); assert.ok(restored.sharingStopped);
+  assert.ok(cold.room.messages.some(m => m.role === 'tool' && m.text.includes('VOLATILE BODY') && m.status === 'unconfirmed'));
+  assert.ok(cold.get(ids[0]).messages.some(m => m.role === 'tool' && m.status === 'unconfirmed'));
+  assert.ok(cold.room.messages.some(m => m.kind === 'gap'));
   assert.equal(cold.sharedReplies.grants.size, 0); assert.equal(cold.versions.dispatches, 0); assert.equal(sent.length, 1);
 });
 

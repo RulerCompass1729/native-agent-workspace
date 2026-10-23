@@ -12,6 +12,11 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.77 retains already-displayed native tool input/results in the existing local
+conversation and shared histories through reopening, with bounded storage and no
+restored sharing grant or task replay. Source and installed native journeys pass;
+full native display/input parity remains open.
+
 Alpha.76 preserves interrupted Codex reply text against late events and restored
 history. Retained sessions can send the next GUI task using the same confirmed
 native state. Source and installed current/retained workflows pass; full native

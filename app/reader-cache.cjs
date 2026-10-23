@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { persistedMessages } = require('./native-blocks.cjs');
 const readerPath = (dataDir, nativeId) => path.join(dataDir, `legacy-reader-${crypto.createHash('sha256').update(nativeId).digest('hex')}.json`);
 const maxBytes = 64 * 1024 * 1024;
 function readReaderCache(filename, record) {
@@ -18,7 +19,7 @@ function readReaderCache(filename, record) {
 function writeReaderCache(filename, record, extra = {}) {
   const body = JSON.stringify({ ...extra, nativeId: record.nativeId, provider: record.provider,
     processIdentity: record.processIdentity, ...(record.provider === 'codex' ? { serverIdentity: record.serverIdentity } : {}),
-    messages: record.messages.filter(row => !row.volatile) });
+    messages: persistedMessages(record.messages) });
   if (Buffer.byteLength(body) > maxBytes) throw Error('Reader cache exceeds limit');
   const temporary = filename + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
   try {
