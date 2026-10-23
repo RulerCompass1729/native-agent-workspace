@@ -27,6 +27,17 @@ the 48-file installed payload, strict signature and original three-session hidde
 reopening pass with zero new dispatch. Independent final source/artifact review passes for B38. Human Stop, lost connections and uncertain failures remain gated;
 this does not close U17 or bypass Claude's native post-Stop input restriction.
 
+**Next core gate — agent-addressed cooperation:** human recipient selection and
+an explicitly authorized fixed-order reply exchange already work. They do not
+implement an agent choosing its next recipient: the current run advances by the
+human-selected order, regardless of mentions in an answer. U21 tracks that gap.
+The next bounded proof is one explicitly addressed agent-to-agent message within
+the human's authorization, followed by independent work and reopening without a
+replay. Ordinary prose, quoted mentions, code and file references must never
+trigger delivery. Native structured-tool interfaces are candidates, not verified
+live-session integrations. No new provider, remote broker or routing model is
+part of this gate; full U17 remains separately open.
+
 **Alpha.79 — native error detail:** actual Claude
 API failures now map their processed native error record into the same failed-turn
 row, matched to the exact native root/prompt/turn. Raw Stop text never supplies a
