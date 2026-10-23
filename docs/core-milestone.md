@@ -19,7 +19,16 @@ Installation, broader provider support, and complete solo GUI/TUI parity are
 follow-up work. The historical checkpoints below retain their original scope;
 they do not constitute acceptance of this current shared-workspace milestone.
 
-Current shared-workspace checkpoint: **alpha.83, 2026-10-22**, accepted for the
+Current cross-service increment: **alpha.84, 2026-10-23**. Explicit V1 peer
+services can run a finite fixed-order exchange without replacing native sessions.
+Source and installed native/UI journeys pass three steps, first Codex TUI entry,
+UI-closed continuation, identity/draft retention, pause verification, permission
+changes and departure. The 888-check source suite, 53-file payload/signature and
+original-three-session hidden reopen pass. Final independent artifact review passes.
+Existing alpha.2/83 services remain manual because they lack this protocol; this
+increment does not complete external live attachment or U17.
+
+Previous shared-workspace checkpoint: **alpha.83, 2026-10-22**, accepted for the
 supported new-session local trial after independent review. One real Haiku/Luna
 budget task performs two native tool-selected handoffs and concludes in three
 root submissions; installed native pause/private-continuation/reopen and six

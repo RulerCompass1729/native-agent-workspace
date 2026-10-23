@@ -1,5 +1,49 @@
 # Bounded testing
 
+## Finite exchange across existing supported services — alpha.84
+
+The existing shared reader can coordinate a finite fixed-order reply exchange
+across independent local services that advertise `peerReplyHandoffsV1`. This is
+an explicit 2–6-member, at-most-six-reply/ten-minute authorization. It creates no
+new provider runtime or routing model and does not replace native sessions.
+Existing services without that protocol, including alpha.2/83, remain manual;
+this is not an external-live-session attachment implementation.
+
+Source Electron/native testing uses actual Claude 2.1.309 and Codex 0.163.0 with
+isolated private homes and fixed loopback responses: Claude drafts a 36+14 budget,
+Codex checks it, and the original Claude concludes. The same Codex TUI opens
+during its active turn without changing the native server. The GUI then closes;
+both later steps finish without it, and reopening retains identities, private
+and shared drafts, exactly one human source and three final replies/receipts.
+Three root responses, no native title response and zero paid inference. The
+first TUI attempt failed because the test emitted a delta before subscription;
+it remains failed evidence. Waiting for the native task and Working prompt, as
+in the existing first-terminal test, passes without a production workaround.
+
+A separate actual Electron/two-daemon journey checks completion, UI-closed work,
+held and lost pause acknowledgements, explicit read-only pause verification,
+permission→idle in a single state batch, and departure. Seven synthetic sends,
+no native process or model. Clearing history through the actual privacy menu
+cannot erase pending/unconfirmed revocation or its verification action. New
+runs cannot overwrite it, including through stale windows/backend requests.
+The original same-service six-group collaboration regression also passes.
+
+The full source suite passes 888 checks without skips. Counterexamples include
+native human/control/approval/observer gaps before and after preparation,
+source-side single-use completion proof, native-context/backend changes,
+late send acknowledgements, socket loss, expiry, repeated replies, background
+work, lost revocation receipts and frozen preview identities. Opening a Codex
+TUI changes its display PID without changing the backend identity. Native work
+already received is not claimed cancelled by revoking future handoffs.
+
+Independent source and raw-native/UI evidence review passes. Installed native
+three-step cooperation and the four Electron control journeys also pass. All 53
+runtime payload files match source, and the post-native strict signature passes.
+Original three-session hidden reopening retains IDs/PIDs, drafts and selected
+view with zero new dispatch. Final independent installed-artifact review passes. Ordinary input, records, delivery details and
+permission handling continue through the existing paths. Full solo parity,
+external live entry and arbitrary old-service automatic exchange remain open.
+
 ## Native usage visibility — alpha.83
 
 The existing privacy/usage dialog and session details display native readings.

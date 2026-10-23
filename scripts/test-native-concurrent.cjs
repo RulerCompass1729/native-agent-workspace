@@ -10,6 +10,8 @@ const { connect, connectService } = require('../app/service-client.cjs');
 const retained = process.env.NAW_CONCURRENT_RETAINED === '1';
 const nativeInterrupt = process.env.NAW_CONCURRENT_INTERRUPT === '1';
 const emptyTerminal = process.env.NAW_CONCURRENT_EMPTY_TERMINAL === '1';
+const peerRound = process.env.NAW_CONCURRENT_PEER === '1';
+assert.ok(!peerRound || !retained && !nativeInterrupt && !emptyTerminal);
 const providers = emptyTerminal ? ['codex'] : ['claude', 'codex'];
 if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-concurrent-'));
@@ -63,7 +65,7 @@ const server = http.createServer((req, res) => {
       event(res, 'message_start', { message: { id: 'msg_claude_local', type: 'message', role: 'assistant', model: input.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
       event(res, 'content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
       const append = text => event(res, 'content_block_delta', { index: 0, delta: { type: 'text_delta', text } });
-      append(number === 1 ? 'CLAUDE_SHARED_PREFIX: checking the small task.\n' : nativeInterrupt && number === 2 ? 'CLAUDE_NATIVE_RECOVERY: private input after stop.\n' : 'CLAUDE_QUEUED_PREFIX: following up.\n');
+      append(peerRound ? (number === 1 ? '草案：午餐36元，交通14元，总计50元。\n' : '最终预算50元，已由Codex核查。\n') : number === 1 ? 'CLAUDE_SHARED_PREFIX: checking the small task.\n' : nativeInterrupt && number === 2 ? 'CLAUDE_NATIVE_RECOVERY: private input after stop.\n' : 'CLAUDE_QUEUED_PREFIX: following up.\n');
       controls[key] = { append, finish: () => {
         event(res, 'content_block_stop', { index: 0 });
         event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 30 } });
@@ -77,7 +79,7 @@ const server = http.createServer((req, res) => {
       event(res, 'response.output_item.added', { output_index: 0, item });
       event(res, 'response.content_part.added', { output_index: 0, item_id: item.id, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
       const append = delta => { text += delta; event(res, 'response.output_text.delta', { output_index: 0, item_id: item.id, content_index: 0, delta }); };
-      append(number === 1 ? 'CODEX_SHARED_PREFIX: checking concurrently.\n' : 'CODEX_STEER_PREFIX: revised task in progress.\n');
+      append(peerRound ? '独立核查：36+14=50，计算正确。\n' : number === 1 ? 'CODEX_SHARED_PREFIX: checking concurrently.\n' : 'CODEX_STEER_PREFIX: revised task in progress.\n');
       controls[key] = { append, finish: () => {
         item.status = 'completed'; item.content = [{ type: 'output_text', text, annotations: [] }];
         event(res, 'response.output_text.done', { output_index: 0, item_id: item.id, content_index: 0, text });
@@ -194,6 +196,66 @@ async function openApplication() {
     for (const provider of ['claude', 'codex']) retainedIds[provider] = await legacyClient.call('create', { provider, cwd, name: provider === 'claude' ? 'Claude review' : 'Codex build', view: 'terminal' });
   }
   await openApplication();
+  if (peerRound) {
+    const claude = await create('claude');
+    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await application.close(); application = null;
+    // Exercise two supported independent services. This is not a claim that an
+    // already-released backend acquired the new protocol without an upgrade.
+    const key = 'backends/' + 'c'.repeat(20); fs.mkdirSync(path.join(profile, key), { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.join(profile, 'backends'), 0o700);
+    fs.writeFileSync(path.join(profile, 'services.json'), JSON.stringify({ format: 1, active: '.', entries: ['.'], pending: key }), { mode: 0o600 });
+    const shipped = process.env.NAW_APP_EXECUTABLE ? path.resolve(process.env.NAW_APP_EXECUTABLE, '../../Resources/app') : root;
+    const previous = { NAW_APP_VERSION: process.env.NAW_APP_VERSION, NAW_RUNTIME_CONFIG: process.env.NAW_RUNTIME_CONFIG, NAW_WORKSPACE: process.env.NAW_WORKSPACE };
+    try {
+      Object.assign(process.env, { NAW_APP_VERSION: require(path.join(shipped, 'package.json')).version, NAW_RUNTIME_CONFIG: path.join(profile, 'runtime-locations.json'), NAW_WORKSPACE: cwd });
+      await require(path.join(shipped, 'app/service-client.cjs')).ensureService(profile, process.env.NAW_APP_EXECUTABLE || require('electron'));
+    } finally { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value; }
+    await openApplication(); const codex = await create('codex');
+    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    const peerIdentity = s => [s.id, s.nativeId, s.provider === 'codex' ? s.serverIdentity?.pid : s.pid];
+    const ids = (await snapshot()).sessions.map(peerIdentity);
+    assert.equal(new Set((await snapshot()).sessions.map(s => s.handoffGroup)).size, 2);
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${claude.id}"]`).click();
+    await page.locator('#shared-input').fill('核对一个小预算：午餐合计36元，交通14元。Claude给草案，Codex核对，Claude给最终结论。');
+    await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
+    assert.equal(await page.locator('#run-mode').inputValue(), 'replies');
+    await page.locator('#run-limit').selectOption('3'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
+    await until(() => controls['claude-1'], 'First native response in original service');
+    controls['claude-1'].finish(); await until(() => controls['codex-1'], 'Peer native response in second service');
+    const codexBackend = (await session(codex.id)).serverIdentity;
+    await page.locator(`[data-session-id="${codex.id}"]`).click(); await page.locator('#terminal-tab').click();
+    await until(async () => { const text = await page.locator('#terminal-area').innerText(); return text.includes('核对一个小预算') && text.includes('Working'); }, 'The same Codex TUI is subscribed to the working turn');
+    controls['codex-1'].append('PEER_NATIVE_VIEW: this is the same active native work.\n');
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('PEER_NATIVE_VIEW'), 'First TUI attachment receives live output');
+    assert.deepEqual((await session(codex.id)).serverIdentity, codexBackend);
+    assert.equal((await snapshot()).room.run.status, 'running');
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await page.locator('#shared-input').fill('Unsent peer-room draft.');
+    const observer = await connect(profile, 'peer-native-observer');
+    try {
+      await application.close(); application = null;
+      controls['codex-1'].finish(); await until(() => controls['claude-2'], 'Native handoff returns while UI is closed');
+      controls['claude-2'].finish();
+      await until(async () => (await observer.call('initial')).room.run?.status === 'completed', 'Three native steps complete');
+    } finally { observer.close(); }
+    await openApplication(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    const done = await snapshot();
+    assert.deepEqual(done.sessions.map(peerIdentity), ids); assert.equal(done.room.run.steps, 3); assert.equal(done.diagnostics.dispatches, 3);
+    assert.equal(done.room.messages.filter(m => m.finalReply && m.runId === done.room.run.id).length, 3);
+    assert.equal(done.room.messages.filter(m => m.role === 'human' && m.runId === done.room.run.id).length, 1);
+    assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent peer-room draft.');
+    for (const provider of ['claude', 'codex']) assert.equal(done.sessions.find(s => s.provider === provider).liveDraft, `Private ${provider} draft.`);
+    assert.match(await page.locator('#room-messages').innerText(), /最终预算50元/);
+    const request = JSON.parse(fs.readFileSync(path.join(base, 'codex-1-request.json')));
+    assert.ok(JSON.stringify(request.input).includes('草案：午餐36元')); assert.ok(!JSON.stringify(request.input).includes('Private claude draft.'));
+    assert.deepEqual(counts, { claude: 2, codex: 1 }); assert.ok(titleCalls <= 1); assert.deepEqual(errors, []);
+    await save('peer-completed');
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-peer.png') }); }
+    console.log(JSON.stringify({ checks: ['Actual Claude and Codex in separate supported services complete a finite round', 'Opening the same Codex TUI preserves the backend and active round; UI-closed handoff returns to the original Claude; identities/drafts and one reading stream survive reopening', 'Only explicit goal and prior reply transfer; no draft broadcast or seed task'], versions, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
+    return;
+  }
   if (emptyTerminal) {
     assert.equal(retained, false);
     const codex = await create('codex');

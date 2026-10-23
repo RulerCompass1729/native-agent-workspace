@@ -19,7 +19,7 @@ class SharedReplies {
     return !g.closed && s && w.runtimes.get(s.id) === g.runtime && s.nativeId === g.nativeId &&
       s.roomId === 'shared' && s.memberRevision === g.member && s.controlRevision === g.control && s.connectionRevision === g.connection &&
       !['ended', 'recoverable', 'disconnected', 'approval'].includes(s.state) && (s.state !== 'error' || explicitRecovery) && !s.approval && !g.runtime.transportDisconnected && !g.runtime.backendExitConfirmed &&
-      (!g.run || (w.room.run === g.run && g.run.status === 'running' && Date.now() < g.run.deadline));
+      (!g.run || (w.routeValid ? w.routeValid(g.run) : w.room.run === g.run && g.run.status === 'running' && Date.now() < g.run.deadline));
   }
   recovering(g) {
     const r = g.runtime;

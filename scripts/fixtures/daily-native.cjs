@@ -6,6 +6,16 @@ const { NativeHost, Codex } = require(path.join(root, 'app/adapters.cjs'));
 const runtimes = new Map(), sends = [], inputs = [], calls = [], decisions = [];
 const heldSends = new Map();
 let heldPause;
+let holdPeerPause = false; const peerPauseWaiters = [];
+if (require('node:fs').existsSync(path.join(root, 'app/service-connection.cjs'))) {
+const { ServiceClient } = require(path.join(root, 'app/service-connection.cjs'));
+const originalPeerCall = ServiceClient.prototype.call;
+ServiceClient.prototype.call = async function(method, ...args) {
+  const value = await originalPeerCall.call(this, method, ...args);
+  if (method !== 'peerPause' || !holdPeerPause) return value;
+  return new Promise((resolve, reject) => peerPauseWaiters.push({ resolve: () => resolve(value), reject }));
+};
+}
 const { Workspace } = require(path.join(root, 'app/workspace.cjs'));
 const originalPause = Workspace.prototype.pause;
 Workspace.prototype.pause = function (...args) {
@@ -66,6 +76,11 @@ NativeHost.prototype.create = function (record) {
   runtimes.set(record.id, r); return r;
 };
 process.on('message', q => {
+  if (q.method === 'holdPeerPause') holdPeerPause = true;
+  if (['releasePeerPause', 'rejectPeerPause'].includes(q.method)) {
+    holdPeerPause = false; const waiting = peerPauseWaiters.splice(0);
+    waiting.forEach((p, i) => q.method === 'rejectPeerPause' && i === 0 ? p.reject(Error('Synthetic lost pause ACK')) : p.resolve());
+  }
   if (q.method === 'holdPause') heldPause = true;
   if (['releasePause', 'rejectPause'].includes(q.method)) {
     const pending = heldPause; heldPause = null;
@@ -79,6 +94,7 @@ process.on('message', q => {
     if (q.method === 'rejectSend') held.reject(new Error(q.text)); else held.resolve();
   }
   if (q.method === 'event') runtimes.get(q.target).event(q.value);
+  if (q.method === 'events') for (const event of q.value) runtimes.get(q.target).event(event);
   if (q.method === 'release') {
     const sent = q.target ? sends.findLast(s => s.id === q.target) : sends.at(-1), r = runtimes.get(sent.id);
     if (r.record.provider === 'codex') {
@@ -86,5 +102,5 @@ process.on('message', q => {
       notify(r, 'turn/completed', { turn: { id: sent.turnId, status: 'completed' } });
     } else { r.emit('state', 'idle'); r.emit('complete', { tag: sent.tag, text: q.text }); }
   }
-  process.send({ requestId: q.id, sends: sends.map(({ id, text }) => ({ id, text })), inputs, calls, decisions, pausePending: typeof heldPause?.resolve === 'function', nativeProcesses: 0, modelCalls: 0 });
+  process.send({ requestId: q.id, peerPausePending: peerPauseWaiters.length, sends: sends.map(({ id, text }) => ({ id, text })), inputs, calls, decisions, pausePending: typeof heldPause?.resolve === 'function', nativeProcesses: 0, modelCalls: 0 });
 });

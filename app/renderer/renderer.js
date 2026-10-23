@@ -850,7 +850,7 @@ function render() {
       }
       $('room-record').setAttribute('aria-pressed', String(!roomSession));
       for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.roomSession === roomSession));
-      $('run-status').textContent = run ? `${{ running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
+      $('run-status').textContent = run ? `${run.pausePending ? '正在撤销后续授权' : run.pauseUnconfirmed ? '部分后台未确认暂停' : { running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
       const pendingRun = roomSubmitting?.automatic;
       const waiting = roomPendingRecipients.get($('recipient').value) || roomPendingRecipients.values().next().value;
       $('run-status').parentElement.hidden = !run && !roomSubmitting && !waiting;
@@ -879,7 +879,7 @@ function render() {
       const ready = s => s && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
       const manualErrorReady = recipient?.state === 'error' && recipient.failedTurnInputAvailable && !recipient.pendingTag && !recipient.pendingQueue && !recipient.approval;
       $('forward-button').disabled = nativeRoute ? roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !manualErrorReady && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
-      $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || !safeHandoffs || Boolean(threadUnsupported);
+      $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed || !safeHandoffs || Boolean(threadUnsupported);
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
       if (roomQueueAvailable(recipient) || recipient?.pendingQueue) $('run-help').textContent += ' · 等原生下一轮接收；当前工作继续，先前私人内容不会加入共享记录。';
       if (roomSteerAvailable(recipient)) $('run-help').textContent += ' · 追加到当前原生回合；接收后的新消息块进入共享记录，先前内容不补发。';
@@ -888,8 +888,8 @@ function render() {
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
       if (nativeRoute) $('run-help').textContent = recipient?.nativeInputRequired ? 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；共享草稿保留，不会自动发送。' : '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
       if (threadUnsupported) $('run-help').textContent = roomThreads.rows.has(roomReplyTo) ? '此连接尚不支持讨论回复。草稿保留；取消回复可作为新消息发送。' : '原讨论已移除。草稿保留，请先取消回复。';
-      $('pause-button').textContent = pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
-      $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || (!pendingRun && run?.status !== 'running');
+      $('pause-button').textContent = run?.pauseUnconfirmed ? '重新核对暂停' : pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
+      $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || Boolean(run?.pausePending) || (!pendingRun && run?.status !== 'running' && !run?.pauseUnconfirmed);
       if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
     }
     for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id));
@@ -1297,7 +1297,7 @@ async function submitRoom(automatic) {
   else roomPendingRecipients.set(first, submission);
   render();
   try {
-    const receipt = await (automatic ? api.run(ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
+    const receipt = await (automatic ? api.run(ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
     if (submission.cancelRequested || receipt?.contextChanged) return;
     if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
   }
@@ -1327,7 +1327,7 @@ function handoffCandidates(firstId) {
   if (!first) return [];
   return members().filter(s => {
     const caps = s.serviceCapabilities || state.capabilities || [];
-    return s.handoffGroup === first.handoffGroup && caps.includes('boundedReplyHandoffs') &&
+    return (s.handoffGroup === first.handoffGroup || state.peerHandoffsAvailable && caps.includes('peerReplyHandoffsV1') && first.serviceCapabilities?.includes('peerReplyHandoffsV1')) && caps.includes('boundedReplyHandoffs') &&
       s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false &&
       ![s.background, s.scheduled].some(n => Number.isSafeInteger(n) && n > 0);
   });
@@ -1335,9 +1335,12 @@ function handoffCandidates(firstId) {
 function renderRunChoices() {
   if (!runPreview) return;
   const ids = runPreview.ids, eligible = handoffCandidates(runPreview.recipient);
+  const crossService = new Set(ids.map(id => members().find(s => s.id === id)?.handoffGroup)).size > 1;
+  for (const option of $('run-mode').options) option.disabled = crossService && option.value !== 'replies';
+  if (crossService) $('run-mode').value = 'replies';
   const directed = $('run-mode').value === 'directed';
   const capable = ids.every(id => { const s = members().find(m => m.id === id); return s?.addressedSendAvailable === true && (s.serviceCapabilities || state.capabilities || []).includes('agentAddressedHandoffs'); });
-  $('run-mode-help').textContent = directed ? (capable ? '只向成员明确选择的接收者发送；没有定向调用就结束。工具调用、工具说明及本轮成员表会计入原生用量；发送详情可核对实际内容。' : '所选会话中有原生连接尚不支持主动定向工具。可改用按顺序核查；不会重建或替换原会话。') : '';
+  $('run-mode-help').textContent = crossService ? '成员保留各自后台；按预览顺序转交完整回复，关闭界面后继续。暂停撤销后续授权，已经被原生接收的工作仍可能继续。' : directed ? (capable ? '只向成员明确选择的接收者发送；没有定向调用就结束。工具调用、工具说明及本轮成员表会计入原生用量；发送详情可核对实际内容。' : '所选会话中有原生连接尚不支持主动定向工具。可改用按顺序核查；不会重建或替换原会话。') : '';
   const multi = eligible.every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs'));
   $('run-participants').replaceChildren();
   for (const s of members()) {
@@ -1374,7 +1377,7 @@ $('run-button').onclick = () => {
   if ($('shared-input').value.length > 6000) { toast('一起核查的任务与材料合计最多 6000 字符。草稿保留；可缩短后核查，或定向发送。'); $('shared-input').focus(); return; }
   const recipient = $('recipient').value, candidates = handoffCandidates(recipient);
   runPreview = { text: $('shared-input').value, recipient, revision: roomDraftRevision,
-    members: members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
+    members: members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]), identities: Object.fromEntries(members().map(s => [s.id, s.peerIdentity])), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
   $('run-preview').textContent = runPreview.text;
   $('run-consent').checked = false; $('run-error').hidden = true; renderRunChoices();
   $('run-dialog').showModal();
@@ -1388,12 +1391,13 @@ $('run-form').onsubmit = event => {
   if (!$('run-consent').checked || !runPreview || $('confirm-run').disabled) return;
   const eligible = handoffCandidates(runPreview.recipient);
   const same = selected === 'room' && !roomSession && runPreview.text === $('shared-input').value && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]));
-  const available = runPreview.ids.length >= 2 && runPreview.ids.every(id => eligible.some(s => s.id === id)) &&
+  const available = runPreview.ids.length >= 2 && runPreview.ids.every(id => JSON.stringify(runPreview.identities[id]) === JSON.stringify(members().find(s => s.id === id)?.peerIdentity)) && runPreview.ids.every(id => eligible.some(s => s.id === id)) &&
     (runPreview.ids.length <= 2 || eligible.filter(s => runPreview.ids.includes(s.id)).every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs')));
   if (!same || !available || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
   const mode = $('run-mode').value, limit = Number($('run-limit').value), ids = [...runPreview.ids], labels = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[2]]));
+  const identities = Object.fromEntries(runPreview.ids.map(id => [id, runPreview.identities[id]]));
   const contexts = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[3]]));
-  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit, ids, labels, contexts, mode }));
+  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit, ids, labels, contexts, mode, identities }));
 };
 $('recipient').onchange = () => { closeMentions(); attempt(persistView); render(); };
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };
