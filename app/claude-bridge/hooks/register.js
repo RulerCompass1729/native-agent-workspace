@@ -14,6 +14,20 @@ let syncRootAgain = false;
 let rootSyncBlocked = false;
 let contextTransitions = false;
 let nativeBlocks = false;
+let addressedTool = false;
+let addressedReading = false;
+async function observeAddressedTool($, ownGeneration) {
+  if (legacyOnly || stopped || ownGeneration !== generation || addressedReading) return;
+  const binding = rootBinding;
+  addressedReading = true;
+  try {
+    const available = (await $.tool.list()).some(t => t.name === 'mcp__native_workspace__workspace_message');
+    if (!binding || binding !== rootBinding || stopped || ownGeneration !== generation || available === addressedTool) return;
+    await request($, '/addressed-capability', { available }, binding);
+    addressedTool = available;
+  } catch { /* Keep the previously confirmed capability; actual calls still validate. */ }
+  finally { addressedReading = false; }
+}
 let nativeModelSupported = false;
 let modelReadRevision = 0;
 let modelReads = 0, modelReadAgain = false;
@@ -289,6 +303,7 @@ async function request($, route, body, binding) {
 async function listen($, ownGeneration) {
   if (stopped || generation !== ownGeneration) return;
   try {
+    observeAddressedTool($, ownGeneration);
     const binding = await connection($);
     // A GUI reopen rotates only the compatibility credential. Rebind the
     // observer to that same native root; never repeat a pending submission.
@@ -358,11 +373,14 @@ async function listen($, ownGeneration) {
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
   const version = (await $.session.version()).version;
-  const result = await request($, '/root-bind', { nativeBlocks, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309'].includes(version)),
+  const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309'].includes(version)),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
+  // Native MCP connection may finish just after session.start. One early
+  // metadata refresh avoids waiting for the existing /next poll to return.
+  if (!legacyOnly) $.clock.after(500, () => observeAddressedTool($, ownGeneration));
   observeModel($);
   await listen($, ownGeneration);
 }
@@ -410,6 +428,28 @@ async function syncRoot($) {
 }
 
 export function register(on) {
+  on('tool.describe', { tool: 'mcp__native_workspace__workspace_message' }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
+  on('tool.call', { tool: 'mcp__native_workspace__workspace_message' }, async ($, e, next) => {
+    const binding = rootBinding, turnId = activeTurn, promptId = rootPrompt?.id;
+    if (!addressedTool || stopped || !binding || !turnId || !promptId || e.agentId ||
+      next.origin?.plugin !== 'engine' || e.tool_use_id === undefined) return { deny: '没有本原生主会话的定向协作授权。' };
+    const args = { recipient_id: e.recipient_id, message: e.message };
+    // Let Claude run the real MCP call: PreToolUse, configured rules, native
+    // approval and any managed hooks all remain on the execution path.
+    const executed = await next(e);
+    let approved;
+    try { approved = JSON.parse(executed.text); } catch { /* Refused or not our exact MCP result. */ }
+    if (executed.deny || executed.isError || approved?.approved !== true || approved.recipient_id !== args.recipient_id || approved.message !== args.message) {
+      await request($, '/addressed-failed', { turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch }, binding).catch(() => {});
+      if (executed.deny || executed.isError) return executed;
+      return { deny: '原生工具结果或输入已变化；没有安排转交。' };
+    }
+    if (stopped || rootBinding !== binding || activeTurn !== turnId || rootPrompt?.id !== promptId || observationGap) return { deny: '原生回合或连接已变化，未安排转交。' };
+    try {
+      const result = await request($, '/addressed-message', { turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch, arguments: args }, binding);
+      return { result: JSON.stringify(result), isError: result.status !== 'staged' };
+    } catch { return { deny: '本地接收结果未确认；不要重试，请让真人核对。' }; }
+  });
   on('classic.PostModelSwitch', async ($, e, next) => {
     const binding = rootBinding, ownGeneration = generation;
     const watching = nativeModelSupported && !stopped && binding && !e.agent_id && e.session_id === binding.sessionId;
@@ -585,6 +625,7 @@ export function register(on) {
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
+    addressedTool = false;
     if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => contextTransitions ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
     return next(e);
   });

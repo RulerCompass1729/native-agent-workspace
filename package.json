@@ -1,6 +1,6 @@
 {
   "name": "native-agent-workspace",
-  "version": "0.1.0-alpha.80",
+  "version": "0.1.0-alpha.81",
   "private": true,
   "description": "A local desktop demo for native agent sessions and bounded collaboration",
   "license": "Apache-2.0",
@@ -71,7 +71,8 @@
     "@deepseek-ai/dsh-config-editor": "0.2.1-rc.2",
     "@deepseek-ai/dsh-settings": "0.2.1-rc.2",
     "@deepseek-ai/dsh-api-settings-controller": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-native-command": "0.2.1-rc.2"
+    "@deepseek-ai/dsh-native-command": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sdk-protocol": "0.2.1-rc.2"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",

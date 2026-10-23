@@ -106,7 +106,9 @@ class Claude extends EventEmitter {
     }
     const settings = path.join(host.privateDir, `${record.id}.settings.json`);
     fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', hooks }), { mode: 0o600 });
-    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--plugin-dir', path.join(__dirname, 'claude-bridge')], record.cwd, {
+    const mcp = JSON.stringify({ mcpServers: { native_workspace: { command: process.execPath,
+      args: [path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
+    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge')], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -134,6 +136,7 @@ class Claude extends EventEmitter {
     this.rootObservation = null; this.rootTurn = null;
     this.nativeBlocks = message.nativeBlocks === true;
     this.nativeQueue = message.nativeQueue === true;
+    this.addressedSendAvailable = this.nativeBlocks && message.addressedTool === true && !this.retainedReader;
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
     this.displayProofs = new Map(); this.displayGap = false;
     return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks };
@@ -555,7 +558,7 @@ class Codex extends EventEmitter {
         throw error;
       }
       if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
-      this.hasHistory = true; this.finishRecoveryConnection?.(true);
+      this.hasHistory = true; this.addressedSendAvailable = this.record.addressedToolVersion === 1; this.finishRecoveryConnection?.(true);
       if (this.record.externalHistory && typeof result.thread.cwd === 'string' && path.isAbsolute(result.thread.cwd)) this.record.cwd = result.thread.cwd;
       this.emit('pid', this.host.codexProcess.pid); this.emit('model', result.model || result.thread.model || '原生默认');
       if (revision === this.stateRevision) this.observeStatus(result.thread.status);
@@ -576,8 +579,9 @@ class Codex extends EventEmitter {
     await this.host.createCodex(async () => {
     if (!current()) throw new Error('原生后台已变化，没有继续旧的启动请求。');
     // Let native configuration/requirements choose permissions for this cwd.
-    const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false });
+    const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false, dynamicTools: [require('./addressed-handoffs.cjs').codexTool] });
     if (!current()) throw new Error('原生后台已变化，没有接管旧的启动结果。');
+    this.record.addressedToolVersion = 1; this.addressedSendAvailable = true;
     this.record.nativeId = r.thread.id;
     this.host.codexTargets.set(this.record.nativeId, this);
     this.emit('model', r.model || r.thread.model || '原生默认');
@@ -787,6 +791,20 @@ class Codex extends EventEmitter {
       }
     }
     if (message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: '原生会话错误', status: 'failed' });
+    if (message.id !== undefined && message.method === 'item/tool/call' && p.tool === require('./addressed-handoffs.cjs').TOOL && p.namespace === require('./addressed-handoffs.cjs').NAMESPACE) {
+      // Only the connected native root supplies identity. Never take a sender
+      // ID from model arguments or treat another dynamic tool as ours.
+      let result, success = false;
+      try {
+        if (!this.addressedSendAvailable || this.transportDisconnected || p.threadId !== this.record.nativeId || p.turnId !== this.turnId || !this.addressedCall) throw Error('当前原生连接不支持定向协作。');
+        result = this.addressedCall({ nativeId: p.threadId, turnId: p.turnId, callId: p.callId }, p.arguments); success = true;
+      } catch (error) {
+        try { this.addressedFailed?.({ nativeId: p.threadId, turnId: p.turnId, callId: p.callId }); } catch { /* Not this authorized root turn. */ }
+        result = { status: 'not-sent', message: error.message };
+      }
+      this.host.rpc.reply(message.id, { success, contentItems: [{ type: 'inputText', text: JSON.stringify(result) }] });
+      return;
+    }
     if (message.id !== undefined) {
       let request = this.nativeRequests.get(message.id);
       const fingerprint = crypto.createHash('sha256').update(JSON.stringify([message.method, p])).digest('hex');

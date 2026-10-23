@@ -100,14 +100,14 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     if (alive) throw new Error('已有运行服务仍存在但无法连接；为保住会话，不启动替代进程。');
     fs.rmSync(lock); // Dead PID only; never kill or replace a live owner.
   }
-  const names = ['service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'native-blocks.cjs', 'shared-replies.cjs', 'room-threads.js', 'native-history.cjs', 'approval-policy.js', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
+  const names = ['service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'native-blocks.cjs', 'shared-replies.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'approval-policy.js', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
   const pluginFiles = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js'];
   const hash = crypto.createHash('sha256'); for (const name of names) hash.update(fs.readFileSync(path.join(__dirname, name)));
   for (const name of pluginFiles) hash.update(fs.readFileSync(path.join(__dirname, 'claude-bridge', name)));
   const runtime = path.join(dataDir, 'runtimes', hash.digest('hex').slice(0, 16)); fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
   for (const name of names) fs.copyFileSync(path.join(__dirname, name), path.join(runtime, name));
   for (const name of pluginFiles) { const destination = path.join(runtime, 'claude-bridge', name); fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 }); fs.copyFileSync(path.join(__dirname, 'claude-bridge', name), destination); }
-  for (const name of ['ws', '@xterm/headless', '@xterm/addon-serialize']) {
+  for (const name of ['ws', '@xterm/headless', '@xterm/addon-serialize', '@deepseek-ai/dsh-sdk-protocol']) {
     const source = path.dirname(require.resolve(`${name}/package.json`));
     const target = path.join(runtime, 'node_modules', name);
     fs.cpSync(source, target, { recursive: true });

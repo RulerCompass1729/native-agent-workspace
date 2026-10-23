@@ -1,6 +1,13 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.80 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.81 is a **local macOS technical-trial alpha**.
+
+**Current user priority:** finish the usable shared-workspace flow first. The
+embedded native TUI is acceptable for independent work; complete 1:1 solo chat
+mapping is deferred, not declared solved. U21 now has source, native-model and installed control/recovery evidence;
+the six-group installed shared-workflow regression and independent final review
+also pass;
+see [current milestone](core-milestone.md#current-priority--2026-10-22).
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -27,16 +34,28 @@ the 48-file installed payload, strict signature and original three-session hidde
 reopening pass with zero new dispatch. Independent final source/artifact review passes for B38. Human Stop, lost connections and uncertain failures remain gated;
 this does not close U17 or bypass Claude's native post-Stop input restriction.
 
-**Next core gate — agent-addressed cooperation:** human recipient selection and
-an explicitly authorized fixed-order reply exchange already work. They do not
-implement an agent choosing its next recipient: the current run advances by the
-human-selected order, regardless of mentions in an answer. U21 tracks that gap.
-The next bounded proof is one explicitly addressed agent-to-agent message within
-the human's authorization, followed by independent work and reopening without a
-replay. Ordinary prose, quoted mentions, code and file references must never
-trigger delivery. Native structured-tool interfaces are candidates, not verified
-live-session integrations. No new provider, remote broker or routing model is
-part of this gate; full U17 remains separately open.
+**Alpha.81 — agent-addressed cooperation:** new supported Claude 2.1.309 and
+GUI-created Codex 0.163.0 sessions can use a native structured tool to select a
+recipient within an explicitly authorized round. One staged message is delivered
+only after its matching root turn finishes and membership/control/identity/time
+limits are rechecked. No tool call ends the exchange with the human. Existing
+human-directed sending and fixed-order checks remain available. No parsing of
+prose, quotes, code or file mentions can initiate a route.
+
+The source suite passes 861 checks without skips. A real Haiku 5.5 / Luna task
+completed three root submissions and two addressed handoffs: three underlying
+Claude responses and three Codex responses, including a tool lookup. No subagent
+call was observed. Installed actual-native journeys separately verify finite
+handoffs, human pause, private continuation and reopen with no replay using
+fixed local responses; native PreToolUse denial prevents peer delivery. Tool
+metadata, participant wrappers and tool continuations consume native context;
+there is no routing model and no claim of equal cost to an unextended session.
+
+Retained services and terminal-first Codex sessions without registered tools do
+not gain this capability by replacing their native session. Use their existing
+manual/fixed-order path, or create a supported new session. Full solo parity,
+Claude post-Stop GUI input, external live attachment, cross-service automatic
+handoff and arbitrary unattended goals remain outside this local increment.
 
 **Alpha.79 — native error detail:** actual Claude
 API failures now map their processed native error record into the same failed-turn

@@ -1,6 +1,35 @@
 # Core product acceptance
 
-Latest integrated checkpoint: **alpha.55, 2026-10-21**. The currently supported
+## Current priority — 2026-10-22
+
+The user clarified that the embedded native TUI is an acceptable single-agent
+surface for this milestone. Recreating every TUI detail in a separate solo chat
+is deferred. The current delivery decision is whether the **shared workspace**
+is usable: one attributed reading stream, human `@` selection, bounded explicit
+agent-to-agent messages, human intervention, detach/continue, and persisted
+records/drafts through archive and reopening. Preserve the existing solo reader;
+do not build additional viewers or terminal-camera panels.
+
+Use one small end-to-end task and one control/recovery scenario, real application
+interaction and affected native paths, then independent review. Reuse unaffected
+evidence. Fix blocking failures before repeating the affected case; avoid separate
+releases for individual cosmetic or peripheral improvements. Existing native
+protocols and reusable implementations take priority over new infrastructure.
+Installation, broader provider support, and complete solo GUI/TUI parity are
+follow-up work. The historical checkpoints below retain their original scope;
+they do not constitute acceptance of this current shared-workspace milestone.
+
+Current shared-workspace checkpoint: **alpha.81, 2026-10-22**, accepted for the
+supported new-session local trial after independent review. One real Haiku/Luna
+budget task performs two native tool-selected handoffs and concludes in three
+root submissions; installed native pause/private-continuation/reopen and six
+shared UI groups pass. Source suite: 861 passed, zero skips. Original sessions
+survive the update. See [exact evidence](testing.md#agent-selected-addressed-cooperation--alpha81).
+Old connections without the tool remain manual/fixed-order; full solo 1:1,
+mid-turn agent handoffs, arbitrary unattended goals and external live attachment
+are not closed by this checkpoint. Tool metadata/continuations have native cost.
+
+Historical integrated checkpoint: **alpha.55, 2026-10-21**. The currently supported
 local single/shared-session workflow passes six installed-application journeys,
 including private-result follow-through after a permission pause. Independent
 final source/artifact review passes; [evidence and exact limits](testing.md#integrated-core-acceptance--alpha55)
