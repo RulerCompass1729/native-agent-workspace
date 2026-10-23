@@ -15,11 +15,13 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
 
 - workspace.json contains displayed conversation copies, selected working paths,
   native IDs, process identity for safe recovery, team-event metadata, explicit
-  shared messages and drafts. It does not contain raw terminal scrollback,
+  shared messages, drafts and bounded structured native tool records already displayed
+  to the user. It does not contain raw terminal scrollback,
   provider credential files, full environment dumps or raw protocol traces.
 - legacy-shared.json stores only native display blocks authorized by an explicit
   room send on inspected retained Claude connections. It is owner-only and atomic;
-  tool bodies stay in the bounded in-memory cache. Clearing shared history removes
+  already-displayed structured tool inputs/results are saved within the existing
+  200-record/1 MiB bounded trajectory, including an explicit overflow marker. Clearing shared history removes
   these replies too. Reopening preserves displayed history, never a live sharing
   grant or pending task. Permissions, private input, departure, control change,
   gaps and context changes freeze the grant. A shared reply may refer to earlier
@@ -60,8 +62,9 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   Provider history and material already delivered to another agent remain separate.
 - legacy-reader-*.json stores explicitly connected retained Claude and Codex
   private local projections: native/process identity, accepted inputs, displayed
-  response text and turn/gap metadata. It is atomically saved with owner-only
-  permissions. Volatile tool bodies are excluded. Invalid or missing projection
+  response text, bounded structured native tool inputs/results and turn/gap metadata.
+  It is atomically saved with owner-only permissions. Raw terminal observations
+  remain excluded. Reopening marks unfinished tool state unconfirmed, not running. Invalid or missing projection
   data after attachment cannot silently fall back to the old raw-response cache.
   Observed Codex partial replies and interrupted turn boundaries survive GUI exit
   even when native history omits them. Reopening never renews a sharing grant,
@@ -199,7 +202,17 @@ These sources inform the engineering requirements; they are not a worldwide lega
 clearance. Recheck changing terms and the actual business model before distribution.
 
 
-## Native observation in alpha.24
+## Native observation
+
+Alpha.77 persists already-displayed structured native tool inputs/results in the
+existing private session and explicitly authorized shared histories. These can
+contain sensitive data just like displayed conversation text; they are not
+automatically redacted or encrypted. Existing record removal/shared-history clear
+apply, separately from provider history. Persistence does not restore a live
+sharing grant, add tool output to a model prompt, or send any task. Raw terminal
+bytes and unstructured legacy observations remain memory-only.
+
+The following describes the earlier alpha.24 observation layer:
 
 The portal now holds bounded native terminal bytes and allowlisted structured tool
 progress in local process memory. These may contain private paths, drafts, login

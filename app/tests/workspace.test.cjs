@@ -90,7 +90,7 @@ test('unattributed waiting receipt stays visible but cannot share the next priva
   assert.equal(source.status, 'reply-private'); assert.equal(source.deliveries[0].status, 'submitted');
   assert.equal(w.forwards.size, 0); assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE_UNKNOWN_REPLY'));
 });
-test('native blocks share the private reader but never silently persist or share tool bodies', async t => {
+test('native tool history persists privately without automatically entering the room', async t => {
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);
   const s = w.get(id); w.join(id, true); r.nativeBlocks = true;
   r.emit('nativeBlock', { id: 'display:one', nativeId: s.nativeId, kind: 'response', text: 'visible reply', status: 'complete' });
@@ -100,7 +100,8 @@ test('native blocks share the private reader but never silently persist or share
   assert.ok(s.messages.some(m => m.text === 'PRIVATE_TOOL_BODY'));
   assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE_TOOL_BODY'));
   w.persist(); const stored = fs.readFileSync(path.join(directory, 'workspace.json'), 'utf8');
-  assert.ok(stored.includes('visible reply')); assert.ok(!stored.includes('PRIVATE_TOOL_BODY')); assert.ok(!stored.includes('PRIVATE_INPUT'));
+  assert.ok(stored.includes('visible reply')); assert.ok(stored.includes('PRIVATE_TOOL_BODY')); assert.ok(stored.includes('PRIVATE_INPUT'));
+  assert.ok(!JSON.stringify(JSON.parse(stored).room).includes('PRIVATE_TOOL_BODY'));
 });
 test('shared human message survives uncertain delivery and restart without replay', async t => {
   const { workspace: w, runtimes: [r], ids: [id], directory } = await fixture(t);

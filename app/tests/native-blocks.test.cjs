@@ -40,3 +40,21 @@ test('volatile cache bounds full serialized rows and count without unbounded pla
   assert.ok(volatile.length <= 200); assert.ok(Buffer.byteLength(JSON.stringify(volatile)) <= 1024 * 1024);
   assert.equal(s.messages[0].text, 'persistent'); assert.equal(volatile.filter(m => m.kind === 'gap').length, 1);
 });
+
+
+test('durable trajectory retains only bounded structured native tools and its overflow marker', () => {
+  const { persistedMessages } = require('../native-blocks.cjs');
+  const rows = [{ id: 'chat', role: 'assistant', text: 'answer' },
+    { id: 'legacy', volatile: true, role: 'system', text: 'RAW TERMINAL OBSERVATION' },
+    { id: 'untyped', volatile: true, role: 'tool', text: 'UNATTRIBUTED TOOL' }];
+  for (let n = 0; n < 220; n++) rows.push({ id: `native:native:tool:${n}`, nativeId: 'native', nativeBlock: true, volatile: true,
+    kind: 'tool', role: 'tool', input: 'local input', text: '本地输出'.repeat(1000), status: 'complete' });
+  const before = JSON.stringify(rows), saved = persistedMessages(rows);
+  assert.equal(JSON.stringify(rows), before, 'Preparing persistence cannot mutate the live reader');
+  assert.ok(!JSON.stringify(saved).includes('RAW TERMINAL')); assert.ok(!JSON.stringify(saved).includes('UNATTRIBUTED'));
+  const tools = saved.filter(m => m.volatile);
+  assert.ok(tools.length <= 200); assert.ok(Buffer.byteLength(JSON.stringify(tools)) <= 1024 * 1024);
+  assert.equal(tools.filter(m => m.kind === 'gap').length, 1);
+  assert.equal(saved.at(-2).id, 'native:native:tool:219'); assert.equal(saved[0].id, 'chat');
+  assert.deepEqual(persistedMessages(saved), saved, 'Saving again neither grows nor drops the overflow marker');
+});

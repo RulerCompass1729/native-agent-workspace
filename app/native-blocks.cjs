@@ -50,9 +50,18 @@ function trimVolatileRows(messages, gapId = 'native-cache-gap') {
     messages = messages.filter(m => !removed.has(m.id));
     let gap = messages.find(m => m.id === gapId);
     if (!gap) { gap = { id: gapId, role: 'system', volatile: true, kind: 'gap', time: Date.now() }; messages.push(gap); }
-    gap.text = '部分工具记录超过本次运行缓存上限，请在原生终端核对。'; gap.incomplete = true;
+    gap.text = '部分工具记录超过本地保留上限，请在原生终端核对。'; gap.incomplete = true;
   }
   return messages;
+}
+// Retain the bounded structured trajectory the person already read. Raw legacy
+// observations/terminal bytes remain ephemeral. Saved rows never grant delivery.
+function persistedMessages(messages, gapId = 'native-cache-gap') {
+  return trimVolatileRows(messages.filter(row => !row.volatile ||
+    row.role === 'tool' && typeof row.nativeId === 'string' &&
+      (row.nativeBlock === true && row.kind === 'tool' && row.id?.startsWith(`native:${row.nativeId}:tool:`) ||
+        row.sharedStream === true && row.nativeMessageId?.startsWith(`native:${row.nativeId}:tool:`)) ||
+    row.kind === 'gap' && row.id === gapId).map(row => ({ ...row })), gapId);
 }
 function applyCodexHistory(s, items, runtime, submitted = () => {}) {
   const { toolContent, toolStatus, nativeTextContent } = require('./codex-tool-content.cjs');
@@ -174,4 +183,4 @@ function applyCodexMessage(s, item) {
   Object.assign(m, { text: item.text, status: 'complete', nativeId: item.nativeId || s.nativeId, phase: item.phase, ...(typeof item.inputTag === 'string' ? { inputTag: item.inputTag } : {}), ...(item.turnId ? { turnId: item.turnId } : {}) });
   return m;
 }
-module.exports = { applyNativeBlock, trimVolatileRows, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress };
+module.exports = { applyNativeBlock, trimVolatileRows, persistedMessages, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress };

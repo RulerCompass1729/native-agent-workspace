@@ -2,6 +2,7 @@
 // Only a new explicit send can grant display; persisted rows never grant work.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const { SharedReplies } = require('./shared-replies.cjs');
+const { persistedMessages } = require('./native-blocks.cjs');
 
 class LegacyShared extends SharedReplies {
   constructor(dataDir, changed) {
@@ -103,7 +104,7 @@ class LegacyShared extends SharedReplies {
     if (this.storageError) throw Error('本地共享回复记录无法保存；后续内容留在原会话。');
     const temporary = this.filename + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
     try {
-      fs.writeFileSync(temporary, JSON.stringify(this.workspace.room.messages.filter(row => !row.volatile)), { mode: 0o600, flag: 'wx' });
+      fs.writeFileSync(temporary, JSON.stringify(persistedMessages(this.workspace.room.messages, 'shared-native-cache-gap')), { mode: 0o600, flag: 'wx' });
       fs.renameSync(temporary, this.filename);
     } finally { try { fs.unlinkSync(temporary); } catch {} }
   }

@@ -20,6 +20,7 @@ const quitQueueTrial = process.env.NAW_RETAINED_QUEUE_QUIT === '1';
 const queueTrial = sharedQueueTrial || process.env.NAW_RETAINED_QUEUE === '1', sharedTrial = process.env.NAW_RETAINED_SHARED === '1';
 assert.ok(!(queueTrial && sharedTrial), 'Choose one bounded scenario');
 assert.ok(!quitQueueTrial || sharedQueueTrial, 'Whole-app pending quit uses the shared waiting scenario');
+const toolHistoryTrial = process.env.NAW_RETAINED_TOOL_HISTORY === '1';
 const modelOnly = process.env.NAW_MODEL_ONLY === '1';
 const budget = modelOnly ? 0 : sharedTrial ? 5 : queueTrial ? 4 : 3;
 let child, client, application, page, calls = 0, finishFinal;
@@ -137,7 +138,7 @@ async function launch() {
   }
   assert.equal(await page.locator('#messages').getByText('RETAINED_HISTORY: original native answer.', { exact: true }).count(), 1);
   assert.equal(calls, 1); checks.push('Actual old backend and native TUI history retained on same-process input/reader attachment');
-  if (sharedTrial) {
+  if (sharedTrial || toolHistoryTrial) {
     await page.getByRole('button', { name: '加入协作', exact: true }).click();
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
@@ -159,6 +160,45 @@ async function launch() {
   assert.equal(await page.locator('.native-progress').count(), 0);
   fs.writeFileSync(path.join(base, 'streaming.json'), JSON.stringify(await snapshot(), null, 2));
   checks.push('Actual 302 display and tool events stream into attributed main-reader blocks; one visible input and no camera panel');
+  if (toolHistoryTrial) {
+    const beforeQuit = await snapshot(), original = beforeQuit.sessions.find(s => s.id === id);
+    const tool = original.messages.find(m => m.role === 'tool' && m.text.includes('RETAINED_TOOL: 42'));
+    const sharedTool = beforeQuit.room.messages.find(m => m.role === 'tool' && m.text.includes('RETAINED_TOOL: 42'));
+    assert.ok(tool && sharedTool, 'Native tool is visible privately and in the authorized room');
+    await page.locator('#message-input').fill('Unsent reader draft'); await sleep(300);
+    await application.close(); application = null; await launch();
+    await until(async () => (await snapshot()).sessions.find(s => s.id === id)?.legacySubmit, 'Same native observer reconnects');
+    const restored = await snapshot(), current = restored.sessions.find(s => s.id === id);
+    fs.writeFileSync(path.join(base, 'tool-history-reopened.json'), JSON.stringify(restored, null, 2));
+    assert.equal(current.nativeId, before.nativeId); assert.equal(current.pid, before.pid);
+    assert.equal(await page.locator('#message-input').inputValue(), 'Unsent reader draft');
+    assert.equal(current.messages.find(m => m.id === tool.id)?.text, tool.text, 'Private native tool body survives whole-app exit');
+    assert.equal(current.messages.find(m => m.id === tool.id)?.input, tool.input);
+    assert.equal(restored.room.messages.find(m => m.id === sharedTool.id)?.text, sharedTool.text, 'Shared native tool body survives whole-app exit');
+    await until(async () => (await page.locator('#messages').innerText()).includes('RETAINED_TOOL: 42'), 'Restored tool is readable in solo view');
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await until(async () => (await page.locator('#room-messages').innerText()).includes('RETAINED_TOOL: 42'), 'Restored tool is readable in room');
+    assert.ok(!JSON.stringify(restored.room.messages).includes('RETAINED_HISTORY'));
+    const roomBeforeFinal = JSON.stringify(restored.room.messages);
+    finishFinal();
+    await until(async () => (await snapshot()).sessions.find(s => s.id === id).messages.some(m => m.text.endsWith('42.\n')), 'Same native task finishes privately');
+    assert.equal(JSON.stringify((await snapshot()).room.messages), roomBeforeFinal, 'Reopen preserves history without restoring sharing authority');
+    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#terminal-tab').click();
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('RETAINED_FINAL_PREFIX'), 'Same native terminal is connected');
+    await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('Control+o');
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('RETAINED_TOOL'), 'Native expanded transcript shows the retained tool result');
+    const terminal = await page.locator('#terminal-area').innerText(); fs.writeFileSync(path.join(base, 'tool-history-terminal.txt'), terminal);
+    assert.match(terminal, /RETAINED_TOOL/);
+    await page.locator('#chat-tab').click();
+    fs.writeFileSync(path.join(base, 'tool-history-final.json'), JSON.stringify(await snapshot(), null, 2));
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'tool-history-solo.png') }); await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'tool-history-room.png') }); }
+    await page.locator('#privacy-button').click();
+    assert.ok((await page.locator('#trust-status').innerText()).includes('结构化工具输入与结果会随记录保存在本机'));
+    await page.locator('#close-privacy').click();
+    assert.equal(calls, 3); assert.deepEqual(errors, []);
+    checks.push('Whole-app exit retains exact private/shared tool input and result, same native process and draft, with no replay or restored sharing grant');
+    console.log(JSON.stringify({ checks, version, calls, paidModelCalls: 0, evidence: base })); return;
+  }
   let queuedTag;
   if (queueTrial) {
     if (sharedQueueTrial) {

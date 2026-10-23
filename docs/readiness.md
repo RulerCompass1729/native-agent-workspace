@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.76 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.77 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,18 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.77 — native trajectory continuity:** existing local histories now
+retain already-displayed structured native tool inputs/results through reopening,
+within the same 200-record/1 MiB trajectory bound. Raw terminal observations remain
+ephemeral. Reopening does not restore sharing grants or resend tasks; unfinished
+tools become unconfirmed. Real retained Claude/Electron reproduces the old loss;
+source and installed repairs pass a three-response local journey and 808 checks
+without skips or paid inference. The installed two-native journey also passes
+concurrent streaming, native waiting/steering, threads, member filtering and mouse
+departure/rejoin with four fixed local responses. The exact 48-file payload, strict
+signature and original three-session hidden reopening pass. Final independent source and installed-artifact review passes for this bounded fix.
+Full U17 and the native post-Stop input limitation remain open.
 
 **Alpha.76 — ordinary interrupted reply retention:**
 protects the observed native text cut against late ordinary reply events and

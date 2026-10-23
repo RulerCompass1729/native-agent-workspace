@@ -1,5 +1,25 @@
 # Bounded testing
 
+## Native tool history — alpha.77
+
+Set `NAW_RETAINED_TOOL_HISTORY=1` in the existing retained Claude test to run three
+fixed loopback responses through actual Claude 2.1.302 and Electron. It checks
+native-to-GUI attachment, explicit room sending, streamed progress/tool input and
+output, full-app exit during the held final, restored private/shared tool records,
+unchanged process/native identity and draft, and final continuation with no renewed
+room grant. Native Ctrl+O expands the original terminal tool output for comparison.
+The old implementation fails the private-history assertion after actual reopening.
+Local regressions cover bounded persistence, raw legacy observation exclusion,
+owner-only files, unfinished status, shared clearing and no restored grants.
+Source and installed native checks pass, including the installed privacy disclosure.
+The separate installed two-native journey verifies concurrent output, waiting and
+steering, threads/member filtering, actual mouse departure/rejoin, native-terminal
+comparison and unchanged drafts/identities with four fixed local responses.
+A successful local recording is retained privately. All 808 checks pass, with no
+skips; 48 runtime files match and the post-native strict signature passes.
+Original three-session hidden reopening adds no dispatch. Final independent source and installed-artifact review passes for B35; U17 remains open.
+
+
 ## Retained Claude main reader — alpha.64
 
 `scripts/test-native-retained-claude.cjs` uses this repository's actual alpha.2
@@ -39,8 +59,8 @@ is retained separately.
 
 The reader preserves downstream display content, not raw pre-transform text. It
 cannot reconstruct transient content before attachment or while disconnected.
-Tool bodies remain volatile under the existing observation privacy boundary;
-reopening does not guarantee their restoration. Physical IME, native menus and
+At alpha.64, tool bodies were volatile and were not guaranteed to return after
+reopening. Alpha.77 supersedes this with bounded structured-tool persistence. Physical IME, native menus and
 all transient-state parity are not established. U17 remains open.
 
 ## Concurrent native recipients — alpha.63
@@ -128,7 +148,8 @@ Review counterexamples cover approval while streaming, revoked-grant eviction,
 nonempty old partial caches, history/live races, failed reconnect preservation
 and native error with unfinished text/tools. Failed earlier GUI runs remain in
 private evidence and are not counted as passes. Controlled providers are labeled
-fixtures; tool records remain bounded and volatile, not a durable full trace.
+fixtures; these earlier tool records were volatile. Alpha.77 now persists the
+bounded structured records, still not a durable full trace.
 
 The normal installed profile was reopened through `--background`, retaining all
 three native session IDs/processes, selected view and saved draft. Its previously
@@ -1967,7 +1988,7 @@ all loopback with zero paid inference. The native TUI's automatic title request 
 counted separately rather than hidden in portal dispatch totals; the test returns
 its requested structured format. This does not establish production inference
 cost or disable the user's native title behavior. Completed shared text is local
-history; tool text remains volatile. Full native display parity, retained shared
+history; tool text was volatile at this version (superseded by alpha.77). Full native display parity, retained shared
 steering and automatic cross-service handoff are not acceptance claims here.
 
 

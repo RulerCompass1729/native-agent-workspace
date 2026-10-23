@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { processIdentity, processMayBeAlive } = require('./platform.cjs');
 const { ProgressJournal } = require('./observation.cjs');
-const { applyNativeBlock, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress } = require('./native-blocks.cjs');
+const { applyNativeBlock, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress, persistedMessages } = require('./native-blocks.cjs');
 const { SharedReplies } = require('./shared-replies.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
 const { NativeHistory, nativeId } = require('./native-history.cjs');
@@ -34,7 +34,7 @@ class Workspace extends EventEmitter {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
       for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.state === 'ended' ? 'ended' : 'recoverable', owner: null, approval: null, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
-        if (message.status === 'streaming') message.status = 'unconfirmed';
+        if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
       }
       this.room.messages = stored.room?.messages || [];
       for (const m of this.room.messages) if (['streaming', 'running'].includes(m.status)) { m.status = 'unconfirmed'; m.sharingStopped = '运行连接曾中断，未重发任务'; }
@@ -67,8 +67,8 @@ class Workspace extends EventEmitter {
     const target = path.join(this.dataDir, 'workspace.json'); const temp = `${target}.tmp`;
     try {
       // No terminal bytes, credentials, environment, hook secrets or raw protocol.
-      const sessions = [...this.sessions.values()].map(({ owner, approval, approvalResolved, pid, ...s }) => ({ ...s, messages: s.messages.filter(m => !m.volatile), pendingTag: null }));
-      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: this.room.messages.filter(m => !m.volatile), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
+      const sessions = [...this.sessions.values()].map(({ owner, approval, approvalResolved, pid, ...s }) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null }));
+      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
       fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
     } catch { this.storageFailure = 'write'; this.storageWarning = '本地保存失败，当前会话仍在内存中；请保留窗口并检查磁盘，恢复后重试保存。'; this.emit('change'); }
   }
