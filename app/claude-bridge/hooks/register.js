@@ -52,6 +52,27 @@ async function observeModel($) {
     if (modelReadAgain) { modelReadAgain = false; observeModel($); }
   }
 }
+let nativeUsageSupported = false, usageReading = false, usageReadAgain = false, usageRevision = 0;
+async function observeUsage($) {
+  const binding = rootBinding, revision = ++usageRevision, ownGeneration = generation;
+  if (!nativeUsageSupported || !binding || stopped) return;
+  if (usageReading) { usageReadAgain = true; return; }
+  const epoch = binding.observationEpoch;
+  usageReading = true;
+  try {
+    // No breakdown: the native status-line metadata is free. Never request
+    // /context's full token-count calls or change the person's status line.
+    const value = await $.session.usage();
+    const sessionId = await $.session.id();
+    if (stopped || ownGeneration !== generation || revision !== usageRevision || binding !== rootBinding ||
+      epoch !== binding.observationEpoch || sessionId !== binding.sessionId) return;
+    if (!Number.isSafeInteger(value?.context?.window) || value.context.window <= 0) return;
+    const usage = { context: { window: value.context?.window, tokens: value.context?.tokens, percent: value.context?.percent },
+      cost: { usd: value.cost?.usd }, rateLimits: (Array.isArray(value.rateLimits) ? value.rateLimits : []).slice(0, 8).map(r => ({ kind: r?.kind, percentUsed: r?.percentUsed, resetsAt: r?.resetsAt })) };
+    enqueueBlock($, { id: 'control:usage', kind: 'control', status: 'complete', usage }, binding);
+  } catch { /* Retain the last dated reading; unknown is never zero. */ }
+  finally { usageReading = false; if (usageReadAgain) { usageReadAgain = false; observeUsage($); } }
+}
 let activeTurn = null;
 // Only native turn identity + a complete matching final display can authorize
 // a reply body. Raw Stop text must not bypass a display transform.
@@ -260,7 +281,7 @@ async function refreshLegacyObserver($, ownGeneration) {
       entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence, replayed: true };
     }
     if (observerBindRequest === pending) observerBindRequest = null;
-    observeModel($);
+    observeModel($); observeUsage($);
   };
   observerRebinding = refresh();
   try { await observerRebinding; } finally { observerRebinding = null; }
@@ -381,7 +402,7 @@ async function bindRoot($, ownGeneration) {
   // Native MCP connection may finish just after session.start. One early
   // metadata refresh avoids waiting for the existing /next poll to return.
   if (!legacyOnly) $.clock.after(500, () => observeAddressedTool($, ownGeneration));
-  observeModel($);
+  observeModel($); observeUsage($);
   await listen($, ownGeneration);
 }
 
@@ -535,6 +556,7 @@ export function register(on) {
     const result = await next(e);
     try {
       if (!e.agentId && binding === rootBinding) {
+        observeUsage($);
         const turn = displayTurn(e.turnId, binding), final = turn.blocks.get(turn.last);
         // Text equality is only a completeness check inside an explicit native
         // turn, never a substitute for prompt/turn identity. Forward the display
@@ -576,6 +598,7 @@ export function register(on) {
       try {
         if (observationGeneration === generation && observationBinding?.observationEpoch === observationEpoch) observeAppend($, e, result, observationBinding, observationTurn, candidate, nativeApiError);
         else markObservationGap(observationBinding);
+        if (!e.agentId && e.door === 'response' && observationBinding === rootBinding) observeUsage($);
       }
       catch { markObservationGap(observationBinding); } // Never fail native append.
       return result;
@@ -618,6 +641,7 @@ export function register(on) {
     if (collecting) collecting.invalid = true;
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
+    nativeUsageSupported = nativeVersion === '2.1.309';
     nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309'].includes(nativeVersion);
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion)
       : ['2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion);

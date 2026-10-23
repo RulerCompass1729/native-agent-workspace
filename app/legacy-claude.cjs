@@ -33,6 +33,7 @@ class LegacyClaude extends Claude {
       }
     });
     this.on('inputRequired', () => { this.scheduleSave(); this.emit('change'); });
+    this.on('usage', usage => { this.usage = usage; this.emit('change'); });
     this.on('model', model => { this.model = model; this.emit('change'); });
     this.on('capability', () => this.emit('change'));
     this.on('state', () => this.emit('change'));

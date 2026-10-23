@@ -1,5 +1,45 @@
 # Bounded testing
 
+## Native usage visibility — alpha.83
+
+The existing privacy/usage dialog and session details display native readings.
+Claude 2.1.309 uses its no-argument `session.usage()` API: context, native /cost
+ledger and last-reported quota windows when available. The exact generated native
+types state this read is free; no breakdown, token-count request, status-line
+replacement or model prompt is made. Codex retains native cumulative/last token
+events and window size. Missing values stay unknown, cached input is a subset,
+and neither a dispatch count nor a native USD ledger is called an actual bill.
+
+Source three-native Electron journey passes with seven fixed local responses.
+Startup and post-task metadata are visible; opening/refreshing the dialog adds
+no model response and no token-count request. Root identity, bounded single-flight
+reads, unknown versions, zero vs absent values and separate count semantics have
+deterministic checks. The complete suite passes 865 checks with zero skips.
+
+Actual boot exposed template substitution interpreting a literal dollar sequence;
+callback replacements now preserve inserted content and build-time JavaScript
+compilation checks the output. A second boot exposed a missing module in the
+private-runtime and package manifests; both were fixed before the passing run.
+Installed three-member usage and concurrent two-agent journeys also pass. The
+latter adds four fixed local responses, no native title response and no paid
+inference; a local success recording is retained. It verifies concurrent streams,
+working-turn waiting/steering, threads/member filtering, departure/rejoin and
+private-tail isolation. The 51 installed runtime files match source; strict
+signature and original-three-session hidden reopening pass with zero new dispatch.
+Independent final installed review passes.
+
+Review found positive native amounts below four-decimal precision displaying as
+zero. They now display `<$0.0001`; exact zero remains `$0.0000`. Targeted checks
+cover both actual fixed-response readings and an even smaller positive amount.
+Unavailable context metadata is discarded without creating an output gap.
+
+References: [Claude native API](https://code.claude.com/docs/en/plugins/mods/api),
+[ccusage source-vs-estimated cost](https://github.com/ccusage/ccusage/blob/main/docs/guide/cost-modes.md).
+No external implementation or pricing dependency was copied. These readings may
+lag and do not establish complete descendant accounting, billing accuracy or
+latency/token parity with an unextended agent. Older connections may not report
+them; native sessions are never replaced merely to acquire usage.
+
 ## Three native participants and identity — alpha.82
 
 Source and installed `NAW_TEST_THREE_MEMBERS=1` journeys use two Claude 2.1.309

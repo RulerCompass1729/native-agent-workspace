@@ -114,7 +114,14 @@ async function create(provider) {
     await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Claude startup');
     if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
       assert.ok((await page.locator('#terminal-area').innerText()).includes(fs.realpathSync(cwd)));
-      await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowDown'); await sleep(200); await page.keyboard.press('Enter');
+      await page.locator('#terminal-area .xterm-helper-textarea').waitFor({ state: 'visible' });
+      await until(async () => !(await page.locator('#terminal-paste').isDisabled()), 'Native terminal input ready');
+      await page.locator('#terminal-area .xterm-screen').click();
+      await until(async () => page.locator('#terminal-area .xterm-helper-textarea').evaluate(el => el === document.activeElement), 'Native terminal input focused');
+      const selectedTrust = async () => /[❯›>]\s*(?:\d+[.)]\s*)?Yes, I trust this folder/.test(await page.locator('#terminal-area').innerText());
+      if (!(await selectedTrust())) await page.keyboard.press('ArrowDown');
+      await until(selectedTrust, 'Exact native trust choice selected');
+      await page.keyboard.press('Enter');
     }
     await until(async () => /Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Claude key selection');
     if ((await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key')) {

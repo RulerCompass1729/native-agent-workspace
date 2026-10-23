@@ -88,6 +88,7 @@ class LegacyCodex extends EventEmitter {
       this.emit('change');
     });
     adapter.on('replyBound', identity => this.emit('replyBound', identity));
+    adapter.on('usage', usage => { this.usage = usage; this.emit('change'); });
     adapter.on('model', model => { this.model = model; this.emit('change'); });
     adapter.on('activity', text => { this.activity = text; this.emit('change'); });
     adapter.on('nativeInput', (text, item) => {

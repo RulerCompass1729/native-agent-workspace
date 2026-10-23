@@ -15,13 +15,14 @@ const palette = css.match(/:root\{([^}]*)\}/)[1];
 css = css.replace(/:root\{[^}]*\}/, '').replace(/body\{[^}]*\}/, '');
 css = `.naw{${palette};font-size:14px;height:100%;min-height:0;overflow:hidden;${css}}\n.naw>.sidebar{width:100%;height:100%}.naw>main{height:100%}`;
 const bootstrap = read('app/dsh/bootstrap.js');
-const renderer = read('app/room-threads.js') + '\n' + read('app/approval-policy.js') + '\n' + ['fleet-observation.js', 'local-search.js', 'reading-list.js', 'search-view.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
+const renderer = read('app/native-usage.js') + '\n' + read('app/room-threads.js') + '\n' + read('app/approval-policy.js') + '\n' + ['fleet-observation.js', 'local-search.js', 'reading-list.js', 'search-view.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
 const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\n*/\n${read(`node_modules/${name}/${entry}`)}`;
 const terminal = licensed('@xterm/xterm', 'lib/xterm.js') + '\n' + licensed('@xterm/addon-fit', 'lib/addon-fit.js');
 const source = bootstrap
-  .replace('/* SIDEBAR_TEMPLATE */', JSON.stringify(sidebar))
-  .replace('/* MAIN_TEMPLATE */', JSON.stringify(main))
-  .replace('/* LOCAL_STYLES */', JSON.stringify(css + '\n' + read('node_modules/@xterm/xterm/css/xterm.css')))
-  .replace('/* WORKSPACE_VIEW */', renderer);
+  .replace('/* SIDEBAR_TEMPLATE */', () => JSON.stringify(sidebar))
+  .replace('/* MAIN_TEMPLATE */', () => JSON.stringify(main))
+  .replace('/* LOCAL_STYLES */', () => JSON.stringify(css + '\n' + read('node_modules/@xterm/xterm/css/xterm.css')))
+  .replace('/* WORKSPACE_VIEW */', () => renderer);
+new (require('node:vm').Script)(terminal + '\n' + source, { filename: 'dsh/client.js' });
 fs.writeFileSync(path.join(root, 'app/dsh/client.js'), terminal + '\n' + source);
 console.log('Built DSH native-workspace client plugin');

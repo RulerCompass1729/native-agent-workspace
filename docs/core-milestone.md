@@ -19,12 +19,16 @@ Installation, broader provider support, and complete solo GUI/TUI parity are
 follow-up work. The historical checkpoints below retain their original scope;
 they do not constitute acceptance of this current shared-workspace milestone.
 
-Current shared-workspace checkpoint: **alpha.81, 2026-10-22**, accepted for the
+Current shared-workspace checkpoint: **alpha.83, 2026-10-22**, accepted for the
 supported new-session local trial after independent review. One real Haiku/Luna
 budget task performs two native tool-selected handoffs and concludes in three
 root submissions; installed native pause/private-continuation/reopen and six
-shared UI groups pass. Source suite: 861 passed, zero skips. Original sessions
-survive the update. See [exact evidence](testing.md#agent-selected-addressed-cooperation--alpha81).
+shared UI groups pass. Subsequent actual-native tests cover three same-name
+participants, continued authorized work with the UI closed, stable identities and
+drafts on reopen, and concurrent working-turn input with private departure.
+Native usage reads add no inference/count-token request. Source suite: 865 passed,
+zero skips; final metadata guards pass 77 targeted checks. Original sessions
+survive the update. Final independent alpha.83 artifact review passes; see readiness.md. See [exact evidence](testing.md#agent-selected-addressed-cooperation--alpha81).
 Old connections without the tool remain manual/fixed-order; full solo 1:1,
 mid-turn agent handoffs, arbitrary unattended goals and external live attachment
 are not closed by this checkpoint. Tool metadata/continuations have native cost.

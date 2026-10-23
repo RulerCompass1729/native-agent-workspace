@@ -115,11 +115,11 @@ class WorkspaceClient extends EventEmitter {
           legacySharedQueue: Boolean(legacySubmit && s.provider === 'claude' && bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError),
           ...(s.provider === 'claude' && legacySubmit ? { state: this.sessionState(s), nativeInputRequired: Boolean(bridge.target(s)?.nativeInputRequired), queueAvailable: Boolean(bridge.target(s)?.queueAvailable), pendingQueue: bridge.target(s)?.pendingQueue || null } : {}),
           ...(reader?.initialized ? { nativeBlockMapping: true, messages: reader.record.messages,
-            ...(s.provider === 'claude' ? { model: reader.model || '原生未报告' } : {}),
+            ...(s.provider === 'claude' ? { model: reader.model || '原生未报告', usage: reader.usage || null } : {}),
             ...(reader.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : {}) } : {}),
           ...(bridge?.readerUnavailable?.(s) ? { nativeBlockMapping: true, messages: [{ id: 'retained-reader-unavailable', role: 'system', kind: 'gap', incomplete: true,
             text: '原生阅读记录暂不可用；没有以旧后台内容替换，请在原生终端继续。' }] } : {}),
-          ...(legacyCodex && native ? { nativeBlockMapping: true, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告',
+          ...(legacyCodex && native ? { nativeBlockMapping: true, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告', usage: native.usage || null,
             ...(native.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : native.connected ? { activity: native.activity || '' } : {}) } : {}),
           ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null,
             sharingNotice: bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError

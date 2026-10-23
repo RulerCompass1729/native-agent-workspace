@@ -325,11 +325,11 @@ async function showTrust() {
   const dispatches = snapshot.diagnostics?.dispatches;
   section('应用派发记录', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。包含未确认或被拒绝的尝试，不代表付费调用；不含原生终端直接输入，也不是总用量或账单。普通后台计数从本次运行开始，旧会话输入连接保留本地发送计数。`);
   if (snapshot.sessions.some(s => s.legacyInputEligible)) section('原会话输入连接', '接通 Claude 会在其工作目录添加本地插件，代码不含凭据；Codex 连接原生私有接口，不安装 Claude 插件。连接凭据留在本机私有目录。加载插件和切换界面不发起模型任务。独立输入仅记录派发元数据；你明确共享的正文、收件人名称会本地保存。清除共享记录会移除这些正文，保留派发计数；不会撤回 agent 已收到的内容。');
-  const usage = section('原生报告的用量', '以下是原生接口报告的累计 token；可能延迟或缺少子任务，不是账单。金额请在原生提供商账户核对。');
+  const usage = section('原生报告的用量', '来自原生接口的最近读数，可能延迟或缺少子任务。上下文占用、累计 token 和额度是不同指标；金额请在提供商账户核对。刷新此页不会发起模型请求。');
   for (const s of snapshot.sessions) {
-    const total = s.usage?.total;
-    const count = key => Number.isFinite(total?.[key]) ? total[key].toLocaleString() : '未报告';
-    usage.append(node('p', `${s.name}：${total ? `输入 ${count('inputTokens')} · 缓存输入 ${count('cachedInputTokens')} · 输出 ${count('outputTokens')}` : '未报告；不能据此判断为零'}`));
+    const item = node('section'); item.append(node('h4', participantLabel(s, snapshot.sessions)));
+    for (const line of window.nativeWorkspaceUsage.usageLines(s.provider, s.usage)) item.append(node('p', line));
+    usage.append(item);
   }
   if (!snapshot.sessions.length) usage.append(node('p', '尚无会话。'));
   section('后台与权限', `${snapshot.sessions.filter(s => !['ended', 'recoverable'].includes(s.state)).length} 个会话尚未确认结束。关闭窗口仍可能继续执行。原生进程、团队状态与权限请在终端核对；此处未测量 CPU、内存或完整网络出口。`);
@@ -756,7 +756,7 @@ function renderAdvanced(s) {
   }
   const a = advancedControls;
   a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}${s.nativeContexts?.length ? '\n此前上下文（仅历史）：' + s.nativeContexts.map(c => c.nativeId).join('、') : ''}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
-  a.usage.hidden = !s.usage; a.usage.textContent = s.usage ? `原生报告用量：${JSON.stringify(s.usage.total || s.usage)}` : '';
+  a.usage.hidden = false; a.usage.textContent = window.nativeWorkspaceUsage.usageLines(s.provider, s.usage).join('\n');
   a.fleet.replaceChildren(...s.fleet.slice(-8).map(event => node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`)));
   a.stop.hidden = ['ended', 'stopping', 'recoverable'].includes(s.state);
   a.forget.hidden = !(['ended', 'recoverable', 'error'].includes(s.state) && !s.backendUnavailable && !s.terminalAvailable && (s.serviceCapabilities || state.capabilities)?.includes('forget'));

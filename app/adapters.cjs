@@ -1,3 +1,4 @@
+const { claudeUsage } = require('./native-usage.js');
 const { EventEmitter } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
@@ -171,10 +172,15 @@ class Claude extends EventEmitter {
       (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
       (message.kind === 'input' && (!message.id.startsWith('prompt:') || typeof message.text !== 'string' || message.status !== 'complete')) ||
       !['text', 'delta', 'input', 'title'].every(k => message[k] === undefined || (typeof message[k] === 'string' && message[k].length <= 500000))) throw Error('Invalid native block');
+    const usage = message.id === 'control:usage' ? claudeUsage(message.usage) : null;
+    if (message.id === 'control:usage' && (!usage || message.kind !== 'control' || message.status !== 'complete')) throw Error('Invalid native usage');
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
     if (message.gap) this.observeRootGap(message);
     if (message.kind === 'control') {
-      if (message.id === 'control:model') {
+      if (message.id === 'control:usage') {
+        if (!message.replayed) this.emit('usage', usage);
+        return { observed: true };
+      } else if (message.id === 'control:model') {
         // Metadata is not an input/turn boundary and grants no sharing authority.
         if (!message.replayed) { this.nativeModelEpoch = this.observationEpoch; this.emit('model', message.model); }
         return { observed: true };
@@ -864,7 +870,7 @@ class Codex extends EventEmitter {
           this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), { id: p.item.id });
         }
         break;
-      case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage); break;
+      case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage ? { ...p.tokenUsage, reportedAt: Date.now() } : null); break;
       case 'turn/completed': {
         this.textEndedTurns.add(p.turn.id);
         for (const [id, parts] of this.nativeTextParts) if (parts.turnId === p.turn.id) this.nativeTextParts.delete(id);

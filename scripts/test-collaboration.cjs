@@ -61,6 +61,15 @@ async function run() {
   for (const id of [a, b]) assert.ok((await page.locator(`[data-invite-session="${id}"]`).innerText()).includes(id.slice(0, 6)), 'Refresh preserves exact invite identity');
   await fixture('event', '', b, { method: 'turn/completed', params: { threadId: 'synthetic-' + b, turn: { id: 'identity-refresh-check', status: 'completed' } } });
   await page.locator('#close-invite').click(); await terminal(b);
+  await fixture('event', '', b, { method: 'thread/tokenUsage/updated', params: { threadId: 'synthetic-' + b,
+    tokenUsage: { total: { inputTokens: 120, cachedInputTokens: 100, outputTokens: 20 }, last: { inputTokens: 80, outputTokens: 10 }, modelContextWindow: 200000 } } });
+  await until(async () => (await snapshot()).sessions.find(s => s.id === b)?.usage?.total?.inputTokens === 120);
+  await page.locator('#privacy-button').click();
+  assert.match(await page.locator('#trust-status').innerText(), /累计 token：输入 120/);
+  assert.match(await page.locator('#trust-status').innerText(), /原生用量未报告；不能据此判断为零/);
+  await page.locator('#refresh-trust').click();
+  assert.match(await page.locator('#trust-status').innerText(), /其中缓存输入 100/);
+  await page.locator('#close-privacy').click();
   await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('PRIVATE-DRAFT'); await terminal(b); await page.keyboard.type('UNSUBMITTED');
   // Real pointer drag sequence: no dispatchEvent or synthetic DataTransfer.
   await drag(page.locator(`[data-session-id="${a}"]`), page.locator('#room-nav'));
