@@ -19,7 +19,14 @@ Installation, broader provider support, and complete solo GUI/TUI parity are
 follow-up work. The historical checkpoints below retain their original scope;
 they do not constitute acceptance of this current shared-workspace milestone.
 
-Current cross-service increment: **alpha.84, 2026-10-23**. Explicit V1 peer
+Current cross-service increment: **alpha.85, 2026-10-23**. Explicit V2 peers can
+choose a native tool recipient across backends, preserving exact intent text and
+human-only final answers. Source three-member choice and installed control tasks
+pass, with 895 checks and no paid inference. Released alpha.84 V1 remains
+fixed-order and completes an installed cross-version native task without changing
+its original session. Final independent installed-artifact review passes, including original-session continuity.
+
+Previous cross-service increment: **alpha.84, 2026-10-23**. Explicit V1 peer
 services can run a finite fixed-order exchange without replacing native sessions.
 Source and installed native/UI journeys pass three steps, first Codex TUI entry,
 UI-closed continuation, identity/draft retention, pause verification, permission
