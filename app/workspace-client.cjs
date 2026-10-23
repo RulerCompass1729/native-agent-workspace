@@ -4,7 +4,7 @@ const { isTerminalResponse } = require('./workspace.cjs');
 const { LegacyObservation, supportsLegacyObservation } = require('./legacy-observation.cjs');
 const { LegacyInput, eligible: legacyInputEligible } = require('./legacy-input.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
-const { CAPABILITY: PEER_HANDOFFS, identity: peerIdentity, mergePeerMessages } = require('./peer-handoffs.cjs');
+const { CAPABILITY: PEER_HANDOFFS, DIRECTED: PEER_DIRECTED, identity: peerIdentity, mergePeerMessages } = require('./peer-handoffs.cjs');
 let creationQueue = Promise.resolve();
 const controls = new Map();
 
@@ -162,6 +162,7 @@ class WorkspaceClient extends EventEmitter {
       storageRetryable: this.entries.some(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave')),
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),
       peerHandoffsAvailable: this.active.state.capabilities?.includes(PEER_HANDOFFS) === true,
+      peerDirectedAvailable: this.active.state.capabilities?.includes(PEER_DIRECTED) === true,
       handoffNotice: memberServices.length > 1 && !memberServices.every(e => e.state.capabilities?.includes(PEER_HANDOFFS)) ? '成员使用不同版本的后台，自动交接暂不可用。可在同一协作视图查看终端、选择内容并定向分享。' : null,
     };
   }
@@ -497,7 +498,7 @@ class WorkspaceClient extends EventEmitter {
       const targets = args[0].map(id => this.route(id));
       const guard = guards.get(targets[0].key); guard();
       const crossService = targets.some(target => target !== targets[0]);
-      if (crossService && (args[3] !== 'replies' || !this.active.state.capabilities?.includes(PEER_HANDOFFS) || targets.some(t => !t.state.capabilities?.includes(PEER_HANDOFFS)))) throw new Error('跨版本/跨后台协作尚不支持这些连接的可撤销顺序核查；原生会话保留，可人工分享。');
+      if (crossService && (!['replies', 'directed'].includes(args[3]) || args[3] === 'directed' && (!this.active.state.capabilities?.includes(PEER_DIRECTED) || targets.some(t => !t.state.capabilities?.includes(PEER_DIRECTED))) || !this.active.state.capabilities?.includes(PEER_HANDOFFS) || targets.some(t => !t.state.capabilities?.includes(PEER_HANDOFFS)))) throw new Error('跨版本/跨后台协作尚不支持这些连接的可撤销顺序核查；原生会话保留，可人工分享。');
       assertAutomaticRun(state, args[3], args[0]); assertSharing(state, args[0]);
       await Promise.all(interventions);
       await this.pauseExcept(crossService ? null : targets[0]);

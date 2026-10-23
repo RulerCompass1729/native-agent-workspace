@@ -1,5 +1,49 @@
 # Bounded testing
 
+## Native-selected cross-service handoffs — alpha.85
+
+V2 peers reuse the existing authenticated native tools, source-side completion
+proof, revocable socket grants and shared reader. All selected services and
+their runtimes must support directed messaging. V1 peers remain fixed-order;
+there is no silent mode fallback, text-mention parser, routing model or new UI.
+An addressed message has its own exact body and receipt, even if the human final
+answer differs, is empty, or exceeds the fixed-order reply limit. Only the intent
+body is transferred; its 6000-character bound remains enforced. Directed proof
+does not copy the human final answer between services.
+
+Source native testing covers two same-name Claude sessions and Codex across two
+services. Four root tasks follow A → third member → Codex → A rather than roster
+order; work continues with the interface closed. Reopening, member filtering,
+departure, archive/rename and removing ended references retain native identities,
+drafts and historical authors/recipients. Seven fixed loopback responses, zero
+paid inference. A separate native policy-denial journey refuses the tool through
+Claude PreToolUse: two fixed responses and no Codex dispatch.
+
+Installed native two-agent testing completes a budget task, pauses another after
+native intent staging, detaches Claude for private TUI continuation, and reopens
+the application with stable IDs/PIDs, history and draft. A human-only final answer
+longer than 10000 characters stays visible but never enters the Codex request.
+Four Claude/four Codex fixed responses, zero paid inference. The real application
+recording is retained locally. No new response is requested for recording.
+
+The compatibility journey uses the exact released alpha.84 commit, not a version
+string substituted into current code. Its live native Claude is preserved by
+normal installed alpha.85 bootstrap; a new Codex then completes A → B → A with
+it. V1's directed option stays disabled. First Codex TUI entry, UI-closed work,
+same native identities, private/shared drafts and three exact dispatches pass;
+two Claude/one Codex fixed responses, no title response and zero paid inference.
+The original failing control tests checked a null run before its initial state
+arrived; waiting for the actual new run ID fixes the test, without a production
+timing workaround or hiding those failures.
+
+The source suite passes 895 checks without skips, including source identity,
+tool failure, recipient removal, capability retirement, duplicate/expired calls,
+long/empty/different final replies and V1 rejection. The installed 53-file payload
+matches source and passes post-native strict signature. Original three-session hidden reopening preserves IDs/PIDs, drafts and selection
+with zero new dispatch. Final independent installed-artifact review passes. This closes neither arbitrary old
+backends, external live attachment, full solo fidelity nor unrestricted fleet
+or unattended automation.
+
 ## Finite exchange across existing supported services — alpha.84
 
 The existing shared reader can coordinate a finite fixed-order reply exchange

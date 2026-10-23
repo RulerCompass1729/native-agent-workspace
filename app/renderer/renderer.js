@@ -1336,11 +1336,12 @@ function renderRunChoices() {
   if (!runPreview) return;
   const ids = runPreview.ids, eligible = handoffCandidates(runPreview.recipient);
   const crossService = new Set(ids.map(id => members().find(s => s.id === id)?.handoffGroup)).size > 1;
-  for (const option of $('run-mode').options) option.disabled = crossService && option.value !== 'replies';
-  if (crossService) $('run-mode').value = 'replies';
+  const peerDirected = state.peerDirectedAvailable && ids.every(id => members().find(s => s.id === id)?.serviceCapabilities?.includes('peerDirectedHandoffsV2'));
+  for (const option of $('run-mode').options) option.disabled = crossService && option.value !== 'replies' && !peerDirected;
+  if (crossService && !peerDirected) $('run-mode').value = 'replies';
   const directed = $('run-mode').value === 'directed';
   const capable = ids.every(id => { const s = members().find(m => m.id === id); return s?.addressedSendAvailable === true && (s.serviceCapabilities || state.capabilities || []).includes('agentAddressedHandoffs'); });
-  $('run-mode-help').textContent = crossService ? '成员保留各自后台；按预览顺序转交完整回复，关闭界面后继续。暂停撤销后续授权，已经被原生接收的工作仍可能继续。' : directed ? (capable ? '只向成员明确选择的接收者发送；没有定向调用就结束。工具调用、工具说明及本轮成员表会计入原生用量；发送详情可核对实际内容。' : '所选会话中有原生连接尚不支持主动定向工具。可改用按顺序核查；不会重建或替换原会话。') : '';
+  $('run-mode-help').textContent = directed ? (capable ? '只向成员明确选择的接收者发送；没有定向调用就结束。工具调用、工具说明及本轮成员表会计入原生用量；发送详情可核对实际内容。' : '所选会话中有原生连接尚不支持主动定向工具。可改用按顺序核查；不会重建或替换原会话。') : crossService ? '成员保留各自后台；按预览顺序转交完整回复，关闭界面后继续。暂停撤销后续授权，已经被原生接收的工作仍可能继续。' : '';
   const multi = eligible.every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs'));
   $('run-participants').replaceChildren();
   for (const s of members()) {

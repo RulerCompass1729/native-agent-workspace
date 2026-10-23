@@ -11,7 +11,9 @@ const retained = process.env.NAW_CONCURRENT_RETAINED === '1';
 const nativeInterrupt = process.env.NAW_CONCURRENT_INTERRUPT === '1';
 const emptyTerminal = process.env.NAW_CONCURRENT_EMPTY_TERMINAL === '1';
 const peerRound = process.env.NAW_CONCURRENT_PEER === '1';
+const peerReleased = process.env.NAW_PEER_RELEASED_84 === '1';
 assert.ok(!peerRound || !retained && !nativeInterrupt && !emptyTerminal);
+assert.ok(!peerReleased || peerRound);
 const providers = emptyTerminal ? ['codex'] : ['claude', 'codex'];
 if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-concurrent-'));
@@ -102,7 +104,10 @@ async function drag(source, target) {
 }
 async function create(provider) {
   let retainedId;
-  if (retained) {
+  if (peerReleased && provider === 'claude') {
+    await page.locator(`[data-session-id="${retainedIds.claude}"]`).click(); await page.locator('#terminal-tab').click();
+    const takeover = page.getByRole('button', { name: '接管此窗口', exact: true }); if (await takeover.isVisible()) await takeover.click();
+  } else if (retained) {
     retainedId = retainedIds[provider];
     await page.locator(`[data-session-id="${retainedId}"]`).waitFor(); await page.locator(`[data-session-id="${retainedId}"]`).click();
     await page.locator('#terminal-tab').click();
@@ -184,6 +189,15 @@ async function openApplication() {
       `os.execv(${JSON.stringify(binaries[provider])},[${JSON.stringify(provider)}]+sys.argv[1:]+${JSON.stringify(provider === 'claude' ? ['--model', 'haiku', '--debug-file', path.join(base, 'claude-debug.log')] : [])})\n`, { mode: 0o700 });
   }
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify(shims), { mode: 0o600 });
+  if (peerReleased) {
+    const old = path.join(base, 'released84'); fs.mkdirSync(old);
+    execFileSync('/usr/bin/tar', ['-x', '-C', old], { input: execFileSync('git', ['archive', '38dc8d6', 'app', 'package.json'], { cwd: root, maxBuffer: 16 * 1024 * 1024 }) });
+    fs.symlinkSync(path.join(root, 'node_modules'), path.join(old, 'node_modules'));
+    child = fork(path.join(old, 'app/daemon.cjs'), [profile], { env: { ...process.env, NAW_RUNTIME_CONFIG: path.join(profile, 'runtime-locations.json'), NAW_APP_VERSION: '0.1.0-alpha.84', NAW_WORKSPACE: cwd }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+    await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Released backend ready');
+    legacyClient = await connectService(profile, 'main');
+    retainedIds.claude = await legacyClient.call('create', { provider: 'claude', cwd, name: 'Claude review', view: 'terminal' });
+  }
   if (retained) {
     const old = path.join(base, 'old'), bin = path.join(base, 'bin'); fs.mkdirSync(old); fs.mkdirSync(bin);
     execFileSync('/usr/bin/tar', ['-x', '-C', old], { input: execFileSync('git', ['archive', 'a87653b', 'app', 'package.json'], { cwd: root, maxBuffer: 16 * 1024 * 1024 }) });
@@ -198,10 +212,12 @@ async function openApplication() {
   await openApplication();
   if (peerRound) {
     const claude = await create('claude');
+    if (peerReleased) assert.equal((await session(claude.id)).runtimeVersion, '0.1.0-alpha.84');
     await page.getByRole('button', { name: '加入协作', exact: true }).click();
     await application.close(); application = null;
     // Exercise two supported independent services. This is not a claim that an
     // already-released backend acquired the new protocol without an upgrade.
+    if (!peerReleased) {
     const key = 'backends/' + 'c'.repeat(20); fs.mkdirSync(path.join(profile, key), { recursive: true, mode: 0o700 });
     fs.chmodSync(path.join(profile, 'backends'), 0o700);
     fs.writeFileSync(path.join(profile, 'services.json'), JSON.stringify({ format: 1, active: '.', entries: ['.'], pending: key }), { mode: 0o600 });
@@ -211,7 +227,9 @@ async function openApplication() {
       Object.assign(process.env, { NAW_APP_VERSION: require(path.join(shipped, 'package.json')).version, NAW_RUNTIME_CONFIG: path.join(profile, 'runtime-locations.json'), NAW_WORKSPACE: cwd });
       await require(path.join(shipped, 'app/service-client.cjs')).ensureService(profile, process.env.NAW_APP_EXECUTABLE || require('electron'));
     } finally { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value; }
+    }
     await openApplication(); const codex = await create('codex');
+    if (peerReleased) assert.equal((await session(codex.id)).runtimeVersion, require(process.env.NAW_APP_EXECUTABLE ? path.resolve(process.env.NAW_APP_EXECUTABLE, '../../Resources/app/package.json') : '../package.json').version);
     await page.getByRole('button', { name: '加入协作', exact: true }).click();
     const peerIdentity = s => [s.id, s.nativeId, s.provider === 'codex' ? s.serverIdentity?.pid : s.pid];
     const ids = (await snapshot()).sessions.map(peerIdentity);
@@ -220,6 +238,7 @@ async function openApplication() {
     await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${claude.id}"]`).click();
     await page.locator('#shared-input').fill('核对一个小预算：午餐合计36元，交通14元。Claude给草案，Codex核对，Claude给最终结论。');
     await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
+    if (peerReleased) assert.equal(await page.locator('#run-mode option[value="directed"]').isDisabled(), true, 'Released V1 remains replies-only');
     assert.equal(await page.locator('#run-mode').inputValue(), 'replies');
     await page.locator('#run-limit').selectOption('3'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
     await until(() => controls['claude-1'], 'First native response in original service');

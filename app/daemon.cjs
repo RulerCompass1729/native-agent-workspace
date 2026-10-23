@@ -5,7 +5,7 @@ const net = require('node:net');
 const crypto = require('node:crypto');
 const { NativeHost } = require('./adapters.cjs');
 const { Workspace } = require('./workspace.cjs');
-const { PeerLeases, PeerRunner, CAPABILITY } = require('./peer-handoffs.cjs');
+const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED } = require('./peer-handoffs.cjs');
 const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./service-transport.cjs');
 
 async function main() {
@@ -40,7 +40,7 @@ async function main() {
   const dispatch = async (owner, method, args, client) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, 'agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'peerRun': return peerRunner.start(owner, args[0]);
       case 'peerPrepare': return workspace.peerLeases.prepare(client, owner, args[0]);
       case 'peerTake': return workspace.peerLeases.take(client, args[0]);

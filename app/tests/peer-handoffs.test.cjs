@@ -3,7 +3,7 @@ const { EventEmitter } = require('node:events'), { randomUUID } = require('node:
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { Workspace } = require('../workspace.cjs');
 const { Claude } = require('../adapters.cjs');
-const { PeerLeases, PeerRunner, CAPABILITY, identity, mergePeerMessages } = require('../peer-handoffs.cjs');
+const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED, identity, mergePeerMessages } = require('../peer-handoffs.cjs');
 const tick = () => new Promise(r => setImmediate(r));
 async function wait(fn) { for (let i = 0; i < 100; i++) { if (fn()) return; await tick(); } assert.fail('Expected state did not settle'); }
 async function fixture(t) {
@@ -14,7 +14,7 @@ async function fixture(t) {
   for (const dir of paths) {
     const runtimes = [], host = { binaries: {}, close() {}, create(record) {
       record.nativeId ||= randomUUID(); record.pid = dir === root ? 102 : 101;
-      const r = new EventEmitter(); r.chatAvailable = true; r.nativeBlocks = true;
+      const r = new EventEmitter(); r.chatAvailable = true; r.nativeBlocks = true; r.addressedSendAvailable = true;
       r.start = async () => r.emit('state', 'idle');
       r.send = async (text, tag, valid) => { assert.ok(valid()); sends.push({ dir, text, tag, valid, r }); r.emit('submitted', tag); r.emit('state', 'working'); };
       runtimes.push(r); return r;
@@ -27,7 +27,7 @@ async function fixture(t) {
     const service = services.get(dir), c = new EventEmitter(); c.destroyed = false; service.clients.push(c);
     c.call = async (method, spec) => {
       if (c.destroyed) throw Error('Disconnected');
-      if (method === 'initial') return { ...service.w.snapshot(), capabilities: [CAPABILITY], owner };
+      if (method === 'initial') return { ...service.w.snapshot(), capabilities: [CAPABILITY, DIRECTED], owner };
       if (method === 'peerPrepare') return service.w.peerLeases.prepare(c, owner, spec);
       if (method === 'peerTake') return service.w.peerLeases.take(c, spec);
       if (method === 'peerSend') return service.w.peerLeases.send(c, owner, spec);
@@ -43,14 +43,64 @@ async function fixture(t) {
     identities: { [a.id]: identity(a.w.get(a.id)), [b.id]: identity(b.w.get(b.id)) },
     contexts: { [a.id]: a.w.get(a.id).nativeId, [b.id]: b.w.get(b.id).nativeId }, routes: { [a.id]: key, [b.id]: '.' } };
   const finish = (sent, text, extra = {}) => {
-    const service = services.get(sent.dir), s = service.w.get(service.id), turnId = randomUUID(), promptId = randomUUID(), block = 'display:' + randomUUID();
+    const service = services.get(sent.dir), s = [...service.w.sessions.values()].find(s => s.pendingTag === sent.tag), { turnId, promptId } = sent.identity ||= { turnId: randomUUID(), promptId: randomUUID() }, block = 'display:' + randomUUID();
     sent.r.emit('replyBound', { tag: sent.tag, nativeId: s.nativeId, turnId, promptId });
     sent.r.emit('nativeBlock', { id: block, kind: 'response', nativeId: s.nativeId, turnId, promptId, text, status: 'complete' });
     sent.r.emit('state', 'idle'); sent.r.emit('complete', { tag: sent.tag, messageId: `native:${s.nativeId}:${block}`, text, background: null, scheduled: null, fleetPending: null, stopHookActive: null, ...extra });
   };
   t.after(async () => { await runner.pause(); for (const service of services.values()) { for (const c of service.clients) c.close(); service.w.close(); } fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, key, a, b, runner, spec, sends, connect, finish };
+  const stage = (sent, recipient, message) => {
+    const service = services.get(sent.dir), s = [...service.w.sessions.values()].find(s => s.pendingTag === sent.tag);
+    sent.identity ||= { turnId: randomUUID(), promptId: randomUUID() };
+    sent.r.emit('replyBound', { tag: sent.tag, nativeId: s.nativeId, ...sent.identity });
+    return sent.r.addressedCall({ nativeId: s.nativeId, ...sent.identity, callId: 'call:' + sent.tag }, { recipient_id: recipient, message });
+  };
+  return { root, key, a, b, runner, spec, sends, connect, finish, stage };
 }
+
+for (const kind of ['different', 'empty', 'long']) test('directed peer intent keeps its exact body separate from the final reply: ' + kind, async t => {
+  const f = await fixture(t); f.spec.mode = 'directed';
+  await f.runner.start('owner', f.spec); const first = f.sends[0];
+  assert.match(first.text, /At most 3 replies remain/); assert.doesNotMatch(first.text, /NaN/);
+  assert.throws(() => f.stage(first, f.b.id, 'x'.repeat(6001)), /6000/);
+  assert.equal(f.stage(first, f.b.id, 'Only this exact peer message goes to the second agent.').status, 'staged');
+  assert.equal(f.sends.length, 1, 'Staging alone never delivers');
+  f.finish(first, kind === 'empty' ? '' : kind === 'long' ? 'Human final answer. '.repeat(1000) : 'This final answer is for the human, and is different.'); await wait(() => f.sends.length === 2);
+  assert.ok(f.sends[1].text.includes('Only this exact peer message')); assert.ok(!f.sends[1].text.includes('This final answer is for the human'));
+  assert.match(f.sends[1].text, /At most 2 replies remain/);
+  f.finish(f.sends[1], 'Final conclusion for the human. '.repeat(kind === 'long' ? 1000 : 1)); await wait(() => f.runner.run.status === 'completed');
+  const rows = mergePeerMessages([...f.a.w.room.messages, ...f.b.w.room.messages]), routed = rows.filter(m => m.addressed);
+  assert.equal(routed.length, 1); assert.equal(routed[0].text, 'Only this exact peer message goes to the second agent.');
+  assert.equal(routed[0].deliveries[0].recipientId, f.b.id); assert.equal(f.sends.length, 2);
+  if (kind === 'different') assert.ok(rows.some(m => m.finalReply && m.text === 'This final answer is for the human, and is different.'));
+});
+test('native recipient choice can skip the displayed peer order, with no synthetic remote session records', async t => {
+  const f = await fixture(t), third = await f.a.w.create('claude', f.root, 'owner', 'Third'); f.a.w.join(third, true);
+  f.spec.ids.push(third); f.spec.identities[third] = identity(f.a.w.get(third)); f.spec.contexts[third] = f.a.w.get(third).nativeId; f.spec.routes[third] = f.key; f.spec.maxSteps = 4; f.spec.mode = 'directed';
+  await f.runner.start('owner', f.spec); f.stage(f.sends[0], third, 'Third member first.'); f.finish(f.sends[0], 'First final.'); await wait(() => f.sends.length === 2);
+  assert.equal(f.runner.run.awaiting.sessionId, third); assert.equal(f.b.w.sessions.size, 1);
+  f.stage(f.sends[1], f.b.id, 'Second backend next.'); f.finish(f.sends[1], 'Third member final.'); await wait(() => f.sends.length === 3);
+  assert.equal(f.runner.run.awaiting.sessionId, f.b.id); f.finish(f.sends[2], 'Done.'); await wait(() => f.runner.run.status === 'completed');
+});
+test('directed peer stages cannot survive failed native tool policy or departure', async t => {
+  for (const boundary of ['failed', 'departure']) {
+    const f = await fixture(t); f.spec.mode = 'directed'; await f.runner.start('owner', f.spec); const sent = f.sends[0];
+    f.stage(sent, f.b.id, 'This must not be delivered.');
+    if (boundary === 'departure') f.b.w.join(f.b.id, false);
+    else sent.r.addressedFailed({ nativeId: f.a.w.get(f.a.id).nativeId, ...sent.identity, callId: 'call:' + sent.tag });
+    f.finish(sent, 'Native final after revocation.'); await wait(() => f.runner.run.status === 'paused'); assert.equal(f.sends.length, 1);
+  }
+});
+test('V1 peers cannot be silently downgraded from directed intent', async t => {
+  const f = await fixture(t), connect = f.runner.connect; f.spec.mode = 'directed';
+  f.runner.connect = async (...args) => { const c = await connect(...args), call = c.call; c.call = async (method, ...args) => { const value = await call(method, ...args); if (method === 'initial') value.capabilities = [CAPABILITY]; return value; }; return c; };
+  await assert.rejects(f.runner.start('owner', f.spec), /缺少本次/); assert.equal(f.sends.length, 0);
+});
+test('loss of the native addressing capability revokes a staged peer intent', async t => {
+  const f = await fixture(t); f.spec.mode = 'directed'; await f.runner.start('owner', f.spec);
+  f.stage(f.sends[0], f.b.id, 'Do not send after native tool retirement.'); f.a.r.addressedSendAvailable = false; f.a.r.emit('capability');
+  f.finish(f.sends[0], 'Native final after tool retirement.'); await wait(() => f.runner.run.status === 'paused'); assert.equal(f.sends.length, 1);
+});
 test('bounded cross-service round binds exact native replies, preserves identity and merges receipts', async t => {
   const f = await fixture(t), ids = [f.a, f.b].map(s => identity(s.w.get(s.id)));
   await f.runner.start('owner', f.spec); assert.equal(f.sends.length, 1);

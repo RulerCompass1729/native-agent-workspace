@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-23. Version 0.1.0-alpha.84 is a **local macOS technical-trial alpha**.
+As of 2026-10-23. Version 0.1.0-alpha.85 is a **local macOS technical-trial alpha**.
 
 **Current user priority:** finish the usable shared-workspace flow first. The
 embedded native TUI is acceptable for independent work; complete 1:1 solo chat
@@ -21,6 +21,19 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.85 — native-selected recipients across services:** explicit V2 services
+extend the existing native tools, finite authorization and message receipts to
+agent-selected recipients across backends. An addressed message has its own
+exact body and receipt; the final answer to the human is not silently sent in
+its place. Native three-member choice skips roster order; pause, native policy
+denial, private departure and reopening pass. 895 checks pass without skips.
+Installed native control journeys, all 53 payload files and strict signature
+pass. A real released alpha.84 backend cooperates with installed alpha.85 in
+fixed-order mode, preserving its original native session; it is not upgraded
+in place to V2. Original three-session hidden reopening preserves IDs/PIDs, drafts and selection
+with zero dispatch. Final independent installed-artifact review passes. External live
+entry and complete solo mapping remain open.
 
 **Alpha.84 — finite cross-service cooperation:** independent local services
 with the explicit V1 peer protocol can exchange a bounded sequence in the
