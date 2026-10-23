@@ -32,7 +32,7 @@ function applyNativeBlock(session, event) {
   }
   if (typeof event.text === 'string') row.text = event.text;
   if (typeof event.delta === 'string') row.text += event.delta;
-  for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag']) if (typeof event[field] === 'string') row[field] = event[field];
+  for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag', 'toolKind']) if (typeof event[field] === 'string') row[field] = event[field];
   if (event.kind === 'turn') for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) {
     if (Number.isFinite(event[field]) && (field === 'nativeDurationMs' ? Number.isSafeInteger(event[field]) && event[field] >= 0 : Math.abs(event[field]) <= 8640000000000000)) row[field] = event[field];
   }
@@ -113,7 +113,7 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}, turns) {
       // History has no live watermark or submission attribution. Keep a newer
       // live row and never fabricate an inputTag that could authorize sharing.
       const row = (runtime.liveToolItems?.has(item.id) && existing.get(id)) || { id, role: 'tool', nativeId: s.nativeId,
-        nativeBlock: true, volatile: true, kind: 'tool', turnId: item.turnId, text: '',
+        nativeBlock: true, volatile: true, kind: 'tool', toolKind: item.type, turnId: item.turnId, text: '',
         ...tool, status: toolStatus(item, item.type === 'functionCallOutput' || item.status === 'completed' || typeof item.success === 'boolean') };
       if (row.status === 'completed') row.status = 'complete';
       if (!used.has(id)) { imported.push(row); used.add(id); }
@@ -209,7 +209,7 @@ function applyCodexDelta(s, item) {
 function applyCodexProgress(s, item) {
   const id = `native:${s.nativeId}:tool:${item.id}`;
   if (!item.id || item.source !== 'codex-native' || (!item.turnId && !s.messages.some(m => m.id === id))) return null;
-  applyNativeBlock(s, { ...item, id: `tool:${item.id}`, nativeId: s.nativeId, kind: 'tool',
+  applyNativeBlock(s, { ...item, id: `tool:${item.id}`, nativeId: s.nativeId, kind: 'tool', toolKind: item.kind,
     status: item.status === 'completed' ? 'complete' : item.status });
   return s.messages.find(m => m.id === id);
 }

@@ -1,12 +1,31 @@
 # Readiness and next gates
 
-As of 2026-10-23. Version 0.1.0-alpha.87 is a **local macOS technical-trial alpha**.
+As of 2026-10-23. Version 0.1.0-alpha.88 is a **local macOS technical-trial alpha**.
+
+**Alpha.88 — compact processes and a simultaneous native terminal:** conversation
+and same-session xterm share one workspace, side by side or stacked in a narrow
+window. The room retains its main reading/input area beside a selected member's
+actual TUI. Keyboard control and `@` routing remain separate from the displayed
+terminal. Hide/maximize reuses the connection. Search/reasoning default to compact
+disclosures, commands preview three tail lines, and assistant prose/plans remain
+readable. Full stored originals remain expandable/copyable. New error signatures
+override older collapsed choices; explicitly collapsing a known error persists.
+Web search retains its native query/action and available results.
+
+Source and installed task/control checks pass, including direct native Escape
+inside the shared workspace and visible inputs at minimum window size. All 54
+runtime files match; post-native strict signing and original three-session
+continuity pass with zero new dispatch. 913 checks pass without skips. Independent final artifact review passes
+for this scoped trial. Full U17, Recap/Next,
+physical system/WeChat IME, Claude-specific phase parity and user visual acceptance
+remain open. A remote native client cannot replay transient output emitted before
+attachment; the reader retains its independently observed native records.
 
 **Latest feedback, 2026-10-23:** the alpha.86 reader appearance is not accepted.
 U26 remains open for visual usability; alpha.87 is a new lightweight candidate.
 Passing mechanics below do not establish complete TUI fidelity or a
 usable unified reading experience. Keep the frontend lightweight; review the
-proposed conversation/TUI relationship before changing the main layout. See the
+conversation/TUI relationship within the latest authorized increment above. See the
 corrected delivery unit in [current milestone](core-milestone.md#current-priority--2026-10-22).
 
 **Alpha.87 — lightweight reader and native completion records:** human messages

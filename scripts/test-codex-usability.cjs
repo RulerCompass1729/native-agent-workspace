@@ -38,7 +38,10 @@ async function run() {
   await fixture('history', a, {items:[
     { id:'user-short',type:'userMessage',turnId:'old',content:[{type:'text',text:'h'}] },
     { id:'reply-short',type:'agentMessage',turnId:'old',text:'你好！有什么我能帮你？' },
-    { id:'reply-code',type:'agentMessage',turnId:'code',text:'第一段。\n\n第二段。\n\n'+String.fromCharCode(96).repeat(3)+'js\nconst n = 1;\n'+String.fromCharCode(96).repeat(3) }
+    { id:'reply-code',type:'agentMessage',turnId:'code',text:'第一段。\n\n第二段。\n\n'+String.fromCharCode(96).repeat(3)+'js\nconst n = 1;\n'+String.fromCharCode(96).repeat(3) },
+    { id:'search-one',type:'webSearch',turnId:'code',query:'Seattle forecast',action:{type:'search',query:'Seattle forecast',queries:null},results:[{title:'Weather result',snippet:'Exact native result, retained in full.'}] },
+    { id:'reason-one',type:'reasoning',turnId:'code',summary:['原生摘要第一段。','原生摘要第二段。'] },
+    { id:'command-one',type:'commandExecution',turnId:'code',command:'check-document',aggregatedOutput:'line one\nline two\nline three\nline four\nline five',status:'completed' }
   ],turns:[{id:'old',status:'completed',completedAt,durationMs:2300},{id:'code',status:'completed',completedAt:completedAt+5,durationMs:5000}]});
   await page.locator('#messages .message-body p').first().waitFor();
   await require('./check-theme.cjs').checkTheme(page);
@@ -63,7 +66,53 @@ async function run() {
   assert.ok(completion.includes(new Date(completedAt*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})));
   await boundary.hover(); await boundary.getByRole('button',{name:'复制',exact:true}).click();
   assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),completion,'Copy includes the displayed native completion metadata');
+  // Same-window task: full native originals, compact defaults, focused input only.
+  const search = page.locator('#messages .process').filter({hasText:'Seattle forecast'});
+  const reasoning = page.locator('#messages .process').filter({hasText:'原生摘要第一段。'});
+  const command = page.locator('#messages .process').filter({hasText:'check-document'});
+  assert.equal(await search.locator('.process-details').evaluate(el=>el.open),false);
+  assert.equal(await reasoning.locator('.process-details').evaluate(el=>el.open),false);
+  assert.equal(await command.locator('.process-tail').innerText(),'line three\nline four\nline five');
+  await search.locator('.process-details > summary').click();assert.match(await search.locator('.message-body').innerText(),/Exact native result, retained in full/);
+  await reasoning.locator('.process-details > summary').focus();await page.keyboard.press('Enter');assert.match(await reasoning.locator('.message-body').innerText(),/原生摘要第二段。/);
+  await command.locator('.process-details > summary').click();await command.hover();await command.getByRole('button',{name:'复制',exact:true}).click();assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),'line one\nline two\nline three\nline four\nline five');
+  await page.locator('#message-input').fill('终端加载期间仍可编辑的草稿');
+  await until(async()=> (await fixture('stats')).pending.includes(a),'Passive same-session native attach');
+  await fixture('release',a);await page.locator('#terminal-area .xterm-screen').waitFor();
+  assert.equal(await page.locator('#message-input').inputValue(),'终端加载期间仍可编辑的草稿');
+  assert.equal(await page.locator('#messages').isVisible(),true);assert.equal(await page.locator('#terminal-area').isVisible(),true);
+  const nativeScreen=page.locator('#terminal-area .xterm-screen');
+  await nativeScreen.click();await page.keyboard.type('native-only');
+  await until(async()=> (await fixture('stats')).inputs.filter(i=>i.id===a).map(i=>i.data).join('').includes('native-only'),'Focused terminal input reaches same session');
+  const nativeCount=(await fixture('stats')).inputs.length;
+  await page.locator('#message-input').fill('聊天输入不会送进终端');
+  await page.locator('#message-input').press('Shift+Enter');
+  assert.equal((await fixture('stats')).inputs.length,nativeCount);
   await page.getByRole('button',{name:'加入协作',exact:true}).click();
+  await nativeScreen.click();
+  const paragraph=code.locator('.message-body p').first();await paragraph.scrollIntoViewIfNeeded();
+  const paragraphBox=await paragraph.boundingBox();await page.mouse.click(paragraphBox.x+12,paragraphBox.y+8,{clickCount:3});
+  const selectedText=await page.evaluate(()=>window.getSelection().toString());assert.ok(selectedText.includes('第一段。'));
+  await page.getByRole('button',{name:'分享选中内容',exact:true}).click();
+  await page.locator('#share-dialog').waitFor({state:'visible'});
+  assert.equal(await page.locator('#share-text').inputValue(),selectedText,'Reader selection supersedes the terminal input mode');
+  await page.locator('#cancel-share').click();
+  await page.locator('#terminal-maximize').click();assert.equal(await page.locator('#messages').isVisible(),false);
+  await page.locator('#terminal-maximize').click();assert.equal(await page.locator('#messages').isVisible(),true);
+  await page.locator('#close-native-terminal').click();await page.locator('#terminal-area').waitFor({state:'hidden'});
+  await page.locator('#terminal-tab').click();assert.equal(await page.locator('#terminal-area').isVisible(),true);
+  assert.equal(await search.locator('.process-details').evaluate(el=>el.open),true,'Disclosure survives layout changes');
+  const originalBounds=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getBounds());
+  for(const height of [850,600]) {
+    await app.evaluate(({BrowserWindow},height)=>BrowserWindow.getAllWindows()[0].setSize(850,height),height);
+    await page.waitForTimeout(100);
+    const fits=await page.locator('#message-input').evaluate(el=>{const input=el.getBoundingClientRect(),pane=document.getElementById('conversation-pane').getBoundingClientRect();return {bottom:input.bottom,paneBottom:pane.bottom,viewport:innerHeight};});
+    assert.ok(fits.bottom<=fits.paneBottom+1 && fits.bottom<=fits.viewport,'Narrow-window chat input remains within its visible pane: '+JSON.stringify(fits));
+    assert.equal(await page.locator('#terminal-area').isVisible(),true);
+  }
+  await app.evaluate(({BrowserWindow},bounds)=>BrowserWindow.getAllWindows()[0].setBounds(bounds),originalBounds);
+  await page.locator('#message-input').fill('');
+  await capture('same-window-native-reader');
   const b=await create('Codex B');await page.getByRole('button',{name:'加入协作',exact:true}).click();
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
   let input=page.locator('#shared-input');
@@ -111,10 +160,41 @@ async function run() {
   assert.equal((await snapshot()).diagnostics.dispatches,0);assert.deepEqual(errors,[]);
   await page.evaluate(async ids=>{await workspace.rename(ids[0],'Codex A');await workspace.rename(ids[1],'Codex B');},[a,b]);
   const beforeTask=await snapshot();
+  await page.locator(`[data-room-session="${a}"]`).click();
+  assert.equal(await page.locator('#room-messages').isVisible(),true);
+  assert.equal(await page.locator('#terminal-area').isVisible(),true);
+  await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(850,600));
+  await page.waitForTimeout(100);
+  const roomFits=await page.locator('#forward-button').evaluate(el=>({bottom:el.getBoundingClientRect().bottom,paneBottom:document.getElementById('room-record-view').getBoundingClientRect().bottom,viewport:innerHeight}));
+  assert.ok(roomFits.bottom<=roomFits.paneBottom+1 && roomFits.bottom<=roomFits.viewport,'Minimum-window shared Send remains visible: '+JSON.stringify(roomFits));
+  await app.evaluate(({BrowserWindow},bounds)=>BrowserWindow.getAllWindows()[0].setBounds(bounds),originalBounds);
   await chooseRecipient(page,b);await fillRoomMessage(page,'核对材料：12、18、25，文档声称总额60。');await page.locator('#forward-button').click();
+  assert.match(await page.locator('#native-pane-title').innerText(),/Codex A/,'Displaying A does not replace the addressed B');
+  assert.equal((await fixture('stats')).sends.at(-1).id,b);
   await fixture('replyBound',b,{turnId:'check-b'});
   await page.locator('#run-status').getByText('Codex B · 正在处理',{exact:false}).waitFor();
   await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14),status:'running'});
+  let process = page.locator('#room-messages .process').filter({hasText:'核对数字'});
+  assert.equal(await process.locator('.process-details').evaluate(el=>el.open),false);
+  assert.equal(await process.getAttribute('data-running'),'true');
+  await process.locator('.process-details > summary').click();
+  await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14)+'完整的追加结果',status:'running'});
+  assert.equal(await process.locator('.process-details').evaluate(el=>el.open),true);
+  await process.getByText('完整的追加结果',{exact:false}).waitFor();
+  await process.locator('.process-details > summary').click();
+  await page.locator('#room-filter').selectOption(a);
+  await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14)+'原生失败信息',status:'failed'});
+  await page.locator('#room-filter').selectOption('');
+  await until(()=>process.locator('.process-details').evaluate(el=>el.open),'Native failure opens a previously collapsed process');
+  await process.locator('.process-details > summary').click();
+  await app.close();app=null;await launch();
+  process = page.locator('#room-messages .process').filter({hasText:'核对数字'});
+  assert.equal(await process.locator('.process-details').evaluate(el=>el.open),false,'Explicitly collapsing a known error survives whole-app close');
+  await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14)+'原生中断信息',status:'interrupted'});
+  await until(()=>process.locator('.process-details').evaluate(el=>el.open),'A different native error reopens the record');
+  await app.close();app=null;await launch();
+  assert.equal(await page.locator('#room-messages .process').filter({hasText:'核对数字'}).locator('.process-details').evaluate(el=>el.open),true,'New error remains open even on immediate whole-app close');
+  await capture('shared-native-reader');
   await fixture('nativeBlock',b,{id:'response:check-b',kind:'response',turnId:'check-b',text:'核对中，正在检查材料中的合计。',status:'streaming'});
   await chooseRecipient(page,a);await fillRoomMessage(page,'独立复核这三个数字的合计。');await page.locator('#forward-button').click();
   await fixture('replyBound',a,{turnId:'check-a'});
@@ -130,7 +210,7 @@ async function run() {
   assert.equal(await page.locator('#room-messages .native-turn').count(),2);
   const publicTask=(await snapshot()).room.messages;
   assert.equal(publicTask.filter(m=>m.sharedStream&&m.role==='assistant').length,2,'Streaming updates stay in their original attributed blocks');
-  assert.ok(publicTask.some(m=>m.kind==='tool'&&m.text.split('\n').length>=14),'Long native process remains readable, without automatic folding');
+  assert.ok(publicTask.some(m=>m.kind==='tool'&&m.text.split('\n').length>=14),'Collapsed process retains the complete native original');
   await page.locator('#room-messages .message-author').filter({hasText:'Codex A'}).first().click();
   assert.equal(await page.locator('#room-filter').inputValue(),a);await page.locator('#room-filter').selectOption('');
   await page.locator('#room-messages').hover();await page.mouse.wheel(0,2000);
@@ -160,7 +240,7 @@ async function run() {
   assert.ok(!(await snapshot()).room.messages.some(m=>m.text.includes('PRIVATE AFTER INTERVENTION')));
   await fixture('complete',a,{messageId:'native:synthetic-'+a+':response:control',text:'PRIVATE AFTER INTERVENTION'});
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({geometry,checks:['Content-width human messages in light/dark; exact Markdown and native timing Copy','Inline mentions/Undo/Redo/composition guard; roster changes and reopen retain drafts','Two attributed agents check a document with short messages and long streaming process','Member trajectory filter, private departure and whole-app reopening preserve records/identity/draft','Same-turn private intervention hides native phase and freezes shared content'],dispatches:3,providerCalls:0,errors,profile},null,2));
+  console.log(JSON.stringify({geometry,checks:['Content-width human messages in light/dark; exact Markdown and native timing Copy','Native search/reasoning collapse by default; commands preview three lines; full original Copy and keyboard expansion','Same-window native/reader focus, layout hide/maximize and actual DOM selected-share source','Fold choices persist during streaming; off-page failure opens; acknowledged error collapse and changed error survive full reopen','Inline mentions/Undo/Redo/composition guard; roster changes and reopen retain drafts','Two attributed agents check a document while displayed A and addressed B remain independent','Member trajectory filter, private departure and whole-app reopening preserve records/identity/draft','Same-turn private intervention hides native phase and freezes shared content'],dispatches:3,providerCalls:0,errors,profile},null,2));
 }
 async function capture(name){if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,name+'.png')});}}
 run().catch(async error=>{console.error(error.stack);if(page&&!page.isClosed())await capture('usability-failed');process.exitCode=1}).finally(async()=>{try{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close()}}finally{if(child.connected)child.disconnect();if(child.exitCode===null)child.kill('SIGTERM')}});

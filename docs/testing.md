@@ -1,5 +1,45 @@
 # Bounded testing
 
+## Compact processes and simultaneous TUI — alpha.88
+
+One existing-session shared task and a private control/recovery scenario remain
+the delivery unit. No new editor, framework, terminal-byte parser or summary model.
+
+- Actual Electron: two agents check a document with the shared reader and a native
+  xterm surface together. Displaying A while addressing B sends only to B. Native
+  typing, GUI drafts, selection sharing, hide/maximize, streaming disclosures, full
+  original Copy, keyboard expansion, filtering, off-page failures, acknowledged
+  error collapse and immediate full reopen are checked.
+- File preview and finite collaboration authorization work with another member's
+  terminal displayed. Delayed selection and ownership changes cannot insert into
+  the wrong draft. Reading, shared-send, archive/membership, focus, draft ownership,
+  input-event and terminal-generation regressions pass.
+- Real Codex 0.163: two fixed local response tasks plus one title verify passive
+  first-turn attachment, streaming, completion metadata, Escape and reopening. A
+  retained alpha.2 service completes four tasks plus one title, including native
+  permission, private continuation and original identity. No paid inference;
+  fixed responses do not certify model judgment.
+- Reviewer counterexamples reproduced and repaired: hover actions blocked a
+  disclosure pointer target; old input mode ignored reader selection; an older
+  collapsed choice hid a new off-page error. Ordinary failed/dead displays still
+  require explicit recovery. Only the known never-started first-message case
+  retries on new native turn/output proof, without a seed or agent replacement.
+- Test adaptations preserve intent: terminal visibility no longer proves input
+  ownership; nested delivery disclosures and two takeover controls need uniquely
+  scoped targets. Physical system IME and foreground Space switching remain
+  unverified in hidden tests and are not counted as passed.
+
+The final installed candidate repeats the integrated task at 850×850 and
+850×600, including shared Send visibility. The native control case clicks the
+actual TUI in the shared workspace before Escape; its saved snapshot confirms
+`selected=room`, a selected member, native input mode and the retained unsent
+shared draft. All 54 runtime files match; strict signing after native tests and
+original three-session ID/PID/draft/view continuity pass with zero dispatch.
+The unchanged retained permission path reuses its complete source evidence; the
+installed retained history/timing/reopen path also passes. 913 checks pass without
+skips. Independent final artifact review passes for this scoped trial.
+Recap/Next, complete TUI parity and user aesthetic acceptance remain open.
+
 ## Lightweight reader — alpha.87
 
 The candidate reuses the existing reader, textarea and native connections.

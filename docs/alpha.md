@@ -1,8 +1,21 @@
 # macOS alpha trial
 
-As of 2026-10-22. Version 0.1.0-alpha.70. Suitable for a small technical trial with
+As of 2026-10-23. Version 0.1.0-alpha.88. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Alpha.88 conversation and native terminal together
+
+The conversation and same native terminal can remain visible together. Click the
+input surface to type there; use the terminal header to maximize or close its pane.
+In a room, selecting a member opens that member’s TUI beside the shared reader.
+It does not change the message’s inline `@` recipient. Native terminal intervention
+is private and pauses subsequent handoffs.
+
+Native search/reasoning records start compact; commands retain a short tail.
+Expand for full originals. Your fold choices persist; a newly failed/interrupted
+record opens even when an older running version was collapsed. Complete TUI parity,
+Recap/Next reading and physical system-input validation remain open.
 
 ## Alpha.70 reopening during queued work
 

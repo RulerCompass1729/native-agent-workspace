@@ -8,6 +8,8 @@ const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, 
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
+let terminalLayout = 'split';
+const chatInput = () => selected === 'room' ? $('shared-input') : $('message-input');
 let roomSubmitting = null;
 const roomPendingRecipients = new Map();
 let shareRevision = 0, sharePending = null;
@@ -228,7 +230,7 @@ function renderComposer(s) {
 }
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
-function persistView() { normalizeRoomMention(); captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
+function persistView() { normalizeRoomMention(); captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalLayout, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession) {
   captureReadingViews();
@@ -239,7 +241,8 @@ async function select(id, requestedMode, member = roomSession) {
   if (revision !== selectionRevision) return;
   if (id === 'room') roomSession = member;
   selected = id; const s = current();
-  if (selected === 'room') mode = 'terminal'; else if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
+  if (selected === 'room') mode = s ? 'terminal' : 'chat'; else if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
+  if (mode === 'terminal' && terminalLayout === 'hidden') terminalLayout = 'split';
   $('message-input').value = s?.liveDraft || '';
   clearFailedTerminal(s?.id);
   lastMessages = ''; lastRoomMessages = ''; render(); attempt(persistView);
@@ -251,7 +254,7 @@ async function select(id, requestedMode, member = roomSession) {
     if (row.top < viewport.top) list.scrollTop -= viewport.top - row.top;
     else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
   }
-  if (s && mode === 'chat' && !$('message-input').readOnly && inputFocusAllowed()) $('message-input').focus();
+  if (mode === 'chat' && !chatInput().readOnly && inputFocusAllowed()) chatInput().focus();
   if (s && mode === 'terminal' && !['ended', 'stopping', 'disconnected', 'recoverable'].includes(s.state)) attempt(async () => { await ensureTerminal(s.id, true); focusTerminal(s.id); });
   if (selected === 'room' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {
     const revision = selectionRevision;
@@ -693,12 +696,12 @@ function updateSharingControls() {
 }
 function visibleSelectionTerminal() {
   const s = current(); if (!s || s.archived) return null;
-  if (mode === 'terminal') return terminals.get(s.id)?.ready ? terminals.get(s.id).term : null;
-  return null;
+  const entry = terminals.get(s.id);
+  return terminalLayout !== 'hidden' && entry?.ready && entry.element.checkVisibility() ? entry.term : null;
 }
 function selectedSharingText() {
   const s = current(); if (!s || s.archived) return '';
-  if (mode === 'chat') {
+  {
     const selection = window.getSelection(), text = selection?.toString() || '';
     if (text) {
       // Only the displayed conversation/trace/permission content is a source.
@@ -845,9 +848,18 @@ function render() {
     if ($('session-view').parentElement !== slot) slot.append($('session-view'));
     $('solo-session').hidden = inRoom || !s;
     $('room-session').hidden = !s;
-    $('room-record-view').hidden = Boolean(s);
-    $('room-scope').hidden = !s;
+    $('room-record-view').hidden = false;
+    $('room-scope').hidden = !inRoom || !s;
+    const terminalVisible = Boolean(s && terminalLayout !== 'hidden');
+    $('native-pane').hidden = !terminalVisible;
+    $('room-layout').classList.toggle('has-terminal', inRoom && terminalVisible);
+    $('room-layout').classList.toggle('terminal-maximized', inRoom && terminalVisible && terminalLayout === 'maximized');
+    $('session-layout').classList.toggle('has-terminal', !inRoom && terminalVisible);
+    $('session-layout').classList.toggle('terminal-maximized', !inRoom && terminalVisible && terminalLayout === 'maximized');
+    $('session-layout').classList.toggle('native-only', inRoom);
+    $('conversation-pane').hidden = inRoom;
     $('chat-tab').parentElement.hidden = inRoom;
+    $('session-files').hidden = inRoom;
     document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
@@ -870,22 +882,30 @@ function render() {
     if (!s) renderNativeActivity(null);
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
+      $('native-pane-title').textContent = participantLabel(s, state.sessions) + ' · 原生终端';
+      $('terminal-maximize').setAttribute('aria-label', terminalLayout === 'maximized' ? '恢复并排' : '放大终端');
+      $('terminal-maximize').title = terminalLayout === 'maximized' ? '恢复并排' : '放大终端';
       $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
-      $('take-control').hidden = own || !alive || mode === 'chat';
+      $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
-      $('terminal-controls').hidden = mode !== 'terminal';
+      $('terminal-controls').hidden = !terminalVisible;
       $('terminal-paste').disabled = !terminalCanInput(s.id) || !alive;
-      $('messages').hidden = mode !== 'chat'; $('terminal-area').hidden = mode !== 'terminal'; $('composer-wrap').hidden = mode !== 'chat';
+      $('messages').hidden = false; $('terminal-area').hidden = !terminalVisible; $('composer-wrap').hidden = false;
       renderComposer(s); renderNativeActivity(s);
       $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
-      if (mode === 'chat') readLegacyProgress(s);
+      readLegacyProgress(s);
       const visibleMessages = sessionMessages(s);
       const signature = JSON.stringify(visibleMessages);
-      if (mode === 'chat' && (signature !== lastMessages || messageViews.get($('messages'))?.key !== s.id)) { messageList($('messages'), visibleMessages, false, s.id); lastMessages = signature; }
+      if (signature !== lastMessages || messageViews.get($('messages'))?.key !== s.id) { messageList($('messages'), visibleMessages, false, s.id); lastMessages = signature; }
       renderApproval(s, own);
       renderAdvanced(s);
       for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)); }
-      if (mode === 'terminal' && alive) attempt(() => ensureTerminal(s.id));
+      $('terminal-empty').hidden = terminals.has(s.id);
+      if (terminalVisible && alive && (mode === 'terminal' || s.terminalState?.alive || s.activeTurnId || s.messages.some(m => m.role === 'assistant'))) {
+        // Mounting the same native display is passive; input still requires its
+        // own focus/control claim. Never steal focus when the snapshot arrives.
+        ensureTerminal(s.id).catch(error => { if (mode === 'terminal') toast(error.message); });
+      }
     }
     if (inRoom) {
       const run = state.room.run;
@@ -961,6 +981,7 @@ function render() {
 async function switchMode(next, takeControl = false) {
   captureReadingViews();
   const s = current(); if (!s) return;
+  if (next === 'terminal' && terminalLayout === 'hidden' || next === 'chat' && terminalLayout === 'maximized') terminalLayout = 'split';
   const revision = ++selectionRevision;
   const entry = terminals.get(s.id);
   cancelViewInput(entry);
@@ -979,7 +1000,7 @@ async function switchMode(next, takeControl = false) {
   // while the native view acknowledgement or origin composition finishes.
   if (next === 'chat') {
     pendingMode = { id: s.id, revision }; mode = 'chat'; render();
-    if (inputFocusAllowed()) $('message-input').focus();
+    if (inputFocusAllowed()) chatInput().focus();
   }
   // Save the surface already shown to the person before waiting for native
   // control. Closing now must reopen this view; input remains separately gated.
@@ -1000,7 +1021,7 @@ async function switchMode(next, takeControl = false) {
     mode = next; preference = next; clearFailedTerminal(s.id); render(); await persistView();
     if (!stillSelected()) return;
     if (next === 'terminal') { await ensureTerminal(s.id, true); if (stillSelected()) focusTerminal(s.id); }
-    else if (inputFocusAllowed()) $('message-input').focus();
+    else if (inputFocusAllowed()) chatInput().focus();
   } finally {
     if (queued && entry.viewInput === queued) cancelViewInput(entry);
     if (pendingMode?.revision === revision) { pendingMode = undefined; render(); }
@@ -1011,6 +1032,12 @@ async function ensureTerminal(id, explicit = false) {
   const generation = record?.connectionRevision || 0;
   const old = terminals.get(id);
   if (old && old.generation !== generation) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, new Error('原生连接已变化；旧输入没有发送。')); }
+  if (old?.waitingForFirstTurn && terminals.get(id) === old &&
+      (record?.activeTurnId && record.activeTurnId !== old.firstTurnAttemptId || record?.messages.some(message => message.role === 'assistant') && !old.firstTurnHadOutput)) {
+    // A first-message instruction never launched a display. Once that same
+    // native thread has real output, the visible pane can attach without a seed.
+    old.term.dispose(); old.element.remove(); terminals.delete(id);
+  }
   // A repaint never restarts a native display. Only an explicit view action can
   // replace its cached screen, after the backend reports the display lifetime.
   if (explicit && old?.ready && terminals.get(id) === old && !currentTerminalDisplay(old, record)) {
@@ -1021,6 +1048,7 @@ async function ensureTerminal(id, explicit = false) {
   if (!explicit && !terminals.has(id) && record?.terminalState?.alive === false) return;
   if (terminals.has(id)) { const existing = terminals.get(id); if (existing.ready) fitTerminal(id); return existing.pending; }
   const element = node('div', undefined, 'terminal-host'); element.dataset.terminalId = id; $('terminal-area').append(element);
+  if (activeSessionId() === id) $('terminal-empty').hidden = true;
   const theme = terminalThemes[terminalDisplay.palette];
   $('terminal-area').style.backgroundColor = theme.background;
   const loading = node('p', '正在连接原生终端…', 'terminal-loading'); loading.setAttribute('role', 'status');
@@ -1028,7 +1056,7 @@ async function ensureTerminal(id, explicit = false) {
   const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
   const intent = selectionRevision;
-  const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [] }; terminals.set(id, entry);
+  const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: record?.messages.some(message => message.role === 'assistant') }; terminals.set(id, entry);
   term.onSelectionChange(() => nativeSelectionChanged(id, term));
   let recovery = inputRecoveries.get(id);
   if (!recovery) {
@@ -1043,6 +1071,11 @@ async function ensureTerminal(id, explicit = false) {
     recovery.text.value += text; recovery.panel.hidden = false; render();
     toast(`${state.sessions.find(s => s.id === id)?.name || '原会话'}：${error.message || '输入未确认'}。文字保留在该原生终端的提示中，不会自动重发。`);
   };
+  const claimTerminalFocus = () => {
+    if (mode !== 'terminal' && activeSessionId() === id && state.sessions.find(s => s.id === id)?.owner === owner && inputFocusAllowed()) attempt(() => switchMode('terminal'));
+  };
+  surface.addEventListener('pointerdown', event => { if (event.button === 0) claimTerminalFocus(); }, true);
+  surface.addEventListener('focusin', claimTerminalFocus);
   surface.addEventListener('paste', event => { event.preventDefault(); event.stopPropagation(); attempt(() => { if (activeSessionId() === id) pasteTerminal(event.clipboardData?.getData('text/plain') || ''); }); }, true);
   term.onData(data => {
     // The service's canonical terminal answers device queries, once. Focus
@@ -1086,7 +1119,7 @@ async function ensureTerminal(id, explicit = false) {
         }
         await token.input; resolve();
       } catch (error) { reject(error); }
-      finally { if (entry.composition === token) { entry.composition = null; render(); } }
+      finally { if (entry.composition === token) { entry.composition = null; render(); if (entry.fitPending) { entry.fitPending = false; fitTerminal(id); } } }
     }, 0));
     token.done.catch(() => {}); // Navigation may not be awaiting this origin.
     entry.composition = token;
@@ -1145,7 +1178,8 @@ async function ensureTerminal(id, explicit = false) {
         // Only this known local instruction may replace the generic failure.
         // Never persist a raw native error (which can contain private paths).
         const firstMessage = '请先在对话中发送第一条消息，再打开同一会话的原生终端。';
-        loading.textContent = error.message?.includes(firstMessage) ? firstMessage : '终端未连接，重新选择此会话或视图可重试。';
+        entry.waitingForFirstTurn = Boolean(error.message?.includes(firstMessage));
+        loading.textContent = entry.waitingForFirstTurn ? firstMessage : '终端未连接，重新选择此会话或视图可重试。';
         throw error;
       }
     }
@@ -1154,8 +1188,13 @@ async function ensureTerminal(id, explicit = false) {
 }
 function fitTerminal(id) {
   const entry = terminals.get(id); const s = state.sessions.find(s => s.id === id);
-  if (!entry?.ready || activeSessionId() !== id || mode !== 'terminal' || s?.owner !== owner) return;
-  requestAnimationFrame(() => { if (activeSessionId() !== id || mode !== 'terminal' || !entry.element.isConnected || !entry.element.checkVisibility() || state.sessions.find(s => s.id === id)?.owner !== owner) return; entry.fit.fit(); attempt(() => api.resize(id, entry.term.cols, entry.term.rows)); });
+  if (!entry?.ready || activeSessionId() !== id || terminalLayout === 'hidden' || s?.owner !== owner) return;
+  if (entry.composing || entry.composition) { entry.fitPending = true; return; }
+  requestAnimationFrame(() => {
+    if (activeSessionId() !== id || terminalLayout === 'hidden' || !entry.element.isConnected || !entry.element.checkVisibility() || state.sessions.find(s => s.id === id)?.owner !== owner) return;
+    if (entry.composing || entry.composition) { entry.fitPending = true; return; }
+    entry.fit.fit(); attempt(() => api.resize(id, entry.term.cols, entry.term.rows));
+  });
 }
 function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data); entry.sequence = event.sequence; } }
 const disposers = [
@@ -1203,6 +1242,14 @@ $('manage-members').onclick = () => $('members-dialog').showModal();
 $('close-members').onclick = () => { $('members-dialog').close(); focusTerminal(); };
 dropTarget($('room-nav'), true); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
 $('chat-tab').onclick = () => attempt(() => switchMode('chat')); $('terminal-tab').onclick = () => attempt(() => switchMode('terminal'));
+$('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = terminalLayout === 'maximized' ? 'split' : 'maximized'; await switchMode('terminal'); });
+$('close-native-terminal').onclick = () => attempt(async () => {
+  if (selected === 'room') return selectRoom('');
+  terminalLayout = 'hidden'; await switchMode('chat');
+});
+for (const input of [$('message-input'), $('shared-input')]) input.addEventListener('focus', () => {
+  if (mode !== 'chat' && current() && inputFocusAllowed()) attempt(() => switchMode('chat'));
+});
 $('take-control').onclick = () => attempt(() => switchMode(mode, true));
 $('terminal-copy').onclick = () => attempt(async () => { const text = terminals.get(activeSessionId())?.term.getSelection(); if (!text) return toast('先选择文字；原生程序占用鼠标时，按住 ⌥ Option 拖选，再点复制。'); await api.copy(text); focusTerminal(); });
 $('terminal-paste').onclick = () => attempt(async () => { const id = activeSessionId(); const text = await api.pasteText(); if (activeSessionId() === id && mode === 'terminal') pasteTerminal(text); });
@@ -1217,16 +1264,16 @@ $('reset-terminal-display').onclick = () => { $('terminal-font-size').value = 14
 $('close-terminal-display').onclick = () => { $('terminal-display-dialog').close(); focusTerminal(); };
 let filePreview = null, fileTarget = null, fileChoosing = false;
 function fileTargetMatches() {
-  return fileTarget && fileTarget.revision === selectionRevision && fileTarget.id === activeSessionId() &&
-    fileTarget.room === (selected === 'room' && !roomSession) && fileTarget.mode === mode;
+  return fileTarget && fileTarget.revision === selectionRevision && fileTarget.mode === mode &&
+    (fileTarget.room ? selected === 'room' && fileTarget.id === roomRecipient() : selected !== 'room' && fileTarget.id === activeSessionId());
 }
 function fileDraftInput() { return fileTarget?.room ? $('shared-input') : $('message-input'); }
-async function openLocalFile() {
+async function openLocalFile(room = false) {
   if (fileChoosing) return;
   fileChoosing = true;
-  const target = { id: activeSessionId(), room: selected === 'room' && !roomSession, mode, revision: selectionRevision };
+  const target = { id: room ? roomRecipient() : activeSessionId(), room, mode, revision: selectionRevision };
   try {
-    const preview = await api.openLocalFile(target.room ? $('recipient').value || null : target.id);
+    const preview = await api.openLocalFile(target.id || null);
     if (!preview) return;
     fileTarget = target;
     if (!fileTargetMatches()) { await api.closeLocalFile(preview.token); return; }
@@ -1240,7 +1287,8 @@ async function openLocalFile() {
     $('file-dialog').showModal();
   } finally { fileChoosing = false; }
 }
-$('session-files').onclick = $('room-files').onclick = () => attempt(openLocalFile);
+$('session-files').onclick = () => attempt(() => openLocalFile(false));
+$('room-files').onclick = () => attempt(() => openLocalFile(true));
 $('close-file').onclick = () => $('file-dialog').close();
 $('file-dialog').addEventListener('close', () => {
   if (filePreview) attempt(() => api.closeLocalFile(filePreview.token));
@@ -1444,7 +1492,7 @@ $('run-button').onclick = () => {
   $('room-advanced').open = false;
   if (nativeWorkspaceMentions.body(roomMention, $('shared-input').value).length > 6000) { toast('一起核查的任务与材料合计最多 6000 字符。草稿保留；可缩短后核查，或定向发送。'); $('shared-input').focus(); return; }
   const recipient = roomRecipient(), candidates = handoffCandidates(recipient);
-  runPreview = { text: nativeWorkspaceMentions.body(roomMention, $('shared-input').value), recipient, revision: roomDraftRevision,
+  runPreview = { text: nativeWorkspaceMentions.body(roomMention, $('shared-input').value), recipient, revision: roomDraftRevision, selectionRevision,
     members: members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]), identities: Object.fromEntries(members().map(s => [s.id, s.peerIdentity])), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
   $('run-preview').textContent = runPreview.text;
   $('run-consent').checked = false; $('run-error').hidden = true; renderRunChoices();
@@ -1458,7 +1506,7 @@ $('run-form').onsubmit = event => {
   event.preventDefault();
   if (!$('run-consent').checked || !runPreview || $('confirm-run').disabled) return;
   const eligible = handoffCandidates(runPreview.recipient);
-  const same = selected === 'room' && !roomSession && runPreview.text === nativeWorkspaceMentions.body(roomMention, $('shared-input').value) && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]));
+  const same = selected === 'room' && runPreview.selectionRevision === selectionRevision && runPreview.text === nativeWorkspaceMentions.body(roomMention, $('shared-input').value) && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]));
   const available = runPreview.ids.length >= 2 && runPreview.ids.every(id => JSON.stringify(runPreview.identities[id]) === JSON.stringify(members().find(s => s.id === id)?.peerIdentity)) && runPreview.ids.every(id => eligible.some(s => s.id === id)) &&
     (runPreview.ids.length <= 2 || eligible.filter(s => runPreview.ids.includes(s.id)).every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs')));
   if (!same || !available || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
@@ -1567,6 +1615,7 @@ attempt(async () => {
   state = await api.initial();
   if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
   owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;
+  terminalLayout = ['hidden', 'split', 'maximized'].includes(state.viewState.terminalLayout) ? state.viewState.terminalLayout : 'split';
   readingPositions = state.viewState.readingPositions || {};
   roomSession = typeof state.viewState.roomSession === 'string' ? state.viewState.roomSession : '';
   const display = state.viewState.terminalDisplay;

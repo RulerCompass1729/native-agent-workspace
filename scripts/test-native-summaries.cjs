@@ -86,8 +86,8 @@ async function launch() {
   await fillRoomMessage(page, 'Check this small example and report your progress.'); await page.locator('#forward-button').click();
   await until(() => calls === 1 && releaseStart, 'One requested native task');
   await page.locator('#run-status').getByText('Native summaries · 正在处理',{exact:false}).waitFor();
-  await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();
-  await until(async () => (await snapshot()).sessions[0].terminalState?.alive && (await page.locator('#terminal-area').innerText()).includes('esc to interrupt'), 'Actual native terminal attached', 60000);
+  await page.locator(`[data-session-id="${before.id}"]`).click();
+  await until(async () => (await snapshot()).sessions[0].terminalState?.alive && (await page.locator('#terminal-area').innerText()).includes('esc to interrupt'), 'Actual native terminal attaches alongside the reader without a tab switch', 60000);
   releaseStart();
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('Checking the given material.'), 'Native public summary');
   fs.writeFileSync(path.join(base,'native-streaming.txt'),await page.locator('#terminal-area').innerText());
@@ -97,7 +97,11 @@ async function launch() {
     fs.writeFileSync(path.join(base,'missing-summary.json'),JSON.stringify(missing,null,2));
     console.log(JSON.stringify({reproduced:true,nativeSummaryVisible:true,guiSummaryRows:0,localResponses:calls,nativeTitleResponses:titleCalls,paidModelCalls:0,evidence:base})); return;
   }
+  const disclosure = page.locator('#messages .process-details').filter({hasText:'PUBLIC_SUMMARY'});
+  await disclosure.locator(':scope > summary').waitFor(); assert.equal(await disclosure.evaluate(el=>el.open),false);
+  await disclosure.locator(':scope > summary').click();
   await page.locator('#messages').getByText('Checking the given material.',{exact:true}).waitFor();
+  assert.equal(await page.locator('#terminal-area').isVisible(),true,'Actual native TUI remains alongside its structured reader');
   const streaming = await snapshot(), row = streaming.sessions[0].messages.find(m=>m.kind==='summary');
   assert.equal(row.text,summary); assert.equal(row.status,'streaming');
   assert.equal(streaming.room.messages.find(m=>m.title==='过程摘要').text,summary);
@@ -130,17 +134,29 @@ async function launch() {
   checks.push('One native summary block streams in solo/shared readers; reload preserves draft; final reply stays separate');
   checks.push('Native completion duration agrees with TUI and retains exact native clock in solo and shared records');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await page.locator(`[data-room-session="${before.id}"]`).click();
+  assert.equal(await page.locator('#room-messages').isVisible(),true);
+  assert.equal(await page.locator('#terminal-area').isVisible(),true,'Shared reading and the actual native member remain together');
+  await page.locator('#room-messages .process-details').filter({hasText:'PUBLIC_SUMMARY'}).locator(':scope > summary').click();
   assert.match(await page.locator('#room-messages').innerText(),/Checking the given material/);
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true}); await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'public-summary.png')});}
   await fillRoomMessage(page, 'Start another small check.'); await page.locator('#forward-button').click();
   await until(()=>calls===2&&releaseStart,'Second bounded task'); releaseStart();
+  await page.locator('#room-messages .process-details').filter({hasText:'INTERRUPTED_SUMMARY'}).locator(':scope > summary').click();
   await page.locator('#room-messages').getByText('This visible partial must remain.',{exact:true}).waitFor();
-  await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();
+  assert.equal(await page.locator('#room-messages').isVisible(),true);
+  await fillRoomMessage(page,'Unsent shared draft before native intervention.');
+  const sharedDraftBeforeInterrupt=await page.locator('#shared-input').inputValue();
+  await page.locator('#terminal-area .xterm-screen').click();
   await until(async ()=>(await page.locator('#terminal-area').innerText()).includes('This visible partial must remain.'),'Native partial summary');
   await page.locator('#terminal-area .xterm-helper-textarea').press('Escape');
   await until(async ()=>(await snapshot()).sessions[0].messages.some(m=>m.kind==='summary'&&m.status==='interrupted'),'Native interruption boundary');
+  assert.equal(await page.locator('#room-messages').isVisible(),true,'Native Escape occurs inside the shared workspace');
+  assert.equal(await page.locator('#shared-input').inputValue(),sharedDraftBeforeInterrupt,'Native interruption preserves the independent shared draft');
+  fs.writeFileSync(path.join(base,'shared-interrupted.json'),JSON.stringify(await snapshot(),null,2));
+  if(process.env.NAW_EVIDENCE_DIR) await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'shared-native-interrupted.png')});
   releaseFinal();
-  await page.locator('#chat-tab').click(); await page.reload(); await page.locator('#new-session').waitFor();
+  await page.locator(`[data-session-id="${before.id}"]`).click();await page.locator('#chat-tab').click(); await page.reload(); await page.locator('#new-session').waitFor();
   const interrupted=await snapshot();
   assert.ok(interrupted.sessions[0].messages.some(m=>m.kind==='summary'&&m.status==='interrupted'&&m.text.includes('This visible partial must remain.')));
   assert.ok(interrupted.room.messages.some(m=>m.title==='过程摘要'&&m.status==='interrupted'));

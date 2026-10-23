@@ -77,5 +77,6 @@ process.on('message', q => {
     const r = runtimes.get(q.target); r.record.connectionRevision = (r.record.connectionRevision || 0) + 1; r.emit('state', 'idle');
   }
   if (q.method === 'fail') { const at = pending.findIndex(p => p.id === q.target); if (at >= 0) pending.splice(at, 1)[0].reject(Error('Synthetic snapshot failure')); }
+  if (q.method === 'first-message-required') { const at = pending.findIndex(p => p.id === q.target); if (at >= 0) pending.splice(at, 1)[0].reject(Error('请先在对话中发送第一条消息，再打开同一会话的原生终端。')); }
   process.send({ requestId: q.id, waitingInputs: waitingInputs.map(c => c.id), pending: pending.map(p => p.id), claims: claims.map(c => c.id), inputs, sends, interruptions });
 });

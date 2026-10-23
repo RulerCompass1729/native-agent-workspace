@@ -177,7 +177,9 @@ async function run() {
       await until(async () => (await fixture()).inputs.slice(queueBase).filter(x => x.id === id).map(x => x.data).join('') === 'BUFFERED\r', 'Authorized input flush once and in order');
     } else {
       await page.locator(`[data-session-id="${id}"]`).click();
-      if (!await page.locator('#terminal-area').isVisible()) await page.locator('#terminal-tab').click();
+      // Both surfaces are visible now. Deliberately focus the native input;
+      // visibility no longer establishes which surface owns the keyboard.
+      await page.locator('#terminal-tab').click();
       await recovery.waitFor();
       assert.equal((await fixture()).inputs.slice(queueBase).filter(x => x.id === id).length, 0, 'Cancelled/failed/new-owner input is never flushed');
       assert.ok((await recovery.locator('textarea').inputValue()).startsWith('BUFFERED\n'), 'Unsubmitted input copy remains available');

@@ -2,6 +2,8 @@
 const messageViews = new Map();
 let readingPositions = {};
 function saveReading(view, position) {
+  if (view.folds && Object.keys(view.folds).length) position.folds = { ...view.folds };
+  else delete position.folds;
   readingPositions[view.key] = position;
   // Bound metadata even when old sessions have been removed or archived.
   const keys = Object.keys(readingPositions);
@@ -58,7 +60,9 @@ function scheduleReading(view, intent = view.intent) {
     const el = view.el, p = view.intent.position;
     const anchor = view.entries.get(p.anchor)?.item;
     if (anchor && view.intent.searchQuery) {
-      const entry = view.entries.get(p.anchor), range = readingMatch(entry.body, view.intent.searchQuery);
+      const entry = view.entries.get(p.anchor);
+      if (entry.disclosure && !entry.disclosure.open) { entry.expectedOpen = true; entry.disclosure.open = true; }
+      const range = readingMatch(entry.body, view.intent.searchQuery);
       if (range) {
         const offset = 16 - (range.getBoundingClientRect().top - anchor.getBoundingClientRect().top);
         if (p.offset !== offset) {
@@ -92,7 +96,7 @@ function readingView(el, key) {
   }
   if (view.key !== key) {
     captureReading(view); ui.clearMarkdown(el); el.replaceChildren();
-    view.entries.clear(); view.days.clear(); view.key = key;
+    view.entries.clear(); view.days.clear(); view.key = key; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
     // The new list is empty until Markdown mounts; never capture that temporary
     // zero as this session's saved reading position.
     view.intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
@@ -122,6 +126,7 @@ function messageList(el, messages, room = false, key = 'room') {
   view.intent = intent;
   const rows = [], retained = new Set(), days = new Set(); let lastDay = '';
   for (const m of messages) {
+    if (m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)) continue;
     if (room) {
       const day = Number.isFinite(m.time) ? new Date(m.time).toLocaleDateString() : '时间未记录';
       if (day !== lastDay) {
@@ -134,6 +139,28 @@ function messageList(el, messages, room = false, key = 'room') {
       const item = node('article'), heading = node('div', undefined, 'message-heading'), body = node('div', undefined, 'message-body'), actions = node('div', undefined, 'message-actions');
       item.dataset.messageId = m.id; item.append(heading, body, actions);
       entry = { item, heading, body, actions }; view.entries.set(m.id, entry);
+      if (m.role === 'tool' || m.kind === 'summary') {
+        const disclosure = node('details', undefined, 'process-details'), summary = node('summary'), content = node('div', undefined, 'process-content');
+        entry.disclosure = disclosure; entry.preview = node('span', undefined, 'process-label'); entry.tail = node('pre', undefined, 'process-tail'); entry.content = content;
+        summary.append(heading); content.append(body); disclosure.append(summary, content); item.replaceChildren(disclosure, entry.tail, actions);
+        const rememberFold = () => {
+          const message = entry.message, error = message?.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted'].includes(message?.status) ? message.status : '';
+          const previous = view.folds[m.id];
+          if (view.key !== key || previous?.open === disclosure.open && previous.error === error) return;
+          view.intent = null; delete view.folds[m.id]; view.folds[m.id] = { open: disclosure.open, error };
+          for (const id of Object.keys(view.folds).slice(0, Math.max(0, Object.keys(view.folds).length - 200))) delete view.folds[id];
+          captureReading(view); saveReading(view, { ...(readingPositions[key] || { top: el.scrollTop, anchor: m.id, offset: 0 }), follow: false });
+          attempt(() => api.readingState(readingPositions));
+        };
+        summary.addEventListener('click', event => {
+          if (event.target.closest('button,a,input')) return;
+          event.preventDefault(); entry.expectedOpen = undefined; disclosure.open = !disclosure.open; rememberFold();
+        });
+        disclosure.addEventListener('toggle', () => {
+          if (entry.expectedOpen === disclosure.open) { entry.expectedOpen = undefined; return; }
+          entry.expectedOpen = undefined; rememberFold();
+        });
+      }
       actions.append(button('复制', () => api.copy(entry.displayText ?? entry.message.text)));
       entry.share = button('选择并分享', () => share(entry.message.text)); actions.append(entry.share);
       if (room) {
@@ -141,7 +168,7 @@ function messageList(el, messages, room = false, key = 'room') {
         entry.delivery = node('details', undefined, 'message-delivery');
         entry.deliverySummary = node('summary'); entry.deliveryBody = node('div', undefined, 'delivery-body');
         entry.deliveryRows = new Map(); entry.deliveryNote = node('p'); entry.deliveryBody.append(entry.deliveryNote);
-        entry.delivery.append(entry.deliverySummary, entry.deliveryBody); item.append(entry.delivery);
+        entry.delivery.append(entry.deliverySummary, entry.deliveryBody); (entry.content || item).append(entry.delivery);
         entry.openRecipient = button('查看会话', () => {
           if (!state.sessions.some(s => s.id === entry.openSessionId)) return toast('这个会话当前不可用，记录仍保留。');
           return select(entry.openSessionId, 'chat');
@@ -162,7 +189,7 @@ function messageList(el, messages, room = false, key = 'room') {
       }
     }
     entry.message = m; retained.add(m.id); rows.push(entry.item);
-    entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}`;
+    entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
     let name = room ? roomMessageLabel(m) : m.name;
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
     if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
@@ -175,7 +202,7 @@ function messageList(el, messages, room = false, key = 'room') {
       entry.heading.replaceChildren(author); entry.headingKey = headingKey;
       if (m.title) entry.heading.append(node('span', m.title));
       if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
-      if (m.volatile) entry.heading.append(node('span', (m.nativeMessageId || m.id || '').startsWith(`native:${m.nativeId}:tool:`) ? '工具记录' : '本次运行记录'));
+      if (m.volatile && !entry.disclosure) entry.heading.append(node('span', (m.nativeMessageId || m.id || '').startsWith(`native:${m.nativeId}:tool:`) ? '工具记录' : '本次运行记录'));
       if (m.sharingStopped) entry.heading.append(node('span', `共享已停止 · ${m.sharingStopped}`));
       if (Number.isFinite(messageTime)) { const time = node('time', new Date(messageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(messageTime).toISOString(); time.title = new Date(messageTime).toLocaleString(); entry.heading.append(time); }
       // A stored fragment is not proof that its native turn is still running.
@@ -183,6 +210,21 @@ function messageList(el, messages, room = false, key = 'room') {
       const status = { 'awaiting-native': '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
       if (status) entry.heading.append(node('span', status));
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
+      if (entry.preview) entry.heading.append(entry.preview);
+    }
+    if (entry.disclosure) {
+      const error = m.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted'].includes(m.status) ? m.status : '';
+      const query = room ? $('room-search').value.trim() : '';
+      const reveal = query && [m.text, m.input].some(value => value?.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+      const choice = view.folds[m.id];
+      const savedOpen = typeof choice === 'boolean' ? (error ? undefined : choice) : choice?.error === error ? choice.open : undefined;
+      const open = Boolean(reveal || (savedOpen !== undefined ? savedOpen : error));
+      if (entry.disclosure.open !== open) { entry.expectedOpen = open; entry.disclosure.open = open; }
+      entry.item.dataset.running = String(['running', 'streaming'].includes(m.status));
+      const preview = (m.input || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
+      if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
+      const tail = m.toolKind === 'commandExecution' && !open && m.text ? m.text.split('\n').slice(-3).join('\n') : '';
+      entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
     }
     entry.share.hidden = m.role === 'system';
     if (entry.reply) {
@@ -235,7 +277,7 @@ function messageList(el, messages, room = false, key = 'room') {
     if (entry.context) entry.context.hidden = !($('room-search').value || $('room-filter').value);
     if (entry.input !== m.input) {
       entry.input = m.input;
-      if (!entry.inputBody) { entry.inputBody = node('pre', undefined, 'native-tool-input'); entry.item.insertBefore(entry.inputBody, entry.body); }
+      if (!entry.inputBody) { entry.inputBody = node('pre', undefined, 'native-tool-input'); entry.body.before(entry.inputBody); }
       entry.inputBody.textContent = m.input || ''; entry.inputBody.hidden = !m.input;
     }
     const displayText = nativeCompletionText(m);
