@@ -65,6 +65,19 @@ async function run() {
   const started = Date.now();
   for (let i = 0; i < 24; i++) { await fixture('delta', id, { id: 'live-reply', text: `Live update ${i}.\n` }); await delay(40); }
   await page.locator('#messages [data-message-id="live-reply"]').getByText('Live update 23.', { exact: false }).waitFor();
+  const lineGeometry = await page.locator('#messages [data-message-id="live-reply"] .message-body').evaluate(el => {
+    const positions = {};
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); let node;
+    while ((node = walker.nextNode())) for (const text of ['Live update 0.', 'Live update 1.']) {
+      const at = node.textContent.indexOf(text); if (at < 0) continue;
+      const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + text.length);
+      positions[text] = range.getBoundingClientRect().top;
+    }
+    return { positions, text: el.textContent, html: el.innerHTML };
+  });
+  assert.ok(lineGeometry.positions['Live update 1.'] - lineGeometry.positions['Live update 0.'] > 10,
+    'Native newline stays a visible line break in the unified reader: ' + JSON.stringify(lineGeometry));
+  observations.push({check:'Native single newlines remain visible during streaming',pass:true});
   const after = await page.evaluate(() => ({ selection: window.getSelection().toString(), scroll: document.getElementById('messages').scrollTop, removed: window.readingMutations }));
   observations.push({ check: 'reading selection survives another message streaming', pass: after.selection === before.selection, before: before.selection, after: after.selection });
   observations.push({ check: 'reading position remains stable during streaming', pass: Math.abs(after.scroll - before.scroll) < 3, before: before.scroll, after: after.scroll });
