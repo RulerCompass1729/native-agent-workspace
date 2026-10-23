@@ -145,7 +145,7 @@ class WorkspaceClient extends EventEmitter {
     const memberServices = this.entries.filter(e => e.state.sessions.some(s => s.roomId === 'shared'));
     const routingService = memberServices.length === 1 ? memberServices[0] : this.active;
     const capabilities = (this.active.state.capabilities || []).filter(cap => {
-      if (['verifiedHandoffs', 'boundedReplyHandoffs'].includes(cap)) return memberServices.length <= 1 && routingService.state.capabilities?.includes(cap) && routingService.state.capabilities?.includes('nativeInputIsolation') &&
+      if (['verifiedHandoffs', 'boundedReplyHandoffs', 'agentAddressedHandoffs'].includes(cap)) return memberServices.length <= 1 && routingService.state.capabilities?.includes(cap) && routingService.state.capabilities?.includes('nativeInputIsolation') &&
         (!routingService.state.sessions.some(s => s.roomId === 'shared' && s.provider === 'claude') || routingService.state.capabilities?.includes('claudePromptIdentity'));
       if (cap === 'clearSharedHistory') return this.entries.every(e => e.state.capabilities?.includes(cap)
         || (e.state.runtimeVersion === '0.1.0-alpha.2' && !e.state.room.messages?.length));

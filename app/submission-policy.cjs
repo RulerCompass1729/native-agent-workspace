@@ -18,11 +18,11 @@ function assertSharing(snapshot, ids) {
   if (ids.some(id => { const s = snapshot.sessions.find(s => s.id === id); return !s || !canShare(snapshot, s); })) throw new Error(legacyNotice);
 }
 function assertAutomaticRun(snapshot, mode = 'strict', ids) {
-  if (!['strict', 'replies'].includes(mode)) throw new Error('未知协作授权。');
-  const cap = mode === 'replies' ? 'boundedReplyHandoffs' : 'verifiedHandoffs';
+  if (!['strict', 'replies', 'directed'].includes(mode)) throw new Error('未知协作授权。');
+  const cap = mode === 'directed' ? 'agentAddressedHandoffs' : mode === 'replies' ? 'boundedReplyHandoffs' : 'verifiedHandoffs';
   const supported = ids ? ids.every(id => {
     const caps = capabilitiesFor(snapshot, id);
-    return snapshot.sessions.some(s => s.id === id) && caps.includes(cap) && caps.includes('nativeInputIsolation') &&
+    return snapshot.sessions.some(s => s.id === id && (mode !== 'directed' || s.addressedSendAvailable === true)) && caps.includes(cap) && caps.includes('nativeInputIsolation') &&
       (ids.length <= 2 || caps.includes('multiSessionHandoffs'));
   }) : snapshot.capabilities?.includes(cap);
   if (!supported) throw new Error(snapshot.handoffNotice || '旧版后台无法核实自动交接状态；原生会话已保留，请用原生终端或定向发送。');

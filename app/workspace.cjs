@@ -6,6 +6,7 @@ const { processIdentity, processMayBeAlive } = require('./platform.cjs');
 const { ProgressJournal } = require('./observation.cjs');
 const { applyNativeBlock, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress, persistedMessages } = require('./native-blocks.cjs');
 const { SharedReplies } = require('./shared-replies.cjs');
+const addressed = require('./addressed-handoffs.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
 const { NativeHistory, nativeId } = require('./native-history.cjs');
 
@@ -48,7 +49,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { sessions: [...this.sessions.values()].map(s => ({ ...s, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeBlockMapping: true, failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { sessions: [...this.sessions.values()].map(s => ({ ...s, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeBlockMapping: true, failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.sharedReplies.refresh();
@@ -145,6 +146,8 @@ class Workspace extends EventEmitter {
     this.historyQueue = tracked.catch(() => {}); return tracked;
   }
   bind(s, runtime) {
+    runtime.addressedCall = (identity, args) => addressed.accept(this, s, runtime, identity, args);
+    runtime.addressedFailed = identity => addressed.failed(this, s, runtime, identity);
     const on = (event, handler) => runtime.on(event, (...args) => {
       if (this.runtimes.get(s.id) === runtime) handler(...args);
     });
@@ -558,12 +561,13 @@ class Workspace extends EventEmitter {
   }
   async startRun(ids, goal, maxSteps, mode = 'strict', labels = {}, _contexts, replyTo) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
-    if (!['strict', 'replies'].includes(mode)) throw new Error('未知协作授权。');
+    if (!['strict', 'replies', 'directed'].includes(mode)) throw new Error('未知协作授权。');
     goal = cleanText(goal, 6000);
     if (!Array.isArray(ids) || ids.length < 2 || ids.length > 6 || new Set(ids).size !== ids.length || ![2, 3, 4, 5, 6].includes(maxSteps) || maxSteps < ids.length) throw new Error('请选择 2–6 个不同会话，回复上限需覆盖每位参与者且不超过 6 次。');
     if (this.room.run?.status === 'running') throw new Error('已有协作正在运行。');
     for (const id of ids) { const s = this.get(id); if (s.roomId !== 'shared' || s.state !== 'idle' || s.pendingTag || s.approval || [s.background, s.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) throw new Error('所选成员都需就绪、加入共同工作，且没有已报告的后台或定时工作。'); }
     if (ids.some(id => this.runtime(id).chatAvailable === false || this.runtime(id).nativeInputRequired)) throw new Error('有成员的安全发送接口尚未连接，请先在原生终端检查。');
+    if (mode === 'directed' && ids.some(id => this.runtime(id).addressedSendAvailable !== true)) throw Error('所选会话尚未接通原生定向工具。原会话保持不变，仍可定向发送或按顺序核查。');
     // Freeze the human-visible names with this authorization, not native defaults.
     const names = Object.fromEntries(ids.map(id => {
       const s = this.get(id), name = labels && Object.hasOwn(labels, id) ? labels[id] : s.name;
@@ -574,15 +578,15 @@ class Workspace extends EventEmitter {
     const sourceMessage = { id: randomUUID(), role: 'human', name: '你', text: goal, time: Date.now(), runId: run.id, deliveryTracked: true, ...(replyTo ? { replyTo } : {}) };
     run.sourceId = sourceMessage.id;
     this.room.run = run; this.room.messages.push(sourceMessage); this.changed();
-    this.runEvent(mode === 'replies' ? `已授权依次转交本次回复，最多 ${maxSteps} 次、10 分钟；未知的原生子任务不视为结束。` : '核实原生工作状态后交接。');
-    await this.send(ids[0], goal, null, run, null, sourceMessage);
+    this.runEvent(mode === 'directed' ? `已授权成员选择接收者，最多 ${maxSteps} 次回复、10 分钟；没有定向调用就结束，不广播或轮询。` : mode === 'replies' ? `已授权依次转交本次回复，最多 ${maxSteps} 次、10 分钟；未知的原生子任务不视为结束。` : '核实原生工作状态后交接。');
+    await this.send(ids[0], mode === 'directed' ? addressed.taskText(run, goal) : goal, null, run, null, sourceMessage);
   }
   async advance(s, info) {
     const run = this.room.run; const a = run?.awaiting;
     if (this.expireRun(run)) return;
     if (!run || run.status !== 'running' || a?.sessionId !== s.id || a.tag !== info.tag || s.memberRevision !== a.member || s.controlRevision !== a.control || s.roomId !== 'shared') return;
     run.awaiting = null;
-    if (typeof info.text !== 'string' || !info.text.trim()) return this.pause('原生没有提供可交接的回复，请人工查看。');
+    if ((typeof info.text !== 'string' || !info.text.trim()) && !(run.mode === 'directed' && run.pendingHandoff)) return this.pause('原生没有提供可交接的回复，请人工查看。');
     const sourceMessage = this.sharedReplies.final(s, info, run);
     if (!sourceMessage) return this.pause('回复共享已失效，请在原会话核对。');
     run.steps++;
@@ -593,10 +597,25 @@ class Workspace extends EventEmitter {
     if (info.stopHookActive === true || counts.some(n => Number.isSafeInteger(n) && n > 0)) return this.pause('原生仍有后台、团队或定时工作，或继续执行的 hooks。回复已保留；请查看原生终端，确认后可定向发送。');
     const unknown = info.stopHookActive !== false || counts.some(n => !Number.isSafeInteger(n) || n < 0);
     run.nativeWorkUnknown = unknown;
-    if (unknown && run.mode !== 'replies') return this.pause('原生未完整报告后台、团队或定时工作状态，已暂停自动交接。回复已保留；请查看原生终端，确认后可定向发送。');
+    if (unknown && !['replies', 'directed'].includes(run.mode)) return this.pause('原生未完整报告后台、团队或定时工作状态，已暂停自动交接。回复已保留；请查看原生终端，确认后可定向发送。');
     // A separately authorized reply exchange does not certify fleet completion.
     // It never changes unknown native counts into zero or closes native work.
     if (run.steps >= run.maxSteps) { run.status = 'completed'; run.reason = '已达到本轮回复上限，交接结束；原生子任务是否结束需另行确认。'; this.runEvent(run.reason); this.changed(); return; }
+    if (run.mode === 'directed') {
+      const intent = run.pendingHandoff; run.pendingHandoff = null;
+      if (!intent) {
+        run.status = 'completed'; run.reason = '本次回复面向你，没有请求继续转交。'; this.runEvent(run.reason); this.changed(); return;
+      }
+      const target = this.sessions.get(intent.recipientId);
+      if (intent.sourceTag !== info.tag || intent.senderId !== s.id || !target || target.roomId !== 'shared' ||
+        target.nativeId !== intent.nativeId || target.memberRevision !== intent.member || target.controlRevision !== intent.control || target.connectionRevision !== intent.connection)
+        return this.pause('接收者或授权已变化，未转交已登记的消息。');
+      const message = { id: randomUUID(), role: 'assistant', sessionId: s.id, name: `${run.names[s.id]} → ${run.names[target.id]}`,
+        text: intent.text, status: 'complete', time: Date.now(), runId: run.id, replyTo: sourceMessage.id, deliveryTracked: true, addressed: true };
+      this.room.messages.push(message); this.changed();
+      await this.send(target.id, addressed.taskText(run, intent.text, s.id), null, run, null, message);
+      return;
+    }
     const normalized = info.text.trim();
     run.replies ||= {};
     if (run.replies[s.id] === normalized) return this.pause('同一成员重复了上一份回复，已停止交接。');

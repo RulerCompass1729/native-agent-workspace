@@ -1,5 +1,62 @@
 # Bounded testing
 
+## Agent-selected addressed cooperation — alpha.81
+
+As of 2026-10-22. This increment prioritizes the shared workspace; embedded native
+TUI is accepted for independent work and full solo chat parity is deferred.
+
+- `app/tests/addressed-handoffs.test.cjs`: 13 deterministic checks, including
+  exact stable ID with duplicate names, once-only handoff after authoritative
+  completion, reciprocal limits, native refusal, pause/departure/control/connection
+  invalidation, wrong roots/turns/prompts, and no routing from ordinary prose/code.
+- Complete source suite: 861 passed, zero failures/skips. A held native tool-list
+  read cannot block root binding or the existing input poll, and metadata requests
+  stay single-flight. Final targeted handoff rerun passes after the tool-name hint.
+- `scripts/test-native-addressed.cjs`: real Electron, Claude 2.1.309 and Codex
+  0.163.0 through normal service bootstrap. Four source and installed journeys
+  pass: Claude→Codex→Claude budget calculation; human pause after staging and
+  before delivery; detach into the same private TUI; full GUI close/reopen with
+  stable native IDs/PIDs, history and draft, without replay. Each run uses four
+  Claude and four Codex fixed loopback responses, zero paid inference. Codex uses
+  the actual advertised code-mode callable; requests assert native tool schemas.
+- The same test with `NAW_TEST_NATIVE_DENY=1` verifies native PreToolUse denial
+  overrides the named MCP allowance. Source and installed: two Claude local
+  responses, no Codex response, one task dispatch, paused room, original denial
+  preserved. No global native setting is changed.
+- One real model task uses Haiku 5.5 low and Luna low, explicitly checked before
+  sending. Two lunches at 18 each plus transport 14: Claude calculates, Codex
+  independently confirms via a native tool-selected recipient, Claude concludes
+  50. Exactly three root task submissions, two addressed messages, six underlying
+  model responses (three per provider), and no observed subagent tool. Codex's
+  native tool lookup accounts for one of its responses. Native config remains
+  intact; this is not a token comparison with an unextended session. Full private
+  native history, UI state, screenshot and successful video are retained locally.
+
+The real task initially stopped at folder-trust setup before sending any model
+request: a startup keystroke did not select the intended native choice. The test
+now checks terminal input readiness/focus and the actual selected choice before
+Enter. It never treats enqueue/keyboard delivery as proof of native selection.
+Earlier failed protocol experiments are retained privately: reserved MCP server
+name, premature capability discovery, and a wrong native-result field. The final
+path uses the normal MCP permission chain and its actual flattened result text.
+
+Installed shared UI regression also passes six groups: pointer drag/cancel,
+duplicate-name @ selection, notes and exact explicit context, private departure,
+room/session archive and restoration, and shared-history deletion. It uses the
+real installed renderer/IPC with synthetic providers, not model inference.
+The original three-session profile reopens hidden with unchanged native IDs/PIDs,
+selection/draft and zero new task dispatch. Fifty installed runtime files match
+source and the post-native strict signature passes.
+
+The independent reviewer read source, complete native requests/results and the
+real model task. Final independent installed-artifact and evidence review passes;
+the reviewer separately checked all 50 files, strict signature and original-profile
+continuity. U21 closes only for the supported new-session workflow. These checks do not prove physical IME behavior, complete
+native fleet inventory, all provider versions, external live attachment or full
+solo GUI/TUI parity. Old native processes are preserved without promising tool
+injection; their supported manual/fixed-order path remains available.
+
+
 ## Native paragraph line breaks — alpha.78
 
 The native terminal's final result contains two separate lines; the prior GUI

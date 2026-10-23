@@ -1282,7 +1282,7 @@ async function submitRoom(automatic) {
   else roomPendingRecipients.set(first, submission);
   render();
   try {
-    const receipt = await (automatic ? api.run(ids, text, automatic.limit, 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
+    const receipt = await (automatic ? api.run(ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
     if (submission.cancelRequested || receipt?.contextChanged) return;
     if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
   }
@@ -1320,6 +1320,9 @@ function handoffCandidates(firstId) {
 function renderRunChoices() {
   if (!runPreview) return;
   const ids = runPreview.ids, eligible = handoffCandidates(runPreview.recipient);
+  const directed = $('run-mode').value === 'directed';
+  const capable = ids.every(id => { const s = members().find(m => m.id === id); return s?.addressedSendAvailable === true && (s.serviceCapabilities || state.capabilities || []).includes('agentAddressedHandoffs'); });
+  $('run-mode-help').textContent = directed ? (capable ? '只向成员明确选择的接收者发送；没有定向调用就结束。工具调用、工具说明及本轮成员表会计入原生用量；发送详情可核对实际内容。' : '所选会话中有原生连接尚不支持主动定向工具。可改用按顺序核查；不会重建或替换原会话。') : '';
   const multi = eligible.every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs'));
   $('run-participants').replaceChildren();
   for (const s of members()) {
@@ -1347,8 +1350,8 @@ function renderRunChoices() {
     const s = members().find(s => s.id === ids[i % ids.length]);
     return s ? `${s.name} (${s.id.slice(0, 6)})` : '未选择';
   });
-  $('run-order').textContent = `转交顺序：${sequence.join(' → ')}。只转交任务与上一份回复，不附加私人历史。`;
-  $('confirm-run').disabled = !$('run-consent').checked || ids.length < 2;
+  $('run-order').textContent = directed ? `由第一位开始，在所选成员中明确选择下一位；上限 ${$('run-limit').value} 次回复，不广播私人历史。` : `转交顺序：${sequence.join(' → ')}。只转交任务与上一份回复，不附加私人历史。`;
+  $('confirm-run').disabled = !$('run-consent').checked || ids.length < 2 || (directed && !capable);
 }
 $('run-button').onclick = () => {
   if ($('run-button').disabled) return;
@@ -1361,20 +1364,21 @@ $('run-button').onclick = () => {
   $('run-consent').checked = false; $('run-error').hidden = true; renderRunChoices();
   $('run-dialog').showModal();
 };
-$('run-consent').onchange = () => { $('confirm-run').disabled = !$('run-consent').checked || !runPreview || runPreview.ids.length < 2; };
+$('run-consent').onchange = renderRunChoices;
+$('run-mode').onchange = () => { $('run-consent').checked = false; renderRunChoices(); };
 $('run-limit').onchange = () => { $('run-consent').checked = false; renderRunChoices(); };
 $('cancel-run').onclick = () => { $('run-dialog').close(); runPreview = null; $('shared-input').focus(); };
 $('run-form').onsubmit = event => {
   event.preventDefault();
-  if (!$('run-consent').checked || !runPreview) return;
+  if (!$('run-consent').checked || !runPreview || $('confirm-run').disabled) return;
   const eligible = handoffCandidates(runPreview.recipient);
   const same = selected === 'room' && !roomSession && runPreview.text === $('shared-input').value && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]));
   const available = runPreview.ids.length >= 2 && runPreview.ids.every(id => eligible.some(s => s.id === id)) &&
     (runPreview.ids.length <= 2 || eligible.filter(s => runPreview.ids.includes(s.id)).every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs')));
   if (!same || !available || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
-  const limit = Number($('run-limit').value), ids = [...runPreview.ids], labels = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[2]]));
+  const mode = $('run-mode').value, limit = Number($('run-limit').value), ids = [...runPreview.ids], labels = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[2]]));
   const contexts = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[3]]));
-  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit, ids, labels, contexts }));
+  $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit, ids, labels, contexts, mode }));
 };
 $('recipient').onchange = () => { closeMentions(); attempt(persistView); render(); };
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };

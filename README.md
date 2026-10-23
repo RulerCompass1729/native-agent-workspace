@@ -12,6 +12,16 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.81 adds bounded **agent-selected addressed handoffs** in the same shared
+reader, alongside human-selected order. With supported new sessions, choose the
+first recipient with `@`, open `… → 一起核查`, select `由 agent 选择接收者`,
+and approve participants and reply limit. A native tool chooses one recipient;
+plain mentions never send anything. Delivery details show the exact task and
+receipt. Real Haiku/Luna cooperation and installed control/recovery checks pass.
+Embedded native TUI remains the independent-work surface; complete solo 1:1 chat
+mapping is deferred. Existing connections without the tool keep their original
+session and supported manual/fixed-order workflow. See [readiness](docs/readiness.md).
+
 Alpha.80 permits an explicit new human message after a confirmed native Claude
 request failure, in a solo conversation or to a chosen shared recipient. The old
 error stays visible; no automatic retry or resumed handoff. Source and installed

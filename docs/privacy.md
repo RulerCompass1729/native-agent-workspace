@@ -108,6 +108,18 @@ regulated information is not an appropriate first alpha test fixture.
 
 ## Inspecting privacy and usage
 
+Agent-selected handoffs use a native tool registered with new supported sessions.
+Its tool description consumes native context even outside a collaboration round.
+An authorized round also adds participant IDs/names and remaining reply limits to
+each delivered task; the existing message delivery details expose the exact
+wrapped text. These tokens and each native tool continuation are billed or counted
+by the provider. There is no separate routing model, but this is not a claim of
+identical token usage to a plain native session without the messaging tool.
+Only a valid bounded room grant permits delivery. Claude's session-local MCP
+helper uses stdio and cannot dispatch messages itself; its native permission and
+hook result must return to the authenticated root before staging. No global
+provider settings or credentials are changed.
+
 The **隐私与用量** panel shows current application/backend versions, the number
 of managed sessions not confirmed ended, application dispatches since backend
 startup, and native token reports where available. Refresh is a local state read;

@@ -9,6 +9,7 @@ own terms. This is an independent product, not an official DSH distribution.
 | Input | Pinned version / source | Distribution treatment |
 | --- | --- | --- |
 | DSH UI/host packages | 0.2.1-rc.2; npm integrity pins in package-lock.json | MIT and vendored original notices retained with each package; original plugin source in app/dsh; no upstream model/tool/account/telemetry plugins mounted |
+| DSH SDK protocol | 0.2.1-rc.2 | MIT notice retained; its JSON-RPC line transport is reused for the session-local Claude MCP tool; no remote broker or model client is mounted |
 | xterm.js and headless | 6.0.0 | Full MIT notices preserved; headless npm omission supplemented from the same xterm.js release |
 | xterm fit / serialize | 0.11.0 / 0.14.0 | Full MIT notices preserved; serialize omission supplemented from xterm.js |
 | ws | 8.22.0 | MIT notice preserved in the persistent runtime copy |
@@ -41,4 +42,8 @@ API ([reference](https://code.claude.com/docs/en/plugins/mods/api)), verified
 against the installed 2.1.302 type definitions. Those generated definitions,
 provider binaries, credentials and native test kit are not redistributed. The
 bridge is loaded with a session-local plugin directory; it does not install a
-global plugin or change the provider's license. No dependency was added for it.
+global plugin or change the provider's license. The addressed-message extension
+was verified against native 2.1.309. It reuses the DSH protocol transport above;
+the native MCP call runs through Claude's permission/hook path before the
+root-bound bridge can stage a handoff. Generated provider declarations are not
+redistributed.

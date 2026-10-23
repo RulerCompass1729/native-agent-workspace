@@ -11,7 +11,7 @@ function adapter() {
   r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
   r.bindRoot({ sessionId: r.record.nativeId }); return r;
 }
-async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader } = {}) {
+async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader, toolReader } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
   const { register, testObserveModel } = await import('data:text/javascript;base64,' + Buffer.from(source + '\nexport { observeModel as testObserveModel };\n//' + randomUUID()).toString('base64'));
   const r = runtime || adapter(), clock = [], hooks = new Map(), requests = [];
@@ -21,6 +21,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
     env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? (legacy ? undefined : '/fixture/socket') : key === 'NAW_HOOK_SOCKET' ? '/fixture/hooks.sock' : 'fixture-token' },
     fs: { read: async () => JSON.stringify({ sessionId: native, socketPath: '/fixture/gui-submit.sock', token, compat: true, nativeBlocks: true }) },
     clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; } },
+    tool: { list: toolReader || (async () => []) },
     prompt: { read: async () => ({ text: '' }), submit: promptSubmit || (async () => { throw Error('Observation must never submit'); }) },
     http: { fetch: async (url, options) => {
       const body = JSON.parse(options.body); let result;
@@ -37,7 +38,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
     } } };
   register((name, fn) => { hooks.set(name, fn); return { catch() {} }; });
   const invoke = (name, e, next = async e => ({ uuid: e.uuid, message: e.message })) => hooks.get(name)($, e, next);
-  await invoke('session.start', {}); await clock.shift()(); const poll = clock.shift(); clock.length = 0;
+  await invoke('session.start', {}); await clock.shift()(); const poll = clock.find(fn => fn.delay === 0); clock.length = 0;
   return { r, clock, requests, invoke, poll, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
@@ -662,4 +663,13 @@ test(`native API failure does not disclose uncertain or transformed-away content
   // Session restart owns its new repeating poll; only flush existing observations.
   for (let i = 0; i < 3 && f.clock.length; i++) await f.clock.shift()();
   assert.ok(!JSON.stringify(rows).includes('PRIVATE'));
+});
+
+test('held tool discovery never blocks root binding or input polling and remains single-flight', async () => {
+  let reads = 0, polls = 0;
+  const f = await mod({ version: '2.1.309', toolReader: () => { reads++; return new Promise(() => {}); },
+    requestHandler: async url => { if (url.endsWith('/next')) polls++; } });
+  assert.equal(reads, 1); assert.equal(polls, 1);
+  for (let i = 0; i < 4; i++) await f.poll();
+  assert.equal(reads, 1); assert.equal(polls, 5);
 });

@@ -83,6 +83,21 @@ function createSubmissionServer(filename, targets) {
       }
       if (target.rootLease && !target.validRootBinding(message)) { res.writeHead(409); res.end('{}'); return; }
       if (message.sessionId !== target.record.nativeId) { res.writeHead(409); res.end('{}'); return; }
+      if (req.url === '/addressed-capability') {
+        if (!target.validRootBinding(message) || typeof message.available !== 'boolean') { res.writeHead(409); res.end('{}'); return; }
+        target.addressedSendAvailable = message.available && target.nativeBlocks === true && !target.retainedReader;
+        target.emit('capability'); return res.end(JSON.stringify({ received: true }));
+      }
+      if (req.url === '/addressed-message' || req.url === '/addressed-failed') {
+        try {
+          if (!target.addressedSendAvailable || !target.validRootBinding(message) || message.epoch !== target.observationEpoch || !target.addressedCall) throw Error('当前原生连接不支持定向协作。');
+          const identity = { nativeId: message.sessionId, turnId: message.turnId, promptId: message.promptId, callId: message.callId };
+          return res.end(JSON.stringify(req.url === '/addressed-failed' ? target.addressedFailed(identity) : target.addressedCall(identity, message.arguments)));
+        } catch (error) {
+          try { target.addressedFailed?.({ nativeId: message.sessionId, turnId: message.turnId, promptId: message.promptId, callId: message.callId }); } catch { /* Not the authorized root. */ }
+          return res.end(JSON.stringify({ status: 'not-sent', message: error.message }));
+        }
+      }
       if (req.url === '/observation') {
         try { return res.end(JSON.stringify(target.observeRoot(message))); }
         catch { res.writeHead(409); res.end('{}'); return; }
