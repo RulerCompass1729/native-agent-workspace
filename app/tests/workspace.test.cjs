@@ -771,9 +771,11 @@ for (const accepted of [true, false]) test(`private GUI steering (${accepted ? '
   const tag = await w.send(id, 'shared task', 'owner', null, true);
   r.emit('submitted', tag); r.emit('replyBound', { tag, nativeId: s.nativeId, turnId: 'active' });
   r.emit('state', 'working'); r.turnId = 'active'; r.steerAvailable = true;
+  r.nativeActivity = { nativeId: s.nativeId, turnId: 'active', label: '执行命令' };
   const block = { id: 'same-block', nativeId: s.nativeId, turnId: 'active', kind: 'response', text: 'shared prefix', status: 'streaming' };
   r.emit('nativeBlock', block);
   assert.ok(w.room.messages.some(m => m.text === 'shared prefix'));
+  assert.equal(w.snapshot().sessions.find(s=>s.id===id).sharedActivity.label, '执行命令');
   r.steer = async (text, steerTag, turnId, guard) => {
     assert.ok(guard());
     r.emit('nativeBlock', { ...block, text: 'private continuation' });
@@ -782,6 +784,7 @@ for (const accepted of [true, false]) test(`private GUI steering (${accepted ? '
   };
   const sending = w.steer(id, 'private requirement', 'owner', 'active');
   if (accepted) await sending; else await assert.rejects(sending);
+  assert.equal(r.turnId, 'active'); assert.equal(w.snapshot().sessions.find(s=>s.id===id).sharedActivity, null, 'Private steer retires activity proof even in the same turn');
   r.emit('complete', { tag, messageId: 'same-block', text: 'private continuation' }); await tick();
   assert.ok(s.messages.some(m => m.text === 'private continuation'));
   assert.ok(!w.room.messages.some(m => m.text?.includes('private')));

@@ -86,7 +86,7 @@ async function run() {
   observations.push({ check: 'historical action retains keyboard focus during streaming', pass: await copy.evaluate(el => document.activeElement === el) });
   await copy.click(); assert.equal(await app.evaluate(() => globalThis.copiedText.at(-1)), history[40].text, 'Copy uses exact historical text');
   const liveCopy = page.locator('#messages [data-message-id="live-reply"] .message-actions').getByRole('button', { name: '复制', exact: true });
-  await liveCopy.click();
+  await page.locator('#messages [data-message-id="live-reply"]').hover(); await liveCopy.click();
   assert.equal(await app.evaluate(() => globalThis.copiedText.at(-1)), (await snapshot()).sessions.find(s => s.id === id).messages.find(m => m.id === 'live-reply').text, 'Reused action copies latest streaming payload');
   await resource('stream-complete');
   const outputElapsedMs = Date.now() - started;

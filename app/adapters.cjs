@@ -13,6 +13,7 @@ const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.c
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion } = require('./native-history.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
+const { codexTurnBlock } = require('./native-blocks.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -675,7 +676,34 @@ class Codex extends EventEmitter {
               (toolTypes.has(item.type) && !this.liveToolItems.has(item.id)) ||
               (['reasoning', 'plan'].includes(item.type) && !this.liveTextItems.has(item.id) && !this.nativeTextParts.has(item.id))) this.historyMessageItems.add(item.id);
         }
-        this.emit('history', [...items.values()]); return true;
+        this.emit('history', [...items.values()]);
+        if (this.host.rpc.nativeVersion === '0.163.0') {
+          const previousMetadata = this.turnMetadataHydration;
+          const rpc = this.host.rpc, revision = this.turnMetadataRevision = (this.turnMetadataRevision || 0) + 1;
+          const current = () => !this.stopped && !this.transportDisconnected && lifecycle === this.lifecycleRevision && rpc === this.host.rpc &&
+            revision === this.turnMetadataRevision && threadId === this.record.nativeId;
+          // One bounded read-only enrichment per snapshot. Content and input
+          // are ready immediately, even if this optional request is held.
+          this.turnMetadataHydration = (async () => {
+            try {
+              await previousMetadata;
+              const turns = [], seen = new Set(); let after;
+              for (let page = 0; page < 1000; page++) {
+                if (!current()) return;
+                const result = await rpc.call('thread/turns/list', { threadId, limit: 100, sortDirection: 'asc', itemsView: 'notLoaded', ...(after ? { cursor: after } : {}) });
+                if (!current()) return;
+                if (!Array.isArray(result.data)) throw Error('Invalid native turn metadata');
+                turns.push(...result.data);
+                if (result.nextCursor == null) { this.emit('turnHistory', turns); return; }
+                after = result.nextCursor;
+                if (typeof after !== 'string' || !after || seen.has(after)) throw Error('Invalid native turn cursor');
+                seen.add(after);
+              }
+              throw Error('Native metadata page limit');
+            } catch { if (current()) this.emit('turnHistory', null); }
+          })();
+        }
+        return true;
       }
       if (typeof cursor !== 'string' || !cursor || cursors.has(cursor)) throw new Error('原生历史分页未能确认；请在原生终端继续。');
       cursors.add(cursor);
@@ -905,9 +933,8 @@ class Codex extends EventEmitter {
         if (p.turn.id === this.turnId) { this.nativeTurnFinished = true; this.activeNativeItems.clear(); this.nativeWait = null; this.publishNativeActivity(); }
         this.textEndedTurns.add(p.turn.id);
         for (const [id, parts] of this.nativeTextParts) if (parts.turnId === p.turn.id) this.nativeTextParts.delete(id);
-        this.emit('nativeBlock', { id: `turn:${p.turn.id}`, kind: 'turn', turnId: p.turn.id, inputTag: this.turn(p.turn.id).inputTag || '', nativeId: this.record.nativeId,
-          status: p.turn.status === 'completed' ? 'complete' : p.turn.status === 'interrupted' ? 'interrupted' : 'failed',
-          text: p.turn.status === 'completed' ? '原生本轮已结束' : p.turn.status === 'interrupted' ? '原生已中断本轮' : '原生本轮未正常完成' });
+        const block = codexTurnBlock(this.record.nativeId, p.turn);
+        if (block) this.emit('nativeBlock', { ...block, inputTag: this.turn(p.turn.id).inputTag || '' });
         this.turn(p.turn.id).completed = p.turn;
         // Events can arrive before the RPC acknowledgement names our turn.
         // Wait for that identity instead of assigning whichever turn finishes.

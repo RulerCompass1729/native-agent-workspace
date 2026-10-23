@@ -1,9 +1,23 @@
 // Native display records are private session history. They never authorize a
 // send, a shared reply, or completion of background work.
+function codexTurnBlock(nativeId, turn) {
+  if (typeof turn?.id !== 'string' || !turn.id || !['completed', 'interrupted', 'failed'].includes(turn.status)) return null;
+  const event = { id: `turn:${turn.id}`, kind: 'turn', turnId: turn.id, nativeId,
+    status: turn.status === 'completed' ? 'complete' : turn.status,
+    text: turn.status === 'completed' ? '原生本轮已结束' : turn.status === 'interrupted' ? '原生已中断本轮' : '原生本轮未正常完成' };
+  // The native protocol reports Unix seconds; display records use milliseconds.
+  // Missing history is unknown, never the time this client happened to reconnect.
+  for (const [source, target] of [['startedAt', 'nativeStartedAt'], ['completedAt', 'nativeCompletedAt']]) {
+    if (Number.isFinite(turn[source]) && Math.abs(turn[source]) <= 8640000000000) event[target] = turn[source] * 1000;
+  }
+  if (Number.isSafeInteger(turn.durationMs) && turn.durationMs >= 0) event.nativeDurationMs = turn.durationMs;
+  return event;
+}
 function applyNativeBlock(session, event) {
   if (!event || typeof event.id !== 'string' || !event.id || event.nativeId !== session.nativeId) return false;
   const id = `native:${event.nativeId}:${event.id}`;
   let row = session.messages.find(m => m.id === id);
+  if (row?.kind === 'turn' && ['interrupted', 'failed'].includes(row.status) && event.status === 'complete') return false;
   if (row?.turnId && event.turnId && row.turnId !== event.turnId) { row.incomplete = true; return true; }
   const boundary = event.turnId && session.messages.find(m => m.nativeId === event.nativeId && m.kind === 'turn' && m.turnId === event.turnId);
   if (!row) {
@@ -19,6 +33,9 @@ function applyNativeBlock(session, event) {
   if (typeof event.text === 'string') row.text = event.text;
   if (typeof event.delta === 'string') row.text += event.delta;
   for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag']) if (typeof event[field] === 'string') row[field] = event[field];
+  if (event.kind === 'turn') for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) {
+    if (Number.isFinite(event[field]) && (field === 'nativeDurationMs' ? Number.isSafeInteger(event[field]) && event[field] >= 0 : Math.abs(event[field]) <= 8640000000000000)) row[field] = event[field];
+  }
   if (typeof event.input === 'string') row.input = event.input;
   if (event.incomplete) row.incomplete = true;
   if (['response', 'summary', 'plan'].includes(event.kind) && boundary && row.status === 'streaming') row.status = boundary.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
@@ -63,7 +80,7 @@ function persistedMessages(messages, gapId = 'native-cache-gap') {
         row.sharedStream === true && row.nativeMessageId?.startsWith(`native:${row.nativeId}:tool:`)) ||
     row.kind === 'gap' && row.id === gapId).map(row => ({ ...row })), gapId);
 }
-function applyCodexHistory(s, items, runtime, submitted = () => {}) {
+function applyCodexHistory(s, items, runtime, submitted = () => {}, turns) {
   const { toolContent, toolStatus, nativeTextContent } = require('./codex-tool-content.cjs');
   const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set(), replacements = new Map();
   const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
@@ -115,6 +132,7 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
     const m = own || (item.type === 'userMessage'
       ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
       : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
+    if (item.turnId && (!m.turnId || m.turnId === item.turnId)) { m.turnId = item.turnId; m.nativeId = s.nativeId; }
     // Early backends assigned random display IDs to native user input.
     // One unmatched pure-text history item may replace one pre-recovery
     // cache row. This is display reconciliation, never reply attribution.
@@ -140,7 +158,34 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
   // No complete/nativeInput events: hydration cannot route or pause a task.
   const ordered = imported.flatMap(row => [row, ...(after.get(row.id) || [])]);
   s.messages = trimVolatileRows((anchor === null ? ordered.concat(before) : before.concat(ordered)).concat(unplaced));
+  if (turns !== undefined) applyCodexTurnHistory(s, turns, runtime);
   runtime.recoveryNativeInputs?.clear();
+}
+function applyCodexTurnHistory(s, turns, runtime) {
+  // Enrich only exact existing turns. Never reapply a stale text snapshot,
+  // resurrect removed history, emit completion, or grant a room delivery.
+  if (Array.isArray(turns)) for (const turn of turns) {
+    const event = codexTurnBlock(s.nativeId, turn);
+    if (!event || turn.id === runtime.turnId && !runtime.nativeTurnFinished) continue;
+    const id = `native:${s.nativeId}:${event.id}`, cached = s.messages.find(m => m.id === id);
+    if (cached) {
+      if (cached.status === event.status) for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) {
+        if (cached[field] == null && event[field] != null) cached[field] = event[field];
+      }
+      continue;
+    }
+    const anchor = s.messages.findLastIndex(m => m.nativeId === s.nativeId && m.turnId === turn.id);
+    if (anchor < 0) continue;
+    applyNativeBlock(s, event);
+    const [row] = s.messages.splice(s.messages.findIndex(m => m.id === id), 1);
+    const position = s.messages.findLastIndex(m => m.nativeId === s.nativeId && m.turnId === turn.id);
+    s.messages.splice(position + 1, 0, row);
+  }
+  if (turns !== undefined) {
+    const id = `native:${s.nativeId}:turn-metadata-unavailable`;
+    s.messages = s.messages.filter(m => m.id !== id);
+    if (turns === null) s.messages.push({ id, role: 'system', kind: 'notice', text: '原生回合时间暂未同步；正文保留，可在原生终端核对。' });
+  }
 }
 // A native interrupt fixes the observed text cut. Late deltas/completion and
 // reconnect history cannot silently rewrite that cut or create a final reply.
@@ -183,4 +228,4 @@ function applyCodexMessage(s, item) {
   Object.assign(m, { text: item.text, status: 'complete', nativeId: item.nativeId || s.nativeId, phase: item.phase, ...(typeof item.inputTag === 'string' ? { inputTag: item.inputTag } : {}), ...(item.turnId ? { turnId: item.turnId } : {}) });
   return m;
 }
-module.exports = { applyNativeBlock, trimVolatileRows, persistedMessages, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress };
+module.exports = { codexTurnBlock, applyNativeBlock, trimVolatileRows, persistedMessages, applyCodexHistory, applyCodexTurnHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress };

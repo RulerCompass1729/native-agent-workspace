@@ -100,6 +100,9 @@ async function launch() {
   await page.locator('#messages').getByText('RETAINED_CODEX_HISTORY: private original answer.', { exact: true }).waitFor();
   const linked = (await snapshot()).sessions.find(s => s.id === id);
   assert.equal(linked.nativeId, before.nativeId); assert.equal(linked.pid, before.pid); assert.equal(linked.legacySharedReply, true);
+  await until(async()=> (await snapshot()).sessions.find(s=>s.id===id).messages.some(m=>m.kind==='turn'&&Number.isFinite(m.nativeCompletedAt)),'Original pre-share history completion time');
+  const originalBoundary=(await snapshot()).sessions.find(s=>s.id===id).messages.find(m=>m.kind==='turn'&&Number.isFinite(m.nativeCompletedAt));
+  fs.writeFileSync(path.join(base,'original-boundary-before-share.json'),JSON.stringify(originalBoundary,null,2));
   checks.push('Original native history attaches to the same process and ID without another model request');
   await page.locator('#message-input').fill('Unsent private draft.');
   await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
@@ -122,6 +125,11 @@ async function launch() {
   assert.equal(completed.room.messages.filter(m => m.role === 'assistant').length, 1);
   assert.equal(completed.diagnostics.dispatches, 1); assert.equal(calls, 2);
   assert.equal(completed.sessions.find(s => s.id === id).pid, before.pid);
+  assert.equal(completed.sessions.find(s=>s.id===id).messages.find(m=>m.id===originalBoundary.id).nativeCompletedAt,originalBoundary.nativeCompletedAt);
+  const sharedBoundary=completed.room.messages.find(m=>m.kind==='turn');
+  assert.ok(sharedBoundary&&Number.isFinite(sharedBoundary.nativeCompletedAt));
+  assert.ok(Number.isSafeInteger(sharedBoundary.nativeDurationMs));
+  assert.notEqual(sharedBoundary.turnId,originalBoundary.turnId,'The restored old boundary is not the newly completed shared turn');
   checks.push('Shared native output updates one attributed block across reload; private history/draft stay private');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'retained-codex-shared.png') }); }
   await application.close(); application = null; await launch();
@@ -133,6 +141,14 @@ async function launch() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'idle', 'Reopened native connection');
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent private draft.');
   checks.push('GUI closure restores shared history and both drafts without native replacement or replay');
+  if(process.env.NAW_RETAINED_TIMING_ONLY==='1') {
+    const reopened=await snapshot();
+    assert.equal(reopened.room.messages.find(m=>m.id===sharedBoundary.id).nativeCompletedAt,sharedBoundary.nativeCompletedAt);
+    assert.equal(reopened.sessions.find(s=>s.id===id).nativeId,before.nativeId);
+    assert.deepEqual(errors,[]);
+    checks.push('Retained alpha.2 original history and new shared native completion retain exact timing through reopening');
+    console.log(JSON.stringify({version,checks,taskResponses:calls,nativeTitleResponses:titleCalls,paidModelCalls:0,evidence:base,errors}));return;
+  }
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await fillRoomMessage(page, 'Create sample.txt with the provided line, then read it back.'); await page.locator('#forward-button').click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'approval', 'Actual native command approval', 45000);

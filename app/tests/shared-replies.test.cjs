@@ -21,6 +21,34 @@ async function fixture(t) {
   function block(i, value) { runtimes[i].emit('nativeBlock', { nativeId: w.get(ids[i]).nativeId, turnId: `turn-${i}`, promptId: `prompt-${i}`, ...value }); }
   return { w, directory, runtimes, sent, ids, bind, block };
 }
+test('native activity needs a currently valid grant, never a historical row or retained tag', async t => {
+  const { w, runtimes: [,b], ids, bind } = await fixture(t);
+  const s = w.get(ids[1]); await w.forward(s.id,'task','owner'); bind(1);
+  b.nativeActivity = { nativeId: s.nativeId, turnId: 'turn-1', label: '执行命令' };
+  assert.equal(w.sharedReplies.activity(s).label,'执行命令');
+  s.state='approval'; assert.equal(w.sharedReplies.activity(s),null);
+  s.state='working'; const grant=[...w.sharedReplies.grants.values()][0]; grant.requiredInputTag='new-steer';
+  assert.equal(w.sharedReplies.activity(s),null,'Whole-turn phase does not prove the phase belongs to a new shared steer');
+  grant.requiredInputTag=''; w.sharedReplies.close(grant.tag); assert.equal(w.sharedReplies.activity(s),null);
+});
+test('only the authorized native turn shares completion metadata, retained through reopening', async t => {
+  const { w, directory, ids, bind, block } = await fixture(t);
+  await w.forward(ids[1], 'Check shared material', 'owner'); bind(1);
+  block(1, { id: 'turn:private', kind: 'turn', turnId: 'private', status: 'complete', text: 'PRIVATE', nativeCompletedAt: 1000, nativeDurationMs: 90 });
+  block(1, { id: 'turn:turn-1', kind: 'turn', status: 'complete', text: 'Native completed', nativeStartedAt: 1700000000000, nativeCompletedAt: 1700000003000, nativeDurationMs: 3500 });
+  const row = w.room.messages.find(m => m.kind === 'turn');
+  assert.ok(row); assert.equal(row.sessionId, ids[1]); assert.equal(row.turnId, 'turn-1');
+  assert.equal(row.nativeCompletedAt, 1700000003000); assert.equal(row.nativeDurationMs, 3500);
+  assert.ok(!JSON.stringify(w.room).includes('PRIVATE')); assert.equal(w.versions.dispatches, 1);
+  w.sharedReplies.close(row.sourceTag); const count = w.room.messages.length;
+  delete row.nativeCompletedAt; delete row.nativeDurationMs; delete row.kind;
+  assert.equal(w.sharedReplies.restoreTurnMetadata(w.get(ids[1])), true);
+  assert.equal(row.kind, 'turn'); assert.equal(row.nativeDurationMs, 3500); assert.equal(w.room.messages.length, count);
+  assert.equal(w.sharedReplies.grants.get(row.sourceTag).closed, true, 'Metadata restores no sharing grant');
+  w.persist(); const reopened = new Workspace({ binaries: {}, close() {} }, directory);
+  assert.deepEqual(reopened.room.messages.find(m => m.id === row.id), JSON.parse(JSON.stringify(row)));
+  assert.equal(reopened.sharedReplies.grants.size, 0); assert.equal(reopened.versions.dispatches, 0); reopened.close();
+});
 test('ACK identity gates early content; parallel turns update stable blocks without dispatching or leaking private output', async t => {
   const { w, runtimes: [a, b], ids, sent, bind, block } = await fixture(t);
   await w.forward(ids[0], 'A task', 'owner');
@@ -135,8 +163,11 @@ test('evicting a revoked grant cannot authorize a late final through an old forw
 test('pause during bounded exchange retains text but sends no partial or late final to the next agent', async t => {
   const { w, ids, runtimes: [a], sent, bind, block } = await fixture(t);
   await w.startRun(ids, 'goal', 2, 'replies'); bind(0);
+  a.nativeActivity = { nativeId: w.get(ids[0]).nativeId, turnId: 'turn-0', label: '执行命令' };
+  assert.ok(w.sharedReplies.activity(w.get(ids[0])));
   block(0, { id: 'display:answer', kind: 'response', text: 'partial', status: 'streaming' });
   assert.equal(sent.length, 1); w.pause('human paused');
+  assert.equal(w.sharedReplies.activity(w.get(ids[0])), null, 'Pause hides phases even if the native turn keeps working');
   block(0, { id: 'display:answer', kind: 'response', text: 'late final', status: 'complete' });
   a.emit('complete', { tag: sent[0].tag, text: 'late final' }); await tick();
   assert.equal(sent.length, 1); assert.equal(w.room.run.steps, 0);

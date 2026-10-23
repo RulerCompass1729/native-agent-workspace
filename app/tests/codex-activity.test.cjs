@@ -33,3 +33,12 @@ test('native usage retains thread and turn identity; completion never invents to
   event('thread/tokenUsage/updated', { turnId: 'turn-a', tokenUsage: { total: { outputTokens: 19 } } });
   assert.equal(usage.threadId, 'native-a'); assert.equal(usage.turnId, 'turn-a'); assert.equal(usage.total.outputTokens, 19);
 });
+test('completion carries its own native clock, never the current turn or received time', () => {
+  const { r, event, start } = fixture(), blocks = []; r.on('nativeBlock', block => blocks.push(block));
+  start('new-turn', 9999);
+  event('turn/completed', { turn: { id: 'old-turn', status: 'completed', startedAt: 1234, completedAt: 1237, durationMs: 3456 } });
+  assert.equal(r.turnId, 'new-turn'); assert.equal(r.nativeActivity.startedAt, 9999000);
+  assert.deepEqual([blocks[0].turnId, blocks[0].nativeStartedAt, blocks[0].nativeCompletedAt, blocks[0].nativeDurationMs], ['old-turn', 1234000, 1237000, 3456]);
+  event('turn/completed', { turn: { id: 'untimed', status: 'interrupted', completedAt: null, durationMs: -1 } });
+  assert.equal(blocks[1].nativeCompletedAt, undefined); assert.equal(blocks[1].nativeDurationMs, undefined);
+});

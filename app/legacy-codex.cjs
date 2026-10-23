@@ -11,7 +11,7 @@ const { nativeTextItemId } = require('./codex-tool-content.cjs');
 const { ProgressJournal } = require('./observation.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
-const { applyNativeBlock, applyCodexHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress } = require('./native-blocks.cjs');
+const { applyNativeBlock, applyCodexHistory, applyCodexTurnHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress } = require('./native-blocks.cjs');
 const { readerPath, readReaderCache, writeReaderCache } = require('./reader-cache.cjs');
 
 function eligibleCodex(state, record) {
@@ -81,7 +81,8 @@ class LegacyCodex extends EventEmitter {
     }
     // Retain the original native writer; consume the same event/history
     // reducers as the current service, rather than a second terminal image.
-    adapter.on('history', items => { applyCodexHistory(this.record, items, adapter); this.emit('change'); });
+    adapter.on('history', (items, turns) => { applyCodexHistory(this.record, items, adapter, undefined, turns); this.emit('change'); });
+    adapter.on('turnHistory', turns => { applyCodexTurnHistory(this.record, turns, adapter); this.emit('readerMetadata'); this.emit('change'); });
     adapter.on('delta', item => { this.emit('readerBlock', applyCodexDelta(this.record, item)); this.emit('change'); });
     adapter.on('messageItem', item => { this.emit('readerBlock', applyCodexMessage(this.record, item)); this.emit('change'); });
     adapter.on('nativeBlock', item => {

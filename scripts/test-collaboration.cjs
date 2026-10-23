@@ -104,7 +104,8 @@ async function run() {
   assert.equal(await page.locator('#room-messages article.assistant').count(), 0);
   await page.locator('#room-filter').selectOption(b); await page.locator('#room-search').fill('核查完成'); await until(async () => await page.locator('#room-messages article').count() === 1, 'Filtered reply rendered');
   assert.equal(await page.locator('#room-messages time').count(), 1); await capture('filtered-timeline');
-  await page.locator('#room-messages').getByRole('button', { name: '查看上下文', exact: true }).click();
+  const firstContext=page.locator('#room-messages').getByRole('button', { name: '查看上下文', exact: true });
+  await firstContext.locator('xpath=ancestor::article').hover(); await firstContext.click();
   assert.equal(await page.locator('#room-search').inputValue(), ''); assert.equal(await page.locator('#room-filter').inputValue(), '');
   assert.equal(await page.locator('#room-messages').evaluate(el => el.contains(document.activeElement) && document.activeElement.tagName === 'ARTICLE'), true, 'Filtered context restores and focuses the original row');
   passed.push('Duplicate labels are disambiguated by provider/ID; keyboard @ selects one recipient, exact explicit send, time and member filtering never reroute');
@@ -114,7 +115,8 @@ async function run() {
   await page.locator('#insert-context').click(); assert.equal(await roomBody(page), context); assert.equal((await fixture()).sends.length, 1);
   await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 2, 'Explicit context submission'); assert.deepEqual((await fixture()).sends[1], { id: b, text: context }); await reply('本条背景已接收。');
   await page.locator('#room-search').fill('本条背景已接收');
-  await page.locator('#room-messages').getByRole('button', { name: '查看上下文', exact: true }).click();
+  const secondContext=page.locator('#room-messages').getByRole('button', { name: '查看上下文', exact: true });
+  await secondContext.locator('xpath=ancestor::article').hover(); await secondContext.click();
   await until(() => page.locator('#room-messages .message-body p').count().then(n => n >= 80), 'Unfiltered long Markdown committed');
   await delay(120);
   const contextTarget = page.locator('#room-messages article').filter({ has: page.getByText('本条背景已接收。', { exact: true }) });
