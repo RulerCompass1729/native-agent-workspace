@@ -19,6 +19,14 @@ Installation, broader provider support, and complete solo GUI/TUI parity are
 follow-up work. The historical checkpoints below retain their original scope;
 they do not constitute acceptance of this current shared-workspace milestone.
 
+**Latest authorized increment, 2026-10-23:** the user explicitly requests compact
+native-style default process folding and simultaneous conversation/native TUI.
+Alpha.88 implements them together using the existing reader, native `details`,
+CSS grid and one xterm connection per session. Display layout is separate from
+keyboard control. Room reading, explicit recipients, private native intervention,
+drafts and identities must survive the combined path; isolated field checks are
+insufficient. This supersedes the earlier discussion-only layout boundary below.
+
 **Acceptance correction, 2026-10-23:** alpha.86's passing mechanical checks do
 not establish acceptance of the reading experience. The user rejects the stiff,
 oversized short-message layout and reports missing native completion time,
@@ -41,7 +49,14 @@ before implementation, then checks actual changes and affected installed evidenc
 Reuse unchanged evidence and group fixes into this task; a field fix, test count
 or small release does not close the experience requirement.
 
-Current reading candidate: **alpha.87, 2026-10-23**. One installed short/long,
+Current reading candidate: **alpha.88, 2026-10-23**. Compact native processes
+and the actual same-session terminal remain together through a two-member task,
+private intervention and reopening. Direct room-native Escape and minimum-window
+inputs pass in the installed artifact; 54 runtime files match, signing passes and
+original sessions/drafts survive with no new dispatch. This closes the scoped
+implementation path, not full U17 or user visual acceptance. Independent final artifact review passes for this scoped trial.
+
+Previous reading candidate: **alpha.87, 2026-10-23**. One installed short/long,
 two-member document check and private-intervention control scenario pass, alongside
 real current/retained Codex timing, native Escape, drafts and reopening. Existing
 reading and collaboration regressions pass; no new frontend dependency or provider

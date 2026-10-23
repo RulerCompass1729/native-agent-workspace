@@ -16,3 +16,11 @@ test('invalid or unbounded reading metadata is rejected', () => {
   for (const bad of [{ top: NaN }, { top: -1 }, { top: 1e10 }, { offset: Infinity }, { offset: -1e10 }, { follow: 'yes' }, { anchor: 'x'.repeat(101) }]) assert.throws(() => readingState({ session: { ...position, ...bad } }));
   assert.throws(() => readingState({ ['x'.repeat(101)]: position }));
 });
+test('bounded disclosure choices preserve reserved IDs without storing message text', () => {
+  const folds = JSON.parse('{"__proto__":true,"tool-2":false}');
+  assert.deepEqual(readingState({ session: { ...position, folds } }).session.folds, folds);
+  assert.deepEqual(readingState({ session: { ...position, folds: { tool: { open: false, error: 'failed' } } } }).session.folds.tool, { open: false, error: 'failed' });
+  for (const bad of [null, [], { tool: 'open' }, { tool: { open: false, error: 'unknown' } }, { tool: { open: false, error: '', text: 'PRIVATE' } }, { '': true }, Object.fromEntries(Array.from({ length: 201 }, (_, i) => [i, true]))]) {
+    assert.throws(() => readingState({ session: { ...position, folds: bad } }));
+  }
+});

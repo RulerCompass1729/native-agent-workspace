@@ -1,6 +1,6 @@
 // Public native item fields only: no metadata, raw reasoning, media fetches or
 // parsing of terminal text. Item IDs and lifecycle stay with the native adapter.
-const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'functionCallOutput']);
+const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'functionCallOutput', 'webSearch']);
 const json = value => value === undefined || value === null ? '' : JSON.stringify(value, null, 2);
 // The native protocol separates user-readable summaries from raw reasoning.
 // Never fall back to `content`, `text`, encrypted content or metadata here.
@@ -47,6 +47,12 @@ function toolContent(item) {
   if (item.type === 'commandExecution') {
     result.title = item.command || '命令';
     if (typeof item.aggregatedOutput === 'string') result.text = item.aggregatedOutput;
+  } else if (item.type === 'webSearch') {
+    const action = item.action;
+    result.title = { openPage: '打开网页', findInPage: '页内查找' }[action?.type] || '搜索网页';
+    result.input = action?.type === 'search' ? action.query || action.queries?.join('\n') || item.query || ''
+      : action?.type === 'findInPage' ? [action.url, action.pattern].filter(v => typeof v === 'string').join('\n') : action?.url || item.query || '';
+    result.text = json({ action: action ?? null, ...(Array.isArray(item.results) ? { results: item.results } : {}) });
   } else if (item.type === 'fileChange') {
     result.title = '文件修改'; Object.assign(result, fileChanges(item.changes));
   } else if (item.type === 'functionCallOutput') {

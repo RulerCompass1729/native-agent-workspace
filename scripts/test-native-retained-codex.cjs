@@ -79,7 +79,7 @@ async function launch() {
   client = await connectService(profile, 'retained-codex-fixture');
   const id = await client.call('create', { provider: 'codex', cwd, name: 'Retained Codex', view: 'terminal' });
   await launch(); await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#terminal-tab').click();
-  const takeover = page.getByRole('button', { name: '接管此窗口', exact: true });
+  const takeover = page.locator('#take-control');
   if (await takeover.isVisible()) await takeover.click();
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('Trust this folder?') ||
     (await snapshot()).sessions.find(s => s.id === id)?.state === 'idle', 'Native folder gate', 60000);

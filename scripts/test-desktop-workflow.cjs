@@ -66,6 +66,10 @@ async function run() {
   await page.locator(`[data-session-menu="${a}"]`).click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
   await page.locator('#rename-name').fill('计划复核'); await page.locator('#confirm-rename').click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await recipient(a);
+  await page.locator(`[data-room-session="${c}"]`).click();
+  assert.equal(await page.locator('#room-record-view').isVisible(),true);
+  assert.equal(await page.locator('#terminal-area').isVisible(),true);
+  assert.equal(await page.locator('#recipient').inputValue(),a,'Displayed terminal does not choose the file or message recipient');
   const material = path.join(profile, '计划.csv'); fs.writeFileSync(material, '项目,人数,单价\n午餐,3,18\n交通,3,7\n');
   await fillRoomMessage(page, '请核查预算并给出结论。'); await chooseFile(material);
   assert.match(await page.locator('#file-content').innerText(), /午餐,3,18/); assert.equal((await native()).sends.length, 0);

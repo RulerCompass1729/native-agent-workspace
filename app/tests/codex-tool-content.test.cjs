@@ -2,6 +2,13 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const { toolContent, fileChanges, toolStatus } = require('../codex-tool-content.cjs');
 const { NativeHost } = require('../adapters.cjs');
 const { applyCodexProgress } = require('../native-blocks.cjs');
+test('native web search retains its literal query, action and complete result data', () => {
+  const results = [{ title: 'A result', url: 'https://example.test/a', snippet: 'Full result text' }];
+  const search = toolContent({ type: 'webSearch', query: 'original query', action: { type: 'search', query: null, queries: ['first query', 'second query'] }, results });
+  assert.equal(search.title, '搜索网页'); assert.equal(search.input, 'first query\nsecond query');
+  assert.deepEqual(JSON.parse(search.text).results, results);
+  assert.equal(toolContent({ type: 'webSearch', action: { type: 'findInPage', url: 'https://example.test', pattern: 'needle' } }).input, 'https://example.test\nneedle');
+});
 test('MCP and dynamic tools retain exact input/text, explicit unsupported media and native failures without private metadata', () => {
   const mcp = toolContent({ type: 'mcpToolCall', server: 'local', tool: 'read', arguments: { path: 'sample.txt' },
     result: { content: [{ type: 'text', text: '完整正文\nsecond line' }, { type: 'resource', resource: { uri: 'fixture://one', text: 'resource text', _meta: 'PRIVATE META' } }, { type: 'image', data: 'PRIVATE BYTES' }], structuredContent: { count: 2 }, _meta: { hidden: 'PRIVATE META' } }, error: { message: 'Native error' }, _meta: 'PRIVATE META' });

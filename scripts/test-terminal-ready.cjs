@@ -10,9 +10,9 @@ const child = fork(path.join(root, 'app/daemon.cjs'), [profile], {
 let app, page, client, seq = 0; const errors = [], passed = [];
 const delay = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label) { for (let i = 0; i < 100; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
-function native(method, target) { const id = ++seq; return new Promise((resolve, reject) => {
+function native(method, target, value) { const id = ++seq; return new Promise((resolve, reject) => {
   const timer = setTimeout(() => { child.off('message', cb); reject(Error('Fixture timeout')); }, 5000);
-  const cb = m => { if (m.requestId === id) { clearTimeout(timer); child.off('message', cb); resolve(m); } }; child.on('message', cb); child.send({ id, method, target });
+  const cb = m => { if (m.requestId === id) { clearTimeout(timer); child.off('message', cb); resolve(m); } }; child.on('message', cb); child.send({ id, method, target, value });
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
 const host = id => page.locator(`[data-terminal-id="${id}"]`);
@@ -60,6 +60,14 @@ async function run() {
   await page.locator('#terminal-tab').click(); await checkLoading(a.id); await native('release', a.id);
   await until(async () => await input(a.id).evaluate(el => el === document.activeElement), 'Retry focuses live input');
   passed.push('Failure stays noninteractive and explicit view retry works');
+  await native('replace',a.id);await checkLoading(a.id);await native('first-message-required',a.id);
+  await host(a.id).getByText('请先在对话中发送第一条消息，再打开同一会话的原生终端。',{exact:true}).waitFor();
+  await native('replyBound',a.id,{turnId:'first-native-turn'});
+  await until(async()=>(await native('stats')).pending.includes(a.id),'First native turn attaches before any assistant text');
+  assert.equal((await snapshot()).sessions.find(s=>s.id===a.id).messages.some(m=>m.role==='assistant'),false);
+  await native('release',a.id);await input(a.id).waitFor({state:'visible'});
+  assert.equal((await snapshot()).sessions.find(s=>s.id===a.id).nativeId,a.nativeId);
+  passed.push('Known unmaterialized first display retries on its exact native turn before text; ordinary failures stay gated');
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []); await capture('ready');
   console.log(JSON.stringify({ passed, errors, nativeModelCalls: 0, providerProcesses: 0, oneWindow: true }));
 }
