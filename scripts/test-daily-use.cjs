@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // One visible app, real shipped adapter/workspace/IPC, synthetic providers.
 // This tests the complete daily-use path, not native login, models or fleets.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -65,7 +66,7 @@ async function run() {
   await page.locator(`[data-session-id="${codex}"]`).click(); await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   assert.equal((await snapshot()).room.messages.length, 0, 'Joining does not expose private history');
-  await chooseRecipient(claude); await page.locator('#shared-input').fill('SHARED-MATERIAL'); await page.locator('#forward-button').click();
+  await chooseRecipient(claude); await fillRoomMessage(page, 'SHARED-MATERIAL'); await page.locator('#forward-button').click();
   await until(async () => (await fixture()).sends.length === 2, 'Directed Claude send'); await reply('REVIEW-MATERIAL');
   const shared = page.locator('#room-messages article.assistant').filter({ has: page.getByText('REVIEW-MATERIAL', { exact: true }) });
   await shared.getByRole('button', { name: '选择并分享', exact: true }).click(); await page.locator('#share-recipient').selectOption(codex);
@@ -85,7 +86,7 @@ async function run() {
   await capture('shared-review'); passed.push('Two-agent directed verification shares only selected material; current author/recipient names follow renaming without changing saved messages');
   await page.locator(`[data-room-session="${codex}"]`).click(); await until(() => input(codex).evaluate(el => document.activeElement === el), 'Room terminal focus');
   await page.keyboard.type('-ROOM');
-  await page.locator('#room-record').click(); await chooseRecipient(claude); await page.locator('#shared-input').fill('下一次核查草稿');
+  await page.locator('#room-record').click(); await chooseRecipient(claude); await fillRoomMessage(page, '下一次核查草稿');
   await page.locator(`[data-session-id="${codex}"]`).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
   await terminal(codex); await page.keyboard.type('-SOLO');
   assert.equal((await fixture()).inputs.filter(x => x.id === codex).map(x => x.data).join(''), 'UNSUBMITTED-CODEX-ROOM-SOLO');
@@ -107,7 +108,7 @@ async function run() {
   assert.match(trust, /不是账单/); assert.match(trust, /未报告；不能据此判断为零/); await capture('privacy-usage'); await page.locator('#close-privacy').click();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(880, 660));
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  assert.equal(await page.locator('#shared-input').inputValue(), '下一次核查草稿'); assert.equal(await page.locator('#recipient').inputValue(), claude);
+  assert.equal(await roomBody(page), '下一次核查草稿'); assert.equal(await page.locator('#recipient').inputValue(), claude);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); await capture('compact-room');
   passed.push('Usage panel distinguishes unknown native cost from shell counts; compact window retains controls and shared draft');
   assert.equal((await snapshot()).diagnostics.shellModelCalls, 0); assert.equal((await snapshot()).diagnostics.dispatches, 3);
@@ -124,4 +125,4 @@ run().catch(async e => { console.error(e.stack); if (page) await capture('failed
   if (app) await app.close(); if (client) { const state = await client.call('initial'); for (const s of state.sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
 });
 
-async function chooseRecipient(id) { await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click(); }
+async function chooseRecipient(id) { await inlineRecipient(page, id); }

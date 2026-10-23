@@ -10,10 +10,10 @@ async function checkTheme(page) {
       await page.waitForFunction(dark => document.body.hasAttribute('data-ds-dark-theme') === dark, scheme === 'dark');
       const samples = await page.evaluate(() => {
         const selectors = ['.brand', '#new-session', '#setup-button', '#room-nav', '#subtitle', '#start-claude', '#start-codex', '#setup-dialog h2', '#setup-status p', '#close-setup', '#create-dialog h2', '#session-name', '#cancel-create', '#run-status', '#room-scope', '#room-record', '#manage-members', '#members-dialog h2', '#shared-input', '#forward-button', '.session-more', '[role="menuitem"]', '#rename-name', '#approval strong', '#approval p', '#approval button:not(:disabled)', '#alert'];
-        selectors.push('.approval-command');
+        selectors.push('.approval-command', '#messages .message.user .message-body', '#messages .message.assistant .message-body p', '#messages .message.assistant pre', '#room-messages .message.human .message-body', '#native-phase');
         const rgba = text => {
           const parts = text.match(/[\d.]+/g).map(Number);
-          return [parts[0], parts[1], parts[2], parts[3] ?? 1];
+          return text.startsWith('color(srgb ') ? [parts[0] * 255, parts[1] * 255, parts[2] * 255, parts[3] ?? 1] : [parts[0], parts[1], parts[2], parts[3] ?? 1];
         };
         const over = (fg, bg) => fg.slice(0, 3).map((channel, i) => channel * fg[3] + bg[i] * (1 - fg[3])).concat(1);
         const luminance = rgb => rgb.slice(0, 3).map(v => v / 255).map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);

@@ -371,6 +371,7 @@ async function boot() {
     for (const key of ['roomThread', 'roomReplyTo']) if (next[key] !== undefined) require('./room-threads.js').replyReference(next[key]);
     if (next.roomSearch !== undefined && (typeof next.roomSearch !== 'string' || next.roomSearch.length > 1000)) throw new Error('搜索词过长。');
     if (next.sharedDraft !== undefined && (typeof next.sharedDraft !== 'string' || next.sharedDraft.length > 16000)) throw new Error('协作草稿过长。');
+    if (next.roomMention !== undefined && next.roomMention !== null && !require('./room-mention.js').validView(next.roomMention, next.sharedDraft, next.roomRecipient)) throw new Error('无效协作提及。');
     if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw new Error('无效终端显示设置。');
     const positions = next.readingPositions === undefined ? undefined : readingState(next.readingPositions);
     Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference });
@@ -378,6 +379,7 @@ async function boot() {
     if (next.sharedDraft !== undefined) c.view.sharedDraft = next.sharedDraft;
     if (next.roomSession !== undefined) c.view.roomSession = next.roomSession;
     if (next.roomRecipient !== undefined) c.view.roomRecipient = next.roomRecipient;
+    if (next.roomMention !== undefined) c.view.roomMention = next.roomMention;
     if (next.roomFilter !== undefined) c.view.roomFilter = next.roomFilter;
     if (next.roomSearch !== undefined) c.view.roomSearch = next.roomSearch;
     for (const key of ['roomThread', 'roomReplyTo']) if (next[key] !== undefined) c.view[key] = next[key];

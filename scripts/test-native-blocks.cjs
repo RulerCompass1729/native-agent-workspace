@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + real Claude CLI; canned responses are served on loopback.
 // No paid inference, user profile edits, global keyboard input, or foregrounding.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -84,8 +85,8 @@ async function cleanup() {
   const before = (await snapshot()).sessions[0];
   await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${before.id}"]`).click();
-  await page.locator('#shared-input').fill('Run the local check.'); await page.locator('#forward-button').click();
+  await inlineRecipient(page, before.id);
+  await fillRoomMessage(page, 'Run the local check.'); await page.locator('#forward-button').click();
   await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
   await until(() => calls === 2, 'Native tool loop');
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.text.includes('NATIVE_TOOL: 42')), 'Tool content before final reply');

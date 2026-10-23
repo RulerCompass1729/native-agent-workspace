@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual application and persistent service, controlled provider events only.
 // --real-deadline waits the full ten minutes with the UI closed, no clock change.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -40,8 +41,8 @@ async function create(provider, name) {
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;
 }
 async function start(id, goal) {
-  await room(); await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
-  await page.locator('#shared-input').fill(goal);
+  await room(); await inlineRecipient(page, id);
+  await fillRoomMessage(page, goal);
   if (!(await page.locator('#room-advanced').evaluate(el => el.open))) await page.locator('#room-advanced summary').click();
   await page.locator('#run-button').click(); await page.locator('#run-limit').selectOption('2');
   await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
@@ -92,8 +93,8 @@ async function run() {
     await native('release', { text: '期限之后完成的私人学习计划。' });
     assert.equal((await native()).sends.length, 5); assert.ok((await snapshot()).room.messages.every(m => m.text !== '期限之后完成的私人学习计划。'));
     await launch(); await room(); assert.match(await page.locator('#run-status').innerText(), /已暂停.*10 分钟/); await shot('expired-without-ui');
-    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${b}"]`).click();
-    await page.locator('#shared-input').fill('新的人工指令：把 35 分钟安排写成一句话。'); await page.locator('#forward-button').click();
+    await inlineRecipient(page, b);
+    await fillRoomMessage(page, '新的人工指令：把 35 分钟安排写成一句话。'); await page.locator('#forward-button').click();
     await until(async () => (await native()).sends.length === 6, 'New explicit message accepted'); await native('release', { text: '先阅读 20 分钟，再练习 15 分钟。' });
     assert.equal((await snapshot()).room.run.status, 'paused');
     checks.push('Full real ten-minute deadline expires with UI closed; pending native work is not called stopped, late result stays private, and a new explicit message works without resuming the expired run');

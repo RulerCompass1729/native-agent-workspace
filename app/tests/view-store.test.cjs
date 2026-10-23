@@ -79,3 +79,17 @@ test('invalid in-memory draft data cannot replace the last good recovery record'
   assert.throws(() => store.save(changed), /未覆盖/);
   assert.equal(fs.readFileSync(store.file, 'utf8'), before);
 });
+
+test('inline recipient metadata round-trips only with exact draft range and identity', t => {
+  const { store } = setup(t), views = saved();
+  store.load();
+  Object.assign(views[0], { sharedDraft: '@Codex 检查', roomRecipient: 'native-session', roomMention: { id: 'native-session', active: true, memberRevision: 1, text: '@Codex', start: 0, end: 6 } });
+  store.save(views); assert.deepEqual(store.load(), views);
+  views[0].roomMention.active = false; views[0].roomRecipient = ''; store.save(views); assert.deepEqual(store.load(), views);
+  views[0].roomMention.active = true; views[0].roomRecipient = 'native-session'; store.save(views);
+  const before = fs.readFileSync(store.file, 'utf8');
+  for (const invalid of [{ ...views[0].roomMention, end: 9 }, { ...views[0].roomMention, id: 'other' }]) {
+    assert.throws(() => store.save([{ ...views[0], roomMention: invalid }]));
+    assert.equal(fs.readFileSync(store.file, 'utf8'), before);
+  }
+});

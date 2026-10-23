@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + native Claude/Codex; fixed loopback responses exercise tool
 // calls and transport, not model judgement. No paid inference or global settings.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -121,8 +122,8 @@ async function create(provider, key = provider) {
 async function start(first, text) {
   const previousRun = (await snapshot()).room.run?.id;
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${first}"]`).click();
-  await page.locator('#shared-input').fill(text); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
+  await inlineRecipient(page, first);
+  await fillRoomMessage(page, text); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
   await page.locator('#run-mode').selectOption('directed');
   if (three) await page.locator(`[data-run-member="${ids.secondClaude}"]`).check();
   await page.locator('#run-limit').selectOption(three ? '4' : '3'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
@@ -198,7 +199,7 @@ async function start(first, text) {
     assert.equal(state.room.run.steps, 1); assert.deepEqual(state.room.run.ids, [claude.id, codex.id, second.id]);
     assert.equal(counts.codex, 0, 'Chosen target skips the fixed order');
     assert.equal(state.room.run.awaiting.sessionId, second.id);
-    await page.locator('#shared-input').fill('重新打开后保留的协作草稿'); await sleep(400);
+    await fillRoomMessage(page, '重新打开后保留的协作草稿'); await sleep(400);
     fs.writeFileSync(path.join(base, 'before-close.json'), JSON.stringify(await snapshot(), null, 2));
     await app.close(); app = null; release();
     await until(() => counts.claude === 5, 'Authorized native handoffs continue with interface closed');
@@ -219,7 +220,7 @@ async function start(first, text) {
     }
     const addressed = state.room.messages.filter(m => m.addressed);
     assert.deepEqual(addressed.map(m => [m.sessionId, m.deliveries[0].recipientId, m.deliveries[0].status]), [[claude.id, second.id, 'submitted'], [second.id, codex.id, 'submitted'], [codex.id, claude.id, 'submitted']]);
-    assert.equal(await page.locator('#shared-input').inputValue(), '重新打开后保留的协作草稿');
+    assert.equal(await roomBody(page), '重新打开后保留的协作草稿');
     assert.match(await page.locator('#room-messages').innerText(), /三位完成：最终预算 50 元/);
     for (const message of state.room.messages.filter(m => m.sharedStream && m.role === 'system')) {
       assert.ok((await page.locator(`[data-message-id="${message.id}"] .message-heading`).innerText()).includes(message.sessionId.slice(0, 6)), 'Native turn notices identify their exact participant');
@@ -321,13 +322,13 @@ async function start(first, text) {
   assert.ok(!(await snapshot()).room.messages.some(m => m.text?.includes('私人备注')));
   checks.push('Detach and continue in the same native TUI; private continuation does not enter the room');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator('#shared-input').fill('下一次的草稿，暂不发送。'); await sleep(400);
+  await fillRoomMessage(page, '下一次的草稿，暂不发送。'); await sleep(400);
   const before = await snapshot(); await app.close(); app = null; await launch();
   await until(async () => (await snapshot()).sessions.length === 2, 'Original sessions reconnect');
   state = await snapshot();
   assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
   assert.equal(state.room.run.status, 'paused'); assert.equal(state.diagnostics.dispatches, before.diagnostics.dispatches);
-  assert.equal(await page.locator('#shared-input').inputValue(), '下一次的草稿，暂不发送。');
+  assert.equal(await roomBody(page), '下一次的草稿，暂不发送。');
   assert.match(await page.locator('#room-messages').innerText(), /最终预算：50 元/);
   assert.deepEqual(counts, { claude: 4, codex: 4 }); assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(base, 'reopened.json'), JSON.stringify(state, null, 2));

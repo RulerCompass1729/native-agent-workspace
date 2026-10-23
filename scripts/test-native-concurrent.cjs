@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron, Claude and Codex. Four task responses (five for native interruption),
 // plus at most one native title response; all fixed loopback data, no paid inference.
 // Tests the existing room interaction, including real mouse drag and native streaming.
@@ -163,10 +164,10 @@ async function create(provider) {
   return s;
 }
 async function recipient(id) {
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
+  await inlineRecipient(page, id);
 }
 async function sharedSend(id, text) {
-  await recipient(id); await page.locator('#shared-input').fill(text); await page.locator('#forward-button').click();
+  await recipient(id); await fillRoomMessage(page, text); await page.locator('#forward-button').click();
   await until(async () => (await snapshot()).room.messages.some(m => m.text === text && m.status === 'submitted'), 'Shared native receipt');
 }
 async function openApplication() {
@@ -235,8 +236,8 @@ async function openApplication() {
     const ids = (await snapshot()).sessions.map(peerIdentity);
     assert.equal(new Set((await snapshot()).sessions.map(s => s.handoffGroup)).size, 2);
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${claude.id}"]`).click();
-    await page.locator('#shared-input').fill('核对一个小预算：午餐合计36元，交通14元。Claude给草案，Codex核对，Claude给最终结论。');
+    await inlineRecipient(page, claude.id);
+    await fillRoomMessage(page, '核对一个小预算：午餐合计36元，交通14元。Claude给草案，Codex核对，Claude给最终结论。');
     await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
     if (peerReleased) assert.equal(await page.locator('#run-mode option[value="directed"]').isDisabled(), true, 'Released V1 remains replies-only');
     assert.equal(await page.locator('#run-mode').inputValue(), 'replies');
@@ -251,7 +252,7 @@ async function openApplication() {
     assert.deepEqual((await session(codex.id)).serverIdentity, codexBackend);
     assert.equal((await snapshot()).room.run.status, 'running');
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    await page.locator('#shared-input').fill('Unsent peer-room draft.');
+    await fillRoomMessage(page, 'Unsent peer-room draft.');
     const observer = await connect(profile, 'peer-native-observer');
     try {
       await application.close(); application = null;
@@ -264,7 +265,7 @@ async function openApplication() {
     assert.deepEqual(done.sessions.map(peerIdentity), ids); assert.equal(done.room.run.steps, 3); assert.equal(done.diagnostics.dispatches, 3);
     assert.equal(done.room.messages.filter(m => m.finalReply && m.runId === done.room.run.id).length, 3);
     assert.equal(done.room.messages.filter(m => m.role === 'human' && m.runId === done.room.run.id).length, 1);
-    assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent peer-room draft.');
+    assert.equal(await roomBody(page), 'Unsent peer-room draft.');
     for (const provider of ['claude', 'codex']) assert.equal(done.sessions.find(s => s.provider === provider).liveDraft, `Private ${provider} draft.`);
     assert.match(await page.locator('#room-messages').innerText(), /最终预算50元/);
     const request = JSON.parse(fs.readFileSync(path.join(base, 'codex-1-request.json')));
@@ -284,8 +285,22 @@ async function openApplication() {
     assert.equal(await page.locator('#terminal-area .xterm-helper-textarea').isVisible(), false);
     await save('empty-terminal-guidance');
     await page.screenshot({ path: path.join(base, 'empty-terminal-guidance.png') });
-    await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('Start the first Codex task.'); await page.locator('#send-button').click();
+    await page.locator('#chat-tab').click(); await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await fillRoomMessage(page, 'Start the first Codex task.'); await inlineRecipient(page, codex.id); await page.locator('#forward-button').click();
+    // Room member tabs intentionally open the native TUI. The same session's
+    // sidebar entry opens its unified reader without leaving the room.
+    await page.locator('[data-session-id="' + codex.id + '"]').click(); await page.locator('#chat-tab').click();
     await until(() => controls['codex-1'], 'Requested first turn');
+    const actualInput = fs.readFileSync(path.join(base, 'codex-1-request.json'), 'utf8');
+    assert.ok(actualInput.includes('Start the first Codex task.')); assert.ok(!actualInput.includes('Private codex draft.')); assert.ok(!actualInput.includes('@Codex build'));
+    await until(async () => (await page.locator('#native-phase').innerText()).includes('正在输出'), 'Real native agentMessage lifecycle appears in reader');
+    const activity = (await session(codex.id)).nativeActivity;
+    assert.equal(activity.nativeId, codex.nativeId); assert.equal(activity.turnId, (await session(codex.id)).activeTurnId);
+    assert.ok(Number.isFinite(activity.startedAt), 'Native Turn supplies its own start time');
+    await until(async () => /本轮已运行 \d+ 秒/u.test(await page.locator('#native-elapsed').innerText()), 'Native elapsed time visible');
+    await save('codex-live-activity');
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-codex-activity.png') }); }
     await page.locator('#terminal-tab').click();
     await until(async () => { const text = await page.locator('#terminal-area').innerText(); return text.includes('Start the first Codex task.') && text.includes('Working'); }, 'The same native terminal displays the active first input');
     assert.equal((await session(codex.id)).state, 'working');
@@ -297,13 +312,17 @@ async function openApplication() {
     controls['codex-1'].finish();
     await until(async () => (await session(codex.id)).state === 'idle', 'First native response ends');
     assert.equal((await session(codex.id)).nativeId, codex.nativeId);
+    assert.equal((await session(codex.id)).nativeActivity, null);
     assert.deepEqual((await session(codex.id)).serverIdentity, codex.serverIdentity);
     assert.equal((await snapshot()).diagnostics.dispatches, 1); assert.deepEqual(counts, { claude: 0, codex: 1 }); assert.deepEqual(errors, []);
     await save('first-terminal-ready');
     await page.screenshot({ path: path.join(base, 'first-terminal-ready.png') });
     await page.locator('#chat-tab').click();
+    assert.equal(await page.locator('#native-activity').isHidden(), true);
     await until(async () => { const text = await page.locator('#messages').innerText(); return text.includes('CODEX_SHARED_PREFIX') && text.includes('AFTER_ATTACH'); }, 'The main reader retains both pre-attachment and later output');
-    console.log(JSON.stringify({ checks: ['An empty native Codex session shows the necessary first-message step with zero seed tasks', 'During the single requested first GUI turn, terminal displays its input and new output after attachment', 'The original turn finishes and the main reader retains the complete reply without another submission'], versions, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await until(async () => { const text = await page.locator('#room-messages').innerText(); return text.includes('Start the first Codex task.') && text.includes('AFTER_ATTACH'); }, 'Inline addressed task and original native reply appear in shared reader');
+    console.log(JSON.stringify({ checks: ['An empty native Codex session shows the necessary first-message step with zero seed tasks', 'The single inline-addressed room task reaches the native Codex and shared reader; terminal displays its input and new output after attachment', 'Native activity phase and turn start clock are visible; the completed original turn clears live status and retains the complete reply without another submission'], versions, counts, nativeTitleResponses: titleCalls, paidModelCalls: 0, evidence: base }));
     return;
   }
   if (retained) await application.evaluate(({ app }) => {
@@ -470,12 +489,12 @@ async function openApplication() {
     return;
   }
   const turn = (await session(codex.id)).activeTurnId;
-  await recipient(claude.id); await page.locator('#shared-input').fill('Follow up on the Claude review.');
+  await recipient(claude.id); await fillRoomMessage(page, 'Follow up on the Claude review.');
   await page.locator('#forward-button').click();
   await until(async () => (await session(claude.id)).pendingQueue, 'Claude queued input pending');
   controls['claude-1'].append('CLAUDE_WHILE_WAITING: original public work continues.\n');
   await until(async () => (await page.locator('#room-messages').innerText()).includes('CLAUDE_WHILE_WAITING'), 'Original public output stays live while queued input waits');
-  await recipient(codex.id); await page.locator('#shared-input').fill('Refine only the Codex task.');
+  await recipient(codex.id); await fillRoomMessage(page, 'Refine only the Codex task.');
   assert.equal(await page.locator('#forward-button').isEnabled(), true, 'Waiting Claude input must not block another recipient');
   await page.locator('#forward-button').click();
   await until(async () => (await snapshot()).room.messages.some(m => m.text === 'Refine only the Codex task.' && m.status === 'submitted'), 'Codex shared steer receipt');
@@ -494,9 +513,9 @@ async function openApplication() {
   const source = currentRoom.find(m => m.text === 'Follow up on the Claude review.');
   await page.locator(`[data-message-id="${source.id}"] [data-reply-to]`).click();
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('CODEX_STEER_PREFIX'));
-  await page.locator('#shared-input').fill('Unsent thread draft.');
+  await fillRoomMessage(page, 'Unsent thread draft.');
   await page.reload(); await page.locator('#new-session').waitFor();
-  await until(async () => (await page.locator('#shared-input').inputValue()) === 'Unsent thread draft.', 'Thread draft restoration');
+  await until(async () => (await roomBody(page)) === 'Unsent thread draft.', 'Thread draft restoration');
   assert.deepEqual(counts, { claude: 2, codex: 2 });
   await page.locator('#thread-back').click();
   await page.locator('#room-filter').selectOption(claude.id);

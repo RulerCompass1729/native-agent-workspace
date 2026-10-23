@@ -14,7 +14,7 @@ let shareRevision = 0, sharePending = null;
 let runPreview = null;
 let renamingId = '', renaming = false;
 let sessionMenu;
-let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, notesRevision, contextTarget = null;
+let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, mentionRoster = '', roomMention = null, roomMentionEdit = null, notesRevision, contextTarget = null;
 let roomDraftRevision = 0;
 let pendingRoomFilter = '';
 let roomThread = '', roomReplyTo = '';
@@ -228,7 +228,7 @@ function renderComposer(s) {
 }
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
-function persistView() { captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: $('recipient').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
+function persistView() { normalizeRoomMention(); captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession) {
   captureReadingViews();
@@ -620,11 +620,17 @@ function openContext() {
   $('context-error').hidden = true; $('insert-context').hidden = Boolean(s);
   $('context-dialog').showModal();
 }
-function closeMentions() { mentionOptions = []; mentionRange = null; $('mention-list').hidden = true; $('shared-input').setAttribute('aria-expanded', 'false'); $('shared-input').removeAttribute('aria-activedescendant'); }
+function appendedDraft(input, text, room) {
+  if (room && roomRecipient() && !nativeWorkspaceMentions.body(roomMention, input.value).trim()) return input.value + (/\s$/u.test(input.value) ? '' : ' ') + text;
+  return [input.value, text].filter(Boolean).join('\n\n');
+}
+function mentionRosterKey() { return JSON.stringify(members().map(s => [s.id, s.name, s.provider, s.memberRevision])); }
+function closeMentions() { mentionRoster = ''; mentionOptions = []; mentionRange = null; $('mention-list').hidden = true; $('shared-input').setAttribute('aria-expanded', 'false'); $('shared-input').removeAttribute('aria-activedescendant'); }
 function showMentions(force = false) {
   const input = $('shared-input'), before = input.value.slice(0, input.selectionStart);
   const match = before.match(/(?:^|\s)@([^\s@]*)$/u);
   if (!force && !match) return closeMentions();
+  mentionRoster = mentionRosterKey();
   mentionRange = match ? { start: before.lastIndexOf('@'), end: input.selectionStart } : null;
   const query = match ? match[1].toLocaleLowerCase() : '';
   mentionOptions = members().filter(s => `${s.name} ${s.provider}`.toLocaleLowerCase().includes(query)); mentionIndex = 0;
@@ -639,12 +645,40 @@ function showMentions(force = false) {
 function highlightMention() {
   [...$('mention-list').querySelectorAll('[role="option"]')].forEach((el, i) => el.setAttribute('aria-selected', String(i === mentionIndex)));
   if (mentionOptions.length) $('shared-input').setAttribute('aria-activedescendant', `mention-${mentionIndex}`);
+  else $('shared-input').removeAttribute('aria-activedescendant');
+}
+function roomRecipient() {
+  const person = members().find(s => s.id === roomMention?.id);
+  return person && roomMention.active === true && roomMention.memberRevision === (person.memberRevision || 0) && roomMention.text === '@' + participantLabel(person) && nativeWorkspaceMentions.valid(roomMention, $('shared-input').value) ? roomMention.id : '';
+}
+function normalizeRoomMention() {
+  if (!roomMention) return;
+  if (!nativeWorkspaceMentions.valid(roomMention, $('shared-input').value)) roomMention = null;
+  else if (!roomRecipient()) roomMention = { ...roomMention, active: false };
 }
 function chooseMention(id) {
-  if (!members().some(s => s.id === id)) { closeMentions(); return toast('这个会话已离开，请重新选择接收者。'); }
-  $('recipient').value = id;
-  if (mentionRange) { const input = $('shared-input'); input.setRangeText('', mentionRange.start, mentionRange.end, 'end'); roomDraftRevision++; }
-  closeMentions(); attempt(persistView); render(); $('shared-input').focus();
+  const person = members().find(s => s.id === id);
+  if (!person) { closeMentions(); return toast('这个会话已离开，请重新选择接收者。'); }
+  const input = $('shared-input'), old = nativeWorkspaceMentions.valid(roomMention, input.value) ? roomMention : null;
+  let range = mentionRange || (old ? { start: old.start, end: old.end } : { start: input.selectionStart, end: input.selectionEnd });
+  let text = input.value;
+  if (old && (old.start !== range.start || old.end !== range.end)) {
+    text = text.slice(0, old.start) + text.slice(old.end);
+    if (old.end <= range.start) range = { start: range.start - old.text.length, end: range.end - old.text.length };
+  }
+  const token = '@' + participantLabel(person);
+  const suffix = text.slice(range.end), separator = suffix && /^\s/u.test(suffix) ? '' : ' ';
+  const next = text.slice(0, range.start) + token + separator + suffix;
+  if (next.length > 16000) return toast('草稿已达长度上限，请先缩短再选择成员。');
+  input.focus(); input.setSelectionRange(0, input.value.length);
+  // Chromium's native edit command keeps the textarea undo history; assigning
+  // value or introducing a second editor would discard it. Routing is rebound
+  // explicitly below, never by a later undo/redo text match.
+  if (!document.execCommand('insertText', false, next)) input.value = next;
+  roomMention = { id, active: true, memberRevision: person.memberRevision || 0, start: range.start, end: range.start + token.length, text: token };
+  roomMentionEdit = null; roomDraftRevision++;
+  input.setSelectionRange(roomMention.end + separator.length, roomMention.end + separator.length);
+  closeMentions(); attempt(persistView); render(); input.focus();
 }
 function share(text) {
   if (!members().length) return toast('先把接收方加入共同工作，再分享选定内容。');
@@ -780,6 +814,21 @@ function renderMembers() {
     const slot = list.children[index]; if (slot !== row.element) list.insertBefore(row.element, slot || null);
   });
 }
+function renderNativeActivity(s) {
+  const el = $('native-activity');
+  const live = s && s.provider === 'codex' && mode === 'chat' && !disconnected && !s.transportDisconnected && ['working', 'approval'].includes(s.state);
+  el.hidden = !live;
+  if (!live) return;
+  const status = s.nativeActivity;
+  const matched = status && status.nativeId === s.nativeId && status.turnId === s.activeTurnId;
+  const seconds = matched && Number.isFinite(status.startedAt) && status.startedAt <= Date.now() ? Math.floor((Date.now() - status.startedAt) / 1000) : null;
+  const label = matched ? status.label : s.state === 'approval' ? '等待原生确认' : '正在处理';
+  const text = (s.name || 'Codex') + ' · ' + label;
+  if ($('native-phase').textContent !== text) $('native-phase').textContent = text;
+  const elapsed = seconds === null ? '' : ' · 本轮已运行 ' + seconds + ' 秒';
+  if ($('native-elapsed').textContent !== elapsed) $('native-elapsed').textContent = elapsed;
+}
+const nativeActivityClock = setInterval(() => { if (state) renderNativeActivity(current()); }, 1000);
 function render() {
   if (!state || rendering) return;
   captureReadingViews();
@@ -818,6 +867,7 @@ function render() {
       if (record) entry.textContent = `加入 ${participantLabel(record, state.sessions)}`;
     }
     renderHeader(s, inRoom);
+    if (!s) renderNativeActivity(null);
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
       $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
@@ -826,7 +876,7 @@ function render() {
       $('terminal-controls').hidden = mode !== 'terminal';
       $('terminal-paste').disabled = !terminalCanInput(s.id) || !alive;
       $('messages').hidden = mode !== 'chat'; $('terminal-area').hidden = mode !== 'terminal'; $('composer-wrap').hidden = mode !== 'chat';
-      renderComposer(s);
+      renderComposer(s); renderNativeActivity(s);
       $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
       if (mode === 'chat') readLegacyProgress(s);
       const visibleMessages = sessionMessages(s);
@@ -862,25 +912,25 @@ function render() {
       renderTimeline();
       renderMembers();
       const previousRecipient = $('recipient').value;
+      normalizeRoomMention();
       $('recipient').dataset.hadChoices = 'true';
       populateSelect($('recipient'), members());
+      $('recipient').value = roomRecipient();
       if (previousRecipient && !$('recipient').value) attempt(persistView);
       const safeHandoffs = handoffCandidates($('recipient').value).length >= 2;
       const recipient = people.find(s => s.id === $('recipient').value);
-      $('mention-button').textContent = recipient ? `@ ${participantLabel(recipient)} ⌄` : '@ 选择成员';
-      $('mention-button').title = recipient ? `接收者：${participantLabel(recipient)}；点击更换` : '选择接收者，也可以在消息中输入 @';
       const nativeRoute = recipient && (recipient.nativeInputRequired || recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient));
-      $('shared-input').readOnly = Boolean(nativeRoute);
+      $('shared-input').readOnly = false;
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
       $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : roomSteerAvailable(recipient) ? '追加指令 ↑' : '发送 ↑';
       const recipientPending = roomPendingRecipients.has(recipient?.id);
-      const unavailable = roomSubmitting || recipientPending || disconnected || !$('shared-input').value.trim();
+      const unavailable = roomSubmitting || recipientPending || disconnected || !nativeWorkspaceMentions.body(roomMention, $('shared-input').value).trim();
       const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
       const ready = s => s && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
       const manualErrorReady = recipient?.state === 'error' && recipient.failedTurnInputAvailable && !recipient.pendingTag && !recipient.pendingQueue && !recipient.approval;
       $('forward-button').disabled = nativeRoute ? roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !manualErrorReady && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
       $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed || !safeHandoffs || Boolean(threadUnsupported);
-      $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
+      $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : roomMention?.active === false ? '接收者已变化，重新 @ 选择。正文保留，不会发送给旧成员。' : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
       if (roomQueueAvailable(recipient) || recipient?.pendingQueue) $('run-help').textContent += ' · 等原生下一轮接收；当前工作继续，先前私人内容不会加入共享记录。';
       if (roomSteerAvailable(recipient)) $('run-help').textContent += ' · 追加到当前原生回合；接收后的新消息块进入共享记录，先前内容不补发。';
       if (manualErrorReady) $('run-help').textContent += ' · 上次请求失败，不会自动重试或继续交接。';
@@ -890,7 +940,7 @@ function render() {
       if (threadUnsupported) $('run-help').textContent = roomThreads.rows.has(roomReplyTo) ? '此连接尚不支持讨论回复。草稿保留；取消回复可作为新消息发送。' : '原讨论已移除。草稿保留，请先取消回复。';
       $('pause-button').textContent = run?.pauseUnconfirmed ? '重新核对暂停' : pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
       $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || Boolean(run?.pausePending) || (!pendingRun && run?.status !== 'running' && !run?.pauseUnconfirmed);
-      if (mentionOptions.some(option => !people.some(person => person.id === option.id))) closeMentions();
+      if (!$('mention-list').hidden && mentionRoster !== mentionRosterKey()) showMentions();
     }
     for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id));
     updateSelectedSharing();
@@ -1188,7 +1238,7 @@ $('insert-file').onclick = async () => {
   try {
     if (!filePreview || !fileTargetMatches() || fileDraftInput().readOnly || (!fileTarget.room && mode !== 'chat')) throw Error('视图或控制权已变化，请回到要编辑的会话重新选择文件。');
     const input = fileDraftInput();
-    const next = [input.value, `文件：${filePreview.name}\n${filePreview.text}`].filter(Boolean).join('\n\n');
+    const next = appendedDraft(input, `文件：${filePreview.name}\n${filePreview.text}`, fileTarget.room);
     if (next.length > 16000) throw Error('合并后超过 16000 字符。请缩短草稿或选择较小的材料；没有截断内容。');
     const room = fileTarget.room;
     input.value = next;
@@ -1271,7 +1321,12 @@ $('interrupt').onclick = () => {
   if (mode === 'chat' && inputFocusAllowed() && !$('message-input').readOnly) $('message-input').focus();
   attempt(() => api.interrupt(id));
 };
-$('shared-input').oninput = event => { roomDraftRevision++; attempt(persistView); render(); if (event.inputType === 'insertText' && !event.isComposing) showMentions(); else closeMentions(); };
+$('shared-input').onbeforeinput = event => { const input = $('shared-input'); roomMentionEdit = { before: input.value, start: input.selectionStart, end: input.selectionEnd, type: event.inputType }; };
+$('shared-input').oninput = event => {
+  const edit = roomMentionEdit; roomMentionEdit = null;
+  roomMention = edit ? nativeWorkspaceMentions.edited(roomMention, edit.before, $('shared-input').value, edit) : null;
+  roomDraftRevision++; attempt(persistView); render(); if (event.inputType === 'insertText' && !event.isComposing) showMentions(); else closeMentions(); };
+$('shared-input').oncompositionend = () => showMentions();
 $('shared-input').onkeydown = event => {
   if (event.isComposing || event.keyCode === 229) return;
   if (!$('mention-list').hidden) {
@@ -1279,16 +1334,16 @@ $('shared-input').onkeydown = event => {
     if (event.key === 'Escape') { event.preventDefault(); closeMentions(); return; }
     if (event.key === 'Enter') { event.preventDefault(); if (mentionOptions[mentionIndex]) chooseMention(mentionOptions[mentionIndex].id); return; }
   }
-  if (event.key === 'Enter' && !event.shiftKey && !$('shared-input').readOnly) { event.preventDefault(); if (!$('forward-button').disabled) $('room-composer').requestSubmit(); }
+  if (event.key === 'Enter' && !event.shiftKey && !$('shared-input').readOnly) { event.preventDefault(); if (!$('forward-button').disabled) { if ($('forward-button').type === 'button') $('forward-button').click(); else $('room-composer').requestSubmit(); } }
 };
-$('mention-button').onclick = () => { showMentions(true); $('shared-input').focus(); };
-$('shared-input').onblur = event => { if (!event.relatedTarget?.closest('#mention-list') && event.relatedTarget?.id !== 'mention-button') closeMentions(); };
+$('shared-input').onblur = event => { if (!event.relatedTarget?.closest('#mention-list')) closeMentions(); };
 async function submitRoom(automatic) {
   if (roomSubmitting || (automatic ? roomPendingRecipients.size > 0 : roomPendingRecipients.has($('recipient').value)) || $('shared-input').readOnly || $(automatic ? 'run-button' : 'forward-button').disabled) return;
-  const first = $('recipient').value, text = $('shared-input').value, revision = roomDraftRevision;
+  const first = roomRecipient(), raw = $('shared-input').value, text = nativeWorkspaceMentions.body(roomMention, raw), revision = roomDraftRevision, address = roomMention && { ...roomMention };
   const ids = automatic?.ids;
   const recipient = members().find(s => s.id === first);
   if (!recipient) throw Error('接收方已变化，请重新选择。');
+  if (recipient.nativeInputRequired || recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient)) return;
   // Return focus before the clicked control becomes disabled. Never steal it
   // back asynchronously after the person has opened another view or dialog.
   $('shared-input').focus();
@@ -1299,7 +1354,7 @@ async function submitRoom(automatic) {
   try {
     const receipt = await (automatic ? api.run(ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
     if (submission.cancelRequested || receipt?.contextChanged) return;
-    if (revision === roomDraftRevision && $('shared-input').value === text) { $('shared-input').value = ''; roomDraftRevision++; await persistView(); }
+    if (revision === roomDraftRevision && $('shared-input').value === raw && roomRecipient() === first && roomMention?.memberRevision === address?.memberRevision && roomMention?.text === address?.text) { $('shared-input').value = roomMention.text + ' '; roomMention = { ...roomMention, start: 0, end: roomMention.text.length }; roomDraftRevision++; await persistView(); }
   }
   catch (error) { if (!submission.cancelRequested) throw error; }
   finally {
@@ -1311,7 +1366,7 @@ async function submitRoom(automatic) {
 }
 $('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => submitRoom(false)); };
 $('forward-button').onclick = () => {
-  if ($('forward-button').disabled || !$('shared-input').readOnly) return;
+  if ($('forward-button').disabled || $('forward-button').type !== 'button') return;
   const recipient = members().find(s => s.id === $('recipient').value);
   if (!recipient) return;
   if (nativeUsable(recipient)) selectRoom(recipient.id); else select(recipient.id, 'chat');
@@ -1375,9 +1430,9 @@ function renderRunChoices() {
 $('run-button').onclick = () => {
   if ($('run-button').disabled) return;
   $('room-advanced').open = false;
-  if ($('shared-input').value.length > 6000) { toast('一起核查的任务与材料合计最多 6000 字符。草稿保留；可缩短后核查，或定向发送。'); $('shared-input').focus(); return; }
-  const recipient = $('recipient').value, candidates = handoffCandidates(recipient);
-  runPreview = { text: $('shared-input').value, recipient, revision: roomDraftRevision,
+  if (nativeWorkspaceMentions.body(roomMention, $('shared-input').value).length > 6000) { toast('一起核查的任务与材料合计最多 6000 字符。草稿保留；可缩短后核查，或定向发送。'); $('shared-input').focus(); return; }
+  const recipient = roomRecipient(), candidates = handoffCandidates(recipient);
+  runPreview = { text: nativeWorkspaceMentions.body(roomMention, $('shared-input').value), recipient, revision: roomDraftRevision,
     members: members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]), identities: Object.fromEntries(members().map(s => [s.id, s.peerIdentity])), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
   $('run-preview').textContent = runPreview.text;
   $('run-consent').checked = false; $('run-error').hidden = true; renderRunChoices();
@@ -1391,7 +1446,7 @@ $('run-form').onsubmit = event => {
   event.preventDefault();
   if (!$('run-consent').checked || !runPreview || $('confirm-run').disabled) return;
   const eligible = handoffCandidates(runPreview.recipient);
-  const same = selected === 'room' && !roomSession && runPreview.text === $('shared-input').value && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]));
+  const same = selected === 'room' && !roomSession && runPreview.text === nativeWorkspaceMentions.body(roomMention, $('shared-input').value) && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]));
   const available = runPreview.ids.length >= 2 && runPreview.ids.every(id => JSON.stringify(runPreview.identities[id]) === JSON.stringify(members().find(s => s.id === id)?.peerIdentity)) && runPreview.ids.every(id => eligible.some(s => s.id === id)) &&
     (runPreview.ids.length <= 2 || eligible.filter(s => runPreview.ids.includes(s.id)).every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs')));
   if (!same || !available || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
@@ -1400,7 +1455,7 @@ $('run-form').onsubmit = event => {
   const contexts = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[3]]));
   $('run-dialog').close(); runPreview = null; attempt(() => submitRoom({ limit, ids, labels, contexts, mode, identities }));
 };
-$('recipient').onchange = () => { closeMentions(); attempt(persistView); render(); };
+
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };
 $('thread-back').onclick = () => { captureReadingViews(); roomThread = ''; if (!$('shared-input').value.trim() && !roomSubmitting) roomReplyTo = ''; render(); attempt(persistView); };
 $('cancel-reply').onclick = () => { roomReplyTo = ''; roomThread = ''; roomDraftRevision++; render(); attempt(persistView); $('shared-input').focus(); };
@@ -1418,7 +1473,7 @@ $('insert-context').onclick = () => attempt(async () => {
   const target = contextTarget, text = $('context-text').value;
   if (!target?.room || selected !== 'room') throw Error('当前视图已变化，请重新打开协作背景。');
   const input = $('shared-input');
-  const next = [input.value, text].filter(Boolean).join('\n\n');
+  const next = appendedDraft(input, text, true);
   if (next.length > 16000) { $('context-error').textContent = '合并后的草稿超过 16000 字符，请先缩短。'; $('context-error').hidden = false; return; }
   input.value = next;
   roomDraftRevision++; await persistView();
@@ -1508,10 +1563,13 @@ attempt(async () => {
   $('room-search').value = state.viewState.roomSearch || ''; pendingRoomFilter = state.viewState.roomFilter || '';
   roomThread = state.viewState.roomThread || ''; roomReplyTo = state.viewState.roomReplyTo || '';
   const savedRecipient = state.viewState.roomRecipient;
+  const savedMention = state.viewState.roomMention;
+  if (savedMention && nativeWorkspaceMentions.validView(savedMention, $('shared-input').value, savedRecipient)) roomMention = savedMention;
+  normalizeRoomMention();
   if (typeof savedRecipient === 'string' || $('shared-input').value.trim()) {
     // Older views have a draft but no recipient: require an explicit choice.
     $('recipient').dataset.hadChoices = 'true'; populateSelect($('recipient'), members());
-    $('recipient').value = members().some(s => s.id === savedRecipient) ? savedRecipient : '';
+    $('recipient').value = roomRecipient();
     $('recipient').title = $('recipient').selectedOptions[0]?.textContent || '';
   }
   for (const [id, backup] of Object.entries(state.viewState.draftBackups || {})) {
@@ -1524,4 +1582,4 @@ attempt(async () => {
   }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { clearInterval(nativeActivityClock); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

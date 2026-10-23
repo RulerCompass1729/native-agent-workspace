@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron interface, native adapters/workspace and persisted records.
 // Controlled provider events prove UI behavior, not model reasoning or OS IME.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -96,9 +97,9 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'followthrough-observer');
   await launch(); const a = await create('claude', '预算整理'), b = await create('codex', '预算核查');
   const identities = (await snapshot()).sessions.map(s => [s.id, s.nativeId]);
-  await room(); await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${b}"]`).click();
+  await room(); await inlineRecipient(page, b);
   const task = '核查三人出游预算：每人午餐 18 元、交通 7 元。给出总计和人均，保留明细。';
-  await page.locator('#shared-input').fill(task); await page.locator('#forward-button').click();
+  await fillRoomMessage(page, task); await page.locator('#forward-button').click();
   await until(async () => (await native()).sends.length === 1, 'Directed task accepted once');
   const request = (await snapshot()).room.messages.find(m => m.text === task);
   assert.ok(request); assert.equal(request.recipientId, b);
@@ -157,8 +158,8 @@ async function run() {
   await page.locator('#room-search').fill(''); await page.locator('#room-filter').selectOption('');
   // A finite exchange has no directed-send row. Its pause record must keep the
   // exact waiting session reachable without turning private output into sharing.
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${a}"]`).click();
-  await page.locator('#shared-input').fill('复核这份预算，仍然只算三人午餐和交通。');
+  await inlineRecipient(page, a);
+  await fillRoomMessage(page, '复核这份预算，仍然只算三人午餐和交通。');
   await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
   await page.locator('#run-limit').selectOption('2'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
   await until(async () => (await native()).sends.length === 3, 'First bounded reply');

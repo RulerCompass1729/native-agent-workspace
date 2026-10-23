@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual hidden desktop, two independent local services and shipped routing.
 // Controlled provider transports; no native process or model inference.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
@@ -40,8 +41,8 @@ async function create(provider, name) {
 }
 async function run(id, text) {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
-  await page.locator('#shared-input').fill(text); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
+  await inlineRecipient(page, id);
+  await fillRoomMessage(page, text); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
   assert.equal(await page.locator('#run-mode').inputValue(), 'replies');
   await page.locator('#run-limit').selectOption('3'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
 }
@@ -66,13 +67,13 @@ async function main() {
   await until(async () => (await fixture(old)).sends.length === 1, 'First service accepts step one');
   await fixture(old, 'release', '草案：预算50元。');
   await until(async () => (await fixture(next)).sends.length === 1, 'Second service accepts step two');
-  await page.locator('#shared-input').fill('关闭重开后保留的草稿'); await app.close(); app = null;
+  await fillRoomMessage(page, '关闭重开后保留的草稿'); await app.close(); app = null;
   await fixture(next, 'release', '核查：36+14=50，计算正确。');
   await until(async () => (await fixture(old)).sends.length === 2, 'UI-closed service handoff returns to original session');
   await fixture(old, 'release', '最终预算50元，已核查。');
   await until(async () => (await observer.call('initial')).room.run?.status === 'completed', 'Finite run completes without UI');
   await launch(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  assert.equal(await page.locator('#shared-input').inputValue(), '关闭重开后保留的草稿');
+  assert.equal(await roomBody(page), '关闭重开后保留的草稿');
   let state = await snapshot(); assert.equal(state.room.run.steps, 3); assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
   assert.equal(state.room.messages.filter(m => m.role === 'human' && m.runId === state.room.run.id).length, 1);
   assert.equal(state.room.messages.filter(m => m.finalReply && m.runId === state.room.run.id).length, 3);

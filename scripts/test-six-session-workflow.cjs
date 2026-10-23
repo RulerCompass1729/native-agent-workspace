@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Upper-bound daily workflow through the actual app. Provider replies are
 // controlled, not model reasoning; process samples exclude the person's apps.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -43,8 +44,8 @@ async function create(provider) {
 }
 async function room() { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
 async function authorize(ids, goal) {
-  await room(); await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${ids[0]}"]`).click();
-  await page.locator('#shared-input').fill(goal);
+  await room(); await inlineRecipient(page, ids[0]);
+  await fillRoomMessage(page, goal);
   if (!await page.locator('#room-advanced').evaluate(el => el.open)) await page.locator('#room-advanced summary').click();
   await page.locator('#run-button').click();
   for (const id of ids.slice(1)) await page.locator(`[data-run-member="${id}"]`).check();

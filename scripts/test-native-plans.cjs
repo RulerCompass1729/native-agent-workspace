@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex Plan mode and Electron; four bounded fixed loopback responses.
 // Private native configuration; no paid inference or normal-profile edits.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -107,8 +108,8 @@ async function launch() {
   await page.locator('#chat-tab').click();
   await page.locator('#header-actions').getByRole('button',{name:'加入协作',exact:true}).click();
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
-  await page.locator('#mention-button').click();await page.locator(`[data-mention-id="${before.id}"]`).click();
-  await page.locator('#shared-input').fill('Plan this shared example.');await page.locator('#forward-button').click();
+  await inlineRecipient(page, before.id);
+  await fillRoomMessage(page, 'Plan this shared example.');await page.locator('#forward-button').click();
   await until(()=>calls===3&&releaseFinal,'One explicit shared task');
   await page.locator('#room-messages').getByText('Check this shared plan before continuing.',{exact:true}).waitFor();
   const shared=await snapshot();assert.ok(shared.room.messages.some(m=>m.title==='计划'&&m.status==='streaming'));
@@ -129,7 +130,7 @@ async function launch() {
   await input.press('Escape');
   await until(async()=>!(await terminal.innerText()).includes('Implement this plan?'),'Shared native menu dismissed');
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
-  await page.locator('#shared-input').fill('Start the next shared plan.');await page.locator('#forward-button').click();
+  await fillRoomMessage(page, 'Start the next shared plan.');await page.locator('#forward-button').click();
   await until(()=>calls===4&&releaseFinal,'Last bounded shared task');
   await page.locator('#room-messages').getByText('Keep this observed cut.',{exact:true}).waitFor();
   await page.locator(`[data-session-id="${before.id}"]`).click();await page.locator('#terminal-tab').click();

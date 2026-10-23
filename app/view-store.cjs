@@ -16,6 +16,7 @@ function validViews(views) {
     for (const key of ['mode', 'preference'])
       if (view[key] !== undefined && !['chat', 'terminal'].includes(view[key])) return false;
     if (view.sharedDraft !== undefined && !text(view.sharedDraft, 16000)) return false;
+    if (view.roomMention !== undefined && view.roomMention !== null && !require('./room-mention.js').validView(view.roomMention, view.sharedDraft, view.roomRecipient)) return false;
     if (view.roomSearch !== undefined && !text(view.roomSearch, 1000)) return false;
     if (view.draft !== undefined && (!object(view.draft) || !text(view.draft.id, 100) || !text(view.draft.text, 16000))) return false;
     if (view.draftBackups !== undefined) {

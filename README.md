@@ -12,6 +12,10 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.86 puts selected room mentions inside the composer, compacts the reader,
+and displays native Codex activity and elapsed time without extra model calls.
+See [acceptance scope](docs/readiness.md).
+
 Alpha.85 extends agent-selected addressed handoffs across supported local
 services without replacing native sessions. Alpha.84 services retain fixed-order
 cooperation through an update; services without the peer protocol remain manual.

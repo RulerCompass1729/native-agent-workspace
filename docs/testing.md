@@ -2723,3 +2723,40 @@ Actual hidden Electron mouse/keyboard actions exercise native CLIs and productio
 adapters; loopback responses replace model inference only. This is not physical
 IME coverage, hosted reasoning, arbitrary provider-version compatibility, or
 closure of U17 and the post-Stop GUI restriction.
+
+## Codex readability and inline mentions — alpha.86
+
+Scope: compact human/agent reading, inline exact-recipient room input, and native
+Codex activity in the existing conversation surface. No new inference/routing
+model, provider SDK replacement or Claude native phase work.
+
+- `test-codex-usability.cjs`: actual hidden Electron/DSH, bounded synthetic history;
+  light/dark body contrast, role distinction, compact geometry, Markdown/code
+  Copy, inline keyboard choice, real textarea undo/redo, body editing, reopened
+  bindings, same-name IDs, obsolete names and departure. Application composition
+  events test Enter guarding; this is not physical system/WeChat IME acceptance.
+- `test-reading.cjs`: 13 reading/selection/focus/scroll/reopen checks pass; native
+  single newlines and code formatting remain readable and Copy stays exact.
+- `test-collaboration.cjs` and `test-room-send.cjs`: existing shared workflows
+  use the inline input, including late receipt failure, exact payloads, threads,
+  archive/restore, six-thousand-character body previews and recipient changes.
+- `test-native-concurrent.cjs`, `NAW_CONCURRENT_EMPTY_TERMINAL=1`: actual Codex
+  0.163.0, one fixed loopback response, no title response or paid inference.
+  An inline-addressed room task reaches the same native session. Native item
+  phase and native startedAt/turn identity appear in its conversation reader;
+  first TUI attachment keeps the same task and the shared reader retains the
+  complete reply. Completion clears live activity. The actual request contains
+  the task and excludes both the private draft and the addressing token.
+- Unit coverage includes concurrent native items, old-turn events, absent time,
+  waiting flags, native usage identity, stale resume ACK, exact mention edits
+  and private view persistence. Other native provider scenarios are not repeated
+  merely for layout. Existing scenario helpers are migrated to inline addressing.
+
+902 checks pass with no skips. The installed usability journey, ten sending
+groups and six collaboration groups pass; the latter two use synthetic native
+transports without provider inference. All 54 runtime payload files match source,
+strict signature verification passes after native use and normal-profile reopen,
+and application search has one installed entry. The original three sessions keep
+native IDs/PIDs, selection and drafts through hidden reopening with no new
+dispatch. Final independent source/artifact review passes for U26; U17, physical
+system/WeChat IME acceptance and Claude native phase parity remain open.

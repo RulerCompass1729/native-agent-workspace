@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // A hidden Electron renderer and real persistence chain, with synthetic native transport.
 // Composition uses Chromium's input path, not a physical macOS input method.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -41,10 +42,11 @@ async function checkSaved(id, text, shared, recipient) {
   const s = await snapshot(), v = s.viewState;
   assert.equal(s.sessions.find(x => x.id === id).liveDraft, text, 'Service draft');
   assert.deepEqual(v.draft, { id, text }, 'Main recovery draft');
-  assert.equal(v.sharedDraft, shared); assert.equal(v.roomRecipient, recipient);
+  const mention = require('../app/room-mention.js');
+  assert.equal(mention.valid(v.roomMention, v.sharedDraft) ? mention.body(v.roomMention, v.sharedDraft) : v.sharedDraft, shared); assert.equal(v.roomRecipient, recipient);
   const disk = JSON.parse(fs.readFileSync(path.join(profile, 'views.json'))).find(x => x.owner === s.owner);
-  for (const key of ['draft', 'sharedDraft', 'roomRecipient', 'selected', 'mode']) assert.deepEqual(disk[key], v[key], 'Disk ' + key);
-  assert.equal(await page.locator('#shared-input').inputValue(), shared, 'DOM shared draft');
+  for (const key of ['draft', 'sharedDraft', 'roomRecipient', 'roomMention', 'selected', 'mode']) assert.deepEqual(disk[key], v[key], 'Disk ' + key);
+  assert.equal(await roomBody(page), shared, 'DOM shared draft');
 }
 async function run() {
   console.log('Synthetic profile:', profile, 'Code root:', code);
@@ -109,9 +111,9 @@ async function run() {
   await chat(a); assert.equal(await page.locator('#message-input').inputValue(), 'PRIVATE-UNSENT-中文');
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   // Draft first, then select an unavailable recipient. Never inject it into TUI.
-  await page.locator('#shared-input').fill('ROOM-UNSENT'); await chooseRecipient(a);
+  await fillRoomMessage(page, 'ROOM-UNSENT'); await chooseRecipient(a);
   await page.locator('#forward-button').getByText('打开原生终端', { exact: true }).waitFor();
-  assert.equal(await page.locator('#shared-input').evaluate(el => el.readOnly), true);
+  assert.equal(await page.locator('#shared-input').evaluate(el => el.readOnly), false, 'Room draft remains editable even while delivery requires native input');
   await capture('unavailable-room'); await page.locator('#forward-button').click(); await until(() => focused(a), 'Same member terminal');
   assert.equal((await fixture()).inputs.map(x => x.data).join(''), 'NATIVE-DRAFT\x1b[D\x03'); assert.equal((await fixture()).sends.length, 0);
   passed.push('Unavailable solo/room routes expose the same native terminal, preserve both drafts and never paste or dispatch');
@@ -155,7 +157,7 @@ async function run() {
   await page.locator('#send-button').click(); await until(async () => (await snapshot()).sessions.find(s => s.id === a).owner === (await snapshot()).owner, 'Explicit takeover');
   assert.equal(await page.locator('#message-input').inputValue(), 'REOPEN-PRIVATE-中文');
   passed.push('Connected errors use the existing terminal; another owner remains read-only until explicit takeover');
-  await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await chooseRecipient(a); await page.locator('#shared-input').fill('REOPEN-ROOM-中文');
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await chooseRecipient(a); await fillRoomMessage(page, 'REOPEN-ROOM-中文');
   await chat(a); await until(async () => (await snapshot()).viewState.draft?.text === 'REOPEN-PRIVATE-中文', 'Saved GUI draft');
   await checkSaved(a, 'REOPEN-PRIVATE-中文', 'REOPEN-ROOM-中文', a);
   await delay(12000); await checkSaved(a, 'REOPEN-PRIVATE-中文', 'REOPEN-ROOM-中文', a);
@@ -186,4 +188,4 @@ run().catch(async error => { console.error(error.stack); if (page && !page.isClo
   if (child.connected) child.disconnect();
 });
 
-async function chooseRecipient(id) { await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click(); }
+async function chooseRecipient(id) { await inlineRecipient(page, id); }

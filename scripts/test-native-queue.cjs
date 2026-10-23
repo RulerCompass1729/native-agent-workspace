@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + real Claude CLI; canned responses are served on loopback.
 // No paid inference, user profile edits, global keyboard input, or foregrounding.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -95,7 +96,7 @@ async function cleanup() {
     await page.locator('#message-input').fill('Private solo draft.');
     await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${before.id}"]`).click();
+    await inlineRecipient(page, before.id);
     await until(async () => (await page.locator(send).innerText()) === '等本轮结束后发送 ↑', 'Shared native waiting action');
   }
   await page.locator(input).fill('Do the next local task.');
