@@ -15,6 +15,8 @@ assert.match(versions.claude, /^2\.1\.309\b/); assert.equal(versions.codex, 'cod
 let app, page, ids = {}, held, release, sequence = 0;
 const counts = { claude: 0, codex: 0 }, errors = [], checks = [];
 const deny = process.env.NAW_TEST_NATIVE_DENY === '1';
+const three = process.env.NAW_TEST_THREE_MEMBERS === '1';
+assert.ok(!(deny && three), 'Choose one native scenario');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label, timeout = 40000) { const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label); }
 const snapshot = () => page.evaluate(() => workspace.initial());
@@ -32,16 +34,24 @@ const server = http.createServer((req, res) => {
     fs.writeFileSync(path.join(base, `${provider}-${number}-request.json`), body);
     const schemas = JSON.stringify([...(input.tools || []), ...(input.input || []).filter(m => m.type === 'additional_tools').flatMap(m => m.tools || [])]);
     if (!(provider === 'claude' ? (input.tools || []).some(t => t.name === 'mcp__native_workspace__workspace_message' && t.input_schema?.properties?.recipient_id) : schemas.includes('workspace__workspace_message(args: {') && schemas.includes('recipient_id: string'))) { errors.push(`${provider} missing actual workspace tool schema`); res.writeHead(500); res.end(); return; }
-    if (number > 4) { res.writeHead(429); res.end(); return; }
+    if (number > (three ? 5 : 4)) { res.writeHead(429); res.end(); return; }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     if (provider === 'claude') {
       assert.match(input.model, /haiku/);
       event(res, 'message_start', { message: { id: `msg_claude_${number}`, type: 'message', role: 'assistant', model: input.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
-      if (number === 1) {
+      if (three) {
+        if (number === 1 || number === 3) {
+          claudeBlock(res, 0, { type: 'text', text: number === 1 ? '方案：两份午餐 36 元，交通 14 元。先请另一位 Claude 核对材料。' : '材料核对完成：36 + 14。请 Codex 独立计算并给最初的 Claude 返回结果。' });
+          claudeBlock(res, 1, { type: 'tool_use', id: `toolu_three_${number}`, name: 'mcp__native_workspace__workspace_message', input: { recipient_id: number === 1 ? ids.secondClaude : ids.codex, message: number === 1 ? '请核对材料：午餐合计36元、交通14元，然后交给Codex计算。' : '请计算36+14，并将核对结果送回第一位Claude。' } });
+        } else {
+          claudeBlock(res, 0, { type: 'text', text: number === 5 ? '三位完成：最终预算 50 元，材料与计算一致。' : '转交请求已登记，当前回复即将结束。' });
+          if (number === 4) { held = res; await new Promise(r => { release = r; }); if (res.destroyed) return; }
+        }
+      } else if (number === 1) {
         claudeBlock(res, 0, { type: 'text', text: '预算草案：两份午餐各 18 元，交通共 14 元，总计 50 元。请 Codex 核查。\n' });
         claudeBlock(res, 1, { type: 'tool_use', id: 'toolu_addressed_budget', name: 'mcp__native_workspace__workspace_message', input: { recipient_id: ids.codex, message: '请独立核查预算：午餐 2×18，交通 14，总计是否为 50？请把核查结果发回给我。' } });
       } else claudeBlock(res, 0, { type: 'text', text: number === 2 ? '已登记核查请求，等待本轮结束后转交。' : number === 3 ? '最终预算：50 元。两位 agent 已分别核查，结果一致。' : '脱出后的私人继续：保留 50 元预算，私人备注不共享。' });
-      event(res, 'message_delta', { delta: { stop_reason: number === 1 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 30 } });
+      event(res, 'message_delta', { delta: { stop_reason: number === 1 || (three && number === 3) ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 30 } });
       event(res, 'message_stop', {}); res.end();
     } else {
       assert.equal(input.model, 'gpt-6-luna');
@@ -75,14 +85,17 @@ async function launch() {
     ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}),
     env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   await until(async () => { for (const p of app.windows()) if (!p.isClosed() && await p.locator('#new-session').count().catch(() => 0)) { page = p; return true; } }, 'Main workspace');
+  await app.evaluate(({ clipboard }) => { globalThis.copiedText = []; clipboard.writeText = text => globalThis.copiedText.push(text); });
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
 }
-async function create(provider) {
+async function create(provider, key = provider) {
+  const previous = new Set((await snapshot()).sessions.map(s => s.id));
+  const created = async () => (await snapshot()).sessions.find(s => s.provider === provider && !previous.has(s.id));
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
   await page.locator('#initial-view').selectOption(provider === 'claude' ? 'terminal' : 'chat');
-  await page.locator('#session-name').fill(provider === 'claude' ? '预算方案' : '预算核查'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(three ? '核查员' : provider === 'claude' ? '预算方案' : '预算核查'); await page.locator('#confirm-create').click();
   if (provider === 'claude') {
-    await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Native Claude startup');
+    await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await created())?.chatAvailable, 'Native Claude startup');
     if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
       assert.ok((await page.locator('#terminal-area').innerText()).includes(fs.realpathSync(cwd)));
       await page.locator('#terminal-area .xterm-helper-textarea').waitFor({ state: 'visible' });
@@ -94,18 +107,20 @@ async function create(provider) {
       await until(selectedTrust, 'Exact native trust choice selected');
       await page.keyboard.press('Enter');
     }
-    await until(async () => /Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Native key choice');
+    await until(async () => /Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await created())?.chatAvailable, 'Native key choice');
     if ((await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key')) { await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowUp'); await sleep(200); await page.keyboard.press('Enter'); }
   }
-  await until(async () => { const s = (await snapshot()).sessions.find(s => s.provider === provider); return s?.state === 'idle' && s.chatAvailable && s.addressedSendAvailable; }, `${provider} addressed tool connected`, 60000);
-  const s = (await snapshot()).sessions.find(s => s.provider === provider); ids[provider] = s.id;
+  await until(async () => { const s = await created(); return s?.state === 'idle' && s.chatAvailable && s.addressedSendAvailable; }, `${provider} addressed tool connected`, 60000);
+  const s = await created(); ids[key] = s.id;
   await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click(); return s;
 }
 async function start(first, text) {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${first}"]`).click();
   await page.locator('#shared-input').fill(text); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
-  await page.locator('#run-mode').selectOption('directed'); await page.locator('#run-limit').selectOption('3'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
+  await page.locator('#run-mode').selectOption('directed');
+  if (three) await page.locator(`[data-run-member="${ids.secondClaude}"]`).check();
+  await page.locator('#run-limit').selectOption(three ? '4' : '3'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
 }
 (async () => {
   console.log('Evidence:', base); await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -126,6 +141,111 @@ async function start(first, text) {
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify(shims), { mode: 0o600 });
   if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
   await launch(); const claude = await create('claude'), codex = await create('codex');
+  if (three) {
+    const second = await create('claude', 'secondClaude');
+    const identities = [claude, codex, second].map(s => [s.id, s.nativeId, s.pid]);
+    for (const member of [claude, codex, second]) {
+      const link = page.locator(`[data-session-id="${member.id}"]`);
+      assert.ok((await link.innerText()).includes(member.id.slice(0, 6)), 'Same-name sidebar distinguishes native sessions');
+      assert.ok((await link.getAttribute('aria-label')).includes(member.id.slice(0, 6)));
+      assert.ok((await page.locator(`[data-session-menu="${member.id}"]`).getAttribute('aria-label')).includes(member.id.slice(0, 6)));
+    }
+    for (const member of [claude, second]) {
+      await page.locator(`[data-session-menu="${member.id}"]`).click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click();
+      await until(async () => !(await snapshot()).sessions.find(s => s.id === member.id).roomId, 'Independent same-name invite candidate');
+    }
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    for (const member of [claude, second]) {
+      await page.getByRole('button', { name: '参与者…', exact: true }).click(); await page.locator('#invite-button').click();
+      const invitation = page.locator(`[data-invite-session="${member.id}"]`);
+      assert.ok((await invitation.innerText()).includes(member.id.slice(0, 6)), 'Invite target has exact same-name identity');
+      await invitation.click();
+      await until(async () => (await snapshot()).sessions.find(s => s.id === member.id).roomId === 'shared', 'Exact invite target rejoins');
+    }
+    await start(claude.id, '两份午餐各18元，交通14元。第一位Claude提出方案，第二位Claude核对材料，Codex计算后回给第一位Claude收尾。');
+    await until(() => release, 'Third participant stages a handoff before interface closes');
+    await until(async () => (await snapshot()).room.run?.pendingHandoff?.recipientId === codex.id, 'Third participant picks Codex');
+    let state = await snapshot();
+    assert.equal(state.room.run.steps, 1); assert.deepEqual(state.room.run.ids, [claude.id, codex.id, second.id]);
+    assert.equal(counts.codex, 0, 'Chosen target skips the fixed order');
+    assert.equal(state.room.run.awaiting.sessionId, second.id);
+    await page.locator('#shared-input').fill('重新打开后保留的协作草稿'); await sleep(400);
+    fs.writeFileSync(path.join(base, 'before-close.json'), JSON.stringify(await snapshot(), null, 2));
+    await app.close(); app = null; release();
+    await until(() => counts.claude === 5, 'Authorized native handoffs continue with interface closed');
+    await launch();
+    await until(async () => (await snapshot()).room.run?.status === 'completed', 'Shared task finishes');
+    state = await snapshot();
+    assert.equal(state.room.run.steps, 4); assert.equal(state.diagnostics.dispatches, 4);
+    assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
+    const addressed = state.room.messages.filter(m => m.addressed);
+    assert.deepEqual(addressed.map(m => [m.sessionId, m.deliveries[0].recipientId, m.deliveries[0].status]), [[claude.id, second.id, 'submitted'], [second.id, codex.id, 'submitted'], [codex.id, claude.id, 'submitted']]);
+    assert.equal(await page.locator('#shared-input').inputValue(), '重新打开后保留的协作草稿');
+    assert.match(await page.locator('#room-messages').innerText(), /三位完成：最终预算 50 元/);
+    for (const message of state.room.messages.filter(m => m.sharedStream && m.role === 'system')) {
+      assert.ok((await page.locator(`[data-message-id="${message.id}"] .message-heading`).innerText()).includes(message.sessionId.slice(0, 6)), 'Native turn notices identify their exact participant');
+    }
+    await page.getByRole('button', { name: '参与者…', exact: true }).click();
+    for (const member of [claude, codex, second]) assert.ok((await page.locator(`[data-member-id="${member.id}"]`).innerText()).includes(member.id.slice(0, 6)));
+    await page.locator('#close-members').click();
+    const beforeCopy = await app.evaluate(() => globalThis.copiedText.length);
+    await page.locator('#copy-timeline').click();
+    await until(async () => await app.evaluate(() => globalThis.copiedText.length) === beforeCopy + 1, 'Fresh copy acknowledgement');
+    const copied = await app.evaluate(() => globalThis.copiedText.at(-1));
+    for (const member of [claude, codex, second]) assert.ok(copied.includes(member.id.slice(0, 6)), 'Copied shared record keeps source identities');
+    await page.locator('#room-filter').selectOption(second.id);
+    assert.match(await page.locator('#room-messages').innerText(), /材料核对完成/);
+    assert.doesNotMatch(await page.locator('#room-messages').innerText(), /三位完成：最终预算/);
+    await page.locator('#room-filter').selectOption('');
+    await page.locator(`[data-session-id="${second.id}"]`).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+    await page.locator('#terminal-tab').click();
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('材料核对完成'), 'Detached native TUI retains its own work');
+    assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    assert.match(await page.locator('#room-messages').innerText(), /材料核对完成/);
+    await page.locator(`[data-session-menu="${second.id}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
+    await page.locator('#archive-button').click();
+    assert.ok((await page.locator(`[data-archived-session="${second.id}"] strong`).innerText()).includes(second.id.slice(0, 6)));
+    await page.locator(`[data-archived-session="${second.id}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
+    await page.locator(`[data-session-menu="${second.id}"]`).click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
+    await page.locator('#rename-name').fill('材料核对'); await page.locator('#confirm-rename').click();
+    await until(async () => (await page.locator(`[data-session-id="${second.id}"]`).getAttribute('aria-label')).includes('材料核对'), 'Rename propagates');
+    assert.ok(!(await page.locator(`[data-session-id="${second.id}"]`).innerText()).includes(second.id.slice(0, 6)), 'Unique name stays compact');
+    assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    assert.match(await page.locator('#room-messages').innerText(), /材料核对/);
+    assert.deepEqual(counts, { claude: 5, codex: 2 }); assert.deepEqual(errors, []);
+    fs.writeFileSync(path.join(base, 'three-completed.json'), JSON.stringify(await snapshot(), null, 2));
+    // Only these owned completed test sessions; native task permissions are not stubbed.
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async (_win, options) => {
+      if (!['结束这个原生会话？', '移除此应用中的会话记录？'].includes(options.message)) throw Error('Unexpected confirmation');
+      return { response: 1 };
+    }; });
+    for (const member of [claude, second]) {
+      await page.locator(`[data-session-id="${member.id}"]`).click();
+      if (!(await page.locator('#advanced').evaluate(el => el.open))) await page.locator('#advanced summary').click();
+      await page.getByRole('button', { name: '结束这个原生会话…', exact: true }).click();
+      await until(async () => (await snapshot()).sessions.find(s => s.id === member.id)?.state === 'ended', 'Owned native Claude exits');
+      await page.getByRole('button', { name: '移除本应用记录…', exact: true }).click();
+      await until(async () => !(await snapshot()).sessions.some(s => s.id === member.id), 'Owned session reference removed');
+    }
+    await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    for (const message of state.room.messages.filter(m => m.sharedStream && [claude.id, second.id].includes(m.sessionId))) {
+      assert.ok((await page.locator(`[data-message-id="${message.id}"] .message-heading`).innerText()).includes(message.sessionId.slice(0, 6)), 'Forgotten native row preserves exact author identity');
+    }
+    for (const message of addressed) {
+      assert.ok((await page.locator(`[data-message-id="${message.id}"] .message-delivery summary`).innerText()).includes(message.deliveries[0].recipientId.slice(0, 6)) || message.deliveries[0].recipientId === codex.id, 'Forgotten recipient retains exact identity');
+    }
+    const beforeHistoryCopy = await app.evaluate(() => globalThis.copiedText.length);
+    await page.locator('#copy-timeline').click();
+    await until(async () => await app.evaluate(() => globalThis.copiedText.length) === beforeHistoryCopy + 1, 'Fresh historical copy acknowledgement');
+    const historyCopy = await app.evaluate(() => globalThis.copiedText.at(-1));
+    for (const member of [claude, second]) assert.ok(historyCopy.includes(member.id.slice(0, 6)), 'Copied history preserves removed authors');
+    fs.writeFileSync(path.join(base, 'three-forgotten.json'), JSON.stringify(await snapshot(), null, 2));
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'three-native-addressed.png') }); }
+    console.log(JSON.stringify({ versions, checks: ['Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sidebar, menus, member dialog, native notices, copied history and archive show exact identity; rename restores compact labels', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
+    return;
+  }
   const identities = [claude, codex].map(s => [s.id, s.nativeId, s.pid]);
   await start(claude.id, '两份午餐各18元，交通总共14元。Claude提出预算，Codex独立核查并返回，Claude给我最终结论。');
   await until(async () => (await snapshot()).room.run?.status !== 'running', 'Native addressed round finishes', 60000);

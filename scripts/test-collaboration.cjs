@@ -11,9 +11,9 @@ const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['-
 let app, page, client, sequence = 0; const errors = [], passed = [], requests = new Set(), startupMs = [];
 const delay = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label) { for (let i = 0; i < 140; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
-function fixture(method = 'stats', text = '') { const id = ++sequence; return new Promise((resolve, reject) => {
+function fixture(method = 'stats', text = '', target, value) { const id = ++sequence; return new Promise((resolve, reject) => {
   const timer = setTimeout(() => { child.off('message', cb); reject(Error('Fixture timeout')); }, 5000);
-  const cb = m => { if (m.requestId === id) { clearTimeout(timer); child.off('message', cb); resolve(m); } }; child.on('message', cb); child.send({ id, method, text });
+  const cb = m => { if (m.requestId === id) { clearTimeout(timer); child.off('message', cb); resolve(m); } }; child.on('message', cb); child.send({ id, method, text, target, value });
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
 const input = id => page.locator(`[data-terminal-id="${id}"] .xterm-helper-textarea`);
@@ -53,6 +53,14 @@ async function run() {
   console.log('Synthetic profile:', profile, 'Code root:', code);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon ready'); client = await connect(profile, 'collaboration-observer'); await launch();
   const a = await create('claude'), b = await create('codex'), ids = identities(await snapshot());
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await page.getByRole('button', { name: '参与者…', exact: true }).click(); await page.locator('#invite-button').click();
+  for (const id of [a, b]) assert.ok((await page.locator(`[data-invite-session="${id}"]`).innerText()).includes(id.slice(0, 6)), 'Initial invite disambiguates names');
+  await fixture('event', '', b, { method: 'turn/started', params: { threadId: 'synthetic-' + b, turn: { id: 'identity-refresh-check' } } });
+  await until(async () => (await page.locator(`[data-session-id="${b}"]`).innerText()).includes('正在工作'), 'Actual state update rendered while invite stays open');
+  for (const id of [a, b]) assert.ok((await page.locator(`[data-invite-session="${id}"]`).innerText()).includes(id.slice(0, 6)), 'Refresh preserves exact invite identity');
+  await fixture('event', '', b, { method: 'turn/completed', params: { threadId: 'synthetic-' + b, turn: { id: 'identity-refresh-check', status: 'completed' } } });
+  await page.locator('#close-invite').click(); await terminal(b);
   await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('PRIVATE-DRAFT'); await terminal(b); await page.keyboard.type('UNSUBMITTED');
   // Real pointer drag sequence: no dispatchEvent or synthetic DataTransfer.
   await drag(page.locator(`[data-session-id="${a}"]`), page.locator('#room-nav'));

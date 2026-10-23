@@ -148,11 +148,9 @@ function messageList(el, messages, room = false, key = 'room') {
     }
     entry.message = m; retained.add(m.id); rows.push(entry.item);
     entry.item.className = `message ${m.role}`;
-    const participant = room && state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
-    let name = participant ? (m.role === 'human' ? `你 → ${participantLabel(participant, state.sessions)}` : participantLabel(participant, state.sessions)) : m.name;
+    let name = room ? roomMessageLabel(m) : m.name;
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
-    if (m.role === 'system' && !m.sessionId) name = room ? '工作区' : m.name || '原生会话';
-    if (m.role === 'system' && m.runId) name = m.name || '协作';
+    if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
     const headingKey = JSON.stringify([name, m.status, room && m.time, m.manualReply, m.title, m.incomplete, m.volatile, m.sharingStopped]);
     if (entry.headingKey !== headingKey) {
       const authorId = room && (m.sessionId || m.recipientId);
@@ -181,7 +179,7 @@ function messageList(el, messages, room = false, key = 'room') {
       entry.delivery.hidden = m.role === 'system';
       const deliveries = (m.deliveries || []).map(d => {
         const recipient = state.sessions.find(s => s.id === d.recipientId);
-        return { ...d, label: recipient ? participantLabel(recipient, state.sessions) : d.recipientName || '原接收会话' };
+        return { ...d, label: recipient ? participantLabel(recipient, state.sessions) : historicalParticipantLabel(d.recipientName, d.recipientId) };
       });
       const deliveryKey = JSON.stringify([m.deliveryTracked, deliveries]);
       if (entry.deliveryKey !== deliveryKey) {

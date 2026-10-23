@@ -1,5 +1,28 @@
 # Bounded testing
 
+## Three native participants and identity — alpha.82
+
+Source and installed `NAW_TEST_THREE_MEMBERS=1` journeys use two Claude 2.1.309
+sessions and one Codex 0.163.0, all with the same display name. Actual Electron
+controls create, invite, address, filter, detach, archive/restore, rename and
+remove ended references. Routes follow stable IDs rather than roster order.
+Authorized handoffs continue while the interface is closed; reopening preserves
+native IDs/PIDs, shared history and the unsent draft without replay. Four root
+dispatches produce five Claude and two Codex fixed local responses, with zero
+paid inference. This proves transport and lifecycle, not model judgement.
+
+Existing labels now distinguish duplicates in the sidebar, menus, invitation and
+member dialogs, native turn rows and copied history. Removed references retain
+the original author/recipient IDs in shared history. A separate zero-native
+Electron regression crosses a real state update while the invitation menu is
+open, preventing refresh from erasing identity labels. Both copy checks wait for
+the new clipboard event. Only the two test-owned stop/forget confirmation dialogs
+are accepted by the test harness; native tool permission handling is unchanged.
+
+The 861-check source suite passes without skips. Installed shared-workflow and
+original-profile continuity acceptance are recorded in readiness.md. No new
+routing behavior, model requests, external attachment or solo-parity claim.
+
 ## Agent-selected addressed cooperation — alpha.81
 
 As of 2026-10-22. This increment prioritizes the shared workspace; embedded native
