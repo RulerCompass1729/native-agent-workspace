@@ -11,13 +11,13 @@ function adapter() {
   r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
   r.bindRoot({ sessionId: r.record.nativeId }); return r;
 }
-async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader, toolReader } = {}) {
+async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader, toolReader, usageReader } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
-  const { register, testObserveModel } = await import('data:text/javascript;base64,' + Buffer.from(source + '\nexport { observeModel as testObserveModel };\n//' + randomUUID()).toString('base64'));
+  const { register, testObserveModel, testObserveUsage } = await import('data:text/javascript;base64,' + Buffer.from(source + '\nexport { observeModel as testObserveModel, observeUsage as testObserveUsage };\n//' + randomUUID()).toString('base64'));
   const r = runtime || adapter(), clock = [], hooks = new Map(), requests = [];
   let native = r.record.nativeId, token = 'a'.repeat(64);
   if (legacy) r.retainedReader = true;
-  const $ = { session: { id: async () => native, version: async () => ({ version }), ...(modelReader ? { model: modelReader } : {}) },
+  const $ = { session: { id: async () => native, version: async () => ({ version }), ...(modelReader ? { model: modelReader } : {}), ...(usageReader ? { usage: usageReader } : {}) },
     env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? (legacy ? undefined : '/fixture/socket') : key === 'NAW_HOOK_SOCKET' ? '/fixture/hooks.sock' : 'fixture-token' },
     fs: { read: async () => JSON.stringify({ sessionId: native, socketPath: '/fixture/gui-submit.sock', token, compat: true, nativeBlocks: true }) },
     clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; } },
@@ -39,7 +39,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
   register((name, fn) => { hooks.set(name, fn); return { catch() {} }; });
   const invoke = (name, e, next = async e => ({ uuid: e.uuid, message: e.message })) => hooks.get(name)($, e, next);
   await invoke('session.start', {}); await clock.shift()(); const poll = clock.find(fn => fn.delay === 0); clock.length = 0;
-  return { r, clock, requests, invoke, poll, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
+  return { r, clock, requests, invoke, poll, readUsage() { return testObserveUsage($); }, setUsageReader(fn) { $.session.usage = fn; }, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
 
@@ -672,4 +672,33 @@ test('held tool discovery never blocks root binding or input polling and remains
   assert.equal(reads, 1); assert.equal(polls, 1);
   for (let i = 0; i < 4; i++) await f.poll();
   assert.equal(reads, 1); assert.equal(polls, 5);
+});
+
+
+test('usage read is free, root-scoped, metadata-only and version-gated', async () => {
+  const f = await mod({ version: '2.1.309' }), usage = [], blocks = [], capabilities = [];
+  f.r.on('usage', x => usage.push(x)); f.r.on('nativeBlock', x => blocks.push(x)); f.r.on('capability', x => capabilities.push(x));
+  f.setUsageReader(async (...args) => { assert.equal(args.length, 0); return { context: { window: 200000, tokens: 17, percent: 0 }, cost: { usd: 0 } }; });
+  await f.readUsage(); await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  assert.equal(usage.length, 1); assert.equal(usage[0].context.tokens, 17);
+  assert.deepEqual(blocks, []); assert.deepEqual(capabilities, []);
+  const requestCount = f.requests.length;
+  f.setUsageReader(async () => ({ context: { window: 0 } })); await f.readUsage();
+  assert.equal(f.requests.length, requestCount); assert.equal(f.clock.length, 0, 'Unavailable metadata cannot inject an observation gap');
+  let resolve;
+  f.setUsageReader(() => new Promise(r => { resolve = r; }));
+  const pending = f.readUsage(); f.setNativeId(randomUUID()); resolve({ context: { window: 200000, tokens: 999 } }); await pending;
+  assert.equal(usage.length, 1, 'Old native identity may not publish a reading');
+  const unknown = await mod({ version: '2.1.310' });
+  unknown.setUsageReader(() => { throw Error('Unknown version must not read'); }); await unknown.readUsage();
+});
+
+test('held usage metadata never blocks binding/input and coalesces reads', async () => {
+  let reads = 0, release;
+  const f = await mod({ version: '2.1.309', usageReader: () => { reads++; return new Promise(r => { release = r; }); } });
+  assert.ok(f.r.rootLease); assert.equal(typeof f.poll, 'function');
+  await f.readUsage(); await f.readUsage(); assert.equal(reads, 1);
+  f.setUsageReader(async () => { reads++; return { context: { window: 200000 } }; });
+  release({ context: { window: 200000, tokens: 123 } }); await new Promise(r => setImmediate(r));
+  assert.equal(reads, 2, 'Repeated observation requests coalesce to one fresh read');
 });

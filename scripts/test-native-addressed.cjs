@@ -14,6 +14,7 @@ const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => 
 assert.match(versions.claude, /^2\.1\.309\b/); assert.equal(versions.codex, 'codex-cli 0.163.0');
 let app, page, ids = {}, held, release, sequence = 0;
 const counts = { claude: 0, codex: 0 }, errors = [], checks = [];
+let tokenCountRequests = 0;
 const deny = process.env.NAW_TEST_NATIVE_DENY === '1';
 const three = process.env.NAW_TEST_THREE_MEMBERS === '1';
 assert.ok(!(deny && three), 'Choose one native scenario');
@@ -29,6 +30,7 @@ function claudeBlock(res, index, content) {
 const server = http.createServer((req, res) => {
   let body = ''; req.on('data', b => body += b); req.on('end', async () => {
     const provider = req.url.endsWith('/responses') ? 'codex' : req.url.startsWith('/v1/messages') && !req.url.includes('count_tokens') ? 'claude' : null;
+    if (req.url.includes('count_tokens')) tokenCountRequests++;
     if (!provider) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":100,"data":[]}'); return; }
     const number = ++counts[provider], input = JSON.parse(body);
     fs.writeFileSync(path.join(base, `${provider}-${number}-request.json`), body);
@@ -150,6 +152,14 @@ async function start(first, text) {
       assert.ok((await link.getAttribute('aria-label')).includes(member.id.slice(0, 6)));
       assert.ok((await page.locator(`[data-session-menu="${member.id}"]`).getAttribute('aria-label')).includes(member.id.slice(0, 6)));
     }
+    if (process.env.NAW_TEST_USAGE === '1') {
+      await until(async () => (await snapshot()).sessions.filter(s => s.provider === 'claude').every(s => s.usage?.source === 'claude-session-usage'), 'Native Claude free metadata on startup');
+      const before = { ...counts };
+      await page.locator('#privacy-button').click(); await page.locator('#refresh-trust').click();
+      assert.match(await page.locator('#trust-status').innerText(), /原生 \/cost 累计金额/);
+      assert.match(await page.locator('#trust-status').innerText(), /不是账户实际账单/);
+      await page.locator('#close-privacy').click(); assert.deepEqual(counts, before); assert.equal(tokenCountRequests, 0);
+    }
     for (const member of [claude, second]) {
       await page.locator(`[data-session-menu="${member.id}"]`).click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click();
       await until(async () => !(await snapshot()).sessions.find(s => s.id === member.id).roomId, 'Independent same-name invite candidate');
@@ -178,6 +188,16 @@ async function start(first, text) {
     state = await snapshot();
     assert.equal(state.room.run.steps, 4); assert.equal(state.diagnostics.dispatches, 4);
     assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
+    if (process.env.NAW_TEST_USAGE === '1') {
+      await until(async () => (await snapshot()).sessions.filter(s => s.provider === 'claude').every(s => Number.isFinite(s.usage?.costUsd) && Number.isSafeInteger(s.usage?.context?.tokens)), 'Native Claude usage after the task');
+      assert.ok((await snapshot()).sessions.find(s => s.provider === 'codex').usage?.total);
+      assert.equal(tokenCountRequests, 0);
+      await page.locator('#privacy-button').click(); await page.locator('#refresh-trust').click();
+      assert.match(await page.locator('#trust-status').innerText(), /累计 token：输入/);
+      if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-usage.png') }); }
+      await page.locator('#close-privacy').click();
+      checks.push('Native usage appears without token-count requests; viewing and refresh add no model responses');
+    }
     const addressed = state.room.messages.filter(m => m.addressed);
     assert.deepEqual(addressed.map(m => [m.sessionId, m.deliveries[0].recipientId, m.deliveries[0].status]), [[claude.id, second.id, 'submitted'], [second.id, codex.id, 'submitted'], [codex.id, claude.id, 'submitted']]);
     assert.equal(await page.locator('#shared-input').inputValue(), '重新打开后保留的协作草稿');
@@ -243,7 +263,7 @@ async function start(first, text) {
     for (const member of [claude, second]) assert.ok(historyCopy.includes(member.id.slice(0, 6)), 'Copied history preserves removed authors');
     fs.writeFileSync(path.join(base, 'three-forgotten.json'), JSON.stringify(await snapshot(), null, 2));
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'three-native-addressed.png') }); }
-    console.log(JSON.stringify({ versions, checks: ['Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sidebar, menus, member dialog, native notices, copied history and archive show exact identity; rename restores compact labels', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
+    console.log(JSON.stringify({ versions, checks: [...checks, 'Three same-name native participants route by ID instead of roster order', 'Authorized handoffs continue while the interface is closed', 'Reopening restores native identities, history and unsent draft without replay', 'Member filtering and departure preserve the original terminal and shared records', 'Same-name sidebar, menus, member dialog, native notices, copied history and archive show exact identity; rename restores compact labels', 'Removing ended local session references preserves shared author and recipient identities'], counts, paidModelCalls: 0, evidence: base }, null, 2));
     return;
   }
   const identities = [claude, codex].map(s => [s.id, s.nativeId, s.pid]);

@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.82 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.83 is a **local macOS technical-trial alpha**.
 
 **Current user priority:** finish the usable shared-workspace flow first. The
 embedded native TUI is acceptable for independent work; complete 1:1 solo chat
@@ -21,6 +21,15 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.83 — native usage visibility:** the existing privacy/usage
+and session-detail surfaces distinguish native context, cumulative tokens,
+reported quota windows and native /cost amount. Unknown remains unknown;
+account billing is not inferred. The source three-native task and 865 checks pass
+without paid inference. Installed three-member and concurrent two-agent journeys
+also pass: native waiting/steering, threads/filtering, departure/rejoin and private
+output separation. The 51-file payload and strict signature match; original three
+sessions reopen hidden with stable IDs/PIDs/drafts and zero new dispatch. Independent final installed review passes.
 
 **Alpha.82 — three-participant identity and continuity:** two native Claude
 sessions and one Codex can follow addressed handoffs by exact identity, including
