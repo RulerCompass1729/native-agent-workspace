@@ -106,7 +106,14 @@ class LegacyInput extends EventEmitter {
     const t = this.targets.get(record.id);
     return t && t.record.nativeId === record.nativeId && t.record.pid === record.pid ? t : null;
   }
-  effectiveState(record) { return this.target(record)?.effectiveState?.(record) || record?.state; }
+  effectiveState(record) {
+    const target = this.target(record);
+    // The retained Codex transport is the same authenticated native source
+    // used by the reader. Its old host may still report the pre-interrupt state.
+    // Never reuse an idle value after this connection has closed.
+    if (target?.native) return target.native.connected && !target.native.closed ? target.native.state : 'disconnected';
+    return target?.effectiveState?.(record) || record?.state;
+  }
   connected(record) { return !!this.target(record)?.submission.connected; }
   prepared(record) { return !!this.target(record); }
   reader(record) { const reader = this.readers.get(record.id); return reader?.record.nativeId === record.nativeId ? reader : null; }

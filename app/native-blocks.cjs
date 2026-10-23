@@ -99,7 +99,7 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
     // history. Live items received on this connection still take precedence.
     if (own && s.recovering && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
       const interrupted = own.status === 'interrupted';
-      Object.assign(own, { text: interrupted && (!item.text || own.text?.startsWith(item.text)) ? own.text : item.text || '',
+      Object.assign(own, { text: interrupted ? own.text : item.text || '',
         status: interrupted ? 'interrupted' : item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
     }
     if (own && s.recovering && item.type === 'userMessage' && item.clientId === own.id) { own.status = 'submitted'; submitted(own.id); }
@@ -133,8 +133,16 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
   s.messages = trimVolatileRows((anchor === null ? ordered.concat(before) : before.concat(ordered)).concat(unplaced));
   runtime.recoveryNativeInputs?.clear();
 }
+// A native interrupt fixes the observed text cut. Late deltas/completion and
+// reconnect history cannot silently rewrite that cut or create a final reply.
+function codexInterrupted(s, item, row) {
+  return row?.status === 'interrupted' || Boolean(item.turnId && s.messages.some(m =>
+    m.kind === 'turn' && m.nativeId === (item.nativeId || s.nativeId) &&
+    m.turnId === item.turnId && m.status === 'interrupted'));
+}
 function applyCodexDelta(s, item) {
   let message = s.messages.find(m => m.id === item.id);
+  if (codexInterrupted(s, item, message)) return null;
   if (!message) { message = { id: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
   message.text += item.text;
   if (item.turnId) message.turnId = item.turnId;
@@ -153,6 +161,7 @@ function applyCodexProgress(s, item) {
 }
 function applyCodexMessage(s, item) {
   let m = s.messages.find(m => m.id === item.id);
+  if (codexInterrupted(s, item, m)) return null;
   if (!m) {
     m = { id: item.id, role: 'assistant' };
     if (item.nativeId && item.nativeId !== s.nativeId) {

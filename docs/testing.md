@@ -2334,3 +2334,42 @@ inference. Independent source/artifact review passes; 796 local checks have no
 skips, all 48 runtime files match source, strict post-native signature passes,
 and the original three sessions reopen hidden without new dispatch. Cold native service restoration
 is covered by protocol tests only, not the retained-service GUI reopening trial.
+
+
+## Interrupted ordinary Codex replies
+
+A controlled production-reducer reproduction shows three failures after an
+observed native interrupted boundary: a late delta appends text, a completed item
+replaces it and restores complete status, and cold history replaces the cut.
+The common current/retained reducer now preserves that observed cut, without
+freezing other turns, already completed messages or background tool results.
+Independent source checks cover those boundaries.
+
+`scripts/test-native-cut.cjs` uses actual Electron and native Codex with two fixed
+loopback task responses and at most one native title response. It checks shared
+streaming, real terminal Escape, a subsequent private task, exact private/shared
+rows and drafts after whole-app reopening. Late portal event ordering is covered
+by controlled protocol tests, not claimed as a behavior induced in the native CLI.
+The first runner attached after a partial delta, which native attachment does not
+replay, and its failure cleanup referenced a removed helper. The owned service
+was stopped; the corrected runner attaches before releasing the stream and uses
+its own cleanup. That failed run remains a failure, not a native pass.
+A second runner waited for an Escape hint that native final-answer streaming
+does not keep on screen. Its actual terminal contained the partial response; the
+runner now checks that content and the working state before pressing Escape.
+Current and retained source journeys pass: each has two task responses and one
+separately counted native title response, all loopback, zero paid inference.
+The retained journey reproduced a real next-send failure: its reader showed idle
+while routing still used old-host working state. The common state accessor now
+uses the authenticated retained native state and rejects closed transports.
+Working/approval/closed counterexamples pass; owner, PID, identity and pending
+guards remain. A separate failed comparison mistakenly distinguished undefined
+fields from their JSON-persisted absence; the runner now compares serialized
+records without altering product data. All 806 local checks pass without skips;
+independent source and raw source-native evidence review passes. Both installed
+current/retained journeys pass the same three groups, each with two fixed task
+responses and one native title response, zero paid inference. Exact 48-file
+payload, strict signature after native testing, and original three-session hidden
+reopening with unchanged IDs/PIDs/selection/drafts and no new dispatch pass.
+Independent final artifact review passes. Successful installed video is kept
+privately and has been visually inspected; U17 remains open.
