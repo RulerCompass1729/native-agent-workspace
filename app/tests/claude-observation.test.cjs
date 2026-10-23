@@ -568,3 +568,47 @@ test('native switch event wins over lagging query and delayed older switch hook'
   finish({}); await first; await f.clock.shift()();
   assert.deepEqual(models, ['claude-second']);
 });
+
+
+for (const legacy of [false, true]) for (const order of ['append-first', 'failure-first', 'end-first'])
+test(`native API failure uses only processed same-turn text: ${legacy ? 'retained' : 'current'} ${order}`, async () => {
+  const f = await mod({ version: legacy ? '2.1.302' : '2.1.309', legacy }), rows = [], prompt = randomUUID(), turn = randomUUID();
+  f.r.on('nativeBlock', row => rows.push(row));
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  await f.invoke('turn.start', { turnId: turn });
+  const append = () => f.append(response('API Error: PRIVATE RAW', { origin: { kind: 'model', model: '<synthetic>' } }), async e =>
+    ({ uuid: e.uuid, message: { type: 'assistant', content: [{ type: 'text', text: 'SAFE ERROR' }] } }));
+  const failure = () => f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId, prompt_id: prompt,
+    error_details: 'PRIVATE DETAIL', last_assistant_message: 'PRIVATE LAST ANSWER' });
+  const end = () => f.invoke('turn.complete', { turnId: turn, reason: 'error', answer: '', durationMs: 100 });
+  for (const fn of order === 'append-first' ? [append, failure, end] : order === 'failure-first' ? [failure, end, append] : [end, append, failure]) await fn();
+  while (f.clock.length) await f.clock.shift()();
+  const failures = rows.filter(row => row.kind === 'turn');
+  assert.match(failures.at(-1).text, /SAFE ERROR/); assert.equal(failures.at(-1).status, 'failed');
+  assert.ok(failures.every(row => row.id === `turn:${turn}` && !row.finalDisplayId));
+  assert.ok(!JSON.stringify(rows).includes('PRIVATE')); assert.equal(rows.filter(row => row.kind === 'response').length, 0);
+  const session = { nativeId: f.r.record.nativeId, messages: [] };
+  for (const row of rows) require('../native-blocks.cjs').applyNativeBlock(session, row);
+  assert.equal(session.messages.length, 1); assert.equal(session.messages[0].role, 'system');
+});
+for (const rejection of ['empty-transform', 'ordinary-model', 'unknown-shape', 'child', 'old-prompt', 'aborted', 'changed-uuid', 'reinitialized'])
+test(`native API failure does not disclose uncertain or transformed-away content: ${rejection}`, async () => {
+  const f = await mod({ version: '2.1.309' }), rows = [], prompt = randomUUID(), turn = randomUUID();
+  f.r.on('nativeBlock', row => rows.push(row));
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
+  await f.invoke('turn.start', { turnId: turn });
+  const e = response(rejection === 'unknown-shape' ? 'PRIVATE BODY' : 'API Error: PRIVATE BODY', {
+    origin: { kind: 'model', model: rejection === 'ordinary-model' ? 'claude-haiku' : '<synthetic>' },
+    ...(rejection === 'child' ? { agentId: 'child' } : {}) });
+  await f.append(e, async e => {
+    if (rejection === 'reinitialized') await f.invoke('session.start', {});
+    return { uuid: rejection === 'changed-uuid' ? randomUUID() : e.uuid,
+      message: { type: 'assistant', content: [{ type: 'text', text: rejection === 'empty-transform' ? '' : 'PRIVATE BODY' }] } };
+  });
+  await f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId,
+    prompt_id: rejection === 'old-prompt' ? randomUUID() : prompt, last_assistant_message: 'API Error: PRIVATE OLD' });
+  await f.invoke('turn.complete', { turnId: turn, reason: rejection === 'aborted' ? 'aborted' : 'error' });
+  // Session restart owns its new repeating poll; only flush existing observations.
+  for (let i = 0; i < 3 && f.clock.length; i++) await f.clock.shift()();
+  assert.ok(!JSON.stringify(rows).includes('PRIVATE'));
+});

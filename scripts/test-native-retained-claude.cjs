@@ -22,7 +22,9 @@ assert.ok(!(queueTrial && sharedTrial), 'Choose one bounded scenario');
 assert.ok(!quitQueueTrial || sharedQueueTrial, 'Whole-app pending quit uses the shared waiting scenario');
 const toolHistoryTrial = process.env.NAW_RETAINED_TOOL_HISTORY === '1';
 const modelOnly = process.env.NAW_MODEL_ONLY === '1';
-const budget = modelOnly ? 0 : sharedTrial ? 5 : queueTrial ? 4 : 3;
+const errorTrial = process.env.NAW_RETAINED_ERROR === '1';
+assert.ok(!errorTrial || !(modelOnly || queueTrial || sharedTrial || toolHistoryTrial), 'Error trial is a single bounded task');
+const budget = errorTrial ? 6 : modelOnly ? 0 : sharedTrial ? 5 : queueTrial ? 4 : 3;
 let child, client, application, page, calls = 0, finishFinal;
 const checks = [], errors = [], sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) { const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label); }
@@ -37,6 +39,7 @@ const server = http.createServer((req, res) => {
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"input_tokens":100,"data":[]}'); return; }
     const number = ++calls; if (number > budget) { res.writeHead(429); res.end(); return; }
     const input = JSON.parse(body); fs.writeFileSync(path.join(base, `request-${number}.json`), body);
+    if (errorTrial) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'NATIVE_FAILURE_FIXTURE: selected model is unavailable.' } })); return; }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'message_start', { message: { id: `msg_retained_${number}`, type: 'message', role: 'assistant', model: input.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
     const finish = reason => { event(res, 'message_delta', { delta: { stop_reason: reason, stop_sequence: null }, usage: { output_tokens: 30 } }); event(res, 'message_stop', {}); res.end(); };
@@ -81,7 +84,7 @@ async function launch() {
   // Boot with the already released compatibility hook, then exercise the
   // actual explicit reload upgrade in this same native process.
   fs.writeFileSync(path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js'),
-    execFileSync('git', ['show', (quitQueueTrial ? '03c44d8' : '2fe9784') + ':app/claude-bridge/hooks/register.js'], { cwd: root, encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;'), { mode: 0o600 });
+    execFileSync('git', ['show', (errorTrial ? 'd73768e' : quitQueueTrial ? '03c44d8' : '2fe9784') + ':app/claude-bridge/hooks/register.js'], { cwd: root, encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;'), { mode: 0o600 });
   fs.writeFileSync(path.join(bin, 'claude'), '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
     `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")\n` +
     `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--debug-file",${JSON.stringify(path.join(base, 'native-debug.log'))},"--allowedTools","Bash(printf:*)"])\n`, { mode: 0o700 });
@@ -104,7 +107,7 @@ async function launch() {
   }
   await until(async () => (await snapshot()).sessions.find(s => s.id === id)?.state === 'idle', 'Old native session ready');
   const before = (await snapshot()).sessions.find(s => s.id === id);
-  if (!modelOnly) {
+  if (!modelOnly && !errorTrial) {
   await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.type('Keep the original history.'); await page.keyboard.press('Enter');
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).messages.some(m => m.text.includes('RETAINED_HISTORY:')), 'Old hooks recorded native reply');
   }
@@ -129,6 +132,22 @@ async function launch() {
   await sleep(300); await page.keyboard.press('Enter');
   await until(async () => { const s = (await snapshot()).sessions.find(s => s.id === id); return s.nativeBlockMapping && s.legacySubmit; }, 'Same-process reader and input ready');
   await page.locator('#chat-tab').click();
+  if (errorTrial) {
+    await page.locator('#message-input').fill('Explain the local error.'); await page.locator('#send-button').click();
+    await until(async () => (await snapshot()).sessions.find(s => s.id === id).messages.some(m => m.kind === 'turn' && m.text.includes('NATIVE_FAILURE_FIXTURE')), 'Retained error detail in main reader');
+    assert.match(await page.locator('#messages').innerText(), /NATIVE_FAILURE_FIXTURE/);
+    await until(async () => (await page.locator('#compose-hint').innerText()).includes('原生请求未完成'), 'Error guidance supersedes plugin reload');
+    assert.ok(!(await page.locator('#compose-hint').innerText()).includes('/reload-plugins'));
+    await page.screenshot({ path: path.join(base, 'error-reader.png') });
+    await page.locator('#terminal-tab').click();
+    await until(async () => (await page.locator('#terminal-area').innerText()).includes('NATIVE_FAILURE_FIXTURE'), 'Native retained terminal error');
+    await page.screenshot({ path: path.join(base, 'error-terminal.png') });
+    const after = (await snapshot()).sessions.find(s => s.id === id);
+    assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid); assert.ok(calls >= 1 && calls <= 6);
+    assert.equal(after.messages.filter(m => m.kind === 'turn' && m.text.includes('NATIVE_FAILURE_FIXTURE')).length, 1);
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ checks: ['Retained native API failure is readable in unified and terminal views, same identity/process'], nativeVersion: version, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+  }
   if (modelOnly) {
     await require('./native-model-check.cjs')({ page, snapshot, base, reopen: async () => {
       await application.close(); application = null; await launch(); return page;

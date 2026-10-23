@@ -170,3 +170,19 @@ test('sharing closure between completed items remains visible without calling a 
   sharing.final(s, { tag: 'next', messageId: 'final', text: 'final' });
   assert.equal(w.room.messages.at(-1).sharingStopped, undefined, 'Normal final does not show an interrupted-sharing warning');
 });
+
+
+test('native failure details require the exact live grant and never advance an exchange', async t => {
+  const { w, ids, sent, bind, block, runtimes: [a] } = await fixture(t);
+  await w.startRun(ids, 'one bounded task', 2, 'replies'); bind(0);
+  block(0, { id: 'turn:private', kind: 'turn', turnId: 'private-turn', text: 'PRIVATE ERROR', status: 'failed' });
+  block(0, { id: 'turn:end', kind: 'turn', text: 'Visible failure', status: 'failed' });
+  assert.ok(w.room.messages.some(m => m.text === 'Visible failure' && m.role === 'system'));
+  assert.ok(!w.room.messages.some(m => m.finalReply)); assert.equal(sent.length, 1); assert.equal(w.room.run.steps, 0);
+  a.emit('state', 'error');
+  block(0, { id: 'turn:end', kind: 'turn', text: 'PRIVATE LATE ERROR', status: 'failed' });
+  a.emit('state', 'idle'); bind(0);
+  block(0, { id: 'turn:end', kind: 'turn', text: 'PRIVATE REPLAY', status: 'failed' });
+  assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE'));
+  assert.equal(sent.length, 1); assert.equal(w.room.run.steps, 0);
+});

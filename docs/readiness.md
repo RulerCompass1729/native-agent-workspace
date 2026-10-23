@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.78 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.79 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,20 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.79 — native error detail:** actual Claude
+API failures now map their processed native error record into the same failed-turn
+row, matched to the exact native root/prompt/turn. Raw Stop text never supplies a
+reply or error body. Existing sharing grants still apply; failure does not produce
+an automatic handoff or retry. Error-state input guidance no longer recommends
+reloading a working plugin. Source native current 309 and retained 302 cases pass
+with fixed loopback errors, same identities/processes and zero paid inference.
+Installed current and retained checks pass, including upgrade from the exact
+released alpha.78 compatibility hook. A missing upgrade hash found during normal
+reopening was repaired without allowing customized plugin replacement. All 826
+checks pass without skips; final 48-file payload, strict signature and original
+three-session input/reader/identity restoration pass with zero new task dispatch.
+Independent final source and artifact review passes for B37. U17 remains open.
 
 **Alpha.78 — native paragraph line breaks:** fixes native single newlines
 collapsing into one visual line in the solo/shared reader. Paragraphs retain their
