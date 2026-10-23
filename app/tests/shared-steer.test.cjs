@@ -157,3 +157,24 @@ for (const variant of ['shared','private','revoked','incomplete']) test(`plan-on
   assert.equal(f.w.room.messages.filter(m=>m.finalReply).length,0);assert.equal(f.calls.length,1);
   assert.equal(f.w.sharedReplies.grants.get(tag).closed,true);
 });
+
+for (const late of ['delta', 'completed', 'unseen-item']) test(`native interrupt freezes private and shared reply against ${late}`, async t => {
+  const f = await fixture(t), sending = f.w.steer(f.id, 'Shared request', 'owner', 'active', {}), tag = f.runtime.pendingSteer;
+  f.user(tag); f.start('answer'); f.delta('answer', 'Observed cut'); f.ack(); await sending;
+  f.end('interrupted');
+  const privateCut = JSON.stringify(f.s.messages), sharedCut = JSON.stringify(f.w.room.messages);
+  if (late === 'delta') f.delta('answer', ' late suffix');
+  else if (late === 'completed') f.finish('answer', 'Late complete replacement');
+  else { f.start('unseen'); f.delta('unseen', 'Unseen late suffix'); f.finish('unseen', 'Unseen late final'); }
+  assert.equal(JSON.stringify(f.s.messages), privateCut);
+  assert.equal(JSON.stringify(f.w.room.messages), sharedCut);
+  assert.equal(f.w.room.messages.filter(m => m.finalReply).length, 0);
+  assert.equal(f.w.versions.dispatches, 1);
+  // The next genuine turn continues; interruption never becomes a session lock.
+  f.emit('turn/started', { turn: { id: 'next' } });
+  f.emit('item/agentMessage/delta', { turnId: 'next', itemId: 'next-answer', delta: 'Next partial' });
+  f.emit('item/completed', { turnId: 'next', item: { type: 'agentMessage', id: 'next-answer', text: 'Next authoritative answer' } });
+  assert.equal(f.s.messages.at(-1).text, 'Next authoritative answer');
+  assert.equal(f.s.messages.at(-1).status, 'complete');
+  assert.equal(JSON.stringify(f.w.room.messages), sharedCut);
+});

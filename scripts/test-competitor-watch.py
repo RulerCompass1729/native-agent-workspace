@@ -15,6 +15,59 @@ spec.loader.exec_module(watch)
 
 
 class ScheduleTests(unittest.TestCase):
+    def positioning_fixture(self, directory):
+        directory.mkdir()
+        (directory/'baseline-2026-10-22.md').write_text(
+            '# baseline\n## 0. scope\nSCOPE\n## 1. quotations\nOMIT_ORIGINAL_QUOTES\n'
+            '## 2. rules\nRULES\n## 3. unrelated\nOMIT_HISTORY\n## 8. protocol\nPROTOCOL\n## 9. other\nOMIT_OTHER')
+        (directory/'matrix.json').write_text(json.dumps({'products': {'fixture': {'cells': {}}}}))
+        (directory/'review-guide.md').write_text('Require all three; partial is only near.')
+
+    def test_positioning_context_is_allowlisted_and_report_is_saved_without_rewriting_matrix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp); positioning = base/'positioning'; self.positioning_fixture(positioning)
+            (positioning/'check-2026-10-20.md').write_text('PREVIOUS_REVIEW')
+            (positioning/'unrelated.json').write_text('OMIT_UNRELATED')
+            original_matrix = (positioning/'matrix.json').read_bytes()
+            captured = base/'prompt.txt'; helper = base/'helper'
+            body = ('结论：证据不足\n交叉格：证据不足\n发现与变化\n重合与价值\n下一步\n'
+                    '未知与审查\n跟踪名单\n差异化复盘\n矩阵复核\n基础设施测试，不是调研。')
+            helper.write_text('#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\n'
+                'assert sys.argv[sys.argv.index("-s")+1]=="read-only"\n'
+                'Path('+repr(str(captured))+').write_text(sys.stdin.read())\n'
+                'Path(sys.argv[sys.argv.index("-o")+1]).write_text('+repr(body)+')\n')
+            helper.chmod(0o700)
+            now = datetime(2026,10,21,19,tzinfo=watch.PT)
+            result = watch.run(base/'runs', helper, now, positioning_dir=positioning)
+            self.assertEqual(result['status'], 'completed')
+            prompt = captured.read_text()
+            for token in ('SCOPE', 'RULES', 'PROTOCOL', 'PREVIOUS_REVIEW', 'Require all three'):
+                self.assertIn(token, prompt)
+            for token in ('OMIT_ORIGINAL_QUOTES', 'OMIT_HISTORY', 'OMIT_OTHER', 'OMIT_UNRELATED'):
+                self.assertNotIn(token, prompt)
+            self.assertEqual((positioning/'check-2026-10-21.md').read_text(), body)
+            self.assertEqual((positioning/'matrix.json').read_bytes(), original_matrix)
+            self.assertEqual(watch.run(base/'runs', helper, now, positioning_dir=positioning)['status'], 'already-attempted')
+
+    def test_configured_positioning_cannot_silently_run_without_inputs_or_in_public_repo(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)/'positioning'; self.positioning_fixture(directory)
+            (directory/'review-guide.md').unlink()
+            with self.assertRaises(ValueError):
+                watch.positioning_context(directory)
+            (directory/'review-guide.md').symlink_to(directory/'matrix.json')
+            with self.assertRaises(ValueError):
+                watch.positioning_context(directory)
+        with self.assertRaises(ValueError):
+            watch.positioning_context(watch.ROOT)
+
+    def test_positioning_verdict_is_required_and_uncertainty_is_valid(self):
+        body = '结论：继续\n交叉格：证据不足\n差异化复盘\n矩阵复核'
+        watch.validate_positioning_report(body)
+        for invalid in [body.replace('交叉格：证据不足', '没有竞争对手'), body.replace('矩阵复核', '')]:
+            with self.assertRaises(ValueError):
+                watch.validate_positioning_report(invalid)
+
     def test_pacific_deadline_survives_dst(self):
         for instant, expected in [
             ('2026-10-22T01:59:00+00:00', '2026-10-20'),

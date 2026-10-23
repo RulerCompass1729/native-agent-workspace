@@ -515,6 +515,27 @@ async function routerFixture(t, options) {
   return { ...f, bridge, router, state };
 }
 
+test('retained interrupted native turn can accept the next GUI message while its old host still says working', async t => {
+  const f = await routerFixture(t);
+  f.event('turn/completed', { turn: { id: 'active', status: 'interrupted' } }); await tick();
+  assert.equal(f.record.state, 'working');
+  assert.equal(f.router.snapshot().sessions[0].state, 'idle');
+  await f.router.call('send', f.record.id, 'next private task');
+  assert.equal(f.calls.filter(c => c.method === 'turn/start').length, 1);
+  assert.equal(f.calls.some(c => ['turn/steer', 'turn/interrupt', 'thread/start'].includes(c.method)), false);
+});
+
+for (const state of ['working', 'approval', 'disconnected']) test(`retained authoritative ${state} state cannot inherit idle from the old host`, async t => {
+  const f = await routerFixture(t); f.record.state = 'idle';
+  const native = f.bridge.target(f.record).native;
+  if (state === 'approval') native.adapter.emit('state', 'approval');
+  if (state === 'disconnected') native.close();
+  await f.router.refresh();
+  assert.equal(f.bridge.effectiveState(f.record), state);
+  await assert.rejects(f.router.call('send', f.record.id, 'must not send'));
+  assert.equal(f.calls.some(c => ['turn/start', 'turn/steer', 'turn/interrupt'].includes(c.method)), false);
+});
+
 for (const change of ['peer-leave-rejoin', 'peer-archive', 'own-leave', 'room-pause', 'room-archive']) test(`real room membership path preserves only unaffected retained sharing: ${change}`, async t => {
   const f = await routerFixture(t, { steer(m, reply, event) {
     event('item/completed', { turnId: 'active', item: { type: 'userMessage', id: 'steer-user', clientId: m.params.clientUserMessageId, content: [{ type: 'text', text: 'shared work' }] } });
@@ -659,10 +680,10 @@ test('private interrupted text and boundary survive cold attachment with native 
   assert.equal(f.calls.some(c => ['turn/start', 'turn/interrupt', 'thread/start', 'thread/unsubscribe'].includes(c.method)), false);
 });
 
-test('cached interruption is not completed or shortened by an incomplete matching history item', () => {
+for (const text of ['partial', 'partial original plus late suffix', 'different late completion', '']) test(`cached interruption retains the observed cut against history ${JSON.stringify(text)}`, () => {
   const { applyCodexHistory } = require('../native-blocks.cjs');
   const s = { provider: 'codex', recovering: true, messages: [{ id: 'cut', role: 'assistant', text: 'partial original', status: 'interrupted' }] };
-  applyCodexHistory(s, [{ id: 'cut', type: 'agentMessage', text: 'partial' }], {});
+  applyCodexHistory(s, [{ id: 'cut', type: 'agentMessage', text }], {});
   assert.equal(s.messages[0].text, 'partial original'); assert.equal(s.messages[0].status, 'interrupted');
 });
 

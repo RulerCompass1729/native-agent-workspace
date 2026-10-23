@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.75 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.76 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,17 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.76 — ordinary interrupted reply retention:**
+protects the observed native text cut against late ordinary reply events and
+recovered history in both current and retained sessions. Other turns and tools
+continue normally. A real retained-session trial also exposed old-host state
+blocking the next GUI send after native interruption; display and sending now use
+the same authenticated native state. Source and installed current/retained
+journeys pass, each with two fixed loopback tasks and one native title response,
+zero paid inference. Independent review, 806 local checks with no skips, 48-file
+payload, strict signature and original three-session continuity pass. This closes
+only the bounded B34 fix; U17 and Claude's post-Stop GUI limitation remain open.
 
 **Alpha.75 — proposed plan display:** native Codex
 plan text now uses the existing reader, including streaming and interruption.

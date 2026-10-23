@@ -12,6 +12,11 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.76 preserves interrupted Codex reply text against late events and restored
+history. Retained sessions can send the next GUI task using the same confirmed
+native state. Source and installed current/retained workflows pass; full native
+parity and Claude's post-Stop GUI limitation remain open.
+
 Alpha.75 restores native Codex proposed plans in the same conversation and shared
 reader, with streaming, interruption and retained receipts. Displaying a plan
 does not approve implementation or start a handoff. Source and installed native
