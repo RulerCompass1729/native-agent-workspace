@@ -123,6 +123,32 @@ async function queueRouter(t) {
   return { ...f, bridge, router, wire, event };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+for (const boundary of ['working', 'permission', 'gap', 'leave']) test(`retained explicit recovery preserves exact new shared grant until ${boundary}`, async t => {
+  const f = await queueRouter(t), sharing = f.bridge.sharedReplies, text = 'explicit recovery task';
+  // This fixture's 15 ms queue-timeout probe is unrelated to ordinary sends.
+  // Keep a bounded normal ACK window when the suite runs concurrently.
+  f.r.submission.timeout = 5000;
+  f.record.state = 'error'; f.r.rootTurn = { id: 'failed-A', promptId: crypto.randomUUID(), status: 'error' };
+  await f.router.refresh();
+  const done = f.router.call('forward', f.record.id, text, f.record.nativeId); done.catch(() => {});
+  await settle(); const tag = f.r.submission.pending?.tag; assert.ok(tag);
+  assert.equal(f.r.submission.authorize({ id: tag, text }), true);
+  const grant = sharing.grants.get(tag); assert.equal(sharing.valid(grant), true);
+  const promptId = crypto.randomUUID();
+  f.event({ id: 'control:turn-start', kind: 'control', turnId: 'new-B', promptId, status: 'running' });
+  sharing.refresh(); assert.equal(grant.closed, false, 'Old host error snapshot cannot close an authorized new task');
+  f.event({ id: `prompt:${promptId}`, kind: 'input', text, inputTag: tag, turnId: 'new-B', promptId });
+  f.r.submission.result({ id: tag, status: 'accepted', turnId: 'new-B', promptId }); await done;
+  if (boundary === 'working') { f.record.state = 'working'; await f.router.refresh(); }
+  if (boundary === 'permission') f.event({ id: 'control:permission', kind: 'control' });
+  if (boundary === 'gap') f.r.gap('missing events');
+  if (boundary === 'leave') { f.record.roomId = null; f.record.memberRevision++; await f.router.refresh(); }
+  f.event({ id: 'display:new-B', turnId: 'new-B', promptId, delta: 'New shared result' });
+  const visible = sharing.snapshot().find(m => m.text === 'New shared result');
+  if (boundary === 'working') assert.equal(visible?.replyTo, tag);
+  else assert.equal(visible, undefined);
+  assert.equal(f.wire.filter(m => m.id === tag).length, 1);
+});
 test('a newer shared queue cancels an older delayed send intent without replaying it after acceptance', async t => {
   const f = await queueRouter(t); let release, calls = 0;
   const pause = f.router.pauseExcept.bind(f.router);

@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.79 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.80 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,18 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.80 — explicit input after a failed request:** a live, confirmed Claude
+request failure permits one new human send through the existing composer,
+including an explicit shared recipient. This does not retry the old request,
+resume a paused run or revive its sharing grant. Exact prompt/turn identities
+protect new input from late old failures; new shared authorization survives the
+short lag between native start/acceptance and the old service state update.
+Source and installed real-current solo/retained shared journeys pass with fixed
+local responses and unchanged native IDs/PIDs. All 847 checks pass without skips;
+the 48-file installed payload, strict signature and original three-session hidden
+reopening pass with zero new dispatch. Independent final source/artifact review passes for B38. Human Stop, lost connections and uncertain failures remain gated;
+this does not close U17 or bypass Claude's native post-Stop input restriction.
 
 **Alpha.79 — native error detail:** actual Claude
 API failures now map their processed native error record into the same failed-turn

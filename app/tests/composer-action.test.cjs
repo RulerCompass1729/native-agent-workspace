@@ -11,6 +11,10 @@ test('failure guidance cannot hide first-time legacy connection or claim plugin 
   s.legacyInputPrepared = true;
   assert.equal(action().kind, 'terminal'); assert.match(action().hint, /原生请求未完成/);
   assert.ok(!action().hint.includes('/reload-plugins'));
+  s.failedTurnInputAvailable = true;
+  assert.equal(action().kind, 'send'); assert.match(action().hint, /不会自动重试/);
+  s.nativeInputRequired = true; assert.equal(action().kind, 'terminal');
+  s.nativeInputRequired = false; s.failedTurnInputAvailable = false;
   s.owner = 'other'; assert.equal(action().kind, 'claim');
   s.owner = 'owner'; s.state = 'idle'; assert.match(action().hint, /reload-plugins/);
 });

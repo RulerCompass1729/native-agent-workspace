@@ -12,6 +12,11 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.80 permits an explicit new human message after a confirmed native Claude
+request failure, in a solo conversation or to a chosen shared recipient. The old
+error stays visible; no automatic retry or resumed handoff. Source and installed
+native checks pass; full native parity and post-Stop GUI input remain open.
+
 Alpha.77 retains already-displayed native tool input/results in the existing local
 conversation and shared histories through reopening, with bounded storage and no
 restored sharing grant or task replay. Source and installed native journeys pass;

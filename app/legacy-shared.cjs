@@ -27,10 +27,15 @@ class LegacyShared extends SharedReplies {
   }
   valid(g) {
     try {
+      const current = g.authority(g);
+      if (!current) return false;
+      // The retained service replaces its snapshot objects. Do not keep the
+      // state captured before an explicit send once native starts that task.
+      if (typeof current === 'object') this.workspace.sessions.get(g.sessionId).state = current.state;
       const r = g.runtime, nativeValid = r.record.provider === 'codex'
         ? r.sharedReplyAvailable && !r.approval && ['idle', 'working'].includes(r.state)
         : !r.disposed && !r.rootEnding && r.nativeSharedDisplay && r.rootLease === g.lease;
-      return !this.storageError && nativeValid && g.authority() && super.valid(g);
+      return !this.storageError && nativeValid && super.valid(g);
     }
     catch { return false; }
   }

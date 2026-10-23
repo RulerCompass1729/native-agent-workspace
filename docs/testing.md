@@ -2468,3 +2468,50 @@ input remain open. A proposed synthetic legacy UI
 fixture was rejected because production recomputed its flags; its failed run is
 not counted as proof. The retained native path and an explicit pure decision
 regression cover the corrected guidance instead.
+
+
+## Explicit new input after native failure — alpha.80 (2026-10-22)
+
+This repairs a confirmed request failure, not a human Stop or an uncertain
+connection. Fresh native root/prompt/turn evidence permits one explicit new
+human send. Replayed or persisted error rows cannot authorize it. The error
+record remains visible; automatic runs and queued handoffs remain blocked.
+
+Independent counterexamples exposed two event-order bugs: late A failure could
+clear B before its settings hook arrived; the new B shared grant could close
+while the original host still reported A's error. Regressions cover current and
+retained paths through native authorization, ordered start, receipt and state
+refresh, while permission, gap and departure keep revoking shared visibility.
+Old grants never reopen.
+
+Source real Electron/current Claude 309 solo recovery passes with two GUI sends,
+six fixed local error responses and one fixed success. Retained Claude 302
+upgrades the exact alpha.79 hook and recovers through an explicit shared send:
+two fixed errors, one fixed success, same native ID/PID, preserved private error,
+shared new reply and the original terminal result. Both use zero paid inference.
+Failed intermediate shared trials are retained privately, not counted as passes.
+
+```sh
+npm run build:ui
+NAW_ERROR_RECOVERY=1 node scripts/test-native-error.cjs
+NAW_CLAUDE_302=/path/to/retained/claude NAW_RETAINED_ERROR=1 NAW_ERROR_RECOVERY=1 node scripts/test-native-retained-claude.cjs
+```
+
+Installed current/retained journeys pass with seven and three fixed local
+responses respectively, zero paid inference, unchanged native identities and
+one new explicit task after each original failure. Shared recovery preserves
+its submitted receipt and one final reply without exposing the private error.
+All 847 checks pass without skips. The new ordinary-send regression initially
+inherited a 15 ms queue-timeout probe; under concurrent load it timed out before
+ACK inspection. It now uses a bounded 5-second fixture window; production
+timeouts are unchanged. Independent review's complete-before-ACK counterexample
+is retained as a four-case real adapter/channel regression.
+
+The final 48-file source/installed payload matches and strict signature checking
+passes after native testing. All three original sessions reopen hidden with the
+same IDs/PIDs, input/readers, selected view and drafts, with zero new dispatch.
+Independent final source/artifact review passes for this bounded B38 repair.
+Actual hidden Electron mouse/keyboard actions exercise native CLIs and production
+adapters; loopback responses replace model inference only. This is not physical
+IME coverage, hosted reasoning, arbitrary provider-version compatibility, or
+closure of U17 and the post-Stop GUI restriction.

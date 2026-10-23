@@ -60,7 +60,7 @@ function publishFailure($, turnId, turn, binding) {
   if (turn.ended && turn.endReason === 'error' && turn.failedPrompt && turn.failure) {
     const detail = failureText(turn);
     enqueueBlock($, { id: `turn:${turnId}`, turnId, kind: 'turn', status: 'failed',
-      text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous) }, binding);
+      text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous), failedRequest: true }, binding);
   }
 }
 const observations = [];
@@ -505,7 +505,8 @@ export function register(on) {
         turn.endingText = `${e.reason === 'aborted' ? '原生已中断本轮' : e.reason === 'answer' ? '原生本轮已结束' : '原生本轮未正常完成'}${Number.isFinite(e.durationMs) ? ` · ${(e.durationMs / 1000).toFixed(1)} 秒` : ''}`;
         enqueueBlock($, { id: `turn:${e.turnId}`, turnId: e.turnId, kind: 'turn', finalDisplayId,
           text: turn.endingText + (e.reason === 'error' && failureText(turn) ? `\n${failureText(turn)}` : ''),
-          status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed' }, binding);
+          status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed',
+          failedRequest: e.reason === 'error' && turn.failedPrompt === true }, binding);
       }
     } catch { markObservationGap(binding); }
     return result;

@@ -43,6 +43,28 @@ test('ACK identity gates early content; parallel turns update stable blocks with
   assert.equal(w.room.messages.filter(m => m.role === 'assistant').length, 2);
   assert.equal(first.finalReply, true); assert.equal(first.status, 'complete');
 });
+test('explicit recovery shares only its new reply across delayed error state; old grants stay closed', async t => {
+  const { w, runtimes: [a], ids, bind, block } = await fixture(t);
+  const old = await w.forward(ids[0], 'failed old task', 'owner');
+  a.emit('failed', 'old request failed'); a.emit('state', 'error');
+  a.rootLease = 'same-root'; a.failedTurnInputId = 'failed-A';
+  a.failedTurnInputMatches = id => id === 'failed-A' && !a.rootTurn;
+  const tag = await w.forward(ids[0], 'new explicit task', 'owner'), grant = w.sharedReplies.grants.get(tag);
+  assert.equal(grant.closed, false); assert.equal(w.sharedReplies.grants.get(old).closed, true);
+  a.submission = { connected: true, pending: { tag, authorized: true } };
+  a.rootTurn = { id: 'turn-0', promptId: 'prompt-0', status: 'working' };
+  a.emit('capability'); assert.equal(grant.closed, false, 'Ordered start B can precede settings working state');
+  bind(0); a.submission.pending = null; a.emit('capability');
+  block(0, { id: 'display:new', kind: 'response', text: 'new reply', status: 'complete' });
+  assert.equal(w.room.messages.find(m => m.text === 'new reply').replyTo, tag);
+  const messageId = w.room.messages.find(m => m.text === 'new reply').nativeMessageId;
+  a.rootTurn.status = null; a.rootTurn.completed = true; a.emit('capability');
+  assert.equal(grant.closed, false, 'Native completion can precede old settings Stop/idle');
+  a.emit('state', 'idle'); a.emit('complete', { tag, messageId, text: 'new reply' });
+  assert.equal(w.room.messages.filter(m => m.text === 'new reply').length, 1);
+  assert.equal(w.room.messages.find(m => m.text === 'new reply').finalReply, true);
+  assert.equal(w.sharedReplies.grants.get(old).closed, true);
+});
 test('human thread association survives unconfirmed acceptance without adding parent text to native input', async t => {
   const { w, runtimes, ids, sent, directory } = await fixture(t);
   const parent = await w.forward(ids[0], 'PARENT MATERIAL', 'owner');
