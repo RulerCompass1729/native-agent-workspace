@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.77 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.78 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,16 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.78 — native paragraph line breaks:** fixes native single newlines
+collapsing into one visual line in the solo/shared reader. Paragraphs retain their
+line breaks while Markdown block spacing and code formatting remain separate.
+Actual Electron source checks reproduce the old same-line geometry and pass
+13 reading plus 10 room groups after repair, with no provider process or model
+request. Installed reading and room journeys also pass all 23 groups; independent
+source/artifact review, 48 matching runtime files, strict signature and original
+three-session hidden reopening pass without a new task dispatch.
+This is a rendering fix, not closure of U17 or the Claude post-Stop limitation.
 
 **Alpha.77 — native trajectory continuity:** existing local histories now
 retain already-displayed structured native tool inputs/results through reopening,

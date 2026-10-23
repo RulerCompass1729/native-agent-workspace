@@ -1,5 +1,30 @@
 # Bounded testing
 
+## Native paragraph line breaks — alpha.78
+
+The native terminal's final result contains two separate lines; the prior GUI
+rendered them on the same line. A real Electron range-geometry assertion fails
+before repair and passes afterward. Paragraph-only whitespace preserves original
+line breaks without treating generated whitespace between Markdown elements as
+blank lines. Source reading and room journeys pass 13 and 10 groups: streaming
+line separation, completed shared text, Markdown/code formatting, exact Copy,
+selection/focus, scroll anchoring, switching, reopening, deliveries and existing
+bounded collaboration. Both use controlled transport, no native process or model.
+Installed reading and room journeys also pass all 23 groups. Independent source
+and artifact review, 48 matching runtime files, strict signature and the original
+three-session hidden reopening pass with unchanged native IDs/processes, saved
+view/drafts and no new task dispatch. This closes only the paragraph rendering fix.
+
+Separate private capability probes run the actual Claude 2.1.309 client with
+fixed loopback responses. Its pending final half-line is absent from both TUI and
+GUI when native Escape cuts the turn; unshown `turn.answer` text is not inserted
+into the reader. One successful response is used; an earlier probe incorrectly
+expected that tail to be visible and is retained as a failed test expectation.
+An explicit `turn.abort` probe permits the subsequent plugin submission, using
+two fixed responses, but is not integrated into the product. Its native contract
+omits the Escape interruption marker, so it is not proof of identical Stop or
+force-send semantics. The product's post-Stop GUI limitation remains open.
+
 ## Native tool history — alpha.77
 
 Set `NAW_RETAINED_TOOL_HISTORY=1` in the existing retained Claude test to run three

@@ -51,8 +51,19 @@ async function run() {
   assert.equal(await page.locator('#run-button').isDisabled(), true); passed.push('One member: default form sends only to its recipient, without starting a run');
   const b = await create('codex'); await chooseRecipient(b); await page.locator('#shared-input').fill('只分享这段'); await page.locator('#shared-input').press('Shift+Enter');
   assert.equal(await page.locator('#shared-input').inputValue(), '只分享这段\n'); assert.equal((await native('stats')).sends.length, 1);
-  await page.locator('#forward-button').click(); await sent(2, b, '只分享这段'); assert.equal((await snapshot()).room.run, null); await complete('SECOND-REPLY');
-  const s = await snapshot(); assert.ok(s.room.messages.some(m => m.text === 'SECOND-REPLY')); assert.equal(s.sessions.find(x => x.id === a).messages.filter(m => m.role === 'user').length, 1);
+  await page.locator('#forward-button').click(); await sent(2, b, '只分享这段'); assert.equal((await snapshot()).room.run, null); await complete('SECOND-REPLY\nSECOND-LINE');
+  const s = await snapshot(); assert.ok(s.room.messages.some(m => m.text === 'SECOND-REPLY\nSECOND-LINE'));
+  const sharedReply = page.locator('#room-messages .message.assistant .message-body p').filter({ hasText: 'SECOND-REPLY' });
+  await sharedReply.waitFor();
+  const lineTops = await sharedReply.evaluate(el => {
+    const node = el.firstChild, range = document.createRange();
+    range.setStart(node, 0); range.setEnd(node, 12); const first = range.getBoundingClientRect().top;
+    const at = node.textContent.indexOf('SECOND-LINE'); range.setStart(node, at); range.setEnd(node, at + 11);
+    return [first, range.getBoundingClientRect().top];
+  });
+  assert.ok(lineTops[1] - lineTops[0] > 10, 'Shared completed reply preserves native single newline');
+  passed.push('Shared completed reply retains native line breaks in the same main reader');
+  await sharedReply.scrollIntoViewIfNeeded(); await capture('shared-native-lines'); assert.equal(s.sessions.find(x => x.id === a).messages.filter(m => m.role === 'user').length, 1);
   await chooseRecipient(a); await page.locator('#shared-input').fill('键盘发送'); await page.locator('#forward-button').focus(); await page.keyboard.press('Enter'); await sent(3, a, '键盘发送'); assert.equal((await snapshot()).room.run, null); await complete('KEYBOARD-REPLY');
   passed.push('Pointer and keyboard send once to selected recipient; Shift Enter remains a newline');
   await page.locator('#shared-input').fill('显式自动核查'); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
