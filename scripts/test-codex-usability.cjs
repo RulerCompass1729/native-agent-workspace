@@ -1,4 +1,4 @@
-const { chooseRecipient, roomBody } = require('./room-input.cjs');
+const { chooseRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real hidden Electron/DSH UI and service; synthetic history/output, no models.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
@@ -19,7 +19,7 @@ function fixture(method, target, value) { const id = ++sequence; return new Prom
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
 async function launch() {
-  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR?{recordVideo:{dir:process.env.NAW_VIDEO_DIR,size:{width:1280,height:900}}}:{}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').waitFor();
   // Capture app Copy payloads without touching the person's active clipboard.
@@ -34,11 +34,12 @@ async function create(name) {
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service'); client = await connect(profile, 'codex-usability'); await launch();
   const a = await create('Codex A');
-  await fixture('history', a, [
+  const completedAt = Math.floor(Date.now()/1000) - 30;
+  await fixture('history', a, {items:[
     { id:'user-short',type:'userMessage',turnId:'old',content:[{type:'text',text:'h'}] },
     { id:'reply-short',type:'agentMessage',turnId:'old',text:'你好！有什么我能帮你？' },
     { id:'reply-code',type:'agentMessage',turnId:'code',text:'第一段。\n\n第二段。\n\n'+String.fromCharCode(96).repeat(3)+'js\nconst n = 1;\n'+String.fromCharCode(96).repeat(3) }
-  ]);
+  ],turns:[{id:'old',status:'completed',completedAt,durationMs:2300},{id:'code',status:'completed',completedAt:completedAt+5,durationMs:5000}]});
   await page.locator('#messages .message-body p').first().waitFor();
   await require('./check-theme.cjs').checkTheme(page);
   const geometry=[];
@@ -47,16 +48,21 @@ async function run() {
     const values=await page.evaluate(()=>{
       const u=document.querySelector('#messages .user'), a=document.querySelector('#messages .assistant');
       const ub=u.querySelector('.message-body'), ab=a.querySelector('.message-body');
-      return {humanHeight:u.getBoundingClientRect().height,humanMargin:parseFloat(getComputedStyle(u).marginBottom),agentHeight:a.getBoundingClientRect().height,humanBackground:getComputedStyle(ub).backgroundColor,agentBackground:getComputedStyle(ab).backgroundColor,humanBorder:parseFloat(getComputedStyle(ub).borderLeftWidth),heading:u.querySelector('.message-heading').getBoundingClientRect().top,actions:u.querySelector('.message-actions').getBoundingClientRect().top};
+      return {humanHeight:u.getBoundingClientRect().height,humanWidth:u.getBoundingClientRect().width,readerWidth:u.parentElement.clientWidth,humanMargin:parseFloat(getComputedStyle(u).marginBottom),agentHeight:a.getBoundingClientRect().height,humanBackground:getComputedStyle(ub).backgroundColor,agentBackground:getComputedStyle(ab).backgroundColor,actionsOpacity:getComputedStyle(u.querySelector('.message-actions')).opacity};
     });
     assert.ok(values.humanHeight+values.humanMargin<90,'Short human message fits compact reader'); assert.ok(values.agentHeight<65);
-    assert.notEqual(values.humanBackground,values.agentBackground);assert.ok(values.humanBorder>=2);assert.ok(Math.abs(values.heading-values.actions)<8);
+    assert.notEqual(values.humanBackground,values.agentBackground);assert.ok(values.humanWidth<values.readerWidth/2,'Short messages use their content width');
     geometry.push({scheme,...values}); await capture('codex-compact-'+scheme);
   }
   const code=page.locator('#messages [data-message-id="reply-code"]');
   assert.match(await code.locator('pre').innerText(),/const n = 1;/);
-  await code.locator('.message-actions').getByRole('button',{name:'复制',exact:true}).click();
+  await code.hover(); await code.locator('.message-actions').getByRole('button',{name:'复制',exact:true}).click();
   assert.match(await app.evaluate(()=>globalThis.copiedText.at(-1)),/第一段。\n\n第二段。/);
+  const boundary=page.locator('#messages .native-turn').first(); await boundary.waitFor();
+  const completion=await boundary.locator('.message-body').innerText(); assert.match(completion,/Worked for 2s/);
+  assert.ok(completion.includes(new Date(completedAt*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})));
+  await boundary.hover(); await boundary.getByRole('button',{name:'复制',exact:true}).click();
+  assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),completion,'Copy includes the displayed native completion metadata');
   await page.getByRole('button',{name:'加入协作',exact:true}).click();
   const b=await create('Codex B');await page.getByRole('button',{name:'加入协作',exact:true}).click();
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
@@ -103,7 +109,58 @@ async function run() {
   assert.equal(await page.locator('#recipient').inputValue(),b);
   assert.equal((await input.inputValue()).match(/@/gu).length,1,'One visible address after changing the recipient');
   assert.equal((await snapshot()).diagnostics.dispatches,0);assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({geometry,checks:['Compact light/dark human and agent distinction; exact Markdown/code Copy','Inline keyboard mention, no separate selector; choose does not send','Native textarea Undo/Redo revokes identity while retaining prior text','Body edits, app composition Enter guard, reopen and same-text replacement','Same-name IDs, rename and departure retain drafts and require explicit reselect'],dispatches:0,errors,profile},null,2));
+  await page.evaluate(async ids=>{await workspace.rename(ids[0],'Codex A');await workspace.rename(ids[1],'Codex B');},[a,b]);
+  const beforeTask=await snapshot();
+  await chooseRecipient(page,b);await fillRoomMessage(page,'核对材料：12、18、25，文档声称总额60。');await page.locator('#forward-button').click();
+  await fixture('replyBound',b,{turnId:'check-b'});
+  await page.locator('#run-status').getByText('Codex B · 正在处理',{exact:false}).waitFor();
+  await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14),status:'running'});
+  await fixture('nativeBlock',b,{id:'response:check-b',kind:'response',turnId:'check-b',text:'核对中，正在检查材料中的合计。',status:'streaming'});
+  await chooseRecipient(page,a);await fillRoomMessage(page,'独立复核这三个数字的合计。');await page.locator('#forward-button').click();
+  await fixture('replyBound',a,{turnId:'check-a'});
+  await fixture('nativeBlock',a,{id:'response:check-a',kind:'response',turnId:'check-a',text:'逐项复核：12 + 18 + 25 = 55。材料里的60有误。',status:'complete'});
+  await fixture('nativeBlock',a,{id:'turn:check-a',kind:'turn',turnId:'check-a',text:'原生本轮已结束',status:'complete',nativeCompletedAt:completedAt*1000,nativeDurationMs:3400});
+  await fixture('complete',a,{messageId:'native:synthetic-'+a+':response:check-a',text:'逐项复核：12 + 18 + 25 = 55。材料里的60有误。'});
+  await fixture('nativeBlock',b,{id:'response:check-b',kind:'response',turnId:'check-b',text:'已核实，总额应为55，建议将60改为55。',status:'complete'});
+  await fixture('nativeBlock',b,{id:'turn:check-b',kind:'turn',turnId:'check-b',text:'原生本轮已结束',status:'complete',nativeCompletedAt:(completedAt+2)*1000,nativeDurationMs:5800});
+  await fixture('complete',b,{messageId:'native:synthetic-'+b+':response:check-b',text:'已核实，总额应为55，建议将60改为55。'});
+  await page.locator('#run-status').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#run-status').isVisible(),false,'Completed agents do not leave a stale activity label');
+  await page.locator('#room-messages').getByText('已核实，总额应为55，建议将60改为55。',{exact:true}).waitFor();
+  assert.equal(await page.locator('#room-messages .native-turn').count(),2);
+  const publicTask=(await snapshot()).room.messages;
+  assert.equal(publicTask.filter(m=>m.sharedStream&&m.role==='assistant').length,2,'Streaming updates stay in their original attributed blocks');
+  assert.ok(publicTask.some(m=>m.kind==='tool'&&m.text.split('\n').length>=14),'Long native process remains readable, without automatic folding');
+  await page.locator('#room-messages .message-author').filter({hasText:'Codex A'}).first().click();
+  assert.equal(await page.locator('#room-filter').inputValue(),a);await page.locator('#room-filter').selectOption('');
+  await page.locator('#room-messages').hover();await page.mouse.wheel(0,2000);
+  await capture('shared-short-long-interleaved');
+  await page.locator('[data-session-id="'+b+'"]').click();await page.getByRole('button',{name:'脱出协作',exact:true}).click();
+  await fixture('nativeBlock',b,{id:'response:private',kind:'response',turnId:'private-b',text:'PRIVATE CONTINUATION',status:'complete'});
+  await page.locator('#message-input').fill('私下继续核对的草稿');
+  assert.ok(!(await snapshot()).room.messages.some(m=>m.text.includes('PRIVATE CONTINUATION')));
+  await app.close();app=null;await launch();
+  assert.equal(await page.locator('#message-input').inputValue(),'私下继续核对的草稿');
+  const reopened=await snapshot();
+  assert.equal(reopened.sessions.find(s=>s.id===b).nativeId,beforeTask.sessions.find(s=>s.id===b).nativeId);
+  assert.equal(reopened.sessions.find(s=>s.id===b).roomId,null);
+  assert.deepEqual(reopened.room.messages,publicTask);assert.equal(reopened.diagnostics.dispatches,2);
+  assert.equal(reopened.sessions.find(s=>s.id===a).messages.filter(m=>m.kind==='turn').length,3);
+  await page.locator('#room-nav').click();await page.locator('#room-record').click();
+  await chooseRecipient(page,a);await fillRoomMessage(page,'控制场景：开始核查，然后私下接管。');await page.locator('#forward-button').click();
+  await fixture('replyBound',a,{turnId:'control-turn'});
+  await fixture('nativeBlock',a,{id:'response:control',kind:'response',turnId:'control-turn',text:'共享中的片段',status:'streaming'});
+  await page.locator('#run-status').getByText('Codex A · 正在处理',{exact:false}).waitFor();
+  await fixture('nativeInput',a,'PRIVATE INTERVENTION');
+  await page.locator('#run-status').waitFor({state:'hidden'});
+  const privateState=(await snapshot()).sessions.find(s=>s.id===a);
+  assert.equal(privateState.nativeActivity.turnId,'control-turn');assert.equal(privateState.sharedActivity,null);
+  assert.equal(await page.locator('#run-status').isVisible(),false,'Private intervention retires room phase while the same native turn continues');
+  await fixture('nativeBlock',a,{id:'response:control',kind:'response',turnId:'control-turn',text:'PRIVATE AFTER INTERVENTION',status:'complete'});
+  assert.ok(!(await snapshot()).room.messages.some(m=>m.text.includes('PRIVATE AFTER INTERVENTION')));
+  await fixture('complete',a,{messageId:'native:synthetic-'+a+':response:control',text:'PRIVATE AFTER INTERVENTION'});
+  assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({geometry,checks:['Content-width human messages in light/dark; exact Markdown and native timing Copy','Inline mentions/Undo/Redo/composition guard; roster changes and reopen retain drafts','Two attributed agents check a document with short messages and long streaming process','Member trajectory filter, private departure and whole-app reopening preserve records/identity/draft','Same-turn private intervention hides native phase and freezes shared content'],dispatches:3,providerCalls:0,errors,profile},null,2));
 }
 async function capture(name){if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,name+'.png')});}}
 run().catch(async error=>{console.error(error.stack);if(page&&!page.isClosed())await capture('usability-failed');process.exitCode=1}).finally(async()=>{try{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close()}}finally{if(child.connected)child.disconnect();if(child.exitCode===null)child.kill('SIGTERM')}});

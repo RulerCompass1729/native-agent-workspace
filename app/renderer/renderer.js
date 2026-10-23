@@ -900,15 +900,27 @@ function render() {
       }
       $('room-record').setAttribute('aria-pressed', String(!roomSession));
       for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.roomSession === roomSession));
-      $('run-status').textContent = run ? `${run.pausePending ? '正在撤销后续授权' : run.pauseUnconfirmed ? '部分后台未确认暂停' : { running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
+      let runText = run ? `${run.pausePending ? '正在撤销后续授权' : run.pauseUnconfirmed ? '部分后台未确认暂停' : { running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
       const pendingRun = roomSubmitting?.automatic;
       const waiting = roomPendingRecipients.get($('recipient').value) || roomPendingRecipients.values().next().value;
       $('run-status').parentElement.hidden = !run && !roomSubmitting && !waiting;
       const next = state.sessions.find(m => m.id === run?.awaiting?.sessionId);
-      if (run?.status === 'running' && next) $('run-status').textContent += ` · 等待 ${next.name}`;
-      if (pendingRun && roomSubmitting.cancelling) $('run-status').textContent = '正在取消后续交接；草稿保留，已接收的任务仍在原会话中。';
-      else if (pendingRun && run?.status !== 'running') $('run-status').textContent = '正在准备核查，等待先前操作或原生接收确认。可取消本次等待；已开始的原生任务不受影响。';
-      if (waiting && !pendingRun) $('run-status').textContent = `正在发给 ${waiting.recipientName}，等待原生接收确认。可以选择其他成员继续输入。`;
+      if (run?.status === 'running' && next) runText += ` · 等待 ${next.name}`;
+      if (pendingRun && roomSubmitting.cancelling) runText = '正在取消后续交接；草稿保留，已接收的任务仍在原会话中。';
+      else if (pendingRun && run?.status !== 'running') runText = '正在准备核查，等待先前操作或原生接收确认。可取消本次等待；已开始的原生任务不受影响。';
+      if (waiting && !pendingRun) runText = `正在发给 ${waiting.recipientName}，等待原生接收确认。可以选择其他成员继续输入。`;
+      const active = people.filter(person => {
+        const activity = person.sharedActivity;
+        if (disconnected || person.transportDisconnected || !['working', 'approval'].includes(person.state) ||
+          !activity || activity.nativeId !== person.nativeId || activity.turnId !== person.activeTurnId) return false;
+        return true;
+      }).map(person => `${participantLabel(person, people)} · ${person.sharedActivity.label}`);
+      if (active.length) {
+        runText = [runText, ...active].filter(Boolean).join(' · ');
+        $('run-status').parentElement.hidden = false;
+      }
+      if ($('run-status').textContent !== runText) $('run-status').textContent = runText;
+      $('pause-button').hidden = !run && !roomSubmitting;
       renderTimeline();
       renderMembers();
       const previousRecipient = $('recipient').value;

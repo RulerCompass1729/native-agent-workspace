@@ -19,6 +19,36 @@ Installation, broader provider support, and complete solo GUI/TUI parity are
 follow-up work. The historical checkpoints below retain their original scope;
 they do not constitute acceptance of this current shared-workspace milestone.
 
+**Acceptance correction, 2026-10-23:** alpha.86's passing mechanical checks do
+not establish acceptance of the reading experience. The user rejects the stiff,
+oversized short-message layout and reports missing native completion time,
+elapsed duration and Recap/Next. Keep the frontend lightweight and iterate within
+the existing reader and embedded TUI. Discuss a representative short exchange,
+long native process and interleaved-member example before changing the primary
+layout. Simultaneous conversation/TUI display is a design candidate, not an
+implemented or accepted capability.
+
+The next delivery unit is one complete existing-session task: human `@` selects
+a participant to check a small synthetic document; the reader shows attribution,
+actual recipients, native progress and completion metadata; the person intervenes,
+detaches for private continuation, then reopens with identity, records and drafts
+preserved. Include the affected retained-backend path rather than proving only a
+fresh session. Unknown native data stays unknown; display-only/private content
+does not silently become a model delivery. Recap/Next's existing-result read path
+remains unverified and must not be replaced by a new summarization request.
+The same independent reviewer reconstructs acceptance from the original feedback
+before implementation, then checks actual changes and affected installed evidence.
+Reuse unchanged evidence and group fixes into this task; a field fix, test count
+or small release does not close the experience requirement.
+
+Current reading candidate: **alpha.87, 2026-10-23**. One installed short/long,
+two-member document check and private-intervention control scenario pass, alongside
+real current/retained Codex timing, native Escape, drafts and reopening. Existing
+reading and collaboration regressions pass; no new frontend dependency or provider
+inference is introduced by the shell. This is scoped task evidence, not user visual
+acceptance or complete TUI parity. Recap/Next and the proposed simultaneous layout
+remain open. See [evidence](testing.md#lightweight-reader--alpha87).
+
 Current cross-service increment: **alpha.85, 2026-10-23**. Explicit V2 peers can
 choose a native tool recipient across backends, preserving exact intent text and
 human-only final answers. Source three-member choice and installed control tasks

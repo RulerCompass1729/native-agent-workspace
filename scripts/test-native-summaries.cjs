@@ -85,6 +85,7 @@ async function launch() {
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Check this small example and report your progress.'); await page.locator('#forward-button').click();
   await until(() => calls === 1 && releaseStart, 'One requested native task');
+  await page.locator('#run-status').getByText('Native summaries · 正在处理',{exact:false}).waitFor();
   await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();
   await until(async () => (await snapshot()).sessions[0].terminalState?.alive && (await page.locator('#terminal-area').innerText()).includes('esc to interrupt'), 'Actual native terminal attached', 60000);
   releaseStart();
@@ -111,8 +112,23 @@ async function launch() {
   assert.equal(completed.room.messages.filter(m=>m.finalReply).length,1);
   assert.equal(completed.room.messages.find(m=>m.finalReply).text,'SUMMARY_TASK_DONE');
   assert.equal(completed.sessions[0].nativeId,before.nativeId); assert.equal(calls,1);
+  const completion=completed.sessions[0].messages.find(m=>m.kind==='turn'&&m.status==='complete');
+  assert.ok(Number.isFinite(completion?.nativeCompletedAt)); assert.ok(Number.isSafeInteger(completion?.nativeDurationMs));
+  const sharedCompletion=completed.room.messages.find(m=>m.nativeMessageId===completion.id);
+  assert.equal(sharedCompletion?.kind,'turn'); assert.equal(sharedCompletion.nativeCompletedAt,completion.nativeCompletedAt);
+  assert.equal(sharedCompletion.nativeDurationMs,completion.nativeDurationMs);
+  const completionRow=page.locator('#messages [data-message-id="'+completion.id+'"]');
+  await completionRow.getByText('Worked for',{exact:false}).waitFor();
+  const displayedCompletion=await completionRow.locator('.message-body').innerText();
+  await page.locator('#terminal-tab').click();
+  await until(async()=> (await page.locator('#terminal-area').innerText()).includes('Worked for'),'Native completion label');
+  const nativeCompleted=await page.locator('#terminal-area').innerText();
+  assert.ok(nativeCompleted.includes(displayedCompletion.split(' • ')[0]),'Reader duration matches the native TUI completion');
+  fs.writeFileSync(path.join(base,'native-completed.txt'),nativeCompleted);
+  await page.locator('#chat-tab').click();
   fs.writeFileSync(path.join(base,'completed.json'),JSON.stringify(completed,null,2));
   checks.push('One native summary block streams in solo/shared readers; reload preserves draft; final reply stays separate');
+  checks.push('Native completion duration agrees with TUI and retains exact native clock in solo and shared records');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   assert.match(await page.locator('#room-messages').innerText(),/Checking the given material/);
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true}); await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'public-summary.png')});}

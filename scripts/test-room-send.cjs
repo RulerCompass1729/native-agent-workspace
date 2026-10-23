@@ -124,7 +124,8 @@ async function run() {
   passed.push('Reopen retains the recipient; legacy or unavailable recipient requires an explicit choice with no dispatch');
   passed.push('Blank and pending sends are blocked; late failure and reopen retain the newer draft without replay');
   await chooseRecipient(b); const departedDraft = await page.locator('#shared-input').inputValue();
-  await page.locator('#room-messages article').filter({ has: page.getByText('FIRST-REPLY', { exact: true }) }).getByRole('button', { name: '选择并分享', exact: true }).click();
+  const firstReply=page.locator('#room-messages article').filter({ has: page.getByText('FIRST-REPLY', { exact: true }) });
+  await firstReply.hover(); await firstReply.getByRole('button', { name: '选择并分享', exact: true }).click();
   await page.locator('#share-recipient').selectOption(b); await client.call('join', b, false);
   await until(async () => await page.locator('#recipient').inputValue() === '', 'Departed room recipient cleared');
   assert.equal(await page.locator('#share-recipient').inputValue(), ''); assert.equal(await page.locator('#confirm-share').isDisabled(), true);

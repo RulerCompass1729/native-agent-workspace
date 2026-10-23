@@ -242,6 +242,8 @@ class LegacyInput extends EventEmitter {
         native.on('change', () => this.emit('change'));
         native.on('progress', update => this.emit('progress', { id: record.id, ...update }));
         native.on('readerBlock', message => { if (message) this.sharedReplies.observed(native, message); });
+        const metadata = () => { if (this.sharedReplies.restoreTurnMetadata(native.record)) this.sharedReplies.scheduleSave(); };
+        native.on('readerMetadata', metadata); metadata();
         native.on('replyBound', identity => this.sharedReplies.bindNative(native, identity));
         native.on('complete', info => this.sharedReplies.completeNative(native, info));
         for (const event of ['nativeInput', 'approval', 'failed', 'fleet']) native.on(event, () => this.sharedReplies.revoke(record.id, '原生输入、权限或运行状态已改变；后续内容留在原会话'));

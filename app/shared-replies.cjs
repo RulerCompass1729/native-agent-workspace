@@ -49,6 +49,26 @@ class SharedReplies {
   refresh() {
     for (const g of this.grants.values()) if (!g.closed && !this.valid(g)) this.close(g.tag);
   }
+  activity(s) {
+    const runtime = this.workspace.runtimes.get(s.id), activity = runtime?.nativeActivity;
+    if (!activity || activity.nativeId !== s.nativeId) return null;
+    for (const g of this.grants.values()) if (g.sessionId === s.id && g.nativeId === activity.nativeId &&
+      g.turnId === activity.turnId && !g.requiredInputTag && this.valid(g)) return activity;
+    // Steered turns can still contain earlier private native items. Until the
+    // provider reports input-scoped activity, their generic phase stays private.
+    return null;
+  }
+  restoreTurnMetadata(s) {
+    let changed = false;
+    for (const row of this.workspace.room.messages) {
+      if (row.sessionId !== s.id || row.nativeId !== s.nativeId || !row.sharedStream || !row.nativeMessageId) continue;
+      const native = s.messages.find(m => m.id === row.nativeMessageId && m.kind === 'turn' && m.turnId === row.turnId && m.status === row.nativeStatus);
+      if (!native) continue;
+      if (row.kind !== 'turn') { row.kind = 'turn'; changed = true; }
+      for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) if (row[field] == null && native[field] != null) { row[field] = native[field]; changed = true; }
+    }
+    return changed;
+  }
   bind(s, tag, identity) {
     const g = this.grants.get(tag);
     if (!g || !this.valid(g) || !identity || identity.nativeId !== g.nativeId || typeof identity.turnId !== 'string' || !identity.turnId) return;
@@ -82,7 +102,7 @@ class SharedReplies {
           turnId: g.turnId, ...(g.run ? { runId: g.run.id } : {}), sharedStream: true, deliveryTracked: true };
         g.rows.set(message.id, row); this.workspace.room.messages.push(row);
       }
-      for (const field of ['text', 'input', 'title', 'status', 'incomplete', 'volatile', 'displayTurnId']) row[field] = message[field];
+      for (const field of ['text', 'input', 'title', 'kind', 'status', 'incomplete', 'volatile', 'displayTurnId', 'nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) row[field] = message[field];
       row.nativeStatus = message.status;
       this.boundary(g, message);
     }

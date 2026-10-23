@@ -21,6 +21,76 @@ async function fixture(t, pages) {
   t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { w, r, s, id, calls, notify };
 }
+test('native turn metadata pages restore exact boundaries without sharing history or replaying work', async t => {
+  const items = [entry('a', 'agentMessage', 'first'), { ...entry('b', 'agentMessage', 'second'), turnId: 'second-turn' }];
+  const f = await fixture(t, () => ({ data: items }));
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0';
+  rpc.call = async (method, params) => {
+    if (method !== 'thread/turns/list') return call(method, params);
+    f.calls.push({ method, params });
+    assert.equal(params.itemsView, 'notLoaded'); assert.equal(params.sortDirection, 'asc');
+    return params.cursor ? { data: [{ id: 'second-turn', status: 'interrupted', completedAt: 1700000100, durationMs: 800 }], nextCursor: null }
+      : { data: [{ id: 'old-turn', status: 'completed', startedAt: 1700000000, completedAt: 1700000002, durationMs: 2300 }], nextCursor: 'older-page' };
+  };
+  f.w.join(f.id, true); const room = JSON.stringify(f.w.room), revision = f.s.controlRevision;
+  await f.r.hydrateHistory(f.s.nativeId);
+  await f.r.turnMetadataHydration;
+  assert.deepEqual(f.s.messages.map(m => m.kind || m.id), ['a', 'turn', 'b', 'turn']);
+  const [first, second] = f.s.messages.filter(m => m.kind === 'turn');
+  assert.equal(first.nativeCompletedAt, 1700000002000); assert.equal(first.nativeDurationMs, 2300);
+  assert.equal(second.nativeCompletedAt, 1700000100000); assert.equal(second.nativeDurationMs, 800); assert.equal(second.status, 'interrupted');
+  assert.equal(first.turnId, 'old-turn'); assert.equal(second.turnId, 'second-turn');
+  assert.equal(JSON.stringify(f.w.room), room); assert.equal(f.s.controlRevision, revision); assert.equal(f.w.versions.dispatches, 0);
+  f.w.persist(); const stored = JSON.parse(fs.readFileSync(path.join(f.w.dataDir, 'workspace.json')));
+  assert.deepEqual(stored.sessions.find(s => s.id === f.id).messages.filter(m => m.kind === 'turn'), [first, second]);
+  await f.r.hydrateHistory(f.s.nativeId); await f.r.turnMetadataHydration; assert.equal(f.s.messages.filter(m => m.kind === 'turn').length, 2);
+});
+test('late history cannot replace a live interruption or stop a different active turn', async t => {
+  const f = await fixture(t, () => ({ data: [entry('a', 'agentMessage', 'historical final')] }));
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0';
+  rpc.call = async (method, params) => {
+    if (method !== 'thread/turns/list') return call(method, params);
+    f.notify('turn/completed', { turn: { id: 'old-turn', status: 'interrupted', completedAt: 1700000001, durationMs: 1500 } });
+    f.notify('turn/started', { turn: { id: 'new-turn', startedAt: 1700000005 } });
+    return { data: [{ id: 'old-turn', status: 'completed', completedAt: 1700000099, durationMs: 99000 }] };
+  };
+  await f.r.hydrateHistory(f.s.nativeId);
+  await f.r.turnMetadataHydration;
+  const boundary = f.s.messages.find(m => m.kind === 'turn');
+  assert.equal(boundary.status, 'interrupted'); assert.equal(boundary.nativeCompletedAt, 1700000001000); assert.equal(boundary.nativeDurationMs, 1500);
+  assert.equal(f.r.turnId, 'new-turn'); assert.equal(f.s.state, 'working');
+});
+test('optional native timing failure preserves readable history and input, retry removes the notice', async t => {
+  const f = await fixture(t, () => ({ data: [entry('a', 'agentMessage', 'retained answer')] }));
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0'; let fail = true;
+  rpc.call = async (method, params) => { if (method !== 'thread/turns/list') return call(method, params); if (fail) throw Error('Disconnected metadata read'); return { data: [] }; };
+  await f.r.observeFirstTurn();
+  await f.r.turnMetadataHydration;
+  assert.equal(f.r.chatAvailable, true); assert.equal(f.s.messages[0].text, 'retained answer');
+  assert.equal(f.s.messages.filter(m => m.kind === 'notice').length, 1);
+  fail = false; await f.r.hydrateHistory(f.s.nativeId); await f.r.turnMetadataHydration;
+  assert.equal(f.s.messages.filter(m => m.kind === 'notice').length, 0); assert.equal(f.s.messages[0].nativeCompletedAt, undefined);
+});
+test('held timing request does not delay readable history/input or overwrite later native text', async t => {
+  const f = await fixture(t, () => ({ data: [entry('a', 'agentMessage', 'saved answer')] }));
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0'; let release;
+  rpc.call = (method, params) => method === 'thread/turns/list' ? new Promise(resolve => { release = resolve; }) : call(method, params);
+  await f.r.observeFirstTurn();
+  assert.equal(typeof release, 'function'); assert.equal(f.r.chatAvailable, true); assert.equal(f.s.messages[0].text, 'saved answer');
+  f.notify('item/completed', { turnId: 'old-turn', item: { id: 'a', type: 'agentMessage', text: 'new authoritative answer' } });
+  release({ data: [{ id: 'old-turn', status: 'completed', completedAt: 1700000000, durationMs: 2400 }] }); await f.r.turnMetadataHydration;
+  assert.equal(f.s.messages.find(m => m.id === 'a').text, 'new authoritative answer');
+  assert.equal(f.s.messages.find(m => m.kind === 'turn').nativeDurationMs, 2400);
+});
+test('metadata held across a lifecycle change cannot enrich another native identity', async t => {
+  const f = await fixture(t, () => ({ data: [entry('a', 'agentMessage', 'saved answer')] }));
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0'; let release;
+  rpc.call = (method, params) => method === 'thread/turns/list' ? new Promise(resolve => { release = resolve; }) : call(method, params);
+  await f.r.hydrateHistory(f.s.nativeId); await Promise.resolve();
+  f.r.lifecycleRevision++; f.s.nativeId = 'new-native';
+  release({ data: [{ id: 'old-turn', status: 'completed', completedAt: 1700000000, durationMs: 2400 }] }); await f.r.turnMetadataHydration;
+  assert.equal(f.s.messages.some(m => m.kind === 'turn'), false);
+});
 test('first terminal attachment imports every page in order without impersonating live input', async t => {
   const all = Array.from({ length: 105 }, (_, i) => entry('item-' + i, i % 2 ? 'agentMessage' : 'userMessage', 'text-' + i));
   const f = await fixture(t, p => p.cursor ? { data: all.slice(100), nextCursor: null } : { data: all.slice(0, 100), nextCursor: 'page-2' });

@@ -51,7 +51,12 @@ NativeHost.prototype.create = function (record) {
   runtimes.set(record.id, r); return r;
 };
 process.on('message', q => {
-  if (['history', 'delta', 'messageItem', 'terminal'].includes(q.method)) runtimes.get(q.target).emit(q.method, q.value);
+  if (['delta', 'messageItem', 'terminal'].includes(q.method)) runtimes.get(q.target).emit(q.method, q.value);
+  if (q.method === 'history') runtimes.get(q.target).emit('history', q.value.items || q.value, q.value.turns);
+  if (q.method === 'nativeBlock') { const r = runtimes.get(q.target); r.emit('nativeBlock', { ...q.value, nativeId: r.record.nativeId }); }
+  if (q.method === 'replyBound') { const r = runtimes.get(q.target); r.turnId = q.value.turnId; r.nativeActivity = { nativeId: r.record.nativeId, turnId: r.turnId, label: '正在处理' }; r.emit('replyBound', { ...q.value, tag: r.pendingTag, nativeId: r.record.nativeId }); }
+  if (q.method === 'complete') { const r = runtimes.get(q.target); r.turnId = null; r.nativeActivity = null; r.emit('complete', { ...q.value, tag: r.pendingTag }); r.emit('state', 'idle'); }
+  if (q.method === 'nativeInput') runtimes.get(q.target).emit('nativeInput',q.value,{id:'private-control-input'});
   if (q.method === 'hold-input-ack') heldInputAcks.add(q.target);
   if (q.method === 'hold-input') heldInputs.add(q.target);
   if (['release-input', 'fail-input'].includes(q.method)) { const at = waitingInputs.findIndex(c => c.id === q.target); if (at >= 0) waitingInputs.splice(at, 1)[0].release(q.method === 'fail-input'); }

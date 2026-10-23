@@ -1,6 +1,35 @@
 # Readiness and next gates
 
-As of 2026-10-23. Version 0.1.0-alpha.86 is a **local macOS technical-trial alpha**.
+As of 2026-10-23. Version 0.1.0-alpha.87 is a **local macOS technical-trial alpha**.
+
+**Latest feedback, 2026-10-23:** the alpha.86 reader appearance is not accepted.
+U26 remains open for visual usability; alpha.87 is a new lightweight candidate.
+Passing mechanics below do not establish complete TUI fidelity or a
+usable unified reading experience. Keep the frontend lightweight; review the
+proposed conversation/TUI relationship before changing the main layout. See the
+corrected delivery unit in [current milestone](core-milestone.md#current-priority--2026-10-22).
+
+**Alpha.87 — lightweight reader and native completion records:** human messages
+use their content width, assistant prose remains continuous, and message actions
+appear on hover/keyboard focus (persistently on touch). Native tool text is still
+expanded. Codex completion time/duration come from exact native turns, including
+retained alpha.2 history; receipt time never substitutes for missing native data.
+Optional metadata reads no longer delay content or input recovery. Shared phases
+require a current valid grant; private intervention, permission or pause removes
+that proof even when the same native turn continues. Input-scoped phase after a
+shared steer is conservatively unavailable. Unchanged live-region text is not
+reannounced on every output update.
+
+911 checks pass without skips. Real Electron short/long/interleaved reading,
+private intervention, member filtering, departure, reopening and six collaboration
+groups pass. Installed real Codex completion/Escape and retained alpha.2 tasks
+verify exact timing, native identity, drafts and privacy with fixed local responses
+and no paid inference. All 54 installed runtime files match and strict signature
+verification passes after native tests. Independent final artifact review and
+original three-session continuity pass, including saved views/drafts and zero new
+dispatch; see review.md. Recap/Next's
+existing-result read path, simultaneous conversation/TUI layout, full U17 and
+user visual acceptance remain open; this candidate does not claim those features.
 
 **Current user priority:** finish the usable shared-workspace flow first. The
 embedded native TUI is acceptable for independent work; complete 1:1 solo chat

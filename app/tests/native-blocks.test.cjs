@@ -16,6 +16,12 @@ test('native gaps remain explicit; old-root content cannot enter a new root', ()
   applyNativeBlock(session, { nativeId: 'new-root', id: 'display:a', kind: 'response', index: 3, delta: 'tail' });
   assert.equal(session.messages[0].incomplete, true); assert.equal(session.messages[0].text, 'tail');
 });
+test('a late completed boundary cannot rewrite an interrupted native clock or observed cut', () => {
+  const s = { nativeId: 'root', messages: [] };
+  applyNativeBlock(s, { nativeId: 'root', id: 'turn:a', kind: 'turn', turnId: 'a', status: 'interrupted', nativeCompletedAt: 1000, nativeDurationMs: 900 });
+  assert.equal(applyNativeBlock(s, { nativeId: 'root', id: 'turn:a', kind: 'turn', turnId: 'a', status: 'complete', nativeCompletedAt: 2000, nativeDurationMs: 1900 }), false);
+  assert.equal(s.messages[0].status, 'interrupted'); assert.equal(s.messages[0].nativeCompletedAt, 1000); assert.equal(s.messages[0].nativeDurationMs, 900);
+});
 test('native interrupted boundary preserves text, leaves background tools running and never alters another turn', () => {
   const session = { nativeId: 'root', messages: [] }, send = e => applyNativeBlock(session, { nativeId: 'root', ...e });
   send({ id: 'display:a', kind: 'response', turnId: 'turn-a', delta: 'partial', status: 'streaming' });

@@ -1,5 +1,49 @@
 # Bounded testing
 
+## Lightweight reader — alpha.87
+
+The candidate reuses the existing reader, textarea and native connections.
+Content-width human messages and quieter hover/focus actions are a lightweight
+visual proposal; user acceptance and complete TUI display parity remain open.
+
+- **User task, actual Electron:** two attributed participants check a three-number
+  document, including a long tool record and interleaved streaming replies. Exact
+  recipient choice, member filtering, private departure, original identity/draft
+  retention and whole-app reopening pass. A separate same-turn private-input case
+  removes the room phase while native work continues and freezes public content.
+  Providers are synthetic here, with three explicit fixture submissions.
+- **Actual Codex 0.163.0:** a completed turn retains exact native time/duration in
+  solo and authorized shared records; duration matches the native TUI. Native
+  Escape freezes the observed process text in both readers. Its interruption
+  timing stays in the private reader; a revoked grant does not copy that later
+  boundary into the room. A retained alpha.2 service restores its original private
+  boundary **before** the first shared send; the new shared turn has a different
+  ID, keeps its own clock, and reopens without process replacement or draft loss.
+  Installed trials use normal bootstrap and record video. Inference uses fixed
+  loopback streams, not paid models: source and installed each have two current
+  task responses, two retained task responses and two native title responses.
+- **Regression:** 911 checks pass, zero skips. Reading has 13 application checks;
+  collaboration has six groups; room sending has ten groups. Installed usability,
+  current/retained native and collaboration journeys pass. Unchanged provider
+  reasoning/handoff evidence is reused rather than rerun.
+- **Artifact:** all 54 installed runtime files match source; strict signing passes
+  after native execution. Original three-session hidden reopening keeps native
+  IDs/PIDs, selected view, private/shared drafts and readers, with zero new portal
+  dispatch. Application search exposes one daily app.
+
+Independent review reproduced and repaired optional metadata holding up history
+and input, a retained test accepting the new boundary instead of the old one,
+and historical room rows leaking same-turn private activity. Held-request,
+lifecycle, exact old/new identity, private steer, pause and permission cases now
+have targeted checks. No current sharing grant is restored from saved metadata.
+Unchanged live-region text is left alone during streaming.
+
+Recap/Next existing-result access, simultaneous TUI/conversation layout, physical
+system/WeChat IME, Claude phase parity and full U17 remain unverified. A shared
+steer's generic whole-turn phase stays private until input-scoped activity can be
+proved. These limits are not passed tests or grounds for whole-product completion.
+Raw logs, native transcripts, synthetic screenshots and recordings remain private.
+
 ## Native-selected cross-service handoffs — alpha.85
 
 V2 peers reuse the existing authenticated native tools, source-side completion
