@@ -449,11 +449,13 @@ function renderSessions() {
       element.addEventListener('keydown', event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openSessionMenu(record.id); } });
       element.append(link, more); row = { element, link, more, name, status, dot }; sessionRows.set(record.id, row);
     }
-    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionStatus(record)}`;
+    const identity = participantLabel(record, state.sessions);
+    const duplicate = identity !== record.name;
+    const label = `${identity}${duplicate ? '' : record.provider === 'claude' ? ' · Claude' : ' · Codex'} · ${sessionStatus(record)}`;
     row.link.setAttribute('aria-label', label); row.link.title = label;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
-    row.more.setAttribute('aria-label', `会话操作：${record.name}`); row.more.title = `会话操作：${record.name}`; row.more.disabled = disconnected;
-    row.name.textContent = record.name; row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}`; row.dot.className = `state-dot ${record.state}`;
+    row.more.setAttribute('aria-label', `会话操作：${identity}`); row.more.title = `会话操作：${identity}`; row.more.disabled = disconnected;
+    row.name.textContent = record.name; row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}${duplicate ? ` · ${record.id.slice(0, 6)}` : ''}`; row.dot.className = `state-dot ${record.state}`;
     // Keep existing DOM nodes: native state updates must not remove a focused
     // row or its open menu anchor every 35 ms.
     const slot = $('session-list').children[index]; if (slot !== row.element) $('session-list').insertBefore(row.element, slot || null);
@@ -478,14 +480,14 @@ function renderArchives() {
   $('archive-button').title = `归档 ${count} 项${running ? `，${running} 个原生会话仍需查看状态` : ''}`;
   if (!$('archive-dialog').open) return;
   const list = $('archive-list');
-  const signature = JSON.stringify([state.room.archived, state.room.name, records.map(s => [s.id, s.name, s.state])]);
+  const signature = JSON.stringify([state.room.archived, state.room.name, records.map(s => [s.id, s.name, s.state]), state.sessions.map(s => [s.id, s.name])]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
   if (state.room.archived) {
     const row = node('div', undefined, 'archive-item'); row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', async () => { await api.restoreRoom(); state = await api.initial(); $('archive-dialog').close(); selectRoom(); })); list.append(row);
   }
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
-    row.append(node('strong', s.name), node('small', `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[s.state]}${['ended', 'recoverable'].includes(s.state) ? ' · 需继续原生历史' : ' · 归档未结束原生进程'}`), button('恢复会话', () => restoreArchivedSession(s.id))); list.append(row);
+    row.append(node('strong', participantLabel(s, state.sessions)), node('small', `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[s.state]}${['ended', 'recoverable'].includes(s.state) ? ' · 需继续原生历史' : ' · 归档未结束原生进程'}`), button('恢复会话', () => restoreArchivedSession(s.id))); list.append(row);
   }
   if (!count) list.append(node('p', '还没有归档内容。使用会话或工作区旁的 ⋯ 菜单归档。'));
 }
@@ -530,6 +532,19 @@ function populateSelect(el, items) {
 }
 function participantLabel(session, people = members()) {
   return people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${session.id.slice(0, 6)}` : session.name;
+}
+function historicalParticipantLabel(name, id) {
+  return `${name || '历史成员'}${typeof id === 'string' && id ? ` · ${id.slice(0, 6)}` : ' · 身份未记录'}`;
+}
+function roomMessageLabel(m) {
+  // Run notices describe coordination; streamed native system rows still belong
+  // to their exact agent. Reuse the same identity in reading and copied records.
+  if (m.role === 'system' && m.runId && !m.sharedStream) return m.name || '协作';
+  const person = state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
+  if (person) return (m.role === 'human' ? '你 → ' : '') + participantLabel(person, state.sessions);
+  const id = m.role === 'human' ? m.recipientId : m.sessionId;
+  if (id) return (m.role === 'human' ? '你 → ' : '') + historicalParticipantLabel(m.role === 'human' ? m.deliveries?.find(d => d.recipientId === id)?.recipientName || '历史接收者' : m.name, id);
+  return m.name || (m.role === 'human' ? '你' : '工作区');
 }
 function timeline() {
   return [...state.room.messages, ...(state.room.events || [])].sort((a, b) => (a.time || 0) - (b.time || 0));
@@ -761,7 +776,7 @@ function renderMembers() {
       actions.append(button('查看终端', () => { $('members-dialog').close(); selectRoom(record.id); }), button('脱出', async () => { await detach(record.id); $('members-dialog').close(); }));
       element.append(heading, status, actions); row = { element, name, status }; memberRows.set(record.id, row);
     }
-    row.name.textContent = record.name; row.status.textContent = sessionStatus(record);
+    row.name.textContent = participantLabel(record, state.sessions); row.status.textContent = sessionStatus(record);
     const slot = list.children[index]; if (slot !== row.element) list.insertBefore(row.element, slot || null);
   });
 }
@@ -800,7 +815,7 @@ function render() {
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
-      if (record) entry.textContent = `加入 ${record.name}`;
+      if (record) entry.textContent = `加入 ${participantLabel(record, state.sessions)}`;
     }
     renderHeader(s, inRoom);
     if (s) {
@@ -1384,7 +1399,7 @@ $('recipient').onchange = () => { closeMentions(); attempt(persistView); render(
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };
 $('thread-back').onclick = () => { captureReadingViews(); roomThread = ''; if (!$('shared-input').value.trim() && !roomSubmitting) roomReplyTo = ''; render(); attempt(persistView); };
 $('cancel-reply').onclick = () => { roomReplyTo = ''; roomThread = ''; roomDraftRevision++; render(); attempt(persistView); $('shared-input').focus(); };
-$('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString() : '时间未记录'} · ${state.sessions.find(s => s.id === (m.recipientId || m.sessionId))?.name || m.name || '工作区'}${m.recipientId ? '（接收）' : ''}\n${m.text}`).join('\n\n')));
+$('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString() : '时间未记录'} · ${roomMessageLabel(m)}\n${m.text}`).join('\n\n')));
 $('room-notes').onclick = openNotes; $('cancel-notes').onclick = () => $('notes-dialog').close();
 $('notes-form').onsubmit = async event => {
   event.preventDefault(); $('save-notes').disabled = true;
@@ -1426,7 +1441,7 @@ $('pause-button').onclick = () => attempt(async () => {
     render();
   }
 });
-$('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && !s.archived && s.state !== 'ended').map(s => { const entry = button(`加入 ${s.name}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
+$('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && !s.archived && s.state !== 'ended').map(s => { const entry = button(`加入 ${participantLabel(s, state.sessions)}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
 $('share-dialog').onclose = () => { shareRevision++; };
