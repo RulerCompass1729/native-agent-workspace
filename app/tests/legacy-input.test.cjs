@@ -377,7 +377,7 @@ test('viewing an owned legacy session does not pause peer collaboration; stale v
   assert.equal(f.session.owner, 'B'); assert.equal(pauses, 1);
 });
 
-for (const [version, hash] of [['72', '4bc48cb24744f5f4795d16ad95f13ccfa0583baaf35941ba11f43fb8cbed6ee3'], ['51', '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6'],
+for (const [version, hash] of [['78', '0c04a03d3a7cb3c191405bd9637c218f7603aa6dfad6345741b5e39177ca8017'], ['72', '4bc48cb24744f5f4795d16ad95f13ccfa0583baaf35941ba11f43fb8cbed6ee3'], ['51', '79a701e38fa7ab32e0551c2aa6c364bf34cd4ccd5942ab5ae899463f7b355cc6'],
  ['69', 'a3462c9cb8bb11cdd6fdfb26baebf780bb9af9f7ef72535dd08bfa3f0ae7b359'],
  ['71', '39a213b15740f1723dfb9886d709a1a4dd92a71e651a261d42ceac188e29f388']]) test(`released alpha.${version} compatibility hook upgrades, edited copies remain untouched`, t => {
  const {cwd}=fixture(t),file=path.join(cwd,'.claude/skills/native-workspace-compat/hooks/register.js');
@@ -428,4 +428,14 @@ test('forget also cancels a later session in an already-running restore batch', 
   const restore = bridge.restore([f.entry]); while (!release) await new Promise(r => setImmediate(r));
   bridge.forgetReader(later); release(); await restore;
   assert.deepEqual(calls, [f.record.id]); assert.equal(bridge.reader(later), null);
+});
+
+// Catch a newly edited bridge forgetting the exact prior committed upgrade
+// path before a full installed/profile check reaches the person's sessions.
+test('last committed compatibility hook can upgrade to this working tree', t => {
+ const {cwd}=fixture(t),file=path.join(cwd,'.claude/skills/native-workspace-compat/hooks/register.js');
+ const prior=require('node:child_process').execFileSync('git',['show','HEAD:app/claude-bridge/hooks/register.js'],
+   {cwd:path.resolve(__dirname,'../..'),encoding:'utf8'}).replace('const legacyOnly = false;','const legacyOnly = true;');
+ installPlugin(cwd);const current=fs.readFileSync(file,'utf8');fs.writeFileSync(file,prior);
+ installPlugin(cwd);assert.equal(fs.readFileSync(file,'utf8'),current);
 });

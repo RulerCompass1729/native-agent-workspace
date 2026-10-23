@@ -198,11 +198,12 @@ function soloAction(s) {
     : { kind: 'none', label: '暂不可发送', hint: '请检查原生会话状态。记录和草稿保留，不会自动重发。' };
   if (s.owner !== owner) return { kind: 'claim', label: '接管此窗口', hint: '此窗口只读。接管后继续使用原会话，草稿保留。' };
   if (s.nativeInputRequired) return { kind: 'terminal', label: '打开原生终端', hint: 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；这里的草稿保留，不会自动发送。' };
+  if (s.state === 'error' && (s.chatAvailable !== false || !s.legacyInputEligible || s.legacyInputPrepared)) return { kind: 'terminal', label: '打开原生终端', hint: '原生请求未完成。请查看上方的失败记录；草稿保留，不会自动重试。需要处理原生设置时可打开终端。' };
   if (s.chatAvailable === false && s.legacyInputEligible && s.provider === 'codex') return { kind: 'connect', label: '接通原会话输入', hint: '连接正在运行的原生 Codex 会话，保留上下文、模型与权限设置；不会新建对话。' };
   if (s.chatAvailable === false && s.legacyInputEligible) return s.legacyInputPrepared
     ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
     : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
-  if (s.chatAvailable === false || s.state === 'starting' || s.state === 'error') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
+  if (s.chatAvailable === false || s.state === 'starting') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
   if (s.legacyReaderPending && s.state === 'idle') return { kind: 'send', label: '发送 ↑', hint: '输入已接通；实时过程尚待更新。在原生终端运行 /reload-plugins 后生效，无需重启。' };
   if (s.pendingQueue) return { kind: 'send', label: '等待原生接收', hint: '下一条正在等待原生开始；当前工作继续。不会自动重发，可先编辑后续草稿。' };
   if (s.state === 'working' && s.queueAvailable && !s.approval) return { kind: 'send', label: '等本轮结束后发送 ↑', hint: '使用原生等待队列；保留当前工作，不强制中断。' };

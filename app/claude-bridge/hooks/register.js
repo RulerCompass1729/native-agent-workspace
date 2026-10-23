@@ -53,6 +53,16 @@ function displayTurn(id, binding) {
   }
   return turn;
 }
+function failureText(turn) {
+  return turn.failedPrompt && !turn.failureAmbiguous && turn.failure?.text || '';
+}
+function publishFailure($, turnId, turn, binding) {
+  if (turn.ended && turn.endReason === 'error' && turn.failedPrompt && turn.failure) {
+    const detail = failureText(turn);
+    enqueueBlock($, { id: `turn:${turnId}`, turnId, kind: 'turn', status: 'failed',
+      text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous) }, binding);
+  }
+}
 const observations = [];
 let observing = false;
 let observationGap = false;
@@ -78,7 +88,7 @@ function enqueueBlock($, row, binding = rootBinding) {
   if (!observing) { observing = true; $.clock.after(0, () => flushObservations($)); }
 }
 
-function observeAppend($, e, result, binding, turnId, candidate) {
+function observeAppend($, e, result, binding, turnId, candidate, nativeApiError) {
   if ((!contextTransitions && !nativeBlocks) || !binding || stopped || rootBinding !== binding || e.agentId ||
     result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
   const message = result.message;
@@ -97,6 +107,18 @@ function observeAppend($, e, result, binding, turnId, candidate) {
     // Display IDs and saved transcript IDs are different namespaces. Text is
     // collected from MessageDisplay only, not guessed equal to an append/Stop.
     if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
+      // Engine-generated API failures bypass MessageDisplay. Classify the
+      // inspected native stand-in, but keep only the downstream stored text.
+      // A failed prompt and error turn boundary must independently agree.
+      if (turnId && nativeApiError &&
+        message.content.every(b => b?.type === 'text' && typeof b.text === 'string')) {
+        const turn = displayTurn(turnId, binding), detail = text(message.content);
+        if (detail.length <= 500000) {
+          if (turn.failure && turn.failure.uuid !== result.uuid) turn.failureAmbiguous = true;
+          else turn.failure = { uuid: result.uuid, text: detail };
+          publishFailure($, turnId, turn, binding);
+        } else markObservationGap(binding);
+      }
       for (const block of message.content) if (block?.type === 'tool_use' && typeof block.id === 'string') {
         enqueueBlock($, { id: `tool:${block.id}`, kind: 'tool', turnId,
           title: block.name || '工具', input: JSON.stringify(block.input || {}, null, 2), status: 'running' });
@@ -408,6 +430,19 @@ export function register(on) {
     if (!e.agent_id && e.session_id === rootBinding?.sessionId) enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete' });
     return next(e);
   }).catch(($, e, next) => { markObservationGap(rootBinding); return next(e); });
+  on('classic.StopFailure', async ($, e, next) => {
+    const binding = rootBinding, prompt = promptTurns.get(e.prompt_id), ownGeneration = generation;
+    const result = await next(e);
+    if (nativeBlocks && binding && binding === rootBinding && ownGeneration === generation && !e.agent_id &&
+      e.session_id === binding.sessionId && prompt?.binding === binding && !prompt.ambiguous) {
+      const turn = displayTurn(prompt.turnId, binding);
+      turn.failedPrompt = true;
+      publishFailure($, prompt.turnId, turn, binding);
+    }
+    // StopFailure may carry a previous/untransformed assistant message. Never
+    // use it as the error body or as a completed assistant reply.
+    return result;
+  }).catch(($, e, next) => { markObservationGap(rootBinding); return next(e); });
   on('classic.MessageDisplay', async ($, e, next) => {
     const binding = rootBinding;
     const result = await next(e);
@@ -460,15 +495,16 @@ export function register(on) {
     const result = await next(e);
     try {
       if (!e.agentId && binding === rootBinding) {
-        const turn = displayTurns.get(e.turnId), final = turn?.blocks.get(turn.last);
+        const turn = displayTurn(e.turnId, binding), final = turn.blocks.get(turn.last);
         // Text equality is only a completeness check inside an explicit native
         // turn, never a substitute for prompt/turn identity. Forward the display
         // ID, not the possibly unredacted answer.
         const finalDisplayId = turn?.binding === binding && !turn.incomplete && final?.final &&
           typeof e.answer === 'string' && final.raw.trimEnd() === e.answer.trimEnd() ? `display:${turn.last}` : undefined;
-        if (turn) turn.ended = true;
+        turn.ended = true; turn.endReason = e.reason;
+        turn.endingText = `${e.reason === 'aborted' ? '原生已中断本轮' : e.reason === 'answer' ? '原生本轮已结束' : '原生本轮未正常完成'}${Number.isFinite(e.durationMs) ? ` · ${(e.durationMs / 1000).toFixed(1)} 秒` : ''}`;
         enqueueBlock($, { id: `turn:${e.turnId}`, turnId: e.turnId, kind: 'turn', finalDisplayId,
-          text: `${e.reason === 'aborted' ? '原生已中断本轮' : e.reason === 'answer' ? '原生本轮已结束' : '原生本轮未正常完成'}${Number.isFinite(e.durationMs) ? ` · ${(e.durationMs / 1000).toFixed(1)} 秒` : ''}`,
+          text: turn.endingText + (e.reason === 'error' && failureText(turn) ? `\n${failureText(turn)}` : ''),
           status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed' }, binding);
       }
     } catch { markObservationGap(binding); }
@@ -476,7 +512,11 @@ export function register(on) {
   }).catch(($, e, next) => next(e));
   on('session.append', async ($, e, next) => {
     const observationBinding = rootBinding;
-    const observationTurn = activeTurn;
+    const observationTurn = activeTurn, observationEpoch = observationBinding?.observationEpoch, observationGeneration = generation;
+    const content = e.message?.content;
+    const nativeApiError = e.door === 'response' && e.origin?.kind === 'model' && e.origin.model === '<synthetic>' &&
+      e.message?.type === 'assistant' && content?.length === 1 && content[0]?.type === 'text' &&
+      typeof content[0].text === 'string' && /^API Error: /.test(content[0].text);
     if (collecting && e.door === 'prompt') {
       collecting.appends++;
       // The native engine pins origin. A previously queued foreign prompt also
@@ -492,7 +532,10 @@ export function register(on) {
     const candidate = collecting;
     try {
       const result = await next(e);
-      try { observeAppend($, e, result, observationBinding, observationTurn, candidate); }
+      try {
+        if (observationGeneration === generation && observationBinding?.observationEpoch === observationEpoch) observeAppend($, e, result, observationBinding, observationTurn, candidate, nativeApiError);
+        else markObservationGap(observationBinding);
+      }
       catch { markObservationGap(observationBinding); } // Never fail native append.
       return result;
     }

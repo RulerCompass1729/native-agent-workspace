@@ -146,6 +146,8 @@ async function run() {
   await fixture('set-state', a, 'error'); await chat(a);
   await page.locator('#send-button').getByText('打开原生终端', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '继续原生会话', exact: true }).count(), 0, 'A still-connected error is not a new resume');
+  assert.match(await page.locator('#compose-hint').innerText(), /原生请求未完成/);
+  assert.ok(!(await page.locator('#compose-hint').innerText()).includes('/reload-plugins'));
   await fixture('set-state', a, 'idle');
   await fixture('set-owner', a, 'other-test-view');
   await page.locator('#send-button').getByText('接管此窗口', { exact: true }).waitFor();

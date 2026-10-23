@@ -2419,3 +2419,52 @@ payload, strict signature after native testing, and original three-session hidde
 reopening with unchanged IDs/PIDs/selection/drafts and no new dispatch pass.
 Independent final artifact review passes. Successful installed video is kept
 privately and has been visually inspected; U17 remains open.
+
+
+## Native API error continuity — alpha.79 (2026-10-22)
+
+A real Claude 2.1.309/Electron reproduction showed an API error in the terminal
+while the unified reader contained only a generic failed-turn record. The native
+stand-in arrives through `session.append`, not ordinary `MessageDisplay`.
+The repair retains only downstream processed text after an inspected synthetic
+API-error shape, exact prompt `StopFailure`, and same-turn error completion agree.
+Uncertain/ordinary/child/old-prompt/reinitialized/removed content stays excluded.
+The existing system turn row updates; an error cannot be a final assistant reply.
+Existing explicit sharing grants apply and are never reopened for late details.
+
+Source current and retained 302 native checks pass one GUI task each, preserving
+the original native ID/PID. Native 309 made six local error requests and 302 made
+two; these were native behavior, not portal retries, and all were fixed loopback
+responses with zero paid inference. The final source suite passed 826 checks, zero skips. Installed current and
+retained error journeys pass, with identical native IDs/PIDs and corrected hints. Actual image review
+also exposed misleading `/reload-plugins` guidance after an API failure; existing
+error guidance now takes precedence, with real Electron coverage.
+
+Reproduction commands use private scratch profiles and the actual CLI:
+
+```sh
+node scripts/test-native-error.cjs
+NAW_CLAUDE_302=/path/to/retained/claude NAW_RETAINED_ERROR=1 node scripts/test-native-retained-claude.cjs
+```
+
+`NAW_APP_EXECUTABLE` selects the installed executable. For retained installed
+coverage, `NAW_TEST_APP_ROOT` selects that artifact's application resources.
+No provider methods are replaced in these error journeys. Only the local model
+endpoint returns fixed responses. UI tests operate hidden real Electron windows;
+these are not physical system-input-method or hosted-model reasoning tests.
+Neither this fix nor those tests closes U17 or Claude's post-Stop plugin-input gap.
+
+
+The normal-profile reopen initially failed: the exact alpha.78 compatibility hook
+was absent from the upgrade allowlist, leaving its input/readers disconnected.
+The fix accepts only that published hash and retains refusal of edited files.
+A permanent released fixture plus a last-committed-hook upgrade regression covers
+this path; a retained native trial boots that alpha.78 hook and upgrades it in the
+same process. Final installed native checks pass. The final 48-file runtime
+matches source, strict signing verification passes after native use, and all three
+original sessions reconnect with their IDs/PIDs, drafts and selection retained.
+Normal reopening dispatches no task and stays hidden. Independent final source and artifact review passes for B37; U17 and post-Stop
+input remain open. A proposed synthetic legacy UI
+fixture was rejected because production recomputed its flags; its failed run is
+not counted as proof. The retained native path and an explicit pure decision
+regression cover the corrected guidance instead.

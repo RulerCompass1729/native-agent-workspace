@@ -43,7 +43,8 @@ function installPlugin(cwd) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件路径不安全，未写入插件文件。');
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
-  const previousHooks = new Set(['4bc48cb24744f5f4795d16ad95f13ccfa0583baaf35941ba11f43fb8cbed6ee3',
+  const previousHooks = new Set(['0c04a03d3a7cb3c191405bd9637c218f7603aa6dfad6345741b5e39177ca8017',
+    '4bc48cb24744f5f4795d16ad95f13ccfa0583baaf35941ba11f43fb8cbed6ee3',
     'dcbff5190245c72761ef3e0d110b8976f5f49740b0ef3a839654cdcb933764ba',
     '069c66cb4889031f0cc460dcbb75d0892cf41835c9bac02e9dbf796cd52c7a40',
     '6e72f7d5eade95e90e4667ed22888e7923d535b5e9620d26074bc01c2a8303d1',
