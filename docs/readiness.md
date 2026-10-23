@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.74 is a **local macOS technical-trial alpha**.
+As of 2026-10-22. Version 0.1.0-alpha.75 is a **local macOS technical-trial alpha**.
 The accepted core increment is defined in [core-milestone.md](core-milestone.md).
 It preserves DeepSeek Harness UI composition and the persistent native service.
 The earlier solo-only pause is superseded by this accepted collaboration work.
@@ -14,6 +14,15 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.75 — proposed plan display:** native Codex
+plan text now uses the existing reader, including streaming and interruption.
+Completed plans remain plans: displaying them does not approve implementation or
+create an automatic final handoff. Source and installed native four-task journeys
+pass, with one separately counted native title response each, all fixed loopback
+and zero paid inference. Independent source/artifact review, 796 local checks
+with no skips, 48-file payload, strict signature and original three-session
+continuity pass. Full U17 and the post-Stop Claude input limitation remain open.
 
 **Alpha.74 — visible native progress:** maps Codex's readable native summaries
 into the existing solo/shared message stream, retaining item identity and the

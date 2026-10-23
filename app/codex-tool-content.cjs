@@ -8,6 +8,15 @@ function summaryText(item) {
   return item?.type === 'reasoning' && Array.isArray(item.summary) && item.summary.every(part => typeof part === 'string')
     ? item.summary.join('\n\n') : '';
 }
+function nativeTextContent(item) {
+  if (item?.type === 'reasoning') return { kind: 'summary', title: '过程摘要', text: summaryText(item) };
+  if (item?.type === 'plan') return { kind: 'plan', title: '计划', text: typeof item.text === 'string' ? item.text : '' };
+  return null;
+}
+function nativeTextItemId(message, nativeId) {
+  const prefix = `native:${nativeId}:${message.kind}:`;
+  return ['summary', 'plan'].includes(message.kind) && message.id?.startsWith(prefix) ? message.id.slice(prefix.length) : message.id;
+}
 function contentText(content) {
   if (typeof content === 'string') return { text: content, incomplete: false };
   if (!Array.isArray(content)) return { text: '', incomplete: content !== null && content !== undefined };
@@ -62,4 +71,4 @@ function toolStatus(item, completed) {
   if (item.status === 'interrupted') return 'interrupted';
   return completed ? 'completed' : 'running';
 }
-module.exports = { contentText, fileChanges, toolContent, toolStatus, toolTypes, summaryText };
+module.exports = { contentText, fileChanges, toolContent, toolStatus, toolTypes, summaryText, nativeTextContent, nativeTextItemId };

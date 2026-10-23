@@ -124,3 +124,36 @@ test('summary sharing follows exact input provenance, preserves private tails an
   const row = f.w.room.messages.find(m => m.title === '过程摘要'); assert.ok(row); assert.equal(row.sessionId, f.id); assert.equal(row.status, 'streaming');
   f.end('interrupted'); assert.equal(row.status, 'interrupted'); assert.equal(row.finalReply, undefined);
 });
+
+test('plan sharing follows its own input and cannot share an older private plan', async t => {
+  const f = await fixture(t);
+  f.start('private-plan','plan');
+  f.emit('item/plan/delta',{turnId:'active',itemId:'private-plan',delta:'PRIVATE PLAN'});
+  const sending=f.w.steer(f.id,'Review the shared plan','owner','active',{}),tag=f.runtime.pendingSteer;
+  f.user(tag);f.ack();await sending;
+  f.emit('item/completed',{turnId:'active',item:{id:'private-plan',type:'plan',text:'PRIVATE COMPLETE'}});
+  f.start('shared-plan','plan');
+  f.emit('item/plan/delta',{turnId:'active',itemId:'shared-plan',delta:'Plan in progress'});
+  const row=f.w.room.messages.find(m=>m.title==='计划');assert.ok(row);assert.equal(row.text,'Plan in progress');
+  assert.ok(!JSON.stringify(f.w.room.messages).includes('PRIVATE'));
+  f.end('interrupted');assert.equal(row.status,'interrupted');assert.equal(row.finalReply,undefined);
+  f.emit('item/completed',{turnId:'active',item:{id:'shared-plan',type:'plan',text:'LATE PLAN'}});
+  assert.equal(row.text,'Plan in progress');assert.equal(f.w.versions.dispatches,1);
+});
+
+for (const variant of ['shared','private','revoked','incomplete']) test(`plan-only ${variant} completion preserves truthful receipt without automatic handoff`, async t => {
+  const f=await fixture(t);
+  if(variant==='private')f.start('plan-item','plan');
+  const sending=f.w.steer(f.id,'Shared plan request','owner','active',{}),tag=f.runtime.pendingSteer;
+  f.user(tag);f.ack();await sending;
+  if(variant!=='private')f.start('plan-item','plan');
+  if(variant==='incomplete')f.emit('item/plan/delta',{turnId:'active',itemId:'plan-item',delta:'Partial plan'});
+  else f.emit('item/completed',{turnId:'active',item:{id:'plan-item',type:'plan',text:'Plan body'}});
+  if(variant==='revoked')f.w.join(f.id,false);
+  f.end('completed');
+  const human=f.w.room.messages.find(m=>m.id===tag);
+  assert.equal(human.status,variant==='shared'?'submitted':'reply-private');
+  assert.equal(human.deliveries[0].status,'submitted');
+  assert.equal(f.w.room.messages.filter(m=>m.finalReply).length,0);assert.equal(f.calls.length,1);
+  assert.equal(f.w.sharedReplies.grants.get(tag).closed,true);
+});

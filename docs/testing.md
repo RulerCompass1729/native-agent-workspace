@@ -2290,3 +2290,47 @@ original three sessions reopen hidden with IDs/processes, drafts and selected vi
 unchanged and no task dispatch. Native cold-service hydration is covered by local
 protocol tests only; whole-app reopen retains the running native service. Raw reasoning, hosted inference quality and complete
 native transient/menu parity are not claimed.
+
+
+## Codex proposed plan display
+
+The official [app-server protocol](https://learn.chatgpt.com/docs/app-server)
+provides `plan` items and `item/plan/delta`; the final completed item is authoritative.
+Locally generated native 0.163.0 types confirm that contract. This uses the same
+public native text lifecycle as readable summaries, not terminal parsing or a new
+plan widget. Native `turn/plan/updated` checklists are a separate capability.
+
+The actual pre-fix Electron/native trial entered `/plan`, submitted a small task,
+and observed plan text in the native terminal while the reader had an empty tool
+row. Two local fixed task responses and one native title response were used, with
+zero paid inference. Initial test-helper variable errors and trailing-newline
+expectation failures are preserved separately, not counted as product passes.
+A later runner initially selected the wrong room sender role; another attempted
+Escape before the current task was fully redrawn. The final runner uses the exact
+shared source ID and waits for current native task text and input focus.
+The expanded trial then exposed an undismissed native implementation menu: the
+first Escape correctly closed that menu rather than interrupting the newer turn.
+The final journey explicitly waits for and dismisses each native implementation
+menu before starting another task, preserving native key semantics.
+The native plan keeps its trailing newline in this tested version; production
+does not trim it. A protocol regression separately checks different completed text.
+
+`scripts/test-native-plans.cjs` boots actual Codex and Electron with a private
+configuration and at most four fixed loopback task responses plus one separately
+counted native title response. It covers native Plan command/task entry, live
+solo text, reload/draft, completion, explicit shared plan and its receipt, private
+plan isolation, actual native Escape and whole-app reopen. It does not accept
+native implementation suggestions. Completion cannot authorize an automatic
+handoff. The observed native command line/menu must settle before Enter.
+
+Independent source review reproduced cached plan IDs missing the resume/reconnect
+watermark and a completed shared plan incorrectly setting the human record to
+`reply-private`. Common ID extraction and an exact valid-grant completed-plan
+proof address these; revoked, private and incomplete plans retain existing guards.
+Source and installed native four-task journeys pass, including completed shared
+plan receipts, exact native interruption and retained-service reopening. Each
+uses four fixed loopback task responses and one native title response, zero paid
+inference. Independent source/artifact review passes; 796 local checks have no
+skips, all 48 runtime files match source, strict post-native signature passes,
+and the original three sessions reopen hidden without new dispatch. Cold native service restoration
+is covered by protocol tests only, not the retained-service GUI reopening trial.

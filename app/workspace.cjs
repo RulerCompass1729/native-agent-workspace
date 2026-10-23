@@ -258,12 +258,13 @@ class Workspace extends EventEmitter {
       if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete' });
       const forward = this.forwards.get(forwardTag);
       const shared = forward && forwardTag === info.tag && s.roomId === 'shared' && forward.member === s.memberRevision && forward.control === s.controlRevision && info.text && this.sharedReplies.final(s, info);
-      if (forward && !shared) { const message = this.room.messages.find(m => m.id === forwardTag); if (message) message.status = 'reply-private'; }
+      const displayedPlan = forward && forwardTag === info.tag && !info.text && this.sharedReplies.hasCompletedPlan(s, forwardTag);
+      if (forward && !shared && !displayedPlan) { const message = this.room.messages.find(m => m.id === forwardTag); if (message) message.status = 'reply-private'; }
       this.forwards.delete(forwardTag);
       this.changed();
       const run = this.room.run;
       this.advance(s, info).catch(error => { this.pause(error.message, run); });
-      this.sharedReplies.close(forwardTag, '原生回复已结束；未确认内容留在原会话');
+      this.sharedReplies.close(forwardTag, displayedPlan ? '原生计划已显示，本轮已结束' : '原生回复已结束；未确认内容留在原会话');
     });
     on('failed', (reason, info) => {
       // An unscoped native error affects this observation connection, including
