@@ -189,7 +189,7 @@ test('interrupted summaries keep native cut and cold history never silently remo
   f.notify('item/reasoning/summaryTextDelta', {turnId: 'old-turn', itemId: 'summary', summaryIndex: 0, delta: 'Partial preserved tail'});
   f.notify('turn/completed', {turn: {id: 'old-turn', status: 'interrupted'}});
   assert.equal(f.s.messages[0].status, 'interrupted');
-  f.s.recovering = true; f.r.summaryParts.clear(); f.r.liveSummaryItems.clear();
+  f.s.recovering = true; f.r.nativeTextParts.clear(); f.r.liveTextItems.clear();
   await f.r.hydrateHistory(f.s.nativeId);
   assert.equal(f.s.messages[0].text, 'Partial preserved tail'); assert.equal(f.s.messages[0].status, 'interrupted');
 });
@@ -202,6 +202,40 @@ test('native interrupted summary rejects late deltas, completed snapshots and co
   f.notify('item/reasoning/summaryTextDelta', {turnId:'old-turn',itemId:'summary',summaryIndex:0,delta:' LATE TAIL'});
   f.notify('item/completed', {turnId:'old-turn',item:{id:'summary',type:'reasoning',summary:['LATE COMPLETED SNAPSHOT']}});
   assert.equal(f.s.messages[0].text,'VISIBLE CUT'); assert.equal(f.s.messages[0].status,'interrupted');
-  f.s.recovering=true; f.r.liveSummaryItems.clear(); await f.r.hydrateHistory(f.s.nativeId);
+  f.s.recovering=true; f.r.liveTextItems.clear(); await f.r.hydrateHistory(f.s.nativeId);
   assert.equal(f.s.messages[0].text,'VISIBLE CUT'); assert.equal(f.s.messages[0].status,'interrupted');
+});
+
+// Native proposed plans are streamed display items, not tools or approvals.
+test('plan text streams in one message, uses authoritative final text and survives history overlap', async t => {
+  const f = await fixture(t, () => ({data: [entry('plan-item', 'plan', 'OLD HISTORY')]}));
+  f.notify('turn/started', {turn: {id:'old-turn'}});
+  f.notify('item/started', {turnId:'old-turn',item:{id:'plan-item',type:'plan',text:''}});
+  f.notify('item/plan/delta', {turnId:'old-turn',itemId:'plan-item',delta:'1. Read'});
+  f.notify('item/plan/delta', {turnId:'old-turn',itemId:'plan-item',delta:' the material.'});
+  assert.equal(f.s.messages.length,1); assert.equal(f.s.messages[0].role,'assistant');
+  assert.equal(f.s.messages[0].kind,'plan'); assert.equal(f.s.messages[0].text,'1. Read the material.');
+  assert.equal(f.s.messages[0].status,'streaming');
+  await f.r.hydrateHistory(f.s.nativeId); assert.equal(f.s.messages[0].text,'1. Read the material.');
+  f.notify('item/completed',{turnId:'old-turn',item:{id:'plan-item',type:'plan',text:'1. Check the final plan.'}});
+  f.notify('item/plan/delta', {turnId:'old-turn',itemId:'plan-item',delta:' LATE'});
+  assert.equal(f.s.messages.length,1); assert.equal(f.s.messages[0].text,'1. Check the final plan.');
+  assert.equal(f.s.messages[0].status,'complete'); assert.equal(f.r.turn('old-turn').text,'');
+  assert.equal(f.w.versions.dispatches,0); assert.equal(f.w.room.messages.length,0);
+});
+test('plan history has no delta watermark and interruption freezes the observed native cut', async t => {
+  const f = await fixture(t, () => ({data:[entry('plan-item','plan','OLD HISTORY')]}));
+  await f.r.hydrateHistory(f.s.nativeId);
+  f.notify('item/plan/delta',{turnId:'old-turn',itemId:'plan-item',delta:'OVERLAP'});
+  assert.equal(f.s.messages[0].text,'OLD HISTORY');
+  f.notify('item/completed',{turnId:'old-turn',item:{id:'plan-item',type:'plan',text:'Completed history'}});
+  assert.equal(f.s.messages[0].text,'Completed history');
+  f.notify('turn/started',{turn:{id:'current'}});
+  f.notify('item/started',{turnId:'current',item:{id:'current-plan',type:'plan',text:''}});
+  f.notify('item/plan/delta',{turnId:'current',itemId:'current-plan',delta:'VISIBLE CUT'});
+  f.notify('turn/completed',{turn:{id:'current',status:'interrupted'}});
+  f.notify('item/plan/delta',{turnId:'current',itemId:'current-plan',delta:' LATE TAIL'});
+  f.notify('item/completed',{turnId:'current',item:{id:'current-plan',type:'plan',text:'WRONG FINAL'}});
+  const row=f.s.messages.find(m=>m.kind==='plan'&&m.turnId==='current');
+  assert.equal(row.text,'VISIBLE CUT'); assert.equal(row.status,'interrupted');
 });

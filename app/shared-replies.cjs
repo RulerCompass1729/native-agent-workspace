@@ -82,6 +82,14 @@ class SharedReplies {
       row.nativeStatus = row.status;
     }
   }
+  hasCompletedPlan(s, tag) {
+    const g = this.grants.get(tag);
+    if (!g || g.sessionId !== s.id || !g.turnId || !this.valid(g)) return false;
+    return s.messages.some(message => message.kind === 'plan' && message.status === 'complete' && !message.incomplete &&
+      message.nativeId === g.nativeId && message.turnId === g.turnId &&
+      (!g.requiredInputTag || message.inputTag === g.requiredInputTag) &&
+      g.rows.get(message.id)?.status === 'complete' && !g.rows.get(message.id).incomplete);
+  }
   final(s, info, run) {
     const g = this.grants.get(info.tag);
     if (!g || !this.valid(g)) { this.close(info.tag); return null; }

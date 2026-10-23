@@ -12,6 +12,11 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.75 restores native Codex proposed plans in the same conversation and shared
+reader, with streaming, interruption and retained receipts. Displaying a plan
+does not approve implementation or start a handoff. Source and installed native
+checks pass; full native display/input parity remains open.
+
 Alpha.74 restores Codex's native readable process summaries in the existing main
 conversation and shared reader, with native interruption boundaries. It does not
 request extra summaries or expose raw reasoning. Full native display/input parity

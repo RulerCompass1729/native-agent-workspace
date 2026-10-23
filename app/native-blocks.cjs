@@ -7,7 +7,7 @@ function applyNativeBlock(session, event) {
   if (row?.turnId && event.turnId && row.turnId !== event.turnId) { row.incomplete = true; return true; }
   const boundary = event.turnId && session.messages.find(m => m.nativeId === event.nativeId && m.kind === 'turn' && m.turnId === event.turnId);
   if (!row) {
-    row = { id, role: event.kind === 'input' ? 'user' : ['response', 'summary'].includes(event.kind) ? 'assistant' : event.kind === 'tool' ? 'tool' : 'system',
+    row = { id, role: event.kind === 'input' ? 'user' : ['response', 'summary', 'plan'].includes(event.kind) ? 'assistant' : event.kind === 'tool' ? 'tool' : 'system',
       nativeId: event.nativeId, nativeBlock: true, volatile: event.kind === 'tool', kind: event.kind, turnId: event.turnId, text: '', time: Date.now() };
     session.messages.push(row);
   }
@@ -21,7 +21,7 @@ function applyNativeBlock(session, event) {
   for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag']) if (typeof event[field] === 'string') row[field] = event[field];
   if (typeof event.input === 'string') row.input = event.input;
   if (event.incomplete) row.incomplete = true;
-  if (['response', 'summary'].includes(event.kind) && boundary && row.status === 'streaming') row.status = boundary.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
+  if (['response', 'summary', 'plan'].includes(event.kind) && boundary && row.status === 'streaming') row.status = boundary.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
   if (event.kind === 'turn') {
     // Only a native boundary ends a streamed response. A completed text block
     // does not finish its turn, and a finished turn does not finish its fleet.
@@ -55,7 +55,7 @@ function trimVolatileRows(messages, gapId = 'native-cache-gap') {
   return messages;
 }
 function applyCodexHistory(s, items, runtime, submitted = () => {}) {
-  const { toolContent, toolStatus, summaryText } = require('./codex-tool-content.cjs');
+  const { toolContent, toolStatus, nativeTextContent } = require('./codex-tool-content.cjs');
   const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set(), replacements = new Map();
   const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
   const legacyInputs = new Map();
@@ -68,13 +68,14 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}) {
     }
   }
   for (const item of items) {
-    if (item.type === 'reasoning') {
-      const text = summaryText(item), id = `native:${s.nativeId}:summary:${item.id}`, cached = existing.get(id);
+    const content = nativeTextContent(item);
+    if (content) {
+      const { text, kind, title } = content, id = `native:${s.nativeId}:${kind}:${item.id}`, cached = existing.get(id);
       if (!text && !cached) continue;
       const interrupted = cached?.status === 'interrupted';
-      const row = (runtime.liveSummaryItems?.has(item.id) || runtime.summaryParts?.has(item.id)) && cached || {
-        id, role: 'assistant', nativeId: s.nativeId, nativeBlock: true, kind: 'summary', turnId: item.turnId,
-        title: '过程摘要', text: interrupted ? cached.text : text,
+      const row = (runtime.liveTextItems?.has(item.id) || runtime.nativeTextParts?.has(item.id)) && cached || {
+        id, role: 'assistant', nativeId: s.nativeId, nativeBlock: true, kind, turnId: item.turnId,
+        title, text: interrupted ? cached.text : text,
         status: interrupted ? 'interrupted' : item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete',
       };
       if (!used.has(id)) { imported.push(row); used.add(id); }

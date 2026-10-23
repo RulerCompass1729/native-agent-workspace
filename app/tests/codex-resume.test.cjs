@@ -269,3 +269,13 @@ test('live public summary before resume ACK invalidates stale idle without inven
   assert.ok(!f.states.includes('idle')); assert.equal(f.r.turnId,null);
   assert.equal(blocks.length,1); assert.equal(blocks[0].text,'Live public progress');
 });
+
+for (const reconnect of [false,true]) test(`cached plan ${reconnect?'reconnect':'cold resume'} rejects overlapping delta before omitted history`, async () => {
+  const f=fixture(r=>({thread:{id:r.record.nativeId,status:{type:'idle'}}}),(_p,r)=>{
+    r.event({method:'item/plan/delta',params:{turnId:'saved-turn',itemId:'cached-plan',delta:'OVERLAP'}});return{data:[]};
+  });
+  f.r.record.messages=[{id:'native:saved-thread:plan:cached-plan',nativeId:'saved-thread',kind:'plan',role:'assistant',turnId:'saved-turn',text:'persisted plan',status:'streaming'}];
+  const blocks=[];f.r.on('nativeBlock',x=>blocks.push(x));
+  if(reconnect){f.r.stopped=true;await f.r.reconnect()}else await f.r.start();
+  assert.ok(f.r.historyMessageItems.has('cached-plan'));assert.equal(blocks.length,0);
+});
