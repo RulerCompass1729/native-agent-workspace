@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual alpha.2 backend + Claude 2.1.302 + current Electron. Three loopback
 // responses (four with NAW_RETAINED_QUEUE=1, five with NAW_RETAINED_SHARED=1), zero paid inference. No original profile or global keyboard access.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -153,8 +154,8 @@ async function launch() {
       await page.locator('#chat-tab').click();
       await page.getByRole('button', { name: '加入协作', exact: true }).click();
       await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-      await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
-      await page.locator('#shared-input').fill('Continue with this new shared task after the failure.');
+      await inlineRecipient(page, id);
+      await fillRoomMessage(page, 'Continue with this new shared task after the failure.');
       assert.equal(await page.locator('#run-button').isEnabled(), false);
       await page.locator('#forward-button').click();
       await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'idle' && (await page.locator('#room-messages').innerText()).includes('RETAINED_ERROR_RECOVERY'), 'Explicit retained shared task after native failure');
@@ -186,8 +187,8 @@ async function launch() {
   if (sharedTrial || toolHistoryTrial) {
     await page.getByRole('button', { name: '加入协作', exact: true }).click();
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
-    await page.locator('#shared-input').fill('Read the local result in the unified interface.'); await page.locator('#forward-button').click();
+    await inlineRecipient(page, id);
+    await fillRoomMessage(page, 'Read the local result in the unified interface.'); await page.locator('#forward-button').click();
     await until(async () => (await snapshot()).room.messages.some(m => m.role === 'assistant'), 'Shared reply in retained main reader');
     await page.locator('#room-messages').getByText('RETAINED_PROGRESS: inspect the local result.', { exact: true }).waitFor();
     await until(async () => (await page.locator('#room-messages').innerText()).includes('RETAINED_TOOL: 42'), 'Shared native tool');
@@ -249,17 +250,17 @@ async function launch() {
     if (sharedQueueTrial) {
       await page.getByRole('button', { name: '加入协作', exact: true }).click();
       await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-      await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
+      await inlineRecipient(page, id);
       await until(async () => (await page.locator('#forward-button').innerText()) === '等本轮结束后发送 ↑', 'Room supports original native waiting queue');
-      await page.locator('#shared-input').fill('Handle this one queued instruction.'); await page.locator('#forward-button').click();
+      await fillRoomMessage(page, 'Handle this one queued instruction.'); await page.locator('#forward-button').click();
       await until(async () => (await snapshot()).sessions.find(s => s.id === id).pendingQueue, 'Room waiting receipt');
       const waiting = (await snapshot()).room.messages.find(m => m.role === 'human');
       assert.equal(waiting.status, 'awaiting-native'); assert.equal(waiting.deliveries[0].status, 'awaiting-native');
       assert.equal(waiting.manualReply, false);
       await page.locator('#room-messages .message-body').filter({ hasText: 'Handle this one queued instruction.' }).waitFor();
-      await page.locator('#shared-input').fill('Unsent room draft'); await sleep(300);
+      await fillRoomMessage(page, 'Unsent room draft'); await sleep(300);
       await page.reload(); await page.locator('#new-session').waitFor();
-      assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent room draft');
+      assert.equal(await roomBody(page), 'Unsent room draft');
       assert.equal((await snapshot()).room.messages.filter(m => m.role === 'assistant').length, 0);
       await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click();
     } else {
@@ -318,7 +319,7 @@ async function launch() {
       fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
       await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'pending-quit-success.png') });
       await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-      assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent room draft');
+      assert.equal(await roomBody(page), 'Unsent room draft');
       await page.locator('#room-messages').getByText('原生已接收 · 回复由你选定后分享', { exact: true }).waitFor();
       await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'pending-receipt-success.png') });
     }
@@ -342,11 +343,11 @@ async function launch() {
       for (const privateText of ['RETAINED_HISTORY', 'RETAINED_PROGRESS', 'RETAINED_TOOL', 'RETAINED_FINAL_PREFIX', 'Unsent reader draft']) assert.ok(!JSON.stringify(room).includes(privateText));
       await page.locator('#room-nav').click(); await page.locator('#room-record').click();
       await page.locator('#room-messages').getByText(final.text.trim(), { exact: true }).waitFor();
-      assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent room draft');
+      assert.equal(await roomBody(page), 'Unsent room draft');
       await page.reload(); await page.locator('#new-session').waitFor();
       await page.locator('#room-messages').getByText(final.text.trim(), { exact: true }).waitFor();
       assert.equal((await snapshot()).room.messages.find(m => m.finalReply).id, final.id);
-      assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent room draft');
+      assert.equal(await roomBody(page), 'Unsent room draft');
       fs.writeFileSync(path.join(base, 'shared-queue-final.json'), JSON.stringify(await snapshot(), null, 2));
       if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'retained-shared-queue-success.png') });
       checks.push('Room waiting receipt, exact queued reply and new draft survive reload; prior private task stays private');
@@ -391,8 +392,8 @@ async function launch() {
     if (await page.locator('#send-button').textContent() === '接管此窗口') await page.locator('#send-button').click();
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).legacySubmit, 'Retained rebind for second task');
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
-    await page.locator('#shared-input').fill('Check native permission without exposing later output.'); await page.locator('#forward-button').click();
+    await inlineRecipient(page, id);
+    await fillRoomMessage(page, 'Check native permission without exposing later output.'); await page.locator('#forward-button').click();
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'approval', 'Actual retained native permission prompt');
     fs.writeFileSync(path.join(base, 'shared-permission.json'), JSON.stringify(await snapshot(), null, 2));
     await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#terminal-tab').click();

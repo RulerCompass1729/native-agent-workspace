@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron navigation with controlled native events; no model calls.
 // This replaces the retired terminal-camera/replay reading test.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -73,8 +74,8 @@ async function run() {
   }
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   async function sendTo(id, text) {
-    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
-    await page.locator('#shared-input').fill(text); await page.locator('#forward-button').click();
+    await inlineRecipient(page, id);
+    await fillRoomMessage(page, text); await page.locator('#forward-button').click();
     await until(async () => (await fixture('stats', id)).lastSend?.text === text, 'Directed native send');
     return (await fixture('stats', id)).lastSend;
   }
@@ -86,11 +87,11 @@ async function run() {
   await fixture('nativeBlock', b, { ...sb, id: 'display:shared-b', kind: 'response', text: 'Beta shared output', status: 'streaming' });
   await page.locator('#room-messages').getByText('Beta shared output', { exact: true }).waitFor();
   assert.match(await arow.innerText(), /Reading A/);
-  await page.locator('#shared-input').fill('Unsent room draft'); await page.locator('#shared-input').focus();
+  await fillRoomMessage(page, 'Unsent room draft'); await page.locator('#shared-input').focus();
   await fixture('nativeBlock', a, { ...sa, id: 'display:shared-a', kind: 'response', text: 'Alpha shared output continued', status: 'streaming' });
   await arow.getByText('Alpha shared output continued', { exact: true }).waitFor();
   assert.equal(await element.evaluate(el => el.isConnected), true);
-  assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent room draft');
+  assert.equal(await roomBody(page), 'Unsent room draft');
   assert.equal(await page.locator('#shared-input').evaluate(el => document.activeElement === el), true);
   assert.equal(await page.locator('.native-progress').count(), 0);
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('Result line'));
@@ -115,13 +116,13 @@ async function run() {
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('Beta private continuation'));
   assert.match(await page.locator('#room-messages').innerText(), /共享已停止/);
   checks.push('Leaving freezes the already shared prefix while later native content remains private');
-  await page.locator('#shared-input').fill('');
+  await fillRoomMessage(page, '');
   const originalParent = (await snapshot()).room.messages.find(m => m.text === 'Shared task for A');
   await arow.getByRole('button', { name: '回复 · 2 条讨论记录', exact: true }).click();
   assert.equal(await page.locator('#thread-heading').isVisible(), true);
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('Beta shared output'));
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${a}"]`).click();
-  await page.locator('#shared-input').fill('Follow up only'); await page.locator('#forward-button').click();
+  await inlineRecipient(page, a);
+  await fillRoomMessage(page, 'Follow up only'); await page.locator('#forward-button').click();
   await until(async () => (await fixture('stats', a)).lastSend?.text === 'Follow up only', 'Thread send');
   const sc = (await fixture('stats', a)).lastSend;
   const follow = (await snapshot()).room.messages.find(m => m.text === 'Follow up only');
@@ -131,16 +132,16 @@ async function run() {
   await page.locator('#room-messages').getByText('Reply within discussion', { exact: true }).waitFor();
   await page.locator(`[data-message-id="${follow.id}"] .message-delivery summary`).click();
   assert.equal(await page.locator(`[data-message-id="${follow.id}"] .delivery-payload`).innerText(), 'Follow up only');
-  await page.locator('#shared-input').fill('Unsent discussion draft');
+  await fillRoomMessage(page, 'Unsent discussion draft');
   await page.locator(`[data-session-id="${a}"]`).click(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent discussion draft');
+  assert.equal(await roomBody(page), 'Unsent discussion draft');
   assert.match(await page.locator('#reply-label').innerText(), /Shared task for A/);
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'discussion.png') }); }
   checks.push('Reply opens one discussion, native reply streams in that thread, and only the explicit new text is delivered');
   await application.close(); application = null;
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await application.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#shared-input').waitFor();
-  assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent discussion draft');
+  assert.equal(await roomBody(page), 'Unsent discussion draft');
   assert.match(await page.locator('#reply-label').innerText(), /Shared task for A/);
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('Beta shared output'));
   assert.equal((await fixture('stats')).stats.sends, 3);
@@ -154,24 +155,24 @@ async function run() {
   await page.locator('#return-reading').click();
   assert.equal(await page.locator('#thread-heading').isVisible(), true);
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('Beta shared output'));
-  assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent discussion draft');
+  assert.equal(await roomBody(page), 'Unsent discussion draft');
   checks.push('Clicking an author filters its shared trajectory; search into another discussion and return preserve thread draft and reading scope');
   await page.locator('#thread-back').click();
   await page.locator('#room-messages').getByText('Beta shared output', { exact: true }).waitFor();
   assert.equal(await page.locator('#reply-context').isVisible(), true, 'Draft stays attached until explicitly cancelled');
   await page.locator('#cancel-reply').click();
-  assert.equal(await page.locator('#shared-input').inputValue(), 'Unsent discussion draft');
+  assert.equal(await roomBody(page), 'Unsent discussion draft');
   assert.equal(await page.locator('#reply-context').isVisible(), false);
   checks.push('App reopen preserves thread and draft without resending; return to all discussions and cancel reply preserve draft text');
-  await page.locator('#shared-input').fill('');
+  await fillRoomMessage(page, '');
   const followAnswer = (await snapshot()).room.messages.find(m => m.text === 'Reply within discussion');
   await fixture('complete', a, { messageId: followAnswer.nativeMessageId, text: 'Reply within discussion' });
   await fixture('complete', b, { text: 'Private end' });
   await page.locator(`[data-session-id="${b}"]`).click(); await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await page.locator(`[data-reply-to="${originalParent.id}"]`).click();
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${a}"]`).click();
-  await page.locator('#shared-input').fill('New finite check only');
+  await inlineRecipient(page, a);
+  await fillRoomMessage(page, 'New finite check only');
   await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
   await page.locator('#run-limit').selectOption('2'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
   await until(async () => (await fixture('stats', a)).lastSend?.text === 'New finite check only', 'Threaded run starts');

@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex tool execution and Electron with two canned loopback Responses streams.
 // Private native configuration; no paid inference or normal-profile edits.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -68,8 +69,8 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   const before = (await snapshot()).sessions[0]; assert.equal(before.model, 'gpt-6-luna');
   await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${before.id}"]`).click();
-  await page.locator('#shared-input').fill('Create sample.txt with the provided line, then read it back.'); await page.locator('#forward-button').click();
+  await inlineRecipient(page, before.id);
+  await fillRoomMessage(page, 'Create sample.txt with the provided line, then read it back.'); await page.locator('#forward-button').click();
   await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'approval' || s.messages.some(m => m.text === 'NATIVE_TOOL_DONE: created and read sample.txt.'); }, 'Native tool starts', 45000);
   if ((await snapshot()).sessions[0].state === 'approval') {
     await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();

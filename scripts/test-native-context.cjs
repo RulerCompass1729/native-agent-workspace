@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
 const {fork}=require('node:child_process'),{_electron}=require('playwright');
 const root=path.resolve(__dirname,'..'),code=process.env.NAW_TEST_APP_ROOT||root,{connect}=require(path.join(code,'app/service-client.cjs'));
@@ -27,10 +28,10 @@ async function launch(){app=await _electron.launch({executablePath:process.env.N
  }
  await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#initial-view').selectOption('chat');await page.locator('#session-name').fill('复核助手');await page.locator('#confirm-create').click();
  await page.getByRole('button',{name:'加入协作',exact:true}).click();await page.locator('#room-nav').click();await page.locator('#room-record').click();
- await page.locator('#mention-button').click();await page.locator(`[data-mention-id="${id}"]`).click();const material='保留共同核查材料';await page.locator('#shared-input').fill(material);
+ await inlineRecipient(page, id);const material='保留共同核查材料';await fillRoomMessage(page, material);
  await fixture('hold');await page.locator('#room-advanced summary').click();await page.locator('#run-button').click();await page.locator('#run-limit').selectOption('2');await page.locator('#run-consent').check();await page.locator('#confirm-run').click();
  await until(async()=>(await fixture('stats')).sends.length===3,'Run waits for first native acceptance');await fixture('clear',{target:id});await fixture('resolve');await delay(200);
- assert.equal(await page.locator('#shared-input').inputValue(),material);assert.equal((await snapshot()).room.run.status,'paused');assert.equal((await fixture('stats')).sends.length,3);await shot('clear-pending-shared-material');
+ assert.equal(await roomBody(page),material);assert.equal((await snapshot()).room.run.status,'paused');assert.equal((await fixture('stats')).sends.length,3);await shot('clear-pending-shared-material');
  checks.push('A root clear while the first shared reply awaits acceptance preserves task material and prevents the next handoff');
  const before=(await snapshot()).sessions[0];assert.equal(before.nativeContexts.length,4);assert.equal((await fixture('stats')).sends.length,3);
  await app.close();app=null;await launch();await page.locator(`[data-session-id="${id}"]`).click();await page.locator('#chat-tab').click();

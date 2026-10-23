@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-23. Version 0.1.0-alpha.85 is a **local macOS technical-trial alpha**.
+As of 2026-10-23. Version 0.1.0-alpha.86 is a **local macOS technical-trial alpha**.
 
 **Current user priority:** finish the usable shared-workspace flow first. The
 embedded native TUI is acceptable for independent work; complete 1:1 solo chat
@@ -21,6 +21,16 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.86 — Codex reader and inline mentions:** selected recipients stay in
+the existing textarea. A stored exact range/ID is required; ordinary @text,
+undo/redo, obsolete labels and departed/rejoined members cannot silently route.
+The reader uses compact author/action rows and distinct human text styling.
+Codex native item phases and native turn elapsed time appear above input, with
+no invented spinner phrases or token rates. 902 checks pass without skips. Source and installed UI/native acceptance,
+54-file payload matching, strict signing and independent review pass. Original
+three-session hidden reopening preserves identities/PIDs, selection and drafts
+with zero new dispatch. Full U17 and Claude phase parity remain open.
 
 **Alpha.85 — native-selected recipients across services:** explicit V2 services
 extend the existing native tools, finite authorization and message receipts to

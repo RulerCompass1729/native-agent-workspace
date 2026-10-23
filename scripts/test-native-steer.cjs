@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex and Electron with two canned loopback Responses streams.
 // Private native configuration; no paid inference or normal-profile edits.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -97,7 +98,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
     await page.locator('#message-input').fill('Unsent private draft.');
     await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-    await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${before.id}"]`).click();
+    await inlineRecipient(page, before.id);
     assert.ok(!(await page.locator('#room-messages').innerText()).includes('NATIVE_STEER_PARTIAL'));
   }
   assert.equal(await page.locator(sendSelector).textContent(), '追加指令 ↑');

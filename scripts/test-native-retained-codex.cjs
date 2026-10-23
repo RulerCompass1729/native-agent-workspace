@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual retained alpha.2 host, native Codex and current Electron; four task Responses streams plus at most one native title response.
 // Native execution and UI are real; inference is fixed.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -103,8 +104,8 @@ async function launch() {
   await page.locator('#message-input').fill('Unsent private draft.');
   await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click();
-  await page.locator('#shared-input').fill('Report the shared task result.'); await page.locator('#forward-button').click();
+  await inlineRecipient(page, id);
+  await fillRoomMessage(page, 'Report the shared task result.'); await page.locator('#forward-button').click();
   await page.locator('#room-messages').getByText('RETAINED_CODEX_SHARED: original task result.', { exact: true }).waitFor();
   const streaming = await snapshot(), row = streaming.room.messages.find(m => m.role === 'assistant');
   assert.equal(row.status, 'streaming'); assert.equal(row.sessionId, id); assert.ok(row.nativeMessageId);
@@ -113,8 +114,8 @@ async function launch() {
   assert.equal(streaming.room.messages.find(m => m.role === 'human').manualReply, false);
   assert.ok(!(await page.locator('#run-help').innerText()).includes('回复在成员视图'));
   fs.writeFileSync(path.join(base, 'streaming.json'), JSON.stringify(streaming, null, 2));
-  await page.locator('#shared-input').fill('A newer shared draft.'); await page.reload(); await page.locator('#new-session').waitFor();
-  assert.equal(await page.locator('#shared-input').inputValue(), 'A newer shared draft.'); assert.equal(calls, 2);
+  await fillRoomMessage(page, 'A newer shared draft.'); await page.reload(); await page.locator('#new-session').waitFor();
+  assert.equal(await roomBody(page), 'A newer shared draft.'); assert.equal(calls, 2);
   release(); release = null;
   await until(async () => (await snapshot()).room.messages.some(m => m.id === row.id && m.finalReply), 'Native final updates the original block');
   const completed = await snapshot(); fs.writeFileSync(path.join(base, 'completed.json'), JSON.stringify(completed, null, 2));
@@ -126,14 +127,14 @@ async function launch() {
   await application.close(); application = null; await launch();
   await page.locator('#room-messages').getByText('RETAINED_CODEX_SHARED: original task result.', { exact: true }).waitFor();
   assert.equal(calls, 2); assert.equal((await snapshot()).diagnostics.dispatches, 1);
-  assert.equal(await page.locator('#shared-input').inputValue(), 'A newer shared draft.');
+  assert.equal(await roomBody(page), 'A newer shared draft.');
   await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click();
   if (await page.locator('#send-button').textContent() === '接管此窗口') await page.locator('#send-button').click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'idle', 'Reopened native connection');
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent private draft.');
   checks.push('GUI closure restores shared history and both drafts without native replacement or replay');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator('#shared-input').fill('Create sample.txt with the provided line, then read it back.'); await page.locator('#forward-button').click();
+  await fillRoomMessage(page, 'Create sample.txt with the provided line, then read it back.'); await page.locator('#forward-button').click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'approval', 'Actual native command approval', 45000);
   const permission = await snapshot(); fs.writeFileSync(path.join(base, 'permission.json'), JSON.stringify(permission, null, 2));
   assert.equal(permission.sessions.find(s => s.id === id).approval.method, 'item/commandExecution/requestApproval');

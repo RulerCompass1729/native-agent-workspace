@@ -279,3 +279,15 @@ for (const reconnect of [false,true]) test(`cached plan ${reconnect?'reconnect':
   if(reconnect){f.r.stopped=true;await f.r.reconnect()}else await f.r.start();
   assert.ok(f.r.historyMessageItems.has('cached-plan'));assert.equal(blocks.length,0);
 });
+
+test('native tool activity before resume ACK rejects its older idle status', async () => {
+  const f = fixture(r => {
+    r.event({ method: 'item/started', params: { turnId: 'active-turn', item: { id: 'active-command', type: 'commandExecution', command: 'echo local' } } });
+    return idle(r);
+  });
+  f.r.event({ method: 'turn/started', params: { turn: { id: 'active-turn', startedAt: 1234 } } });
+  await f.r.start();
+  assert.ok(!f.states.includes('idle'));
+  assert.equal(f.r.nativeActivity.label, '执行命令');
+  assert.equal(f.r.nativeActivity.turnId, 'active-turn');
+});

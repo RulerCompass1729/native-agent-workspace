@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex tool execution and Electron with two bounded loopback summary streams.
 // Private native configuration; no paid inference or normal-profile edits.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -81,8 +82,8 @@ async function launch() {
   const before = (await snapshot()).sessions[0]; assert.equal(before.model, 'gpt-6-luna');
   await page.locator('#header-actions').getByRole('button', {name:'加入协作',exact:true}).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${before.id}"]`).click();
-  await page.locator('#shared-input').fill('Check this small example and report your progress.'); await page.locator('#forward-button').click();
+  await inlineRecipient(page, before.id);
+  await fillRoomMessage(page, 'Check this small example and report your progress.'); await page.locator('#forward-button').click();
   await until(() => calls === 1 && releaseStart, 'One requested native task');
   await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();
   await until(async () => (await snapshot()).sessions[0].terminalState?.alive && (await page.locator('#terminal-area').innerText()).includes('esc to interrupt'), 'Actual native terminal attached', 60000);
@@ -115,7 +116,7 @@ async function launch() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   assert.match(await page.locator('#room-messages').innerText(),/Checking the given material/);
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true}); await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'public-summary.png')});}
-  await page.locator('#shared-input').fill('Start another small check.'); await page.locator('#forward-button').click();
+  await fillRoomMessage(page, 'Start another small check.'); await page.locator('#forward-button').click();
   await until(()=>calls===2&&releaseStart,'Second bounded task'); releaseStart();
   await page.locator('#room-messages').getByText('This visible partial must remain.',{exact:true}).waitFor();
   await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();

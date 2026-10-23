@@ -532,6 +532,7 @@ class Codex extends EventEmitter {
   constructor(record, host) {
     super(); this.record = record; this.host = host; this.pending = null; this.turnId = null; this.terminal = null; this.turns = new Map(); this.ownInputs = new Set(); this.hasHistory = false; this.chatAvailable = !record.recovering && record.view !== 'terminal'; this.stopped = false; this.lifecycleRevision = 0; this.eventRevision = 0; this.stateRevision = 0; this.on('state', state => { this.latestState = state; this.stateRevision++; }); this.inputItems = new Set(); this.liveMessageItems = new Set(); this.liveToolItems = new Set(); this.historyMessageItems = new Set();
     this.nativeRequests = new Map();
+    this.activeNativeItems = new Map(); this.nativeStartedAt = null; this.nativeWait = null; this.nativeTurnFinished = false;
     this.nativeTextParts = new Map(); this.liveTextItems = new Set();
     this.textEndedTurns = new Set((record.messages || []).filter(m => m.kind === 'turn' || ['summary', 'plan'].includes(m.kind) && m.status === 'interrupted').map(m => m.turnId).filter(Boolean));
     if (record.recovering) this.recoveryReady = new Promise(resolve => { this.finishRecoveryConnection = resolve; });
@@ -694,11 +695,33 @@ class Codex extends EventEmitter {
       : exitNotice));
     return this.terminal;
   }
+  get nativeActivity() {
+    if (!this.turnId || this.nativeTurnFinished || this.stopped || this.transportDisconnected || !['working', 'approval'].includes(this.latestState)) return null;
+    const labels = { commandExecution: '执行命令', fileChange: '修改文件', mcpToolCall: '调用工具', dynamicToolCall: '调用工具', reasoning: '思考中', plan: '更新计划', agentMessage: '正在输出' };
+    const kinds = [...this.activeNativeItems.values()];
+    const kind = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'reasoning', 'plan', 'agentMessage'].find(type => kinds.includes(type));
+    return { nativeId: this.record.nativeId, turnId: this.turnId, startedAt: this.nativeStartedAt,
+      label: this.nativeWait || labels[kind] || '正在处理' };
+  }
+  publishNativeActivity() {
+    const label = this.nativeActivity?.label || '';
+    if (label !== this.publishedNativeActivity) { this.publishedNativeActivity = label; this.emit('activity', label); }
+  }
+  observeNativeItem(method, params) {
+    if (params.turnId !== this.turnId || !params.item?.id) return;
+    this.stateRevision++; // A delayed resume status predates these native events.
+    if (method === 'item/started') {
+      if (this.activeNativeItems.size < 200) this.activeNativeItems.set(params.item.id, params.item.type);
+    } else this.activeNativeItems.delete(params.item.id);
+    this.publishNativeActivity();
+  }
   observeStatus(status) {
+    this.nativeWait = status?.activeFlags?.includes('waitingOnUserInput') ? '等待回答' : status?.activeFlags?.includes('waitingOnApproval') ? '等待确认' : null;
     if (status?.type === 'idle') this.emit('state', 'idle');
     else if (status?.type === 'active') this.emit('state', status.activeFlags?.some(flag => ['waitingOnApproval', 'waitingOnUserInput'].includes(flag)) ? 'approval' : 'working');
     else if (status?.type === 'systemError') this.emit('state', 'error');
-    else { this.emit('state', 'starting'); this.emit('activity', '原生状态尚未确认，请在原生终端查看。'); }
+    else { this.emit('state', 'starting'); this.emit('activity', '原生状态尚未确认，请在原生终端查看。'); return; }
+    this.publishNativeActivity();
   }
   forgetNativeRequests() {
     for (const request of this.nativeRequests.values()) this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认结果未确认' });
@@ -733,6 +756,7 @@ class Codex extends EventEmitter {
       this.closed = true; this.stopped = true; this.finishRecoveryConnection?.(false); this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
     }
     if (this.stopped) return;
+    if (['item/started', 'item/completed'].includes(message.method)) this.observeNativeItem(message.method, p);
     if (message.method === 'item/completed' && p.item?.type === 'userMessage' &&
       p.turnId && this.ownInputs.has(p.item.clientId)) {
       this.nativeAcceptedInput = { turnId: p.turnId, tag: p.item.clientId, rpc: this.host.rpc, lifecycle: this.lifecycleRevision };
@@ -835,8 +859,9 @@ class Codex extends EventEmitter {
         // Match the bounded progress journal, without storing request bodies.
         while (this.nativeRequests.size > 200) this.nativeRequests.delete(this.nativeRequests.keys().next().value);
       }
+      this.nativeWait = message.method.endsWith('/requestUserInput') ? '等待回答' : '等待确认';
       this.emit('progress', { id: request.id, source: 'codex-native', kind: message.method, title: '等待原生确认', status: 'waiting' });
-      this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); return;
+      this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); this.publishNativeActivity(); return;
     }
     switch (message.method) {
       case 'serverRequest/resolved': {
@@ -848,13 +873,15 @@ class Codex extends EventEmitter {
         break;
       }
       case 'thread/status/changed': this.observeStatus(p.status); break;
-      case 'turn/started': this.turnId = p.turn.id; this.emit('state', 'working'); break;
+      case 'turn/started':
+        this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeTurnFinished = false;
+        this.nativeStartedAt = Number.isFinite(p.turn.startedAt) && p.turn.startedAt > 0 ? p.turn.startedAt * 1000 : null;
+        this.emit('state', 'working'); this.publishNativeActivity(); break;
       case 'item/agentMessage/delta':
         this.stateRevision++; // Live work invalidates an older resume status.
         if (!this.historyMessageItems.has(p.itemId)) { this.liveMessageItems.add(p.itemId); this.emit('delta', { id: p.itemId, text: p.delta, turnId: p.turnId, inputTag }); }
         break;
       case 'item/started':
-        if (p.item?.type && !['agentMessage', 'userMessage', 'reasoning', 'plan'].includes(p.item.type)) this.emit('activity', p.item.type);
         if (/collab|agent/i.test(p.item?.type || '') && p.item.type !== 'agentMessage') {
           const item = p.item;
           this.emit('fleet', { event: item.type, id: item.id, name: item.agentPath || 'Codex 原生子 agent', kind: item.kind, tool: item.tool,
@@ -873,8 +900,9 @@ class Codex extends EventEmitter {
           this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), { id: p.item.id });
         }
         break;
-      case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage ? { ...p.tokenUsage, reportedAt: Date.now() } : null); break;
+      case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage ? { ...p.tokenUsage, threadId: p.threadId, turnId: p.turnId, reportedAt: Date.now() } : null); break;
       case 'turn/completed': {
+        if (p.turn.id === this.turnId) { this.nativeTurnFinished = true; this.activeNativeItems.clear(); this.nativeWait = null; this.publishNativeActivity(); }
         this.textEndedTurns.add(p.turn.id);
         for (const [id, parts] of this.nativeTextParts) if (parts.turnId === p.turn.id) this.nativeTextParts.delete(id);
         this.emit('nativeBlock', { id: `turn:${p.turn.id}`, kind: 'turn', turnId: p.turn.id, inputTag: this.turn(p.turn.id).inputTag || '', nativeId: this.record.nativeId,

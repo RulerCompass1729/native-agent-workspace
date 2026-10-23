@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron/native Codex interruption and next-turn continuation.
 // Two fixed loopback task responses and at most one native title; no paid inference.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
@@ -88,8 +89,8 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
   if (!retained) assert.equal(before.model, 'gpt-6-luna');
   await page.locator('#header-actions').getByRole('button',{name:'加入协作',exact:true}).click();
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
-  await page.locator('#mention-button').click();await page.locator(`[data-mention-id="${before.id}"]`).click();
-  await page.locator('#shared-input').fill('Start a small shared response for the interruption check.');await page.locator('#forward-button').click();
+  await inlineRecipient(page, before.id);
+  await fillRoomMessage(page, 'Start a small shared response for the interruption check.');await page.locator('#forward-button').click();
   await until(()=>calls===1&&releaseStart,'First native response pending');
   await page.locator(`[data-session-id="${before.id}"]`).click();await page.locator('#terminal-tab').click();
   await until(async()=>(await page.locator('#terminal-area').innerText()).includes('esc to interrupt'),'Native terminal attached before streaming',60000);
@@ -99,7 +100,7 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
   await page.locator('#room-messages').getByText(partial,{exact:true}).waitFor();
   const streaming=await save('streaming');assert.equal(calls,1);
   const sharedRow=streaming.room.messages.find(m=>m.text===partial);assert.equal(sharedRow.status,'streaming');
-  await page.locator('#shared-input').fill('Unsent room draft.');
+  await fillRoomMessage(page, 'Unsent room draft.');
   await page.locator(`[data-session-id="${before.id}"]`).click();await page.locator('#chat-tab').click();
   await page.locator('#messages').getByText(partial,{exact:true}).waitFor();await page.locator('#message-input').fill('Unsent solo draft.');
   await page.locator('#terminal-tab').click();
@@ -138,7 +139,7 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
   assert.deepEqual(reopened.sessions[0].messages,completed.sessions[0].messages);assert.deepEqual(reopened.room.messages,completed.room.messages);
   assert.equal(await page.locator('#message-input').inputValue(),'Draft after continuation.');
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
-  await page.locator('#room-messages').getByText(partial,{exact:true}).waitFor();assert.equal(await page.locator('#shared-input').inputValue(),'Unsent room draft.');
+  await page.locator('#room-messages').getByText(partial,{exact:true}).waitFor();assert.equal(await roomBody(page),'Unsent room draft.');
   assert.equal(calls,2);assert.equal(reopened.diagnostics.dispatches,2);assert.deepEqual(errors,[]);
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'interrupted-shared.png')});}
   checks.push('Whole-app reopening retains exact solo/shared rows, native process/identity and both drafts without another dispatch');

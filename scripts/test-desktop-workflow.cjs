@@ -1,3 +1,4 @@
+const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron renderer/IPC/storage; provider replies and OS dialog selection
 // are controlled local fixtures. This does not certify physical macOS dialog use.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -54,7 +55,7 @@ async function create(provider) {
   const id = (await snapshot()).sessions.find(s => !previous.includes(s.id)).id;
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;
 }
-async function recipient(id) { await page.locator('#mention-button').click(); await page.locator(`[data-mention-id="${id}"]`).click(); }
+async function recipient(id) { await inlineRecipient(page, id); }
 async function openRun() { await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click(); await page.locator('#run-dialog').waitFor(); }
 async function complete(text) { await native('release', text); }
 async function run() {
@@ -66,17 +67,17 @@ async function run() {
   await page.locator('#rename-name').fill('计划复核'); await page.locator('#confirm-rename').click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await recipient(a);
   const material = path.join(profile, '计划.csv'); fs.writeFileSync(material, '项目,人数,单价\n午餐,3,18\n交通,3,7\n');
-  await page.locator('#shared-input').fill('请核查预算并给出结论。'); await chooseFile(material);
+  await fillRoomMessage(page, '请核查预算并给出结论。'); await chooseFile(material);
   assert.match(await page.locator('#file-content').innerText(), /午餐,3,18/); assert.equal((await native()).sends.length, 0);
   await shot('material-preview'); await page.locator('#insert-file').click();
   await assert.rejects(page.evaluate(ids => workspace.run(ids, 'stale name should not dispatch', 3, 'replies', Object.fromEntries(ids.map(id => [id, 'obsolete alias']))), [a, b, c]), /名称已变化/);
   assert.equal((await native()).sends.length, 0);
-  const goal = await page.locator('#shared-input').inputValue(); assert.ok(goal.includes('文件：计划.csv')); assert.ok(!goal.includes(profile));
-  const longDraft = '材料'.repeat(3100); await page.locator('#shared-input').fill(longDraft);
+  const goal = await roomBody(page); assert.ok(goal.includes('文件：计划.csv')); assert.ok(!goal.includes(profile));
+  const longDraft = '材料'.repeat(3100); await fillRoomMessage(page, longDraft);
   await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
   assert.equal(await page.locator('#run-dialog').isVisible(), false); assert.match(await page.locator('#toast').innerText(), /6000/);
-  assert.equal(await page.locator('#shared-input').inputValue(), longDraft); assert.equal((await native()).sends.length, 0);
-  await page.locator('#shared-input').fill(goal);
+  assert.equal(await roomBody(page), longDraft); assert.equal((await native()).sends.length, 0);
+  await fillRoomMessage(page, goal);
   await openRun(); await page.locator(`[data-run-member="${c}"]`).check();
   assert.equal(await page.locator(`[data-run-member="${d}"]`).isChecked(), false);
   assert.equal(await page.locator('#confirm-run').isDisabled(), true); assert.match(await page.locator('#run-order').innerText(), new RegExp(c.slice(0, 6)));
@@ -96,7 +97,7 @@ async function run() {
   await until(() => fs.existsSync(copy), 'Visible result exported'); assert.equal(fs.readFileSync(copy, 'utf8'), resultText); await shot('result-preview'); await page.locator('#close-file').click();
   assert.equal((await native()).sends.length, 3); passed.push('Result preview and exact local copy make zero provider calls; original file unchanged');
   // Second provider arrangement, with ordering changed through real controls.
-  await recipient(d); await page.locator('#shared-input').fill('只复核 75 是否正确。'); await openRun();
+  await recipient(d); await fillRoomMessage(page, '只复核 75 是否正确。'); await openRun();
   assert.equal(await page.locator(`[data-run-member="${a}"]`).isChecked(), true); await page.locator(`[data-run-member="${c}"]`).check();
   await page.getByRole('button', { name: `提前 伙伴 · ${c.slice(0, 6)}`, exact: true }).click();
   await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
@@ -107,12 +108,12 @@ async function run() {
   await until(async () => (await snapshot()).room.run.status === 'completed', 'Second cap');
   passed.push('One-Claude/two-Codex and two-Claude/one-Codex work with duplicate labels and explicitly reordered participants');
   // Fail draft persistence after insertion; retry must not append another copy.
-  await page.locator('#shared-input').fill('保存故障前的草稿'); await chooseFile(material);
+  await fillRoomMessage(page, '保存故障前的草稿'); await chooseFile(material);
   await app.evaluate(() => { const fs = process.getBuiltinModule('node:fs'); global.__originalRename = fs.renameSync; fs.renameSync = (...args) => { if (String(args[1]).endsWith('/views.json')) throw Error('Synthetic disk full'); return global.__originalRename(...args); }; });
   await page.locator('#insert-file').click(); await until(() => page.locator('#file-dialog').isVisible().then(v => !v), 'Insert closes once even if storage fails');
-  assert.equal((await page.locator('#shared-input').inputValue()).split('文件：计划.csv').length, 2);
+  assert.equal((await roomBody(page)).split('文件：计划.csv').length, 2);
   await app.evaluate(() => { process.getBuiltinModule('node:fs').renameSync = global.__originalRename; });
-  await page.locator('#retry-save').click(); assert.equal((await page.locator('#shared-input').inputValue()).split('文件：计划.csv').length, 2);
+  await page.locator('#retry-save').click(); assert.equal((await roomBody(page)).split('文件：计划.csv').length, 2);
   passed.push('Material insertion stays once across persistence failure and retry; draft is retained');
   await page.locator(`[data-session-id="${c}"]`).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
   await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('独立继续的草稿'); await chooseFile(material, 'session-files'); await page.locator('#insert-file').click();
