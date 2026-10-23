@@ -4,6 +4,7 @@ const { isTerminalResponse } = require('./workspace.cjs');
 const { LegacyObservation, supportsLegacyObservation } = require('./legacy-observation.cjs');
 const { LegacyInput, eligible: legacyInputEligible } = require('./legacy-input.cjs');
 const { nativeApprovalPolicy } = require('./approval-policy.js');
+const { CAPABILITY: PEER_HANDOFFS, identity: peerIdentity, mergePeerMessages } = require('./peer-handoffs.cjs');
 let creationQueue = Promise.resolve();
 const controls = new Map();
 
@@ -104,7 +105,7 @@ class WorkspaceClient extends EventEmitter {
         const approvalDecisions = approvalDecisionAvailable ? nativeApprovalPolicy(approval, {
           localDecisions: legacyCodex || e.state.capabilities?.includes('nativeApprovalLocalDecisions') === true,
         }).decisions : [];
-        ids.add(s.id); sessions.push({ ...s, legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
+        ids.add(s.id); sessions.push({ ...s, peerIdentity: peerIdentity(s), legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           nativeInputRequired: Boolean(s.nativeInputRequired || reader?.nativeInputRequired),
           failedTurnInputAvailable: Boolean(s.failedTurnInputAvailable || failedTurnInputAvailable),
@@ -152,15 +153,16 @@ class WorkspaceClient extends EventEmitter {
       return true;
     });
     const sum = key => this.entries.every(e => Number.isSafeInteger(e.state.diagnostics?.[key])) ? this.entries.reduce((n, e) => n + e.state.diagnostics[key], 0) : null;
-    runs.sort((a, b) => (b.status === 'running') - (a.status === 'running') || (b.startedAt || 0) - (a.startedAt || 0));
+    runs.sort((a, b) => Boolean(b.pausePending || b.pauseUnconfirmed) - Boolean(a.pausePending || a.pauseUnconfirmed) || (b.status === 'running') - (a.status === 'running') || (b.startedAt || 0) - (a.startedAt || 0));
     return { ...this.active.state, sessions, capabilities,
-      room: { ...this.active.state.room, revision: this.entries.reduce((n, e) => n + (e.state.room.revision || 0), 0), run: runs[0] || null, messages: [...messages.values()].sort((a, b) => (a.time || 0) - (b.time || 0)) },
+      room: { ...this.active.state.room, revision: this.entries.reduce((n, e) => n + (e.state.room.revision || 0), 0), run: runs[0] || null, messages: mergePeerMessages([...messages.values()]).sort((a, b) => (a.time || 0) - (b.time || 0)) },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
       storageWarning: [...this.entries.map(e => e.state.storageWarning), this.control.legacyInput?.storageWarning,
         this.control.legacyInput?.sharedReplies?.storageError ? '本地共享回复未能保存；后续内容留在原会话，请检查磁盘与文件权限。' : null].filter(Boolean).join('\n') || null,
       storageRetryable: this.entries.some(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave')),
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),
-      handoffNotice: memberServices.length > 1 ? '成员使用不同版本的后台，自动交接暂不可用。可在同一协作视图查看终端、选择内容并定向分享。' : null,
+      peerHandoffsAvailable: this.active.state.capabilities?.includes(PEER_HANDOFFS) === true,
+      handoffNotice: memberServices.length > 1 && !memberServices.every(e => e.state.capabilities?.includes(PEER_HANDOFFS)) ? '成员使用不同版本的后台，自动交接暂不可用。可在同一协作视图查看终端、选择内容并定向分享。' : null,
     };
   }
   route(id) {
@@ -296,7 +298,8 @@ class WorkspaceClient extends EventEmitter {
       if (replyTo && !this.snapshot().room.messages.some(m => m.id === replyTo)) throw Error('原讨论记录已移除；草稿保留，没有发送。');
     };
     replyGuard();
-    let contextGuard = replyGuard;
+    let contextGuard = replyGuard, runIdentities;
+    const displayedIdentities = method === 'run' ? args[7] : undefined;
     if (['send', 'forward', 'run'].includes(method)) {
       const ids = method === 'run' ? args[0] : [args[0]], index = method === 'run' ? 5 : 2;
       if (!Array.isArray(ids)) throw Error('无效会话选择。');
@@ -309,12 +312,14 @@ class WorkspaceClient extends EventEmitter {
           !this.entries.some(e => e.state.capabilities?.includes('nativeContextTransitions'))) return [];
         const entry = this.route(id), record = entry.state.sessions.find(s => s.id === id);
         const nativeId = supplied === undefined ? record?.nativeId : method === 'run' ? supplied?.[id] : supplied;
-        return [{ id, entry, nativeId }];
+        return [{ id, entry, nativeId, identity: displayedIdentities?.[id] || peerIdentity(record) }];
       });
+      if (method === 'run') runIdentities = Object.fromEntries(expected.map(e => [e.id, e.identity]));
       contextGuard = () => {
         replyGuard();
         for (const { id, entry, nativeId } of expected) {
           const current = entry.state.sessions.find(s => s.id === id);
+          if (method === 'run' && displayedIdentities && JSON.stringify(peerIdentity(current || {})) !== JSON.stringify(runIdentities[id])) throw Error('成员的输入、控制权或加入状态已变化，请重新预览授权。');
           if (!current || current.nativeContextPending || current.nativeId !== nativeId) throw Error('原生上下文已变化，请重新查看后发送；草稿保留。');
         }
       };
@@ -472,6 +477,7 @@ class WorkspaceClient extends EventEmitter {
       const state = await this.refresh();
       if (method === 'shutdown' && state.sessions.some(s => s.state !== 'ended')) throw new Error('请先结束各原生会话，再关闭运行服务。');
       if (method === 'clearSharedHistory' && (!state.capabilities.includes(method) || state.room.run?.status === 'running')) throw new Error('请先暂停交接，并确认各后台支持清除记录。');
+      if (method === 'clearSharedHistory' && this.entries.some(e => e.state.room.run?.pausePending || e.state.room.run?.pauseUnconfirmed)) throw new Error('请先核对各后台已撤销后续交接授权，再清除共享记录。');
       // These are explicit user actions. Partial failure must remain visible.
       guards.forEach(check => check());
       const results = await Promise.allSettled(this.entries.map(e => method === 'clearSharedHistory'
@@ -486,13 +492,15 @@ class WorkspaceClient extends EventEmitter {
       this.control.manualEpoch++;
       const interventions = [...this.control.interventions];
       const state = await this.refresh();
+      if (this.entries.some(e => e.state.room.run?.pausePending || e.state.room.run?.pauseUnconfirmed)) throw Error('请先核对各后台已撤销后续交接授权，再开始新的协作。');
       if (!Array.isArray(args[0]) || args[0].length < 2 || args[0].length > 6 || new Set(args[0]).size !== args[0].length) throw new Error('请选择 2–6 个不同会话。');
       const targets = args[0].map(id => this.route(id));
       const guard = guards.get(targets[0].key); guard();
-      if (targets.some(target => target !== targets[0])) throw new Error('跨版本自动交接暂不可用；请选择内容并定向分享。');
+      const crossService = targets.some(target => target !== targets[0]);
+      if (crossService && (args[3] !== 'replies' || !this.active.state.capabilities?.includes(PEER_HANDOFFS) || targets.some(t => !t.state.capabilities?.includes(PEER_HANDOFFS)))) throw new Error('跨版本/跨后台协作尚不支持这些连接的可撤销顺序核查；原生会话保留，可人工分享。');
       assertAutomaticRun(state, args[3], args[0]); assertSharing(state, args[0]);
       await Promise.all(interventions);
-      await this.pauseExcept(targets[0]);
+      await this.pauseExcept(crossService ? null : targets[0]);
       const previousArm = this.control.armed.get(targets[0].key);
       if (previousArm?.entry.closing || previousArm?.entry.closed) await this.pauseEntry(targets[0]);
       const previousPause = this.control.armed.get(targets[0].key)?.pause;
@@ -500,6 +508,15 @@ class WorkspaceClient extends EventEmitter {
       if (revision !== this.control.revision || this.socket.destroyed) throw new Error('真人操作已使这次交接失效；请重新确认任务。');
       this.authorizeOperation?.(method, args);
       guard(); contextGuard();
+      if (this.entries.some(e => e.state.room.run?.pausePending || e.state.room.run?.pauseUnconfirmed)) throw Error('请先核对各后台已撤销后续交接授权，再开始新的协作。');
+      if (crossService) {
+        for (const id of args[0]) if (JSON.stringify(peerIdentity(this.route(id).state.sessions.find(s => s.id === id))) !== JSON.stringify(runIdentities[id])) throw Error('成员输入或控制权已变化，请重新授权。');
+        const activeGuard = guards.get(this.active.key); activeGuard();
+        const arm = { entry: this.active }; this.control.armed.set(this.active.key, arm);
+        return this.active.client.call('peerRun', { ids: args[0], goal: args[1], maxSteps: args[2], mode: args[3], labels: args[4] || {},
+          contexts: Object.fromEntries(args[0].map(id => [id, this.route(id).state.sessions.find(s => s.id === id).nativeId])),
+          identities: runIdentities, routes: Object.fromEntries(args[0].map(id => [id, this.route(id).key])), replyTo });
+      }
       const arm = this.control.armed.get(targets[0].key) || { entry: targets[0] };
       this.control.armed.set(targets[0].key, arm);
       return arm.entry.client.call(method, ...args);

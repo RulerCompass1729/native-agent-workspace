@@ -5,6 +5,7 @@ const net = require('node:net');
 const crypto = require('node:crypto');
 const { NativeHost } = require('./adapters.cjs');
 const { Workspace } = require('./workspace.cjs');
+const { PeerLeases, PeerRunner, CAPABILITY } = require('./peer-handoffs.cjs');
 const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./service-transport.cjs');
 
 async function main() {
@@ -19,6 +20,8 @@ async function main() {
   fs.mkdirSync(defaultWorkspace, { recursive: true, mode: 0o700 });
   const host = new NativeHost(privateDir); await host.start();
   const workspace = new Workspace(host, dataDir); const clients = new Set(), writers = new Map();
+  workspace.peerLeases = new PeerLeases(workspace);
+  const peerRunner = workspace.peerRunner = new PeerRunner(workspace, dataDir);
   const send = (client, value) => writers.get(client)?.send(value);
   const broadcast = (event, data) => {
     if (!clients.size) return;
@@ -34,10 +37,15 @@ async function main() {
   workspace.on('terminal', data => broadcast('terminal', data));
   workspace.on('progress', data => broadcast('progress', data));
   let shuttingDown = false;
-  const dispatch = async (owner, method, args) => {
+  const dispatch = async (owner, method, args, client) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: ['agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, 'agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'peerRun': return peerRunner.start(owner, args[0]);
+      case 'peerPrepare': return workspace.peerLeases.prepare(client, owner, args[0]);
+      case 'peerTake': return workspace.peerLeases.take(client, args[0]);
+      case 'peerSend': return workspace.peerLeases.send(client, owner, args[0]);
+      case 'peerPause': return workspace.peerLeases.pause(client, args[0]?.id);
       case 'retrySave': return workspace.retrySave();
       case 'nativeHistory': return workspace.nativeHistory.list(args[0]);
       case 'importHistory': return workspace.importHistory(args[0], owner);
@@ -82,7 +90,7 @@ async function main() {
         await workspace.startRun(...args);
         return { contextChanged: contexts.some(([id, nativeId]) => workspace.get(id).nativeId !== nativeId || workspace.get(id).nativeContextPending) };
       }
-      case 'pause': return workspace.pause('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。');
+      case 'pause': await peerRunner.pause(); return workspace.pause('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。');
       case 'forward': {
         workspace.assertNativeContext(args[0], args[2]);
         const nativeId = workspace.get(args[0]).nativeId;
@@ -114,9 +122,9 @@ async function main() {
         authenticated = true; owner = request.owner; clients.add(client); clearTimeout(authTimer); send(client, { ready: true }); return;
       }
       if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
-      Promise.resolve().then(() => dispatch(owner, request.method, request.args)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。' }));
+      Promise.resolve().then(() => dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。' }));
     });
-    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); if (!shuttingDown) workspace.release(owner); });
+    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); workspace.peerLeases.disconnected(client); if (!shuttingDown) workspace.release(owner); });
   });
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);
   const connection = path.join(dataDir, 'connection.json'); const tmp = `${connection}.tmp`;

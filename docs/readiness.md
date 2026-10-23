@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-22. Version 0.1.0-alpha.83 is a **local macOS technical-trial alpha**.
+As of 2026-10-23. Version 0.1.0-alpha.84 is a **local macOS technical-trial alpha**.
 
 **Current user priority:** finish the usable shared-workspace flow first. The
 embedded native TUI is acceptable for independent work; complete 1:1 solo chat
@@ -21,6 +21,19 @@ replacement UI. The user subsequently authorized continuing the agreed direction
 and requested per-message delivery transparency; the current development increment
 adds expandable recipient/receipt/exact-send details to existing shared messages.
 The larger 1:1 native mapping and working-turn input contract remain open.
+
+**Alpha.84 — finite cross-service cooperation:** independent local services
+with the explicit V1 peer protocol can exchange a bounded sequence in the
+existing shared reader. Source native Claude→Codex→original Claude and actual
+Electron pause/permission/departure journeys pass, including UI-closed work,
+first Codex TUI attachment, source-side reply proof and honest unconfirmed
+revocation. 888 checks pass without skips or paid inference; independent source
+review passes. Installed native and four-group control journeys, all 53 payload
+files and post-native strict signature pass. Original three-session hidden
+reopening preserves identities, drafts and selection with zero new dispatch;
+final independent artifact review passes. Alpha.2/83 and other services
+without V1 remain manual, and external live attachment is still open. See
+[exact scope and evidence](testing.md#finite-exchange-across-existing-supported-services--alpha84).
 
 **Alpha.83 — native usage visibility:** the existing privacy/usage
 and session-detail surfaces distinguish native context, cumulative tokens,

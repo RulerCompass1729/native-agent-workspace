@@ -4,6 +4,16 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['claudePromptIdentity', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+for (const flag of ['pausePending', 'pauseUnconfirmed']) test('an unresolved peer pause cannot be hidden by history clearing or a new run: ' + flag, async () => {
+  for (const method of ['clearSharedHistory', 'run']) {
+    const { c, old, next } = fixture();
+    old.real.room.run = { id: 'unresolved', status: 'paused', [flag]: true };
+    await assert.rejects(c.call(method, ['new', 'old'], 'Check 36+14', 3, 'replies'), /核对各后台/);
+    assert.equal(old.real.room.run.id, 'unresolved');
+    assert.equal([...old.calls, ...next.calls].some(([m]) => m !== 'initial'), false);
+    c.close();
+  }
+});
 test('a delayed initial response cannot reverse newer membership, messages or permission state', async () => {
   const { ServiceClient } = require('../service-client.cjs');
   for (const newerRead of [false, true]) {

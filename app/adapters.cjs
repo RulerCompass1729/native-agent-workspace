@@ -198,6 +198,9 @@ class Claude extends EventEmitter {
       } else {
         if (!['control:permission', 'control:input'].includes(message.id)) throw Error('Invalid native control boundary');
         this.rootTurn = null;
+        // Current sessions need this boundary too: the classic permission/state
+        // event can arrive later or be coalesced before a peer sees a snapshot.
+        this.emit('nativeControlBoundary', message.id);
         if (this.nativeSharedDisplay) this.emit('sharingBoundary', message.id);
       }
       this.emit('capability'); return { observed: true };

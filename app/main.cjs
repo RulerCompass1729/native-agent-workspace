@@ -264,6 +264,8 @@ async function boot() {
   register('dataDirectory', () => shell.openPath(dataDir));
   register('quitService', async c => { await c.client.call('shutdown'); app.quit(); });
   register('clearSharedHistory', async c => {
+    const state = await c.client.call('initial');
+    if (state.room.run?.pausePending || state.room.run?.pauseUnconfirmed) throw Error('请先核对各后台已撤销后续交接授权，再清除共享记录。');
     const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: '清除共同工作记录？', detail: '清除本应用里的共享消息、成员时间线和共享笔记，并停止尚未完成的分享回写。名称与各个原生会话保留，不能撤回其他 agent 已收到的内容。正在执行的原生任务不会因此取消。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
       const revision = roomState.value.revision;
