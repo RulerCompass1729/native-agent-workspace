@@ -21,7 +21,13 @@ The current batch also restores core Codex 0.164 compatibility using exact nativ
 handshake gates, exposes scoped native usage through the existing dialog, and
 rechecks the complete current-provider addressed task, pause, private continuation
 and whole-app reopening. Source and installed task acceptance and independent artifact review pass for
-this batch. Full U17 and the limits below remain open. No new terminal renderer or frontend framework is introduced.
+this batch. Full U17 and the limits below remain open.
+
+Accepted alpha.92 task: show a version-drift explanation in the existing
+status/details, distinguishing the actual current native handshake from a last
+connection or no report. Preserve permissions, drafts, recipients and native
+identity. No version manager, new model task or broader compatibility claim.
+Installed metadata/continuity verification and independent final artifact review pass. No new terminal renderer or frontend framework is introduced.
 
 ## Current priority — 2026-10-22
 

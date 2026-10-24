@@ -3,6 +3,11 @@ const path = require('node:path');
 const { executable } = require('./platform.cjs');
 const serverVersion = result => typeof result?.userAgent === 'string' ? result.userAgent.match(/^[^/\s]+\/(\d+\.\d+\.\d+)(?:\s|$)/)?.[1] || null : null;
 const verifiedCodexProtocol = rpc => ['0.163.0', '0.164.0'].includes(rpc?.nativeVersion);
+function codexVersionInfo(rpc, connected = true) {
+  const version = typeof rpc?.nativeVersion === 'string' && /^\d+\.\d+\.\d+$/.test(rpc.nativeVersion) ? rpc.nativeVersion : null;
+  const current = connected && rpc?.ws?.readyState === 1 && Object.hasOwn(rpc, 'nativeVersion');
+  return { nativeVersion: version, nativeVersionStatus: current ? verifiedCodexProtocol(rpc) ? 'verified' : 'unverified' : version ? 'last-known' : 'unreported' };
+}
 function nativeId(value) {
   if (typeof value !== 'string' || !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value)) throw Error('无效的原生会话标识。');
   return value;
@@ -49,4 +54,4 @@ class NativeHistory {
     return metadata(result.thread);
   }
 }
-module.exports = { NativeHistory, nativeId, metadata, serverVersion, verifiedCodexProtocol };
+module.exports = { NativeHistory, nativeId, metadata, serverVersion, verifiedCodexProtocol, codexVersionInfo };

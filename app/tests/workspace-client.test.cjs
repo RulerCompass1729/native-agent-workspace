@@ -4,6 +4,17 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['claudePromptIdentity', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+test('retained native version metadata uses its connected original RPC rather than another backend snapshot', async () => {
+  const { old, c } = fixture(); old.real.runtimeVersion = '0.1.0-alpha.2';
+  Object.assign(old.real.sessions[1], { nativeVersion: '0.164.0', nativeVersionStatus: 'verified' });
+  await c.refresh();
+  const native = { rpc: { nativeVersion: '0.163.0', ws: { readyState: 1 } }, connected: true, record: { messages: [] } };
+  c.control.legacyInput = { records: [], target: s => s.id === 'old-codex' ? { native } : null, prepared: () => false, connected: () => false, reader: () => null, close() {} };
+  assert.equal(c.snapshot().sessions.find(s => s.id === 'old-codex').nativeVersion, '0.163.0');
+  native.connected = false;
+  assert.equal(c.snapshot().sessions.find(s => s.id === 'old-codex').nativeVersionStatus, 'last-known');
+  c.close();
+});
 for (const flag of ['pausePending', 'pauseUnconfirmed']) test('an unresolved peer pause cannot be hidden by history clearing or a new run: ' + flag, async () => {
   for (const method of ['clearSharedHistory', 'run']) {
     const { c, old, next } = fixture();

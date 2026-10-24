@@ -74,6 +74,11 @@ process.on('message', q => {
     const r = runtimes.get(q.target); r.chatAvailable = q.method === 'available'; r.emit('capability');
   }
   if (q.method === 'set-state') runtimes.get(q.target).emit('state', q.value);
+  if (q.method === 'native-version') {
+    const r = runtimes.get(q.target);
+    r.host = { rpc: { nativeVersion: q.value.version, ws: { readyState: q.value.closed ? 3 : 1 } } };
+    r.transportDisconnected = Boolean(q.value.closed); r.emit('capability');
+  }
   if (q.method === 'set-owner') { const r = runtimes.get(q.target); r.record.owner = q.value; r.emit('capability'); }
   if (q.method === 'replace') {
     const r = runtimes.get(q.target); r.record.connectionRevision = (r.record.connectionRevision || 0) + 1; r.emit('state', 'idle');
