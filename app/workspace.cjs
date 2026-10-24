@@ -7,7 +7,7 @@ const { ProgressJournal } = require('./observation.cjs');
 const { applyNativeBlock, applyCodexHistory, applyCodexTurnHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress, persistedMessages } = require('./native-blocks.cjs');
 const { SharedReplies } = require('./shared-replies.cjs');
 const addressed = require('./addressed-handoffs.cjs');
-const { nativeApprovalPolicy } = require('./approval-policy.js');
+const { nativeApprovalPolicy, ApprovalQueue } = require('./approval-policy.js');
 const { NativeHistory, nativeId } = require('./native-history.cjs');
 
 const cleanText = (value, max = 16000) => {
@@ -33,7 +33,7 @@ class Workspace extends EventEmitter {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
-      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.state === 'ended' ? 'ended' : 'recoverable', owner: null, approval: null, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
+      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.state === 'ended' ? 'ended' : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
       }
@@ -69,7 +69,7 @@ class Workspace extends EventEmitter {
     const target = path.join(this.dataDir, 'workspace.json'); const temp = `${target}.tmp`;
     try {
       // No terminal bytes, credentials, environment, hook secrets or raw protocol.
-      const sessions = [...this.sessions.values()].map(({ owner, approval, approvalResolved, pid, ...s }) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null }));
+      const sessions = [...this.sessions.values()].map(({ owner, approval, approvals, approvalOverflow, approvalResolved, pid, ...s }) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null }));
       fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
       fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
     } catch { this.storageFailure = 'write'; this.storageWarning = '本地保存失败，当前会话仍在内存中；请保留窗口并检查磁盘，恢复后重试保存。'; this.emit('change'); }
@@ -189,12 +189,12 @@ class Workspace extends EventEmitter {
       if (['ended', 'recoverable', 'error', 'disconnected'].includes(state)) for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
       if (runtime.transportDisconnected || ['disconnected', 'ended', 'recoverable'].includes(state)) s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
       if (state !== 'approval') s.approvalResolved = false;
-      if (runtime.transportDisconnected) { s.approval = null; this.approvalRoutes.delete(s.id); }
+      if (runtime.transportDisconnected) { s.approval = null; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(s.id); }
       if (state !== 'starting' && s.activity === '正在连接原生历史') s.activity = '';
       if (state === 'ended' || state === 'recoverable') {
         if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
         if (s.pendingTag) this.deliveryStatus(s.pendingTag, 'unconfirmed');
-        s.pid = null; s.pendingTag = null; s.approval = null; this.runtimes.delete(s.id);
+        s.pid = null; s.pendingTag = null; s.approval = null; s.approvals = []; s.approvalOverflow = false; this.runtimes.delete(s.id);
         this.approvalRoutes.delete(s.id);
       }
       if (state === 'working') this.peerLeases?.working(s.id);
@@ -220,23 +220,24 @@ class Workspace extends EventEmitter {
     });
     on('approval', (approval, rpc = this.host.rpc) => {
       s.peerRevision = (s.peerRevision || 0) + 1;
-      // Native request numbers may be reused after a socket reconnect. The
-      // visible decision is scoped to this request and its original RPC.
-      const requestId = randomUUID();
-      this.approvalRoutes.set(s.id, { runtime, rpc, requestId, nativeRequestId: approval.requestId });
-      s.approval = { ...approval, requestId }; s.approvalResolved = false;
+      let queue = this.approvalRoutes.get(s.id);
+      if (!queue) this.approvalRoutes.set(s.id, queue = new ApprovalQueue(randomUUID));
+      queue.add(approval, rpc, runtime); Object.assign(s, queue.snapshot()); s.approvalResolved = false;
       this.pauseParticipant(s.id, '等待原生权限确认'); this.changed();
     });
     on('approvalResolved', (nativeRequestId, rpc = this.host.rpc) => {
-      const route = this.approvalRoutes.get(s.id);
-      if (!route || route.rpc !== rpc || route.nativeRequestId !== nativeRequestId) return;
-      this.approvalRoutes.delete(s.id); s.approval = null;
-      s.approvalResolved = s.state === 'approval';
+      const queue = this.approvalRoutes.get(s.id);
+      if (!queue || !queue.entries.some(r => r.rpc === rpc && r.nativeRequestId === nativeRequestId)) return;
+      queue.resolve(nativeRequestId, rpc); Object.assign(s, queue.snapshot());
+      if (!queue.entries.length && !queue.overflow) this.approvalRoutes.delete(s.id);
+      s.approvalResolved = !s.approval && !queue.overflow && s.state === 'approval';
       this.changed();
     });
     on('approvalUnavailable', rpc => {
-      if (this.approvalRoutes.get(s.id)?.rpc !== rpc) return;
-      this.approvalRoutes.delete(s.id); s.approval = null; s.approvalResolved = false;
+      const queue = this.approvalRoutes.get(s.id);
+      if (!queue || (!queue.entries.some(r => r.rpc === rpc) && !queue.overflowSources.has(rpc))) return;
+      queue.removeSource(rpc); Object.assign(s, queue.snapshot()); s.approvalResolved = false;
+      if (!queue.entries.length && !queue.overflow) this.approvalRoutes.delete(s.id);
       s.activity = '原生确认连接已变化；正在核对原会话，未自动发送决定。'; this.changed();
     });
     on('nativeInput', (text, item) => {
@@ -269,7 +270,7 @@ class Workspace extends EventEmitter {
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
-      if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag || s.pendingTag === info.supersededTag) { s.pendingTag = null; s.activity = ''; s.approval = null; }
+      if (s.provider === 'claude' || !s.pendingTag || s.pendingTag === info.tag || s.pendingTag === info.supersededTag) { s.pendingTag = null; s.activity = ''; if (!this.approvalRoutes.has(s.id)) s.approval = null; }
       if (s.provider === 'claude' && info.text && !runtime.nativeBlocks) s.messages.push({ id: randomUUID(), role: 'assistant', text: info.text, status: 'complete' });
       const forward = this.forwards.get(forwardTag);
       const shared = forward && forwardTag === info.tag && s.roomId === 'shared' && forward.member === s.memberRevision && forward.control === s.controlRevision && info.text && this.sharedReplies.final(s, info);
@@ -308,7 +309,7 @@ class Workspace extends EventEmitter {
       }
       this.forwards.delete(s.pendingTag);
     }
-    s.pendingTag = null; s.approval = null; s.approvalResolved = false; this.approvalRoutes.delete(s.id);
+    s.pendingTag = null; s.approval = null; s.approvalResolved = false; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(s.id);
     s.controlRevision++; s.memberRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1;
     s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
     s.nativeContextPending = ['clear', 'resume', 'terminal-switch'].includes(info.reason) ? { nativeId: info.nativeId, reason: info.reason } : null;
@@ -663,14 +664,14 @@ class Workspace extends EventEmitter {
     this.claim(id, owner, s.view); return this.send(id, text, owner, null, { member: s.memberRevision, replyTo });
   }
   approve(id, requestId, decision, owner) {
-    const s = this.get(id), route = this.approvalRoutes.get(id);
-    if (!route || !s.approval || s.approval.pending || s.state !== 'approval' || s.owner !== owner || s.approval.requestId !== requestId || route.requestId !== requestId ||
+    const s = this.get(id), queue = this.approvalRoutes.get(id), route = queue?.get(requestId);
+    if (!route || queue.overflow || route.approval.pending || s.state !== 'approval' || s.owner !== owner ||
       route.runtime !== this.runtimes.get(id) || !(route.rpc === this.host.rpc || route.runtime.currentRpc?.(route.rpc)) || route.runtime.transportDisconnected ||
       route.runtime.backendExitConfirmed) throw new Error('权限请求已变化，请重新查看。');
     if (!['accept', 'decline', 'cancel'].includes(decision)) throw new Error('未知权限决定。');
-    if (!nativeApprovalPolicy(s.approval).decisions.includes(decision)) throw new Error('请在原生终端核对；此界面不支持这项权限决定。');
+    if (!nativeApprovalPolicy(route.approval).decisions.includes(decision)) throw new Error('请在原生终端核对；此界面不支持这项权限决定。');
     route.rpc.reply(route.nativeRequestId, { decision });
-    if (this.approvalRoutes.get(id) === route && s.approval?.requestId === requestId) s.approval = { ...s.approval, pending: true };
+    if (this.approvalRoutes.get(id)?.get(requestId) === route) { route.approval = { ...route.approval, pending: true }; Object.assign(s, queue.snapshot()); }
     this.changed();
   }
   stop(id) {
@@ -685,7 +686,7 @@ class Workspace extends EventEmitter {
     this.pause('正在断开原生会话'); s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'stopping'; s.activity = '等待原生确认'; this.changed();
     const operation = Promise.resolve().then(() => runtime.stop()).then(result => {
       if (!['ended', 'recoverable', 'disconnected'].includes(result?.state)) throw new Error('原生未确认结束状态。');
-      s.state = result.state; s.pendingTag = null; s.approval = null; s.approvalResolved = false; this.approvalRoutes.delete(id);
+      s.state = result.state; s.pendingTag = null; s.approval = null; s.approvalResolved = false; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(id);
       s.activity = result.state === 'ended' ? '' : result.state === 'recoverable'
         ? '原生后台已退出；记录和草稿保留，任务不会自动重发。'
         : '本应用连接已断开；原生线程或后台任务可能仍在运行。';
@@ -707,7 +708,7 @@ class Workspace extends EventEmitter {
         if (shared) shared.status = 'reply-private';
         this.forwards.delete(s.pendingTag);
       }
-      s.pendingTag = null; s.approval = null; this.approvalRoutes.delete(id);
+      s.pendingTag = null; s.approval = null; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(id);
       s.controlRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1;
       const generation = s.connectionRevision;
       s.owner = owner; s.recovering = true; s.state = 'starting'; s.activity = '正在连接原生历史';

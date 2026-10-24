@@ -2,6 +2,7 @@
 const path = require('node:path');
 const { executable } = require('./platform.cjs');
 const serverVersion = result => typeof result?.userAgent === 'string' ? result.userAgent.match(/^[^/\s]+\/(\d+\.\d+\.\d+)(?:\s|$)/)?.[1] || null : null;
+const verifiedCodexProtocol = rpc => ['0.163.0', '0.164.0'].includes(rpc?.nativeVersion);
 function nativeId(value) {
   if (typeof value !== 'string' || !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value)) throw Error('无效的原生会话标识。');
   return value;
@@ -26,7 +27,7 @@ class NativeHistory {
     if (host.codexBinary !== binary) throw Error('Codex 连接已变化，请重新打开历史列表。');
     // The running server's handshake is authoritative. A binary replaced at
     // the same path cannot lend its version to an older still-running process.
-    if (host.rpc?.nativeVersion !== '0.163.0') throw Error('已有历史接入目前仅验证 Codex 0.163.0 的运行后台；请暂时在原生界面继续。');
+    if (!verifiedCodexProtocol(host.rpc)) throw Error('已有历史接入目前仅验证 Codex 0.163.0 / 0.164.0 的运行后台；请暂时在原生界面继续。');
     return host.rpc;
   }
   async list(options = {}) {
@@ -48,4 +49,4 @@ class NativeHistory {
     return metadata(result.thread);
   }
 }
-module.exports = { NativeHistory, nativeId, metadata, serverVersion };
+module.exports = { NativeHistory, nativeId, metadata, serverVersion, verifiedCodexProtocol };

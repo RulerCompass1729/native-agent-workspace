@@ -7,6 +7,7 @@ test('native usage keeps zero, strips unrelated/private fields and never invents
   assert.equal(value.costUsd, 0); assert.equal(value.context.tokens, 0);
   assert.equal(value.rateLimits.length, 1); assert.ok(!JSON.stringify(value).includes('PRIVATE'));
   assert.match(usageLines('claude', value).join('\n'), /\$0\.0000/);
+  assert.match(usageLines('claude', value).join('\n'), /本机读数时间/);
   assert.match(usageLines('claude', null).join('\n'), /未报告.*不能据此判断为零/);
   assert.equal(claudeUsage({ context: { window: -1 } }), null);
   const missing = claudeUsage({ context: { window: 100, tokens: NaN, percent: 150 }, cost: { usd: -1 }, rateLimits: [{ kind: 'spend_limit', percentUsed: Infinity }] });

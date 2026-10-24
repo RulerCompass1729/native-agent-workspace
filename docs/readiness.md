@@ -1,7 +1,30 @@
 # Readiness and next gates
 
-As of 2026-10-23. Version 0.1.0-alpha.90 is a **local macOS technical-trial alpha**.
+As of 2026-10-24. Version 0.1.0-alpha.91 is a **local macOS technical-trial alpha**.
 
+
+**Alpha.91 — pending native actions, compatibility and scoped usage:** native
+confirmations are retained independently by source connection and typed request
+ID. Resolving a later question cannot hide an older permission. Existing member
+tabs identify waiting participants without publishing private request details or
+changing the inline recipient. A single header action reuses the native usage
+view for the exact session or current room; unknowns stay unknown and local
+reading time is explicit. Core Codex 0.164 gates use the running handshake after
+comparison with original generated 0.163 protocols; unverified versions remain
+gated for these capabilities, without widening retained-version fallbacks.
+
+948 checks pass without skips. Actual installed three-member pending requests,
+full shared/drag/archive/restore/usage workflow, Codex context/menu/history/native
+continuation, current Claude 310/Codex 164 addressed cooperation, pause, private
+continuation and whole-app reopening pass. The retained alpha.2/Codex 163 path
+also accepts an actual native command confirmation from the current GUI and
+keeps later private output out of the room. Native responses are fixed loopback
+fixtures, not model-judgment tests; paid inference is zero. Successful full-task
+video is retained locally. All 55 runtime files match, post-native strict signing
+and one launcher pass. Original three-session reopening preserves native IDs,
+PIDs, 24 Codex items, saved drafts/views and zero dispatch. Final independent
+artifact review passes for this increment. Full U17, physical IME, Recap/Next and user visual
+acceptance remain open.
 
 **Alpha.90 — interrupt and continue from the GUI:** supported new Claude 2.1.310
 connections use the native exact-turn API. API acknowledgement, the exact native

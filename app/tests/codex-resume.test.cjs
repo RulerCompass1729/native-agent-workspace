@@ -233,7 +233,7 @@ for (const scenario of ['empty', 'pending', 'missing', 'wrong-error-id', 'wrong-
   const record = { nativeId: 'first-thread', cwd: '/synthetic', view: 'chat' }, calls = [];
   let r;
   const host = { binaries: { codex: 'synthetic' }, codexSocket: '/synthetic/socket', rpc: {
-    nativeVersion: scenario === 'unknown-version' ? '0.164.0' : '0.163.0',
+    nativeVersion: scenario === 'unknown-version' ? '0.165.0' : '0.163.0',
     call: async (method, params) => {
       calls.push({ method, params });
       if (method === 'thread/read' && params.includeTurns) throw Object.assign(Error('Native turns unavailable'), { nativeUnsupportedTurns: true });

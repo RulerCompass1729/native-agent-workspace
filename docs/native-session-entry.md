@@ -87,8 +87,10 @@ bootstrap also restores exact real historical messages and the original model
 without sending a new task; see [testing evidence](testing.md). The protocol probe's
 single injected synthetic record is not complete-history acceptance. Its native
 notifications included goal clearing, so preserving arbitrary goals or active
-fleets is not claimed. The actual running server must report exactly 0.163.0 in its initialization
-handshake before this path is enabled. A same-path CLI replacement cannot lend
+fleets is not claimed. The actual running server must report exactly 0.163.0 or
+0.164.0 in its initialization handshake before this path is enabled. Core 0.164
+protocols were compared with locally generated 0.163 definitions; actual catalog,
+selected history, context changes and native continuation were then verified. A same-path CLI replacement cannot lend
 its version to an older server. Unknown versions remain unavailable for outside
 history; existing workspace sessions retain their existing behavior.
 

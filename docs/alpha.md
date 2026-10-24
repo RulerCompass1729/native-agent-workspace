@@ -1,8 +1,16 @@
 # macOS alpha trial
 
-As of 2026-10-23. Version 0.1.0-alpha.88. Suitable for a small technical trial with
+As of 2026-10-24. Version 0.1.0-alpha.91. Suitable for a small technical trial with
 synthetic or low-sensitivity work; not a general consumer release. Product name
 is still a working name.
+
+## Pending actions and usage
+
+A waiting member is marked on its existing tab. Open that member to inspect its
+private native requests; choose a request when more than one is pending. Decisions
+remain subject to native permissions. Display selection never changes the inline
+message recipient. Use the header’s **用量** action for the current session or
+room; missing native readings are not zero or an inferred bill.
 
 ## Alpha.88 conversation and native terminal together
 

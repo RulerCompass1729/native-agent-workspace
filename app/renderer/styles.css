@@ -269,3 +269,8 @@ header h1, header p { overflow-wrap: anywhere; }
 @media(prefers-reduced-motion:reduce){.message.process[data-running='true']>details>summary::before{animation:none;background:var(--green)}}
 @media(max-width:900px){.split-workspace.has-terminal{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr)}.split-workspace.terminal-maximized,.split-workspace.native-only{grid-template-rows:minmax(0,1fr)}.native-pane,#room-layout>#room-session{border-left:0;border-top:1px solid var(--border)}.native-pane-toolbar{min-height:36px}.messages{min-height:0}#room-composer,#composer-wrap{max-height:26vh}}
 @media(max-width:900px) and (max-height:720px){.split-workspace.has-terminal:not(.terminal-maximized){grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}.native-pane,#room-layout>#room-session{border-top:0;border-left:1px solid var(--border)}}
+
+#room-member-tabs .needs-attention { border-color: var(--green); }
+#approval select { max-width: 100%; margin-bottom: 8px; }
+
+#privacy-dialog[data-mode="usage"] .privacy-only { display: none; }

@@ -105,6 +105,8 @@ class WorkspaceClient extends EventEmitter {
         const approvalDecisions = approvalDecisionAvailable ? nativeApprovalPolicy(approval, {
           localDecisions: legacyCodex || e.state.capabilities?.includes('nativeApprovalLocalDecisions') === true,
         }).decisions : [];
+        const approvals = (legacyCodex ? native?.connected && native.approvals : s.approvals) || (approval ? [approval] : []);
+        const approvalOverflow = legacyCodex ? Boolean(native?.connected && native.approvalOverflow) : Boolean(s.approvalOverflow);
         ids.add(s.id); sessions.push({ ...s, peerIdentity: peerIdentity(s), legacyObservation: supportsLegacyObservation(e.state, s), legacyProgress: !!native?.connected,
           legacyInputEligible: legacyInputEligible(e.state, s), legacyInputPrepared: !!bridge?.prepared(s), legacySubmit,
           nativeInputRequired: Boolean(s.nativeInputRequired || reader?.nativeInputRequired),
@@ -129,7 +131,10 @@ class WorkspaceClient extends EventEmitter {
             pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
           ...(legacyCodex
             ? { approval: native?.connected ? native.approval : null, approvalResolved: Boolean(native?.connected && native.approvalResolved) } : {}),
-          approvalDecisionAvailable, approvalDecisions,
+          approvals: approvals.map(request => ({ ...request, decisions: approvalDecisionAvailable && !approvalOverflow ? nativeApprovalPolicy(request, {
+            localDecisions: legacyCodex || e.state.capabilities?.includes('nativeApprovalLocalDecisions') === true,
+          }).decisions : [] })), approvalOverflow,
+          approvalDecisionAvailable, approvalDecisions: approvalOverflow ? [] : approvalDecisions,
           approvalNotice: s.provider === 'codex' && !approvalDecisionAvailable ? '旧连接无法核实这项确认的最新状态，请在原生终端核对。原会话继续保留。' : null,
           handoffGroup: this.entries.indexOf(e), serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
       }

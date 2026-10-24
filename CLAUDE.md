@@ -57,6 +57,12 @@ or start paid model runs as a side effect of editing documents.
 
 ## Architectural invariants
 
+- Avoid unnecessary secondary labels and descriptions; let the layout explain
+  hierarchy, grouping and authorship. Remove repeated captions and helper text
+  before adding UI. Keep concise text where it changes a decision: the actual
+  recipient, delivery/permission state, failure or recovery. Preserve accessible
+  names and native content; visual simplicity must not hide those facts.
+
 - Before changing primary interaction, information organization, or system
   architecture (including messaging and state synchronization), inspect
   established products, protocols and actual implementations first. Compare their

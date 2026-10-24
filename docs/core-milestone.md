@@ -1,5 +1,28 @@
 # Core product acceptance
 
+## Iteration discipline — 2026-10-24
+
+Choose one complete user task by value, blockage and expected effort. Write the
+starting state, actions and visible result before editing; the reused independent
+reviewer checks that scope. Implement, run affected local/native checks, accept
+that task, then choose the next highest-value task. Do not use test totals,
+release numbers or another status panel as a substitute for a usable task.
+Reuse passing unaffected evidence and batch installation at a delivery boundary.
+Continued work authorization remains active across completed subitems.
+
+Accepted source task: show member A and address C with an unsent room draft while B
+has two native requests. Find B without exposing its private details in shared
+messages; open and handle B's exact requests, resolve the later one first,
+keep the earlier one actionable, and retain remaining requests after reload.
+Addressed recipient, draft and native identity remain unchanged. Test transport
+and actual native permission evidence have separate scopes.
+
+The current batch also restores core Codex 0.164 compatibility using exact native
+handshake gates, exposes scoped native usage through the existing dialog, and
+rechecks the complete current-provider addressed task, pause, private continuation
+and whole-app reopening. Source and installed task acceptance and independent artifact review pass for
+this batch. Full U17 and the limits below remain open. No new terminal renderer or frontend framework is introduced.
+
 ## Current priority — 2026-10-22
 
 The user clarified that the embedded native TUI is an acceptable single-agent

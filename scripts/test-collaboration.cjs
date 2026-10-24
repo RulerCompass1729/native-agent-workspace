@@ -65,7 +65,30 @@ async function run() {
   await fixture('event', '', b, { method: 'thread/tokenUsage/updated', params: { threadId: 'synthetic-' + b,
     tokenUsage: { total: { inputTokens: 120, cachedInputTokens: 100, outputTokens: 20 }, last: { inputTokens: 80, outputTokens: 10 }, modelContextWindow: 200000 } } });
   await until(async () => (await snapshot()).sessions.find(s => s.id === b)?.usage?.total?.inputTokens === 120);
+  const usageBefore = await snapshot();
+  await page.locator('#usage-button').click();
+  assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'usage');
+  assert.equal(await page.locator('#trust-status [data-usage-session]').count(), 1);
+  assert.equal(await page.locator('#trust-status [data-usage-session]').getAttribute('data-usage-session'), b);
+  assert.match(await page.locator('#trust-status').innerText(), /累计 token：输入 120/);
+  assert.match(await page.locator('#trust-status').innerText(), /本机读数时间/);
+  assert.equal(await page.locator('#data-directory').isVisible(), false);
+  assert.equal(await page.locator('#quit-service').isVisible(), false);
+  await page.locator('#refresh-trust').click();
+  assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'usage');
+  assert.equal(await page.locator('#trust-status [data-usage-session]').count(), 1);
+  await capture('usage-single-session'); await page.locator('#close-privacy').click();
+  const usageAfter = await snapshot(); assert.equal(usageAfter.viewState.selected, usageBefore.viewState.selected);
+  assert.equal(usageAfter.diagnostics.dispatches, usageBefore.diagnostics.dispatches);
+  await page.locator(`[data-session-id="${a}"]`).click();await page.locator('#usage-button').click();
+  assert.equal(await page.locator('#trust-status [data-usage-session]').count(), 1);
+  assert.equal(await page.locator('#trust-status [data-usage-session]').getAttribute('data-usage-session'), a);
+  assert.match(await page.locator('#trust-status').innerText(), /未报告.*不能据此判断为零/);
+  assert.ok(!(await page.locator('#trust-status').innerText()).includes('累计 token：输入 120'));
+  await page.locator('#close-privacy').click();await terminal(b);
   await page.locator('#privacy-button').click();
+  assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'privacy');
+  assert.equal(await page.locator('#data-directory').isVisible(), true);
   assert.match(await page.locator('#trust-status').innerText(), /累计 token：输入 120/);
   assert.match(await page.locator('#trust-status').innerText(), /原生用量未报告；不能据此判断为零/);
   await page.locator('#refresh-trust').click();
@@ -109,6 +132,16 @@ async function run() {
   assert.equal(await page.locator('#room-search').inputValue(), ''); assert.equal(await page.locator('#room-filter').inputValue(), '');
   assert.equal(await page.locator('#room-messages').evaluate(el => el.contains(document.activeElement) && document.activeElement.tagName === 'ARTICLE'), true, 'Filtered context restores and focuses the original row');
   passed.push('Duplicate labels are disambiguated by provider/ID; keyboard @ selects one recipient, exact explicit send, time and member filtering never reroute');
+  await fillRoomMessage(page, '用量查看时保留的草稿'); const populatedUsageBefore = await snapshot();
+  await page.locator('#usage-button').click();
+  assert.equal(await page.locator('#trust-status [data-usage-session]').count(), 2);
+  assert.match(await page.locator('#trust-status').innerText(), /原生用量未报告；不能据此判断为零/);
+  assert.equal(await page.locator('#quit-service').isVisible(), false);
+  await page.locator('#refresh-trust').click(); await page.locator('#close-privacy').click();
+  assert.equal(await roomBody(page), '用量查看时保留的草稿');
+  const populatedUsageAfter = await snapshot(); assert.equal(populatedUsageAfter.viewState.roomRecipient, populatedUsageBefore.viewState.roomRecipient);
+  assert.equal(populatedUsageAfter.diagnostics.dispatches, populatedUsageBefore.diagnostics.dispatches);
+  await fillRoomMessage(page, '');
   await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('共同目标：比较两种学习方法。\n决定：先核对证据，再写结论。'); await page.locator('#save-notes').click();
   assert.equal((await fixture()).sends.length, 1, 'Notes save does not call model');
   await page.locator('#room-advanced summary').click(); await page.locator('#attach-context').click(); const context = await page.locator('#context-text').inputValue(); assert.ok(context.includes('共同目标')); assert.ok(context.includes('当前参与会话')); assert.ok(!context.includes('PRIVATE-'));
@@ -139,6 +172,14 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === null, 'Active session detached'); await reply('PRIVATE-AFTER-LEAVE');
   assert.equal((await snapshot()).room.messages.some(m => m.text === 'PRIVATE-AFTER-LEAVE'), false); assert.ok((await snapshot()).sessions.find(s => s.id === a).messages.some(m => m.text === 'PRIVATE-AFTER-LEAVE'));
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await fillRoomMessage(page, '保留的合作草稿'); const before = await snapshot(); await capture('collaboration-ready');
+  await page.locator('#usage-button').click();
+  assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'usage');
+  assert.equal(await page.locator('#trust-status [data-usage-session]').count(), before.sessions.filter(s => s.roomId === 'shared' && !s.archived).length);
+  await page.locator('#refresh-trust').click(); await page.locator('#close-privacy').click();
+  assert.equal(await roomBody(page), '保留的合作草稿');
+  const roomUsage = await snapshot(); assert.equal(roomUsage.viewState.roomRecipient, before.viewState.roomRecipient);
+  assert.equal(roomUsage.diagnostics.dispatches, before.diagnostics.dispatches);
+  passed.push('Single-session and room usage reuse native readings with explicit scope, preserve drafts/recipients, retain privacy controls and never dispatch');
   await app.close(); app = null; await launch(); const after = await snapshot();
   assert.deepEqual(identities(after), ids); assert.equal(after.room.name, '周末学习小组'); assert.equal(after.room.notes, before.room.notes); assert.deepEqual(after.room.events, before.room.events); assert.deepEqual(after.room.messages, before.room.messages);
   assert.equal(await roomBody(page), '保留的合作草稿'); assert.equal(await page.locator('#recipient').inputValue(), ''); assert.equal((await fixture()).sends.length, 3);
@@ -182,6 +223,7 @@ async function run() {
   await page.locator(`[data-session-menu="${a}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click(); await until(async () => (await snapshot()).sessions.find(s => s.id === a).archived, 'Former member independently archived');
   await app.close(); app = null; await launch(); assert.equal((await snapshot()).room.archived, true); assert.equal((await snapshot()).sessions.find(s => s.id === a).archived, true);
   await page.locator('#archive-button').click(); await capture('archive-resume'); await page.getByRole('button', { name: '恢复工作区', exact: true }).click();
+  await until(async () => !(await snapshot()).room.archived && await page.locator('#room-nav').isVisible() && !await page.locator('#archive-dialog').isVisible(), 'Room restore completes and returns to its visible workspace');
   const restored = await snapshot(); assert.equal(restored.room.archived, false); assert.equal(restored.room.notes, preserved.room.notes); assert.deepEqual(restored.room.messages, preserved.room.messages);
   assert.equal(restored.sessions.find(s => s.id === b).roomId, 'shared'); assert.equal(restored.sessions.find(s => s.id === a).roomId, null); assert.equal(restored.sessions.find(s => s.id === a).archived, true);
   await page.locator('#archive-button').click(); await page.locator(`[data-archived-session="${a}"]`).getByRole('button', { name: '恢复会话', exact: true }).click(); assert.deepEqual(identities(await snapshot()), ids);
@@ -209,7 +251,7 @@ async function run() {
   passed.push('Shared-history deletion includes new timeline and notes, keeps native history and room name; no hidden dispatch');
   console.log(JSON.stringify({ passed, errors, syntheticDispatches: 4, nativeProcesses: 0, modelCalls: 0, oneWindow: app.windows().length === 1 }, null, 2));
 }
-run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) { await capture('failed'); fs.writeFileSync(path.join(profile, 'failure.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2)); fs.writeFileSync(path.join(profile, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); } process.exitCode = 1; }).finally(async () => {
   if (app) await app.close(); if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
 });
 

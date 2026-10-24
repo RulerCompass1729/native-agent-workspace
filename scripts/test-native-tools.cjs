@@ -11,7 +11,8 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home 
 for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('codex'); if (!binary) throw Error('Real Codex required');
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.equal(version, 'codex-cli 0.163.0');
+const nativeVersion = process.env.NAW_CODEX_VERSION || '0.163.0';
+assert.ok(['0.163.0','0.164.0'].includes(nativeVersion)); assert.equal(version, 'codex-cli ' + nativeVersion);
 let application, page, calls = 0, sequence = 0;
 const errors = [], requests = [], sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label, timeout = 30000) {
