@@ -51,9 +51,17 @@ const server = http.createServer((req, res) => {
   });
 });
 const snapshot = () => page.evaluate(() => workspace.initial());
+async function revealTools(selector) {
+  for (const disclosure of await page.locator(selector + ' .process-details').all()) {
+    if (await disclosure.getAttribute('open') === null) await disclosure.locator(':scope > summary').click();
+  }
+}
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  // Trust only the owned empty fixture folder. The actual file permission
+  // remains on-request and must still be answered in the real native UI.
+  for (const folder of new Set([cwd, fs.realpathSync(cwd)])) fs.appendFileSync(path.join(home, 'config.toml'), `\n[projects.${JSON.stringify(folder)}]\ntrust_level = "trusted"\n`);
   const shim = path.join(base, 'codex-local');
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\n' +
     `os.environ["CODEX_HOME"]=${JSON.stringify(home)}\n` +
@@ -72,6 +80,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Create sample.txt with the provided line, then read it back.'); await page.locator('#forward-button').click();
   await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'approval' || s.messages.some(m => m.text === 'NATIVE_TOOL_DONE: created and read sample.txt.'); }, 'Native tool starts', 45000);
+  assert.equal((await snapshot()).sessions[0].state, 'approval', 'This scenario requires a real native file permission, not an automatically allowed tool');
   if ((await snapshot()).sessions[0].state === 'approval') {
     await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();
     await until(async () => (await page.locator('#terminal-area').innerText()).includes('sample.txt'), 'Native approval is rendered', 45000);
@@ -101,10 +110,12 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   assert.ok(!done.room.messages.some(m => m.text === 'NATIVE_TOOL_DONE: created and read sample.txt.'), 'Permission revocation keeps later native replies private');
   assert.ok(done.room.messages.some(m => m.role === 'tool' && m.sharingStopped), 'Shared diff explicitly freezes when approval is requested');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await revealTools('#room-messages');
   const roomText = await page.locator('#room-messages').innerText(); fs.writeFileSync(path.join(base, 'shared-reader.txt'), roomText);
   assert.match(roomText, /NATIVE_TOOL_FILE: hello 世界/);
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-tools.png') }); }
   await page.locator(`[data-session-id="${before.id}"]`).click();
+  await revealTools('#messages');
   assert.match(await page.locator('#messages').innerText(), /NATIVE_TOOL_FILE: hello 世界/);
   await page.locator('#terminal-tab').click();
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('NATIVE_TOOL_DONE'), 'Native TUI shows the same result', 60000);

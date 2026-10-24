@@ -80,9 +80,11 @@ function persistedMessages(messages, gapId = 'native-cache-gap') {
         row.sharedStream === true && row.nativeMessageId?.startsWith(`native:${row.nativeId}:tool:`)) ||
     row.kind === 'gap' && row.id === gapId).map(row => ({ ...row })), gapId);
 }
-function applyCodexHistory(s, items, runtime, submitted = () => {}, turns) {
+function applyCodexHistory(s, items, runtime, submitted = () => {}, turns, recovery = false) {
   const { toolContent, toolStatus, nativeTextContent } = require('./codex-tool-content.cjs');
-  const existing = new Map(s.messages.map(m => [m.id, m])), imported = [], used = new Set(), replacements = new Map();
+  const existing = new Map(s.messages.filter(m => !m.nativeId || m.nativeId === s.nativeId).flatMap(m => [[m.id, m], ...(m.nativeItemId ? [[m.nativeItemId, m]] : [])])), imported = [], used = new Set(), replacements = new Map();
+  const boundary = s.messages.findLastIndex(m => s.nativeContexts?.some(c => c.boundaryId === m.id));
+  const prefix = boundary < 0 ? [] : s.messages.slice(0, boundary + 1), prefixIds = new Set(prefix.map(m => m.id));
   const exactIds = new Set(items.flatMap(item => [item.id, ...(item.clientId ? [item.clientId] : [])]));
   const legacyInputs = new Map();
   if (s.provider === 'codex' && s.recovering) {
@@ -123,7 +125,7 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}, turns) {
     const own = item.type === 'userMessage' && item.clientId && existing.get(item.clientId)?.role === 'user' ? existing.get(item.clientId) : existing.get(item.id);
     // A cold connection's persisted partial text is not newer than native
     // history. Live items received on this connection still take precedence.
-    if (own && s.recovering && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
+    if (own && (s.recovering || recovery) && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
       const interrupted = own.status === 'interrupted';
       Object.assign(own, { text: interrupted ? own.text : item.text || '',
         status: interrupted ? 'interrupted' : item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
@@ -132,7 +134,9 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}, turns) {
     const m = own || (item.type === 'userMessage'
       ? { id: item.id, role: 'user', text: (item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), status: 'submitted', origin: 'native' }
       : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
-    if (item.turnId && (!m.turnId || m.turnId === item.turnId)) { m.turnId = item.turnId; m.nativeId = s.nativeId; }
+    if (!own && s.messages.some(row => row.id === m.id && row.nativeId && row.nativeId !== s.nativeId)) { m.nativeItemId = item.id; m.id = `native:${s.nativeId}:message:${item.id}`; }
+    m.nativeId = s.nativeId;
+    if (item.turnId && (!m.turnId || m.turnId === item.turnId)) m.turnId = item.turnId;
     // Early backends assigned random display IDs to native user input.
     // One unmatched pure-text history item may replace one pre-recovery
     // cache row. This is display reconciliation, never reply attribution.
@@ -149,15 +153,15 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}, turns) {
   // history (including interrupted replies) immediately after their previous
   // surviving display anchor, never after an unrelated later turn.
   const before = [], after = new Map(), unplaced = []; let anchor = null;
-  for (const row of s.messages) {
+  for (const row of s.messages.slice(boundary + 1)) {
     if (used.has(row.id)) { anchor = replacements.get(row.id) || row.id; continue; }
     if (!row.turnId || row.nativeId !== s.nativeId) { unplaced.push(row); continue; }
     if (anchor === null) before.push(row);
     else { if (!after.has(anchor)) after.set(anchor, []); after.get(anchor).push(row); }
   }
   // No complete/nativeInput events: hydration cannot route or pause a task.
-  const ordered = imported.flatMap(row => [row, ...(after.get(row.id) || [])]);
-  s.messages = trimVolatileRows((anchor === null ? ordered.concat(before) : before.concat(ordered)).concat(unplaced));
+  const ordered = imported.filter(row => !prefixIds.has(row.id)).flatMap(row => [row, ...(after.get(row.id) || [])]);
+  s.messages = trimVolatileRows(prefix.concat((anchor === null ? ordered.concat(before) : before.concat(ordered)).concat(unplaced)));
   if (turns !== undefined) applyCodexTurnHistory(s, turns, runtime);
   runtime.recoveryNativeInputs?.clear();
 }
@@ -195,9 +199,9 @@ function codexInterrupted(s, item, row) {
     m.turnId === item.turnId && m.status === 'interrupted'));
 }
 function applyCodexDelta(s, item) {
-  let message = s.messages.find(m => m.id === item.id);
+  let message = s.messages.find(m => (m.nativeItemId || m.id) === item.id && (!m.nativeId || m.nativeId === s.nativeId));
   if (codexInterrupted(s, item, message)) return null;
-  if (!message) { message = { id: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
+  if (!message) { message = { id: s.messages.some(m => m.id === item.id) ? `native:${s.nativeId}:message:${item.id}` : item.id, nativeItemId: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
   message.text += item.text;
   if (item.turnId) message.turnId = item.turnId;
   message.nativeId = s.nativeId;
@@ -214,10 +218,11 @@ function applyCodexProgress(s, item) {
   return s.messages.find(m => m.id === id);
 }
 function applyCodexMessage(s, item) {
-  let m = s.messages.find(m => m.id === item.id);
+  const nativeId = item.nativeId || s.nativeId;
+  let m = s.messages.find(m => (m.nativeItemId || m.id) === item.id && (!m.nativeId || m.nativeId === nativeId));
   if (codexInterrupted(s, item, m)) return null;
   if (!m) {
-    m = { id: item.id, role: 'assistant' };
+    m = { id: s.messages.some(m => m.id === item.id) ? `native:${nativeId}:message:${item.id}` : item.id, nativeItemId: item.id, role: 'assistant' };
     if (item.nativeId && item.nativeId !== s.nativeId) {
       const context = s.nativeContexts?.find(c => c.nativeId === item.nativeId);
       const index = s.messages.findIndex(message => message.id === context?.boundaryId);

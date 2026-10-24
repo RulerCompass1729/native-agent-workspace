@@ -36,17 +36,70 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
       else throw Error('Unexpected request: ' + url);
       return { ok: true, text: JSON.stringify(result) };
     } } };
-  register((name, fn) => { hooks.set(name, fn); return { catch() {} }; });
-  const invoke = (name, e, next = async e => ({ uuid: e.uuid, message: e.message })) => hooks.get(name)($, e, next);
+  register((name, matcher, handler) => { const values=hooks.get(name)||[];values.push({matcher:handler?matcher:null,fn:handler||matcher});hooks.set(name,values);return {catch(){}}; });
+  const matches=(filter,value)=>!filter||Object.entries(filter).every(([key,want])=>want&&typeof want==='object'?matches(want,value?.[key]):value?.[key]===want);
+  const invoke = (name, e, next = async e => ({ uuid: e.uuid, message: e.message })) => {
+    const selected=(hooks.get(name)||[]).filter(hook=>matches(hook.matcher,e));
+    const dispatch=(index,value)=>{if(index===selected.length)return next(value);const rest=v=>dispatch(index+1,v);rest.origin=next.origin;return selected[index].fn($,value,rest);};return dispatch(0,e);
+  };
   await invoke('session.start', {}); await clock.shift()(); const poll = clock.find(fn => fn.delay === 0); clock.length = 0;
   return { r, clock, requests, invoke, poll, readUsage() { return testObserveUsage($); }, setUsageReader(fn) { $.session.usage = fn; }, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
 
-for (const version of ['2.1.308', '2.1.309', '2.1.310']) test('native queue/display compatibility remains version scoped: ' + version, async () => {
+test('root activity follows the transparent native stream, while child activity and ended turns cannot replace it', async () => {
+  const f = await mod({version:'2.1.309'}), turnId=randomUUID();
+  await f.invoke('turn.start',{turnId});await f.clock.shift()();
+  assert.equal(f.r.nativeActivity.label,'正在请求');
+  const chunks=[{kind:'thinking',text:'PRIVATE REASONING'},{kind:'text',text:'visible',ref:2}], result={stopReason:'end_turn'};
+  const next=()=> (async function*(){yield*chunks;return result;})();next.origin={plugin:'engine',tier:'core'};
+  const stream=f.invoke('turn.step',{turnId},next);assert.equal((await stream.next()).value,chunks[0]);await f.clock.shift()();assert.equal(f.r.nativeActivity.label,'思考中');
+  assert.equal((await stream.next()).value,chunks[1]);await f.clock.shift()();assert.equal(f.r.nativeActivity.label,'正在输出');
+  assert.equal((await stream.next()).value,result);assert.ok(!JSON.stringify(f.requests).includes('PRIVATE REASONING'));
+  await f.invoke('prompt.submit',{text:'A newly entered private instruction'});await f.clock.shift()();
+  assert.equal(f.r.nativeActivity.turnId,turnId,'A private-input boundary revokes sharing without inventing a new executing turn');
+  const child=f.invoke('turn.step',{turnId:'child',agentId:'child'},next);while(!(await child.next()).done){};
+  assert.equal(f.r.nativeActivity.turnId,turnId);
+  await f.invoke('turn.complete',{turnId,reason:'answer',answer:'',durationMs:100});await f.clock.shift()();assert.equal(f.r.nativeActivity,null);
+});
+
+test('native permission requests remain private, correlated to actual calls and do not fabricate GUI decisions', async () => {
+  const f=await mod({version:'2.1.302',legacy:true}), promptId=randomUUID(),turnId=randomUUID();
+  await f.invoke('classic.UserPromptSubmit',{session_id:f.r.record.nativeId,prompt_id:promptId,prompt:'check'});
+  await f.invoke('turn.start',{turnId});await f.clock.shift()();
+  let finishA,finishB;
+  const verdict=async()=>({decision:'ask'});verdict.origin={plugin:'engine',tier:'core'};
+  const make=(id,command,done)=>{const execute=async()=>{await f.invoke('tool.check',{tool:'Bash',tool_use_id:id,input:{command}},verdict);return new Promise(done);};execute.origin={plugin:'engine',tier:'core'};return f.invoke('tool.call',{tool:'Bash',tool_use_id:id,input:{command}},execute);};
+  const a=make('first','first',r=>finishA=r),b=make('second','second',r=>finishB=r);await new Promise(r=>setImmediate(r));
+  await f.clock.shift()();assert.equal(f.r.nativeActivity.phase,'approval');assert.equal(f.r.nativeApproval.requests.length,2);assert.equal(f.r.nativeApproval.requests[0].input,'{\n  "command": "first"\n}');
+  assert.equal(f.r.rootTurn,null);assert.equal(f.r.nativeApproval.availableDecisions,undefined);
+  const render=async e=>e;render.origin={plugin:'engine',tier:'core'};
+  await f.invoke('ui.render',{component:'ToolProgress',props:{kind:'background_hint',tool_use_id:'foreign'}},render);
+  assert.equal(f.r.nativeApproval.requests.length,2,'An unrelated native render cannot resolve a root permission');
+  const injected=async e=>e;injected.origin={plugin:'third-party',tier:'plugin'};
+  await f.invoke('ui.render',{component:'ToolProgress',props:{kind:'background_hint',tool_use_id:'first'}},injected);
+  assert.equal(f.r.nativeApproval.requests.length,2,'A transformed render is not native execution proof');
+  await f.invoke('ui.render',{component:'ToolProgress',props:{kind:'background_hint',tool_use_id:'first'}},render);await f.clock.shift()();
+  assert.equal(f.r.nativeApproval.requests.length,1,'A native running pill resolves only its own exact call');
+  assert.match(f.r.nativeApproval.requests[0].input,/second/);
+  finishA({result:'first result'});await a;await f.clock.shift()();assert.equal(f.r.nativeApproval.requests.length,1);
+  finishB({deny:'native denial'});await b;await f.clock.shift()();assert.equal(f.r.nativeApproval,null);assert.equal(f.r.nativeActivity.turnId,turnId);
+  f.r.observeRootGap({sessionId:f.r.record.nativeId,lease:f.r.rootLease,epoch:f.r.observationEpoch});assert.equal(f.r.nativeActivity,null);
+});
+
+test('old permission identity cannot replace a new root and expired observer proof cannot look live',()=>{
+ const r=adapter();r.nativeBlocks=true;const emit=(id,extra)=>r.observeBlock({block:true,sessionId:r.record.nativeId,lease:r.rootLease,epoch:r.observationEpoch,sequence:(r.rootObservation?.sequence||0)+1,kind:'control',status:'complete',id,...extra});
+ emit('control:turn-start',{turnId:'a',status:'running'});emit('control:turn-start',{turnId:'b',status:'running'});
+ emit('control:permission',{turnId:'a',permissionId:'permission:old',title:'Bash',input:'old'});
+ assert.equal(r.nativeApproval,null);assert.equal(r.nativeActivity.turnId,'b');assert.equal(r.rootTurn.id,'b');
+ r.observationSeenAt=Date.now()-6000;assert.ok(Date.now()-r.nativeActivity.observedAt>5000);
+ emit('control:heartbeat',{});assert.equal(r.nativeActivity.turnId,'b');
+});
+
+for (const version of ['2.1.308', '2.1.309', '2.1.310', '2.1.311']) test('native queue/display compatibility remains version scoped: ' + version, async () => {
   const f = await mod({ version });
-  assert.equal(f.r.nativeQueue === true, version !== '2.1.310');
-  assert.equal(f.r.nativeBlocks === true, version !== '2.1.310');
+  assert.equal(f.r.nativeQueue === true, version !== '2.1.311');
+  assert.equal(f.r.nativeBlocks === true, version !== '2.1.311');
 });
 
 test('real retained append hook reconciles receipt through reader without a classic prompt ID or sharing grant', async t => {

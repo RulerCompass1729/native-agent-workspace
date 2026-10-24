@@ -97,7 +97,7 @@ async function launch() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Original backend boot');
   client = await connectService(profile, 'retained-fixture'); const id = await client.call('create', { provider: 'claude', cwd, name: 'Retained Claude', view: 'terminal' });
   await launch(); await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#terminal-tab').click();
-  const takeover = page.getByRole('button', { name: '接管此窗口', exact: true });
+  const takeover = page.locator('#take-control');
   if (await takeover.isVisible()) await takeover.click();
   await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()), 'Native boot', 60000);
   if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
@@ -191,6 +191,7 @@ async function launch() {
     await fillRoomMessage(page, 'Read the local result in the unified interface.'); await page.locator('#forward-button').click();
     await until(async () => (await snapshot()).room.messages.some(m => m.role === 'assistant'), 'Shared reply in retained main reader');
     await page.locator('#room-messages').getByText('RETAINED_PROGRESS: inspect the local result.', { exact: true }).waitFor();
+    const sharedProcess=page.locator('#room-messages .process-details').filter({hasText:'RETAINED_TOOL: 42'});await sharedProcess.locator(':scope > summary').click();
     await until(async () => (await page.locator('#room-messages').innerText()).includes('RETAINED_TOOL: 42'), 'Shared native tool');
     assert.ok(!JSON.stringify((await snapshot()).room.messages).includes('RETAINED_HISTORY'));
     assert.ok(!(await page.locator('#run-help').innerText()).includes('回复在成员视图'));
@@ -200,6 +201,7 @@ async function launch() {
   } else { await page.locator('#message-input').fill('Read the local result in the unified interface.'); await page.locator('#send-button').click(); }
   await until(() => calls === 3 && finishFinal, 'Native tool and held final');
   await page.locator('#messages').getByText('RETAINED_PROGRESS: inspect the local result.', { exact: true }).waitFor();
+  const toolProcess=page.locator('#messages .process-details').filter({hasText:'RETAINED_TOOL: 42'});await toolProcess.locator(':scope > summary').click();
   await until(async () => (await page.locator('#messages').innerText()).includes('RETAINED_TOOL: 42'), 'Native tool in main reader');
   await until(async () => (await page.locator('#messages').innerText()).includes('RETAINED_FINAL_PREFIX:'), 'Partial final before native completion');
   assert.equal(await page.locator('#messages').getByText('Read the local result in the unified interface.', { exact: true }).count(), 1);
@@ -386,8 +388,9 @@ async function launch() {
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     await page.locator('#room-messages').getByText(final.text.trim(), { exact: true }).waitFor();
     assert.equal(calls, 3);
-    assert.ok(!fs.readFileSync(path.join(profile, 'legacy-shared.json'), 'utf8').includes('RETAINED_TOOL: 42'));
-    checks.push('Shared final appears once, survives app reopen and keeps delivery count; volatile tools stay memory-only');
+    const savedShared=fs.readFileSync(path.join(profile, 'legacy-shared.json'), 'utf8');
+    assert.ok(savedShared.includes('RETAINED_TOOL: 42'));assert.ok(!savedShared.includes('RETAINED_HISTORY'));
+    checks.push('Shared final and explicitly observed native tools survive reopen without importing private history or replaying a delivery');
     await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click();
     if (await page.locator('#send-button').textContent() === '接管此窗口') await page.locator('#send-button').click();
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).legacySubmit, 'Retained rebind for second task');
@@ -395,8 +398,11 @@ async function launch() {
     await inlineRecipient(page, id);
     await fillRoomMessage(page, 'Check native permission without exposing later output.'); await page.locator('#forward-button').click();
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'approval', 'Actual retained native permission prompt');
+    await page.locator('#approval').getByText('Retained Claude · 等待原生权限确认',{exact:false}).waitFor();
+    assert.match(await page.locator('#approval pre').innerText(),/RETAINED_APPROVED_TOOL/);
+    assert.equal(await page.locator('#approval button').count(),1,'Actual native options stay on the real TUI');
     fs.writeFileSync(path.join(base, 'shared-permission.json'), JSON.stringify(await snapshot(), null, 2));
-    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#terminal-tab').click();
+    await page.locator('#approval button').click();
     await until(async () => /Do you want to proceed|Allow this/.test(await page.locator('#terminal-area').innerText()), 'Native permission choice visible');
     const permissionText = await page.locator('#terminal-area').innerText();
     assert.ok(permissionText.includes('RETAINED_APPROVED_TOOL'));
@@ -413,7 +419,7 @@ async function launch() {
     fs.writeFileSync(path.join(base, 'native-boundaries.json'), JSON.stringify(boundaries, null, 2));
     assert.equal(verified.sessions.find(s => s.id === id).nativeId, before.nativeId);
     assert.equal(verified.sessions.find(s => s.id === id).pid, before.pid);
-    await page.locator('#chat-tab').click();
+    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click();
     await page.getByRole('button', { name: '脱出协作', exact: true }).click();
     await page.getByRole('button', { name: '加入协作', exact: true }).click();
     assert.ok(!JSON.stringify((await snapshot()).room.messages).includes('RETAINED_PRIVATE_AFTER_PERMISSION'));

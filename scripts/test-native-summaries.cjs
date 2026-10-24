@@ -70,6 +70,7 @@ async function launch() {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   const shim = path.join(base, 'codex-local');
+  for(const folder of new Set([cwd,fs.realpathSync(cwd)])) fs.appendFileSync(path.join(home,'config.toml'), `\n[projects.${JSON.stringify(folder)}]\ntrust_level = "trusted"\n`);
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\n' +
     `os.environ["CODEX_HOME"]=${JSON.stringify(home)}\n` +
     'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n' +

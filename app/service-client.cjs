@@ -55,7 +55,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     if (alive) throw new Error('已有运行服务仍存在但无法连接；为保住会话，不启动替代进程。');
     fs.rmSync(lock); // Dead PID only; never kill or replace a live owner.
   }
-  const names = ['service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'native-blocks.cjs', 'shared-replies.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
+  const names = ['service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'native-blocks.cjs', 'shared-replies.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
   const pluginFiles = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js'];
   const hash = crypto.createHash('sha256'); for (const name of names) hash.update(fs.readFileSync(path.join(__dirname, name)));
   for (const name of pluginFiles) hash.update(fs.readFileSync(path.join(__dirname, 'claude-bridge', name)));
@@ -112,7 +112,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       // own history stays in its store; no session is replayed or migrated.
       let key = layout.pending || layout.entries.find(entry => states.get(entry).runtimeVersion === version && states.get(entry).sessions.every(s => s.state === 'ended')) || layout.entries.find(entry => states.get(entry).runtimeVersion === version);
       if (!key) {
-        const hash = crypto.createHash('sha256').update(version).update(fs.readFileSync(path.join(__dirname, 'daemon.cjs'))).update(fs.readFileSync(path.join(__dirname, 'adapters.cjs'))).update(fs.readFileSync(path.join(__dirname, 'workspace.cjs'))).digest('hex').slice(0, 20);
+        const hash = crypto.createHash('sha256').update(version).update(fs.readFileSync(path.join(__dirname, 'daemon.cjs'))).update(fs.readFileSync(path.join(__dirname, 'adapters.cjs'))).update(fs.readFileSync(path.join(__dirname, 'codex-terminal-bridge.cjs'))).update(fs.readFileSync(path.join(__dirname, 'workspace.cjs'))).digest('hex').slice(0, 20);
         key = `backends/${hash}`;
         fs.mkdirSync(path.join(dataDir, key), { recursive: true, mode: 0o700 });
         // Publish ownership before launching. A crash or failed activation can

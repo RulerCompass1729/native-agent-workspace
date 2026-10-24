@@ -26,7 +26,7 @@ if (retained) { assert.ok(process.env.NAW_CLAUDE_302); binaries.claude = process
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => {
   assert.ok(file, `Real ${p} required`); return [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()];
 }));
-if (!emptyTerminal) assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.(308|309)\b/);
+if (!emptyTerminal) assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.(308|309|310)\b/);
 assert.equal(versions.codex, 'codex-cli 0.163.0');
 const retainedIds = {};
 let application, page, child, legacyClient, sequence = 0, titleCalls = 0;
@@ -180,6 +180,7 @@ async function openApplication() {
   const address = `http://127.0.0.1:${server.address().port}`;
   fs.writeFileSync(path.join(codexHome, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local fixture"\nbase_url = "${address}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   fs.writeFileSync(path.join(claudeHome, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
+  for(const folder of new Set([cwd,fs.realpathSync(cwd)])) fs.appendFileSync(path.join(codexHome,'config.toml'), `\n[projects.${JSON.stringify(folder)}]\ntrust_level = "trusted"\n`);
   const shims = {};
   for (const provider of providers) {
     const config = provider === 'codex' ? { CODEX_HOME: codexHome } : { ANTHROPIC_BASE_URL: address, ANTHROPIC_API_KEY: 'local-fixture', CLAUDE_CONFIG_DIR: claudeHome, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' };
@@ -390,6 +391,12 @@ async function openApplication() {
         // retained TUI keyboard path; do not seed a hidden model turn.
         await page.locator('#chat-tab').click(); await page.locator('#interrupt').click();
       }
+      let frozenSharedText;
+      await until(async () => {
+        const row = (await snapshot()).room.messages.find(m => m.sessionId === original.id && m.sharedStream && m.role === 'assistant' && m.sharingStopped);
+        if (!row) return false;
+        frozenSharedText = row.text; return true;
+      }, 'Shared text freezes at human control boundary');
       await until(async () => (await session(original.id)).messages.some(m => m.kind === 'turn' && m.status === 'interrupted'), 'Exact native interruption boundary');
       if (keyboardInterrupt) {
         terminalText = await page.locator('#terminal-area').innerText();
@@ -404,20 +411,24 @@ async function openApplication() {
       const visibleTail = terminalText.includes(marker) ? marker : original.provider.toUpperCase() + '_SHARED_PREFIX';
       assert.ok(s.messages.some(m => m.role === 'assistant' && m.text?.includes(visibleTail)), 'Private reader preserves the native visible partial line');
       await page.locator('#chat-tab').click();
-      assert.ok((await page.locator('#messages').innerText()).includes(visibleTail));
+      await until(async () => (await page.locator('#messages').innerText()).includes(visibleTail), 'Private native cut reaches the rendered reader');
       await page.locator('#room-nav').click(); await page.locator('#room-record').click();
       const room = (await snapshot()).room.messages;
-      assert.ok(room.some(m => m.sessionId === s.id && m.text?.includes(visibleTail)), 'Shared block preserves native visible partial line through confirmed interruption');
+      const sharedCut = room.find(m => m.sessionId === s.id && m.sharedStream && m.role === 'assistant');
+      assert.equal(sharedCut.text, frozenSharedText, 'Private display flush after revocation cannot expand shared text');
+      assert.ok(sharedCut.text.includes(original.provider.toUpperCase() + '_SHARED_PREFIX'));
+      assert.ok(s.messages.some(m => m.role === 'assistant' && m.text?.startsWith(sharedCut.text)), 'Authorized shared cut remains a prefix of the complete private native cut');
+      assert.ok(sharedCut.sharingStopped);
       assert.ok(room.some(m => m.sessionId === s.id && m.status === 'interrupted'));
       assert.ok(!room.some(m => m.sessionId === s.id && m.finalReply), 'Interrupted work is never a successful final reply');
-      assert.ok((await page.locator('#room-messages').innerText()).includes(visibleTail));
+      assert.ok((await page.locator('#room-messages').innerText()).includes(original.provider.toUpperCase() + '_SHARED_PREFIX'));
       await save(original.provider + '-interrupted');
       if (original.provider === 'claude') {
         controls['codex-1'].append('CODEX_AFTER_CLAUDE_INTERRUPT: still working.\n');
         await until(async () => (await page.locator('#room-messages').innerText()).includes('CODEX_AFTER_CLAUDE_INTERRUPT'), 'Other member stays live after native interruption');
         assert.equal((await session(codex.id)).state, 'working');
       }
-      checks.push(`Native ${s.provider} ${keyboardInterrupt ? 'Escape' : 'GUI interrupt'} preserves exact partial output and draft in solo/shared readers, without ending the peer task`);
+      checks.push(`Native ${s.provider} ${keyboardInterrupt ? 'Escape' : 'GUI interrupt'} preserves the full private cut, authorized shared prefix and draft without ending the peer task`);
     }
     const interruptedPrivate = (await session(codex.id)).messages.filter(m => m.status === 'interrupted').map(m => ({ id: m.id, text: m.text, status: m.status }));
     assert.ok(interruptedPrivate.some(m => m.text?.includes('CODEX_SHARED_PREFIX')));

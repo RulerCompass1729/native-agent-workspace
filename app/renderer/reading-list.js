@@ -190,6 +190,7 @@ function messageList(el, messages, room = false, key = 'room') {
     }
     entry.message = m; retained.add(m.id); rows.push(entry.item);
     entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
+    entry.item.classList.toggle('native-notice', m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && current()?.nativeContexts?.some(c => c.boundaryId === m.id)));
     let name = room ? roomMessageLabel(m) : m.name;
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
     if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
@@ -207,7 +208,7 @@ function messageList(el, messages, room = false, key = 'room') {
       if (Number.isFinite(messageTime)) { const time = node('time', new Date(messageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(messageTime).toISOString(); time.title = new Date(messageTime).toLocaleString(); entry.heading.append(time); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
-      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
+      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: !room && current()?.provider === 'claude' && m.role === 'tool' ? '已请求工具' : '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
       if (status) entry.heading.append(node('span', status));
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
       if (entry.preview) entry.heading.append(entry.preview);
@@ -221,7 +222,12 @@ function messageList(el, messages, room = false, key = 'room') {
       const open = Boolean(reveal || (savedOpen !== undefined ? savedOpen : error));
       if (entry.disclosure.open !== open) { entry.expectedOpen = open; entry.disclosure.open = open; }
       entry.item.dataset.running = String(['running', 'streaming'].includes(m.status));
-      const preview = (m.input || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
+      let inputPreview = m.input;
+      if (inputPreview?.trim().startsWith('{')) {
+        try { const value = JSON.parse(inputPreview); inputPreview = [value.command, value.description, value.file_path, value.path, value.query].find(field => typeof field === 'string' && field.trim()) || inputPreview; }
+        catch { /* The expandable original remains authoritative. */ }
+      }
+      const preview = (inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
       if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
       const tail = m.toolKind === 'commandExecution' && !open && m.text ? m.text.split('\n').slice(-3).join('\n') : '';
       entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
@@ -291,7 +297,11 @@ function messageList(el, messages, room = false, key = 'room') {
   }
   for (const [id, entry] of view.entries) if (!retained.has(id)) { ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
   for (const [day, divider] of view.days) if (!days.has(day)) { divider.remove(); view.days.delete(day); }
-  if (!messages.length) rows.push(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : '从这里开始。你也可以随时使用同一个会话的原生终端。', 'message empty'));
+  if (!messages.length) {
+    const s = room ? null : current();
+    const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对上方请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
+    rows.push(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : empty, 'message empty'));
+  }
   // Do not detach/reinsert unchanged rows: that would destroy live selections.
   let cursor = el.firstChild;
   for (const row of rows) { if (row === cursor) cursor = cursor.nextSibling; else el.insertBefore(row, cursor); }

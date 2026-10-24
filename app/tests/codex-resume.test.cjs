@@ -249,7 +249,7 @@ for (const scenario of ['empty', 'pending', 'missing', 'wrong-error-id', 'wrong-
       return scenario === 'bad-page' ? {} : { data: scenario === 'empty' ? [] : [{ id: 'first-turn', status: 'inProgress' }] };
     },
   } };
-  r = new Codex(record, host); let starts = 0;
+  r = new Codex(record, host); r.terminalEndpoint = async () => host.codexSocket; let starts = 0;
   r.makeTerminal = args => { starts++; assert.equal(args.at(-1), record.nativeId); return { alive: true }; };
   if (scenario === 'pending') { await r.openTerminal(); assert.equal(starts, 1); }
   else {

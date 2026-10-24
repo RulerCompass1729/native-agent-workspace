@@ -19,6 +19,7 @@ test('Codex can finish human setup after two minutes without a model call', asyn
   runtime.observeFirstTurn = async () => {};
   const states = []; runtime.on('state', state => states.push(state));
   const pending = runtime.startFromTerminal();
+  await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(121000);
   assert.equal(typeof host.pendingCodex, 'function');
   assert.equal(record.nativeId, null);
@@ -40,6 +41,7 @@ test('canceling Codex setup releases its creation slot only after terminal exit'
   terminal.stop = () => new Promise(resolve => { confirmExit = () => { terminal.emit('closed', { confirmed: true }); resolve(); }; });
   runtime.makeTerminal = () => (runtime.terminal = terminal);
   const pending = host.createCodex(() => runtime.startFromTerminal());
+  await new Promise(resolve => setImmediate(resolve));
   const rejection = assert.rejects(pending, /初始化已退出/);
   await Promise.resolve();
   let nextStarted = false;

@@ -59,9 +59,14 @@ class LegacyClaude extends Claude {
   }
   validRootBinding(message) { return !this.disposed && super.validRootBinding(message); }
   effectiveState(record) {
+    if (record.approval) return record.state;
+    if (!this.disposed && this.validRootBinding({ sessionId: record.nativeId, lease: this.rootLease }) && record.pid === this.record.pid &&
+        ['idle', 'working', 'approval'].includes(record.state) && !record.nativeContextPending && this.submission.connected && this.liveTurn && Date.now() - this.observationSeenAt <= 5000) {
+      return this.livePermissions?.size ? 'approval' : 'working';
+    }
     if (!this.disposed && this.validRootBinding({ sessionId: record.nativeId, lease: this.rootLease }) &&
       record.pid === this.record.pid && ['idle', 'working'].includes(record.state) && !record.approval && !record.nativeContextPending &&
-      this.submission.connected && this.rootTurn?.status) return this.rootTurn.status;
+      this.submission.connected && (!this.liveTurn || Date.now() - this.observationSeenAt <= 5000) && this.rootTurn?.status) return this.rootTurn.status;
     return record.state;
   }
   clearRoot() { throw Error('Retained context migration is not supported'); }
@@ -87,7 +92,7 @@ class LegacyClaude extends Claude {
   interrupt() { throw Error('Native lifecycle belongs to the original host'); }
   stop() { throw Error('Native lifecycle belongs to the original host'); }
   gap(text) {
-    this.rootTurn = null;
+    this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
     for (const row of this.record.messages) if (['streaming', 'running', 'awaiting-native'].includes(row.status)) row.status = 'unconfirmed';
     const id = `retained-gap:${this.record.nativeId}`;
     let row = this.record.messages.find(m => m.id === id);
@@ -109,7 +114,7 @@ class LegacyClaude extends Claude {
   }
   close() {
     if (this.disposed) return;
-    this.rootTurn = null; this.disposed = true; clearTimeout(this.saveTimer); this.saveTimer = null;
+    this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear(); this.disposed = true; clearTimeout(this.saveTimer); this.saveTimer = null;
     this.submission.close(); this.save();
   }
 }

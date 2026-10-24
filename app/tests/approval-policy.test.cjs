@@ -1,5 +1,11 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { nativeApprovalPolicy } = require('../approval-policy.js');
+test('native question content is preserved without creating permission decisions',()=>{
+ const questions=[{id:'approach',header:'Approach',question:'Which route?',isOther:true,options:[{label:'Existing native UI',description:'Reuse the existing surface'}]}];
+ const p=nativeApprovalPolicy({method:'item/tool/requestUserInput',params:{questions,isBlocking:true}});
+ assert.deepEqual(p.questions,questions);assert.deepEqual(p.decisions,[]);
+ assert.equal(nativeApprovalPolicy({method:'item/tool/requestUserInput',params:{questions:[...questions,...questions]}}).questions,null);
+});
 const command = params => ({ method: 'item/commandExecution/requestApproval', params: { command: 'first line\nsecond line', cwd: '/synthetic/work', reason: 'Requested scope reason', ...params } });
 test('ordinary command displays all material text and only one-time decision options', () => {
   for (const params of [{}, { kind: 'command', environmentId: null }, { kind: 'command', environmentId: 'local' }]) {

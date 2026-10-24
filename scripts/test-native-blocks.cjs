@@ -10,10 +10,10 @@ const { executable } = require('../app/platform.cjs');
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-block-test-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), config = path.join(base, 'claude');
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
-const binary = executable('claude'); if (!binary) throw Error('Real Claude CLI required');
+const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = require('node:child_process').execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(307|308|309)\b/, 'Verify the updated native contract before sending a test task');
-let application, page, client, calls = 0, held, releaseFinal;
+assert.match(nativeVersion, /^2\.1\.(307|308|309|310)\b/, 'Verify the updated native contract before sending a test task');
+let application, page, client, calls = 0, held, releaseFinal, releaseStart;
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
@@ -31,6 +31,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
     }
     const number = ++calls;
+    if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
     if (number > 3) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -87,12 +88,20 @@ async function cleanup() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Run the local check.'); await page.locator('#forward-button').click();
+  if (process.env.NAW_TEST_NATIVE_PHASE === '1') {
+    await until(()=>Boolean(releaseStart),'One bounded native request waits before text');
+    await page.locator(`[data-session-id="${before.id}"]`).click();await page.locator('#chat-tab').click();
+    await page.locator('#native-phase').getByText('Native blocks · 正在请求',{exact:true}).waitFor();
+    fs.writeFileSync(path.join(base,'before-first-text.json'),JSON.stringify(await snapshot(),null,2));
+    releaseStart();releaseStart=null;
+  }
   await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
   await until(() => calls === 2, 'Native tool loop');
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.text.includes('NATIVE_TOOL: 42')), 'Tool content before final reply');
   const live = (await snapshot()).sessions[0];
   assert.equal(live.state, 'working');
   await page.locator('#messages').getByText('NATIVE_FIRST: checking locally.', { exact: true }).waitFor();
+  await page.locator('#messages .process-details').filter({hasText:'NATIVE_TOOL: 42'}).locator(':scope > summary').click();
   assert.match(await page.locator('#messages').innerText(), /NATIVE_TOOL: 42/);
   assert.equal(await page.locator('.native-progress').count(), 0);
   checks.push('Native intermediate text and tool result appear in the main reading stream before final response');

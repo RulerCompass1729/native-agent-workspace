@@ -88,6 +88,15 @@ class Terminal extends EventEmitter {
 }
 
 class Claude extends EventEmitter {
+  get turnId() { return this.liveTurn?.id || null; }
+  get nativeActivity() {
+    if (!this.liveTurn || this.rootEnding || this.disposed || !this.terminal?.alive) return null;
+    return { nativeId: this.record.nativeId, turnId: this.liveTurn.id, label: this.livePermissions?.size ? '等待原生权限确认' : this.liveTurn.label, phase: this.livePermissions?.size ? 'approval' : this.liveTurn.phase, observedAt: this.observationSeenAt };
+  }
+  get nativeApproval() {
+    if (this.rootEnding || this.disposed || !this.terminal?.alive || !this.livePermissions?.size) return null;
+    return { nativeOnly: true, observedAt: this.observationSeenAt, requests: [...this.livePermissions.values()].map(request => ({ ...request })) };
+  }
   constructor(record, host, { attachOnly = false } = {}) {
     super(); this.record = record; this.host = host; this.pending = null; this.ready = false; this.chatAvailable = false;
     this.submission = new SubmissionChannel();
@@ -135,7 +144,7 @@ class Claude extends EventEmitter {
     // observer independently of the native submission/control credential.
     if (this.observationEpoch) this.observeRootGap({ sessionId: message.sessionId, lease: this.rootLease, epoch: this.observationEpoch });
     this.observationEpoch = crypto.randomBytes(16).toString('hex');
-    this.rootObservation = null; this.rootTurn = null;
+    this.rootObservation = null; this.rootTurn = null; this.liveTurn = null; this.livePermissions = new Map(); this.observationSeenAt = Date.now();
     this.nativeBlocks = message.nativeBlocks === true;
     this.nativeQueue = message.nativeQueue === true;
     this.addressedSendAvailable = this.nativeBlocks && message.addressedTool === true && !this.retainedReader;
@@ -156,6 +165,7 @@ class Claude extends EventEmitter {
     // text as the latest native state; the gap remains visible instead.
     if (message.sequence <= previous) throw Error('Stale native observation');
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
+    if (!message.replayed) this.observationSeenAt = Date.now();
     if (message.gap === true) this.observeRootGap(message);
     const tool = typeof message.title === 'string' ? message.title.slice(0, 200) : '';
     this.emit('progress', { id: `claude-row-${message.id}`, source: 'claude-native-message', kind: message.kind,
@@ -176,6 +186,7 @@ class Claude extends EventEmitter {
     const usage = message.id === 'control:usage' ? claudeUsage(message.usage) : null;
     if (message.id === 'control:usage' && (!usage || message.kind !== 'control' || message.status !== 'complete')) throw Error('Invalid native usage');
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
+    if (!message.replayed) this.observationSeenAt = Date.now();
     if (message.gap) this.observeRootGap(message);
     if (message.kind === 'control') {
       if (message.id === 'control:usage') {
@@ -194,15 +205,37 @@ class Claude extends EventEmitter {
           this.seenRootTurns.add(message.turnId);
           while (this.seenRootTurns.size > 256) this.seenRootTurns.delete(this.seenRootTurns.values().next().value);
           this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
+          this.liveTurn = this.rootTurn ? { id: message.turnId, promptId: message.promptId, phase: 'requesting', label: '正在请求' } : null;
+          this.livePermissions.clear();
           if (this.rootTurn) { this.nativeInputRequired = false; this.emit('inputRequired', false); }
         }
+      } else if (message.id === 'control:heartbeat') {
+        // The observation lease has its own liveness proof; a held native
+        // submit may legitimately leave the independent input poll pending.
+      } else if (message.id === 'control:activity') {
+        const labels = { requesting: '正在请求', thinking: '思考中', responding: '正在输出', 'tool-input': '准备工具输入', 'tool-use': '正在处理工具' };
+        if (!Object.hasOwn(labels, message.phase) || typeof message.turnId !== 'string') throw Error('Invalid native activity');
+        if (!message.replayed && !message.gap && this.liveTurn?.id === message.turnId) {
+          this.liveTurn.phase = message.phase; this.liveTurn.label = labels[message.phase];
+        }
+      } else if (message.id === 'control:permission-end') {
+        if (typeof message.permissionId !== 'string' || !/^permission:[a-zA-Z0-9_:-]{1,160}$/.test(message.permissionId)) throw Error('Invalid native permission');
+        if (!message.replayed && !message.gap && this.livePermissions.delete(message.permissionId) && !this.livePermissions.size && this.liveTurn) this.emit('state', 'working');
       } else {
         if (!['control:permission', 'control:input'].includes(message.id)) throw Error('Invalid native control boundary');
+        if (message.id === 'control:permission' && message.turnId &&
+            (this.liveTurn && message.turnId !== this.liveTurn.id || this.displayProofs?.get(message.turnId)?.ended)) return { observed: true };
+        if (message.id === 'control:permission' && !message.boundaryOnly && !message.replayed && !message.gap) {
+          const id = message.permissionId || `permission:${message.sequence}`;
+          if (!/^permission:[a-zA-Z0-9_:-]{1,160}$/.test(id) || this.livePermissions.size >= 16) throw Error('Invalid native permission');
+          this.livePermissions.set(id, { id, title: message.title || '原生工具', input: message.input || '', incomplete: message.incomplete === true, turnId: message.turnId || this.liveTurn?.id });
+        }
         this.rootTurn = null;
         // Current sessions need this boundary too: the classic permission/state
         // event can arrive later or be coalesced before a peer sees a snapshot.
         this.emit('nativeControlBoundary', message.id);
         if (this.nativeSharedDisplay) this.emit('sharingBoundary', message.id);
+        if (message.id === 'control:permission' && !message.replayed && !message.gap) this.emit('state', 'approval');
       }
       this.emit('capability'); return { observed: true };
     }
@@ -222,6 +255,8 @@ class Claude extends EventEmitter {
       if (turn.blocks.size > 64 || [...turn.blocks.values()].reduce((n, b) => n + b.text.length, 0) > 500000) { turn.blocks.clear(); turn.incomplete = true; }
     }
     if (kind === 'turn') {
+      if (this.liveTurn?.id === turnId) this.liveTurn = null;
+      for (const [key, request] of this.livePermissions) if (!request.turnId || request.turnId === turnId) this.livePermissions.delete(key);
       turn.ended = true;
       const block = turn.blocks.get(message.finalDisplayId);
       if (status === 'complete' && !turn.incomplete && block?.final) { turn.safeText = block.text; turn.messageId = `native:${this.record.nativeId}:${message.finalDisplayId}`; }
@@ -247,7 +282,7 @@ class Claude extends EventEmitter {
   }
   observeRootGap(message) {
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
-    this.rootTurn = null;
+    this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
     this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
     this.emit('progress', { id: `claude-observation-gap-${this.record.nativeId}`,
       source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步',
@@ -257,7 +292,7 @@ class Claude extends EventEmitter {
   contextEnding(reason = 'other') {
     if (this.rootEnding?.sessionId === this.record.nativeId) return;
     this.rootEnding = { sessionId: this.record.nativeId, reason };
-    this.rootTurn = null; this.pending = null; this.ready = false; this.lastPromptId = null;
+    this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear(); this.pending = null; this.ready = false; this.lastPromptId = null;
     this.submission.close?.();
     this.emit('contextEnd', { nativeId: this.record.nativeId, reason });
     this.emit('state', 'stopping');
@@ -551,8 +586,8 @@ class Codex extends EventEmitter {
       // Subscribe locally before the request: native events may precede its ACK.
       // Persisted text has no delta watermark; wait for authoritative completion
       // rather than appending an unknown suffix/prefix to an old partial reply.
+      this.rememberHistoryWatermarks();
       for (const message of this.record.messages || []) {
-        if (message.role === 'assistant') this.historyMessageItems.add(nativeTextItemId(message, this.record.nativeId));
         if (message.role === 'user' && ['human', 'room'].includes(message.origin)) this.ownInputs.add(message.id);
       }
       this.host.codexTargets.set(this.record.nativeId, this);
@@ -602,6 +637,7 @@ class Codex extends EventEmitter {
   async startFromTerminal() {
     if (this.stopped) return;
     const rpc = this.host.rpc, child = this.host.codexProcess;
+    const endpoint = await this.terminalEndpoint();
     await new Promise((resolve, reject) => {
       // Login/trust is a human decision, not a timed model request. Keep the
       // creation slot until that terminal starts a thread or actually exits.
@@ -613,19 +649,21 @@ class Codex extends EventEmitter {
         this.terminal?.off('closed', closed);
       };
       const closed = () => { cleanup(); reject(new Error('原生初始化已退出；未发送模型任务。')); };
-      const started = thread => {
+      const started = (thread, model) => {
         cleanup();
         if (this.stopped || rpc !== this.host.rpc || child !== this.host.codexProcess) {
           reject(new Error('原生后台已变化，没有接管旧的启动结果。')); return;
         }
         this.record.nativeId = thread.id; this.host.codexTargets.set(thread.id, this);
-        this.emit('activity', ''); this.emit('model', thread.model || '原生默认'); this.emit('state', 'idle'); resolve();
-        this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', '原生终端可继续；对话连接未确认。'); });
+        if (this.terminalNotificationSource) this.chatAvailable = true;
+        this.emit('activity', ''); this.emit('model', model || thread.model || '原生未报告'); this.emit('state', 'idle'); resolve();
+        if (!this.chatAvailable) this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', '原生终端可继续；对话连接未确认。'); });
       };
       this.host.pendingCodex = started;
       this.host.pendingCodexRuntime = this;
+      this.initialTerminalThread = started;
       try {
-        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${this.host.codexSocket}`, '-C', this.record.cwd]).once('closed', closed);
+        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
       } catch (error) { cleanup(); reject(error); }
     });
   }
@@ -650,7 +688,7 @@ class Codex extends EventEmitter {
       this.chatAvailable = true; this.hasHistory = true; this.emit('capability');
     }
   }
-  async hydrateHistory(threadId, lifecycle = this.lifecycleRevision) {
+  async hydrateHistory(threadId, lifecycle = this.lifecycleRevision, recovery = false) {
     // Read all pages before committing a history snapshot. Live input/approval
     // still takes effect immediately; history itself must never take control.
     const items = new Map(), cursors = new Set(); let cursor;
@@ -676,7 +714,7 @@ class Codex extends EventEmitter {
               (toolTypes.has(item.type) && !this.liveToolItems.has(item.id)) ||
               (['reasoning', 'plan'].includes(item.type) && !this.liveTextItems.has(item.id) && !this.nativeTextParts.has(item.id))) this.historyMessageItems.add(item.id);
         }
-        this.emit('history', [...items.values()]);
+        this.emit('history', [...items.values()], undefined, recovery);
         if (this.host.rpc.nativeVersion === '0.163.0') {
           const previousMetadata = this.turnMetadataHydration;
           const rpc = this.host.rpc, revision = this.turnMetadataRevision = (this.turnMetadataRevision || 0) + 1;
@@ -718,18 +756,170 @@ class Codex extends EventEmitter {
       this.emit('pid', pid);
       if (this.record.activity === exitNotice) this.emit('activity', '');
     });
-    this.terminal.on('closed', () => this.emit('activity', this.backendExitConfirmed
-      ? '原生后台已退出；记录和草稿保留，任务不会自动重发。'
-      : exitNotice));
+    this.terminal.on('closed', () => {
+      this.terminalBridge?.close(); this.terminalBridge = null; this.terminalBridgeReady = null;
+      this.emit('activity', this.backendExitConfirmed
+        ? '原生后台已退出；记录和草稿保留，任务不会自动重发。'
+        : exitNotice);
+    });
     return this.terminal;
+  }
+  async terminalEndpoint() {
+    // Older native services keep their original protocol; no speculative parser.
+    if (this.host.rpc?.nativeVersion !== '0.163.0') return this.host.codexSocket;
+    if (!this.terminalBridge) {
+      const { CodexTerminalBridge } = require('./codex-terminal-bridge.cjs');
+      const bridge = new CodexTerminalBridge(path.join(this.host.privateDir, `tui-${crypto.randomUUID()}.sock`), this.host.codexSocket, event => this.observeTerminalContext(event));
+      this.terminalBridge = bridge;
+      this.terminalBridgeReady = bridge.start();
+      try { await this.terminalBridgeReady; }
+      catch (error) { bridge.close(); if (this.terminalBridge === bridge) this.terminalBridge = null; throw error; }
+    }
+    await this.terminalBridgeReady;
+    return this.terminalBridge.endpoint;
+  }
+  rememberHistoryWatermarks() {
+    for (const message of this.record.messages || []) if ((!message.nativeId || message.nativeId === this.record.nativeId) && ['assistant', 'tool'].includes(message.role)) {
+      const id = nativeTextItemId(message, this.record.nativeId);
+      if (typeof id === 'string' && id) this.historyMessageItems.add(id);
+    }
+  }
+  observeSettings(settings) {
+    if (!settings || typeof settings.model !== 'string' || !settings.model) return;
+    // Public effective settings only. Never copy developer instructions or the
+    // wider settings object into the reader or room.
+    const mode = settings.collaborationMode?.mode;
+    this.nativeSettings = { nativeId: this.record.nativeId, model: settings.model,
+      effort: typeof settings.effort === 'string' ? settings.effort : null,
+      mode: ['plan', 'default'].includes(mode) ? mode : null };
+    this.emit('model', settings.model); this.emit('capability');
+  }
+  rememberQuestion(params) {
+    if (typeof params.turnId !== 'string' || typeof params.itemId !== 'string' || !Array.isArray(params.questions)) return;
+    const id = `notice:question:${params.turnId}:${params.itemId}`;
+    const text = params.questions.map(q => [q.header, q.question,
+      ...(q.options || []).map(option => [option.label, option.description].filter(v => typeof v === 'string').join(' — '))]
+      .filter(v => typeof v === 'string' && v).join('\n')).join('\n\n');
+    const question = { id, turnId: params.turnId, secret: params.questions.some(q => q.isSecret === true), questionIds: params.questions.map(q => q.id).filter(id => typeof id === 'string'), labels: params.questions.map(q => ({ id: q.id, text: q.header || q.question })) };
+    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, turnId: params.turnId, kind: 'notice', title: '原生问题', text, status: 'complete' });
+    return question;
+  }
+  observeTerminalContext(event) {
+    if ((this.stopped || this.transportDisconnected) && event.kind !== 'disconnected') return;
+    if (event.kind === 'reply') {
+      if (this.terminalRpc !== event.rpc || !event.rpc.connected || this.record.nativeContextPending) return;
+      const request = this.nativeRequests.get(this.nativeRequestKey(event.id, event.rpc));
+      if (request?.rpc !== event.rpc || request.ambiguous || !request.question || request.question.secret || !event.result?.answers) return;
+      const answers = Object.create(null);
+      for (const id of request.question.questionIds) {
+        const values = event.result.answers[id]?.answers;
+        if (Array.isArray(values) && values.every(value => typeof value === 'string')) answers[id] = { answers: values };
+      }
+      if (!Object.keys(answers).length) return;
+      const entries = Object.entries(answers);
+      const text = entries.map(([id, value]) => (entries.length > 1 ? (request.question.labels.find(q => q.id === id)?.text || id) + '\n' : '') + value.answers.join('\n')).join('\n\n');
+      this.emit('nativeBlock', { id: request.question.id + ':reply', nativeId: this.record.nativeId,
+        turnId: request.question.turnId, kind: 'notice', title: '原生终端提交的回答', text, status: 'submitted' });
+      return;
+    }
+    if (event.kind === 'native') {
+      if (this.terminalRpc === event.rpc && (this.terminalNotificationSource || event.message.id !== undefined || event.message.method === 'serverRequest/resolved')) this.event(event.message, event.rpc);
+      return;
+    }
+    if (event.kind === 'disconnected') {
+      if (this.terminalRpc !== event.rpc) return;
+      const ownedNotifications = this.terminalNotificationSource;
+      this.emit('approvalUnavailable', event.rpc);
+      for (const [key, request] of this.nativeRequests) if (request.rpc === event.rpc) this.nativeRequests.delete(key);
+      this.terminalRequestKeys?.clear();
+      this.terminalNotificationSource = false; this.terminalRpc = null;
+      if (!ownedNotifications || this.stopped || this.transportDisconnected) return;
+      this.chatAvailable = false;
+      this.nativeObservationPending = true;
+      this.rememberHistoryWatermarks();
+      for (const row of this.record.messages || []) if (row.nativeId === this.record.nativeId && row.turnId === this.turnId && ['streaming', 'running'].includes(row.status)) row.incomplete = true;
+      this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
+      if (this.turnId && !this.nativeTurnFinished) this.emit('nativeBlock', { id: `gap:source:${crypto.randomUUID()}`, nativeId: this.record.nativeId, turnId: this.turnId, kind: 'gap', status: 'complete', text: '原生显示连接已断开，正在核对图形连接；此间的临时变化可能未同步，原会话继续保留。' });
+      const rpc = this.host.rpc, id = this.record.nativeId, revision = this.lifecycleRevision, stateRevision = this.stateRevision;
+      this.observing = rpc.call('thread/resume', { threadId: id, excludeTurns: true }).then(async result => {
+        if (revision !== this.lifecycleRevision || this.stopped || this.transportDisconnected || this.host.rpc !== rpc || result.thread?.id !== id) return;
+        this.nativeObservationPending = false;
+        if (stateRevision === this.stateRevision) this.observeStatus(result.thread.status);
+        if (await this.hydrateHistory(id, revision, true) && revision === this.lifecycleRevision && !this.stopped) { this.chatAvailable = true; this.emit('capability'); }
+      }).catch(() => this.emit('activity', '原生终端已退出；图形连接尚未确认，记录和草稿保留。'));
+      this.emit('capability'); return;
+    }
+    if (event.ephemeral) return; // Native title/Recap helpers are not the displayed root.
+    if (event.kind === 'request') {
+      if (event.method === 'thread/resume' && event.threadId === this.record.nativeId && !this.terminalSwitch) return;
+      if (!this.record.nativeId) return;
+      this.pendingTerminalContext = null; this.terminalSwitch = event.key; this.chatAvailable = false;
+      this.emit('contextEnd', { nativeId: this.record.nativeId, reason: 'terminal-switch' });
+      this.emit('capability'); return;
+    }
+    if (event.kind === 'uncertain') {
+      this.chatAvailable = false;
+      if (this.record.nativeId) this.emit('contextEnd', { nativeId: this.record.nativeId, reason: 'terminal-switch' });
+      this.emit('capability'); return;
+    }
+    if (event.kind !== 'response') return;
+    if (event.error) {
+      if (this.terminalSwitch === event.key) this.emit('activity', '原生切换未确认，旧记录和草稿保留；请在同屏终端核对。');
+      return;
+    }
+    const thread = event.result?.thread;
+    if (!thread || !/^[a-f0-9-]{36}$/i.test(thread.id || '') || thread.ephemeral || thread.parentThreadId) return;
+    if (!this.record.nativeId) {
+      this.terminalNotificationSource = true; this.terminalRpc = event.rpc;
+      this.initialTerminalThread?.(thread, event.result.model); this.initialTerminalThread = null; this.emit('capability'); return;
+    }
+    if (event.method === 'thread/resume' && thread.id === this.record.nativeId && !this.terminalSwitch) { this.terminalRpc = event.rpc; return; }
+    if (this.terminalSwitch !== event.key) return;
+    const existing = this.host.codexTargets.get(thread.id);
+    if (existing && existing !== this) {
+      this.emit('activity', '终端已切换到另一个已列出的会话。请选择那个会话继续；旧记录与草稿保留。'); return;
+    }
+    this.pendingTerminalContext = event;
+    const previousId = this.record.nativeContextPending?.nativeId || this.record.nativeId;
+    const info = { previousId, nativeId: thread.id, reason: 'terminal-switch', model: event.result.model || thread.model || '原生未报告', cwd: thread.cwd };
+    this.emit('contextClear', info);
+    if (!info.committed || this.record.nativeId !== thread.id) return;
+    this.pendingTerminalContext = null; this.terminalSwitch = null; ++this.lifecycleRevision;
+    this.terminalNotificationSource = true; this.terminalRpc = event.rpc; this.nativeObservationPending = false;
+    if (previousId !== thread.id && this.host.codexTargets.get(previousId) === this) this.host.codexTargets.delete(previousId);
+    this.host.codexTargets.set(thread.id, this);
+    this.pending = null; this.turnId = null; this.turns.clear(); this.ownInputs.clear(); this.inputItems.clear();
+    this.activeNativeItems.clear(); this.nativeTextParts.clear(); this.liveTextItems.clear();
+    this.liveMessageItems.clear(); this.historyMessageItems.clear(); this.liveToolItems.clear(); this.textEndedTurns.clear();
+    this.nativeStartedAt = null; this.nativeTurnFinished = false; this.nativeWait = null; this.forgetNativeRequests();
+    this.nativeSettings = null;
+    this.record.addressedToolVersion = null; this.addressedSendAvailable = false;
+    this.hasHistory = Array.isArray(thread.turns) && thread.turns.length > 0;
+    this.chatAvailable = false; this.observeStatus(thread.status);
+    const revision = this.lifecycleRevision;
+    this.observing = (event.method === 'thread/start' && Array.isArray(thread.turns) && thread.turns.length === 0 ? Promise.resolve(true) : this.hydrateHistory(thread.id, revision, true)).then(ok => {
+      if (ok && revision === this.lifecycleRevision && !this.stopped && !this.transportDisconnected) {
+        this.hasHistory = this.record.messages.some(m => m.nativeId === thread.id && m.kind !== 'gap' && m.role !== 'system');
+        this.chatAvailable = true; this.emit('capability');
+      }
+    }).catch(error => {
+      if (revision !== this.lifecycleRevision || this.stopped || this.transportDisconnected) return;
+      this.emit('activity', '新原生上下文已确认，图形连接尚未完成；请在同屏终端继续。');
+      this.emit('capability');
+    });
+  }
+  retryContext() {
+    const candidate = this.pendingTerminalContext;
+    if (candidate?.rpc?.connected && candidate.key === this.terminalSwitch) this.observeTerminalContext(candidate);
   }
   get nativeActivity() {
     if (!this.turnId || this.nativeTurnFinished || this.stopped || this.transportDisconnected || !['working', 'approval'].includes(this.latestState)) return null;
+    if (this.nativeObservationPending) return { nativeId: this.record.nativeId, turnId: this.turnId, stale: true };
     const labels = { commandExecution: '执行命令', fileChange: '修改文件', mcpToolCall: '调用工具', dynamicToolCall: '调用工具', reasoning: '思考中', plan: '更新计划', agentMessage: '正在输出' };
     const kinds = [...this.activeNativeItems.values()];
     const kind = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'reasoning', 'plan', 'agentMessage'].find(type => kinds.includes(type));
     return { nativeId: this.record.nativeId, turnId: this.turnId, startedAt: this.nativeStartedAt,
-      label: this.nativeWait || labels[kind] || '正在处理' };
+      label: this.nativeWait || (this.nativeRetry === this.turnId ? '原生将重试' : '') || labels[kind] || '正在处理' };
   }
   publishNativeActivity() {
     const label = this.nativeActivity?.label || '';
@@ -754,10 +944,24 @@ class Codex extends EventEmitter {
   forgetNativeRequests() {
     for (const request of this.nativeRequests.values()) this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认结果未确认' });
     this.nativeRequests.clear();
+    this.terminalRequestKeys?.clear();
   }
-  event(message) {
+  currentRpc(rpc) { return rpc === this.host.rpc || Boolean(rpc && rpc === this.terminalRpc && rpc.connected); }
+  nativeRequestKey(id, rpc, create = false) {
+    if (rpc === this.host.rpc) return id;
+    this.terminalRequestKeys ||= new Map();
+    if (create && !this.terminalRequestKeys.has(id)) this.terminalRequestKeys.set(id, { id });
+    return this.terminalRequestKeys.get(id);
+  }
+  event(message, sourceRpc = this.host.rpc) {
+    const context = message.params?.threadId || message.params?.thread?.id;
+    if (context && context !== this.record.nativeId) return;
+    if (this.record.nativeContextPending || !this.currentRpc(sourceRpc)) return;
     if (this.transportDisconnected) return;
     const p = message.params || {};
+    if (this.nativeRetry && p.turnId === this.nativeRetry && message.method.startsWith('item/') && message.id === undefined) {
+      this.nativeRetry = null; this.publishNativeActivity();
+    }
     this.eventRevision++;
     // Pin live item provenance at its first start. A later user input never
     // reassigns an old streaming item or a late completion to the new prompt.
@@ -863,46 +1067,56 @@ class Codex extends EventEmitter {
         try { this.addressedFailed?.({ nativeId: p.threadId, turnId: p.turnId, callId: p.callId }); } catch { /* Not this authorized root turn. */ }
         result = { status: 'not-sent', message: error.message };
       }
-      this.host.rpc.reply(message.id, { success, contentItems: [{ type: 'inputText', text: JSON.stringify(result) }] });
+      sourceRpc.reply(message.id, { success, contentItems: [{ type: 'inputText', text: JSON.stringify(result) }] });
       return;
     }
     if (message.id !== undefined) {
-      let request = this.nativeRequests.get(message.id);
+      const key = this.nativeRequestKey(message.id, sourceRpc, true);
+      let request = this.nativeRequests.get(key);
       const fingerprint = crypto.createHash('sha256').update(JSON.stringify([message.method, p])).digest('hex');
-      if (request?.rpc === this.host.rpc) {
+      if (request?.rpc === sourceRpc) {
         // Duplicate delivery must not reopen a decision that is already pending.
         // A reused unresolved ID with different contents is ambiguous; only the
         // native client can safely interpret it.
         if (request.fingerprint !== fingerprint && !request.ambiguous) {
           request.ambiguous = true;
           this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认需要核对' });
-          this.emit('approval', { requestId: message.id, method: 'native/requestAmbiguous', params: { reason: '原生确认标识重复且内容变化；请在原生终端核对。' } });
+          this.emit('approval', { requestId: message.id, method: 'native/requestAmbiguous', params: { reason: '原生确认标识重复且内容变化；请在原生终端核对。' } }, sourceRpc);
           this.emit('state', 'approval');
         }
         return;
       }
-      if (!request || request.rpc !== this.host.rpc) {
-        request = { id: crypto.randomUUID(), rpc: this.host.rpc, fingerprint };
-        this.nativeRequests.set(message.id, request);
+      if (!request || request.rpc !== sourceRpc) {
+        request = { id: crypto.randomUUID(), rpc: sourceRpc, fingerprint };
+        this.nativeRequests.set(key, request);
         // Match the bounded progress journal, without storing request bodies.
-        while (this.nativeRequests.size > 200) this.nativeRequests.delete(this.nativeRequests.keys().next().value);
+        while (this.nativeRequests.size > 200) {
+          const oldest = this.nativeRequests.keys().next().value; this.nativeRequests.delete(oldest);
+          if (oldest && typeof oldest === 'object' && this.terminalRequestKeys?.get(oldest.id) === oldest) this.terminalRequestKeys.delete(oldest.id);
+        }
       }
-      this.nativeWait = message.method.endsWith('/requestUserInput') ? '等待回答' : '等待确认';
-      this.emit('progress', { id: request.id, source: 'codex-native', kind: message.method, title: '等待原生确认', status: 'waiting' });
-      this.emit('approval', { requestId: message.id, method: message.method, params: p }); this.emit('state', 'approval'); this.publishNativeActivity(); return;
+      const nonBlocking = message.method === 'item/tool/requestUserInput' && p.isBlocking === false;
+      if (message.method === 'item/tool/requestUserInput') request.question = this.rememberQuestion(p);
+      if (!nonBlocking) this.nativeWait = message.method.endsWith('/requestUserInput') ? '等待回答' : '等待确认';
+      this.emit('progress', { id: request.id, source: 'codex-native', kind: message.method, title: nonBlocking ? '原生问题（此问题不阻塞本轮）' : '等待原生确认', status: 'waiting' });
+      this.emit('approval', { requestId: message.id, method: message.method, params: p }, sourceRpc); if (!nonBlocking) this.emit('state', 'approval'); this.publishNativeActivity(); return;
     }
     switch (message.method) {
+      case 'thread/settings/updated': this.observeSettings(p.threadSettings); break;
       case 'serverRequest/resolved': {
-        const request = this.nativeRequests.get(p.requestId);
-        if (!request || request.rpc !== this.host.rpc) break;
-        this.nativeRequests.delete(p.requestId);
+        const key = this.nativeRequestKey(p.requestId, sourceRpc), request = this.nativeRequests.get(key);
+        if (!request || request.rpc !== sourceRpc) break;
+        this.nativeRequests.delete(key);
+        if (request.question) this.emit('nativeBlock', { id: request.question.id, nativeId: this.record.nativeId,
+          turnId: request.question.turnId, kind: 'notice', title: '原生问题 · 已处理', status: 'complete' });
+        if (sourceRpc !== this.host.rpc) this.terminalRequestKeys?.delete(p.requestId);
         this.emit('progress', { id: request.id, source: 'codex-native', status: 'resolved', title: '原生确认已处理' });
-        this.emit('approvalResolved', p.requestId);
+        this.emit('approvalResolved', p.requestId, sourceRpc);
         break;
       }
       case 'thread/status/changed': this.observeStatus(p.status); break;
       case 'turn/started':
-        this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeTurnFinished = false;
+        this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeRetry = null; this.nativeTurnFinished = false;
         this.nativeStartedAt = Number.isFinite(p.turn.startedAt) && p.turn.startedAt > 0 ? p.turn.startedAt * 1000 : null;
         this.emit('state', 'working'); this.publishNativeActivity(); break;
       case 'item/agentMessage/delta':
@@ -941,7 +1155,19 @@ class Codex extends EventEmitter {
         if (!this.pending || this.pending.turnId) this.finishTurn(p.turn.id);
         break;
       }
-      case 'error': this.emit('failed', '原生会话返回错误，请检查终端。'); break;
+      case 'error': {
+        const text = [p.error?.message, p.error?.additionalDetails].filter(value => typeof value === 'string' && value).join('\n\n');
+        if (text) this.emit('nativeBlock', { id: `notice:error:${p.turnId || crypto.randomUUID()}`, nativeId: this.record.nativeId, kind: 'notice', turnId: p.turnId,
+          title: p.willRetry ? '原生错误 · 将重试' : '原生错误', text, status: 'complete' });
+        if (!p.turnId || p.turnId === this.turnId) {
+          if (p.willRetry === true) { this.nativeRetry = this.turnId; this.publishNativeActivity(); }
+          else this.emit('failed', '原生会话返回错误，请检查原文或同屏终端。');
+        }
+        break;
+      }
+      case 'warning':
+        if (typeof p.message === 'string') this.emit('nativeBlock', { id: `notice:warning:${crypto.randomUUID()}`, nativeId: this.record.nativeId, kind: 'notice', title: p.threadId ? '原生提示' : '原生全局提示', text: p.message, status: 'complete' });
+        break;
     }
   }
   turn(id) { if (!this.turns.has(id)) this.turns.set(id, { text: '', inputItems: new Set(), itemInputs: new Map(), inputTag: '' }); return this.turns.get(id); }
@@ -1106,7 +1332,10 @@ class Codex extends EventEmitter {
     // Another attachment can finish while the initial rollout read is pending.
     if (!guard()) throw new Error('终端控制权已变化，请重新选择会话。');
     if (this.terminal?.alive) return this.terminal;
-    return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${this.host.codexSocket}`, this.record.nativeId]);
+    const endpoint = await this.terminalEndpoint();
+    if (!guard() || this.stopped || this.transportDisconnected) throw new Error('终端控制权已变化，请重新选择会话。');
+    if (this.terminal?.alive) return this.terminal;
+    return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${endpoint}`, '-C', this.record.cwd, this.record.nativeId]);
   }
   async reconnect() {
     const transportOnly = Boolean(this.transportDisconnected);
@@ -1120,9 +1349,7 @@ class Codex extends EventEmitter {
     this.chatAvailable = false; this.stopped = false;
     this.pending = null; this.turnId = null; this.turns.clear();
     this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
-    for (const message of this.record.messages || []) {
-      if (message.role === 'assistant') this.historyMessageItems.add(nativeTextItemId(message, this.record.nativeId));
-    }
+    this.rememberHistoryWatermarks();
     this.host.codexTargets.set(this.record.nativeId, this);
     const revision = this.stateRevision;
     try {
@@ -1150,7 +1377,7 @@ class Codex extends EventEmitter {
       if (result.model || result.thread.model) this.emit('model', result.model || result.thread.model);
       if (revision === this.stateRevision) this.observeStatus(result.thread.status);
       if (!await this.hydrateHistory(this.record.nativeId, lifecycle) || !current()) throw new Error('连接在同步记录时断开；没有重发任务。');
-      this.chatAvailable = true; this.emit('capability');
+      this.nativeObservationPending = false; this.chatAvailable = true; this.emit('capability');
     } catch (error) {
       if (lifecycle === this.lifecycleRevision) {
         this.chatAvailable = false; this.stopped = !transportOnly;
@@ -1252,9 +1479,13 @@ class NativeHost {
     const event = message => {
       if (!current()) return;
       const p = message.params || {};
-      if (message.method === 'thread/started' && !p.thread?.parentThreadId && this.pendingCodex) this.pendingCodex(p.thread);
+      if (message.method === 'warning' && !p.threadId) {
+        for (const target of this.codexTargets.values()) if (!target.terminalNotificationSource) target.event(message);
+        return;
+      }
+      if (message.method === 'thread/started' && !p.thread?.parentThreadId && this.pendingCodex && !this.pendingCodexRuntime?.terminalBridge) this.pendingCodex(p.thread);
       const target = this.codexTargets.get(p.threadId || p.thread?.id);
-      if (target) target.event(message);
+      if (target && (message.id !== undefined || !target.terminalNotificationSource)) target.event(message);
       else if (message.method === 'thread/started' && p.thread?.parentThreadId) {
         const parent = this.codexTargets.get(p.thread.parentThreadId);
         if (parent && !parent.transportDisconnected) parent.emit('fleet', { id: p.thread.id, event: 'thread/started', name: p.thread.agentNickname || 'Codex 子 agent' });

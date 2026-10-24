@@ -1,6 +1,33 @@
 # Readiness and next gates
 
-As of 2026-10-23. Version 0.1.0-alpha.88 is a **local macOS technical-trial alpha**.
+As of 2026-10-23. Version 0.1.0-alpha.89 is a **local macOS technical-trial alpha**.
+
+**Alpha.89 — native state, choices and continuity:** the existing reader now
+keeps precise native request/thinking/tool/output/wait phases, native permission
+details, retry diagnostics and question history. Handling a native question
+claims the correct terminal input view; immediate input waits on its ACK, and
+late navigation cannot steal focus. Effective Codex Plan/model/effort changes
+are displayed without copying private instructions. On supported new Codex
+connections, native `/new`, `/resume` and `/fork` follow the exact display
+connection; drafts, historical provenance and privacy boundaries remain intact.
+Source-close recovery never appends an unknown suffix to an old partial reply.
+
+932 local checks pass without skips. Actual installed Plan/question/input,
+dual Claude 310/Codex interruption/continuation and Codex file permission/history
+journeys pass with fixed local responses and zero paid inference. All 55 runtime
+files match source; strict signature verification passes after native use.
+Original-profile hidden reopening preserves all three native IDs/PIDs, saved
+views/drafts and existing history with zero dispatch. Application search finds
+one launcher. Independent final source/artifact review passes for this scoped
+trial; this is not full U17 completion.
+
+Some native controls remain in the same-screen TUI: provider-only menus,
+instantaneous spinner/token details and cached child-view selection without a
+public current-view event. Secret question answers stay out of the reader;
+ordinary answers show terminal submission, not a claim of model acceptance.
+Shared text stops at authorization revocation even if private display data arrives
+later. Physical system/WeChat IME, Recap/Next reading and full semantic parity
+remain unverified; see the [feature inventory](interaction.md).
 
 **Alpha.88 — compact processes and a simultaneous native terminal:** conversation
 and same-session xterm share one workspace, side by side or stacked in a narrow
