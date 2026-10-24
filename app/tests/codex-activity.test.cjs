@@ -6,6 +6,15 @@ function fixture() {
   const start = (id, startedAt) => event('turn/started', { turn: { id, startedAt } });
   return { r, event, start };
 }
+test('native retry retains its exact notice, stays working and never fails a newer turn',()=>{
+ const {r,event,start}=fixture(),notices=[],failures=[];r.on('nativeBlock',n=>notices.push(n));r.on('failed',e=>failures.push(e));
+ start('a');event('error',{turnId:'a',willRetry:true,error:{message:'Exact native stream error',additionalDetails:'Exact native detail'}});
+ assert.equal(r.nativeActivity.label,'原生将重试');assert.equal(failures.length,0);assert.equal(notices[0].kind,'notice');assert.equal(notices[0].text,'Exact native stream error\n\nExact native detail');
+ event('item/started',{turnId:'a',item:{id:'reply',type:'agentMessage'}});assert.equal(r.nativeActivity.label,'正在输出');
+ start('b');event('error',{turnId:'a',willRetry:false,error:{message:'Old native failure'}});assert.equal(failures.length,0);assert.equal(r.turnId,'b');
+ event('error',{turnId:'b',willRetry:false,error:{message:'Current native failure'}});assert.equal(failures.length,1);
+ event('warning',{message:'Native warning text'});assert.equal(notices.at(-1).text,'Native warning text');
+});
 test('native working phases follow concurrent items and exact turn timestamps', () => {
   const { r, event, start } = fixture(); start('turn-a', 1234);
   assert.equal(r.nativeActivity.startedAt, 1234000);

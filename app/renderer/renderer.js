@@ -10,6 +10,7 @@ let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let terminalLayout = 'split';
 const chatInput = () => selected === 'room' ? $('shared-input') : $('message-input');
+const nativeStatusFresh = value => value?.stale !== true && (!Number.isFinite(value?.observedAt) || Date.now() - value.observedAt <= 5000);
 let roomSubmitting = null;
 const roomPendingRecipients = new Map();
 let shareRevision = 0, sharePending = null;
@@ -266,6 +267,15 @@ async function select(id, requestedMode, member = roomSession) {
   });
 }
 function selectRoom(id = '') { return select('room', undefined, id); }
+async function operateNative(id) {
+  if (activeSessionId() !== id) {
+    const selection = selected === 'room' ? selectRoom(id) : select(id, 'terminal');
+    const revision = selectionRevision;
+    await selection;
+    if (revision !== selectionRevision) return;
+  }
+  if (activeSessionId() === id) await switchMode('terminal');
+}
 async function detach(id) {
   const nextMode = current()?.id === id ? mode : 'terminal';
   const revision = selectionRevision;
@@ -760,17 +770,41 @@ function renderHeader(s, inRoom) {
 }
 function renderApproval(s, own) {
   const el = $('approval');
-  el.hidden = s.state !== 'approval';
-  const signature = JSON.stringify([s.id, s.state, own, s.approval, s.approvalNotice, s.approvalResolved, s.approvalDecisions]);
+  el.hidden = !s || (s.state !== 'approval' && !s.nativeApproval && !s.approval);
+  const stale = !nativeStatusFresh(s?.nativeApproval);
+  const { observedAt, ...nativeApprovalContent } = s?.nativeApproval || {};
+  const signature = JSON.stringify([s?.id, s?.state, own, s?.approval, s?.approvalNotice, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
   if (el.dataset.signature === signature) return;
   el.dataset.signature = signature; el.replaceChildren();
   if (el.hidden) return;
+  if (s.nativeApproval?.nativeOnly) {
+    el.append(node('strong', `${s.name} · ${stale ? '原生权限状态待核验' : '等待原生权限确认'}`), node('p', '仅你可见。请求内容来自原生会话；在同一个终端选择实际选项。'));
+    for (const request of s.nativeApproval.requests) {
+      el.append(node('strong', request.title));
+      if (request.input) el.append(node('pre', request.input, 'approval-command'));
+      if (request.incomplete) el.append(node('p', '请求内容未完整同步，请在原生终端核对。'));
+    }
+    el.append(button(`在 ${s.name} 的原生终端处理`, () => operateNative(s.id)));
+    return;
+  }
   el.append(node('strong', s.approvalNotice ? '原生确认状态待核对' : s.approvalResolved ? '这项原生确认已处理' : s.approval?.pending ? '等待原生确认结果' : '原生会话需要你确认'));
   if (s.approvalNotice) el.append(node('p', s.approvalNotice));
   if (s.approvalResolved) el.append(node('p', '等待原生状态更新；已处理不代表工具执行成功。'));
   if (s.approval) {
     const policy = window.nativeWorkspaceApproval.nativeApprovalPolicy(s.approval);
-    if (policy.notice) el.append(node('p', policy.notice));
+    if (policy.questions) {
+      el.firstChild.textContent = `${s.name} · ${s.approval.params.isBlocking === false ? '原生问题（此问题不阻塞本轮）' : '等待你回答'}`;
+      for (const question of policy.questions) {
+        const group = node('div', '', 'native-question');
+        group.append(node('strong', question.header), node('p', question.question));
+        const options = node('ol');
+        for (const option of question.options || []) options.append(node('li', option.label + (option.description ? ' — ' + option.description : '')));
+        if (options.children.length) group.append(options);
+        if (question.isOther) group.append(node('p', '可在原生终端输入其他回答。'));
+        el.append(group);
+      }
+      el.append(node('p', '问题和选项来自原生请求；在同屏终端回答，直接交回原请求。'));
+    } else if (policy.notice) el.append(node('p', policy.notice));
     if (policy.command) el.append(node('pre', policy.command, 'approval-command'));
     if (policy.cwd) el.append(node('p', '工作目录：' + policy.cwd));
     if (policy.reason) el.append(node('p', '原因：' + policy.reason));
@@ -781,7 +815,7 @@ function renderApproval(s, own) {
       action.disabled = !own || Boolean(s.approval.pending); el.append(action);
     }
   }
-  el.append(button('在原生终端查看', () => switchMode('terminal')));
+  el.append(button(`在 ${s.name} 的原生终端处理`, () => operateNative(s.id)));
 }
 function renderAdvanced(s) {
   if (advancedControls?.id !== s.id) {
@@ -819,19 +853,25 @@ function renderMembers() {
 }
 function renderNativeActivity(s) {
   const el = $('native-activity');
-  const live = s && s.provider === 'codex' && mode === 'chat' && !disconnected && !s.transportDisconnected && ['working', 'approval'].includes(s.state);
+  const question = s?.approval?.method === 'item/tool/requestUserInput';
+  const waiting = s?.state === 'approval' || s?.nativeApproval || s?.approval && !(question && s.approval.params?.isBlocking === false);
+  const live = s && !disconnected && !s.transportDisconnected && (waiting || ['working', 'approval'].includes(s.state) || s.nativeActivity && !nativeStatusFresh(s.nativeActivity));
   el.hidden = !live;
   if (!live) return;
   const status = s.nativeActivity;
-  const matched = status && status.nativeId === s.nativeId && status.turnId === s.activeTurnId;
+  const matched = status && nativeStatusFresh(status) && status.nativeId === s.nativeId && status.turnId === s.activeTurnId;
   const seconds = matched && Number.isFinite(status.startedAt) && status.startedAt <= Date.now() ? Math.floor((Date.now() - status.startedAt) / 1000) : null;
-  const label = matched ? status.label : s.state === 'approval' ? '等待原生确认' : '正在处理';
+  const label = status && !nativeStatusFresh(status) ? '原生状态待同步' : waiting ? question ? '等待回答' : '等待原生确认' : matched ? status.label : '正在处理';
   const text = (s.name || 'Codex') + ' · ' + label;
   if ($('native-phase').textContent !== text) $('native-phase').textContent = text;
   const elapsed = seconds === null ? '' : ' · 本轮已运行 ' + seconds + ' 秒';
   if ($('native-elapsed').textContent !== elapsed) $('native-elapsed').textContent = elapsed;
 }
-const nativeActivityClock = setInterval(() => { if (state) renderNativeActivity(current()); }, 1000);
+const nativeActivityClock = setInterval(() => {
+  if (!state) return;
+  renderNativeActivity(current());
+  if (state.sessions.some(s => s.sharedActivity && !nativeStatusFresh(s.sharedActivity) || s.nativeApproval && !nativeStatusFresh(s.nativeApproval))) render();
+}, 1000);
 function render() {
   if (!state || rendering) return;
   captureReadingViews();
@@ -863,7 +903,7 @@ function render() {
     document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
-    $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${s.model} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
+    $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${s.model}${s.nativeSettings?.nativeId === s.nativeId ? [s.nativeSettings.mode === 'plan' ? 'Plan' : '', s.nativeSettings.effort].filter(Boolean).map(value => ' · ' + value).join('') : ''} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
     const warning = [disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' '), state.viewStorageWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
@@ -897,7 +937,6 @@ function render() {
       const visibleMessages = sessionMessages(s);
       const signature = JSON.stringify(visibleMessages);
       if (signature !== lastMessages || messageViews.get($('messages'))?.key !== s.id) { messageList($('messages'), visibleMessages, false, s.id); lastMessages = signature; }
-      renderApproval(s, own);
       renderAdvanced(s);
       for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)); }
       $('terminal-empty').hidden = terminals.has(s.id);
@@ -932,7 +971,7 @@ function render() {
       const active = people.filter(person => {
         const activity = person.sharedActivity;
         if (disconnected || person.transportDisconnected || !['working', 'approval'].includes(person.state) ||
-          !activity || activity.nativeId !== person.nativeId || activity.turnId !== person.activeTurnId) return false;
+          !activity || !nativeStatusFresh(activity) || activity.nativeId !== person.nativeId || activity.turnId !== person.activeTurnId) return false;
         return true;
       }).map(person => `${participantLabel(person, people)} · ${person.sharedActivity.label}`);
       if (active.length) {
@@ -975,6 +1014,10 @@ function render() {
       if (!$('mention-list').hidden && mentionRoster !== mentionRosterKey()) showMentions();
     }
     for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id));
+    const approvalTarget = selected === 'room' ? (s?.nativeApproval || s?.approval || s?.state === 'approval' ? s : members().find(person => person.id === roomRecipient())) : s;
+    const approvalParent = selected === 'room' ? $('room-record-view') : $('conversation-pane');
+    if ($('approval').parentElement !== approvalParent) approvalParent.prepend($('approval'));
+    renderApproval(approvalTarget, approvalTarget?.owner === owner);
     updateSelectedSharing();
   } finally { restoreVisibleReading(); rendering = false; }
 }

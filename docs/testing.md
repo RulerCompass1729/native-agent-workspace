@@ -1,5 +1,50 @@
 # Bounded testing
 
+## Native state, controls and context continuity — alpha.89
+
+Use the actual hidden Electron application, actual Codex 0.163.0 and Claude
+302/310 processes, and fixed loopback inference. These prove transport/control
+mechanics, not model judgment. No paid inference is part of these trials.
+
+- `test-native-codex-context.cjs`: native `/new`, GUI input, `/resume`, `/fork`,
+  real model/permission menus, display exit and same-thread GUI continuation;
+  three task responses plus one native title. A separate native-first case uses
+  one task plus one title and real isolated-folder trust, without a seed task.
+- Its question mode uses three fixed responses plus one native title: native
+  Plan settings, a GUI-origin question, exact native options, immediate Enter
+  through the native handling action, completion and retained submission history.
+  Resolution never changes a submitted answer into an accepted-model claim.
+  Native items history was independently probed; it omits that answer output.
+- Its retry mode uses two fixed responses: actual stream disconnection, literal
+  native retry notice, working state and eventual same-thread completion.
+- Retained Claude 302 uses five responses for shared progress, real permission,
+  native choice, privacy after leaving/rejoining and continued original process.
+  Current 310 uses three for before-text phase, native blocks and interruption.
+- `test-native-state.cjs` runs the real UI with synthetic observations, zero
+  providers: freshness, precise private permission body, stable heartbeat DOM,
+  focus/draft and revoked room sharing. It is not native permission evidence.
+- Delayed metadata/storage/source-close counterexamples cover context identity,
+  fork ID reuse and interrupted partial text; a held history cannot turn
+  FIRST + an unknown TAIL into a purported exact native cut.
+
+The native feature inventory and unmapped surfaces are in [interaction](interaction.md).
+Installed checks and final independent acceptance are recorded separately;
+source passing alone does not certify an installed payload or full U17.
+
+Installed artifact: 55 runtime-file hashes match; post-native strict signing
+passes. Actual question/Plan/fast-input (three task responses plus one title),
+mixed interruption/recovery (Claude three, Codex two, one title), and isolated
+file permission/history (two responses) pass with zero paid inference. The mixed
+runner retains the full private cut and asserts the exact first shared-stop text
+never expands after private flush. Older failed fixtures remain local: premature
+DOM reads, post-Escape private text incorrectly required in revoked shared output,
+an automatically allowed file tool mistaken for a permission trial, and reading
+collapsed tool text without opening its disclosure. None count as passing runs.
+Final installed native-context progression (three task responses plus one title),
+original three-session hidden reopening with zero dispatch, unique launcher and
+independent final artifact review pass. The final question trial checks literal
+answer text without internal JSON and retains its submitted status.
+
 ## Compact processes and simultaneous TUI — alpha.88
 
 One existing-session shared task and a private control/recovery scenario remain

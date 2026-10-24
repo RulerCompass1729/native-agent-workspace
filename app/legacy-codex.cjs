@@ -58,6 +58,7 @@ class LegacyCodex extends EventEmitter {
   }
   get sharedReplyAvailable() { return this.connected && !this.closed && this.rpc?.nativeVersion === '0.163.0'; }
   get nativeActivity() { return this.adapter?.nativeActivity || null; }
+  get nativeSettings() { return this.adapter?.nativeSettings || null; }
   get pending() { return this.adapter?.pending; }
   get steerAvailable() { return this.connected && !this.closed && this.adapter?.steerAvailable === true; }
   get turnId() { return this.adapter?.turnId || null; }

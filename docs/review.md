@@ -4,6 +4,24 @@ As of 2026-10-23. This is a working acceptance record, not an independent securi
 certification. Private transcripts, screenshots, paths and account details stay
 outside the public repository. Use synthetic reproductions here.
 
+**Alpha.89 final scoped review, 2026-10-23:**
+the latest feedback requires native state, pending human actions and inputs to
+remain consistent between the reader and its actual TUI. Claude 302's five-response
+native permission journey passes, and current 310 before-text phases pass.
+Codex's actual `/new` → GUI send → `/resume` → `/fork` → native menus → display exit
+→ GUI continuation passes with three fixed local task responses and one native
+title response, no paid inference. Independent review found and rechecked saved
+identity failure, fork item-ID reuse, history ordering and source close races.
+Native user-question rendering, GUI-origin Plan questions, immediate native input,
+submitted-answer history, native-first GUI input and retry evidence now pass.
+Public settings synchronize without copying private instructions. The native
+surface inventory is in interaction.md. Installed context/Plan/question, mixed
+interruption/recovery and file-permission journeys pass. All 55 runtime files
+match; post-native strict signature and original three-session hidden reopening
+pass with zero dispatch. Final independent artifact review passes. The last
+recorded answer is literal text rather than internal JSON. B41 closes only for
+this increment; this is not full U17 closure.
+
 **Alpha.88 final candidate review, 2026-10-23:** latest feedback authorizes compact
 default process disclosures and the actual native terminal beside the main reader.
 Independent review found stale error-fold choices (including failure off-page),
@@ -70,6 +88,7 @@ and documentation review is not a native runtime test; U17 remains open.
 
 | ID | Source / trigger | Priority / owner | Status and evidence | Remaining check or trigger |
 | --- | --- | --- | --- | --- |
+| U17-B41 | User: live native phases/choices and GUI input disagree with the TUI; real trials expose context-switch, fork history, native action focus and missing question trajectory | High / adapter and desktop maintainer | Alpha.89 source/native trials pass current Codex context/Plan/question/retry/native-first paths and current/retained Claude phases/permission. Independent source review rechecked storage identity, source-close watermarks, delayed button navigation and ambiguous secret questions. 932 local checks pass without skips | Installed mixed-task/control/reopen, strict signature, 55-file payload and final independent artifact review pass; B41 closed within scope. Native-first and per-display context tracking apply to supported new connections; cached child selection and full U17 remain open. Privacy-revoked late display content stays private; submitted native answers are not accepted-model proof |
 | U26-B40 | User: empty process headings/large gaps and mutually exclusive conversation/TUI; review found off-page error folds, blocked summary clicks and mode-based selection; minimum-window probe found clipped input | High / desktop maintainer | Alpha.88 compact native records, original text disclosures and shared/solo same-session TUI. Source and installed task, keyboard/selection, privacy, file/run, first-turn recovery and minimum-window cases pass; independent final artifact review passes | Direct room-native interruption, preserved shared draft, rebuilt minimum-window UI and 54 matching runtime files pass; visual acceptance and full U17 remain open |
 | U26 | User screenshots: sparse messages, weak human/agent distinction, missing live Codex status, and an external recipient selector instead of inline @; subsequent feedback rejects alpha.86's stiff appearance | High / desktop and Codex adapter maintainer | Reopened for visual usability on 2026-10-23. Alpha.87 is a lightweight candidate using the existing reader: content-width human messages, continuous assistant prose, hover/focus actions and visible native timing. Short/long/interleaved reading and the installed two-agent check/private-intervention task pass; previous mention identity/undo/draft evidence remains scoped | User visual acceptance remains pending; mechanics do not establish aesthetic acceptance. Complete U17, physical IME, Claude phase parity and Recap/Next existing-result reading remain open. The simultaneous layout is implemented in alpha.88 and subject to the scoped verification below. No new framework, editor or summary model |
 | U17-B39 | Native completion timestamps/durations disappear in the reader; a shared task has no visible native phase before its output begins | High / adapter and desktop maintainer | Alpha.87 source/current-native/retained-native/installed task evidence passes. Exact turn metadata persists privately and in already authorized room rows; optional background reads do not hold input/content. Current valid grants prove shared phases; historical rows never renew them. 911 checks, all 54 installed runtime files and post-native strict signature pass | Independent review found metadata blocking recovery, a false-positive retained-history test, and phase leakage after same-turn private steer; all have source/UI/native counterexamples and repairs. Whole-core/visual acceptance remains open. See alpha.87 in testing.md; final artifact review recorded below |

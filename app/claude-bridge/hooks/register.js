@@ -74,6 +74,21 @@ async function observeUsage($) {
   finally { usageReading = false; if (usageReadAgain) { usageReadAgain = false; observeUsage($); } }
 }
 let activeTurn = null;
+let lastPhase = null;
+const rootToolCalls = new Map();
+function observePhase($, phase, binding = rootBinding, turnId = activeTurn) {
+  if (!nativeBlocks || stopped || !binding || binding !== rootBinding || !turnId || turnId !== activeTurn ||
+      (lastPhase?.binding === binding && lastPhase.turnId === turnId && lastPhase.phase === phase)) return;
+  lastPhase = { binding, turnId, phase };
+  enqueueBlock($, { id: 'control:activity', kind: 'control', status: 'complete', turnId, phase }, binding);
+}
+function heartbeat($, binding, ownGeneration) {
+  $.clock.after(1000, () => {
+    if (stopped || rootBinding !== binding || generation !== ownGeneration || rootEnds.has(binding.sessionId)) return;
+    if (activeTurn && !displayTurns.get(activeTurn)?.ended) enqueueBlock($, { id: 'control:heartbeat', kind: 'control', status: 'complete' }, binding);
+    heartbeat($, binding, ownGeneration);
+  });
+}
 // Only native turn identity + a complete matching final display can authorize
 // a reply body. Raw Stop text must not bypass a display transform.
 const displayTurns = new Map();
@@ -394,11 +409,12 @@ async function listen($, ownGeneration) {
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
   const version = (await $.session.version()).version;
-  const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309'].includes(version)),
+  const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310'].includes(version)),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
+  heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
   // metadata refresh avoids waiting for the existing /next poll to return.
   if (!legacyOnly) $.clock.after(500, () => observeAddressedTool($, ownGeneration));
@@ -485,10 +501,44 @@ export function register(on) {
     }
     return result;
   }).catch(($, e, next) => next(e));
+  on('tool.call', async ($, e, next) => {
+    const binding = rootBinding;
+    if (!nativeBlocks || e.agentId || !e.tool_use_id || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core') return next(e);
+    const call = { binding, turnId: activeTurn, id: `permission:${e.tool_use_id}`, progress: false };
+    rootToolCalls.set(e.tool_use_id, call);
+    try { return await next(e); }
+    finally {
+      if (rootToolCalls.get(e.tool_use_id) === call) rootToolCalls.delete(e.tool_use_id);
+      if (binding === rootBinding) enqueueBlock($, { id: 'control:permission-end', kind: 'control', status: 'complete', permissionId: call.id }, binding);
+    }
+  }).catch(($, e, next) => next(e));
+  on('tool.check', async ($, e, next) => {
+    const call = rootToolCalls.get(e.tool_use_id), result = await next(e);
+    if (!call || e.agentId || call.binding !== rootBinding || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core' || result.decision !== 'ask') return result;
+    let input = '', incomplete = false;
+    try { input = JSON.stringify(e.input ?? {}, null, 2); if (input.length > 500000) { input = ''; incomplete = true; } } catch { incomplete = true; }
+    enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', permissionId: call.id,
+      turnId: call.turnId, title: e.tool || '原生工具', input, incomplete }, call.binding);
+    return result;
+  }).catch(($, e, next) => next(e));
+  on('ui.render', { component: 'ToolProgress' }, ($, e, next) => {
+    const call = rootToolCalls.get(e.props.tool_use_id);
+    if (call && !call.progress && call.binding === rootBinding && e.props.kind === 'background_hint' && next.origin?.plugin === 'engine' && next.origin?.tier === 'core') {
+      call.progress = true;
+      enqueueBlock($, { id: 'control:permission-end', kind: 'control', status: 'complete', permissionId: call.id }, call.binding);
+      observePhase($, 'tool-use', call.binding, call.turnId);
+    }
+    return next(e);
+  }).catch(($, e, next) => next(e));
   on('classic.PermissionRequest', ($, e, next) => {
     // Ordered with display observations, before native permission handling.
     // No permission decision or tool payload is copied into the shared room.
-    if (!e.agent_id && e.session_id === rootBinding?.sessionId) enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete' });
+    const binding = rootBinding;
+    if (e.agent_id || e.session_id !== binding?.sessionId) return next(e);
+    const link = promptTurns.get(e.prompt_id);
+    const turnId = link?.binding === binding && !link.ambiguous ? link.turnId : undefined;
+    enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', boundaryOnly: true,
+      turnId, promptId: e.prompt_id }, binding);
     return next(e);
   }).catch(($, e, next) => { markObservationGap(rootBinding); return next(e); });
   on('classic.StopFailure', async ($, e, next) => {
@@ -539,6 +589,7 @@ export function register(on) {
   on('turn.start', ($, e, next) => {
     if (!e.agentId) {
       activeTurn = e.turnId;
+      lastPhase = null;
       enqueueBlock($, { id: 'control:turn-start', kind: 'control', turnId: e.turnId, promptId: rootPrompt?.id, status: 'running' });
       // Native contract: root turn.start follows UserPromptSubmit. Repeated
       // starts for the same prompt are ambiguous, never a sharing authority.
@@ -551,6 +602,21 @@ export function register(on) {
     }
     return next(e);
   }).catch(($, e, next) => next(e));
+  on('turn.step', async function* ($, e, next) {
+    const binding = rootBinding;
+    if (e.agentId || e.turnId !== activeTurn || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core') return yield* next(e);
+    observePhase($, 'requesting', binding, e.turnId);
+    const iterator = next(e)[Symbol.asyncIterator](); let finished = false, sent;
+    try {
+      while (true) {
+        const item = await iterator.next(sent);
+        if (item.done) { finished = true; return item.value; }
+        const phase = { thinking: 'thinking', text: 'responding', input: 'tool-input', tool: 'tool-use' }[item.value?.kind];
+        if (phase) observePhase($, phase, binding, e.turnId);
+        sent = yield item.value;
+      }
+    } finally { if (!finished) await iterator.return?.(); }
+  }).catch(async function* ($, e, next) { return yield* next(e); });
   on('turn.complete', async ($, e, next) => {
     const binding = rootBinding;
     const result = await next(e);
@@ -641,11 +707,11 @@ export function register(on) {
     if (collecting) collecting.invalid = true;
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
-    nativeUsageSupported = nativeVersion === '2.1.309';
-    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309'].includes(nativeVersion);
-    nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion)
-      : ['2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion);
-    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309'].includes(nativeVersion);
+    nativeUsageSupported = ['2.1.309', '2.1.310'].includes(nativeVersion);
+    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion);
+    nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
+      : ['2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion);
+    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;

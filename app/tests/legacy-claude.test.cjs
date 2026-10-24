@@ -140,7 +140,7 @@ for (const boundary of ['working', 'permission', 'gap', 'leave']) test(`retained
   f.event({ id: `prompt:${promptId}`, kind: 'input', text, inputTag: tag, turnId: 'new-B', promptId });
   f.r.submission.result({ id: tag, status: 'accepted', turnId: 'new-B', promptId }); await done;
   if (boundary === 'working') { f.record.state = 'working'; await f.router.refresh(); }
-  if (boundary === 'permission') f.event({ id: 'control:permission', kind: 'control' });
+  if (boundary === 'permission') f.event({ id: 'control:permission', kind: 'control', turnId: 'new-B', promptId });
   if (boundary === 'gap') f.r.gap('missing events');
   if (boundary === 'leave') { f.record.roomId = null; f.record.memberRevision++; await f.router.refresh(); }
   f.event({ id: 'display:new-B', turnId: 'new-B', promptId, delta: 'New shared result' });

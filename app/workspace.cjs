@@ -50,7 +50,7 @@ class Workspace extends EventEmitter {
     }
   }
   snapshot() {
-    return { peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeBlockMapping: true, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, sharedActivity: this.sharedReplies.activity(s), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     this.sharedReplies.refresh();
@@ -81,6 +81,7 @@ class Workspace extends EventEmitter {
     this.storageFailure = null; this.storageWarning = null;
     this.persist(); this.emit('change');
     if (this.storageWarning) throw new Error('仍未能保存，请保留窗口并检查磁盘空间和写入权限。');
+    for (const runtime of this.runtimes.values()) runtime.retryContext?.();
     return true;
   }
   get(id) { const s = this.sessions.get(id); if (!s) throw new Error('找不到这个会话。'); return s; }
@@ -172,7 +173,7 @@ class Workspace extends EventEmitter {
         this.changed();
       }
     });
-    on('nativeBlock', item => { if (item.kind === 'gap') { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生观察连接出现缺口；请核对后重新授权。', s.id); } if (applyNativeBlock(s, item)) { this.sharedReplies.record(s, s.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`)); this.changed(); } });
+    on('nativeBlock', item => { if (item.kind === 'gap') { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生观察连接出现缺口；请核对后重新授权。', s.id); this.pauseParticipant(s.id, '原生观察连接出现缺口，请核对后重新授权。'); } if (applyNativeBlock(s, item)) { this.sharedReplies.record(s, s.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`)); this.changed(); } });
     on('replyBound', identity => { this.sharedReplies.bind(s, identity.tag, identity); this.changed(); });
     on('contextEnd', info => this.endNativeContext(s, runtime, info));
     on('contextClear', info => this.clearNativeContext(s, runtime, info));
@@ -217,28 +218,33 @@ class Workspace extends EventEmitter {
       if (item.active === true || ['SubagentStart', 'thread/started', 'collabAgentSpawnToolCall'].includes(item.event)) this.nativeWorkObserved(s.id, '观察到原生团队活动，后续转交已暂停；原生团队继续保留。');
       this.changed();
     });
-    on('approval', approval => {
+    on('approval', (approval, rpc = this.host.rpc) => {
       s.peerRevision = (s.peerRevision || 0) + 1;
       // Native request numbers may be reused after a socket reconnect. The
       // visible decision is scoped to this request and its original RPC.
       const requestId = randomUUID();
-      this.approvalRoutes.set(s.id, { runtime, rpc: this.host.rpc, requestId, nativeRequestId: approval.requestId });
+      this.approvalRoutes.set(s.id, { runtime, rpc, requestId, nativeRequestId: approval.requestId });
       s.approval = { ...approval, requestId }; s.approvalResolved = false;
       this.pauseParticipant(s.id, '等待原生权限确认'); this.changed();
     });
-    on('approvalResolved', nativeRequestId => {
+    on('approvalResolved', (nativeRequestId, rpc = this.host.rpc) => {
       const route = this.approvalRoutes.get(s.id);
-      if (!route || route.rpc !== this.host.rpc || route.nativeRequestId !== nativeRequestId) return;
+      if (!route || route.rpc !== rpc || route.nativeRequestId !== nativeRequestId) return;
       this.approvalRoutes.delete(s.id); s.approval = null;
       s.approvalResolved = s.state === 'approval';
       this.changed();
+    });
+    on('approvalUnavailable', rpc => {
+      if (this.approvalRoutes.get(s.id)?.rpc !== rpc) return;
+      this.approvalRoutes.delete(s.id); s.approval = null; s.approvalResolved = false;
+      s.activity = '原生确认连接已变化；正在核对原会话，未自动发送决定。'; this.changed();
     });
     on('nativeInput', (text, item) => {
       this.pause('真人在原生终端输入'); s.controlRevision++;
       if (!item?.id || !s.messages.some(m => m.id === item.id)) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
       this.changed();
     });
-    on('history', (items, turns) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns); this.changed(); });
+    on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
     on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
     on('interrupted', ({ tag }) => {
@@ -305,20 +311,22 @@ class Workspace extends EventEmitter {
     s.pendingTag = null; s.approval = null; s.approvalResolved = false; this.approvalRoutes.delete(s.id);
     s.controlRevision++; s.memberRevision++; s.connectionRevision = (s.connectionRevision || 0) + 1;
     s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
-    s.nativeContextPending = ['clear', 'resume'].includes(info.reason) ? { nativeId: info.nativeId, reason: info.reason } : null;
-    s.activity = info.reason === 'resume' ? '原生已切换会话，此连接尚不能同步新历史。请在原生终端继续；旧记录与草稿保留。' : info.reason === 'clear' ? '原生上下文已改变，正在核对连接。记录和草稿保留，未自动发送。' : '原生会话正在结束。';
+    s.nativeContextPending = ['clear', 'resume', 'terminal-switch'].includes(info.reason) ? { nativeId: info.nativeId, reason: info.reason } : null;
+    s.activity = info.reason === 'resume' ? '原生已切换会话，此连接尚不能同步新历史。请在原生终端继续；旧记录与草稿保留。' : info.reason === 'terminal-switch' ? '正在核对原生上下文。记录和草稿保留，未自动发送。' : info.reason === 'clear' ? '原生上下文已改变，正在核对连接。记录和草稿保留，未自动发送。' : '原生会话正在结束。';
     this.pauseParticipant(s.id, '成员的原生上下文已改变；请重新确认共享内容。'); this.changed();
   }
   clearNativeContext(s, runtime, info) {
     if (this.closed || this.stops.has(s.id) || this.runtimes.get(s.id) !== runtime ||
-      s.nativeContextPending?.nativeId !== info.previousId || s.nativeContextPending.reason !== 'clear') return;
+      s.nativeContextPending?.nativeId !== info.previousId || !['clear', 'terminal-switch'].includes(s.nativeContextPending.reason)) return;
     if (this.storageWarning) return;
     if (s.nativeId === info.previousId) {
+      for (const message of s.messages) if (!message.nativeId) message.nativeId = info.previousId;
       const boundaryId = randomUUID(), time = Date.now();
       s.nativeContexts ||= [];
-      s.nativeContexts.push({ nativeId: info.previousId, endedAt: time, boundaryId, reason: 'clear' });
-      s.messages.push({ id: boundaryId, role: 'system', name: '原生上下文', text: '已在原生终端清空上下文。上方记录仅作为本机历史保留，不会自动发给新上下文。草稿保留，发送前请核对。', nativeId: info.nativeId, time });
-      s.nativeId = info.nativeId; s.model = info.model; s.background = null; s.scheduled = null; s.usage = null;
+      s.nativeContexts.push({ nativeId: info.previousId, endedAt: time, boundaryId, reason: info.reason || 'clear' });
+      s.messages.push({ id: boundaryId, role: 'system', kind: 'context', name: '原生上下文', text: info.reason === 'terminal-switch' ? '已跟随原生终端切换上下文。上方记录仅作为本机历史保留，旧共享授权已停止。草稿保留，发送前请核对。' : '已在原生终端清空上下文。上方记录仅作为本机历史保留，不会自动发给新上下文。草稿保留，发送前请核对。', nativeId: info.nativeId, time });
+      s.nativeId = info.nativeId; s.model = info.model; s.nativeSettings = null; s.background = null; s.scheduled = null; s.usage = null;
+      if (info.reason === 'terminal-switch' && typeof info.cwd === 'string' && path.isAbsolute(info.cwd)) s.cwd = info.cwd;
     } else if (s.nativeId !== info.nativeId || s.nativeContexts?.at(-1)?.nativeId !== info.previousId) return;
     // Identity, old-context references and the boundary are one saved snapshot.
     // A failed write leaves GUI submission closed; retrying metadata cannot add
@@ -651,7 +659,7 @@ class Workspace extends EventEmitter {
   approve(id, requestId, decision, owner) {
     const s = this.get(id), route = this.approvalRoutes.get(id);
     if (!route || !s.approval || s.approval.pending || s.state !== 'approval' || s.owner !== owner || s.approval.requestId !== requestId || route.requestId !== requestId ||
-      route.runtime !== this.runtimes.get(id) || route.rpc !== this.host.rpc || route.runtime.transportDisconnected ||
+      route.runtime !== this.runtimes.get(id) || !(route.rpc === this.host.rpc || route.runtime.currentRpc?.(route.rpc)) || route.runtime.transportDisconnected ||
       route.runtime.backendExitConfirmed) throw new Error('权限请求已变化，请重新查看。');
     if (!['accept', 'decline', 'cancel'].includes(decision)) throw new Error('未知权限决定。');
     if (!nativeApprovalPolicy(s.approval).decisions.includes(decision)) throw new Error('请在原生终端核对；此界面不支持这项权限决定。');

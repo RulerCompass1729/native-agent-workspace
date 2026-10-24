@@ -57,6 +57,8 @@ process.on('message', q => {
   if (q.method === 'replyBound') { const r = runtimes.get(q.target); r.turnId = q.value.turnId; r.nativeActivity = { nativeId: r.record.nativeId, turnId: r.turnId, label: '正在处理' }; r.emit('replyBound', { ...q.value, tag: r.pendingTag, nativeId: r.record.nativeId }); }
   if (q.method === 'complete') { const r = runtimes.get(q.target); r.turnId = null; r.nativeActivity = null; r.emit('complete', { ...q.value, tag: r.pendingTag }); r.emit('state', 'idle'); }
   if (q.method === 'nativeInput') runtimes.get(q.target).emit('nativeInput',q.value,{id:'private-control-input'});
+  if (q.method === 'native-activity') { const r=runtimes.get(q.target);r.turnId=q.value?.turnId || null;r.nativeActivity=q.value ? {...q.value,nativeId:r.record.nativeId}:null;r.emit('state',q.value?'working':'idle'); }
+  if (q.method === 'native-permission') { const r=runtimes.get(q.target);r.nativeApproval=q.value;if(q.value)r.emit('nativeControlBoundary','control:permission');r.emit('state',q.value?'approval':'working'); }
   if (q.method === 'hold-input-ack') heldInputAcks.add(q.target);
   if (q.method === 'hold-input') heldInputs.add(q.target);
   if (['release-input', 'fail-input'].includes(q.method)) { const at = waitingInputs.findIndex(c => c.id === q.target); if (at >= 0) waitingInputs.splice(at, 1)[0].release(q.method === 'fail-input'); }

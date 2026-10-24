@@ -59,7 +59,7 @@ test('Codex native addressed request with an unavailable recipient reports failu
   call(0); await finish(0);
   const replies = [], r = runtimes[1], tag = sent[1].tag;
   Object.assign(r, { record: w.get(ids[1]), host: { rpc: { reply: (id, value) => replies.push(value) } },
-    turnId: tag, turn: Codex.prototype.turn, turns: new Map(), nativeRequests: new Map() });
+    turnId: tag, turn: Codex.prototype.turn, currentRpc: Codex.prototype.currentRpc, turns: new Map(), nativeRequests: new Map() });
   Codex.prototype.event.call(r, { id: 'request-1', method: 'item/tool/call', params: { threadId: r.record.nativeId,
     turnId: tag, callId: 'refused', namespace: 'workspace', tool: 'workspace_message', arguments: { recipient_id: 'not-a-member', message: 'Only the chosen member.' } } });
   assert.equal(replies[0].success, false);

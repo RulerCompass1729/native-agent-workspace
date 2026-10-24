@@ -15,7 +15,7 @@ function nativeTextContent(item) {
 }
 function nativeTextItemId(message, nativeId) {
   const prefix = `native:${nativeId}:${message.kind}:`;
-  return ['summary', 'plan'].includes(message.kind) && message.id?.startsWith(prefix) ? message.id.slice(prefix.length) : message.id;
+  return ['summary', 'plan', 'tool'].includes(message.kind) && message.id?.startsWith(prefix) ? message.id.slice(prefix.length) : message.nativeItemId || message.id;
 }
 function contentText(content) {
   if (typeof content === 'string') return { text: content, incomplete: false };
@@ -43,6 +43,9 @@ function fileChanges(changes) {
 }
 function toolContent(item) {
   if (!item || !toolTypes.has(item.type)) return null;
+  // Question history does not carry isSecret. Only the live request-aware
+  // private answer reader may project its result; generic hydration must not.
+  if (item.type === 'functionCallOutput' && ['request_user_input', 'request_user_input_async'].includes(item.name)) return null;
   const result = {};
   if (item.type === 'commandExecution') {
     result.title = item.command || '命令';
