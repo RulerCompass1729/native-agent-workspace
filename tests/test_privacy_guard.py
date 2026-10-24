@@ -131,6 +131,24 @@ class PublicationGuardTests(unittest.TestCase):
         env = {**self.env, "PATH": str(bins) + os.pathsep + self.env["PATH"]}
         self.blocked(self.call("git", "commit", "--allow-empty", "-qm", "Tool error", ok=False, env=env))
 
+    def test_scanner_timeout_remains_blocked(self):
+        code = """
+import subprocess, sys
+from unittest.mock import patch
+from scripts.privacy_guard import Scanner, Blocked
+scan = Scanner()
+scan.add(b'safe fixture\\n', 'synthetic record')
+try:
+    with patch('scripts.privacy_guard.subprocess.run', side_effect=subprocess.TimeoutExpired('synthetic scanner', 75)):
+        scan.finish()
+except Blocked as error:
+    print('BLOCKED privacy guard: ' + str(error), file=sys.stderr)
+    raise SystemExit(1)
+"""
+        result = self.call(sys.executable, '-c', code, ok=False)
+        self.blocked(result)
+        self.assertIn('gitleaks unavailable or timed out', result.stderr)
+
     def test_missing_gitleaks_blocks(self):
         bins = self.base / "limited-bin"
         bins.mkdir()
@@ -207,6 +225,47 @@ class PublicationGuardTests(unittest.TestCase):
         self.call("git", "replace", dirty, safe)
         self.blocked(self.call("git", "push", "origin", "main", ok=False))
         self.assert_remote_empty()
+
+    def scan_many_parts(self, ending):
+        # Exercise real private rules/gitleaks after the old aggregate limit.
+        # Only this owned subprocess supplies scanner inputs directly; native Git
+        # traversal and actual hooks are covered by the other disposable repos.
+        code = """
+import sys
+from scripts.privacy_guard import Scanner, Blocked, MAX_BLOB, MAX_SCAN
+scan = Scanner()
+part = b'safe fixture line\\n' * ((MAX_BLOB - 1) // 18)
+try:
+    while scan.size <= 64 * 1024 * 1024:
+        scan.add(part, 'synthetic history')
+""" + ending + """
+except Blocked as error:
+    print('BLOCKED privacy guard: ' + str(error), file=sys.stderr)
+    raise SystemExit(1)
+"""
+        return self.call(sys.executable, '-c', code, ok=False)
+
+    def test_scanner_parts_above_old_total_limit_are_checked(self):
+        result = self.scan_many_parts("    scan.finish()\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('PASS privacy guard', result.stdout)
+
+    def test_private_data_after_old_total_limit_still_blocks(self):
+        result = self.scan_many_parts("    scan.add(" + repr(CANARY.encode()) + ", 'late synthetic record')\n    scan.finish()\n")
+        self.blocked(result)
+        self.assertIn('private rule', result.stderr)
+
+    def test_secret_after_old_total_limit_still_blocks(self):
+        fake = 'gh' + 'p_' + 'A7b9C2d5E8f1G4h6J3k0L9m2N5p8Q1r4S7t0'
+        result = self.scan_many_parts("    scan.add(" + repr(fake.encode()) + ", 'late synthetic secret')\n    scan.finish()\n")
+        self.blocked(result)
+        self.assertIn('gitleaks detected a secret', result.stderr)
+        self.assertNotIn(fake, result.stderr + result.stdout)
+
+    def test_new_total_limit_remains_fail_closed(self):
+        result = self.scan_many_parts("    while True:\n        scan.add(part, 'synthetic history beyond bound')\n")
+        self.blocked(result)
+        self.assertIn('scan size limit exceeded', result.stderr)
 
     def test_oversized_content_is_blocked_not_skipped(self):
         self.file("large.txt", "a" * (2 * 1024 * 1024 + 1))
