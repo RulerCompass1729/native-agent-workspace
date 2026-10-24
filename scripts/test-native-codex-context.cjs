@@ -58,6 +58,14 @@ async function nativeCommand(command){
  await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption(initialTerminal?'terminal':'chat');await page.locator('#session-name').fill('Native context');await page.locator('#confirm-create').click();
  if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);await page.locator('#chat-tab').click();}
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
+ if(process.env.NAW_NATIVE_METADATA_ONLY==='1'){
+  assert.equal(before.nativeVersion,nativeVersion);assert.equal(before.nativeVersionStatus,'verified');
+  await until(async()=>(await page.locator('#session-status').getAttribute('title')).includes('Codex '+nativeVersion+' · 核心接口已验证'),'Actual running handshake is rendered');
+  await page.locator('#message-input').fill('Unsent metadata-check draft.');
+  assert.equal((await snapshot()).diagnostics.dispatches,0);assert.equal(calls,0);assert.equal(titles,0);assert.deepEqual(errors,[]);
+  fs.writeFileSync(path.join(base,'native-metadata.json'),JSON.stringify(await snapshot(),null,2));
+  console.log(JSON.stringify({checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+ }
  await page.locator('#message-input').fill('Make one small local check.');await page.locator('#send-button').click();
  if(process.env.NAW_NATIVE_RETRY_TRIAL==='1'){
   await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.kind==='notice'&&m.title==='原生错误 · 将重试')&&releaseRetry,'Actual native retry notification',60000);

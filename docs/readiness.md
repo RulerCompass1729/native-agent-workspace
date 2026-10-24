@@ -1,7 +1,22 @@
 # Readiness and next gates
 
-As of 2026-10-24. Version 0.1.0-alpha.91 is a **local macOS technical-trial alpha**.
+As of 2026-10-24. Version 0.1.0-alpha.92 is a **local macOS technical-trial alpha**.
 
+
+**Alpha.92 — visible native compatibility:** the existing session status and
+details distinguish the corresponding running Codex handshake, an unverified
+version, a last connection and no report. Supported 163/164 stay quiet; invalid
+or prerelease strings never borrow a verified release. The hint does not cover
+native permission state or change any existing input/capability gate.
+
+951 checks pass without skips. Installed synthetic-handshake UI and actual
+native 164 metadata pass with zero inference or dispatch. Actual original-profile
+reopening still reports its existing native 163 server despite the newer binary;
+all three native IDs/PIDs, 24 Codex items, readers/inputs and saved drafts/views
+remain intact. All 55 runtime files match; strict post-native signing and the
+single-launcher check pass. Independent final artifact review passes. Unaffected
+alpha.91 addressed cooperation evidence is reused; no paid native task was rerun
+for this notice. Full U17 and the limitations below remain open.
 
 **Alpha.91 — pending native actions, compatibility and scoped usage:** native
 confirmations are retained independently by source connection and typed request

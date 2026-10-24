@@ -333,6 +333,14 @@ function pasteTerminal(text) {
   if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw new Error('原生程序尚未启用多行粘贴保护，请先分行粘贴。');
   entry.term.paste(text); focusTerminal();
 }
+function nativeVersionText(s) {
+  if (s?.provider !== 'codex') return '';
+  const status = disconnected && s.nativeVersion ? 'last-known' : s.nativeVersionStatus;
+  if (status === 'last-known') return `上次连接 Codex ${s.nativeVersion} · 当前未确认`;
+  if (status === 'verified') return `Codex ${s.nativeVersion} · 核心接口已验证`;
+  if (status === 'unverified') return `Codex ${s.nativeVersion || '版本未确认'} · 此版本尚未验证：工作中追加、原生上下文切换和历史同步请在终端核对`;
+  return 'Codex 原生版本未报告';
+}
 let trustScope = null, trustRevision = 0;
 async function showTrust(options) {
   const dialog = $('privacy-dialog'), wasOpen = dialog.open, scroll = dialog.scrollTop, revision = selectionRevision, generation = ++trustRevision;
@@ -870,7 +878,7 @@ function renderAdvanced(s) {
     advancedControls = { id: s.id, info, usage, fleet, stop, forget };
   }
   const a = advancedControls;
-  a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}${s.nativeContexts?.length ? '\n此前上下文（仅历史）：' + s.nativeContexts.map(c => c.nativeId).join('、') : ''}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
+  a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}${s.provider === 'codex' ? '\n' + nativeVersionText(s) : ''}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}${s.nativeContexts?.length ? '\n此前上下文（仅历史）：' + s.nativeContexts.map(c => c.nativeId).join('、') : ''}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
   a.usage.hidden = false; a.usage.textContent = window.nativeWorkspaceUsage.usageLines(s.provider, s.usage).join('\n');
   a.fleet.replaceChildren(...s.fleet.slice(-8).map(event => node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`)));
   a.stop.hidden = ['ended', 'stopping', 'recoverable'].includes(s.state);
@@ -969,7 +977,8 @@ function render() {
       $('native-pane-title').textContent = participantLabel(s, state.sessions) + ' · 原生终端';
       $('terminal-maximize').setAttribute('aria-label', terminalLayout === 'maximized' ? '恢复并排' : '放大终端');
       $('terminal-maximize').title = terminalLayout === 'maximized' ? '恢复并排' : '放大终端';
-      $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
+      $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? ` · Codex ${s.nativeVersion || '版本未确认'} 尚未验证` : ''}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
+      $('session-status').title = nativeVersionText(s);
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
       $('terminal-controls').hidden = !terminalVisible;

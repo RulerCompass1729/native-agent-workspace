@@ -146,3 +146,37 @@ test('unnamed history reuses a bounded native preview instead of a generated tit
   assert.equal(row.name.length, 60); assert.ok(row.name.startsWith('週末计划 '));
   assert.equal(Object.hasOwn(row, 'preview'), false); assert.equal(Object.hasOwn(row, 'path'), false);
 });
+
+
+test('native version display uses the running handshake and never certifies prerelease or disconnected data', () => {
+  const { codexVersionInfo } = require('../native-history.cjs');
+  const rpc = { nativeVersion: '0.163.0', ws: { readyState: 1 } };
+  assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: '0.163.0', nativeVersionStatus: 'verified' });
+  rpc.nativeVersion = '0.164.0'; assert.equal(codexVersionInfo(rpc).nativeVersionStatus, 'verified');
+  rpc.nativeVersion = '0.165.0'; assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: '0.165.0', nativeVersionStatus: 'unverified' });
+  for (const nativeVersion of ['0.164.0-beta', '0.164.0 secret', null, 164]) {
+    rpc.nativeVersion = nativeVersion;
+    assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: null, nativeVersionStatus: 'unverified' });
+  }
+  rpc.nativeVersion = '0.163.0'; rpc.ws.readyState = 3;
+  assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: '0.163.0', nativeVersionStatus: 'last-known' });
+  rpc.ws.readyState = 1; assert.equal(codexVersionInfo(rpc, false).nativeVersionStatus, 'last-known');
+  assert.deepEqual(codexVersionInfo({ ws: { readyState: 1 } }), { nativeVersion: null, nativeVersionStatus: 'unreported' });
+  assert.deepEqual(codexVersionInfo(null), { nativeVersion: null, nativeVersionStatus: 'unreported' });
+});
+
+test('workspace native version metadata follows its actual runtime RPC and never the replacement binary or another host', () => {
+  const rpc = { nativeVersion: '0.163.0', ws: { readyState: 1 } };
+  const runtime = { host: { rpc } };
+  const workspace = Object.assign(Object.create(Workspace.prototype), {
+    sessions: new Map([['test', { id: 'test', provider: 'codex', nativeVersion: '0.164.0', nativeVersionStatus: 'verified' }]]),
+    runtimes: new Map([['test', runtime]]), host: { binaries: {}, rpc: { nativeVersion: '0.164.0' } },
+    sharedReplies: { activity: () => null }, drafts: new Map(), room: {}, versions: {},
+  });
+  assert.equal(workspace.snapshot().sessions[0].nativeVersion, '0.163.0');
+  runtime.transportDisconnected = true;
+  assert.equal(workspace.snapshot().sessions[0].nativeVersionStatus, 'last-known');
+  workspace.runtimes.clear();
+  assert.equal(workspace.snapshot().sessions[0].nativeVersion, null);
+  assert.equal(workspace.snapshot().sessions[0].nativeVersionStatus, 'unreported');
+});

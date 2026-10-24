@@ -1,5 +1,25 @@
 # Bounded testing
 
+## Running-version visibility — alpha.92
+
+`test-native-version.cjs` uses actual Electron and synthetic native handshakes:
+known 163/164 remain quiet, a future version names its unverified enhancements,
+permission state stays visible, disconnect marks the version last-known, and
+prerelease/invalid text never certifies a release. Display B, address A and an
+unsent shared draft persist with zero dispatch. Current and retained call-site
+counterexamples prohibit borrowing a newer backend's handshake.
+
+`test-native-codex-context.cjs` with `NAW_NATIVE_METADATA_ONLY=1` stops after the
+real native handshake reaches the graphical session: zero task/title responses.
+Installed current 164 and actual original-profile retained 163 readings both
+pass; replacing the binary does not replace the running server's version.
+951 checks pass without skips, 55 runtime hashes match, strict signing and one
+launcher pass. Original three-session reopening keeps IDs/PIDs, readers/inputs,
+24 Codex items, drafts/views and zero dispatch. Independent final scoped artifact
+review passes. Reuse alpha.91 full native addressed/permission tasks; no input gate
+or native transport changed here. This is a compatibility explanation, not new
+certification of every feature or a version manager.
+
 ## Pending actions, current native compatibility and scoped usage — alpha.91
 
 The delivery unit is a complete existing workflow: view A and address C while B

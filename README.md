@@ -12,6 +12,10 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.92 identifies unverified or last-known Codex versions in existing status
+and session details, using the actual running connection. It does not change
+permissions or existing capability gates. See [compatibility scope](docs/readiness.md).
+
 Alpha.91 keeps multiple native confirmations independently actionable and shows
 which room member is waiting. A header usage action reuses native readings for
 the current session or room. Supported core Codex 0.164 interfaces and current
