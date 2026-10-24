@@ -7,7 +7,8 @@ const {connect}=require('../app/service-client.cjs');
 const root=path.resolve(__dirname,'..'),base=fs.mkdtempSync(path.join(os.tmpdir(),'naw-native-context-'));
 const profile=path.join(base,'profile'),cwd=path.join(base,'work'),home=path.join(base,'codex');
 for(const p of[profile,cwd,home])fs.mkdirSync(p,{mode:0o700});
-const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli 0.163.0');
+const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
+const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
 let app,page,calls=0,titles=0,seq=0,releaseRetry;const errors=[],checks=[];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(await fn())return;await sleep(80);}throw Error(label);}
@@ -160,6 +161,10 @@ async function nativeCommand(command){
  await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_3')&&(await snapshot()).sessions[0].state==='idle','GUI still receives the same native context after terminal exit');
  assert.equal((await snapshot()).sessions[0].nativeId,forked.nativeId);
  checks.push('Native display exit retires its event source once; GUI continuation restores the same thread and receives a complete reply');
+ const catalog=await page.evaluate(()=>workspace.nativeHistory({search:''}));
+ fs.writeFileSync(path.join(base,'native-history-catalog.json'),JSON.stringify(catalog,null,2));
+ assert.ok(catalog.data.some(row=>row.nativeId===before.nativeId||row.nativeId===current),'The original native thread remains in the read-only catalog');
+ checks.push('Read-only native history catalog retains the original contexts without another task');
  assert.equal(calls,3);assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));
 })().catch(async e=>{console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(async()=>{
  releaseRetry?.();if(app)await app.close().catch(()=>{});server.closeAllConnections();

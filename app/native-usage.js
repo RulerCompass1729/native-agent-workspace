@@ -35,7 +35,7 @@
       lines.push(`最近一次请求：输入 ${number(last.inputTokens)} · 输出 ${number(last.outputTokens)} · 模型窗口 ${number(usage.modelContextWindow)}`);
       lines.push('金额与额度窗口：此接口未报告');
     } else return ['原生用量未报告；不能据此判断为零。'];
-    lines.push(count(usage.reportedAt) ? '最近读数：' + new Date(usage.reportedAt).toLocaleString() : '读数更新时间未报告');
+    lines.push(count(usage.reportedAt) ? '本机读数时间：' + new Date(usage.reportedAt).toLocaleString() : '本机读数时间未报告');
     return lines;
   }
   const api = { claudeUsage, usageLines };

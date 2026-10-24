@@ -1,5 +1,52 @@
 # Bounded testing
 
+## Pending actions, current native compatibility and scoped usage — alpha.91
+
+The delivery unit is a complete existing workflow: view A and address C while B
+has two requests, resolve B’s later question first, handle its older confirmation,
+reload and retain draft/recipient; then use actual current native sessions for a
+bounded budget check, interruption of the next handoff, private continuation and
+whole-app reopening. Each step preserves actual recipient and native identity.
+
+- `test-pending-actions.cjs`: actual Electron and workspace, synthetic native
+  request transport, no providers or inference. Source and installed runs retain
+  older pending requests, distinguish typed IDs, route two exact decisions and
+  keep private request details out of the shared record.
+- `test-collaboration.cjs`: existing complete drag/drop, inline mentions, notes,
+  sharing, filtering, private drafts, archive/restore/reopen and deletion flow.
+  It now also checks scoped usage, unknown-vs-counted switching, refresh and
+  original privacy controls. Four synthetic dispatches, zero inference.
+- Original locally generated Codex 163/164 protocols establish unchanged core
+  request/event shapes and optional added fields. `NAW_CODEX_VERSION=0.164.0`
+  explicitly selects only that verified version in native tools/context,
+  concurrent and addressed runners. Unknown/future versions remain countercases.
+- Installed current-native context includes native `/new`, `/resume`, `/fork`,
+  menu cancellation, display exit, same-thread GUI continuation and read-only
+  native catalog: three fixed task responses plus one native title.
+- Installed `test-native-addressed.cjs` with `NAW_TEST_USAGE=1`: real Claude
+  310/Codex 164 structured tools, three exact handoffs, scope-correct native usage,
+  human pause before the next peer input, detached private work and full app
+  reopening. Four fixed responses per provider, zero paid inference and no
+  token-count request. Initial native process identities must be present/alive.
+  Codex’s first TUI attachment creates its display client; original server identity
+  is checked separately. All identities are compared across whole-app reopening.
+- Installed retained alpha.2/Codex 163 with `NAW_RETAINED_GUI_APPROVAL=1`: four
+  fixed task responses plus one native title. The current GUI answers the actual
+  original native command request; sharing stays frozen and later private output
+  does not republish after leave/rejoin.
+
+948 local checks pass without skips. Source/installed complete task checks,
+55-file payload hashes, strict signing after native use, a single launcher and
+original three-session reopening pass. Failed trials remain local and do not
+count as passing: version drift caught before inference; premature DOM sampling;
+a hidden-on-hover action; async archive-restore sampling; an ambiguous cached
+terminal selector; and conflating the first display-client PID with the unchanged
+native server. Each relevant runner now waits for the actual visible result or
+compares the correct exact identity; no production behavior was relaxed to pass.
+Final independent artifact review passes for this increment. Source native permission/steer and
+privacy witnesses retain their separate scopes. Complete U17, physical system
+input methods, Recap/Next semantic reading and user visual acceptance remain open.
+
 ## Native Claude GUI interruption and continuation — alpha.90
 
 - `test-native-abort.cjs`: default is a separate SDK probe and explicitly does

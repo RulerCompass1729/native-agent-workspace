@@ -14,6 +14,46 @@ function fixture(t) {
   const progress = () => w.progress.get(s.id).snapshot().items;
   return { w, s, r, host, replies, request, resolve, progress };
 }
+test('a later nonblocking question cannot hide the original unresolved confirmation after resolution', t => {
+  const f = fixture(t); f.request(1); const first = f.s.approval.requestId;
+  f.r.event({ id:'question',method:'item/tool/requestUserInput',params:{threadId:f.s.nativeId,isBlocking:false,questions:[{id:'q',header:'Question',question:'Synthetic choice?',options:[]}]}});
+  assert.equal(f.s.approvals.length,2);assert.equal(f.s.state,'approval');
+  f.resolve('question');assert.equal(f.s.approval.requestId,first);assert.equal(f.s.approvalResolved,false);
+  f.w.approve(f.s.id,first,'accept','window');assert.deepEqual(f.replies,[{id:1,result:{decision:'accept'}}]);
+  f.resolve(1);assert.equal(f.s.approval,null);
+});
+test('each pending native confirmation is independently actionable without dismissing another one',t=>{
+  const f=fixture(t);f.request(1);const first=f.s.approval.requestId;f.request('1');const second=f.s.approval.requestId;
+  f.w.approve(f.s.id,first,'decline','window');assert.equal(f.s.approval.requestId,second);
+  assert.equal(f.s.approvals.find(a=>a.requestId===first).pending,true);
+  f.w.approve(f.s.id,second,'accept','window');f.resolve('1');
+  assert.equal(f.s.approval.requestId,first);assert.equal(f.s.approval.pending,true);
+  assert.throws(()=>f.w.approve(f.s.id,first,'accept','window'),/权限请求已变化/);
+  f.resolve(1);assert.equal(f.s.approval,null);
+  assert.deepEqual(f.replies,[{id:1,result:{decision:'decline'}},{id:'1',result:{decision:'accept'}}]);
+});
+test('source loss removes only requests from that exact native connection',t=>{
+  const f=fixture(t),source={};f.request(2);const first=f.s.approval.requestId;
+  f.r.emit('approval',{requestId:2,method:'native/other',params:{}},source);
+  f.r.emit('approvalUnavailable',source);
+  assert.equal(f.s.approval.requestId,first);assert.equal(f.s.approvals.length,1);
+});
+test('native completion does not fabricate resolution of a separate waiting question',t=>{
+  const f=fixture(t);f.r.event({id:'later',method:'item/tool/requestUserInput',params:{threadId:f.s.nativeId,isBlocking:false,questions:[{id:'q',header:'Q',question:'Keep?',options:[]}]}});
+  const id=f.s.approval.requestId;f.r.emit('complete',{});f.r.emit('state','idle');
+  assert.equal(f.s.approval.requestId,id);assert.equal(f.s.approvalResolved,false);
+  f.w.persist();const stored=JSON.parse(fs.readFileSync(path.join(f.w.dataDir,'workspace.json')));
+  assert.equal(stored.sessions[0].approval,undefined);assert.equal(stored.sessions[0].approvals,undefined);
+  f.resolve('later');assert.equal(f.s.approval,null);
+});
+test('a bounded request overflow stays explicitly non-actionable rather than claiming all requests resolved',t=>{
+  const f=fixture(t);for(let i=0;i<201;i++)f.request(i);
+  assert.equal(f.s.approvals.length,200);assert.equal(f.s.approvalOverflow,true);
+  assert.throws(()=>f.w.approve(f.s.id,f.s.approval.requestId,'accept','window'),/权限请求已变化/);
+  for(let i=1;i<=201;i++)f.resolve(i);
+  assert.equal(f.s.approvalResolved,false);assert.equal(f.s.approvalOverflow,true);assert.deepEqual(f.replies,[]);
+  f.r.transportClosed();assert.equal(f.s.approval,null);assert.equal(f.s.approvalOverflow,false);
+});
 test('native resolution removes the exact old decision and updates the same progress record without claiming tool completion', t => {
   const f = fixture(t); f.request(7);
   const key = f.s.approval.requestId, initial = f.progress()[0];

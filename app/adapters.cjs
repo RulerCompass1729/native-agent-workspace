@@ -11,7 +11,7 @@ const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
 const { TerminalJournal } = require('./observation.cjs');
-const { serverVersion } = require('./native-history.cjs');
+const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
 const { codexTurnBlock } = require('./native-blocks.cjs');
 
@@ -768,7 +768,7 @@ class Codex extends EventEmitter {
               (['reasoning', 'plan'].includes(item.type) && !this.liveTextItems.has(item.id) && !this.nativeTextParts.has(item.id))) this.historyMessageItems.add(item.id);
         }
         this.emit('history', [...items.values()], undefined, recovery);
-        if (this.host.rpc.nativeVersion === '0.163.0') {
+        if (verifiedCodexProtocol(this.host.rpc)) {
           const previousMetadata = this.turnMetadataHydration;
           const rpc = this.host.rpc, revision = this.turnMetadataRevision = (this.turnMetadataRevision || 0) + 1;
           const current = () => !this.stopped && !this.transportDisconnected && lifecycle === this.lifecycleRevision && rpc === this.host.rpc &&
@@ -819,7 +819,7 @@ class Codex extends EventEmitter {
   }
   async terminalEndpoint() {
     // Older native services keep their original protocol; no speculative parser.
-    if (this.host.rpc?.nativeVersion !== '0.163.0') return this.host.codexSocket;
+    if (!verifiedCodexProtocol(this.host.rpc)) return this.host.codexSocket;
     if (!this.terminalBridge) {
       const { CodexTerminalBridge } = require('./codex-terminal-bridge.cjs');
       const bridge = new CodexTerminalBridge(path.join(this.host.privateDir, `tui-${crypto.randomUUID()}.sock`), this.host.codexSocket, event => this.observeTerminalContext(event));
@@ -1233,7 +1233,7 @@ class Codex extends EventEmitter {
     if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag, supersededTag: pending?.supersededTag });
     else this.emit('complete', { tag: pending?.tag, supersededTag: pending?.supersededTag, messageId: turn.messageId, inputTag: turn.itemInputs.get(turn.messageId) || '', text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
   }
-  get steerAvailable() { return this.host.rpc?.nativeVersion === '0.163.0' && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  get steerAvailable() { return verifiedCodexProtocol(this.host.rpc) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   async steer(text, tag, expectedTurnId, guard, shared = false, acceptedGuard = guard) {
     if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw Error('当前原生回合已变化；追加指令未发送，草稿保留。');
     this.ownInputs.add(tag);
@@ -1363,7 +1363,7 @@ class Codex extends EventEmitter {
       const rpc = this.host.rpc, revision = this.lifecycleRevision, id = this.record.nativeId;
       let thread, missingHistory = false;
       try {
-        const paginated = rpc.nativeVersion === '0.163.0';
+        const paginated = verifiedCodexProtocol(rpc);
         ({ thread } = await rpc.call('thread/read', { threadId: id, includeTurns: !paginated }));
         if (paginated) {
           // This native version paginates turns separately. Metadata alone

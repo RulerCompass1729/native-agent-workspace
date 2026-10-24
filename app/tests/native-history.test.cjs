@@ -93,7 +93,9 @@ test('native writer rejection becomes a safe actionable message without raw priv
 });
 
 test('actual server handshake version cannot borrow the client version or allow unknown/prerelease runtimes', () => {
-  const { serverVersion } = require('../native-history.cjs');
+  const { serverVersion, verifiedCodexProtocol } = require('../native-history.cjs');
+  for (const nativeVersion of ['0.163.0','0.164.0']) assert.equal(verifiedCodexProtocol({nativeVersion}), true);
+  for (const nativeVersion of [undefined,'0.165.0','0.164.0-beta','unknown']) assert.equal(verifiedCodexProtocol({nativeVersion}), false);
   assert.equal(serverVersion({ userAgent: 'native_agent_workspace/0.163.0 (Mac OS; arm64) unknown (native_agent_workspace; 0.1.0)' }), '0.163.0');
   assert.equal(serverVersion({ userAgent: 'native_agent_workspace/0.162.0 (Mac OS; arm64) unknown (native_agent_workspace; 0.163.0)' }), '0.162.0');
   assert.equal(serverVersion({ userAgent: 'native_agent_workspace/0.163.0-beta (Mac OS)' }), null);

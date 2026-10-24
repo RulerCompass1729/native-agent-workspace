@@ -257,6 +257,15 @@ test('GUI approval reaches its original native transport and rejects stale or ot
   f.event('serverRequest/resolved', { requestId: 95 }); await tick();
   await assert.rejects(client.call('approve', f.record.id, next.requestId, 'accept'), /权限请求已变化/);
 });
+test('retained native transport keeps every pending confirmation and resolves only its exact typed ID', async t => {
+  const f = await fixture(t), target = new LegacyCodex(f.record); t.after(() => target.close()); await target.connect(f.socket);
+  for (const id of [91,'91']) f.request({id,method:'item/commandExecution/requestApproval',params:{threadId:f.record.nativeId,command:'synthetic '+typeof id,cwd:'/synthetic'}});
+  await tick();assert.equal(target.approvals.length,2);const first=target.approvals[0].requestId;
+  f.event('serverRequest/resolved',{requestId:'91'});await tick();
+  assert.equal(target.approval.requestId,first);assert.equal(target.approvalResolved,false);
+  target.approve(first,'decline');await tick();assert.deepEqual(f.calls.find(c=>c.id===91&&c.result).result,{decision:'decline'});
+  f.event('serverRequest/resolved',{requestId:91});await tick();assert.equal(target.approval,null);
+});
 
 test('retained native permission scope and available decisions cannot be bypassed with a direct GUI call', async t => {
   const f = await fixture(t), target = new LegacyCodex(f.record); t.after(() => target.close()); await target.connect(f.socket);

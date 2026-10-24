@@ -10,7 +10,7 @@ const { Codex, Rpc } = require('./adapters.cjs');
 const { nativeTextItemId } = require('./codex-tool-content.cjs');
 const { ProgressJournal } = require('./observation.cjs');
 const { processMayBeAlive } = require('./platform.cjs');
-const { nativeApprovalPolicy } = require('./approval-policy.js');
+const { nativeApprovalPolicy, ApprovalQueue } = require('./approval-policy.js');
 const { applyNativeBlock, applyCodexHistory, applyCodexTurnHistory, applyCodexDelta, applyCodexMessage, applyCodexProgress } = require('./native-blocks.cjs');
 const { readerPath, readReaderCache, writeReaderCache } = require('./reader-cache.cjs');
 
@@ -47,6 +47,7 @@ class LegacyCodex extends EventEmitter {
     super(); this.record = { ...record, recovering: true, messages: structuredClone(record.messages || []) }; this.progress = new ProgressJournal();
     this.closed = false; this.connected = false; this.revision = 0;
     this.approvalScope = crypto.randomUUID(); this.approval = null;
+    this.pendingApprovals = new ApprovalQueue(() => `legacy:${this.approvalScope}:${crypto.randomUUID()}`);
     this.filename = dataDir && readerPath(dataDir, record.nativeId);
     const saved = this.filename && readReaderCache(this.filename, record);
     this.initialized = Boolean(saved);
@@ -105,9 +106,9 @@ class LegacyCodex extends EventEmitter {
           if (['disconnected', 'error', 'ended'].includes(this.state)) for (const m of this.record.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
         }
         if (event === 'approval') {
-          this.approval = { ...args[0], requestId: `legacy:${this.approvalScope}:${crypto.randomUUID()}` };
+          this.pendingApprovals.add(args[0], args[1] || rpc, adapter);
+          Object.assign(this, this.pendingApprovals.snapshot());
           this.approvalResolved = false;
-          this.nativeRequestId = args[0].requestId;
         }
         if (event === 'failed') {
           this.activity = args[0];
@@ -125,9 +126,9 @@ class LegacyCodex extends EventEmitter {
       const row = applyCodexProgress(this.record, item);
       if (row) { this.emit('readerBlock', row); this.emit('change'); }
     });
-    adapter.on('approvalResolved', requestId => {
-      if (requestId !== this.nativeRequestId) return;
-      this.approval = null; this.nativeRequestId = undefined; this.approvalResolved = this.state === 'approval'; this.emit('change');
+    adapter.on('approvalResolved', (requestId, source = rpc) => {
+      this.pendingApprovals.resolve(requestId, source); Object.assign(this, this.pendingApprovals.snapshot());
+      this.approvalResolved = !this.approval && this.state === 'approval'; this.emit('change');
     });
     rpc.on('closed', () => { this.connected = false; this.revision++; adapter.transportClosed(); this.emit('change'); });
     rpc.on('event', message => {
@@ -220,10 +221,11 @@ class LegacyCodex extends EventEmitter {
   }
   observe() { return { terminal: null, progress: this.progress.snapshot() }; }
   approve(requestId, decision) {
-    if (!this.connected || this.closed || this.state !== 'approval' || this.approval?.pending || this.approval?.requestId !== requestId) throw Error('权限请求已变化，请重新查看。');
-    if (!nativeApprovalPolicy(this.approval).decisions.includes(decision)) throw Error('请在原生终端核对；此界面不支持这项权限决定。');
-    this.rpc.reply(this.nativeRequestId, { decision });
-    if (this.approval?.requestId === requestId) this.approval = { ...this.approval, pending: true };
+    const route = this.pendingApprovals.get(requestId);
+    if (!this.connected || this.closed || this.state !== 'approval' || !route || route.approval.pending || route.rpc !== this.rpc || this.pendingApprovals.overflow) throw Error('权限请求已变化，请重新查看。');
+    if (!nativeApprovalPolicy(route.approval).decisions.includes(decision)) throw Error('请在原生终端核对；此界面不支持这项权限决定。');
+    route.rpc.reply(route.nativeRequestId, { decision });
+    if (this.pendingApprovals.get(requestId) === route) { route.approval = { ...route.approval, pending: true }; Object.assign(this, this.pendingApprovals.snapshot()); }
     this.emit('change');
   }
   close() {

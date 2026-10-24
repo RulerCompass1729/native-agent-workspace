@@ -12,7 +12,9 @@ const homes = { claude: path.join(base, 'claude'), codex: path.join(base, 'codex
 for (const dir of [profile, cwd, ...Object.values(homes)]) fs.mkdirSync(dir, { mode: 0o700 });
 const binaries = Object.fromEntries(['claude', 'codex'].map(p => [p, fs.realpathSync(executable(p))]));
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()]));
-assert.match(versions.claude, /^2\.1\.309\b/); assert.equal(versions.codex, 'codex-cli 0.163.0');
+const nativeVersion = process.env.NAW_CODEX_VERSION || '0.163.0';
+assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
+assert.match(versions.claude, /^2\.1\.(309|310)\b/); assert.equal(versions.codex, 'codex-cli ' + nativeVersion);
 let app, page, ids = {}, held, release, sequence = 0;
 const counts = { claude: 0, codex: 0 }, errors = [], checks = [];
 let tokenCountRequests = 0;
@@ -287,6 +289,8 @@ async function start(first, text) {
     return;
   }
   const identities = [claude, codex].map(s => [s.id, s.nativeId, s.pid]);
+  const nativeProcesses = { claude: claude.processIdentity, codex: codex.serverIdentity };
+  for (const identity of Object.values(nativeProcesses)) assert.ok(identity && Number.isInteger(identity.pid) && identity.started && processMayBeAlive(identity), 'Initial native process identity is present and alive');
   await start(claude.id, '两份午餐各18元，交通总共14元。Claude提出预算，Codex独立核查并返回，Claude给我最终结论。');
   await until(async () => (await snapshot()).room.run?.status !== 'running', 'Native addressed round finishes', 60000);
   let state = await snapshot(); fs.writeFileSync(path.join(base, 'round-one.json'), JSON.stringify(state, null, 2));
@@ -304,6 +308,27 @@ async function start(first, text) {
   for (const m of state.room.messages.filter(m => m.addressed)) { assert.equal(m.deliveries.length, 1); assert.equal(m.deliveries[0].status, 'submitted'); }
   if (longFinal) { assert.ok(state.room.messages.some(m => m.finalReply && m.text?.includes('LONG_HUMAN_FINAL_ONLY'))); assert.ok(!JSON.stringify(JSON.parse(fs.readFileSync(path.join(base, 'codex-1-request.json'))).input).includes('LONG_HUMAN_FINAL_ONLY')); }
   checks.push('Real native structured calls: Claude → Codex → Claude, exact recipient and receipt, one main reader');
+  if (process.env.NAW_TEST_USAGE === '1') {
+    await until(async () => (await snapshot()).sessions.find(s => s.id === codex.id).usage?.total?.inputTokens > 0, 'Native Codex token reading');
+    const before = { ...counts };
+    await fillRoomMessage(page, '用量查看期间保留的草稿'); await sleep(400);
+    const recipient = (await snapshot()).viewState.roomRecipient;
+    await page.locator('#usage-button').click();
+    assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'usage');
+    assert.equal(await page.locator('[data-usage-session]').count(), 2);
+    assert.match(await page.locator(`[data-usage-session="${codex.id}"]`).innerText(), /累计 token：输入/);
+    await page.locator('#refresh-trust').click(); await page.locator('#close-privacy').click();
+    assert.equal(await roomBody(page), '用量查看期间保留的草稿');
+    assert.equal((await snapshot()).viewState.roomRecipient, recipient);
+    await page.locator(`[data-session-id="${codex.id}"]`).click(); await page.locator('#usage-button').click();
+    assert.equal(await page.locator('[data-usage-session]').count(), 1);
+    assert.equal(await page.locator('[data-usage-session]').getAttribute('data-usage-session'), codex.id);
+    assert.match(await page.locator('#trust-status').innerText(), /本机读数时间/);
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-scoped-usage.png') }); }
+    await page.locator('#close-privacy').click(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+    await fillRoomMessage(page, ''); assert.deepEqual(counts, before); assert.equal(tokenCountRequests, 0);
+    checks.push('Actual native usage stays scoped to room or original session; refresh preserves draft/recipient with zero additional inference');
+  }
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'addressed-budget.png') }); }
   await start(codex.id, '再做一次核查，但我会在转交前暂停。');
   await until(() => release, 'Native second task reaches held completion');
@@ -314,19 +339,26 @@ async function start(first, text) {
   assert.equal((await snapshot()).room.run.status, 'paused'); assert.equal(counts.claude, 3); assert.equal((await snapshot()).diagnostics.dispatches, 4);
   checks.push('Human pause revokes a staged message; no peer task starts');
   await page.locator(`[data-session-id="${claude.id}"]`).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
-  await page.locator('#terminal-tab').click(); await until(async () => (await page.locator('#terminal-area').innerText()).includes('最终预算'), 'Same Claude terminal shows collaborative result');
-  await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.type('Continue privately with this budget.');
-  await until(async () => (await page.locator('#terminal-area').innerText()).includes('Continue privately with this budget.'), 'Native draft visible'); await page.keyboard.press('Enter');
-  await until(async () => (await page.locator('#terminal-area').innerText()).includes('脱出后的私人继续'), 'Private native continuation');
+  const nativeClaude = page.locator(`[data-terminal-id="${claude.id}"]`);
+  await page.locator('#terminal-tab').click(); await nativeClaude.waitFor({ state: 'visible' });
+  await until(async () => (await nativeClaude.innerText()).includes('最终预算'), 'Same Claude terminal shows collaborative result');
+  await nativeClaude.locator('.xterm-screen').click(); await page.keyboard.type('Continue privately with this budget.');
+  await until(async () => (await nativeClaude.innerText()).includes('Continue privately with this budget.'), 'Native draft visible'); await page.keyboard.press('Enter');
+  await until(async () => (await nativeClaude.innerText()).includes('脱出后的私人继续'), 'Private native continuation');
   await until(async () => (await snapshot()).sessions.find(s => s.id === claude.id).state === 'idle', 'Private turn finishes');
   assert.ok(!(await snapshot()).room.messages.some(m => m.text?.includes('私人备注')));
   checks.push('Detach and continue in the same native TUI; private continuation does not enter the room');
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await fillRoomMessage(page, '下一次的草稿，暂不发送。'); await sleep(400);
-  const before = await snapshot(); await app.close(); app = null; await launch();
+  const before = await snapshot();
+  assert.deepEqual(before.sessions.map(s => [s.id, s.nativeId]), identities.map(([id, nativeId]) => [id, nativeId]));
+  assert.deepEqual(before.sessions.find(s => s.id === claude.id).processIdentity, nativeProcesses.claude);
+  assert.deepEqual(before.sessions.find(s => s.id === codex.id).serverIdentity, nativeProcesses.codex);
+  fs.writeFileSync(path.join(base, 'before-reopen.json'), JSON.stringify(before, null, 2));
+  await app.close(); app = null; await launch();
   await until(async () => (await snapshot()).sessions.length === 2, 'Original sessions reconnect');
   state = await snapshot();
-  assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
+  assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid, s.processIdentity, s.serverIdentity]), before.sessions.map(s => [s.id, s.nativeId, s.pid, s.processIdentity, s.serverIdentity]));
   assert.equal(state.room.run.status, 'paused'); assert.equal(state.diagnostics.dispatches, before.diagnostics.dispatches);
   assert.equal(await roomBody(page), '下一次的草稿，暂不发送。');
   assert.match(await page.locator('#room-messages').innerText(), /最终预算：50 元/);

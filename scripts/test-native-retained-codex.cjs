@@ -159,7 +159,10 @@ async function launch() {
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('Would you like to run the following command?'), 'Native permission UI', 45000);
   const confirmation = await page.locator('#terminal-area').innerText(); fs.writeFileSync(path.join(base, 'permission.txt'), confirmation);
   assert.match(confirmation, /sample.txt/); assert.match(confirmation, /› 1\. Yes, proceed \(y\)/);
-  await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
+  if (process.env.NAW_RETAINED_GUI_APPROVAL === '1') {
+    await page.locator('#chat-tab').click();
+    await page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }).click();
+  } else await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).messages.some(m => m.text === 'NATIVE_TOOL_DONE: created and read sample.txt.'), 'Post-permission private result', 45000);
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'idle', 'Native completed');
   assert.equal(fs.readFileSync(path.join(cwd, 'sample.txt'), 'utf8'), 'NATIVE_TOOL_FILE: hello 世界\n');
@@ -174,6 +177,7 @@ async function launch() {
   assert.equal((await snapshot()).sessions.find(s => s.id === id).nativeId, before.nativeId);
   assert.equal((await snapshot()).sessions.find(s => s.id === id).pid, before.pid);
   checks.push('Actual native command permission freezes sharing before later private result; departure/rejoin never republishes it');
+  if (process.env.NAW_RETAINED_GUI_APPROVAL === '1') checks.push('The current graphical approval action resolves the retained original native command request without replacing its backend');
   const request = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json')));
   assert.equal(request.input.filter(item => item.role === 'user' && item.content?.some(p => p.text === 'Report the shared task result.')).length, 1);
   assert.ok(!JSON.stringify(request.input).includes('Unsent private draft'));

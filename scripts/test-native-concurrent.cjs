@@ -29,7 +29,8 @@ const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => 
   assert.ok(file, `Real ${p} required`); return [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()];
 }));
 if (!emptyTerminal) assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.(308|309|310)\b/);
-assert.equal(versions.codex, 'codex-cli 0.163.0');
+const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
+assert.equal(versions.codex, 'codex-cli '+nativeVersion);
 const retainedIds = {};
 let application, page, child, legacyClient, sequence = 0, titleCalls = 0;
 const counts = { claude: 0, codex: 0 }, controls = {}, errors = [], checks = [];
@@ -533,7 +534,10 @@ async function openApplication() {
   await save('steered'); checks.push('Steering Codex stays in its turn and does not revoke the concurrent Claude stream');
   const currentRoom = (await snapshot()).room.messages;
   const source = currentRoom.find(m => m.text === 'Follow up on the Claude review.');
-  await page.locator(`[data-message-id="${source.id}"] [data-reply-to]`).click();
+  const replySource = page.locator(`[data-message-id="${source.id}"]`);
+  await replySource.hover(); // Reveal the same compact toolbar a person sees.
+  await until(() => replySource.locator('.message-actions').evaluate(el => getComputedStyle(el).opacity === '1'), 'Reply action is actually revealed');
+  await replySource.locator('[data-reply-to]').click();
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('CODEX_STEER_PREFIX'));
   await fillRoomMessage(page, 'Unsent thread draft.');
   await page.reload(); await page.locator('#new-session').waitFor();

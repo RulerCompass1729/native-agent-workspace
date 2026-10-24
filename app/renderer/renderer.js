@@ -15,6 +15,7 @@ let roomSubmitting = null;
 const roomPendingRecipients = new Map();
 const pendingInterrupts = new Set();
 const interruptPending = s => Boolean(s && (s.interruptPending || pendingInterrupts.has(s.id)));
+const approvalViews = new Map();
 let shareRevision = 0, sharePending = null;
 let runPreview = null;
 let renamingId = '', renaming = false;
@@ -332,26 +333,41 @@ function pasteTerminal(text) {
   if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw new Error('原生程序尚未启用多行粘贴保护，请先分行粘贴。');
   entry.term.paste(text); focusTerminal();
 }
-async function showTrust() {
+let trustScope = null, trustRevision = 0;
+async function showTrust(options) {
+  const dialog = $('privacy-dialog'), wasOpen = dialog.open, scroll = dialog.scrollTop, revision = selectionRevision, generation = ++trustRevision;
+  const scope = options?.usageScope || (wasOpen ? trustScope : null);
   const snapshot = await api.initial();
+  if (generation !== trustRevision || scope && revision !== selectionRevision) return;
+  trustScope = scope; dialog.dataset.mode = scope ? 'usage' : 'privacy';
+  dialog.querySelector('h2').textContent = scope ? `${scope.name} · 用量` : '隐私与用量';
   const content = $('trust-status'); content.replaceChildren();
   const section = (title, text) => { const item = node('section'); item.append(node('h3', title), node('p', text)); content.append(item); return item; };
+  if (!scope) {
   section('数据去向', '会话副本和草稿保存在本机。原始终端画面只在本机内存暂存；对话中已显示的结构化工具输入与结果会随记录保存在本机，受保留上限约束，不自动分享。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
   section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。每轮核查由你确认 2–6 次回复上限和 10 分钟期限；原生工具和子 agent 的用量不受这些交接限制约束。');
   const dispatches = snapshot.diagnostics?.dispatches;
   section('应用派发记录', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。包含未确认或被拒绝的尝试，不代表付费调用；不含原生终端直接输入，也不是总用量或账单。普通后台计数从本次运行开始，旧会话输入连接保留本地发送计数。`);
   if (snapshot.sessions.some(s => s.legacyInputEligible)) section('原会话输入连接', '接通 Claude 会在其工作目录添加本地插件，代码不含凭据；Codex 连接原生私有接口，不安装 Claude 插件。连接凭据留在本机私有目录。加载插件和切换界面不发起模型任务。独立输入仅记录派发元数据；你明确共享的正文、收件人名称会本地保存。清除共享记录会移除这些正文，保留派发计数；不会撤回 agent 已收到的内容。');
-  const usage = section('原生报告的用量', '来自原生接口的最近读数，可能延迟或缺少子任务。上下文占用、累计 token 和额度是不同指标；金额请在提供商账户核对。刷新此页不会发起模型请求。');
-  for (const s of snapshot.sessions) {
-    const item = node('section'); item.append(node('h4', participantLabel(s, snapshot.sessions)));
-    for (const line of window.nativeWorkspaceUsage.usageLines(s.provider, s.usage)) item.append(node('p', line));
+  }
+  const usage = section(scope ? '原生读数' : '原生报告的用量', '来自原生接口的最近读数，可能延迟或缺少子任务。上下文占用、累计 token 和额度是不同指标；金额请在提供商账户核对。刷新此页不会发起模型请求。');
+  const sessions = !scope ? snapshot.sessions : scope.kind === 'room'
+    ? snapshot.sessions.filter(s => s.roomId === scope.roomId && !s.archived)
+    : snapshot.sessions.filter(s => s.id === scope.id && s.nativeId === scope.nativeId && !s.nativeContextPending);
+  for (const s of sessions) {
+    const item = node('section'); item.dataset.usageSession = s.id;
+    item.append(node('h4', participantLabel(s, snapshot.sessions)), node('p', s.nativeContextPending ? '原生上下文待核对' : s.model || '模型未报告'));
+    for (const line of window.nativeWorkspaceUsage.usageLines(s.provider, s.nativeContextPending ? null : s.usage)) item.append(node('p', line));
     usage.append(item);
   }
-  if (!snapshot.sessions.length) usage.append(node('p', '尚无会话。'));
+  if (!sessions.length) usage.append(node('p', scope?.kind === 'session' ? '原会话或原生上下文已变化，请关闭后重新查看。' : '当前范围尚无会话。'));
+  if (!scope) {
   section('后台与权限', `${snapshot.sessions.filter(s => !['ended', 'recoverable'].includes(s.state)).length} 个会话尚未确认结束。关闭窗口仍可能继续执行。原生进程、团队状态与权限请在终端核对；此处未测量 CPU、内存或完整网络出口。`);
   section('版本与核查', `应用 ${snapshot.appVersion || '未报告'} · 新会话后台 ${snapshot.runtimeVersion || '未报告'}。${snapshot.services?.length > 1 ? `另保留 ${snapshot.services.length - 1} 个后台连接原有会话；没有复制原生会话。` : ''}可查看本机数据和公开实现。本地版本号不是签名验证；独立安全审计、完整流量与费用对账尚未完成。`);
-  if (!$('privacy-dialog').open) $('privacy-dialog').showModal();
+  }
+  if (!wasOpen) dialog.showModal(); else dialog.scrollTop = scroll;
 }
+
 function openCreate(provider = 'claude') {
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
   $('initial-view').value = preference; $('session-name').value = '';
@@ -754,10 +770,17 @@ function renderHeader(s, inRoom) {
       const text = selectedSharingText();
       text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。');
     });
+    const usage = button('用量', () => {
+      const target = current();
+      if (selected !== 'room' && !target) return;
+      return showTrust({ usageScope: selected === 'room' ? { kind: 'room', roomId: state.room.id, name: state.room.name }
+        : { kind: 'session', id: target.id, nativeId: target.nativeId, name: target.name } });
+    });
+    usage.id = 'usage-button'; usage.setAttribute('aria-label', '查看原生用量');
     const restore = button('恢复会话', () => { const s = current(); if (s?.archived) return restoreArchivedSession(s.id); }, 'primary');
     const more = button('⋯', () => openRoomMenu()); more.setAttribute('aria-label', '工作区菜单');
-    headerControls = { resume, membership, selectedText, restore, more };
-    $('header-actions').append(resume, membership, selectedText, restore, more);
+    headerControls = { resume, membership, selectedText, restore, more, usage };
+    $('header-actions').append(resume, membership, selectedText, usage, restore, more);
   }
   const h = headerControls;
   const membershipAction = JSON.stringify([s?.id, !!s?.roomId, !!s?.archived]);
@@ -765,6 +788,7 @@ function renderHeader(s, inRoom) {
   // for output updates, never for a newly opposite join/leave action.
   if (h.membership.dataset.action !== membershipAction && document.activeElement === h.membership) h.membership.blur();
   h.membership.dataset.action = membershipAction;
+  h.usage.hidden = !s && !inRoom;
   h.resume.hidden = !s || !canResume(s) || mode !== 'terminal';
   h.membership.hidden = h.selectedText.hidden = !s || !!s.archived;
   h.membership.textContent = s?.roomId ? '脱出协作' : '加入协作';
@@ -773,10 +797,14 @@ function renderHeader(s, inRoom) {
 }
 function renderApproval(s, own) {
   const el = $('approval');
+  const requests = s?.approvals?.length ? s.approvals : s?.approval ? [s.approval] : [];
+  const requested = approvalViews.get(s?.id), chosen = requests.find(a => requested && a.requestId === requested);
+  if (requested && !chosen) approvalViews.delete(s.id);
+  if (chosen) s = { ...s, approval: chosen, approvalDecisions: chosen.decisions || s.approvalDecisions };
   el.hidden = !s || (s.state !== 'approval' && !s.nativeApproval && !s.approval);
   const stale = !nativeStatusFresh(s?.nativeApproval);
   const { observedAt, ...nativeApprovalContent } = s?.nativeApproval || {};
-  const signature = JSON.stringify([s?.id, s?.state, own, s?.approval, s?.approvalNotice, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
+  const signature = JSON.stringify([s?.id, s?.state, own, s?.approval, requests, s?.approvalOverflow, s?.approvalNotice, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
   if (el.dataset.signature === signature) return;
   el.dataset.signature = signature; el.replaceChildren();
   if (el.hidden) return;
@@ -790,13 +818,27 @@ function renderApproval(s, own) {
     el.append(button(`在 ${s.name} 的原生终端处理`, () => operateNative(s.id)));
     return;
   }
-  el.append(node('strong', s.approvalNotice ? '原生确认状态待核对' : s.approvalResolved ? '这项原生确认已处理' : s.approval?.pending ? '等待原生确认结果' : '原生会话需要你确认'));
+  if (requests.length > 1) {
+    const select = document.createElement('select'); select.id = 'approval-request'; select.setAttribute('aria-label', '待处理请求');
+    requests.forEach((request, index) => {
+      const text = request.method === 'item/tool/requestUserInput' ? '问题' : '确认';
+      const detail = request.params?.command || request.params?.questions?.[0]?.header || request.params?.reason || '';
+      const option = node('option', `${index + 1}. ${text}${detail ? ' · ' + detail.split('\n')[0].slice(0, 90) : ''}${request.pending ? ' · 已提交' : ''}`);
+      option.value = request.requestId; select.append(option);
+    });
+    select.value = s.approval.requestId;
+    select.onchange = () => { approvalViews.set(s.id, select.value); render(); $('approval-request')?.focus(); };
+    el.append(select);
+  }
+  const heading = node('strong', `${s.name} · ${s.approvalNotice ? '原生确认状态待核对' : s.approvalResolved ? '这项原生确认已处理' : s.approval?.pending ? '等待原生确认结果' : '需要你确认'}`);
+  el.append(heading);
+  if (s.approvalOverflow) el.append(node('p', '待处理请求未完整同步，请在原生终端核对；这里不会代发决定。'));
   if (s.approvalNotice) el.append(node('p', s.approvalNotice));
   if (s.approvalResolved) el.append(node('p', '等待原生状态更新；已处理不代表工具执行成功。'));
   if (s.approval) {
     const policy = window.nativeWorkspaceApproval.nativeApprovalPolicy(s.approval);
     if (policy.questions) {
-      el.firstChild.textContent = `${s.name} · ${s.approval.params.isBlocking === false ? '原生问题（此问题不阻塞本轮）' : '等待你回答'}`;
+      heading.textContent = `${s.name} · ${s.approval.params.isBlocking === false ? '问题 · 不阻塞本轮' : '等待你回答'}`;
       for (const question of policy.questions) {
         const group = node('div', '', 'native-question');
         group.append(node('strong', question.header), node('p', question.question));
@@ -806,7 +848,6 @@ function renderApproval(s, own) {
         if (question.isOther) group.append(node('p', '可在原生终端输入其他回答。'));
         el.append(group);
       }
-      el.append(node('p', '问题和选项来自原生请求；在同屏终端回答，直接交回原请求。'));
     } else if (policy.notice) el.append(node('p', policy.notice));
     if (policy.command) el.append(node('pre', policy.command, 'approval-command'));
     if (policy.cwd) el.append(node('p', '工作目录：' + policy.cwd));
@@ -815,7 +856,7 @@ function renderApproval(s, own) {
     if (s.approval.params?.environmentId === 'local') el.append(node('p', '执行位置：本机'));
     for (const decision of (s.approvalDecisions || []).filter(d => policy.decisions.includes(d))) {
       const action = button({ accept: '允许这一次', decline: '拒绝', cancel: '取消本轮' }[decision], () => api.approve(s.id, requestId, decision));
-      action.disabled = !own || Boolean(s.approval.pending); el.append(action);
+      action.disabled = !own || Boolean(s.approval.pending) || s.state !== 'approval' || Boolean(s.approvalOverflow); el.append(action);
     }
   }
   el.append(button(`在 ${s.name} 的原生终端处理`, () => operateNative(s.id)));
@@ -963,6 +1004,13 @@ function render() {
       }
       $('room-record').setAttribute('aria-pressed', String(!roomSession));
       for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.roomSession === roomSession));
+      for (const tab of tabs.children) {
+        const member = people.find(m => m.id === tab.dataset.roomSession);
+        const count = member.nativeApproval?.requests?.length || member.approvals?.length || (member.approval || member.approvalOverflow ? 1 : 0);
+        const text = participantLabel(member, people) + (count ? ` · ${count} 待处理` : '');
+        if (tab.textContent !== text) tab.textContent = text;
+        tab.classList.toggle('needs-attention', Boolean(count));
+      }
       let runText = run ? `${run.pausePending ? '正在撤销后续授权' : run.pauseUnconfirmed ? '部分后台未确认暂停' : { running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
       const pendingRun = roomSubmitting?.automatic;
       const waiting = roomPendingRecipients.get($('recipient').value) || roomPendingRecipients.values().next().value;
@@ -1635,7 +1683,7 @@ $('privacy-button').onclick = $('refresh-trust').onclick = () => attempt(showTru
 $('privacy-source').onclick = () => attempt(() => api.openExternal('https://github.com/RulerCompass1729/native-agent-workspace/blob/main/docs/privacy.md'));
 $('data-directory').onclick = () => attempt(() => api.dataDirectory());
 $('clear-shared-history').onclick = () => attempt(() => { if (!state.capabilities?.includes('clearSharedHistory')) throw new Error('后台仍在保留旧版会话；结束它们并重开应用后可使用此功能。'); return api.clearSharedHistory(); });
-$('close-privacy').onclick = () => { $('privacy-dialog').close(); focusTerminal(); };
+$('close-privacy').onclick = () => { trustRevision++; trustScope = null; $('privacy-dialog').close(); focusTerminal(); };
 $('reconnect-button').onclick = () => attempt(async () => { $('reconnect-button').disabled = true; try { await api.reconnect(); } finally { $('reconnect-button').disabled = false; } });
 $('retry-save').onclick = () => attempt(async () => {
   $('retry-save').disabled = true;
