@@ -33,8 +33,8 @@ oversized short-message layout and reports missing native completion time,
 elapsed duration and Recap/Next. Keep the frontend lightweight and iterate within
 the existing reader and embedded TUI. Discuss a representative short exchange,
 long native process and interleaved-member example before changing the primary
-layout. Simultaneous conversation/TUI display is a design candidate, not an
-implemented or accepted capability.
+layout. The simultaneous-layout boundary below records the earlier discussion stage;
+the subsequently authorized alpha.88 implementation is described above.
 
 The next delivery unit is one complete existing-session task: human `@` selects
 a participant to check a small synthetic document; the reader shows attribution,
@@ -49,12 +49,30 @@ before implementation, then checks actual changes and affected installed evidenc
 Reuse unchanged evidence and group fixes into this task; a field fix, test count
 or small release does not close the experience requirement.
 
-Current reading candidate: **alpha.88, 2026-10-23**. Compact native processes
-and the actual same-session terminal remain together through a two-member task,
-private intervention and reopening. Direct room-native Escape and minimum-window
-inputs pass in the installed artifact; 54 runtime files match, signing passes and
-original sessions/drafts survive with no new dispatch. This closes the scoped
-implementation path, not full U17 or user visual acceptance. Independent final artifact review passes for this scoped trial.
+Current tested candidate: **alpha.90, 2026-10-23**. The existing compact reader
+and actual native TUI now include current native phases, permission/question
+state, effective Codex settings and supported context continuity. Supported new
+Claude 310 GUI interruption can continue from the GUI; pending confirmation
+preserves editable drafts and blocks a quick next send before control changes.
+Actual installed solo interruption/continuation and dual-agent shared tasks,
+private cuts, frozen shared prefixes and renderer reload pass. Separate actual
+normal-profile app reopening preserves all three native IDs/PIDs, saved drafts,
+views and original history with zero dispatch. All 55 runtime files match,
+post-native signing passes and one launcher remains. 939 checks pass without
+skips; independent final scoped artifact review passes. The former API-trial log
+label saying whole-app reopening is not accepted as proof of that branch.
+
+This supports a local technical trial of the existing shared-workspace flow.
+Full U17, physical system/WeChat IME, existing Recap/Next semantic reading and
+user visual acceptance remain open. Original native Escape and retained-backend
+pause semantics are distinct from the new 310 GUI API path. The actual same-screen
+TUI remains available for provider-only controls; no replacement recap is generated.
+See [current evidence and limits](readiness.md).
+
+Previous reading candidate: **alpha.88, 2026-10-23**. Compact processes and the
+actual same-session terminal passed two-member task/private intervention/reopening,
+direct room-native Escape and minimum-window input checks. Its 54-file artifact
+and independent scope remain historical evidence; current native fixes are above.
 
 Previous reading candidate: **alpha.87, 2026-10-23**. One installed short/long,
 two-member document check and private-intervention control scenario pass, alongside

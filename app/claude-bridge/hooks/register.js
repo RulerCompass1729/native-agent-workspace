@@ -234,7 +234,11 @@ async function flushObservations($) {
         const sending = request($, '/observation', { ...row, gap }, binding).finally(() => { observationRequests--; });
         let timer;
         const deadline = new Promise((_, reject) => { timer = $.clock.after(1500, () => reject(Error('Observation timeout'))); });
-        try { await Promise.race([sending, deadline]); } finally { timer?.cancel(); }
+        let observed;
+        try { observed = await Promise.race([sending, deadline]); } finally { timer?.cancel(); }
+        // Native control must not hold the observation queue. Its exact result
+        // and submission settlement return separately; no automatic retry.
+        if (observed?.abort) $.clock.after(0, () => abortNativeTurn($, binding, observed.abort).catch(() => {}));
         if (entry.row !== row && binding === rootBinding) continue;
         if (binding === rootBinding && revision === observationGapRevision) observationGap = false;
       } catch (error) {
@@ -256,6 +260,21 @@ async function flushObservations($) {
     if (retry) $.clock.after(1000, () => flushObservations($));
     else observing = false;
   }
+}
+
+async function abortNativeTurn($, binding, command) {
+  if (stopped || binding !== rootBinding || rootEnds.has(binding.sessionId) ||
+      command.epoch !== binding.observationEpoch || command.turnId !== activeTurn ||
+      !/^[a-f0-9-]{36}$/i.test(command.id || '') || displayTurns.get(activeTurn)?.ended) return;
+  const pending = collecting;
+  const report = submitSettled => request($, '/abort-result', { id: command.id, epoch: command.epoch, turnId: command.turnId, status: 'aborted', submitSettled }, binding);
+  try { await $.turn.abort({ turnId: command.turnId }); }
+  catch { await request($, '/abort-result', { id: command.id, epoch: command.epoch, turnId: command.turnId, status: 'failed' }, binding); return; }
+  if (stopped || binding !== rootBinding) return;
+  await report(!pending || pending.finished === true);
+  if (pending && !pending.finished) pending.settled.then(() => {
+    if (!stopped && binding === rootBinding) report(true).catch(() => {});
+  });
 }
 
 async function refreshLegacyObserver($, ownGeneration) {
@@ -378,10 +397,11 @@ async function listen($, ownGeneration) {
             return;
           }
           const candidate = { tag: message.id, events: [], turns: [], appends: 0, text: message.text, invalid: foreignSubmissions !== 0 };
+          candidate.settled = new Promise(resolve => { candidate.resolveSettled = resolve; });
           collecting = candidate;
           let result;
           try { result = await $.prompt.submit({ text: message.text, asUser: true }); }
-          finally { if (collecting === candidate) collecting = null; }
+          finally { candidate.finished = true; candidate.resolveSettled(); if (collecting === candidate) collecting = null; }
           const event = candidate.events[0];
           const promptId = !candidate.invalid && !stopped && generation === ownGeneration &&
             candidate.events.length === 1 && candidate.appends === 1 && event.session_id === binding.sessionId &&
@@ -410,6 +430,7 @@ async function bindRoot($, ownGeneration) {
   const binding = await connection($);
   const version = (await $.session.version()).version;
   const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310'].includes(version)),
+    nativeAbort: !legacyOnly && version === '2.1.310',
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;

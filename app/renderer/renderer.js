@@ -13,6 +13,8 @@ const chatInput = () => selected === 'room' ? $('shared-input') : $('message-inp
 const nativeStatusFresh = value => value?.stale !== true && (!Number.isFinite(value?.observedAt) || Date.now() - value.observedAt <= 5000);
 let roomSubmitting = null;
 const roomPendingRecipients = new Map();
+const pendingInterrupts = new Set();
+const interruptPending = s => Boolean(s && (s.interruptPending || pendingInterrupts.has(s.id)));
 let shareRevision = 0, sharePending = null;
 let runPreview = null;
 let renamingId = '', renaming = false;
@@ -200,6 +202,7 @@ function soloAction(s) {
     ? { kind: 'resume', label: '继续原生会话', hint: '记录和草稿已保留；恢复不会重发旧任务。' }
     : { kind: 'none', label: '暂不可发送', hint: '请检查原生会话状态。记录和草稿保留，不会自动重发。' };
   if (s.owner !== owner) return { kind: 'claim', label: '接管此窗口', hint: '此窗口只读。接管后继续使用原会话，草稿保留。' };
+  if (interruptPending(s)) return { kind: 'send', label: '等待中断确认', hint: '正在等待原生中断确认，可以继续编辑草稿；不会自动发送。' };
   if (s.nativeInputRequired) return { kind: 'terminal', label: '打开原生终端', hint: 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；这里的草稿保留，不会自动发送。' };
   if (s.state === 'error' && s.failedTurnInputAvailable) return { kind: 'send', label: '发送 ↑', hint: '上次请求失败。可以编辑并发送新消息；不会自动重试或继续交接。' };
   if (s.state === 'error' && (s.chatAvailable !== false || !s.legacyInputEligible || s.legacyInputPrepared)) return { kind: 'terminal', label: '打开原生终端', hint: '原生请求未完成。请查看上方的失败记录；草稿保留，不会自动重试。需要处理原生设置时可打开终端。' };
@@ -226,7 +229,7 @@ function renderComposer(s) {
   $('message-input').disabled = false; // Saved drafts remain selectable/copyable.
   $('message-input').placeholder = action.kind === 'send' ? '直接说你想做什么…' : legacyDraft ? '可以继续编辑草稿。' : '草稿保留在这里；请使用下方操作继续。';
   send.textContent = action.label; send.type = action.kind === 'send' ? 'submit' : 'button';
-  send.disabled = action.kind === 'none' || (action.kind === 'send' && (s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
+  send.disabled = action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
   $('compose-hint').textContent = inputRecoveries.get(s?.id)?.text.value ? '上一段原生输入未确认。草稿可继续编辑；请在原生终端查看保留的文字。' : pendingMode?.id === s?.id ? '正在切换输入方式，可以先编辑草稿。' : action.hint;
 }
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
@@ -700,9 +703,9 @@ function share(text) {
 }
 function updateSharingControls() {
   const target = members().find(s => s.id === $('share-recipient').value);
-  $('confirm-share').disabled = Boolean(sharePending) || !$('share-text').value.trim() || !target || target.nativeInputRequired || target.shareAvailable === false || target.chatAvailable === false || disconnected;
+  $('confirm-share').disabled = Boolean(sharePending) || !$('share-text').value.trim() || !target || interruptPending(target) || target.nativeInputRequired || target.shareAvailable === false || target.chatAvailable === false || disconnected;
   $('confirm-share').textContent = sharePending ? '发送中…' : '发送这段内容';
-  $('share-help').textContent = sharePending ? '正在发送刚才确认的内容；你可以继续编辑，新的修改不会随这次发送。' : target?.nativeInputRequired ? 'Claude 已停止本轮；请在原生终端输入一次后继续，所选内容保留。' : target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
+  $('share-help').textContent = sharePending ? '正在发送刚才确认的内容；你可以继续编辑，新的修改不会随这次发送。' : interruptPending(target) ? '正在等待原生中断确认；所选内容保留，不会自动发送。' : target?.nativeInputRequired ? 'Claude 已停止本轮；请在原生终端输入一次后继续，所选内容保留。' : target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
 }
 function visibleSelectionTerminal() {
   const s = current(); if (!s || s.archived) return null;
@@ -933,6 +936,7 @@ function render() {
       $('messages').hidden = false; $('terminal-area').hidden = !terminalVisible; $('composer-wrap').hidden = false;
       renderComposer(s); renderNativeActivity(s);
       $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
+      $('interrupt').disabled = interruptPending(s);
       readLegacyProgress(s);
       const visibleMessages = sessionMessages(s);
       const signature = JSON.stringify(visibleMessages);
@@ -993,12 +997,12 @@ function render() {
       const nativeRoute = recipient && (recipient.nativeInputRequired || recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient));
       $('shared-input').readOnly = false;
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
-      $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : roomSteerAvailable(recipient) ? '追加指令 ↑' : '发送 ↑';
+      $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : interruptPending(recipient) ? '等待中断确认' : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : roomSteerAvailable(recipient) ? '追加指令 ↑' : '发送 ↑';
       const recipientPending = roomPendingRecipients.has(recipient?.id);
       const unavailable = roomSubmitting || recipientPending || disconnected || !nativeWorkspaceMentions.body(roomMention, $('shared-input').value).trim();
       const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
-      const ready = s => s && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
-      const manualErrorReady = recipient?.state === 'error' && recipient.failedTurnInputAvailable && !recipient.pendingTag && !recipient.pendingQueue && !recipient.approval;
+      const ready = s => s && !interruptPending(s) && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
+      const manualErrorReady = !interruptPending(recipient) && recipient?.state === 'error' && recipient.failedTurnInputAvailable && !recipient.pendingTag && !recipient.pendingQueue && !recipient.approval;
       $('forward-button').disabled = nativeRoute ? roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !manualErrorReady && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
       $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed || !safeHandoffs || Boolean(threadUnsupported);
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : roomMention?.active === false ? '接收者已变化，重新 @ 选择。正文保留，不会发送给旧成员。' : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
@@ -1008,6 +1012,7 @@ function render() {
       if (recipient?.legacyShare && !recipient.legacySharedReply) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
       $('run-button').title = safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
       if (nativeRoute) $('run-help').textContent = recipient?.nativeInputRequired ? 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；共享草稿保留，不会自动发送。' : '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
+      if (interruptPending(recipient)) $('run-help').textContent = '正在等待原生中断确认，可以继续编辑草稿；不会自动发送。';
       if (threadUnsupported) $('run-help').textContent = roomThreads.rows.has(roomReplyTo) ? '此连接尚不支持讨论回复。草稿保留；取消回复可作为新消息发送。' : '原讨论已移除。草稿保留，请先取消回复。';
       $('pause-button').textContent = run?.pauseUnconfirmed ? '重新核对暂停' : pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
       $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || Boolean(run?.pausePending) || (!pendingRun && run?.status !== 'running' && !run?.pauseUnconfirmed);
@@ -1422,7 +1427,9 @@ $('composer').onsubmit = event => {
 $('interrupt').onclick = () => {
   const id = activeSessionId();
   if (mode === 'chat' && inputFocusAllowed() && !$('message-input').readOnly) $('message-input').focus();
-  attempt(() => api.interrupt(id));
+  if (pendingInterrupts.has(id)) return;
+  pendingInterrupts.add(id); render();
+  attempt(async () => { try { await api.interrupt(id); } finally { pendingInterrupts.delete(id); render(); } });
 };
 $('shared-input').onbeforeinput = event => { const input = $('shared-input'); roomMentionEdit = { before: input.value, start: input.selectionStart, end: input.selectionEnd, type: event.inputType }; };
 $('shared-input').oninput = event => {
@@ -1475,10 +1482,10 @@ $('forward-button').onclick = () => {
   if (nativeUsable(recipient)) selectRoom(recipient.id); else select(recipient.id, 'chat');
 };
 function roomSteerAvailable(s) {
-  return Boolean(s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && (s.legacySharedSteer || s.serviceCapabilities?.includes('nativeSharedSteer')));
+  return Boolean(!interruptPending(s) && s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && (s.legacySharedSteer || s.serviceCapabilities?.includes('nativeSharedSteer')));
 }
 function roomQueueAvailable(s) {
-  return Boolean(!s?.nativeInputRequired && s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && (s.legacySharedQueue || s.serviceCapabilities?.includes('nativeSharedQueue')));
+  return Boolean(!interruptPending(s) && !s?.nativeInputRequired && s?.state === 'working' && s.queueAvailable && !s.pendingQueue && !s.approval && (s.legacySharedQueue || s.serviceCapabilities?.includes('nativeSharedQueue')));
 }
 function handoffCandidates(firstId) {
   const first = members().find(s => s.id === firstId);
@@ -1486,7 +1493,7 @@ function handoffCandidates(firstId) {
   return members().filter(s => {
     const caps = s.serviceCapabilities || state.capabilities || [];
     return (s.handoffGroup === first.handoffGroup || state.peerHandoffsAvailable && caps.includes('peerReplyHandoffsV1') && first.serviceCapabilities?.includes('peerReplyHandoffsV1')) && caps.includes('boundedReplyHandoffs') &&
-      s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false &&
+      s.state === 'idle' && !interruptPending(s) && !s.nativeInputRequired && !s.pendingTag && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false &&
       ![s.background, s.scheduled].some(n => Number.isSafeInteger(n) && n > 0);
   });
 }

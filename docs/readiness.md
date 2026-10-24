@@ -1,6 +1,26 @@
 # Readiness and next gates
 
-As of 2026-10-23. Version 0.1.0-alpha.89 is a **local macOS technical-trial alpha**.
+As of 2026-10-23. Version 0.1.0-alpha.90 is a **local macOS technical-trial alpha**.
+
+
+**Alpha.90 — interrupt and continue from the GUI:** supported new Claude 2.1.310
+connections use the native exact-turn API. API acknowledgement, the exact native
+interrupted boundary and the original submission's actual return must all arrive
+before graphical input recovers. Pending confirmation keeps drafts editable and
+blocks private/shared sends before they can invalidate the interruption. Duplicate
+clicks, stale results and a held API cannot stop observation or unlock newer work.
+Native keyboard Escape and retained old-backend pause semantics stay explicit.
+
+939 checks pass without skips. The actual installed GUI interruption/immediate
+Enter/draft/next-GUI-message journey passes with two fixed local responses. The
+installed Claude/Codex shared-stream interruption/reload/continuation journey also
+passes, with four fixed responses and one native title, zero paid inference.
+All 55 runtime files match; post-native strict signing and single-launcher
+verification pass. Actual original-profile hidden app reopening preserves three
+native IDs/PIDs, 24 Codex items, inputs/readers and drafts/views with zero dispatch.
+Independent final artifact review passes for this increment. The mixed API trial
+proves renderer reload, not its former raw-log full-app-reopening label. These
+results do not close full U17 or physical IME.
 
 **Alpha.89 — native state, choices and continuity:** the existing reader now
 keeps precise native request/thinking/tool/output/wait phases, native permission

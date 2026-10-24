@@ -11,7 +11,7 @@ function adapter() {
   r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
   r.bindRoot({ sessionId: r.record.nativeId }); return r;
 }
-async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader, toolReader, usageReader } = {}) {
+async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader, toolReader, usageReader, turnAbort } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
   const { register, testObserveModel, testObserveUsage } = await import('data:text/javascript;base64,' + Buffer.from(source + '\nexport { observeModel as testObserveModel, observeUsage as testObserveUsage };\n//' + randomUUID()).toString('base64'));
   const r = runtime || adapter(), clock = [], hooks = new Map(), requests = [];
@@ -22,6 +22,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
     fs: { read: async () => JSON.stringify({ sessionId: native, socketPath: '/fixture/gui-submit.sock', token, compat: true, nativeBlocks: true }) },
     clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; } },
     tool: { list: toolReader || (async () => []) },
+    turn: { abort: turnAbort || (async () => { throw Error('No native control requested'); }) },
     prompt: { read: async () => ({ text: '' }), submit: promptSubmit || (async () => { throw Error('Observation must never submit'); }) },
     http: { fetch: async (url, options) => {
       const body = JSON.parse(options.body); let result;
@@ -33,6 +34,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
         r.record.nativeId = body.nextSessionId; r.rootEnding = null; r.rootLease = randomUUID(); r.observationEpoch = randomUUID(); r.rootObservation = null; result = { lease: r.rootLease, observationEpoch: r.observationEpoch };
       }
       else if (url.endsWith('/observation')) { requests.push(body); result = fetchObservation ? await fetchObservation(body, r) : r.observeRoot(body); }
+      else if (url.endsWith('/abort-result')) result = r.nativeAbortResult(body);
       else throw Error('Unexpected request: ' + url);
       return { ok: true, text: JSON.stringify(result) };
     } } };
@@ -46,6 +48,72 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
   return { r, clock, requests, invoke, poll, readUsage() { return testObserveUsage($); }, setUsageReader(fn) { $.session.usage = fn; }, setModelReader(fn) { $.session.model = fn; }, readModel() { return testObserveModel($); }, setToken(value) { token = value; }, setNativeId(id) { native = id; }, append: (e, next) => invoke('session.append', e, next) };
 }
 const response = (text = 'Intermediate native text', extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' }, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] }, ...extra });
+
+for(const order of ['api-first','boundary-first'])test('native GUI abort requires API result, exact interrupted boundary and real submission settlement: '+order,async()=>{
+ const r=adapter(),turnId=randomUUID();r.nativeAbortAvailable=true;r.rootTurn={id:turnId,status:'working'};
+ r.terminal.input=()=>{throw Error('A native API interruption must not also write Escape');};
+ const done=r.interrupt(),command=r.nativeAbortCommand();assert.equal(command.turnId,turnId);assert.equal(r.nativeAbortCommand(),null,'The native command is delivered once');
+ const result={sessionId:r.record.nativeId,lease:r.rootLease,epoch:r.observationEpoch,id:command.id,turnId,status:'aborted',submitSettled:false};
+ if(order==='api-first')r.nativeAbortResult(result);
+ r.rootTurn.status='idle';r.finishInterrupted(turnId);
+ if(order==='boundary-first')r.nativeAbortResult(result);
+ assert.equal(r.nativeInputRequired,true,'Local completion cannot replace the mod submit finally proof');
+ r.submission.pending={tag:'previous-submission'};r.nativeAbortResult({...result,submitSettled:true});
+ assert.equal(r.nativeInputRequired,true,'The previous receipt is still using the channel');
+ r.submission.pending=null;r.completeNativeAbort();await done;assert.equal(r.nativeInputRequired,false);
+});
+test('stale abort results cannot unlock a newer native turn or a changed control revision',async()=>{
+ for(const changed of ['turn','control','epoch','gap']){
+  const r=adapter(),turnId=randomUUID();r.nativeAbortAvailable=true;r.rootTurn={id:turnId,status:'working'};r.terminal.input=()=>{throw Error('No fallback key');};
+  const done=r.interrupt(),command=r.nativeAbortCommand(),result={sessionId:r.record.nativeId,lease:r.rootLease,epoch:r.observationEpoch,id:command.id,turnId,status:'aborted',submitSettled:true};
+  r.nativeInputRequired=true;
+  if(changed==='turn')r.rootTurn={id:'newer-turn',status:'working'};
+  if(changed==='control')r.record.controlRevision=1;
+  if(changed==='epoch')r.observationEpoch='new-epoch';
+  if(changed==='gap')r.observeRootGap(result);
+  assert.throws(()=>r.nativeAbortResult(result),/Native abort changed/);assert.equal(r.nativeInputRequired,true);
+  r.cancelNativeAbort();await assert.rejects(done,/未确认/);
+ }
+});
+test('duplicate GUI interruption reuses its exact pending native operation without invalidating control',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-abort-unit-')),host={binaries:{},close(){}},w=new Workspace(host,dir),r=adapter();
+ const s=r.record;Object.assign(s,{id:'synthetic',owner:'window',view:'chat',controlRevision:0,memberRevision:0,provider:'claude',messages:[],state:'working'});
+ w.sessions.set(s.id,s);w.runtimes.set(s.id,r);w.bind(s,r);r.nativeAbortAvailable=true;r.rootTurn={id:'native-turn',status:'working'};r.terminal.input=()=>{throw Error('No fallback key');};
+ t.after(()=>{w.close();fs.rmSync(dir,{recursive:true,force:true});});
+ const first=w.interrupt(s.id,'window'),command=r.nativeAbortCommand(),second=w.interrupt(s.id,'window');assert.equal(s.controlRevision,1);
+ r.nativeQueue=true;r.ready=true;r.chatAvailable=true;w.drafts.set(s.id,'The next direction');
+ assert.equal(w.snapshot().sessions[0].interruptPending,true);
+ await assert.rejects(w.queue(s.id,'The next direction','window'),/草稿保留/);
+ await assert.rejects(w.send(s.id,'The next direction','window'),/中断确认/);
+ assert.equal(r.queueAvailable,false);assert.equal(s.controlRevision,1);assert.equal(r.nativeAbortCurrent(r.nativeAbortRequest),true);
+ assert.equal(w.drafts.get(s.id),'The next direction');assert.equal(w.versions.dispatches,0);
+ r.rootTurn.status='idle';r.finishInterrupted('native-turn');r.nativeAbortResult({sessionId:s.nativeId,lease:r.rootLease,epoch:r.observationEpoch,id:command.id,turnId:'native-turn',status:'aborted',submitSettled:true});
+ await Promise.all([first,second]);assert.equal(r.nativeInputRequired,false);assert.equal(w.snapshot().sessions[0].interruptPending,false);
+});
+test('a delayed old abort timeout cannot cancel a later native operation',async t=>{
+ const callbacks=[];t.mock.method(global,'setTimeout',fn=>{callbacks.push(fn);return 0;});
+ const r=adapter();r.nativeAbortAvailable=true;r.rootTurn={id:'old-turn',status:'working'};
+ const old=r.interrupt();r.cancelNativeAbort();await assert.rejects(old,/未确认/);
+ r.rootTurn={id:'new-turn',status:'working'};const current=r.interrupt(),request=r.nativeAbortRequest;
+ callbacks[0]();assert.equal(r.nativeAbortRequest,request);r.cancelNativeAbort();await assert.rejects(current,/未确认/);
+});
+test('a held native abort API cannot block observation of the actual interrupted boundary',async t=>{
+ let release;
+ const f=await mod({version:'2.1.310',turnAbort:()=>new Promise(resolve=>release=resolve),fetchObservation:(body,r)=>({...r.observeRoot(body),abort:r.nativeAbortCommand()})});
+ const turnId=randomUUID();await f.invoke('turn.start',{turnId});await f.clock.shift()();
+ t.after(()=>f.r.cancelNativeAbort());const done=f.r.interrupt();
+ const next=()=> (async function*(){yield {kind:'thinking'};return {stopReason:'end_turn'};})();next.origin={plugin:'engine',tier:'core'};
+ const stream=f.invoke('turn.step',{turnId},next);
+ await stream.next();
+ // Start control while the root still runs. Its RPC result can lag behind the
+ // actual native boundary, which must continue through the observation queue.
+ await f.clock.shift()();
+ const task=f.clock.shift()();await Promise.resolve();
+ assert.equal(typeof release,'function');
+ await f.invoke('turn.complete',{turnId,reason:'aborted'});await f.clock.shift()();
+ assert.equal(f.r.nativeAbortRequest.nativeDone,true);assert.equal(f.r.nativeInputRequired,true);
+ release();await task;await done;await stream.return();assert.equal(f.r.nativeInputRequired,false);
+});
 
 test('root activity follows the transparent native stream, while child activity and ended turns cannot replace it', async () => {
   const f = await mod({version:'2.1.309'}), turnId=randomUUID();

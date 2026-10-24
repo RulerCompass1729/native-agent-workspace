@@ -99,7 +99,11 @@ function createSubmissionServer(filename, targets) {
         }
       }
       if (req.url === '/observation') {
-        try { return res.end(JSON.stringify(target.observeRoot(message))); }
+        try { const observed = target.observeRoot(message); return res.end(JSON.stringify({ ...observed, abort: target.nativeAbortCommand?.() || undefined })); }
+        catch { res.writeHead(409); res.end('{}'); return; }
+      }
+      if (req.url === '/abort-result') {
+        try { return res.end(JSON.stringify(target.nativeAbortResult(message))); }
         catch { res.writeHead(409); res.end('{}'); return; }
       }
       if (req.url === '/next') {
@@ -114,7 +118,10 @@ function createSubmissionServer(filename, targets) {
         catch { return res.end(JSON.stringify({ allowed: false })); }
         return res.end(JSON.stringify({ allowed: target.submission.authorize(message) }));
       }
-      if (req.url === '/result') return res.end(JSON.stringify({ received: target.submission.result(message) }));
+      if (req.url === '/result') {
+        const received = target.submission.result(message); target.completeNativeAbort?.();
+        return res.end(JSON.stringify({ received }));
+      }
       res.writeHead(404); res.end('{}');
     });
   });

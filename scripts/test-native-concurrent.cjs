@@ -10,6 +10,8 @@ const { executable, processIdentity, processMayBeAlive } = require('../app/platf
 const { connect, connectService } = require('../app/service-client.cjs');
 const retained = process.env.NAW_CONCURRENT_RETAINED === '1';
 const nativeInterrupt = process.env.NAW_CONCURRENT_INTERRUPT === '1';
+const apiAbort = process.env.NAW_CONCURRENT_CLAUDE_API === '1';
+assert.ok(!apiAbort || nativeInterrupt && !retained);
 const emptyTerminal = process.env.NAW_CONCURRENT_EMPTY_TERMINAL === '1';
 const peerRound = process.env.NAW_CONCURRENT_PEER === '1';
 const peerReleased = process.env.NAW_PEER_RELEASED_84 === '1';
@@ -60,7 +62,7 @@ const server = http.createServer((req, res) => {
       event(res, 'response.completed', { response }); res.end(); return;
     }
     const number = ++counts[provider];
-    if (number > (nativeInterrupt && provider === 'claude' ? 3 : 2)) { res.writeHead(429); res.end(); return; }
+    if (number > (nativeInterrupt && !apiAbort && provider === 'claude' ? 3 : 2)) { res.writeHead(429); res.end(); return; }
     const key = `${provider}-${number}`;
     fs.writeFileSync(path.join(base, `${key}-request.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -68,7 +70,7 @@ const server = http.createServer((req, res) => {
       event(res, 'message_start', { message: { id: 'msg_claude_local', type: 'message', role: 'assistant', model: input.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
       event(res, 'content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
       const append = text => event(res, 'content_block_delta', { index: 0, delta: { type: 'text_delta', text } });
-      append(peerRound ? (number === 1 ? '草案：午餐36元，交通14元，总计50元。\n' : '最终预算50元，已由Codex核查。\n') : number === 1 ? 'CLAUDE_SHARED_PREFIX: checking the small task.\n' : nativeInterrupt && number === 2 ? 'CLAUDE_NATIVE_RECOVERY: private input after stop.\n' : 'CLAUDE_QUEUED_PREFIX: following up.\n');
+      append(peerRound ? (number === 1 ? '草案：午餐36元，交通14元，总计50元。\n' : '最终预算50元，已由Codex核查。\n') : number === 1 ? 'CLAUDE_SHARED_PREFIX: checking the small task.\n' : nativeInterrupt && !apiAbort && number === 2 ? 'CLAUDE_NATIVE_RECOVERY: private input after stop.\n' : 'CLAUDE_QUEUED_PREFIX: following up.\n');
       controls[key] = { append, finish: () => {
         event(res, 'content_block_stop', { index: 0 });
         event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 30 } });
@@ -376,7 +378,7 @@ async function openApplication() {
       const key = original.provider + '-1', marker = original.provider.toUpperCase() + '_TRAILING_FRAGMENT';
       controls[key].append(marker);
       await page.locator(`[data-session-id="${original.id}"]`).click();
-      const keyboardInterrupt = retained || original.provider === 'claude';
+      const keyboardInterrupt = retained || original.provider === 'claude' && !apiAbort;
       let terminalText = '';
       if (keyboardInterrupt) {
         await page.locator('#terminal-tab').click();
@@ -428,7 +430,7 @@ async function openApplication() {
         await until(async () => (await page.locator('#room-messages').innerText()).includes('CODEX_AFTER_CLAUDE_INTERRUPT'), 'Other member stays live after native interruption');
         assert.equal((await session(codex.id)).state, 'working');
       }
-      checks.push(`Native ${s.provider} ${keyboardInterrupt ? 'Escape' : 'GUI interrupt'} preserves the full private cut, authorized shared prefix and draft without ending the peer task`);
+      checks.push(`Native ${s.provider} ${keyboardInterrupt ? 'Escape' : 'GUI interrupt'} preserves the observed private cut, authorized shared prefix and draft without ending the peer task`);
     }
     const interruptedPrivate = (await session(codex.id)).messages.filter(m => m.status === 'interrupted').map(m => ({ id: m.id, text: m.text, status: m.status }));
     assert.ok(interruptedPrivate.some(m => m.text?.includes('CODEX_SHARED_PREFIX')));
@@ -439,6 +441,7 @@ async function openApplication() {
       assert.ok((await page.locator('#messages').innerText()).includes('CODEX_SHARED_PREFIX'));
       await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     };
+    if (!apiAbort) {
     // Claude's native Stop explicitly refuses plugin input until a new human
     // native input arrives. The UI must keep drafts and explain that boundary,
     // never synthesize Enter or quietly resubmit. Exercise the real route.
@@ -478,21 +481,29 @@ async function openApplication() {
     assert.ok(!(await snapshot()).room.messages.some(m => m.text?.includes('CLAUDE_NATIVE_RECOVERY')));
     await page.locator('#room-record').click();
     checks.push(`Claude native Stop remains visible through ${process.env.NAW_CONCURRENT_REOPEN === '1' ? 'whole-app reopening' : 'renderer reload'}; real human native input resumes the same session, with private draft and reply preserved`);
+    } else {
+      assert.equal((await session(claude.id)).nativeInputRequired, false);
+      assert.equal((await session(claude.id)).liveDraft, 'Private claude draft.');
+      await page.reload(); await page.locator('#new-session').waitFor();
+      await assertPrivateRetained(); await recipient(claude.id);
+      assert.equal((await session(claude.id)).nativeInputRequired, false);
+      checks.push('Claude GUI abort recovers graphical/shared input without any native keyboard input, including reload');
+    }
     // Now verify GUI delivery against both native engines without replacement.
     for (const original of [claude, codex]) {
-      const key = original.provider + (original.provider === 'claude' ? '-3' : '-2');
+      const key = original.provider + (original.provider === 'claude' && !apiAbort ? '-3' : '-2');
       await sharedSend(original.id, `Continue the ${original.provider} task after interruption.`);
       await until(() => controls[key], 'Same native session accepts the next task');
       controls[key].finish();
       await until(async () => (await session(original.id)).state === 'idle', 'Resumed task finishes');
       assert.equal((await session(original.id)).nativeId, original.nativeId);
     }
-    checks.push('After the required Claude native recovery, both sessions accept and finish a new GUI task without replacing either session');
-    assert.deepEqual(counts, { claude: 3, codex: 2 }); assert.deepEqual(errors, []);
+    checks.push(apiAbort ? 'Both sessions continue shared GUI work after native API abort without a recovery task or new native session' : 'After the required Claude native recovery, both sessions accept and finish a new GUI task without replacing either session');
+    assert.deepEqual(counts, { claude: apiAbort ? 2 : 3, codex: 2 }); assert.deepEqual(errors, []);
     await page.reload(); await page.locator('#new-session').waitFor();
     await until(async () => (await page.locator('#room-messages').innerText()).includes('CODEX_SHARED_PREFIX'), 'Interrupted reader survives renderer reload');
     await assertPrivateRetained();
-    checks.push('Private and shared Codex interrupted text and boundary survive full app reopening and later GUI work');
+    checks.push(`Private and shared Codex interrupted text and boundary survive ${!apiAbort && process.env.NAW_CONCURRENT_REOPEN === '1' ? 'full app reopening' : 'renderer reload'} and later GUI work`);
     const final = await snapshot(); assert.equal(final.diagnostics.dispatches, 4); await save('interrupted-reopened');
     assert.ok(final.room.messages.filter(m => m.role === 'human').every(m => m.status === 'submitted'));
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-interruption.png') }); }
