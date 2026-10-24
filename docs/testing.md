@@ -1,5 +1,39 @@
 # Bounded testing
 
+## Native Claude GUI interruption and continuation — alpha.90
+
+- `test-native-abort.cjs`: default is a separate SDK probe and explicitly does
+  not certify the GUI button. `NAW_ABORT_PRODUCT=1` uses only the actual product
+  plugin and GUI controls: stream, type next draft, click Interrupt, immediately
+  press Enter while confirmation is pending, preserve the editable draft, wait for
+  native completion, send that draft from GUI and receive the next reply on the
+  original process/session. Two fixed local responses, zero paid inference.
+- `test-native-concurrent.cjs` with `NAW_CONCURRENT_INTERRUPT=1` and
+  `NAW_CONCURRENT_CLAUDE_API=1`: actual Claude/Codex streams, GUI interruption,
+  preserved private cut/exact stopped shared prefix, peer continuation, reload
+  and new shared tasks in the same sessions. Four fixed responses plus at most
+  one native title. Existing native-Escape mode continues to test its distinct
+  human Stop/recovery semantics.
+- Explicit negative cases require all three native proofs and the settled local
+  submission channel; cover both ACK/boundary orders, changed turn/control/epoch,
+  gap, duplicate clicks and a late old timer. A held abort API cannot hold the
+  observation queue. Native control is never retried or replaced with a keypress.
+- Native 302's real compatibility boot/reader/tool/reopen journey passes with
+  three responses. The exact released alpha.89 hook can upgrade while edited
+  copies remain protected. Node syntax checks alone missed the native module
+  compiler's ban on reading an API noun as a value; the real zero-inference boot
+  caught it before any model response, and the code now calls literal native APIs.
+
+939 local checks pass without skips. Installed solo and mixed versions of the
+above journeys pass, with two and four fixed task responses respectively, plus
+one native title in the mixed trial. Video records the installed solo journey.
+Independent final artifact review, 55 matching runtime files, post-native strict
+signing and original three-session full app reopening pass. The API mixed trial
+uses renderer reload; the old raw-log full-app-reopening label is not accepted as
+proof and is corrected in the runner. Original-profile whole-app continuity has
+its own actual launch evidence. Complete U17 and physical IME remain open; this
+increment does not widen native fleet completion.
+
 ## Native state, controls and context continuity — alpha.89
 
 Use the actual hidden Electron application, actual Codex 0.163.0 and Claude

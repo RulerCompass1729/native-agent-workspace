@@ -128,7 +128,7 @@ class Claude extends EventEmitter {
     this.terminal.on('data', data => this.emit('terminal', data));
     this.terminal.on('started', pid => this.emit('pid', pid));
     this.terminal.on('closed', result => {
-      this.ready = false; this.submission.close();
+      this.cancelNativeAbort(); this.ready = false; this.submission.close();
       if (result.confirmed) this.host.hookTargets.delete(this.token);
       else this.emit('activity', '终端连接断开，原生进程退出未确认。');
       this.emit('state', result.confirmed ? 'ended' : 'error');
@@ -136,6 +136,7 @@ class Claude extends EventEmitter {
   }
   bindRoot(message) {
     if (message.sessionId !== this.record.nativeId || this.rootEnding || !this.terminal?.alive) throw Error('Root unavailable');
+    this.cancelNativeAbort?.();
     if (this.rootLease) this.submission?.close?.(); // Reload retires uncertain receipts, never the native task.
     // This credential stays in the root mod's memory. A child inheriting the
     // environment token cannot bind its different engine session identity.
@@ -147,6 +148,7 @@ class Claude extends EventEmitter {
     this.rootObservation = null; this.rootTurn = null; this.liveTurn = null; this.livePermissions = new Map(); this.observationSeenAt = Date.now();
     this.nativeBlocks = message.nativeBlocks === true;
     this.nativeQueue = message.nativeQueue === true;
+    this.nativeAbortAvailable = message.nativeAbort === true && !this.retainedReader;
     this.addressedSendAvailable = this.nativeBlocks && message.addressedTool === true && !this.retainedReader;
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
     this.displayProofs = new Map(); this.displayGap = false;
@@ -279,10 +281,47 @@ class Claude extends EventEmitter {
     this.nativeInputRequired = true; this.emit('inputRequired', true);
     this.emit('interrupted', { turnId, tag: pending?.tag });
     this.emit('state', 'idle'); // Root only: no successful reply or fleet completion.
+    if (this.nativeAbortRequest?.turnId === turnId) { this.nativeAbortRequest.nativeDone = true; this.completeNativeAbort(); }
+  }
+  cancelNativeAbort() {
+    const request = this.nativeAbortRequest; if (!request) return;
+    this.nativeAbortRequest = null; clearTimeout(request.timer);
+    this.emit('capability');
+    request.reject(Error('原生中断结果未确认；没有重发或切换为终端按键，请核对原会话。'));
+  }
+  nativeAbortCurrent(request) {
+    return this.nativeAbortRequest === request && !this.rootEnding && !this.disposed && this.terminal?.alive &&
+      this.record.nativeId === request.nativeId && this.rootLease === request.lease && this.observationEpoch === request.epoch &&
+      this.rootTurn?.id === request.turnId && this.record.controlRevision === request.control && Date.now() < request.deadline;
+  }
+  nativeAbortCommand() {
+    const request = this.nativeAbortRequest; if (!request) return null;
+    if (!this.nativeAbortCurrent(request)) { this.cancelNativeAbort(); return null; }
+    if (request.delivered) return null;
+    request.delivered = true;
+    return { id: request.id, turnId: request.turnId, epoch: request.epoch };
+  }
+  nativeAbortResult(message) {
+    const request = this.nativeAbortRequest;
+    if (!request || !this.nativeAbortCurrent(request) || !this.validRootBinding(message) || message.epoch !== request.epoch ||
+      message.id !== request.id || message.turnId !== request.turnId || !request.delivered) throw Error('Native abort changed');
+    if (message.status !== 'aborted') { this.cancelNativeAbort(); return { received: true }; }
+    request.apiDone = true;
+    // This flag comes from the mod's actual prompt.submit finally, never a
+    // local timeout/close of the application's submission promise.
+    if (message.submitSettled === true) request.submitSettled = true;
+    this.completeNativeAbort(); return { received: true };
+  }
+  completeNativeAbort() {
+    const request = this.nativeAbortRequest; if (!request) return;
+    if (!this.nativeAbortCurrent(request)) { this.cancelNativeAbort(); return; }
+    if (!request.apiDone || !request.nativeDone || !request.submitSettled || this.submission.pending) return;
+    this.nativeAbortRequest = null; clearTimeout(request.timer);
+    this.nativeInputRequired = false; this.emit('inputRequired', false); request.resolve({ interrupted: true });
   }
   observeRootGap(message) {
     if (!this.validRootBinding(message) || !this.observationEpoch || message.epoch !== this.observationEpoch) throw Error('Invalid native observation');
-    this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
+    this.cancelNativeAbort(); this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
     this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
     this.emit('progress', { id: `claude-observation-gap-${this.record.nativeId}`,
       source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步',
@@ -291,7 +330,7 @@ class Claude extends EventEmitter {
   }
   contextEnding(reason = 'other') {
     if (this.rootEnding?.sessionId === this.record.nativeId) return;
-    this.rootEnding = { sessionId: this.record.nativeId, reason };
+    this.cancelNativeAbort(); this.rootEnding = { sessionId: this.record.nativeId, reason };
     this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear(); this.pending = null; this.ready = false; this.lastPromptId = null;
     this.submission.close?.();
     this.emit('contextEnd', { nativeId: this.record.nativeId, reason });
@@ -455,6 +494,7 @@ class Claude extends EventEmitter {
         this.emit('complete', { messageId: displayConfirmed ? proof?.messageId : undefined, tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
   }
   async send(text, tag, guard) {
+    if (this.nativeAbortRequest) throw Error('正在等待原生中断确认；草稿保留。');
     if (this.nativeInputRequired) throw Error('Claude 已暂停插件输入；请在原生终端输入一次后继续，草稿保留。');
     if (!this.ready || this.pending || this.queued) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
     if (!guard()) throw new Error('这条交接已撤销。');
@@ -472,7 +512,7 @@ class Claude extends EventEmitter {
   claimFailedTurnInput() {
     if (this.failedTurnInputId) { this.rootTurn.inputUsed = true; this.emit('capability'); }
   }
-  get queueAvailable() { return Boolean(!this.nativeInputRequired && this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
+  get queueAvailable() { return Boolean(!this.nativeAbortRequest && !this.nativeInputRequired && this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
   async queue(text, tag, guard) {
     if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Error('原生等待输入暂不可用；草稿保留。');
     const pending = this.queued = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
@@ -515,9 +555,22 @@ class Claude extends EventEmitter {
       throw error;
     }
   }
-  interrupt() { if (this.pending) this.pending.interruptRequested = true; this.terminal.input('\x1b'); }
+  interrupt() {
+    if (this.pending) this.pending.interruptRequested = true;
+    if (this.nativeAbortRequest) {
+      if (this.nativeAbortCurrent(this.nativeAbortRequest)) return this.nativeAbortRequest.done;
+      this.cancelNativeAbort();
+    }
+    if (!this.nativeAbortAvailable || this.rootTurn?.status !== 'working' || this.rootEnding || this.displayGap) { this.terminal.input('\x1b'); return; }
+    const request = { id: crypto.randomUUID(), nativeId: this.record.nativeId, turnId: this.rootTurn.id,
+      lease: this.rootLease, epoch: this.observationEpoch, control: this.record.controlRevision, deadline: Date.now() + 8000 };
+    request.done = new Promise((resolve, reject) => { request.resolve = resolve; request.reject = reject; }); request.done.catch(() => {});
+    this.nativeAbortRequest = request; request.timer = setTimeout(() => { if (this.nativeAbortRequest === request) this.cancelNativeAbort(); }, 8000);
+    this.emit('capability');
+    return request.done;
+  }
   async openTerminal() { return this.terminal; }
-  async stop() { await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
+  async stop() { this.cancelNativeAbort(); await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
 }
 
 class Rpc extends EventEmitter {

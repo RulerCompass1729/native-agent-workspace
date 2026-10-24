@@ -4,6 +4,23 @@ As of 2026-10-23. This is a working acceptance record, not an independent securi
 certification. Private transcripts, screenshots, paths and account details stay
 outside the public repository. Use synthetic reproductions here.
 
+**Alpha.90 final scoped review, 2026-10-23:** the GUI's native Escape path
+caused Claude's post-Stop plugin-input pause. The actual supported 310 GUI now
+uses the native exact-turn API and continues without native typing. Independent
+review reproduced a quick-queue race that invalidated the just-requested abort;
+private/shared sends now wait before changing control, preserving editable drafts.
+API ACK, native interrupted boundary and actual submission settlement remain
+separate. Held native control cannot block observations. All 939 checks pass,
+without skips. Installed solo fast-Enter/abort/next-GUI-input and mixed
+Claude/Codex interruption/shared continuation pass with fixed local responses,
+zero paid inference. The mixed API trial proves renderer reload; its former raw
+log label saying full-app reopening is corrected and is not accepted as evidence.
+A separate actual original-profile app reopening preserves all three sessions,
+24 Codex items, inputs/readers, drafts/views and zero new dispatch. All 55 runtime
+files match, strict signing passes after native use, one launcher remains.
+Independent final source/artifact review passes for B42 only. Physical native
+Escape, retained old-backend pause and complete U17 are not widened.
+
 **Alpha.89 final scoped review, 2026-10-23:**
 the latest feedback requires native state, pending human actions and inputs to
 remain consistent between the reader and its actual TUI. Claude 302's five-response
@@ -88,6 +105,7 @@ and documentation review is not a native runtime test; U17 remains open.
 
 | ID | Source / trigger | Priority / owner | Status and evidence | Remaining check or trigger |
 | --- | --- | --- | --- | --- |
+| U17-B42 | Daily-flow gap: GUI Escape pauses Claude plugin input; independent review reproduces immediate queue invalidating an API abort | High / adapter and desktop maintainer | Closed within supported new 310 scope: native API ACK + exact interruption + actual submit settlement; pending sends reject before control changes, drafts stay editable; source/installed solo and mixed journeys plus 939 checks pass | Independent final source/artifact review passes; 55 files, post-native signature, one launcher and original three-session actual app reopening verified. API mixed trial proves renderer reload only. Native keyboard Escape and retained-backend pause keep their native semantics; full U17 remains open |
 | U17-B41 | User: live native phases/choices and GUI input disagree with the TUI; real trials expose context-switch, fork history, native action focus and missing question trajectory | High / adapter and desktop maintainer | Alpha.89 source/native trials pass current Codex context/Plan/question/retry/native-first paths and current/retained Claude phases/permission. Independent source review rechecked storage identity, source-close watermarks, delayed button navigation and ambiguous secret questions. 932 local checks pass without skips | Installed mixed-task/control/reopen, strict signature, 55-file payload and final independent artifact review pass; B41 closed within scope. Native-first and per-display context tracking apply to supported new connections; cached child selection and full U17 remain open. Privacy-revoked late display content stays private; submitted native answers are not accepted-model proof |
 | U26-B40 | User: empty process headings/large gaps and mutually exclusive conversation/TUI; review found off-page error folds, blocked summary clicks and mode-based selection; minimum-window probe found clipped input | High / desktop maintainer | Alpha.88 compact native records, original text disclosures and shared/solo same-session TUI. Source and installed task, keyboard/selection, privacy, file/run, first-turn recovery and minimum-window cases pass; independent final artifact review passes | Direct room-native interruption, preserved shared draft, rebuilt minimum-window UI and 54 matching runtime files pass; visual acceptance and full U17 remain open |
 | U26 | User screenshots: sparse messages, weak human/agent distinction, missing live Codex status, and an external recipient selector instead of inline @; subsequent feedback rejects alpha.86's stiff appearance | High / desktop and Codex adapter maintainer | Reopened for visual usability on 2026-10-23. Alpha.87 is a lightweight candidate using the existing reader: content-width human messages, continuous assistant prose, hover/focus actions and visible native timing. Short/long/interleaved reading and the installed two-agent check/private-intervention task pass; previous mention identity/undo/draft evidence remains scoped | User visual acceptance remains pending; mechanics do not establish aesthetic acceptance. Complete U17, physical IME, Claude phase parity and Recap/Next existing-result reading remain open. The simultaneous layout is implemented in alpha.88 and subject to the scoped verification below. No new framework, editor or summary model |

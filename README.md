@@ -12,6 +12,12 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.90 lets supported new Claude 2.1.310 sessions continue in the conversation
+after the GUI interrupt action. It uses the native exact-turn abort API;
+API acknowledgement, actual interrupted boundary and original submission
+settlement remain separate. Native keyboard Escape keeps its original behavior.
+See [acceptance scope](docs/readiness.md).
+
 Alpha.89 repairs native state and input continuity: live Claude phases and
 permissions, Codex retry/question/Plan state, native handling focus, and supported
 new connections' native context switches. Questions and non-secret terminal
