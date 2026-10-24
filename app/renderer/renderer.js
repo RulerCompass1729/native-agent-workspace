@@ -299,7 +299,8 @@ function terminalCanInput(id) {
   return Boolean(entry?.ready && currentTerminalDisplay(entry, record) && id === activeSessionId() && mode === 'terminal' && nativeUsable(record) && record?.owner === owner && record?.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
 }
 function currentTerminalDisplay(entry, record) {
-  return record?.terminalState?.alive !== false && (!entry?.epoch || !record?.terminalState?.epoch || entry.epoch === record.terminalState.epoch);
+  return entry?.generation === (record?.connectionRevision || 0) && (!record?.recovering || record.terminalState?.alive === true) &&
+    record?.terminalState?.alive !== false && (!entry?.epoch || !record?.terminalState?.epoch || entry.epoch === record.terminalState.epoch);
 }
 function canCaptureTerminal(id) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id), pending = entry?.viewInput;
@@ -1134,6 +1135,9 @@ async function switchMode(next, takeControl = false) {
 }
 async function ensureTerminal(id, explicit = false) {
   const record = state.sessions.find(s => s.id === id);
+  // Recovery can announce its new generation before the runtime is installed.
+  // Wait for its runtime, while preserving an already-live native display.
+  if (record?.recovering && !record.terminalAvailable && !record.terminalState?.alive) return;
   const generation = record?.connectionRevision || 0;
   const old = terminals.get(id);
   if (old && old.generation !== generation) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, new Error('原生连接已变化；旧输入没有发送。')); }

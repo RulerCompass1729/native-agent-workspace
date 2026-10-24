@@ -12,6 +12,10 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.93 restores the same terminal after explicit cold session recovery, keeping
+history and the unsent draft. A real native-history task verifies the first new
+reply in both reader and TUI; see [tested scope](docs/testing.md).
+
 Alpha.92 identifies unverified or last-known Codex versions in existing status
 and session details, using the actual running connection. It does not change
 permissions or existing capability gates. See [compatibility scope](docs/readiness.md).

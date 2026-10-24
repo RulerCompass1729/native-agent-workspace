@@ -74,6 +74,17 @@ process.on('message', q => {
     const r = runtimes.get(q.target); r.chatAvailable = q.method === 'available'; r.emit('capability');
   }
   if (q.method === 'set-state') runtimes.get(q.target).emit('state', q.value);
+  if (q.method === 'recovering-terminal') {
+    const r = runtimes.get(q.target); r.record.recovering = Boolean(q.value);
+    if (q.value) { r.savedTerminal = r.terminal; r.terminal = null; r.hasHistory = false; r.record.connectionRevision = (r.record.connectionRevision || 0) + 1; }
+    else { r.terminal = r.savedTerminal; r.hasHistory = true; }
+    r.emit('state', q.value ? 'starting' : 'idle');
+  }
+  if (q.method === 'recovery-backend-ready') {
+    const r = runtimes.get(q.target); r.hasHistory = true;
+    r.openTerminal = async () => { r.terminal = r.savedTerminal; r.emit('capability'); return r.terminal; };
+    r.emit('capability');
+  }
   if (q.method === 'native-version') {
     const r = runtimes.get(q.target);
     r.host = { rpc: { nativeVersion: q.value.version, ws: { readyState: q.value.closed ? 3 : 1 } } };

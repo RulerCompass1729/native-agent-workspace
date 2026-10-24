@@ -1,5 +1,52 @@
 # Bounded testing
 
+## Existing history, cold recovery and first new reply — alpha.93
+
+The complete task starts with actual stopped Codex 164 native history, not an
+injected chat row. `test-native-history-existing.cjs` opens the installed app with
+a fresh owned profile and selects the exact native ID from its history picker.
+It checks received text/model, original native completion times and durations,
+the actual native folder-trust menu, private join/detach, no duplicate reference,
+whole-app reopening and refusal of a second live writer. The rejected profile's
+cleanup must leave the first backend alive and its persisted session list empty.
+
+With explicit cold-recovery flags, the runner confirms backend exit, reopens a
+recoverable record and exercises the normal recovery handler with the exact
+fixture consent. The old ID/model/draft/history remain while backend identity
+changes. This tests the handler and explicit choice; it does not certify OS dialog
+appearance or a physical click. No model request occurs during import/recovery.
+Only a subsequent explicit Send permits one fixed local response and at most
+one native title. The installed accepted trial received one of each, one portal
+dispatch, zero paid inference, no page errors. Every pre-send record is matched
+exactly once by ID and compared for role, text, native ID, kind, native turn ID,
+start/completion timestamps and duration. Both reader and the same TUI display
+the new reply; the room receives none of the private history or continuation.
+
+The installed old renderer reproduces the new readiness regression. Recovery
+previously attempted its snapshot before the runtime existed and cached that
+failure despite restored history. Alpha.93 waits for runtime availability and
+rejects stale display generations without blocking an already-live recovering
+terminal. Seven source and installed readiness groups pass; 951 unit checks pass
+without skips. Source focus checks pass; Chromium IME events are tested, while
+OS foreground-return and physical system/WeChat IME are not claimed. Unaffected
+alpha.91 eight-response addressed-cooperation evidence is reused.
+
+Two test-evidence errors were retained as failures and corrected before acceptance:
+response/item IDs must be unique across trials, and all old records must be the
+baseline rather than only the earliest two messages. A fresh native display can
+briefly show shortcuts before its directory-trust menu; the owned fresh-folder
+trial explicitly waits for that menu before pressing Enter. Earlier shortcut-only
+returns generated no key or input IPC and were not native refusals or passes.
+
+The runner requires `NAW_NATIVE_HISTORY_EVIDENCE` to name an owned context-runner
+fixture with stopped original writers and an exact loopback-only model endpoint.
+`NAW_NATIVE_EXPECT_IMPORT_TRUST=1` selects its known first-directory trust case.
+`NAW_NATIVE_COLD_RECOVERY=1` enables explicit recovery;
+`NAW_NATIVE_COLD_CONTINUE=1` additionally permits the one fixed continuation.
+Never point it at a normal native profile. No provider credentials, configuration
+migration, arbitrary external live attachment or new model recap is introduced.
+Independent final installed-artifact and original-profile continuity review pass. Full U17 remains open.
+
 ## Running-version visibility — alpha.92
 
 `test-native-version.cjs` uses actual Electron and synthetic native handshakes:

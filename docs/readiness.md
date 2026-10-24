@@ -1,7 +1,25 @@
 # Readiness and next gates
 
-As of 2026-10-24. Version 0.1.0-alpha.92 is a **local macOS technical-trial alpha**.
+As of 2026-10-24. Version 0.1.0-alpha.93 is a **local macOS technical-trial alpha**.
 
+
+**Alpha.93 — continue after cold recovery:** recovery can announce a new
+connection before its native runtime exists. The reader now waits for that runtime
+before attaching its terminal, and input accepts only the current display generation.
+An already available native display remains usable during history restoration.
+This repairs the premature cached “terminal not connected” failure without polling,
+a replacement agent or automatic task replay.
+
+Seven installed terminal-readiness groups pass. An actual Codex 164 history is
+selected in a fresh product profile, its owned directory is confirmed in the real
+TUI, and old text/native timestamps are retained. Join/detach and full reopening
+preserve identity and draft; a second writer is refused without a duplicate local
+reference. After actual backend exit, explicit recovery restores the same native
+history; sending the preserved draft once produces the same new reply in the
+reader and TUI, with every pre-send record unchanged. One fixed local reply and
+one native title response were served; zero paid inference. The macOS recovery
+dialog's exact handler/choice is exercised through an owned fixture; its OS
+appearance/click and physical IME remain unverified. Independent final source and installed-artifact review passes for this scope.
 
 **Alpha.92 — visible native compatibility:** the existing session status and
 details distinguish the corresponding running Codex handshake, an unverified
