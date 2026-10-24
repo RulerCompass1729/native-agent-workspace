@@ -60,9 +60,15 @@ silently turn off this guard's secret scan.
 
 At this preparation stage, database/export/log files, credentials, screenshots,
 archives, external symlinks, submodules, and non-UTF-8/binary content are blocked.
-The current limits are 2 MiB per scanned item and 64 MiB per scan; exceeding them
-blocks rather than skips. A real need for an asset or a larger repository should
-trigger a reviewed handling change, not a blanket bypass.
+The current finite limits are 2 MiB per scanned item and 128 MiB per scan;
+exceeding either blocks rather than skips. On 2026-10-24, complete history reached
+67,690,301 bytes across 110 commits and 1,860 unique blobs, exceeding the old
+64 MiB total. The reviewed increase changes only that aggregate bound; every
+ref, tree, historical patch, message, identity and secret check remains required.
+Tests beyond the old bound cover clean input and late private/secret matches;
+the new total bound, per-item bound and tool error/timeout remain fail-closed.
+A future asset or larger repository requires another reviewed handling decision,
+not an unbounded scan, skipped history or publication bypass.
 
 ## What these checks cannot establish
 
