@@ -68,6 +68,26 @@ async function run() {
   await native('release',a.id);await input(a.id).waitFor({state:'visible'});
   assert.equal((await snapshot()).sessions.find(s=>s.id===a.id).nativeId,a.nativeId);
   passed.push('Known unmaterialized first display retries on its exact native turn before text; ordinary failures stay gated');
+  await native('messageItem', a.id, { id: 'existing-history', role: 'assistant', text: 'Existing native history', status: 'complete' });
+  await native('recovering-terminal', a.id, true);
+  await until(async () => (await snapshot()).sessions.find(s => s.id === a.id).recovering, 'Native recovery is pending');
+  await native('state', a.id); await delay(150);
+  assert.equal(await host(a.id).getByText('终端未连接，重新选择此会话或视图可重试。', { exact: true }).count(), 0);
+  assert.equal(await page.locator('#terminal-paste').isDisabled(), true, 'Pending recovery cannot accept native input');
+  assert.equal((await native('stats')).pending.includes(a.id), false);
+  await native('recovering-terminal', a.id, false);
+  await until(async () => (await native('stats')).pending.includes(a.id), 'Confirmed recovery attaches without another tab click');
+  await native('release', a.id); await input(a.id).waitFor({ state: 'visible' });
+  assert.equal((await snapshot()).sessions.find(s => s.id === a.id).nativeId, a.nativeId);
+  passed.push('Recovery with existing history waits for its runtime, then mounts the same terminal without caching a premature failure');
+  await native('recovering-terminal', a.id, true);
+  await until(async () => (await snapshot()).sessions.find(s => s.id === a.id).recovering, 'Next recovery begins');
+  await native('recovery-backend-ready', a.id);
+  await until(async () => (await native('stats')).pending.includes(a.id), 'Available native backend need not wait for graphical history recovery');
+  await native('release', a.id); await input(a.id).waitFor({ state: 'visible' });
+  await until(() => page.locator('#terminal-paste').isEnabled(), 'An already live native display remains usable during graphical recovery');
+  await native('recovering-terminal', a.id, false);
+  passed.push('Native availability during pending history recovery still permits one live display; recovery is not a blanket native-input block');
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []); await capture('ready');
   console.log(JSON.stringify({ passed, errors, nativeModelCalls: 0, providerProcesses: 0, oneWindow: true }));
 }

@@ -29,6 +29,14 @@ connection or no report. Preserve permissions, drafts, recipients and native
 identity. No version manager, new model task or broader compatibility claim.
 Installed metadata/continuity verification and independent final artifact review pass. No new terminal renderer or frontend framework is introduced.
 
+Alpha.93 scoped task: select existing stopped Codex history in a fresh profile,
+confirm its owned folder in the native TUI, join/detach privately, reopen, refuse
+a second active writer, then recover after actual native backend exit and send
+the retained draft once. Reader and TUI receive the same reply; all pre-send
+records and original timestamps remain intact. Installed actual-native and
+seven readiness groups pass; independent final artifact review passes for this scope. OS-native recovery
+dialog rendering/click is not certified by its injected explicit fixture choice.
+
 ## Current priority — 2026-10-22
 
 The user clarified that the embedded native TUI is an acceptable single-agent
