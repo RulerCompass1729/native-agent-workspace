@@ -80,3 +80,14 @@ test('process census failure still runs teardown and retains unconfirmed scratch
   const r=probe(`const cp=require('node:child_process'),original=cp.execFileSync;cp.execFileSync=(file,args,opts)=>{if(file==='/bin/ps'&&args[0]==='-axo')throw Error('census unavailable');return original(file,args,opts);};Promise.resolve().finally(scratch.cleanup(async()=>fs.writeFileSync(path.join(root,'teardown.txt'),'ran'))).catch(error=>{console.error(error.message);process.exitCode=1;});`);
   try{assert.equal(r.status,1,r.stderr);assert.equal(fs.readFileSync(path.join(r.root,'teardown.txt'),'utf8'),'ran');assert.match(r.stderr,/census unavailable/);}finally{fs.rmSync(r.root,{recursive:true,force:true});}
 });
+test('an owned process exiting between identity check and signal does not fail cleanup', () => {
+  const r=probe(`const cp=require('node:child_process'),originalKill=process.kill;const child=scratch.childProcess.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});let raced=false;process.kill=function(pid,signal){if(!raced&&pid===child.pid&&signal==='SIGTERM'){raced=true;originalKill(pid,'SIGTERM');cp.execFileSync('/bin/sleep',['0.1']);const error=Error('process exited before signal');error.code='ESRCH';throw error;}return originalKill(pid,signal);};Promise.resolve().finally(scratch.cleanup(async()=>{})).then(()=>console.log(JSON.stringify({raced}))).catch(error=>{console.error(error.message);process.exitCode=1;});`);
+  try{assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(r.stdout.trim().split('\n').at(-1)).raced,true);assert.equal(fs.existsSync(r.root),false,r.stderr);}
+  finally{fs.rmSync(r.root,{recursive:true,force:true});}
+});
+test('a refused signal still fails cleanup and retains a live owned process profile', () => {
+  const r=probe(`const originalKill=process.kill;const child=scratch.childProcess.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});console.log(JSON.stringify({pid:child.pid}));process.kill=function(pid,signal){if(pid===child.pid&&signal==='SIGTERM'){const error=Error('signal denied');error.code='EPERM';throw error;}return originalKill(pid,signal);};Promise.resolve().finally(scratch.cleanup(async()=>{})).catch(error=>{console.error(error.message);process.exit(1);});`);
+  const pid=JSON.parse(r.stdout.split('\n')[1]).pid;
+  try{assert.equal(r.status,1,r.stderr);assert.match(r.stderr,/signal denied/);assert.equal(fs.existsSync(r.root),true);assert.doesNotThrow(()=>process.kill(pid,0));}
+  finally{try{process.kill(pid,'SIGKILL');}catch{}fs.rmSync(r.root,{recursive:true,force:true});}
+});

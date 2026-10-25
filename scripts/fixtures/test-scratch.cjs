@@ -131,7 +131,8 @@ function terminate(record, signal) {
     const command = cp.execFileSync('/bin/ps', ['-p', String(record.identity.pid), '-o', 'command='], { encoding: 'utf8', timeout: 1000 });
     if (!command.includes('daemon.cjs') || !record.serviceProfiles.some(p => command.includes(p))) throw Error('Owned service command identity changed');
   }
-  process.kill(record.identity.pid, signal);
+  try { process.kill(record.identity.pid, signal); }
+  catch (error) { if (error.code !== 'ESRCH') throw error; } // The verified process can exit before the signal.
 }
 async function release() {
   if (closing) return closing;

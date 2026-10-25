@@ -10,18 +10,19 @@ const root=path.resolve(__dirname,'..'),temporary=testScratch.directory(path.joi
 const base=process.env.NAW_EVIDENCE_DIR?path.resolve(process.env.NAW_EVIDENCE_DIR,'fixture',path.basename(temporary)):temporary;
 fs.mkdirSync(base,{recursive:true,mode:0o700});
 fs.writeFileSync(path.join(base,'owned-fixture.json'),JSON.stringify({kind:'naw-native-fixture-v1',producer:'test-native-codex-context.cjs',uid:process.getuid()}),{mode:0o600});
-const profile=path.join(temporary,'profile'),cwd=path.join(base,'work'),home=path.join(base,'codex');
-for(const p of[profile,cwd,home])fs.mkdirSync(p,{mode:0o700});
+const profile=path.join(temporary,'profile'),cwd=path.join(base,'work'),home=path.join(base,'codex'),userHome=path.join(base,'home');
+for(const p of[profile,cwd,home,userHome])fs.mkdirSync(p,{mode:0o700});
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
-let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch;const errors=[],checks=[];
+let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,budgetError;const errors=[],checks=[];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(await fn())return;await sleep(80);}throw Error(label);}
+async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(budgetError)throw budgetError;if(await fn())return;await sleep(80);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++seq,...body})}\n\n`);}
 const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
  if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
  const input=JSON.parse(body),title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
- const n=title?0:++calls;if(title)titles++;if(calls>3||titles>2){res.writeHead(429);res.end();return;}
+ const n=title?0:++calls;if(title)titles++;if(calls>(process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context budget: three fixed tasks and at most one title');res.writeHead(400);res.end(budgetError.message);return;}
+ assert.equal(input.model,'gpt-6-luna');
  fs.writeFileSync(path.join(base,`request-${title?'title-'+titles:n}.json`),JSON.stringify(input,null,2));
  const response={id:'context_'+seq,object:'response',created_at:Math.floor(Date.now()/1000),status:'in_progress',model:input.model,output:[],usage:{input_tokens:10,output_tokens:10,total_tokens:20}};
  res.writeHead(200,{'content-type':'text/event-stream'});event(res,'response.created',{response});
@@ -58,8 +59,8 @@ async function nativeCommand(command){
 }
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
- fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`,{mode:0o600});
- const shim=path.join(base,'codex-local');fs.writeFileSync(shim,'#!/usr/bin/python3\nimport os,sys\n'+`os.environ["CODEX_HOME"]=${JSON.stringify(home)}\n`+'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n'+`os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`,{mode:0o700});
+ fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`,{mode:0o600});
+ const shim=path.join(base,'codex-local');fs.writeFileSync(shim,'#!/usr/bin/python3\nimport os,sys\n'+`os.environ["CODEX_HOME"]=${JSON.stringify(home)}\nos.environ["HOME"]=${JSON.stringify(userHome)}\n`+'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n'+`os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`,{mode:0o700});
  fs.writeFileSync(path.join(profile,'runtime-locations.json'),JSON.stringify({codex:shim}),{mode:0o600});
  if(!process.env.NAW_APP_EXECUTABLE)execFileSync(process.execPath,[path.join(root,'scripts/build-ui.cjs')]);
  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],...(process.env.NAW_VIDEO_DIR?{recordVideo:{dir:process.env.NAW_VIDEO_DIR,size:{width:1280,height:900}}}:{}),env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});
@@ -83,10 +84,19 @@ async function nativeCommand(command){
   const retry=await snapshot();fs.writeFileSync(path.join(base,'retrying.json'),JSON.stringify(retry,null,2));
   await page.locator('#messages').getByText('stream disconnected before completion',{exact:false}).waitFor();
   assert.equal(retry.sessions[0].state,'working');assert.equal(retry.sessions[0].nativeActivity.label,'willRetry');
+  await page.locator('#native-phase').getByText('Native context · willRetry',{exact:true}).waitFor();
+  const original=retry.sessions[0].messages.find(m=>m.kind==='notice'&&m.text.includes('stream disconnected before completion'));
+  assert.equal(await page.locator('#messages').getByText(original.text,{exact:true}).innerText(),original.text,'Native error body is not translated or replaced');
+  await until(async()=>{const text=(await terminalText()).replace(/\s+/g,' ');return text.includes('Reconnecting... 1/5')&&/[Ss]tream disconnected before completion:/.test(text);},'Native TUI shows its reconnect state and error');
+  fs.writeFileSync(path.join(base,'retrying-native.txt'),await terminalText());
+  if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'retrying-native.png')});
   assert.equal(retry.room.messages.length,0,'Private diagnostics never enter the room');releaseRetry();releaseRetry=null;
   await until(async()=>(await snapshot()).sessions[0].state==='idle'&&(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_2'),'Native retry completes in the GUI');
   assert.equal(calls,2);assert.equal((await snapshot()).sessions[0].nativeId,before.nativeId);
-  console.log(JSON.stringify({checks:['Actual native stream loss retains its original error text; retry remains working and final completion reaches the same GUI thread'],localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  const completed=await snapshot();fs.writeFileSync(path.join(base,'retry-completed.json'),JSON.stringify(completed,null,2));
+  assert.equal(await page.locator('#native-activity').isVisible(),false,'Recovered idle turn has no visible running clock');
+  assert.equal(await page.locator('#messages .native-turn').count(),0,'Successful recovery does not invent a native footer');
+  console.log(JSON.stringify({checks:['Actual native stream loss retains its exact public error body in GUI; same-screen TUI shows native reconnect/error; retry remains working and final completion reaches the same GUI thread with no stale running clock'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'){
   await until(async()=>releaseSearch&&(await snapshot()).sessions[0].messages.some(m=>m.toolKind==='webSearch'),'Actual native search starts',60000);

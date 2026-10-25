@@ -6,8 +6,9 @@ As of 2026-10-24. Version 0.1.0-alpha.96 is a **local macOS technical-trial alph
 **Alpha.96 — bounded input repair accepted; GUI-truth goal open:** the goal is accurate GUI facts
 with native interactions retained in the same-screen TUI, not recreating or
 executing every native command and keymap row. The U17 table is an audit with
-explicit GUI/native placement. Codex 164 facts need installed acceptance; Claude
-310 implementation belongs to the separate lane, then main integrates and accepts.
+explicit GUI/native placement. Codex 164 facts have passed scoped installed
+acceptance and independent review; Claude 310 implementation belongs to the
+separate lane, then main integrates and accepts.
 Visual approval, physical IME and external running-session attachment do not block.
 
 A measured input repair is still under review. Native Shift+Enter was decoded as
@@ -37,7 +38,46 @@ limitation; older backends without keyboard metadata keep legacy encoding.
 
 The current installed baseline preserves original three-session identity, records
 and drafts, and has one launcher. Full GUI-fact acceptance under the new goal is
-open. See [current tasks and audit](interaction.md).
+open for Claude integration. See [current tasks and audit](interaction.md).
+
+**GUI-truth acceptance in progress:** installed alpha.96 with Codex 0.164 now
+passes an actual one-file approval/write/read task. The GUI shows native
+`waitingOnApproval`, retains the editable draft, and the same-screen TUI answers
+the original request. Original diff/output, sharing revocation, reader reload and
+same-thread history recovery pass. Two fixed loopback task responses, no native
+title or paid inference; temporary-directory sets match. Fable review08 accepts
+this task, and scoped reuse of installed identity, question wording/waiting,
+search headings/query, model/effort and usage evidence. It does not approve the
+remaining Plan/interruption/error-recovery task or the full goal. No new product
+UI or runtime change was needed.
+
+Installed alpha.96 / Codex164 also passes the existing complete Plan task:
+native mode selection, one streaming block updated at completion, private/shared
+scope, native Escape interruption and whole-app reopen retaining the exact cut,
+identity and draft. Four fixed local task responses plus one native title, zero
+paid inference. A successful recording is retained privately. Fable review09
+accepts Plan content, native cut and reopening. Its requested negative timing
+checks now pass on the installed app: no visible running timer after completion
+or reopen, and no reconstructed native footer. An installed controlled-event
+witness checks unknown→reported-start→unknown→idle clock visibility without
+providers. Fable review10 accepts these assertions. The first Plan run
+had concurrent unit-directory churn and makes no global exact-set claim; final
+reruns and the complete unit suite each preserve identical directory sets.
+
+Installed Codex164 stream-loss/retry acceptance passes with the exact public
+native error body retained in the GUI, native reconnect/error in the same-screen
+TUI, working state while retrying, and same-thread recovery to idle. Two fixed
+local responses plus one native title, no paid inference. A cleanup race observed
+after the first successful task is repaired in the shared test finalizer:
+`ESRCH` after a verified process identity means that process exited before the
+signal; other signal errors still fail closed. The focused regression reproduces
+failure before the fix; all 986 units pass without skips after it. The final
+installed retry, Plan and clock witnesses each restore exact temporary sets.
+Fable review10 approves the scoped Codex fact table and cleanup fix. The GUI
+Plan projection is the original proposed-plan body; native step progress and
+accept/revise controls stay in the same-screen TUI. Claude audit documents are
+merged separately; Claude runtime integration and installed acceptance remain
+open. This increment changes tests and audit documents, not the product runtime.
 
 **Alpha.95 — owned test scratch and daemon exit cleanup:** all 57
 standalone temporary-profile test entry points use one explicit allocator/finalizer.
