@@ -96,6 +96,16 @@ class Terminal extends EventEmitter {
 const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'];
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
+// A running claude process whose arguments name this native session ID.
+function claudeHolder(nativeId) {
+  if (!/^[a-f0-9-]{36}$/i.test(nativeId || '')) return null;
+  let lines; try { lines = execFileSync('/bin/ps', ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024 * 1024 }).split('\n'); } catch { return null; }
+  for (const line of lines) {
+    const [pid, ...args] = line.trim().split(/\s+/);
+    if (Number(pid) !== process.pid && args.some(arg => path.basename(arg) === 'claude') && args.includes(nativeId)) return Number(pid);
+  }
+  return null;
+}
 class Claude extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
   get nativeActivity() {
@@ -118,6 +128,10 @@ class Claude extends EventEmitter {
     // A retained reader uses these same native validators and channel, but
     // cannot write settings, register command hooks or launch another CLI.
     if (attachOnly) return;
+    // Native has no lock: a second --resume writes the same transcript. Refuse
+    // while another claude process (e.g. an external terminal) names this ID.
+    const holder = record.recovering && claudeHolder(record.nativeId);
+    if (holder) throw new Error(`这个原生会话正在另一个进程中运行（PID ${holder}）。请先在那里退出，避免两个程序同时写同一会话。`);
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};

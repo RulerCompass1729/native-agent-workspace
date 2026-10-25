@@ -303,3 +303,31 @@ test('a recovery relaunch passes bypass and effort again only as the session las
   const argv=await launch(record);assert.ok(!argv.includes('--permission-mode')&&!argv.includes('--effort'),`No posture flag for ${JSON.stringify(record)}`);
  }
 });
+test('a recovery refuses while another claude process holds the same native ID',async t=>{
+ const { Claude: Adapter } = require('../adapters.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-holder-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const id=randomUUID(),external=path.join(dir,'claude'),launched=path.join(dir,'launched');
+ // An external terminal's `claude --resume <id>`, as ps shows it.
+ fs.writeFileSync(external,'#!/bin/sh\nsleep 30\n',{mode:0o700});
+ const holder=require('node:child_process').spawn('/bin/sh',[external,'--resume',id],{stdio:'ignore'});t.after(()=>{try{holder.kill('SIGKILL');}catch{}});
+ const binary=path.join(dir,'native');fs.writeFileSync(binary,`#!/bin/sh\ntouch '${launched}'\n`,{mode:0o700});
+ const host={binaries:{claude:binary},privateDir:dir,hookTargets:new Map(),hookSocket:path.join(dir,'hook.sock'),submitSocket:path.join(dir,'submit.sock')};
+ const record={id:randomUUID(),nativeId:id,name:'Holder',cwd:dir,recovering:true};
+ await new Promise(resolve=>setTimeout(resolve,200));
+ assert.throws(()=>new Adapter(record,host),new RegExp(`PID ${holder.pid}`));
+ assert.equal(host.hookTargets.size,0,'A refused recovery registers no hook target');
+ assert.doesNotThrow(()=>new Adapter({...record,id:randomUUID(),nativeId:randomUUID()},host).submission.close(),'Another session ID is not blocked');
+ holder.kill('SIGKILL');await new Promise(resolve=>holder.once('exit',resolve));
+ const r=new Adapter(record,host);await new Promise(resolve=>r.terminal.once('closed',resolve));r.submission.close();
+ assert.ok(fs.existsSync(launched),'Once the other writer exits, recovery launches');
+});
+test('native processes do not inherit the service locations',()=>{
+ const { nativeEnvironment } = require('../platform.cjs');
+ const saved={...process.env};
+ Object.assign(process.env,{NAW_WORKSPACE:'/live/workspace',NAW_RUNTIME_CONFIG:'/live/runtime-locations.json',NAW_APP_VERSION:'9.9.9'});
+ try{
+  const env=nativeEnvironment({NAW_HOOK_TOKEN:'token'});
+  for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION']) assert.equal(env[key],undefined,key);
+  assert.equal(env.NAW_HOOK_TOKEN,'token','Per-session values are still passed');
+ }finally{for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION']) if(key in saved) process.env[key]=saved[key]; else delete process.env[key];}
+});

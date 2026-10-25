@@ -209,6 +209,13 @@ async function recover(before) {
   // An ended row keeps its composer read-only; the draft must still be there.
   await page.locator(`[data-session-id="${live.id}"]`).click(); await page.locator('#chat-tab').click();
   assert.equal(await page.locator('#message-input').inputValue(), draft, 'The draft survives the native process loss');
+  // An external terminal still holding the ID blocks recovery: no second writer.
+  const external = path.join(base, 'external', 'claude'); fs.mkdirSync(path.dirname(external)); fs.writeFileSync(external, '#!/bin/sh\nsleep 60\n', { mode: 0o700 });
+  const holder = testScratch.childProcess.spawn('/bin/sh', [external, '--resume', before.nativeId], { stdio: 'ignore' });
+  await page.getByRole('button', { name: '继续原生会话' }).click();
+  await until(async () => (await snapshot()).sessions[0].activity?.includes(`PID ${holder.pid}`), 'Recovery refuses while another process holds the native ID', 30000);
+  assert.equal(mains, 2); const refused = (await snapshot()).sessions[0]; assert.ok(!refused.pid || refused.pid === live.pid || refused.state === 'error');
+  holder.kill('SIGKILL'); await new Promise(resolve => holder.exitCode !== null || holder.signalCode ? resolve() : holder.once('exit', resolve));
   await page.getByRole('button', { name: '继续原生会话' }).click();
   await until(async () => { const s = (await snapshot()).sessions[0]; return s.chatAvailable && s.state === 'idle' && s.pid && s.pid !== live.pid; }, 'NAW recovers the same native session', 90000);
   const recovered = (await snapshot()).sessions[0]; fs.writeFileSync(path.join(base, 'recovered.json'), JSON.stringify(recovered, null, 2));
@@ -238,7 +245,7 @@ async function recover(before) {
   assert.equal(final.nativeId, before.nativeId); assert.equal(final.nativePermissionMode, 'bypassPermissions');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'goal-recovered-terminal.png') }); }
   assert.deepEqual(errors, []);
-  checks.push('Killing the native process mid-goal and recovering through NAW keeps the row, native ID, draft, bypass mode and effort, replays nothing, and the restored goal completes on the next prompt');
+  checks.push('Killing the native process mid-goal and recovering through NAW keeps the row, native ID, draft, bypass mode and effort, replays nothing, and the restored goal completes on the next prompt; recovery is refused while another process holds the ID');
   console.log(JSON.stringify({ checks, nativeVersion, case: 'recovery', mainTurns: mains, evaluatorVerdicts: evals, nativeTitleResponses: titles, localResponses: calls, paidModelCalls: 0, killedPid: live.pid, recoveredPid: recovered.pid, goalLines: goalLines(terminal), received, errors, evidence: base }));
 }
 (async () => {
