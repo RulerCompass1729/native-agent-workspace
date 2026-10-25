@@ -8,29 +8,31 @@ const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs'), { connect } = require('../app/service-client.cjs');
 const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-tools-'));
-const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex');
-for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, { mode: 0o700 });
+const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex'), userHome = path.join(base, 'home');
+for (const dir of [profile, cwd, home, userHome]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('codex'); if (!binary) throw Error('Real Codex required');
 const version = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 const nativeVersion = process.env.NAW_CODEX_VERSION || '0.163.0';
 assert.ok(['0.163.0','0.164.0'].includes(nativeVersion)); assert.equal(version, 'codex-cli ' + nativeVersion);
-let application, page, calls = 0, sequence = 0;
+let application, page, calls = 0, titleCalls = 0, sequence = 0, budgetError;
 const errors = [], requests = [], sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label, timeout = 30000) {
-  const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
+  const start = Date.now(); while (Date.now() - start < timeout) { if (budgetError) throw budgetError; if (await fn()) return; await sleep(75); } throw Error(label);
 }
 function event(res, type, body) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: ++sequence, ...body })}\n\n`); }
 const server = http.createServer((req, res) => {
   let body = ''; req.on('data', b => body += b); req.on('end', async () => {
     if (!req.url.endsWith('/responses')) { requests.push({ path: req.url.split('?')[0] }); res.writeHead(404); res.end(); return; }
-    const number = ++calls;
-    if (number > 2) { res.writeHead(429); res.end(); return; }
-    const input = JSON.parse(body); requests.push({ model: input.model, inputItems: input.input?.length });
-    fs.writeFileSync(path.join(base, `request-${number}.json`), JSON.stringify(input, null, 2));
+    const input = JSON.parse(body);
+    const title = input.input?.some(m => m.role === 'user' && m.content?.some(p => p.text?.startsWith('Generate a concise, single-line task title')));
+    const number = title ? 0 : ++calls; if (title) titleCalls++;
+    if (calls > 2 || titleCalls > 1) { budgetError = Error('Native tools budget: two fixed task responses and at most one native title'); res.writeHead(400); res.end(budgetError.message); return; }
+    assert.equal(input.model, 'gpt-6-luna'); requests.push({ model: input.model, inputItems: input.input?.length, title });
+    fs.writeFileSync(path.join(base, title ? 'native-title-request.json' : `request-${number}.json`), JSON.stringify(input, null, 2));
     const response = { id: `resp_local_${number}`, object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'in_progress', model: input.model, output: [], usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 } };
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'response.created', { response });
-    if (number === 1) {
+    if (!title && number === 1) {
       const patch = '*** Begin Patch\n*** Add File: sample.txt\n+NATIVE_TOOL_FILE: hello 世界\n*** End Patch';
       const code = `text(await tools.apply_patch(${JSON.stringify(patch)})); text(await tools.exec_command(${JSON.stringify({ cmd: 'cat sample.txt', workdir: cwd, max_output_tokens: 100 })}));`;
       const tool = { id: 'tool_local_1', type: 'custom_tool_call', call_id: 'call_local_1', namespace: 'functions', name: 'exec', input: code, status: 'completed' };
@@ -40,7 +42,7 @@ const server = http.createServer((req, res) => {
       event(res, 'response.output_item.done', { output_index: 0, item: tool });
       event(res, 'response.completed', { response: { ...response, status: 'completed', output: [tool] } }); res.end(); return;
     }
-    const text = 'NATIVE_TOOL_DONE: created and read sample.txt.';
+    const text = title ? JSON.stringify({ title: 'Create and read a small file' }) : 'NATIVE_TOOL_DONE: created and read sample.txt.';
     const item = { id: 'msg_local_2', type: 'message', role: 'assistant', status: 'in_progress', content: [], phase: 'final_answer' };
     event(res, 'response.output_item.added', { output_index: 0, item });
     event(res, 'response.content_part.added', { output_index: 0, item_id: item.id, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
@@ -60,13 +62,14 @@ async function revealTools(selector) {
 }
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(home, 'config.toml'), `model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\n[features]\ndaemon_auto_start = false\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`, { mode: 0o600 });
   // Trust only the owned empty fixture folder. The actual file permission
   // remains on-request and must still be answered in the real native UI.
   for (const folder of new Set([cwd, fs.realpathSync(cwd)])) fs.appendFileSync(path.join(home, 'config.toml'), `\n[projects.${JSON.stringify(folder)}]\ntrust_level = "trusted"\n`);
   const shim = path.join(base, 'codex-local');
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\n' +
     `os.environ["CODEX_HOME"]=${JSON.stringify(home)}\n` +
+    `os.environ["HOME"]=${JSON.stringify(userHome)}\n` +
     'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n' +
     `os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ codex: shim }), { mode: 0o600 });
@@ -77,6 +80,7 @@ async function revealTools(selector) {
   await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('Native tools'); await page.locator('#confirm-create').click();
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
   const before = (await snapshot()).sessions[0]; assert.equal(before.model, 'gpt-6-luna');
+  assert.equal(before.nativeVersion, nativeVersion);
   await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
@@ -84,7 +88,11 @@ async function revealTools(selector) {
   await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'approval' || s.messages.some(m => m.text === 'NATIVE_TOOL_DONE: created and read sample.txt.'); }, 'Native tool starts', 45000);
   assert.equal((await snapshot()).sessions[0].state, 'approval', 'This scenario requires a real native file permission, not an automatically allowed tool');
   if ((await snapshot()).sessions[0].state === 'approval') {
-    await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();
+    await page.locator(`[data-session-id="${before.id}"]`).click();
+    await page.locator('#native-phase').getByText('Native tools · waitingOnApproval', { exact: true }).waitFor();
+    await page.locator('#approval').getByText('Native tools · 需要你确认', { exact: true }).waitFor();
+    assert.equal(await page.locator('#message-input').isEnabled(), true, 'A pending native confirmation preserves the draft editor');
+    await page.locator('#terminal-tab').click();
     await until(async () => (await page.locator('#terminal-area').innerText()).includes('sample.txt'), 'Native approval is rendered', 45000);
     fs.writeFileSync(path.join(base, 'approval.txt'), await page.locator('#terminal-area').innerText());
     fs.writeFileSync(path.join(base, 'approval.json'), JSON.stringify(await snapshot(), null, 2));
@@ -95,8 +103,8 @@ async function revealTools(selector) {
     assert.equal(approval.method, 'item/fileChange/requestApproval');
     assert.match(confirmation, /Would you like to make the following edits\?/);
     assert.match(confirmation, /› 1\. Yes, proceed \(y\)/);
-    const patch = (await snapshot()).sessions[0].messages.find(m => m.title === '文件修改');
-    assert.equal(patch.text, `新增 ${path.join(cwd, 'sample.txt')}\nNATIVE_TOOL_FILE: hello 世界\n`);
+    const patch = (await snapshot()).sessions[0].messages.find(m => m.toolKind === 'fileChange');
+    assert.equal(patch.text, `add ${path.join(cwd, 'sample.txt')}\nNATIVE_TOOL_FILE: hello 世界\n`);
     // Only the isolated, exact one-file change above is approved once. This
     // does not change native permission defaults or grant future file access.
     await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
@@ -141,7 +149,8 @@ async function revealTools(selector) {
   assert.equal(calls, 2); assert.equal(recovered.diagnostics.dispatches, 1);
   const request = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8'));
   assert.ok(JSON.stringify(request.input).includes('NATIVE_TOOL_FILE: hello 世界'), 'Real tool result returned to the native model input');
-  console.log(JSON.stringify({ version, checks: ['Native tool really creates and reads the isolated file', 'Authorized file diff appears in the shared reader; permission revocation keeps later output private', 'GUI and TUI retain same native identity', 'Reload neither loses tool text nor dispatches', 'Separate native service resubscription hydrates tool history without sharing or another response'], localResponses: calls, paidModelCalls: 0, requests, evidence: base }));
+  assert.ok(titleCalls <= 1); assert.ok(!budgetError);
+  console.log(JSON.stringify({ version, checks: ['Native tool really creates and reads the isolated file', 'GUI shows the actual native approval state; its same-screen TUI resolves the original request', 'Authorized file diff appears in the shared reader; permission revocation keeps later output private', 'GUI and TUI retain same native identity', 'Reload neither loses tool text nor dispatches', 'Separate native service resubscription hydrates tool history without sharing or another response'], localResponses: calls, nativeTitleResponses: titleCalls, paidModelCalls: 0, requests, evidence: base }));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
