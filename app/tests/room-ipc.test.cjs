@@ -15,7 +15,7 @@ async function desktop(t) {
   sandbox.actor = { client, win: { isDestroyed: () => false, webContents: { send: noop } } };
   vm.runInContext('windows.set(1, actor);', sandbox);
   const invoke = (name, ...args) => { const frame = { url: 'http://127.0.0.1:10101/' }; return handlers.get(`workspace:${name}`)({ sender: { id: 1, mainFrame: frame }, senderFrame: frame }, ...args); };
-  return { client, sandbox, invoke, room: () => vm.runInContext('roomState.value', sandbox) };
+  return { client, sandbox, invoke, state, dialog: electron.dialog, room: () => vm.runInContext('roomState.value', sandbox) };
 }
 test('real desktop clear handler retains concurrently saved note instead of losing it after delayed daemon acknowledgement', async t => {
   const d = await desktop(t); await d.invoke('roomNotes', 'old', d.room().revision);
@@ -31,4 +31,25 @@ test('closing or disconnected observer does not turn successful metadata write i
   vm.runInContext('windows.set(2, observer);', d.sandbox);
   assert.equal((await d.invoke('roomRename', 'Saved')).ok, true); assert.equal(d.room().name, 'Saved');
   assert.equal((await d.invoke('roomNotes', 'Saved notes', d.room().revision)).ok, true); assert.equal(d.room().notes, 'Saved notes');
+});
+
+test('explicit native resume needs no second dialog and still propagates ownership refusals', async t => {
+  const d=await desktop(t), calls=[];
+  d.state.sessions=[{id:'saved',provider:'codex',nativeId:'original',state:'recoverable'}];
+  d.state.capabilities=['nativePermissionDefaults','resume'];
+  d.dialog.showMessageBox=async()=>{throw Error('Unexpected second confirmation');};
+  const read=d.client.call;
+  d.client.call=async(method,...args)=>{if(method==='resume'){calls.push(args);return true;}return read(method,...args);};
+  assert.equal((await d.invoke('resume','saved')).ok,true);assert.deepEqual(calls,[['saved']]);
+  d.client.call=async(method,...args)=>{if(method==='resume')throw Error('Original native writer is still running');return read(method,...args);};
+  const refused=await d.invoke('resume','saved');assert.equal(refused.ok,false);assert.match(refused.error,/writer is still running/);
+  d.state.capabilities=['resume'];
+  const unsupported=await d.invoke('resume','saved');assert.equal(unsupported.ok,false);assert.match(unsupported.error,/旧版/);
+});
+test('forgetting a saved session still requires a cancellable confirmation', async t => {
+  const d=await desktop(t);d.state.sessions=[{id:'saved',state:'ended'}];d.state.capabilities=['forget'];
+  let forgotten=0,options;const read=d.client.call;
+  d.client.call=async(method,...args)=>{if(method==='forget'){forgotten++;return true;}return read(method,...args);};
+  d.dialog.showMessageBox=async(_win,value)=>{options=value;return{response:0};};
+  assert.equal((await d.invoke('forget','saved')).ok,true);assert.equal(forgotten,0);assert.equal(options.defaultId,0);assert.equal(options.cancelId,0);
 });

@@ -1086,3 +1086,14 @@ its own GPL/licensing review; do not copy/link it into this Apache project.
 References: [iTerm2 scripting](https://iterm2.com/documentation-scripting.html),
 [window/profile API](https://iterm2.com/python-api/window.html),
 [Apple Terminal scripting](https://support.apple.com/en-lamr/guide/terminal/trml1003/mac).
+
+
+Single-agent dogfood qualification (candidate alpha.100): explicit native resume no
+longer asks for a second confirmation. Identity/liveness/capability checks remain,
+and deletion still asks. Installed native164 passes closed-window goal continuation
+and controlled server-loss recovery of the same saved ID/goal/history/model/draft;
+installed310 passes window retention and exact-ID cold native resume into an assigned
+checkout with original model context and same-screen TUI history. Pre-import Claude
+history is explicitly marked unavailable in the GUI reader. The repaired Claude
+resume→background combination is installed-accepted; independent Fable review16 accepts this integration scope. These checks do not claim an entire real developer workday, active Claude
+goal recovery after process death, or public external/live Claude attachment.

@@ -482,7 +482,7 @@ class WorkspaceClient extends EventEmitter {
       const sharedIds = this.control.legacyInput?.sharedMessages?.().map(message => message.id) || [];
       const guards = this.entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
       const state = await this.refresh();
-      if (method === 'shutdown' && state.sessions.some(s => s.state !== 'ended')) throw new Error('请先结束各原生会话，再关闭运行服务。');
+      if (method === 'shutdown' && state.sessions.some(s => !['ended', 'background'].includes(s.state))) throw new Error('请先结束各原生会话，再关闭运行服务。');
       if (method === 'clearSharedHistory' && (!state.capabilities.includes(method) || state.room.run?.status === 'running')) throw new Error('请先暂停交接，并确认各后台支持清除记录。');
       if (method === 'clearSharedHistory' && this.entries.some(e => e.state.room.run?.pausePending || e.state.room.run?.pauseUnconfirmed)) throw new Error('请先核对各后台已撤销后续交接授权，再清除共享记录。');
       // These are explicit user actions. Partial failure must remain visible.

@@ -108,7 +108,7 @@ async function main() {
       case 'forget': return workspace.forget(args[0]);
       case 'shutdown':
         if (workspace.pendingNativeImports) throw new Error('正在接入所选原生会话，请等待连接结果后再关闭后台。');
-        if ([...workspace.sessions.values()].some(s => s.state !== 'ended')) throw new Error('请先结束各原生会话，再关闭运行服务。');
+        if ([...workspace.sessions.values()].some(s => !['ended', 'background'].includes(s.state))) throw new Error('请先结束各原生会话，再关闭运行服务。');
         shuttingDown = true;
         setTimeout(shutdown, 100); return true;
       default: throw new Error('不支持的本地操作。');

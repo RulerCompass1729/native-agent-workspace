@@ -91,3 +91,9 @@ test('a refused signal still fails cleanup and retains a live owned process prof
   try{assert.equal(r.status,1,r.stderr);assert.match(r.stderr,/signal denied/);assert.equal(fs.existsSync(r.root),true);assert.doesNotThrow(()=>process.kill(pid,0));}
   finally{try{process.kill(pid,'SIGKILL');}catch{}fs.rmSync(r.root,{recursive:true,force:true});}
 });
+
+test('owned process exit during final identity read does not turn successful teardown into failure', () => {
+  const prelude=`const cp=require('node:child_process'),original=cp.execFileSync,kill=process.kill;let target,armed=false,raced=false;cp.execFileSync=(file,args,options)=>{if(armed&&!raced&&file==='/bin/ps'&&args[1]===String(target)&&args.includes('lstart=')){raced=true;kill(target,'SIGKILL');original('/bin/sleep',['0.1']);throw Error('exited during identity lookup');}return original(file,args,options);};`;
+  const r=probe(`const child=scratch.childProcess.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});target=child.pid;Promise.resolve().finally(scratch.cleanup(async()=>{armed=true;})).then(()=>console.log(JSON.stringify({raced}))).catch(error=>{console.error(error.message);process.exitCode=1;});`,{prelude});
+  try{assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(r.stdout.trim().split('\n').at(-1)).raced,true);assert.equal(fs.existsSync(r.root),false);}finally{fs.rmSync(r.root,{recursive:true,force:true});}
+});
