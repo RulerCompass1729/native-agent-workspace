@@ -31,7 +31,8 @@ As of 2026-10-24。本文件是 [interaction](interaction.md) 中 U17 验收表�
 不做会坏什么：被 NAW 启动参数关闭的原生功能会被误记成原生本身没有。
 
 来源：Claude Code 闭源。来源只用官方文档（[llms.txt](https://code.claude.com/docs/llms.txt)）、
-Claude Code 2.1.310 为 mod 写出的类型声明和本机 CLI 输出；没有拆安装包。文档会更新，
+Claude Code 2.1.310 为 mod 写出的类型声明和本机 CLI 输出；没有拆安装包。例外（2026-10-25）：为写测试夹具（如 `/goal`
+评估请求的系统提示），曾用 `strings` 只读查看已安装二进制中的字符串，未存入仓库；表中结论以运行验证或官方文档为据。文档会更新，
 表中“命令:N”“键位:N”的行号对应清单里记录 SHA-256 的存档版本，链接指向当前页面。
 源标识索引见 [`claude310-inventory.json`](../scripts/fixtures/claude310-inventory.json)：
 121 个命令条目（119 个不同命令名，3 个文档注明已移除）、27 个键位上下文、
