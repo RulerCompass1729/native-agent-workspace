@@ -804,6 +804,25 @@ function renderHeader(s, inRoom) {
   h.restore.hidden = !s?.archived;
   h.more.hidden = !inRoom || !!s;
 }
+function appendNativeQuestions(parent, questions) {
+  if (!Array.isArray(questions) || !questions.length || questions.length > 20) return false;
+  if (!questions.every(q => q && typeof q.question === 'string' && q.question.length <= 16000 &&
+    (q.header == null || typeof q.header === 'string' && q.header.length <= 16000) &&
+    (q.options == null || Array.isArray(q.options) && q.options.length <= 100 && q.options.every(o => o && typeof o.label === 'string' && o.label.length <= 16000 && (o.description == null || typeof o.description === 'string' && o.description.length <= 16000))))) return false;
+  for (const question of questions) {
+    const group = node('div', '', 'native-question');
+    if (question.header) group.append(node('strong', question.header));
+    group.append(node('p', question.question));
+    const options = node('ol');
+    for (const option of question.options || []) {
+      const item = node('li'); item.append(node('span', option.label));
+      if (option.description) item.append(node('p', option.description));
+      options.append(item);
+    }
+    if (options.children.length) group.append(options); parent.append(group);
+  }
+  return true;
+}
 function renderApproval(s, own) {
   const el = $('approval');
   const requests = s?.approvals?.length ? s.approvals : s?.approval ? [s.approval] : [];
@@ -818,10 +837,13 @@ function renderApproval(s, own) {
   el.dataset.signature = signature; el.replaceChildren();
   if (el.hidden) return;
   if (s.nativeApproval?.nativeOnly) {
-    el.append(node('strong', `${s.name} · ${stale ? '原生权限状态待核验' : '等待原生权限确认'}`), node('p', '仅你可见。请求内容来自原生会话；在同一个终端选择实际选项。'));
+    el.append(node('strong', s.name));
+    if (stale) el.append(node('p', '原生状态待核验'));
     for (const request of s.nativeApproval.requests) {
-      el.append(node('strong', request.title));
-      if (request.input) el.append(node('pre', request.input, 'approval-command'));
+      if (request.title) el.append(node('div', request.title));
+      let questions;
+      if (request.title === 'AskUserQuestion') { try { questions = JSON.parse(request.input).questions; } catch {} }
+      if (!appendNativeQuestions(el, questions) && request.input) el.append(node('pre', request.input, 'approval-command'));
       if (request.incomplete) el.append(node('p', '请求内容未完整同步，请在原生终端核对。'));
     }
     el.append(button(`在 ${s.name} 的原生终端处理`, () => operateNative(s.id)));
@@ -848,15 +870,7 @@ function renderApproval(s, own) {
     const policy = window.nativeWorkspaceApproval.nativeApprovalPolicy(s.approval);
     if (policy.questions) {
       heading.textContent = `${s.name} · ${s.approval.params.isBlocking === false ? '问题 · 不阻塞本轮' : '等待你回答'}`;
-      for (const question of policy.questions) {
-        const group = node('div', '', 'native-question');
-        group.append(node('strong', question.header), node('p', question.question));
-        const options = node('ol');
-        for (const option of question.options || []) options.append(node('li', option.label + (option.description ? ' — ' + option.description : '')));
-        if (options.children.length) group.append(options);
-        if (question.isOther) group.append(node('p', '可在原生终端输入其他回答。'));
-        el.append(group);
-      }
+      appendNativeQuestions(el, policy.questions);
     } else if (policy.notice) el.append(node('p', policy.notice));
     if (policy.command) el.append(node('pre', policy.command, 'approval-command'));
     if (policy.cwd) el.append(node('p', '工作目录：' + policy.cwd));
@@ -914,7 +928,7 @@ function renderNativeActivity(s) {
   const status = s.nativeActivity;
   const matched = status && nativeStatusFresh(status) && status.nativeId === s.nativeId && status.turnId === s.activeTurnId;
   const seconds = matched && Number.isFinite(status.startedAt) && status.startedAt <= Date.now() ? Math.floor((Date.now() - status.startedAt) / 1000) : null;
-  const label = status && !nativeStatusFresh(status) ? '原生状态待同步' : waiting ? question ? '等待回答' : '等待原生确认' : matched ? status.label : '正在处理';
+  const label = status && !nativeStatusFresh(status) ? '原生状态待同步' : matched && status.label ? status.label : waiting ? question ? '等待回答' : '等待原生确认' : '正在处理';
   const text = (s.name || 'Codex') + ' · ' + label;
   if ($('native-phase').textContent !== text) $('native-phase').textContent = text;
   const elapsed = seconds === null ? '' : ' · 本轮已运行 ' + seconds + ' 秒';

@@ -9,7 +9,7 @@ const profile=path.join(base,'profile'),cwd=path.join(base,'work'),home=path.joi
 for(const p of[profile,cwd,home])fs.mkdirSync(p,{mode:0o700});
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
-let app,page,calls=0,titles=0,seq=0,releaseRetry;const errors=[],checks=[];
+let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch;const errors=[],checks=[];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(await fn())return;await sleep(80);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++seq,...body})}\n\n`);}
@@ -20,6 +20,12 @@ const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b)
  fs.writeFileSync(path.join(base,`request-${title?'title-'+titles:n}.json`),JSON.stringify(input,null,2));
  const response={id:'context_'+seq,object:'response',created_at:Math.floor(Date.now()/1000),status:'in_progress',model:input.model,output:[],usage:{input_tokens:10,output_tokens:10,total_tokens:20}};
  res.writeHead(200,{'content-type':'text/event-stream'});event(res,'response.created',{response});
+ if(process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'&&!title&&n===1){
+  const search={id:'native_web_search',type:'web_search_call',status:'completed',action:{type:'search',query:'Seattle forecast'}};
+  event(res,'response.output_item.added',{output_index:0,item:{...search,status:'in_progress'}});
+  await new Promise(resolve=>{releaseSearch=resolve;});
+  event(res,'response.output_item.done',{output_index:0,item:search});
+ }
  if(process.env.NAW_NATIVE_RETRY_TRIAL==='1'&&n===1){
   const item={id:'partial_retry',type:'message',role:'assistant',phase:'commentary',status:'in_progress',content:[]};
   event(res,'response.output_item.added',{output_index:0,item});event(res,'response.output_text.delta',{output_index:0,item_id:item.id,content_index:0,delta:'PARTIAL_BEFORE_NATIVE_RETRY'});setTimeout(()=>res.destroy(),150);return;
@@ -68,16 +74,43 @@ async function nativeCommand(command){
  }
  await page.locator('#message-input').fill('Make one small local check.');await page.locator('#send-button').click();
  if(process.env.NAW_NATIVE_RETRY_TRIAL==='1'){
-  await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.kind==='notice'&&m.title==='原生错误 · 将重试')&&releaseRetry,'Actual native retry notification',60000);
+  await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.kind==='notice'&&m.text.includes('stream disconnected before completion'))&&releaseRetry,'Actual native retry notification',60000);
   const retry=await snapshot();fs.writeFileSync(path.join(base,'retrying.json'),JSON.stringify(retry,null,2));
   await page.locator('#messages').getByText('stream disconnected before completion',{exact:false}).waitFor();
-  assert.equal(retry.sessions[0].state,'working');assert.equal(retry.sessions[0].nativeActivity.label,'原生将重试');
+  assert.equal(retry.sessions[0].state,'working');assert.equal(retry.sessions[0].nativeActivity.label,'willRetry');
   assert.equal(retry.room.messages.length,0,'Private diagnostics never enter the room');releaseRetry();releaseRetry=null;
   await until(async()=>(await snapshot()).sessions[0].state==='idle'&&(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_2'),'Native retry completes in the GUI');
   assert.equal(calls,2);assert.equal((await snapshot()).sessions[0].nativeId,before.nativeId);
   console.log(JSON.stringify({checks:['Actual native stream loss retains its original error text; retry remains working and final completion reaches the same GUI thread'],localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
+ if(process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'){
+  await until(async()=>releaseSearch&&(await snapshot()).sessions[0].messages.some(m=>m.toolKind==='webSearch'),'Actual native search starts',60000);
+  const working=await snapshot();fs.writeFileSync(path.join(base,'web-search-working.json'),JSON.stringify(working,null,2));
+  const nativeSearch=working.sessions[0].messages.find(m=>m.toolKind==='webSearch');
+  assert.match(nativeSearch.title,/^(Browsing the web|Searching the web for Seattle forecast)$/);
+  await page.locator('#messages').getByText(nativeSearch.title,{exact:true}).waitFor();
+  releaseSearch();releaseSearch=null;
+ }
  await until(async()=>(await snapshot()).sessions[0].state==='idle'&&calls===1,'One bounded native task');
+ if(process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'){
+  await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.toolKind==='webSearch'&&m.status==='complete'),'Search completion in GUI');
+  const done=await snapshot(),row=done.sessions[0].messages.find(m=>m.toolKind==='webSearch');
+  assert.equal(row.title,'Searched the web for Seattle forecast');
+  const rendered=page.locator('#messages .process').filter({hasText:row.title});await rendered.waitFor();
+  assert.equal(await rendered.locator('.message-heading').innerText(),'Codex\nSearched the web for Seattle forecast');
+  assert.equal(await rendered.locator('.process-label').innerText(),'');
+  assert.equal(await rendered.locator('.process-details').evaluate(el=>el.open),false);
+  assert.equal(await page.locator('#messages .native-turn').count(),0,'No fabricated completion footer');
+  await until(async()=>(await terminalText()).includes('Searched the web for Seattle forecast'),'Actual TUI uses the same original search summary',60000);
+  fs.writeFileSync(path.join(base,'web-search-terminal.txt'),await terminalText());fs.writeFileSync(path.join(base,'web-search-completed.json'),JSON.stringify(done,null,2));
+  if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'web-search-completed.png')});}
+  await page.reload();await page.locator('#new-session').waitFor();
+  await page.locator('#messages').getByText(row.title,{exact:true}).waitFor();
+  const reopened=await snapshot(),again=reopened.sessions[0].messages.find(m=>m.id===row.id);
+  assert.equal(again.status,'complete');assert.equal(again.title,row.title);assert.equal(reopened.sessions[0].nativeId,before.nativeId);assert.equal(reopened.sessions[0].pid,before.pid);assert.equal(calls,1);
+  fs.writeFileSync(path.join(base,'web-search-reopened.json'),JSON.stringify(reopened,null,2));assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({checks:['Actual Codex search starts and completes with its original English native summary in the GUI and same TUI; compact disclosure; reader reload preserves exact identity and completed status; no fabricated footer'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+ }
  if(initialTerminal){
   await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_1')&&(await terminalText()).includes('CONTEXT_TASK_1'),'First GUI task on the empty actual native-first thread');
   assert.equal((await snapshot()).sessions[0].nativeId,before.nativeId);assert.equal(calls,1);
@@ -99,6 +132,7 @@ async function nativeCommand(command){
   else{await nativeInput.type('Ask me which small approach to use.');await until(async()=>(await terminalText()).includes('Ask me which small approach to use.'),'Native task edit line');await sleep(300);await nativeInput.press('Enter');}
   await until(async()=>(await terminalText()).includes('Which small implementation should be used?'),'Actual native user question');
   await page.locator('#approval').getByText('Which small implementation should be used?',{exact:true}).waitFor();
+  await page.locator('#native-phase').getByText('Native context · waitingOnUserInput',{exact:true}).waitFor();
   await page.locator('#approval').getByText('Use existing primitives',{exact:false}).waitFor();
   fs.writeFileSync(path.join(base,'native-question.txt'),await terminalText());fs.writeFileSync(path.join(base,'gui-question.json'),JSON.stringify(await snapshot(),null,2));
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-question.png')});}

@@ -24,10 +24,11 @@ async function run(){
  assert.equal(await page.locator('#messages .assistant').count(),0,'A live phase is visible before assistant text');
  await page.locator('#terminal-tab').click();await until(async()=>(await fixture('stats')).pending.includes(a),'Native surface pending');await fixture('release',a);
  await page.locator('#terminal-area .xterm-screen').waitFor();assert.equal(await page.locator('#native-activity').isVisible(),true,'Native input focus does not hide the reader phase');
+ await fixture('native-activity',a,{turnId:'turn-a',label:'Bash',phase:'approval'});
  const permission={nativeOnly:true,requests:[{id:'permission:1',title:'Bash',input:'{"command":"check-document"}'}]};
  await fixture('native-permission',a,permission);
- await page.locator('#approval').getByText('Claude state · 等待原生权限确认',{exact:true}).waitFor();
- await page.locator('#native-phase').getByText('Claude state · 等待原生确认',{exact:true}).waitFor();
+ await page.locator('#approval').getByText('Claude state',{exact:true}).waitFor();
+ await page.locator('#native-phase').getByText('Claude state · Bash',{exact:true}).waitFor();
  assert.equal(await page.locator('#approval pre').innerText(),'{'+'"command":"check-document"}');
  assert.equal(await page.locator('#approval button').count(),1,'No fabricated native permission decisions');
  const requestBody=await page.locator('#approval pre').elementHandle();
@@ -49,7 +50,7 @@ async function run(){
  await page.locator('#run-status').getByText('Claude state · 思考中',{exact:false}).waitFor();
  await fixture('nativeBlock',a,{id:'response:shared',kind:'response',turnId:'shared-turn',promptId:'shared-prompt',text:'Public partial',status:'streaming'});
  await fixture('native-permission',a,permission);
- await page.locator('#approval').getByText('Claude state · 等待原生权限确认',{exact:true}).waitFor();
+ await page.locator('#approval').getByText('Claude state',{exact:true}).waitFor();
  assert.equal(await page.locator('#room-messages').isVisible(),true);
  assert.ok(!(await snapshot()).room.messages.some(m=>m.text.includes('check-document')),'Permission arguments never become room messages');
  await page.locator('#approval').getByRole('button',{name:'在 Claude state 的原生终端处理',exact:true}).click();

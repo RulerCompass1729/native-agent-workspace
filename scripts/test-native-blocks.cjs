@@ -15,6 +15,9 @@ const nativeVersion = require('node:child_process').execFileSync(binary, ['--ver
 assert.match(nativeVersion, /^2\.1\.(307|308|309|310)\b/, 'Verify the updated native contract before sending a test task');
 let application, page, client, calls = 0, held, releaseFinal, releaseStart;
 const errors = [], checks = [];
+const questionTrial = process.env.NAW_TEST_NATIVE_QUESTION === '1';
+const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel'].includes(answerMode))throw Error('Unknown bounded native answer case');
+const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
   const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
@@ -32,15 +35,16 @@ const server = http.createServer((req, res) => {
     }
     const number = ++calls;
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
-    if (number > 3) { res.writeHead(429); res.end(); return; }
+    if (number > (questionTrial ? 2 : 3)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
+    fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'message_start', { message: { id: `msg_local_${number}`, type: 'message', role: 'assistant', model: request.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
     if (number === 1) {
       block(res, 0, { type: 'text', text: 'NATIVE_FIRST: checking locally.\n' });
-      block(res, 1, { type: 'tool_use', id: 'toolu_local_block', name: 'Bash', input: { command: 'printf "NATIVE_TOOL: 42\\n"', description: 'Print the local test marker' } });
+      block(res, 1, questionTrial ? { type: 'tool_use', id: 'toolu_local_question', name: 'AskUserQuestion', input: { questions: [nativeQuestion] } } : { type: 'tool_use', id: 'toolu_local_block', name: 'Bash', input: { command: 'printf "NATIVE_TOOL: 42\\n"', description: 'Print the local test marker' } });
     } else if (number === 2) {
-      await new Promise(resolve => { releaseFinal = resolve; });
+      if (!questionTrial) await new Promise(resolve => { releaseFinal = resolve; });
       block(res, 0, { type: 'text', text: 'NATIVE_FINAL: the result is 42.\n' });
     } else {
       event(res, 'content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
@@ -68,14 +72,14 @@ async function cleanup() {
     `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"])\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
-  application = await _electron.launch({ executablePath: require('electron'), args: [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await application.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').waitFor(); client = await connectService(profile, 'native-block-test');
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
   await page.locator('#initial-view').selectOption('terminal'); await page.locator('#session-name').fill('Native blocks'); await page.locator('#confirm-create').click();
   await until(async () => /Yes, I trust this folder|Do you want to use this API key/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions[0]?.chatAvailable, 'Native startup');
   if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
-    assert.ok((await page.locator('#terminal-area').innerText()).includes(fs.realpathSync(cwd)));
+    assert.ok((await page.locator('#terminal-area').innerText()).replace(/\s/g,'').includes(fs.realpathSync(cwd).replace(/\s/g,'')));
     await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowDown'); await sleep(200); await page.keyboard.press('Enter');
   }
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key') || (await snapshot()).sessions[0]?.chatAvailable, 'Native key prompt');
@@ -88,6 +92,62 @@ async function cleanup() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Run the local check.'); await page.locator('#forward-button').click();
+  if (questionTrial) {
+    await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
+    await until(async () => (await snapshot()).sessions[0].nativeApproval?.requests.some(r => r.title === 'AskUserQuestion'), 'Actual native question reaches existing private panel');
+    await page.locator('#approval').getByText(nativeQuestion.question, {exact:true}).waitFor();
+    for (const option of nativeQuestion.options) {
+      await page.locator('#approval').getByText(option.label,{exact:true}).waitFor();
+      await page.locator('#approval').getByText(option.description,{exact:true}).waitFor();
+    }
+    fs.writeFileSync(path.join(base,'question-wait.json'),JSON.stringify(await snapshot(),null,2));
+    fs.writeFileSync(path.join(base,'question-panel.txt'),await page.locator('#approval').innerText());
+    if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'question-wait-'+answerMode+'.png')});}
+    await page.locator('#terminal-tab').click();
+    await until(async () => (await page.locator('#terminal-area .xterm-rows').innerText()).includes(nativeQuestion.question), 'The same native TUI asks the same question');
+    fs.writeFileSync(path.join(base,'question-terminal.txt'),await page.locator('#terminal-area .xterm-rows').innerText());
+    const nativeInput=page.locator('#terminal-area .xterm-helper-textarea');
+    if(answerMode==='cancel') {
+      assert.ok((await page.locator('#terminal-area .xterm-rows').innerText()).includes('Esc to cancel'));
+      await nativeInput.press('Escape');
+      await until(async()=>{const s=(await snapshot()).sessions[0];return s.state==='idle'&&s.messages.some(m=>m.kind==='tool'&&m.status==='failed'&&m.text.includes("The user doesn't want to proceed"));},'Native question cancellation is preserved as a rejected tool, not a guessed turn abort');
+      const after=await snapshot(); assert.equal(after.sessions[0].nativeId,before.nativeId);assert.equal(after.sessions[0].pid,before.pid);
+      await page.locator('#chat-tab').click();await until(()=>page.locator('#approval').isHidden(),'Cancelled dialog clears');
+      assert.match(await page.locator('#messages').innerText(),/The user doesn't want to proceed/);assert.equal(calls,1,'Question cancellation does not submit a replacement human task');
+      fs.writeFileSync(path.join(base,'question-cancelled.json'),JSON.stringify(after,null,2));
+      console.log(JSON.stringify({checks:['Original question/options; native Esc cancellation retained as an abnormal boundary without fabricating an answer'],nativeVersion,answerMode,localResponses:calls,paidModelCalls:0,evidence:base}));return;
+    }
+    const expectedAnswer=answerMode==='other'?'Use my own original answer.':'Keep original';
+    if(answerMode==='other') {
+      assert.ok((await page.locator('#terminal-area .xterm-rows').innerText()).includes('3. Type something.'));
+      await nativeInput.press('ArrowDown');await nativeInput.press('ArrowDown');
+      await until(async()=>(await page.locator('#terminal-area .xterm-rows').innerText()).includes('❯ 3. Type something.'),'Actual native free-answer field selected');
+      await nativeInput.type(expectedAnswer);
+      await until(async()=>(await page.locator('#terminal-area .xterm-rows').innerText()).includes(expectedAnswer)&&Boolean((await snapshot()).sessions[0].nativeApproval),'Free answer is visible in the still-open native question before submitting');
+      fs.writeFileSync(path.join(base,'question-free-draft.txt'),await page.locator('#terminal-area .xterm-rows').innerText());
+    }
+    await nativeInput.press('Enter');
+    await until(async () => calls === 2 || (await page.locator('#terminal-area .xterm-rows').innerText()).includes('Submit answers'), 'Native selection or answer review');
+    if (calls !== 2) {
+      fs.writeFileSync(path.join(base,'question-review.txt'),await page.locator('#terminal-area .xterm-rows').innerText());
+      await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
+    }
+    await until(async () => (await snapshot()).sessions[0].state === 'idle' && (await snapshot()).sessions[0].messages.some(m => m.text.includes('NATIVE_FINAL:')), 'Answer continues the same native turn');
+    const after=(await snapshot()).sessions[0];
+    await page.locator('#terminal-tab').click();await until(async()=>(await page.locator('#terminal-area .xterm-rows').innerText()).includes('NATIVE_FINAL:'),'Actual same TUI receives the final answer');
+    fs.writeFileSync(path.join(base,'question-finished-terminal.txt'),await page.locator('#terminal-area .xterm-rows').innerText());
+    assert.equal(after.nativeId,before.nativeId);assert.equal(after.pid,before.pid);assert.equal(calls,2);
+    const request=JSON.parse(fs.readFileSync(path.join(base,'request-2.json')));
+    const result=request.messages.flatMap(m=>m.content||[]).find(p=>p.type==='tool_result'&&p.tool_use_id==='toolu_local_question');
+    assert.ok(result && JSON.stringify(result).includes(expectedAnswer),'The actual native tool result, not enqueue ACK, contains the selected answer');
+    assert.ok(!(await snapshot()).room.messages.some(m=>m.text?.includes('NATIVE_FINAL:')),'The human-input boundary prevents a late private reply from leaking back into shared history');
+    await page.locator('#chat-tab').click();
+    assert.equal(await page.locator('#approval').isVisible(),false);
+    assert.ok(!(await page.locator('#messages').innerText()).includes('原生本轮已结束'));
+    assert.deepEqual(errors,[]);fs.writeFileSync(path.join(base,'question-finished.json'),JSON.stringify(await snapshot(),null,2));
+    if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-question.png')});}
+    console.log(JSON.stringify({checks:['Exact native question/options in the existing GUI panel and same TUI; actual native answer result; same identity; no late private sharing; no invented completion sentence'],nativeVersion,answerMode,localResponses:calls,paidModelCalls:0,evidence:base}));return;
+  }
   if (process.env.NAW_TEST_NATIVE_PHASE === '1') {
     await until(()=>Boolean(releaseStart),'One bounded native request waits before text');
     await page.locator(`[data-session-id="${before.id}"]`).click();await page.locator('#chat-tab').click();

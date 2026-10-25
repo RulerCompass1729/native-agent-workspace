@@ -398,7 +398,7 @@ async function launch() {
     await inlineRecipient(page, id);
     await fillRoomMessage(page, 'Check native permission without exposing later output.'); await page.locator('#forward-button').click();
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).state === 'approval', 'Actual retained native permission prompt');
-    await page.locator('#approval').getByText('Retained Claude · 等待原生权限确认',{exact:false}).waitFor();
+    await page.locator('#approval').getByText('Retained Claude',{exact:true}).waitFor();
     assert.match(await page.locator('#approval pre').innerText(),/RETAINED_APPROVED_TOOL/);
     assert.equal(await page.locator('#approval button').count(),1,'Actual native options stay on the real TUI');
     fs.writeFileSync(path.join(base, 'shared-permission.json'), JSON.stringify(await snapshot(), null, 2));

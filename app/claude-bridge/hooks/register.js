@@ -171,13 +171,13 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
       }
       for (const block of message.content) if (block?.type === 'tool_use' && typeof block.id === 'string') {
         enqueueBlock($, { id: `tool:${block.id}`, kind: 'tool', turnId,
-          title: block.name || '工具', input: JSON.stringify(block.input || {}, null, 2), status: 'running' });
+          title: block.name || '', input: JSON.stringify(block.input || {}, null, 2), status: 'running' });
       }
     } else if (e.door === 'tool-result' && e.origin?.kind === 'tool' && message.type === 'user') {
       for (const block of message.content) if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
         const nonText = Array.isArray(block.content) && block.content.some(b => b?.type !== 'text');
         enqueueBlock($, { id: `tool:${block.tool_use_id}`, kind: 'tool',
-          title: e.origin.tool || '工具', text: text(block.content), status: block.is_error ? 'failed' : 'complete', incomplete: nonText });
+          title: e.origin.tool || '', text: text(block.content), status: block.is_error ? 'failed' : 'complete', incomplete: nonText });
       }
     }
     return;
@@ -539,15 +539,30 @@ export function register(on) {
     let input = '', incomplete = false;
     try { input = JSON.stringify(e.input ?? {}, null, 2); if (input.length > 500000) { input = ''; incomplete = true; } } catch { incomplete = true; }
     enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', permissionId: call.id,
-      turnId: call.turnId, title: e.tool || '原生工具', input, incomplete }, call.binding);
+      turnId: call.turnId, title: e.tool || '', input, incomplete }, call.binding);
     return result;
+  }).catch(($, e, next) => next(e));
+  on('ui.render', { component: 'AskUserQuestion' }, ($, e, next) => {
+    const call = rootToolCalls.get(e.requestId);
+    // This native dialog can open without a tool permission request. Observe
+    // its own exact root tool ID; leave all input and selection with the TUI.
+    if (e.surface === 'terminal' && call && call.binding === rootBinding && next.origin?.plugin === 'engine' && next.origin?.tier === 'core') {
+      let input = '', incomplete = false;
+      try { input = JSON.stringify({ questions: e.props.questions }, null, 2); if (input.length > 500000) { input = ''; incomplete = true; } } catch { incomplete = true; }
+      if (call.questionInput !== input) {
+        call.questionInput = input;
+        enqueueBlock($, { id: 'control:permission', kind: 'control', status: 'complete', permissionId: call.id,
+          turnId: call.turnId, title: e.props.tool, input, incomplete }, call.binding);
+      }
+    }
+    return next(e);
   }).catch(($, e, next) => next(e));
   on('ui.render', { component: 'ToolProgress' }, ($, e, next) => {
     const call = rootToolCalls.get(e.props.tool_use_id);
     if (call && !call.progress && call.binding === rootBinding && e.props.kind === 'background_hint' && next.origin?.plugin === 'engine' && next.origin?.tier === 'core') {
       call.progress = true;
       enqueueBlock($, { id: 'control:permission-end', kind: 'control', status: 'complete', permissionId: call.id }, call.binding);
-      observePhase($, 'tool-use', call.binding, call.turnId);
+      observePhase($, 'tool', call.binding, call.turnId);
     }
     return next(e);
   }).catch(($, e, next) => next(e));
@@ -632,7 +647,7 @@ export function register(on) {
       while (true) {
         const item = await iterator.next(sent);
         if (item.done) { finished = true; return item.value; }
-        const phase = { thinking: 'thinking', text: 'responding', input: 'tool-input', tool: 'tool-use' }[item.value?.kind];
+        const phase = ['thinking', 'text', 'input', 'tool'].includes(item.value?.kind) ? item.value.kind : null;
         if (phase) observePhase($, phase, binding, e.turnId);
         sent = yield item.value;
       }
@@ -651,7 +666,7 @@ export function register(on) {
         const finalDisplayId = turn?.binding === binding && !turn.incomplete && final?.final &&
           typeof e.answer === 'string' && final.raw.trimEnd() === e.answer.trimEnd() ? `display:${turn.last}` : undefined;
         turn.ended = true; turn.endReason = e.reason;
-        turn.endingText = `${e.reason === 'aborted' ? '原生已中断本轮' : e.reason === 'answer' ? '原生本轮已结束' : '原生本轮未正常完成'}${Number.isFinite(e.durationMs) ? ` · ${(e.durationMs / 1000).toFixed(1)} 秒` : ''}`;
+        turn.endingText = '';
         enqueueBlock($, { id: `turn:${e.turnId}`, turnId: e.turnId, kind: 'turn', finalDisplayId,
           text: turn.endingText + (e.reason === 'error' && failureText(turn) ? `\n${failureText(turn)}` : ''),
           status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed',

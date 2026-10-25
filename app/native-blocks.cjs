@@ -4,7 +4,7 @@ function codexTurnBlock(nativeId, turn) {
   if (typeof turn?.id !== 'string' || !turn.id || !['completed', 'interrupted', 'failed'].includes(turn.status)) return null;
   const event = { id: `turn:${turn.id}`, kind: 'turn', turnId: turn.id, nativeId,
     status: turn.status === 'completed' ? 'complete' : turn.status,
-    text: turn.status === 'completed' ? '原生本轮已结束' : turn.status === 'interrupted' ? '原生已中断本轮' : '原生本轮未正常完成' };
+    text: '' }; // Native state does not authorize invented display text.
   // The native protocol reports Unix seconds; display records use milliseconds.
   // Missing history is unknown, never the time this client happened to reconnect.
   for (const [source, target] of [['startedAt', 'nativeStartedAt'], ['completedAt', 'nativeCompletedAt']]) {
@@ -172,6 +172,16 @@ function applyCodexTurnHistory(s, turns, runtime) {
     const event = codexTurnBlock(s.nativeId, turn);
     if (!event || turn.id === runtime.turnId && !runtime.nativeTurnFinished) continue;
     const id = `native:${s.nativeId}:${event.id}`, cached = s.messages.find(m => m.id === id);
+    const boundaryStatus = ['interrupted', 'failed'].includes(cached?.status) ? cached.status : event.status;
+    // webSearch history items omit a status. A matching native terminal turn
+    // supplies the missing end boundary; never leave recovered searches spinning.
+    for (const row of s.messages) if (row.nativeId === s.nativeId && row.turnId === turn.id && row.toolKind === 'webSearch' && row.status === 'running') {
+      row.status = boundaryStatus === 'complete' ? 'complete' : 'unconfirmed';
+      if (boundaryStatus === 'complete') {
+        let action; try { action = JSON.parse(row.text || '{}').action; } catch {}
+        row.title = require('./codex-tool-content.cjs').webSearchTitle(action, row.input, true);
+      }
+    }
     if (cached) {
       if (cached.status === event.status) for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) {
         if (cached[field] == null && event[field] != null) cached[field] = event[field];

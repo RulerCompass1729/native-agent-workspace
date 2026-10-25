@@ -9,8 +9,8 @@ function summaryText(item) {
     ? item.summary.join('\n\n') : '';
 }
 function nativeTextContent(item) {
-  if (item?.type === 'reasoning') return { kind: 'summary', title: '过程摘要', text: summaryText(item) };
-  if (item?.type === 'plan') return { kind: 'plan', title: '计划', text: typeof item.text === 'string' ? item.text : '' };
+  if (item?.type === 'reasoning') return { kind: 'summary', title: '', text: summaryText(item) };
+  if (item?.type === 'plan') return { kind: 'plan', title: '', text: typeof item.text === 'string' ? item.text : '' };
   return null;
 }
 function nativeTextItemId(message, nativeId) {
@@ -26,7 +26,7 @@ function contentText(content) {
     if (part?.type === 'resource' && typeof part.resource?.text === 'string') return [part.resource.uri, part.resource.text].filter(v => typeof v === 'string').join('\n');
     if (part?.type === 'resource_link') return [part.name, part.uri, part.description].filter(v => typeof v === 'string').join('\n');
     incomplete = true;
-    return '〔非文本内容，请在原生终端查看〕';
+    return ''; // Missing media is a display gap, not invented native text.
   }).join('\n');
   return { text, incomplete };
 }
@@ -34,35 +34,48 @@ function fileChanges(changes) {
   if (!Array.isArray(changes)) return { text: '', incomplete: true };
   let incomplete = false;
   const text = changes.map(change => {
-    if (typeof change?.path !== 'string' || typeof change.diff !== 'string') { incomplete = true; return '〔文件修改内容未完整同步〕'; }
-    const kind = { add: '新增', delete: '删除', update: '修改' }[change.kind?.type] || '文件变更';
+    if (typeof change?.path !== 'string' || typeof change.diff !== 'string') { incomplete = true; return ''; }
+    const kind = typeof change.kind?.type === 'string' ? change.kind.type : '';
     const destination = typeof change.kind?.move_path === 'string' ? ` → ${change.kind.move_path}` : '';
     return `${kind} ${change.path}${destination}\n${change.diff}`;
   }).join('\n\n');
   return { text, incomplete };
 }
-function toolContent(item) {
+// Match the native 0.163/0.164 WebSearchCell summary. The raw action remains
+// expandable; do not localize native words or turn its JSON into a preview.
+function webSearchTitle(action, query, completed) {
+  const type = action?.type;
+  let detail = type === 'search' ? action.query || action.queries?.join(', ') || ''
+    : type === 'openPage' ? action.url || ''
+    : type === 'findInPage' ? action.pattern ? "'" + action.pattern + "'" + (action.url ? ' in ' + action.url : '') : action.url || '' : '';
+  detail ||= query || '';
+  const header = type === 'openPage' ? (completed ? detail ? 'Opened' : 'Opened page' : detail ? 'Opening' : 'Opening page')
+    : type === 'findInPage' ? (completed ? action.pattern ? 'Searched for' : 'Searched page' : action.pattern ? 'Searching for' : 'Searching page')
+    : !completed && !detail && (!type || type === 'other') ? 'Browsing the web' : completed ? 'Searched the web' : 'Searching the web';
+  return header + (detail ? (type === 'openPage' || type === 'findInPage' ? ' ' : ' for ') + detail : '');
+}
+function toolContent(item, completed = item?.status === 'completed') {
   if (!item || !toolTypes.has(item.type)) return null;
   // Question history does not carry isSecret. Only the live request-aware
   // private answer reader may project its result; generic hydration must not.
   if (item.type === 'functionCallOutput' && ['request_user_input', 'request_user_input_async'].includes(item.name)) return null;
   const result = {};
   if (item.type === 'commandExecution') {
-    result.title = item.command || '命令';
+    result.title = item.command || '';
     if (typeof item.aggregatedOutput === 'string') result.text = item.aggregatedOutput;
   } else if (item.type === 'webSearch') {
     const action = item.action;
-    result.title = { openPage: '打开网页', findInPage: '页内查找' }[action?.type] || '搜索网页';
+    result.title = webSearchTitle(action, item.query, completed);
     result.input = action?.type === 'search' ? action.query || action.queries?.join('\n') || item.query || ''
       : action?.type === 'findInPage' ? [action.url, action.pattern].filter(v => typeof v === 'string').join('\n') : action?.url || item.query || '';
     result.text = json({ action: action ?? null, ...(Array.isArray(item.results) ? { results: item.results } : {}) });
   } else if (item.type === 'fileChange') {
-    result.title = '文件修改'; Object.assign(result, fileChanges(item.changes));
+    result.title = ''; Object.assign(result, fileChanges(item.changes));
   } else if (item.type === 'functionCallOutput') {
-    result.title = [item.namespace, item.name].filter(Boolean).join('.') || '工具结果';
+    result.title = [item.namespace, item.name].filter(Boolean).join('.') || '';
     Object.assign(result, contentText(item.output));
   } else {
-    result.title = [item.type === 'mcpToolCall' ? item.server : item.namespace, item.tool].filter(Boolean).join('.') || '工具';
+    result.title = [item.type === 'mcpToolCall' ? item.server : item.namespace, item.tool].filter(Boolean).join('.') || '';
     if (item.arguments !== undefined) result.input = json(item.arguments);
     if (item.type === 'dynamicToolCall' && Array.isArray(item.contentItems)) Object.assign(result, contentText(item.contentItems));
     if (item.type === 'mcpToolCall' && item.result) {
@@ -80,4 +93,4 @@ function toolStatus(item, completed) {
   if (item.status === 'interrupted') return 'interrupted';
   return completed ? 'completed' : 'running';
 }
-module.exports = { contentText, fileChanges, toolContent, toolStatus, toolTypes, summaryText, nativeTextContent, nativeTextItemId };
+module.exports = { webSearchTitle, contentText, fileChanges, toolContent, toolStatus, toolTypes, summaryText, nativeTextContent, nativeTextItemId };

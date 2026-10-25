@@ -5,7 +5,7 @@ const { applyCodexProgress } = require('../native-blocks.cjs');
 test('native web search retains its literal query, action and complete result data', () => {
   const results = [{ title: 'A result', url: 'https://example.test/a', snippet: 'Full result text' }];
   const search = toolContent({ type: 'webSearch', query: 'original query', action: { type: 'search', query: null, queries: ['first query', 'second query'] }, results });
-  assert.equal(search.title, '搜索网页'); assert.equal(search.input, 'first query\nsecond query');
+  assert.equal(search.title, 'Searching the web for first query, second query'); assert.equal(search.input, 'first query\nsecond query');
   assert.deepEqual(JSON.parse(search.text).results, results);
   assert.equal(toolContent({ type: 'webSearch', action: { type: 'findInPage', url: 'https://example.test', pattern: 'needle' } }).input, 'https://example.test\nneedle');
 });
@@ -20,7 +20,7 @@ test('MCP and dynamic tools retain exact input/text, explicit unsupported media 
 });
 test('file changes preserve paths, moves and diff text; function output preserves text and marks omitted binary', () => {
   const diff = '@@ -1 +1 @@\n-old\n+new\n';
-  assert.equal(fileChanges([{ path: 'old.txt', kind: { type: 'update', move_path: 'new.txt' }, diff }]).text, '修改 old.txt → new.txt\n' + diff);
+  assert.equal(fileChanges([{ path: 'old.txt', kind: { type: 'update', move_path: 'new.txt' }, diff }]).text, 'update old.txt → new.txt\n' + diff);
   assert.equal(toolContent({ type: 'functionCallOutput', name: 'check', namespace: 'local', output: 'result\n' }).text, 'result\n');
   const result = toolContent({ type: 'functionCallOutput', name: 'check', output: [{ type: 'input_text', text: 'visible' }, { type: 'encrypted_content', encrypted_content: 'PRIVATE' }] });
   assert.equal(result.incomplete, true); assert.ok(!result.text.includes('PRIVATE')); assert.match(result.text, /visible/);
@@ -38,8 +38,27 @@ test('native tool lifecycle updates the same complete reader block including rep
   assert.equal(s.messages.length, 1); assert.equal(row.text, 'final complete output'); assert.equal(row.status, 'complete');
   emit('item/started', { item: { type: 'fileChange', id: 'patch', changes: [{ path: 'x', kind: { type: 'add' }, diff: '+one' }] } });
   const patch = s.messages[1]; emit('item/fileChange/patchUpdated', { itemId: 'patch', changes: [{ path: 'x', kind: { type: 'add' }, diff: '+two' }] });
-  assert.equal(patch.text, '新增 x\n+two');
+  assert.equal(patch.text, 'add x\n+two');
   emit('item/completed', { item: { type: 'fileChange', id: 'patch', status: 'declined', changes: [{ path: 'x', kind: { type: 'add' }, diff: '+two' }] } });
   assert.equal(patch.status, 'declined'); assert.equal(s.messages.length, 2);
   assert.equal(toolStatus({ success: false }, true), 'failed');
+});
+
+test('native web search words follow native lifecycle rather than localized captions', () => {
+  const {webSearchTitle}=require('../codex-tool-content.cjs');
+  assert.equal(webSearchTitle(null,'',false),'Browsing the web');
+  assert.equal(webSearchTitle(null,'',true),'Searched the web');
+  assert.equal(webSearchTitle({type:'search',query:'Seattle weather'},'',true),'Searched the web for Seattle weather');
+  assert.equal(webSearchTitle({type:'openPage',url:'https://example.test'},'',true),'Opened https://example.test');
+  assert.equal(webSearchTitle({type:'findInPage',pattern:'needle',url:'https://example.test'},'',false),"Searching for 'needle' in https://example.test");
+});
+for (const cut of [null,'interrupted','failed']) test('history web search uses its exact native boundary and preserves earlier cut: '+cut,()=>{
+  const {applyCodexTurnHistory}=require('../native-blocks.cjs');
+  const row={id:'native:N:tool:search',kind:'tool',toolKind:'webSearch',nativeId:'N',turnId:'T',status:'running',input:'Seattle',text:JSON.stringify({action:{type:'search',query:'Seattle'}})};
+  const other={...row,id:'native:N:tool:other',turnId:'OTHER'};
+  const s={nativeId:'N',messages:[row,other,...(cut?[{id:'native:N:turn:T',nativeId:'N',kind:'turn',turnId:'T',status:cut,text:''}]:[])]};
+  applyCodexTurnHistory(s,[{id:'T',status:'completed'}],{});
+  assert.equal(row.status,cut?'unconfirmed':'complete');
+  if(!cut)assert.equal(row.title,'Searched the web for Seattle');
+  assert.equal(other.status,'running');
 });

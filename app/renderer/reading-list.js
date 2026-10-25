@@ -104,20 +104,12 @@ function readingView(el, key) {
   }
   return view;
 }
-function nativeCompletionText(message, now = new Date()) {
+function nativeCompletionText(message) {
   if (message.kind !== 'turn') return message.text;
-  const parts = [];
-  if (Number.isSafeInteger(message.nativeDurationMs) && message.nativeDurationMs >= 0) {
-    const total = Math.floor(message.nativeDurationMs / 1000), h = Math.floor(total / 3600), m = Math.floor(total % 3600 / 60), s = total % 60;
-    parts.push(`Worked for ${h ? `${h}h ${m}m ${s}s` : m ? `${m}m ${s}s` : s ? `${s}s` : '<1s'}`);
-  }
-  if (Number.isFinite(message.nativeCompletedAt) && Math.abs(message.nativeCompletedAt) <= 8640000000000000) {
-    const at = new Date(message.nativeCompletedAt);
-    const day = at.toDateString() === now.toDateString() ? '' : at.toLocaleDateString([], { month: 'short', day: 'numeric', ...(at.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) }) + ' · ';
-    parts.push(day + at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
-  }
-  if (!parts.length) return message.text;
-  return [message.status !== 'complete' ? message.text : '', ...parts].filter(Boolean).join(' • ');
+  // Earlier releases invented these completion sentences. Keep native error
+  // details, but do not translate or reconstruct a missing TUI footer from time.
+  const text = (message.text || '').replace(/^原生(?:本轮已结束|已中断本轮|本轮未正常完成)(?: · [^\n]*)?(?:\n|$)/, '');
+  return text.trim() ? text : ['interrupted', 'failed'].includes(message.status) ? message.status : '';
 }
 function messageList(el, messages, room = false, key = 'room') {
   const view = readingView(el, key);
@@ -126,6 +118,7 @@ function messageList(el, messages, room = false, key = 'room') {
   view.intent = intent;
   const rows = [], retained = new Set(), days = new Set(); let lastDay = '';
   for (const m of messages) {
+    if (m.kind === 'turn' && !nativeCompletionText(m)?.trim()) continue;
     if (m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)) continue;
     if (room) {
       const day = Number.isFinite(m.time) ? new Date(m.time).toLocaleDateString() : '时间未记录';
@@ -191,17 +184,18 @@ function messageList(el, messages, room = false, key = 'room') {
     entry.message = m; retained.add(m.id); rows.push(entry.item);
     entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
     entry.item.classList.toggle('native-notice', m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && current()?.nativeContexts?.some(c => c.boundaryId === m.id)));
+    const nativeTitle = m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
     let name = room ? roomMessageLabel(m) : m.name;
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
     if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
     const messageTime = room && m.kind !== 'turn' ? m.time : undefined;
-    const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, m.title, m.incomplete, m.volatile, m.sharingStopped]);
+    const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, nativeTitle, m.incomplete, m.volatile, m.sharingStopped]);
     if (entry.headingKey !== headingKey) {
       const authorId = room && (m.sessionId || m.recipientId);
       const author = authorId ? button(name, () => { $('room-filter').value = authorId; renderTimeline(); attempt(persistView); }, 'message-author') : node('strong', name);
       if (authorId) { author.title = `查看 ${name} 的共享轨迹`; author.setAttribute('aria-label', `查看 ${name} 的共享轨迹`); }
       entry.heading.replaceChildren(author); entry.headingKey = headingKey;
-      if (m.title) entry.heading.append(node('span', m.title));
+      if (nativeTitle) entry.heading.append(node('span', nativeTitle));
       if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
       if (m.volatile && !entry.disclosure) entry.heading.append(node('span', (m.nativeMessageId || m.id || '').startsWith(`native:${m.nativeId}:tool:`) ? '工具记录' : '本次运行记录'));
       if (m.sharingStopped) entry.heading.append(node('span', `共享已停止 · ${m.sharingStopped}`));
@@ -209,7 +203,8 @@ function messageList(el, messages, room = false, key = 'room') {
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
       const status = { 'awaiting-native': '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: !room && current()?.provider === 'claude' && m.role === 'tool' ? '已请求工具' : '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
-      if (status) entry.heading.append(node('span', status));
+      if (status && !m.nativeBlock && !m.sharedStream) entry.heading.append(node('span', status));
+      else if ((m.nativeBlock || m.sharedStream) && ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status)) entry.heading.append(node('span', m.status));
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
       if (entry.preview) entry.heading.append(entry.preview);
     }
@@ -227,7 +222,7 @@ function messageList(el, messages, room = false, key = 'room') {
         try { const value = JSON.parse(inputPreview); inputPreview = [value.command, value.description, value.file_path, value.path, value.query].find(field => typeof field === 'string' && field.trim()) || inputPreview; }
         catch { /* The expandable original remains authoritative. */ }
       }
-      const preview = (inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
+      const preview = (m.toolKind === 'webSearch' ? '' : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
       if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
       const tail = m.toolKind === 'commandExecution' && !open && m.text ? m.text.split('\n').slice(-3).join('\n') : '';
       entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;

@@ -118,11 +118,11 @@ test('a held native abort API cannot block observation of the actual interrupted
 test('root activity follows the transparent native stream, while child activity and ended turns cannot replace it', async () => {
   const f = await mod({version:'2.1.309'}), turnId=randomUUID();
   await f.invoke('turn.start',{turnId});await f.clock.shift()();
-  assert.equal(f.r.nativeActivity.label,'正在请求');
+  assert.equal(f.r.nativeActivity.label,'requesting');
   const chunks=[{kind:'thinking',text:'PRIVATE REASONING'},{kind:'text',text:'visible',ref:2}], result={stopReason:'end_turn'};
   const next=()=> (async function*(){yield*chunks;return result;})();next.origin={plugin:'engine',tier:'core'};
-  const stream=f.invoke('turn.step',{turnId},next);assert.equal((await stream.next()).value,chunks[0]);await f.clock.shift()();assert.equal(f.r.nativeActivity.label,'思考中');
-  assert.equal((await stream.next()).value,chunks[1]);await f.clock.shift()();assert.equal(f.r.nativeActivity.label,'正在输出');
+  const stream=f.invoke('turn.step',{turnId},next);assert.equal((await stream.next()).value,chunks[0]);await f.clock.shift()();assert.equal(f.r.nativeActivity.label,'thinking');
+  assert.equal((await stream.next()).value,chunks[1]);await f.clock.shift()();assert.equal(f.r.nativeActivity.label,'text');
   assert.equal((await stream.next()).value,result);assert.ok(!JSON.stringify(f.requests).includes('PRIVATE REASONING'));
   await f.invoke('prompt.submit',{text:'A newly entered private instruction'});await f.clock.shift()();
   assert.equal(f.r.nativeActivity.turnId,turnId,'A private-input boundary revokes sharing without inventing a new executing turn');
@@ -153,6 +153,46 @@ test('native permission requests remain private, correlated to actual calls and 
   finishA({result:'first result'});await a;await f.clock.shift()();assert.equal(f.r.nativeApproval.requests.length,1);
   finishB({deny:'native denial'});await b;await f.clock.shift()();assert.equal(f.r.nativeApproval,null);assert.equal(f.r.nativeActivity.turnId,turnId);
   f.r.observeRootGap({sessionId:f.r.record.nativeId,lease:f.r.rootLease,epoch:f.r.observationEpoch});assert.equal(f.r.nativeActivity,null);
+});
+
+test('native question cancellation ends only its exact live turn after sharing authority is revoked',()=>{
+ const r=adapter(),states=[];r.nativeBlocks=true;r.on('state',s=>states.push(s));
+ const emit=(id,extra)=>r.observeBlock({block:true,sessionId:r.record.nativeId,lease:r.rootLease,epoch:r.observationEpoch,sequence:(r.rootObservation?.sequence||0)+1,kind:'control',status:'complete',id,...extra});
+ emit('control:turn-start',{turnId:'a',promptId:'prompt-a',status:'running'});
+ emit('control:permission',{turnId:'a',permissionId:'permission:question',title:'AskUserQuestion',input:'{}'});
+ emit('control:permission',{turnId:'a',promptId:'prompt-a',boundaryOnly:true});
+ r.hook({hook_event_name:'PermissionRequest',session_id:r.record.nativeId,prompt_id:'prompt-a'});
+ assert.equal(r.rootTurn,null);states.length=0;
+ emit('turn:a',{kind:'turn',turnId:'a',text:'',status:'complete'});
+ assert.deepEqual(states,['idle']);assert.equal(r.nativeActivity,null);assert.equal(r.nativeApproval,null);assert.equal(r.rootTurn,null);
+ emit('control:turn-start',{turnId:'b',status:'running'});states.length=0;
+ emit('turn:a',{kind:'turn',turnId:'a',text:'',status:'complete'});
+ assert.deepEqual(states,[]);assert.equal(r.nativeActivity.turnId,'b');
+ emit('control:permission',{turnId:'b',permissionId:'permission:other',title:'AskUserQuestion',input:'{}'});
+ emit('control:input',{});states.length=0;
+ emit('turn:b',{kind:'turn',turnId:'b',text:'',status:'complete'});
+ assert.deepEqual(states,[],'A later private input invalidates the old question completion');
+});
+
+for(const status of ['failed','interrupted'])test('native question abnormal end preserves its terminal state: '+status,()=>{
+ const r=adapter(),states=[];r.nativeBlocks=true;r.on('state',s=>states.push(s));
+ const emit=(id,extra)=>r.observeBlock({block:true,sessionId:r.record.nativeId,lease:r.rootLease,epoch:r.observationEpoch,sequence:(r.rootObservation?.sequence||0)+1,kind:'control',status:'complete',id,...extra});
+ emit('control:turn-start',{turnId:'a',status:'running'});
+ emit('control:permission',{turnId:'a',permissionId:'permission:question',title:'AskUserQuestion',input:'{}'});
+ states.length=0;emit('turn:a',{kind:'turn',turnId:'a',text:'',status});
+ assert.deepEqual(states,[status==='failed'?'error':'idle']);
+ assert.equal(Boolean(r.nativeInputRequired),status==='interrupted');assert.equal(r.rootTurn,null);
+});
+
+for(const boundary of ['UserPromptSubmit','PermissionRequest','Notification','StopFailure'])test('late question completion cannot override the independent classic boundary: '+boundary,()=>{
+ const r=adapter(),states=[];r.nativeBlocks=true;r.on('state',s=>states.push(s));
+ const emit=(id,extra)=>r.observeBlock({block:true,sessionId:r.record.nativeId,lease:r.rootLease,epoch:r.observationEpoch,sequence:(r.rootObservation?.sequence||0)+1,kind:'control',status:'complete',id,...extra});
+ emit('control:turn-start',{turnId:'a',promptId:'prompt-a',status:'running'});
+ emit('control:permission',{turnId:'a',permissionId:'permission:question',title:'AskUserQuestion',input:'{}'});
+ r.hook({hook_event_name:boundary,session_id:r.record.nativeId,prompt_id:'prompt-b',prompt:'new input',notification_type:'auth'});
+ emit('control:permission',{turnId:'a',permissionId:'permission:old-question',title:'AskUserQuestion',input:'{}'});
+ states.length=0;emit('turn:a',{kind:'turn',turnId:'a',text:'',status:'complete'});
+ assert.deepEqual(states,[],'An older question frame cannot rearm completion after a newer classic boundary');
 });
 
 test('old permission identity cannot replace a new root and expired observer proof cannot look live',()=>{

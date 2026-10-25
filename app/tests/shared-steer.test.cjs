@@ -121,7 +121,7 @@ test('summary sharing follows exact input provenance, preserves private tails an
   summary('private-summary', ' PRIVATE TAIL');
   startSummary('shared-summary'); summary('shared-summary', 'Public progress');
   assert.ok(!JSON.stringify(f.w.room.messages).includes('PRIVATE'));
-  const row = f.w.room.messages.find(m => m.title === '过程摘要'); assert.ok(row); assert.equal(row.sessionId, f.id); assert.equal(row.status, 'streaming');
+  const row = f.w.room.messages.find(m => m.kind === 'summary'); assert.ok(row); assert.equal(row.sessionId, f.id); assert.equal(row.status, 'streaming');
   f.end('interrupted'); assert.equal(row.status, 'interrupted'); assert.equal(row.finalReply, undefined);
 });
 
@@ -134,7 +134,7 @@ test('plan sharing follows its own input and cannot share an older private plan'
   f.emit('item/completed',{turnId:'active',item:{id:'private-plan',type:'plan',text:'PRIVATE COMPLETE'}});
   f.start('shared-plan','plan');
   f.emit('item/plan/delta',{turnId:'active',itemId:'shared-plan',delta:'Plan in progress'});
-  const row=f.w.room.messages.find(m=>m.title==='计划');assert.ok(row);assert.equal(row.text,'Plan in progress');
+  const row=f.w.room.messages.find(m=>m.kind==='plan');assert.ok(row);assert.equal(row.text,'Plan in progress');
   assert.ok(!JSON.stringify(f.w.room.messages).includes('PRIVATE'));
   f.end('interrupted');assert.equal(row.status,'interrupted');assert.equal(row.finalReply,undefined);
   f.emit('item/completed',{turnId:'active',item:{id:'shared-plan',type:'plan',text:'LATE PLAN'}});
