@@ -28,6 +28,14 @@ hook、SDK 与引擎项包含非交互界面，数量不等于用户功能数，
 2 个依赖上下文，19 个需要 claude.ai 订阅、`gh` 登录、云会话或 Chrome，用 API key fixture 无法区分。
 这是菜单发现，不是执行验收。键位只有来源，尚无运行证据。逐项画面留在私有验证目录。
 
+发现证据 `CL-INV-02`：同样的隔离环境与启动方式，加了只记录 SessionStart/SessionEnd 的 hook。
+1 次本地固定回复，零付费。`/branch`：进程不变，原生会话 ID 变化，事件为 SessionEnd `resume`
+→ SessionStart `fork`。`/resume`：选择器可打开、Esc 取消。`/background`：内嵌终端里的进程退出
+（SessionEnd `prompt_input_exit`），原生守护进程与 `bg-pty-host` 进程继续运行，hook 与屏幕显示新的会话 ID
+（SessionStart `fork`，屏幕提示 `claude agents` / `claude attach`）。NAW 当前只跟随 clear，
+终端退出即记为结束；两项的 GUI 表现是按源码推断，未在 GUI 里实测。探测结束时向本探测启动的后台进程发了 SIGTERM，
+1.5 秒后仍有 2 个 `bg-pty-host` 在运行，复核时已退出。
+
 需要用户决定：CL-X02（关闭遥测连带关闭的原生功能）和 CL-X03（原生自行发起的后台模型请求）。
 CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收中写明。
 
@@ -60,7 +68,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-A03 Plan 模式与退出 Plan 的确认 | `permission-modes#analyze-before-you-edit-with-plan-mode` | 在同屏原生 TUI 里用；GUI 只见对应权限请求 | **待验** |
 | CL-A04 MCP elicitation 表单与密钥 | `hooks#elicitation` | 在同屏原生 TUI 里用；不导出表单或密钥 | **待验** |
 | CL-A05 权限模式与切换（Shift+Tab 等） | `permission-modes; auto-mode-classifier-billing` | 在同屏原生 TUI 里用；NAW 当前不传 `--permission-mode`，原生默认为 auto（探测启动横幅可见）；分类器请求见 CL-X03 | **待验** |
-| CL-S01 新建、恢复、分支、fork、teleport 与根会话身份 | `sessions; commands` | GUI 跟随原生 clear；**resume/branch/teleport/background/tui 换会话时 GUI 是否跟随待验** | **待验** |
+| CL-S01 新建、恢复、分支、fork、teleport 与根会话身份 | `sessions; commands` | GUI 跟随原生 clear；**`/branch` 与 `/background` 已实测会换原生会话 ID（CL-INV-02）；按源码 NAW 不跟随，GUI 实测待验**；resume/teleport/tui 待验 | **待验** |
 | CL-S02 模型、effort、fast mode、output style | `model-config; fast-mode; output-styles` | GUI 只跟随模型名；选择器在同屏原生 TUI 里用；**fast mode 可用性检查被 CL-X02 关闭，影响待验** | **待验** |
 | CL-S03 配置、记忆、技能、hooks、插件、主题、快捷键设置 | `commands; settings-reference` | 在同屏原生 TUI 里用；**云端同步的技能与插件因 CL-X02 不加载** | **待验** |
 | CL-S04 检查点与 `/rewind` | `checkpointing` | 在同屏原生 TUI 里用；**回退对 GUI 已显示记录的影响待验** | **待验** |
@@ -84,9 +92,9 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-CMD007 `/auto-mode-setup` | [命令:58](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD008 `/autocompact [auto\|<tokens>]` | [命令:59](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD009 `/autofix-pr [prompt]` | [命令:60](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：菜单未列出；需 claude.ai 订阅、`gh` 登录、云会话或 Chrome 等条件；探测用 API key fixture，无法区分是账号条件还是 CL-X02，**需在用户真实登录环境核对** |
-| CL-CMD010 `/background [prompt]` | [命令:61](https://code.claude.com/docs/en/commands)；别名 `/bg` | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；**会把当前终端里的会话转成后台 agent，GUI 是否保持同一原生身份待验** | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
+| CL-CMD010 `/background [prompt]` | [命令:61](https://code.claude.com/docs/en/commands)；别名 `/bg` | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；**缺口（CL-INV-02）**：内嵌终端里的原生进程退出（SessionEnd `prompt_input_exit`），原生守护进程继续运行，hook 显示新会话 ID（SessionStart `fork`）；按源码，NAW 会按终端退出把会话记为结束、看不到后台会话，GUI 实测待验 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD011 `/batch <instruction>` | [命令:62](https://code.claude.com/docs/en/commands)；内置技能 | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
-| CL-CMD012 `/branch [name]` | [命令:63](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；**会在同一终端分支出新会话，GUI 根会话是否跟随待验（现只跟随 clear）** | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
+| CL-CMD012 `/branch [name]` | [命令:63](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；**缺口（CL-INV-02）**：同一进程换到新会话 ID（SessionEnd `resume` → SessionStart `fork`）；NAW 只跟随 clear，按源码会停止跟随并关闭 GUI 输入，GUI 实测待验 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD013 `/btw [question]` | [命令:64](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD014 `/bug [report]` | [命令:65](https://code.claude.com/docs/en/commands)；别名 `/share` | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD015 `/cd <path>` | [命令:66](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
@@ -157,7 +165,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-CMD080 `/remote-control` | [命令:130](https://code.claude.com/docs/en/commands)；别名 `/rc` | **按文档在 NAW 启动环境下不可用**：Remote Control 需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；**待用户决定 CL-X02** |
 | CL-CMD081 `/remote-env` | [命令:131](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：菜单未列出；需 claude.ai 订阅、`gh` 登录、云会话或 Chrome 等条件；探测用 API key fixture，无法区分是账号条件还是 CL-X02，**需在用户真实登录环境核对** |
 | CL-CMD082 `/rename [name]` | [命令:132](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
-| CL-CMD083 `/resume [session]` | [命令:133](https://code.claude.com/docs/en/commands)；别名 `/continue` | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；**会在同一终端换到另一会话，GUI 根会话是否跟随待验（现只跟随 clear）** | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
+| CL-CMD083 `/resume [session]` | [命令:133](https://code.claude.com/docs/en/commands)；别名 `/continue` | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；会在同一终端换到另一会话；选择器已实测可打开与取消，换会话后 GUI 是否跟随待验（现只跟随 clear） | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD084 `/review [low\|medium\|high\|xhigh\|max\|ultra] [--fix] [--comment] [--max-findings n\|all\|default] [pr#\|branch\|path]` | [命令:134](https://code.claude.com/docs/en/commands)；`/code-review` 的别名 | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD085 `/rewind` | [命令:135](https://code.claude.com/docs/en/commands)；别名 `/checkpoint`、`/undo` | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD086 `/run` | [命令:136](https://code.claude.com/docs/en/commands)；内置技能 | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
