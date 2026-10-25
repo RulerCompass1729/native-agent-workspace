@@ -21,6 +21,10 @@ async function launch(){app=await _electron.launch({executablePath:process.env.N
  assert.equal(await page.locator('#message-input').inputValue(),'尚未发送的中文材料');assert.equal(await page.locator('#send-button').isEnabled(),true);assert.equal((await snapshot()).sessions[0].nativeContexts.length,1);
  await page.locator('#messages').getByText('清空前保留的私人结果。',{exact:true}).waitFor();await page.locator('#messages').getByText('原生上下文',{exact:true}).waitFor();await shot('clear-retains-history-draft');
  checks.push('Clear keeps the same row, original result, draft, membership and explicit context boundary; new GUI submission is available');
+ const branched=(await snapshot()).sessions[0];await fixture('branch',{target:id});await until(async()=>(await page.evaluate(()=>workspace.initial())).sessions[0].nativeId!==branched.nativeId,'Branch root visible');
+ assert.equal((await snapshot()).sessions[0].nativeContexts.length,2);assert.equal((await snapshot()).sessions[0].nativeContexts[1].reason,'branch');assert.equal(await page.locator('#message-input').inputValue(),'尚未发送的中文材料');assert.equal(await page.locator('#send-button').isEnabled(),true);
+ await page.locator('#messages').getByText('已在原生终端分支出新会话。上方记录是分支前的历史，旧共享授权已停止。草稿保留，发送前请核对。',{exact:true}).waitFor();await shot('branch-follows');
+ checks.push('A native branch is followed like clear: same row, kept draft, labelled boundary, GUI submission available');
  for(const outcome of ['resolve','reject']){
   const text='等待接收期间清空 · '+outcome;await page.locator('#message-input').fill(text);await fixture('hold');const count=(await fixture('stats')).sends.length;await page.locator('#message-input').press('Enter');await until(async()=>(await fixture('stats')).sends.length===count+1,'Held send');
   await fixture('clear',{target:id});await fixture(outcome);await delay(200);
@@ -34,7 +38,7 @@ async function launch(){app=await _electron.launch({executablePath:process.env.N
  await until(async()=>(await fixture('stats')).sends.length===3,'Run waits for first native acceptance');await fixture('clear',{target:id});await fixture('resolve');await delay(200);
  assert.equal(await roomBody(page),material);assert.equal((await snapshot()).room.run.status,'paused');assert.equal((await fixture('stats')).sends.length,3);await shot('clear-pending-shared-material');
  checks.push('A root clear while the first shared reply awaits acceptance preserves task material and prevents the next handoff');
- const before=(await snapshot()).sessions[0];assert.equal(before.nativeContexts.length,4);assert.equal((await fixture('stats')).sends.length,3);
+ const before=(await snapshot()).sessions[0];assert.equal(before.nativeContexts.length,5);assert.equal((await fixture('stats')).sends.length,3);
  await app.close();app=null;await launch();await page.locator(`[data-session-id="${id}"]`).click();await page.locator('#chat-tab').click();
  const after=(await snapshot()).sessions[0];assert.equal(after.nativeId,before.nativeId);assert.deepEqual(after.nativeContexts,before.nativeContexts);assert.deepEqual(after.messages,before.messages);assert.equal(await page.locator('#message-input').inputValue(),before.liveDraft);assert.equal((await fixture('stats')).sends.length,3);
  checks.push('UI reopen preserves exact context history, current native identity and draft with no dispatch');assert.deepEqual(errors,[]);checks.forEach(c=>console.log('PASS',c));console.log(JSON.stringify({checks:checks.length,syntheticSubmissions:3,modelCalls:0,errors}));

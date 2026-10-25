@@ -87,6 +87,10 @@ class Terminal extends EventEmitter {
   }
 }
 
+// Native root transitions the GUI follows: SessionEnd reason -> SessionStart source
+// of the same process. /clear ends with 'clear'; /branch ends with 'resume' and
+// starts the branch as 'fork'. A plain /resume starts as 'resume' and is not followed.
+const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 class Claude extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
   get nativeActivity() {
@@ -367,10 +371,10 @@ class Claude extends EventEmitter {
       return { lease: this.rootLease, observationEpoch: this.observationEpoch }; // Lost metadata ACK, never a second clear.
     }
     if (!this.rootLease || message.lease !== this.rootLease || this.rootEnding?.sessionId !== message.sessionId ||
-      this.rootEnding.reason !== 'clear' || message.source !== 'clear' || message.agentId ||
+      !FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] || FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] !== message.source || this.rootEnding.unfollowed || message.agentId ||
       typeof message.nextSessionId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(message.nextSessionId) ||
       message.nextSessionId === message.sessionId || !this.terminal?.alive) throw Error('Unverified root transition');
-    const change = { previousId: message.sessionId, nativeId: message.nextSessionId,
+    const change = { previousId: message.sessionId, nativeId: message.nextSessionId, reason: message.source === 'fork' ? 'branch' : 'clear',
       model: typeof message.model === 'string' && message.model.length <= 120 ? message.model : '原生未报告', committed: false };
     this.emit('contextClear', change);
     if (!change.committed || this.record.nativeId !== change.nativeId) throw Error('Context not saved');
@@ -389,8 +393,19 @@ class Claude extends EventEmitter {
     // A new root can already be receiving human input while its identity is
     // being saved. Buffer observations, but trust none until the mod proves the
     // exact new root. Child identities cannot authorize a context transition.
-    if (this.rootEnding?.reason === 'clear' && !event.agent_id && event.session_id !== this.rootEnding.sessionId &&
-      !this.record.nativeContexts?.some(c => c.nativeId === event.session_id)) {
+    if (this.rootEnding && FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] && !this.rootEnding.unfollowed && !event.agent_id &&
+      event.session_id !== this.rootEnding.sessionId && !this.record.nativeContexts?.some(c => c.nativeId === event.session_id)) {
+      // A new root that starts another way (a plain /resume) is not followed; its
+      // events are dropped as before instead of filling the buffer. A start whose
+      // source does not match the ending is only unfollowed while no successor with
+      // the expected source has been seen: after /branch admits its fork, the next
+      // /clear start belongs to the queued chain, not to this ending.
+      if (event.hook_event_name === 'SessionStart' && event.source !== FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason]) {
+        const expected = FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason];
+        const successorSeen = (this.contextEvents || []).some(e => e.hook_event_name === 'SessionStart' &&
+          e.session_id !== this.rootEnding.sessionId && e.source === expected);
+        if (!successorSeen) { this.rootEnding.unfollowed = true; return; }
+      }
       this.contextEvents ||= [];
       if (this.contextEvents.length >= 256 || this.contextEvents.reduce((n, e) => n + JSON.stringify(e).length, 0) + JSON.stringify(event).length > 1024 * 1024) {
         this.contextEventsOverflow = true;

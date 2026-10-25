@@ -318,14 +318,15 @@ class Workspace extends EventEmitter {
   }
   clearNativeContext(s, runtime, info) {
     if (this.closed || this.stops.has(s.id) || this.runtimes.get(s.id) !== runtime ||
-      s.nativeContextPending?.nativeId !== info.previousId || !['clear', 'terminal-switch'].includes(s.nativeContextPending.reason)) return;
+      s.nativeContextPending?.nativeId !== info.previousId ||
+      !(['clear', 'terminal-switch'].includes(s.nativeContextPending.reason) || (s.nativeContextPending.reason === 'resume' && info.reason === 'branch'))) return;
     if (this.storageWarning) return;
     if (s.nativeId === info.previousId) {
       for (const message of s.messages) if (!message.nativeId) message.nativeId = info.previousId;
       const boundaryId = randomUUID(), time = Date.now();
       s.nativeContexts ||= [];
       s.nativeContexts.push({ nativeId: info.previousId, endedAt: time, boundaryId, reason: info.reason || 'clear' });
-      s.messages.push({ id: boundaryId, role: 'system', kind: 'context', name: '原生上下文', text: info.reason === 'terminal-switch' ? '已跟随原生终端切换上下文。上方记录仅作为本机历史保留，旧共享授权已停止。草稿保留，发送前请核对。' : '已在原生终端清空上下文。上方记录仅作为本机历史保留，不会自动发给新上下文。草稿保留，发送前请核对。', nativeId: info.nativeId, time });
+      s.messages.push({ id: boundaryId, role: 'system', kind: 'context', name: '原生上下文', text: info.reason === 'terminal-switch' ? '已跟随原生终端切换上下文。上方记录仅作为本机历史保留，旧共享授权已停止。草稿保留，发送前请核对。' : info.reason === 'branch' ? '已在原生终端分支出新会话。上方记录是分支前的历史，旧共享授权已停止。草稿保留，发送前请核对。' : '已在原生终端清空上下文。上方记录仅作为本机历史保留，不会自动发给新上下文。草稿保留，发送前请核对。', nativeId: info.nativeId, time });
       s.nativeId = info.nativeId; s.model = info.model; s.nativeSettings = null; s.background = null; s.scheduled = null; s.usage = null;
       if (info.reason === 'terminal-switch' && typeof info.cwd === 'string' && path.isAbsolute(info.cwd)) s.cwd = info.cwd;
     } else if (s.nativeId !== info.nativeId || s.nativeContexts?.at(-1)?.nativeId !== info.previousId) return;
