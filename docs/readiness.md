@@ -1,7 +1,43 @@
 # Readiness and next gates
 
-As of 2026-10-24. Version 0.1.0-alpha.95 is a **local macOS technical-trial alpha**.
+As of 2026-10-24. Version 0.1.0-alpha.96 is a **local macOS technical-trial alpha**.
 
+
+**Alpha.96 — bounded input repair accepted; GUI-truth goal open:** the goal is accurate GUI facts
+with native interactions retained in the same-screen TUI, not recreating or
+executing every native command and keymap row. The U17 table is an audit with
+explicit GUI/native placement. Codex 164 facts need installed acceptance; Claude
+310 implementation belongs to the separate lane, then main integrates and accepts.
+Visual approval, physical IME and external running-session attachment do not block.
+
+A measured input repair is still under review. Native Shift+Enter was decoded as
+Enter, and Ctrl+/ was absent. The native program's keyboard mode now gates the
+ambiguous CSI-u encodings; snapshot/live state preserves it across reader reload
+and restores legacy encoding when native disables it. Original controls, ownership
+and composition barriers remain in place. Both runtime copy allowlists include
+the helper. No new panel or dependency.
+
+Independent review rejected a first candidate that forced Option-as-Meta because
+it breaks ordinary Mac character input. That setting has been removed. Ctrl+Option
+letters use the traditional Escape/control sequence; modified letters follow the
+logical layout, not physical key position. A separately reproduced composing-key
+bypass now respects the existing IME guard. Source deterministic layout/IME
+regression and all 984 units pass, zero unit skips. The corrected installed candidate
+passes six native modifier receipts, unsent multiline editing and reader reload,
+with zero native inference requests. Installed deterministic layout/composition
+checks also pass; physical IME and foreground activation are not claimed. The
+native-input test restores identical temporary-directory sets. All 56 runtime
+payloads match, strict signing passes after native use, and one launcher remains.
+Hidden reopening preserves the original three native IDs/PIDs, records and drafts
+with no new portal dispatches. Same-session Fable delta review approves this input
+task and the capability-placement audit; the first 32-key
+recording is historical failed-candidate evidence, not approval.
+Option+letter shortcuts have a disclosed terminal-encoding
+limitation; older backends without keyboard metadata keep legacy encoding.
+
+The current installed baseline preserves original three-session identity, records
+and drafts, and has one launcher. Full GUI-fact acceptance under the new goal is
+open. See [current tasks and audit](interaction.md).
 
 **Alpha.95 — owned test scratch and daemon exit cleanup:** all 57
 standalone temporary-profile test entry points use one explicit allocator/finalizer.
@@ -23,8 +59,16 @@ roots. All 981 units pass without skips. The 55 installed runtime files match;
 strict signing and the single application-search entry pass after native use.
 Hidden reopening retains all three original native IDs/PIDs, GUI records and
 drafts/views, with zero new portal dispatches. Headless Claude independent final review passes for this bounded cleanup task.
-Full U17 mapping is the active
-next goal, first Codex 164 then Claude 310; see [interaction](interaction.md).
+This checkpoint preceded the user's narrower GUI-truth goal, which supersedes
+the full mapping target; see [interaction](interaction.md).
+Installed source-pinned discovery now confirms an integration gap: the custom
+remote endpoint suppresses native local worktrees (55 vs 54 popup entries), with
+source-defined empty-composer Left shortcut/additional-root restrictions and
+image path-versus-snapshot behavior still requiring acceptance. The actual
+/agents command center remains available. Seventeen native menu open/cancel
+journeys and three model/effort selections pass in the installed app without
+inference, preserving draft/identity/config as appropriate and exact temporary
+sets. Discovery and menu cancellation do not prove all child actions; U17 remains open.
 
 **Alpha.94 — preserve native wording with less display rewriting:** remove generated
 completion sentences and locally reconstructed footer clocks. An available original

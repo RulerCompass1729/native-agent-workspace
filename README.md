@@ -12,6 +12,12 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
 
+Alpha.96 repairs measured native Codex keyboard losses, including Shift+Enter
+and Ctrl+/; the same-screen terminal keeps the native program's keyboard modes
+across reader reload. U17 now audits which facts the GUI presents and which
+interactions remain in the same-screen native TUI; full GUI-fact acceptance remains
+open. See [current acceptance](docs/readiness.md).
+
 Alpha.95 makes newly allocated standalone test profiles disposable and keeps
 explicitly exported native-history fixtures reusable. The reused `test:desktop`
 dogfood profile is intentionally excluded. Installed checks and independent
