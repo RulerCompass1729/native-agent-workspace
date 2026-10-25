@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual Electron/DSH and service, synthetic provider output; no model calls.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
-const { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-storage-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-storage-ui-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
   env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile },
@@ -93,7 +94,7 @@ async function run() {
   const checkpoint = stored(), stats = await fixture('stats');
   assert.equal(stats.sends.length, 0);
   // Crash only this test-owned daemon. It cannot flush in response to SIGKILL.
-  child.kill('SIGKILL');
+  testScratch.ownService(profile); child.kill('SIGKILL');
   await new Promise(resolve => child.once('exit', resolve));
   await page.locator('#reconnect-button').waitFor({ state: 'visible' });
   assert.deepEqual(stored(), checkpoint, 'The crash cannot add an orderly-shutdown save');
@@ -106,11 +107,14 @@ async function run() {
   }, 'Reconnect reads the saved records');
   const recovered = await snapshot(), session = recovered.sessions[0];
   assert.equal(session.id, id); assert.equal(session.nativeId, before.nativeId);
-  assert.equal(session.roomId, 'shared'); assert.deepEqual(session.messages, checkpoint.sessions[0].messages);
+  assert.equal(session.roomId, 'shared');
+  // A dead connection preserves text, not an obsolete live-stream claim.
+  const expected=checkpoint.sessions[0].messages.map(m=>['streaming','running','awaiting-native'].includes(m.status)?{...m,status:'unconfirmed'}:m);
+  assert.deepEqual(session.messages,expected);
   assert.equal(await page.locator('#message-input').inputValue(), '还没发出的中文草稿。');
   assert.equal(recovered.diagnostics.dispatches, 0);
   await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
-  assert.equal(await page.locator('#messages [data-message-id="streaming-reply"] .message-heading').textContent(), 'Codex已收到的部分回复');
+  await page.locator('#messages [data-message-id="streaming-reply"] .message-heading').getByText('结果未确认',{exact:true}).waitFor();
   await page.locator('#messages [data-message-id="stored-0"]').scrollIntoViewIfNeeded();
   assert.equal(await page.locator('#messages [data-message-id="stored-0"] .message-body p').first().textContent(), history[0].text.split('\n\n')[0]);
   checks.push('Actual process crash and UI reconnect retain checkpointed history, same identity, draft and room; no task replay');
@@ -123,7 +127,7 @@ async function run() {
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, checkpoints, errors, windows, profile, modelTasks: 0, nativeProviderProcesses: 0 }, null, 2));
 }
-run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close();
   if (child.connected) child.disconnect();
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
@@ -132,4 +136,4 @@ run().catch(error => { console.error(error.stack); process.exitCode = 1; }).fina
     const info = JSON.parse(fs.readFileSync(path.join(profile, 'connection.json')));
     if (info.pid !== child.pid) process.kill(info.pid, 'SIGTERM');
   } catch {}
-});
+}));

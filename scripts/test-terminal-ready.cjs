@@ -1,8 +1,9 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Headed desktop regression; real renderer/IPC with delayed synthetic terminals.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright'), { connect } = require('../app/service-client.cjs');
-const root = path.resolve(__dirname, '..'), profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-terminal-ready-'));
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright')), { connect } = require('../app/service-client.cjs');
+const root = path.resolve(__dirname, '..'), profile = testScratch.directory(path.join(os.tmpdir(), 'naw-terminal-ready-'));
 const child = fork(path.join(root, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require('../package.json').version, NAW_WORKSPACE: profile }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
@@ -91,6 +92,6 @@ async function run() {
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []); await capture('ready');
   console.log(JSON.stringify({ passed, errors, nativeModelCalls: 0, providerProcesses: 0, oneWindow: true }));
 }
-run().catch(e => { console.error(e.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(e => { console.error(e.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close(); if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
-});
+}));

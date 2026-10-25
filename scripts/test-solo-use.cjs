@@ -1,12 +1,13 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // A hidden Electron renderer and real persistence chain, with synthetic native transport.
 // Composition uses Chromium's input path, not a physical macOS input method.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-solo-use-profile-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-solo-use-profile-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, sequence = 0; const errors = [], passed = [];
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -182,10 +183,10 @@ async function run() {
   passed.push('An empty room and invalid saved recipient retain the shared draft after reopen/idle; ended native sessions expose explicit recovery');
   console.log(JSON.stringify({ passed, errors, nativeProviderProcesses: 0, modelTasks: 0, syntheticSends: 2, physicalIME: false, oneWindow: true }, null, 2));
 }
-run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await capture('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await capture('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close();
   if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); }
   if (child.connected) child.disconnect();
-});
+}));
 
 async function chooseRecipient(id) { await inlineRecipient(page, id); }

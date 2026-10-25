@@ -1,11 +1,12 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual application and persistent service, controlled provider events only.
 // --real-deadline waits the full ten minutes with the UI closed, no clock change.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process'), { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-bounded-away-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-bounded-away-'));
 const evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
@@ -104,8 +105,8 @@ async function run() {
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
   console.log(JSON.stringify({ checks, errors, profile, realDeadline: process.argv.includes('--real-deadline'), syntheticDispatches: log.sends.length, modelCalls: log.modelCalls, nativeProcesses: log.nativeProcesses, windows }, null, 2));
 }
-run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(async () => {
+run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await close();
   if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); }
   if (child.connected) child.disconnect();
-});
+}));

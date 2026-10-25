@@ -1,11 +1,12 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual product UI and service with synthetic handshakes; no native/model tasks.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const { chooseRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-version-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-native-version-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, sequence = 0; const errors = [];
@@ -64,8 +65,8 @@ async function create(provider, name) {
   console.error(e.stack);
   if (page && !page.isClosed()) fs.writeFileSync(path.join(profile, 'failure.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2));
   process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   if (app) await app.close();
   if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); }
   if (child.connected) child.disconnect();
-});
+}));

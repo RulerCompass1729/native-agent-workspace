@@ -1,11 +1,12 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual hidden Electron/DSH and daemon. Synthetic long histories isolate local
 // continuity from model latency/cost; all user actions use the rendered UI.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { createHash } = require('node:crypto');
-const { fork } = require('node:child_process'), { once } = require('node:events');
-const { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { once } = require('node:events');
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-long-continuity-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-long-continuity-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code },
@@ -64,7 +65,7 @@ async function run() {
   await verifyPosition(expected, 'Reading old text remains stable while new output arrives');
   await until(() => { try { return stored().drafts[id] === draft && stored().sessions.find(s => s.id === id).messages.length === 81; } catch { return false; } }, 'Checkpoint');
   const checkpoint = stored(), nativeId = checkpoint.sessions.find(s => s.id === id).nativeId;
-  const expectedMessages = checkpoint.sessions.find(s => s.id === id).messages;
+  const expectedMessages = checkpoint.sessions.find(s => s.id === id).messages.map(m=>['streaming','running','awaiting-native'].includes(m.status)?{...m,status:'unconfirmed'}:m);
   const expectedHash = hash(expectedMessages);
   assert.deepEqual(expectedMessages.slice(0, 80).map(m => m.text), history.map(m => m.text));
   await page.locator(`[data-session-id="${other}"]`).click(); await page.locator(`[data-session-id="${id}"]`).click();
@@ -87,7 +88,7 @@ async function run() {
   await verifyPosition(expected, 'Quit during pending control and reopen restore visible chat and reading position');
   assert.equal(await page.locator('#message-input').inputValue(), draft);
   // Kill only the owned synthetic backend, never a user's native process.
-  const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited;
+  const exited = once(child, 'exit'); testScratch.ownService(profile); child.kill('SIGKILL'); await exited;
   await page.locator('#reconnect-button').waitFor({ state: 'visible' });
   await page.locator('#reconnect-button').click();
   await page.locator('#reconnect-button').waitFor({ state: 'hidden', timeout: 40000 });
@@ -98,15 +99,15 @@ async function run() {
   assert.equal(hash(session.messages), expectedHash); assert.equal(await page.locator('#message-input').inputValue(), draft);
   assert.equal(recovered.diagnostics.dispatches, 0);
   await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
-  checks.push('Complete history hash, draft, room and native identity survive; recovery never replays work');
+  checks.push('Complete original text and record hash survive with pending status unconfirmed after crash; draft/room/native identity retained without replay');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true, mode: 0o700 }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'long-history-recovered.png') }); }
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
   assert.equal(windows.length, 1); assert.ok(windows.every(w => !w.visible && !w.focusable)); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, historyBytes: bytes, historyMessages: history.length, loadMs, historySha256: expectedHash, windows, errors, modelTasks: 0, nativeProviderProcesses: 0 }, null, 2));
 }
-run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) console.log(JSON.stringify(await page.evaluate(() => ({ mountedMessages: document.querySelectorAll('#messages article').length, chatVisible: !document.getElementById('messages')?.hidden, toast: document.getElementById('toast')?.textContent })))); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) console.log(JSON.stringify(await page.evaluate(() => ({ mountedMessages: document.querySelectorAll('#messages article').length, chatVisible: !document.getElementById('messages')?.hidden, toast: document.getElementById('toast')?.textContent })))); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close();
   if (child.connected) child.disconnect();
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
   try { const info = JSON.parse(fs.readFileSync(path.join(profile, 'connection.json'))); if (info.pid !== child.pid) process.kill(info.pid, 'SIGTERM'); } catch {}
-});
+}));

@@ -1,12 +1,13 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real hidden Electron/DSH UI and service; synthetic history/output, no models.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
-const { fork, execFileSync } = require('node:child_process');
-const { _electron } = require('playwright');
+const { fork, execFileSync } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reading-profile-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-reading-profile-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 const delay = ms => new Promise(r => setTimeout(r, ms));
 let app, page, client, sequence = 0;
@@ -246,4 +247,4 @@ async function run() {
   console.log(JSON.stringify({geometry,checks:['Content-width human messages in light/dark; exact Markdown and native timing Copy','Native search/reasoning collapse by default; commands preview three lines; full original Copy and keyboard expansion','Same-window native/reader focus, layout hide/maximize and actual DOM selected-share source','Fold choices persist during streaming; off-page failure opens; acknowledged error collapse and changed error survive full reopen','Inline mentions/Undo/Redo/composition guard; roster changes and reopen retain drafts','Two attributed agents check a document while displayed A and addressed B remain independent','Member trajectory filter, private departure and whole-app reopening preserve records/identity/draft','Same-turn private intervention hides native phase and freezes shared content'],dispatches:3,providerCalls:0,errors,profile},null,2));
 }
 async function capture(name){if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,name+'.png')});}}
-run().catch(async error=>{console.error(error.stack);if(page&&!page.isClosed())await capture('usability-failed');process.exitCode=1}).finally(async()=>{try{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close()}}finally{if(child.connected)child.disconnect();if(child.exitCode===null)child.kill('SIGTERM')}});
+run().catch(async error=>{console.error(error.stack);if(page&&!page.isClosed())await capture('usability-failed');process.exitCode=1}).finally(testScratch.cleanup(async()=>{try{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close()}}finally{if(child.connected)child.disconnect();if(child.exitCode===null)child.kill('SIGTERM')}}));

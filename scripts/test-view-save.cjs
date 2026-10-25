@@ -1,9 +1,10 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Exercise disk-write failure and real window/app lifecycle without provider work.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process'), { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-view-save-')), file = path.join(profile, 'views.json');
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-view-save-')), file = path.join(profile, 'views.json');
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/native-progress.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile },
@@ -152,9 +153,9 @@ async function run() {
   checks.push('After storage recovers, closing one window succeeds and saves its inactive state without closing the other window');
   console.log(JSON.stringify({ checks, stats, errors, windows, modelTasks: 0 }, null, 2));
 }
-run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await screenshot('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await screenshot('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   await restoreWrites(); await close();
   if (client) { await fixture('stop'); await client.call('shutdown'); client.close(); }
   if (child.connected) child.disconnect();
   await until(() => child.exitCode !== null, 'Owned fixture exits');
-});
+}));

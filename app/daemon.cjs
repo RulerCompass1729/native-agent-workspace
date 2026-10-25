@@ -13,7 +13,10 @@ async function main() {
   if (!dataDir || !path.isAbsolute(dataDir)) throw new Error('Data directory required');
   const lockPath = path.join(dataDir, 'service.lock');
   const lock = fs.openSync(lockPath, 'wx', 0o600); fs.writeFileSync(lock, String(process.pid)); fs.closeSync(lock);
-  const privateDir = fs.mkdtempSync('/tmp/naw-service-'); fs.chmodSync(privateDir, 0o700);
+  const privateDir = fs.mkdtempSync('/tmp/naw-service-');
+  // The socket directory belongs only to this daemon, also on startup failure.
+  process.once('exit', () => { fs.rmSync(privateDir, { recursive: true, force: true }); });
+  fs.chmodSync(privateDir, 0o700);
   const endpoint = path.join(privateDir, 'desktop.sock');
   const token = crypto.randomBytes(32).toString('hex');
   const defaultWorkspace = process.env.NAW_WORKSPACE || path.join(dataDir, 'workspace');

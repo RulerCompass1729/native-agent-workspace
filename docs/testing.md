@@ -1,5 +1,57 @@
 # Bounded testing
 
+## Owned temporary resources — alpha.95
+
+All 57 standalone temporary-profile scripts allocate through the explicit
+`fixtures/test-scratch.cjs` owner and wrap their original teardown. Spawned
+processes, Electron applications and positively identified profile daemons are
+tracked; teardown waits for exit before removing that owner's directories.
+Normal completion, rejection/throw, explicit failure and SIGINT/SIGTERM are
+covered. Unconfirmed ownership, a replaced directory or a surviving process
+fails cleanup rather than deleting or killing an unrelated resource. Each daemon
+also removes its own socket directory at ordinary exit/startup failure. Tests
+that intentionally hard-kill a daemon register that directory before the crash.
+
+Default runs delete disposable profiles. `NAW_EVIDENCE_DIR` explicitly exports
+selected raw diagnostics outside the repository before removal; failure snapshots
+are retained there too; capture errors and timeouts are reported. Native-context producer fixtures use a separately owned
+persistent provider home/workspace, with an ownership marker, so the import test
+can reuse original native history after the producer's Chromium profile is gone.
+The history consumer still requires stopped original writers and a loopback-only
+model endpoint. The native runtime may append settings events and update its SQLite/WAL files
+when importing; this is a reusable evolving fixture, not an immutable archive.
+The consumer verifies that every existing rollout byte remains an unchanged
+prefix and records before/after hashes.
+
+Sixteen targeted no-model unit checks and all 981 units pass with no skips.
+After independent review, counterexamples also reject an exited/reused parent
+PID and a live child whose birth identity cannot be read. A failed process census
+still runs teardown while retaining uncertain scratch. Source and installed crash
+recovery and installed native import were rerun with the updated helper; each
+restores both complete sets. The final 981-unit run is measured separately with
+identical sets and no skips. Installed import checks all three original rollout
+prefixes byte-for-byte; one gains a native settings event, none lose old bytes.
+
+Source real UI state/crash/large-history tests, Codex 164 local-response native
+fixture export and fresh UI import restore identical canonical `naw-*` directory
+sets in both temporary roots. The final full-unit/package batch also restores
+identical sets. Installed state, crash recovery, large history and native import
+are measured separately; each restores both complete sets, not merely a count.
+Explicit success and failure diagnostics survive outside those temporary roots.
+Installed import makes no inference request; the source fixture producer uses
+three fixed local task responses and one title response, zero paid inference.
+The original installed profile reopens hidden with the same three native IDs,
+PIDs, existing records and drafts/views, and zero new portal dispatches. The
+55-file runtime, strict signature after native testing and one launcher match.
+
+This does not certify that every one of the 57 scenarios was rerun. All callers
+are wired and syntax/census checked; representative lifecycles above exercise
+the shared owner. Runner SIGKILL/power loss, concurrent independent `naw-*`
+writers and non-`naw-*` Chromium/Playwright temporary resources are outside this
+bounded cleanup claim. Existing unrelated temporary directories and the intentionally reused
+`test:desktop` dogfood profile are not swept.
+Independent headless Claude final source/evidence review passes; full U17 is not closed by this task.
+
 ## Existing history, cold recovery and first new reply — alpha.93
 
 The complete task starts with actual stopped Codex 164 native history, not an

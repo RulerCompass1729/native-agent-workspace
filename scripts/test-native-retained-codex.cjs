@@ -1,14 +1,15 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual retained alpha.2 host, native Codex and current Electron; four task Responses streams plus at most one native title response.
 // Native execution and UI are real; inference is fixed.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { execFileSync, fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { execFileSync, fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
 const { connectService, connect } = require(path.join(code, 'app/service-client.cjs'));
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-retained-codex-'));
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-retained-codex-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex'), old = path.join(base, 'old'), bin = path.join(base, 'bin');
 for (const dir of [profile, cwd, home, old, bin]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('codex'); assert.ok(binary);
@@ -189,7 +190,7 @@ async function launch() {
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); fs.writeFileSync(path.join(base, 'failure-state.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2)); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   release?.(); server.closeAllConnections(); if (application) await application.close().catch(() => {}); client?.close();
   try { const cleanup = await connect(profile, 'cleanup');
     try {
@@ -200,4 +201,4 @@ async function launch() {
     } finally { cleanup.close(); }
   } catch (error) { console.error('Owned cleanup unconfirmed:', error.message); process.exitCode = 1; }
   if (child?.connected) child.disconnect(); await new Promise(resolve => server.close(resolve));
-});
+}));

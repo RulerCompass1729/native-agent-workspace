@@ -1,3 +1,4 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Headed Electron interaction regression using only synthetic ended sessions.
 // No provider session is created, resumed or sent a prompt.
 const fs = require('node:fs');
@@ -5,10 +6,10 @@ const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
-const { _electron } = require('playwright');
+const { _electron } = testScratch.playwright(require('playwright'));
 const { connect } = require('../app/service-client.cjs');
 const root = path.resolve(__dirname, '..');
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-menu-test-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-menu-test-'));
 const shots = process.env.NAW_EVIDENCE_DIR;
 const sessions = ['claude', 'codex'].map((provider, i) => ({
   id: randomUUID(), nativeId: randomUUID(), name: '学习笔记', provider,
@@ -136,8 +137,8 @@ async function run() {
   assert.equal(application.windows().length, 1); assert.deepEqual(errors, []);
   console.log('PASS: reopen preserves names and identity/history/membership; no native prompts, dispatches or shell model calls.');
 }
-run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await screenshot('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await screenshot('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   await close();
   try { const c = await connect(profile, 'menu-test-cleanup'); try { await c.call('shutdown'); } finally { c.close(); } }
   catch (error) { console.error('Owned test service cleanup failed:', error.message); process.exitCode = 1; }
-});
+}));

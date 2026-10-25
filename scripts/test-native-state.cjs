@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual Electron, IPC and workspace with controlled native observations.
 // Model/runtime integration is checked separately; this runner uses no provider.
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
-const {fork}=require('node:child_process'),{_electron}=require('playwright');
+const {fork}=testScratch.childProcess,{_electron}=testScratch.playwright(require('playwright'));
 const root=path.resolve(__dirname,'..'),code=process.env.NAW_TEST_APP_ROOT||root;
 const {connect}=require(path.join(code,'app/service-client.cjs'));
-const profile=fs.mkdtempSync(path.join(os.tmpdir(),'naw-native-state-'));
+const profile=testScratch.directory(path.join(os.tmpdir(),'naw-native-state-'));
 const child=fork(path.join(code,'app/daemon.cjs'),[profile],{execArgv:['--require',path.join(__dirname,'fixtures/loading-terminal.cjs')],env:{...process.env,NAW_APP_VERSION:require(path.join(code,'package.json')).version,NAW_WORKSPACE:profile,NAW_TEST_APP_ROOT:code},stdio:['ignore','ignore','inherit','ipc']});
 let app,page,client,sequence=0;const errors=[],checks=[],delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label){for(let i=0;i<160;i++){if(await fn())return;await delay(50);}throw Error(label);}
@@ -64,4 +65,4 @@ async function run(){
  await fixture('native-activity',a,null);assert.equal((await fixture('stats')).sends.length,1);assert.deepEqual(errors,[]);
  console.log(JSON.stringify({checks,errors,providerCalls:0,dispatches:1,profile},null,2));
 }
-run().catch(async e=>{console.error(e.stack);if(page&&!page.isClosed())await capture('failed');process.exitCode=1;}).finally(async()=>{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close();}if(child.connected)child.disconnect();});
+run().catch(async e=>{console.error(e.stack);if(page&&!page.isClosed())await capture('failed');process.exitCode=1;}).finally(testScratch.cleanup(async()=>{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close();}if(child.connected)child.disconnect();}));

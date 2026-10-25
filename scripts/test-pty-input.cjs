@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual hidden Electron, xterm and PTY process; no Claude/Codex model task.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-pty-input-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-pty-input-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/pty-echo.cjs')], env: { ...process.env, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code, NAW_APP_VERSION: require(path.join(code, 'package.json')).version }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let app, page, client; const errors = [], passed = [];
@@ -50,8 +51,8 @@ async function shot(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(pro
   passed.push('GUI/TUI, join/detach and app reopen keep the same real PTY and private draft without replay');
   assert.equal(state.diagnostics.dispatches, 0); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed, provider: 'local Python echo fixture', realPty: true, modelCalls: 0, errors, profile }, null, 2));
-})().catch(async error => { console.error(error.stack); await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(async () => {
+})().catch(async error => { console.error(error.stack); await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close().catch(() => {});
   if (client) { try { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); } finally { client.close(); } }
   if (child.connected) child.disconnect();
-});
+}));

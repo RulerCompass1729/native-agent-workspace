@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual isolated Electron restarts on the current display. No provider calls,
 // foreground windows, screen reconfiguration or changes to the user's profile.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
-const { fork } = require('node:child_process'), { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-window-placement-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-window-placement-ui-'));
 const file = path.join(profile, 'views.json'), checks = [], errors = [];
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/native-progress.cjs')],
@@ -132,10 +133,10 @@ async function run() {
   checks.push('An accessible but undersized saved window recovers the usable native minimum; existing service, identities and drafts survive all restarts with zero provider activity');
   console.log(JSON.stringify({ checks, recovered, partial, usable, stats, errors, modelTasks: 0 }, null, 2));
 }
-run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   await close();
   if (client) { await fixture('stop'); await client.call('shutdown'); client.close(); }
   otherClient?.close();
   if (child.connected) child.disconnect();
   await until(() => child.exitCode !== null, 'Owned test daemon exits');
-});
+}));

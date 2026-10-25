@@ -1,12 +1,13 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + native Claude/Codex; fixed loopback responses exercise tool
 // calls and transport, not model judgement. No paid inference or global settings.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { execFileSync } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { execFileSync } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
 const { connect } = require('../app/service-client.cjs');
-const root = path.resolve(__dirname, '..'), base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-addressed-'));
+const root = path.resolve(__dirname, '..'), base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-addressed-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work');
 const homes = { claude: path.join(base, 'claude'), codex: path.join(base, 'codex') };
 for (const dir of [profile, cwd, ...Object.values(homes)]) fs.mkdirSync(dir, { mode: 0o700 });
@@ -369,7 +370,7 @@ async function start(first, text) {
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); fs.writeFileSync(path.join(base, 'failure.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2)); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   release?.(); held?.destroy(); if (app) await app.close().catch(() => {});
   try { const client = await connect(profile, 'addressed-cleanup');
     try {
@@ -380,4 +381,4 @@ async function start(first, text) {
     } finally { client.close(); }
   } catch (error) { console.error('Cleanup:', error.message); process.exitCode = 1; }
   server.closeAllConnections(); await new Promise(r => server.close(r));
-});
+}));

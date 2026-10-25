@@ -1,16 +1,17 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Real Electron + real Claude CLI; canned responses are served on loopback.
 // No paid inference, user profile edits, global keyboard input, or foregrounding.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict');
-const { _electron } = require('playwright');
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const { connectService } = require('../app/service-client.cjs');
 const { executable } = require('../app/platform.cjs');
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-block-test-'));
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-block-test-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), config = path.join(base, 'claude');
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('claude'); if (!binary) throw Error('Real Claude CLI required');
-const nativeVersion = require('node:child_process').execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
+const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 assert.match(nativeVersion, /^2\.1\.(307|308|309)\b/, 'Verify the updated native contract before sending a test task');
 let application, page, client, calls = 0, recovering = false, recoveryCalls = 0;
 const errors = [], checks = [];
@@ -117,4 +118,4 @@ async function cleanup() {
 })().catch(async error => {
   if (page && !page.isClosed()) { await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
-}).finally(cleanup);
+}).finally(testScratch.cleanup(cleanup));

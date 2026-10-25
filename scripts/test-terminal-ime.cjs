@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Chromium event-path regression. Synthetic native transport; not physical IME.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork, execFileSync } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork, execFileSync } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-ime-profile-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-ime-profile-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, sequence = 0; const errors = [], passed = [], skipped = [];
 let osReturnAttempt = false;
@@ -241,6 +242,6 @@ async function run() {
   passed.push('KeyCode 13 during active composition (with and without isComposing) never emits CR; committed text and a later Enter pass once');
   console.log(JSON.stringify({ passed, skipped, errors, modelTasks: 0, nativeProviderProcesses: 0, physicalIME: false, deterministicInput: 'CDP to hidden non-focusable Electron renderer; foreground return requires explicit opt-in' }, null, 2));
 }
-run().catch(async e => { console.error(e.stack); if (osReturnAttempt) console.log('Foreground attempt failed; raw input diagnostics discarded to avoid retaining unrelated typing.'); else if (page) { console.log('Synthetic trace:', JSON.stringify(await page.evaluate(() => window.syntheticTrace))); console.log('Input destination evidence:', JSON.stringify((await fixture()).inputs)); console.log('Focus:', await page.evaluate(() => ({ active: document.activeElement?.outerHTML, focused: document.hasFocus(), recovery: [...document.querySelectorAll('.terminal-input-recovery')].map(el => ({ hidden: el.hidden, visible: el.checkVisibility(), text: el.querySelector('textarea').value })), hint: document.getElementById('compose-hint').textContent, status: document.getElementById('session-status').textContent })));  } process.exitCode = 1; }).finally(async () => {
+run().catch(async e => { console.error(e.stack); if (osReturnAttempt) console.log('Foreground attempt failed; raw input diagnostics discarded to avoid retaining unrelated typing.'); else if (page) { console.log('Synthetic trace:', JSON.stringify(await page.evaluate(() => window.syntheticTrace))); console.log('Input destination evidence:', JSON.stringify((await fixture()).inputs)); console.log('Focus:', await page.evaluate(() => ({ active: document.activeElement?.outerHTML, focused: document.hasFocus(), recovery: [...document.querySelectorAll('.terminal-input-recovery')].map(el => ({ hidden: el.hidden, visible: el.checkVisibility(), text: el.querySelector('textarea').value })), hint: document.getElementById('compose-hint').textContent, status: document.getElementById('session-status').textContent })));  } process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close(); if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
-});
+}));

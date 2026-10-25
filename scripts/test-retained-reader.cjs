@@ -1,8 +1,9 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
-const { fork } = require('node:child_process'), { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connectService, connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-retained-reader-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-retained-reader-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/retained-reader.cjs')], env: { ...process.env, NAW_APP_VERSION: '0.1.0-alpha.2', NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let application, page, client, n = 0; const checks = [], errors = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -57,10 +58,10 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   assert.equal((await fixture('stats')).requests.filter(m => m === 'turn/start').length, 1);
   checks.push('Reopening restores the same subscription and draft without resending');
   assert.deepEqual(errors, []); console.log(JSON.stringify({ checks, errors, modelCalls: 0, profile }));
-})().catch(async error => { if (page && !page.isClosed()) fs.writeFileSync(path.join(profile, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); console.error(error.stack, profile); process.exitCode = 1; }).finally(async () => {
+})().catch(async error => { if (page && !page.isClosed()) fs.writeFileSync(path.join(profile, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); console.error(error.stack, profile); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (application) await application.close(); client?.close();
   const cleanup = await connect(profile, 'cleanup');
   for (const s of (await cleanup.call('initial')).sessions) await cleanup.call('stop', s.id);
   for (const entry of cleanup.entries) await entry.client.call('shutdown'); cleanup.close();
   if (child.connected) child.disconnect();
-});
+}));

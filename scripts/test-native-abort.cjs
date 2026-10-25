@@ -1,9 +1,10 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Bounded API probe; NAW_ABORT_PRODUCT=1 tests the real product interrupt button.
 // Actual Electron/Claude; two loopback responses, no paid inference.
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http');
-const assert=require('node:assert/strict'),{execFileSync}=require('node:child_process');
-const {_electron}=require('playwright'),{executable}=require('../app/platform.cjs'),{connect}=require('../app/service-client.cjs');
-const root=path.resolve(__dirname,'..'),base=fs.mkdtempSync(path.join(os.tmpdir(),'naw-native-abort-'));
+const assert=require('node:assert/strict'),{execFileSync}=testScratch.childProcess;
+const {_electron}=testScratch.playwright(require('playwright')),{executable}=require('../app/platform.cjs'),{connect}=require('../app/service-client.cjs');
+const root=path.resolve(__dirname,'..'),base=testScratch.directory(path.join(os.tmpdir(),'naw-native-abort-'));
 const profile=path.join(base,'profile'),cwd=path.join(base,'work'),home=path.join(base,'claude'),plugin=path.join(base,'probe');
 for(const dir of[profile,cwd,home,path.join(plugin,'.claude-plugin'),path.join(plugin,'hooks')])fs.mkdirSync(dir,{recursive:true,mode:0o700});
 const binary=executable('claude');assert.match(execFileSync(binary,['--version'],{encoding:'utf8'}),/^2\.1\.310\b/);
@@ -54,6 +55,6 @@ const snapshot=()=>page.evaluate(()=>workspace.initial());
  await page.screenshot({path:path.join(base,'native-abort-completed.png')});
  if(process.env.NAW_VIDEO_DIR)await sleep(1200);
  console.log(JSON.stringify({nativeVersion:'2.1.310',checks:[product?'GUI interrupt uses the original native API, preserves the next draft and continues from the same GUI without native typing':'Actual turn.abort cancels the exact native root and the next public prompt.submit continues that same session'],fixedLocalResponses:calls,paidModelCalls:0,productInterruptButtonTested:product,evidence:base}));
-})().catch(async e=>{console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.json'),JSON.stringify(await snapshot(),null,2));fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());}process.exitCode=1;}).finally(async()=>{
+})().catch(async e=>{console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.json'),JSON.stringify(await snapshot(),null,2));fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
  held?.destroy();if(app)await app.close().catch(()=>{});try{const c=await connect(profile,'abort-probe-cleanup');try{for(const s of(await c.call('initial')).sessions)await c.call('stop',s.id);for(const e of c.entries)await e.client.call('shutdown');}finally{c.close();}}catch(e){console.error('Cleanup',e.message);process.exitCode=1;}server.closeAllConnections();await new Promise(r=>server.close(r));
-});
+}));

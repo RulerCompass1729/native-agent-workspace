@@ -1,11 +1,12 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron navigation with controlled native events; no model calls.
 // This replaces the retired terminal-camera/replay reading test.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-inline-reading-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-inline-reading-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/native-progress.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let application, page, sequence = 0;
@@ -199,4 +200,4 @@ async function run() {
   assert.deepEqual(errors, []); const stats = (await fixture('stats')).stats; assert.equal(stats.sends, 5);
   console.log(JSON.stringify({ checks, errors, modelCalls: 0, stats, profile }, null, 2));
 }
-run().catch(async e => { if (page && !page.isClosed()) { await page.screenshot({ path: path.join(profile, 'failure.png') }).catch(() => {}); fs.writeFileSync(path.join(profile, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); } console.error(e.stack); process.exitCode = 1; }).finally(async () => { if (application) await application.close(); if (child.exitCode === null) { await fixture('stop'); child.kill('SIGTERM'); } });
+run().catch(async e => { if (page && !page.isClosed()) { await page.screenshot({ path: path.join(profile, 'failure.png') }).catch(() => {}); fs.writeFileSync(path.join(profile, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); } console.error(e.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => { if (application) await application.close(); if (child.exitCode === null) { await fixture('stop'); child.kill('SIGTERM'); } }));

@@ -1,8 +1,9 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
-const { fork } = require('node:child_process'), { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-reconnect-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-reconnect-ui-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/reconnect-native.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms)), checks = [], errors = [];
 let app, page, client, sequence = 0;
@@ -159,6 +160,6 @@ async function run() {
   checks.push('Backend exit immediately makes the old terminal read-only; continuation waits for display exit and retains the same draft and identity');
   console.log(JSON.stringify({ checks, errors, modelTasks: 0, nativeProcesses: 0, profile }, null, 2));
 }
-run().catch(async e => { console.error(e.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(async e => { console.error(e.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close(); client?.close(); if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-});
+}));

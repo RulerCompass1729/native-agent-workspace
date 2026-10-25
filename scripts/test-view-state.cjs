@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Real isolated Electron startup/retry/quit with damaged synthetic local data.
 // No provider process, model call, system clipboard or foreground window.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
-const { fork } = require('node:child_process'), { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-view-state-ui-')), file = path.join(profile, 'views.json');
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-view-state-ui-')), file = path.join(profile, 'views.json');
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/native-progress.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile },
@@ -121,11 +122,11 @@ async function run() {
   assert.deepEqual(windows, [{ visible: false, focusable: false }, { visible: false, focusable: false }]); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, stats, windows, errors, modelTasks: 0 }, null, 2));
 }
-run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await shot('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await shot('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (fs.existsSync(file)) fs.chmodSync(file, 0o600);
   await close();
   if (client) { await fixture('stop'); await client.call('shutdown'); client.close(); }
   otherClient?.close();
   if (child.connected) child.disconnect();
   await until(() => child.exitCode !== null, 'Owned test daemon exits');
-});
+}));

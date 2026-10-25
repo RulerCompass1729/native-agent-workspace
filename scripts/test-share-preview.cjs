@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Real isolated Electron controls/IPC with deliberately delayed native acceptance.
 // Synthetic transports only; no native agent or model request.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
-const { fork } = require('node:child_process'), { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-share-preview-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-share-preview-ui-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/delayed-native.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile },
@@ -154,9 +155,9 @@ async function run() {
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
   console.log(JSON.stringify({ checks, syntheticDispatches: 8, windows, errors, modelTasks: 0 }, null, 2));
 }
-run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await shot('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await shot('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close();
   if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); }
   if (child.connected) child.disconnect();
   await until(() => child.exitCode !== null, 'Owned fixture exits');
-});
+}));

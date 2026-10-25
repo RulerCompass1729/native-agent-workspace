@@ -1,14 +1,15 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron/native Codex interruption and next-turn continuation.
 // Two fixed loopback task responses and at most one native title; no paid inference.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { execFileSync, fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { execFileSync, fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
 const { connect, connectService } = require('../app/service-client.cjs');
 const retained = process.env.NAW_CUT_RETAINED === '1';
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-cut-'));
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-cut-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex');
 for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, {mode:0o700});
 const binary=executable('codex'); assert.ok(binary);
@@ -149,7 +150,7 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   if(page&&!page.isClosed()){await save('failure-state');fs.writeFileSync(path.join(base,'failure-toast.txt'),await page.locator('#toast').textContent());}
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   releaseStart?.(); release?.(); server.closeAllConnections();
   if (application) await application.close().catch(() => {});
   legacyClient?.close();
@@ -170,4 +171,4 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
   if (child?.connected) child.disconnect();
   await new Promise(resolve => server.close(resolve));
-});
+}));
