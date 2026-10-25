@@ -92,6 +92,8 @@ class Terminal extends EventEmitter {
 // Native root transitions the GUI follows: SessionEnd reason -> SessionStart source
 // of the same process. /clear ends with 'clear'; /branch ends with 'resume' and
 // starts the branch as 'fork'. A plain /resume starts as 'resume' and is not followed.
+// Claude Code's PermissionMode values, as hook inputs report them.
+const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'];
 const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 class Claude extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
@@ -127,7 +129,11 @@ class Claude extends EventEmitter {
     fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', awaySummaryEnabled: false, promptSuggestionEnabled: false, hooks }), { mode: 0o600 });
     const mcp = JSON.stringify({ mcpServers: { native_workspace: { command: process.execPath,
       args: [path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
-    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge')], record.cwd, {
+    // Native --resume restores the saved model and every permission mode except
+    // bypassPermissions, which needs its launch flag again. Keep only that one,
+    // and only when this session's own last native report was bypass.
+    const bypass = record.recovering && record.nativePermissionMode === 'bypassPermissions' ? ['--permission-mode', 'bypassPermissions'] : [];
+    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...bypass], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
@@ -477,6 +483,9 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
     });
     if (isChild) return;
+    if (PERMISSION_MODES.includes(event.permission_mode) && event.permission_mode !== this.record.nativePermissionMode) {
+      this.record.nativePermissionMode = event.permission_mode; this.emit('capability');
+    }
     if (event.hook_event_name === 'StopFailure') {
       // Settings hooks may arrive after ordered native events, or after a
       // human has submitted B while A's failure is still being reported.

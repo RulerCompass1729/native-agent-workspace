@@ -269,3 +269,32 @@ for(const [label,end,start] of [['resume','resume','resume'],['clear','clear','c
  r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
  assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));
 });
+test('the root hook-reported permission mode is kept on the row; children and retired contexts cannot change it',async t=>{
+ const f=await fixture(t),{w,s,r}=f;const first=s.nativeId;
+ const tool=(fields)=>r.hook({hook_event_name:'PreToolUse',tool_name:'Read',tool_use_id:randomUUID(),session_id:s.nativeId,...fields});
+ tool({permission_mode:'bypassPermissions'});assert.equal(s.nativePermissionMode,'bypassPermissions');
+ tool({permission_mode:'auto',agent_id:'child-agent'});tool({permission_mode:'plan',session_id:randomUUID()});tool({permission_mode:'not-a-mode'});
+ assert.equal(s.nativePermissionMode,'bypassPermissions','Only the root reports the session mode');
+ f.clear();tool({permission_mode:'default',session_id:first});assert.equal(s.nativePermissionMode,'bypassPermissions','A retired context cannot change it');
+ w.persist();assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'workspace.json'))).sessions[0].nativePermissionMode,'bypassPermissions');
+ tool({permission_mode:'auto'});assert.equal(s.nativePermissionMode,'auto','A later native choice replaces it');
+});
+test('a recovery relaunch passes bypass again only when the session last reported bypass',async t=>{
+ const { Claude: Adapter } = require('../adapters.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-posture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const argvFile=path.join(dir,'argv.txt'),binary=path.join(dir,'claude');
+ // A stand-in native binary that only records how NAW launched it.
+ fs.writeFileSync(binary,`#!/bin/sh\nprintf '%s\\n' "$@" > '${argvFile}'\n`,{mode:0o700});
+ const launch=async record=>{
+  fs.rmSync(argvFile,{force:true});
+  const host={binaries:{claude:binary},privateDir:dir,hookTargets:new Map(),hookSocket:path.join(dir,'hook.sock'),submitSocket:path.join(dir,'submit.sock')};
+  const r=new Adapter({id:randomUUID(),nativeId:randomUUID(),name:'Posture',cwd:dir,...record},host);
+  await new Promise(resolve=>r.terminal.once('closed',resolve));r.submission.close();
+  return fs.readFileSync(argvFile,'utf8').trim().split('\n');
+ };
+ const bypass=await launch({recovering:true,nativePermissionMode:'bypassPermissions'});
+ assert.equal(bypass[0],'--resume');assert.deepEqual(bypass.slice(-2),['--permission-mode','bypassPermissions']);
+ for(const record of [{recovering:true,nativePermissionMode:'auto'},{recovering:true},{recovering:false,nativePermissionMode:'bypassPermissions'}]){
+  const argv=await launch(record);assert.ok(!argv.includes('--permission-mode'),`No permission flag for ${JSON.stringify(record)}`);
+ }
+});
