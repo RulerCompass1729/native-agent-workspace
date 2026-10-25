@@ -18,6 +18,10 @@ across reader reload. U17 now audits which facts the GUI presents and which
 interactions remain in the same-screen native TUI; full GUI-fact acceptance remains
 open. See [current acceptance](docs/readiness.md).
 
+Alpha.97 integrates the Claude lane's native `/branch` follow-up: retain the
+session row, process, history and draft while subsequent GUI input reaches the
+new native branch. This is one scoped integration, not full Claude acceptance.
+
 Alpha.95 makes newly allocated standalone test profiles disposable and keeps
 explicitly exported native-history fixtures reusable. The reused `test:desktop`
 dogfood profile is intentionally excluded. Installed checks and independent

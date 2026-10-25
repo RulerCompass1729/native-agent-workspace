@@ -1,6 +1,22 @@
 # Readiness and next gates
 
-As of 2026-10-24. Version 0.1.0-alpha.96 is a **local macOS technical-trial alpha**.
+As of 2026-10-24. Version 0.1.0-alpha.97 is a **local macOS technical-trial alpha**.
+
+**Alpha.97 — scoped Claude branch integration accepted:** integrates the lane's
+committed native `/branch` transition, preserving the same session row/process,
+history and unsent draft while the GUI follows the confirmed new native ID.
+The existing context boundary records the branch and revokes old sharing grants.
+It does not automatically follow arbitrary `/resume` or background transfers.
+
+All 993 units pass without skips. The actual installed app with Claude 2.1.310
+passes native branch→GUI continuation with two fixed local replies and no paid
+inference; the six-group installed context fixture checks pending submissions,
+late outcomes, sharing revocation and reopening without replay. The native test
+restores exact temporary-directory sets. All 56 installed runtime files match,
+strict signing after native use and a single launcher pass. Hidden normal reopen
+retains original three native IDs/PIDs, records and drafts with no new dispatch.
+Same-session headless Fable review12 approves this integration. This changes only the
+lane's branch path and its integration; the overall Claude fact goal remains open.
 
 
 **Alpha.96 — bounded input repair accepted; GUI-truth goal open:** the goal is accurate GUI facts

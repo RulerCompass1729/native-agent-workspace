@@ -7,6 +7,8 @@ let collecting = null;
 let foreignSubmissions = 0;
 let foreignRevision = 0;
 let rootBinding = null;
+// Root transitions followed inside one process: SessionEnd reason -> SessionStart source.
+const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 const rootEnds = new Map();
 const rootTransitions = [];
 let syncingRoot = false;
@@ -457,9 +459,19 @@ async function syncRoot($) {
         ending.confirmed = true;
       }
       const transition = rootTransitions[0];
-      if (ending.reason !== 'clear' || !transition || transition.sessionId !== rootBinding.sessionId) return;
+      const expectedSource = FOLLOWED_ROOT_TRANSITIONS[ending.reason];
+      if (!transition || transition.sessionId !== rootBinding.sessionId || !expectedSource || expectedSource !== transition.source) return;
+      // A fork was admitted before the engine reported it as current; confirm
+      // that now unless a later queued transition already proves it was.
+      if (transition.source === 'fork' && rootTransitions.length === 1 && await $.session.id() !== transition.nextSessionId) {
+        // Bounded: a root that never becomes current is dropped, leaving the
+        // GUI closed for this context instead of polling for the process lifetime.
+        transition.confirmAttempts = (transition.confirmAttempts || 0) + 1;
+        if (transition.confirmAttempts > 30) { rootTransitions.shift(); return; }
+        throw Error('Root not yet current'); // retried below
+      }
       const result = await request($, '/root-clear', { nextSessionId: transition.nextSessionId,
-        source: 'clear', model: transition.model }, rootBinding);
+        source: transition.source, model: transition.model }, rootBinding);
       if (typeof result.lease !== 'string') throw Error('Root lease missing');
       rootEnds.delete(rootBinding.sessionId);
       rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
@@ -768,12 +780,17 @@ export function register(on) {
   });
   on('classic.SessionStart', async ($, e, next) => {
     const previousId = rootTransitions.at(-1)?.nextSessionId || rootBinding?.sessionId;
-    if (contextTransitions && rootEnds.get(previousId)?.reason === 'clear' && e.source === 'clear' && !e.agent_id &&
-      e.session_id !== previousId && e.session_id === await $.session.id()) {
+    // A /clear reports the new id as current before this hook; a /branch (fork)
+    // still answers the ending id here and swaps afterwards, so the new id is
+    // confirmed again before the transition is sent.
+    const currentId = contextTransitions ? await $.session.id() : null;
+    const expectedStart = FOLLOWED_ROOT_TRANSITIONS[rootEnds.get(previousId)?.reason];
+    if (contextTransitions && expectedStart && expectedStart === e.source && !e.agent_id &&
+      e.session_id !== previousId && (e.session_id === currentId || (e.source === 'fork' && currentId === previousId))) {
       if (collecting) collecting.invalid = true;
       stopped = true; generation++;
       if (rootTransitions.length >= 64) rootSyncBlocked = true;
-      else rootTransitions.push({ sessionId: previousId, nextSessionId: e.session_id, model: e.model });
+      else rootTransitions.push({ sessionId: previousId, nextSessionId: e.session_id, source: e.source, model: e.model });
       $.clock.after(0, () => syncRoot($));
     }
     return next(e);

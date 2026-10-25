@@ -28,7 +28,7 @@ GUI 事实按下列用户任务验收，每项需要安装版、零付费推理�
 | 模型与 effort | 只显示当前原生报告，线程改变后不沿用旧线程字段 | `C164-SET-01` 安装 alpha.95 的三次原生 model/effort 切换，GUI 标题一致；零推理；Fable review08 核证复用通过 |
 | 用量 | 只表示原生报告的线程/周期范围；未知保持未知，不混算标题或他人线程 | 安装 alpha.91 / Codex164 定向协作任务验证实际用量与 session/room 范围；同版本合成 UI 验证未知非零与刷新无派发；Fable review08 核证最终通过记录，排除失败试次 |
 | 回合起止、耗时 | GUI 运行计时只用已确认的原生开始时间，未知不显示；完成时间/耗时与 Worked/Cooked 文案保留同屏 TUI，不由 GUI 重构 | `C164-PLAN-01` 安装版完成/截断复开无运行计时或拼造 footer；`C164-TIME-01` 安装版受控事件验证未知→原生开始时间→未知→空闲的显示；零推理，Fable review10 通过 |
-| Claude310 | 由 `.local/lanes/claude310.md` lane 提供已审改动与证据；主线程合并、装机验收、推送 | 等待/合并 lane 的 READY 交接，不重复实现 |
+| Claude310 | 由 `.local/lanes/claude310.md` lane 提供已审改动与证据；主线程合并、装机验收、推送 | 已合并其文档与 branch 改动；安装 alpha.97 原生分支→GUI 继续通过，Fable review12 通过。其他 Claude 事实仍待 lane 交付，不重复实现 |
 
 ### Codex 0.164 接入差异（明确披露）
 
