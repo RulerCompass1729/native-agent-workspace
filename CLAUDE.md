@@ -50,10 +50,30 @@ or start paid model runs as a side effect of editing documents.
   initialization can generate files beside the plugin. Verify the installed
   bundle's strict signature after native testing, not only before it. Synthetic
   transport fixtures may boot directly when they never initialize a provider.
-- Current development preference: the main agent implements and tests directly.
-  Keep one independent reviewer at delivery checkpoints; do not delegate coding
-  or routine testing again unless requested. Reuse relevant evidence and avoid
-  frequent handoffs. This does not resolve model-service capacity errors.
+- Current development preference: the main agent implements and tests directly;
+  do not delegate coding or routine testing unless requested. The independent
+  reviewer at delivery checkpoints is a separate headless Claude Code session,
+  not a subagent of the main agent. Each checkpoint is one invocation that exits.
+  Run it from this repository as an unsandboxed background shell job (not
+  `claude --bg`), with the brief on stdin and output in private files:
+
+  ```sh
+  claude -p --resume "$(cat .local/reviewer-session-id)" \
+    --permission-mode bypassPermissions --output-format json \
+    --disallowedTools Edit Write NotebookEdit "Bash(git commit *)" "Bash(git push *)" \
+    < "$BRIEF" > "$OUT" 2> "$OUT.err"
+  ```
+
+  If that gitignored file is missing, save a new `uuidgen` value there and use
+  `--session-id` instead of `--resume` once. A nonzero exit or `"is_error": true`
+  means Claude is unavailable. Give the reviewer the scope, commit range and raw
+  evidence paths, not your verdict. It may run existing no-model checks
+  (rebuilding gitignored output is fine) and write scratch files only outside
+  the repository; confirm `git rev-parse HEAD` and `git status --porcelain` are
+  unchanged after each review. Reproduce and record its findings in
+  `docs/review.md`, fix them, then send only the delta to the same session. If
+  Claude is unavailable, keep the checkpoint open rather than self-approving.
+  Reuse relevant evidence and avoid frequent handoffs.
 
 ## Architectural invariants
 
