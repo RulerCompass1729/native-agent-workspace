@@ -15,15 +15,17 @@ for(const p of[profile,cwd,home,userHome])fs.mkdirSync(p,{mode:0o700});
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
 let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,budgetError;const errors=[],checks=[];
+const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIVE_REJECTED_REQUEST: Keep This BODY exactly.';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(budgetError)throw budgetError;if(await fn())return;await sleep(80);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++seq,...body})}\n\n`);}
 const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
  if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
  const input=JSON.parse(body),title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
- const n=title?0:++calls;if(title)titles++;if(calls>(process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context budget: three fixed tasks and at most one title');res.writeHead(400);res.end(budgetError.message);return;}
+ const n=title?0:++calls;if(title)titles++;if(calls>(failureTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
  assert.equal(input.model,'gpt-6-luna');
  fs.writeFileSync(path.join(base,`request-${title?'title-'+titles:n}.json`),JSON.stringify(input,null,2));
+ if(failureTrial&&n===1){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:{type:'invalid_request_error',message:failureBody}}));return;}
  const response={id:'context_'+seq,object:'response',created_at:Math.floor(Date.now()/1000),status:'in_progress',model:input.model,output:[],usage:{input_tokens:10,output_tokens:10,total_tokens:20}};
  res.writeHead(200,{'content-type':'text/event-stream'});event(res,'response.created',{response});
  if(process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'&&!title&&n===1){
@@ -79,6 +81,25 @@ async function nativeCommand(command){
   console.log(JSON.stringify({checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  await page.locator('#message-input').fill('Make one small local check.');await page.locator('#send-button').click();
+ if(failureTrial){
+  await until(async()=>{const s=(await snapshot()).sessions[0];return s.messages.some(m=>m.kind==='notice'&&m.text.includes(failureBody))&&s.messages.some(m=>m.kind==='turn'&&m.status==='failed')&&s.state==='idle';},'Native failure finishes without claiming a successful response');
+  const failed=await snapshot(),s=failed.sessions[0],notice=s.messages.find(m=>m.kind==='notice'&&m.text.includes(failureBody));
+  assert.equal(s.messages.filter(m=>m.role==='assistant').length,0,'A rejected request is not replaced with invented assistant prose');
+  assert.equal(await page.locator('#messages').getByText(notice.text,{exact:true}).innerText(),notice.text);
+  assert.equal(await page.locator('#native-activity').isVisible(),false);assert.equal(calls,1,'A non-retryable failure is not automatically resubmitted');
+  // The native display can hard-wrap inside an identifier; GUI equality above
+  // checks the original public body, while this checks that body's native display.
+  await until(async()=>(await terminalText()).replace(/\s/g,'').includes(failureBody.replace(/\s/g,'')),'Native TUI retains the error detail across display wraps');
+  fs.writeFileSync(path.join(base,'failed-native.txt'),await terminalText());fs.writeFileSync(path.join(base,'failed.json'),JSON.stringify(failed,null,2));
+  if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-failed.png')});
+  await page.locator('#message-input').fill('Continue after the failed native turn.');await page.locator('#send-button').click();
+  await until(async()=>{const s=(await snapshot()).sessions[0];return s.state==='idle'&&s.messages.some(m=>m.text==='CONTEXT_TASK_2');},'Explicit next GUI task succeeds after native failure');
+  const recovered=await snapshot();assert.equal(recovered.sessions[0].nativeId,before.nativeId);assert.equal(calls,2);
+  assert.ok(recovered.sessions[0].messages.some(m=>m.id===notice.id&&m.text===notice.text),'Original error remains after recovery');
+  assert.equal(recovered.diagnostics.dispatches,2);assert.deepEqual(errors,[]);
+  fs.writeFileSync(path.join(base,'failed-recovered.json'),JSON.stringify(recovered,null,2));
+  console.log(JSON.stringify({checks:['Native non-retryable failure retains exact error body and failed boundary, creates no assistant reply or automatic replay; one explicit next task completes in the same native thread'],nativeVersion,localTaskAttempts:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+ }
  if(process.env.NAW_NATIVE_RETRY_TRIAL==='1'){
   await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.kind==='notice'&&m.text.includes('stream disconnected before completion'))&&releaseRetry,'Actual native retry notification',60000);
   const retry=await snapshot();fs.writeFileSync(path.join(base,'retrying.json'),JSON.stringify(retry,null,2));
