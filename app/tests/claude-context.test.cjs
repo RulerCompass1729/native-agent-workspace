@@ -269,7 +269,7 @@ for(const [label,end,start] of [['resume','resume','resume'],['clear','clear','c
  r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
  assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));
 });
-test('the root hook-reported permission mode is kept on the row; children and retired contexts cannot change it',async t=>{
+test('the root hook-reported permission mode and effort are kept on the row; children and retired contexts cannot change them',async t=>{
  const f=await fixture(t),{w,s,r}=f;const first=s.nativeId;
  const tool=(fields)=>r.hook({hook_event_name:'PreToolUse',tool_name:'Read',tool_use_id:randomUUID(),session_id:s.nativeId,...fields});
  tool({permission_mode:'bypassPermissions'});assert.equal(s.nativePermissionMode,'bypassPermissions');
@@ -278,8 +278,12 @@ test('the root hook-reported permission mode is kept on the row; children and re
  f.clear();tool({permission_mode:'default',session_id:first});assert.equal(s.nativePermissionMode,'bypassPermissions','A retired context cannot change it');
  w.persist();assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'workspace.json'))).sessions[0].nativePermissionMode,'bypassPermissions');
  tool({permission_mode:'auto'});assert.equal(s.nativePermissionMode,'auto','A later native choice replaces it');
+ tool({effort:{level:'xhigh'}});assert.equal(s.nativeEffort,'xhigh');assert.equal(s.nativePermissionMode,'auto','A hook without a mode keeps the last one');
+ tool({effort:{level:'low'},agent_id:'child-agent'});tool({effort:{level:'turbo'}});tool({effort:'max'});
+ assert.equal(s.nativeEffort,'xhigh','Only a valid root effort report counts');
+ tool({effort:{level:'max'}});assert.equal(s.nativeEffort,'max');
 });
-test('a recovery relaunch passes bypass again only when the session last reported bypass',async t=>{
+test('a recovery relaunch passes bypass and effort again only as the session last reported them',async t=>{
  const { Claude: Adapter } = require('../adapters.cjs');
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-posture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const argvFile=path.join(dir,'argv.txt'),binary=path.join(dir,'claude');
@@ -292,9 +296,10 @@ test('a recovery relaunch passes bypass again only when the session last reporte
   await new Promise(resolve=>r.terminal.once('closed',resolve));r.submission.close();
   return fs.readFileSync(argvFile,'utf8').trim().split('\n');
  };
- const bypass=await launch({recovering:true,nativePermissionMode:'bypassPermissions'});
- assert.equal(bypass[0],'--resume');assert.deepEqual(bypass.slice(-2),['--permission-mode','bypassPermissions']);
- for(const record of [{recovering:true,nativePermissionMode:'auto'},{recovering:true},{recovering:false,nativePermissionMode:'bypassPermissions'}]){
-  const argv=await launch(record);assert.ok(!argv.includes('--permission-mode'),`No permission flag for ${JSON.stringify(record)}`);
+ const bypass=await launch({recovering:true,nativePermissionMode:'bypassPermissions',nativeEffort:'xhigh'});
+ assert.equal(bypass[0],'--resume');assert.deepEqual(bypass.slice(-4),['--permission-mode','bypassPermissions','--effort','xhigh']);
+ assert.deepEqual((await launch({recovering:true,nativePermissionMode:'auto',nativeEffort:'max'})).slice(-2),['--effort','max'],'Effort is kept without bypass');
+ for(const record of [{recovering:true,nativePermissionMode:'auto'},{recovering:true,nativeEffort:'turbo'},{recovering:false,nativePermissionMode:'bypassPermissions',nativeEffort:'xhigh'}]){
+  const argv=await launch(record);assert.ok(!argv.includes('--permission-mode')&&!argv.includes('--effort'),`No posture flag for ${JSON.stringify(record)}`);
  }
 });

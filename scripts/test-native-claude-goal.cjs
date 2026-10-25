@@ -7,7 +7,7 @@ const testScratch = require('./fixtures/test-scratch.cjs');
 // every other request rejected) so the evaluator can be told apart by body.
 // NAW_GOAL_CASE=recovery instead kills the native process while the goal's
 // second turn is in flight, recovers through NAW and checks the same row,
-// native ID, draft, bypass mode and goal; nothing may start until prompted.
+// native ID, draft, bypass mode, effort and goal; nothing starts until prompted.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict');
 const { _electron } = testScratch.playwright(require('playwright'));
@@ -84,7 +84,7 @@ async function serve(req, res, body) {
     const number = ++calls;
     let request; try { request = JSON.parse(body); } catch { refuse(res, 'goal test: unparsable request body', true); return; }
     const kind = classify(request);
-    received.push({ number, kind, at: Date.now(), model: request.model, tools: (request.tools || []).length, stream: request.stream !== false });
+    received.push({ number, kind, at: Date.now(), model: request.model, effort: request.output_config?.effort, tools: (request.tools || []).length, stream: request.stream !== false });
     fs.writeFileSync(path.join(base, `request-${number}-${kind}.json`), JSON.stringify({ url: req.url, headers: req.headers, body: request }, null, 2));
     if (discovery) {
       // Record mode: a main turn gets a plain text reply, everything else is
@@ -195,6 +195,8 @@ async function recover(before) {
   await until(() => heldSecond, 'Native goal continues into a second turn', 120000);
   const live = (await snapshot()).sessions[0];
   assert.equal(live.nativePermissionMode, 'bypassPermissions', 'NAW kept the bypass mode the native hooks reported');
+  assert.equal(live.nativeEffort, 'low', 'NAW kept the effort the native hooks reported');
+  assert.equal(received.find(r => r.kind === 'main').effort, 'low', 'The first native turn ran at the launch effort');
   assert.match(await terminalText(), /bypass permissions on/, 'The native TUI runs in bypass before the fault');
   // Durable checkpoint before fault injection: identity, goal, draft, in-flight work.
   const checkpoint = { id: live.id, nativeId: live.nativeId, pid: live.pid, goal: condition, draft: live.liveDraft, inFlight: 'goal turn 2 held by the loopback API', mains, evals, at: Date.now() };
@@ -213,8 +215,9 @@ async function recover(before) {
   assert.equal(recovered.id, before.id); assert.equal(recovered.nativeId, before.nativeId); assert.notEqual(recovered.pid, live.pid);
   const argv = testScratch.childProcess.execFileSync('ps', ['-o', 'args=', '-p', String(recovered.pid)], { encoding: 'utf8' });
   fs.writeFileSync(path.join(base, 'recovered-argv.txt'), argv);
-  // The shim appends only `--model haiku` now, so a single bypass flag before it is NAW's.
-  assert.ok(argv.includes(`--resume ${before.nativeId}`) && argv.split('--permission-mode bypassPermissions').length === 2 && argv.trim().endsWith('--model haiku'), `Recovered launch: ${argv}`);
+  // The shim appends only `--model haiku` now, so single posture flags before it are NAW's.
+  assert.ok(argv.includes(`--resume ${before.nativeId}`) && argv.split('--permission-mode bypassPermissions').length === 2 &&
+    argv.split('--effort low').length === 2 && argv.trim().endsWith('--model haiku'), `Recovered launch: ${argv}`);
   await page.locator('#terminal-tab').click();
   await until(async () => /bypass permissions on/.test(await terminalText()), 'The recovered native TUI is in bypass again', 30000);
   await stage('recovered');
@@ -227,13 +230,15 @@ async function recover(before) {
   promptedAfterRecovery = true; await page.keyboard.press('Enter');
   await until(async () => mains === 3 && evals === 2 && /Goal achieved/.test(await terminalText()), 'The restored native goal evaluates the same condition and completes', 120000);
   const terminal = await terminalText(); fs.writeFileSync(path.join(base, 'recovered-terminal.txt'), terminal);
+  // The isolated profile has no saved effort, so native alone would resume at the model default.
+  assert.equal(received.filter(r => r.kind === 'main').at(-1).effort, 'low', 'The recovered native turn keeps the session effort');
   const modes = transcriptLines(/"type":"permission-mode"/).filter(l => l.includes(before.nativeId));
   assert.match(modes.at(-1) || '', /bypassPermissions/, 'The native transcript records bypass after recovery');
   const final = (await snapshot()).sessions[0];
   assert.equal(final.nativeId, before.nativeId); assert.equal(final.nativePermissionMode, 'bypassPermissions');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'goal-recovered-terminal.png') }); }
   assert.deepEqual(errors, []);
-  checks.push('Killing the native process mid-goal and recovering through NAW keeps the row, native ID, draft and bypass mode, replays nothing, and the restored goal completes on the next prompt');
+  checks.push('Killing the native process mid-goal and recovering through NAW keeps the row, native ID, draft, bypass mode and effort, replays nothing, and the restored goal completes on the next prompt');
   console.log(JSON.stringify({ checks, nativeVersion, case: 'recovery', mainTurns: mains, evaluatorVerdicts: evals, nativeTitleResponses: titles, localResponses: calls, paidModelCalls: 0, killedPid: live.pid, recoveredPid: recovered.pid, goalLines: goalLines(terminal), received, errors, evidence: base }));
 }
 (async () => {
@@ -241,10 +246,10 @@ async function recover(before) {
   const shim = path.join(base, 'claude-local');
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\nfor key in ["ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN","CLAUDE_CODE_CHILD_SESSION","CLAUDECODE","CLAUDE_CODE_SESSION_ID","CLAUDE_CODE_ENTRYPOINT"]: os.environ.pop(key,None)\nos.environ.update(' +
     `HOME=${JSON.stringify(userHome)},ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")\n` +
-    // Recovery: only the first launch adds bypass, like the dogfood fork's
-    // one-shot launcher; a recovered launch gets it from NAW or not at all.
+    // Recovery: only the first launch adds bypass and an effort, like the dogfood
+    // fork's one-shot launcher; a recovered launch gets them from NAW or not at all.
     `extra=["--model","haiku"]\nmarker=${JSON.stringify(path.join(base, 'first-launch'))}\n` +
-    `if ${recoveryCase ? 'True' : 'False'} and not os.path.exists(marker):\n open(marker,"x").close()\n extra+=["--permission-mode","bypassPermissions"]\n` +
+    `if ${recoveryCase ? 'True' : 'False'} and not os.path.exists(marker):\n open(marker,"x").close()\n extra+=["--permission-mode","bypassPermissions","--effort","low"]\n` +
     `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+extra)\n`, { mode: 0o700 });
   // The service starts a new session in <profile>/workspace; trust it up front
   // so the only native dialog left is the API key choice. /goal needs the same
