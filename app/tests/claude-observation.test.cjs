@@ -673,10 +673,30 @@ test('model metadata rejects invalid payloads and ignores offline replay without
     assert.throws(() => f.r.observeBlock({ ...base, model }), /Invalid/);
   f.r.observeBlock({ ...base, model: 'claude-old', replayed: true });
   assert.deepEqual(models, ['claude-sonnet-test']);
-  const unknown = await mod({ version: '2.1.310' });
+  const unknown = await mod({ version: '2.1.311' });
   unknown.setModelReader(async () => { throw Error('Unknown version must not be queried'); });
-  await unknown.invoke('classic.PostModelSwitch', { session_id: unknown.r.record.nativeId });
+  // A valid to_model would publish on a supported version; an unknown one must stay silent.
+  await unknown.invoke('classic.PostModelSwitch', { session_id: unknown.r.record.nativeId, to_model: 'claude-sonnet-test' });
+  await new Promise(r => setImmediate(r)); while (unknown.clock.length) await unknown.clock.shift()();
   assert.equal(unknown.requests.length, 0);
+});
+
+
+test('native model metadata on 2.1.310 updates the model block for a valid switch', async () => {
+  const f = await mod({ version: '2.1.310' }), models = [];
+  f.r.on('model', value => models.push(value)); f.setModelReader(async () => 'claude-sonnet-test');
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test' });
+  await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  assert.deepEqual(models, ['claude-sonnet-test']);
+  assert.equal(f.requests[0].id, 'control:model'); assert.equal(f.requests[0].model, 'claude-sonnet-test');
+});
+
+test('native model metadata on 2.1.310 ignores invalid and oversized switch payloads', async () => {
+  const f = await mod({ version: '2.1.310' }), models = [];
+  f.r.on('model', value => models.push(value));
+  for (const model of [null, {}, '', 'x'.repeat(161), 'bad\nmodel'])
+    await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: model });
+  assert.equal(f.clock.length, 0); assert.equal(f.requests.length, 0); assert.deepEqual(models, []);
 });
 
 
@@ -850,8 +870,28 @@ test('usage read is free, root-scoped, metadata-only and version-gated', async (
   f.setUsageReader(() => new Promise(r => { resolve = r; }));
   const pending = f.readUsage(); f.setNativeId(randomUUID()); resolve({ context: { window: 200000, tokens: 999 } }); await pending;
   assert.equal(usage.length, 1, 'Old native identity may not publish a reading');
-  const unknown = await mod({ version: '2.1.310' });
-  unknown.setUsageReader(() => { throw Error('Unknown version must not read'); }); await unknown.readUsage();
+  const unknown = await mod({ version: '2.1.311' });
+  let unknownReads = 0; unknown.setUsageReader(() => { unknownReads++; throw Error('Unknown version must not read'); }); await unknown.readUsage();
+  assert.equal(unknownReads, 0, 'An unknown native version is never asked for usage');
+});
+
+test('usage metadata on 2.1.310 is read after turn completion and missing values stay unknown', async () => {
+  const f = await mod({ version: '2.1.310' }), usage = []; let reads = 0;
+  f.r.on('usage', x => usage.push(x));
+  const first = randomUUID();
+  await f.invoke('turn.start', { turnId: first }); await f.clock.shift()();
+  f.setUsageReader(async (...args) => { assert.equal(args.length, 0); reads++; return { context: { window: 200000, tokens: 42, percent: 0.5 }, cost: { usd: 0 } }; });
+  await f.invoke('turn.complete', { turnId: first, reason: 'answer', answer: 'ok' });
+  await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  assert.equal(reads, 1); assert.equal(usage.length, 1);
+  assert.equal(usage[0].context.window, 200000); assert.equal(usage[0].context.tokens, 42); assert.equal(usage[0].context.percent, 0.5);
+  const second = randomUUID();
+  await f.invoke('turn.start', { turnId: second }); await f.clock.shift()();
+  f.setUsageReader(async () => { reads++; return { context: { window: 200000 } }; });
+  await f.invoke('turn.complete', { turnId: second, reason: 'answer', answer: 'ok' });
+  await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  assert.equal(reads, 2); assert.equal(usage.length, 2);
+  assert.equal(usage[1].context.window, 200000); assert.equal(usage[1].context.tokens, undefined);
 });
 
 test('held usage metadata never blocks binding/input and coalesces reads', async () => {

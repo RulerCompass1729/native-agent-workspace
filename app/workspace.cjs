@@ -33,7 +33,7 @@ class Workspace extends EventEmitter {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
-      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.state === 'ended' ? 'ended' : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
+      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
       }
@@ -177,6 +177,8 @@ class Workspace extends EventEmitter {
     on('replyBound', identity => { this.sharedReplies.bind(s, identity.tag, identity); this.changed(); });
     on('contextEnd', info => this.endNativeContext(s, runtime, info));
     on('contextClear', info => this.clearNativeContext(s, runtime, info));
+    on('background', info => { if (this.runtimes.get(s.id) !== runtime || info.nativeId !== s.nativeId) return;
+      s.activity = `已转到原生后台继续运行（会话 ${info.backgroundId.slice(0, 8)}）。可在终端用 claude agents 查看，claude attach ${info.backgroundId.slice(0, 8)} 接回。`; });
     on('sharingBoundary', reason => this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id));
     on('nativeControlBoundary', reason => { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id); });
     on('capability', () => this.changed());
@@ -186,12 +188,12 @@ class Workspace extends EventEmitter {
     on('state', state => {
       if (this.stops.has(s.id) && !['ended', 'recoverable', 'error', 'disconnected'].includes(state)) return;
       s.state = state;
-      if (['ended', 'recoverable', 'error', 'disconnected'].includes(state)) for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
-      if (runtime.transportDisconnected || ['disconnected', 'ended', 'recoverable'].includes(state)) s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
+      if (['ended', 'background', 'recoverable', 'error', 'disconnected'].includes(state)) for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
+      if (runtime.transportDisconnected || ['disconnected', 'ended', 'background', 'recoverable'].includes(state)) s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
       if (state !== 'approval') s.approvalResolved = false;
       if (runtime.transportDisconnected) { s.approval = null; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(s.id); }
       if (state !== 'starting' && s.activity === '正在连接原生历史') s.activity = '';
-      if (state === 'ended' || state === 'recoverable') {
+      if (['ended', 'background', 'recoverable'].includes(state)) {
         if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
         if (s.pendingTag) this.deliveryStatus(s.pendingTag, 'unconfirmed');
         s.pid = null; s.pendingTag = null; s.approval = null; s.approvals = []; s.approvalOverflow = false; this.runtimes.delete(s.id);
@@ -200,7 +202,7 @@ class Workspace extends EventEmitter {
       if (state === 'working') this.peerLeases?.working(s.id);
       if (state === 'approval') { s.peerRevision = (s.peerRevision || 0) + 1; this.pauseParticipant(s.id, '等待原生权限确认'); }
       if (state === 'working' && this.room.run?.status === 'running' && this.room.run.ids.includes(s.id) && this.room.run.awaiting?.sessionId !== s.id) this.pause('成员开始了本轮之外的原生工作，请核对后再交接。');
-      if (['ended', 'recoverable', 'error'].includes(state)) this.pauseParticipant(s.id, '原生会话不可用'); this.changed();
+      if (['ended', 'background', 'recoverable', 'error'].includes(state)) this.pauseParticipant(s.id, '原生会话不可用'); this.changed();
     });
     on('terminal', event => {
       if (runtime.terminal) this.observedTerminals.set(s.id, runtime.terminal);
@@ -678,7 +680,7 @@ class Workspace extends EventEmitter {
   stop(id) {
     if (this.stops.has(id)) return this.stops.get(id);
     const s = this.get(id);
-    if (s.state === 'ended') return Promise.resolve();
+    if (['ended', 'background'].includes(s.state)) return Promise.resolve();
     if (s.externalHistory && s.recovering && s.state === 'starting' && !this.runtimes.has(id)) {
       s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'recoverable';
       s.activity = '已取消连接，原生历史保持原样。'; this.changed(); return Promise.resolve();

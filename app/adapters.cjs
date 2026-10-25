@@ -121,23 +121,39 @@ class Claude extends EventEmitter {
       hooks[event] = [{ hooks: [{ type: 'command', command, timeout: 2 }] }];
     }
     const settings = path.join(host.privateDir, `${record.id}.settings.json`);
-    fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', hooks }), { mode: 0o600 });
+    // Automatic session recap and prompt suggestions are background model requests
+    // the person did not ask for; /recap stays available on request.
+    fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', awaySummaryEnabled: false, promptSuggestionEnabled: false, hooks }), { mode: 0o600 });
     const mcp = JSON.stringify({ mcpServers: { native_workspace: { command: process.execPath,
       args: [path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
     this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge')], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
     });
     this.terminal.on('data', data => this.emit('terminal', data));
     this.terminal.on('started', pid => this.emit('pid', pid));
-    this.terminal.on('closed', result => {
-      this.cancelNativeAbort(); this.ready = false; this.submission.close();
-      if (result.confirmed) this.host.hookTargets.delete(this.token);
-      else this.emit('activity', '终端连接断开，原生进程退出未确认。');
-      this.emit('state', result.confirmed ? 'ended' : 'error');
-    });
+    this.terminal.on('closed', result => this.terminalClosed(result));
+  }
+  terminalClosed(result) {
+    this.cancelNativeAbort(); this.ready = false; this.submission.close();
+    if (!result.confirmed) { this.emit('activity', '终端连接断开，原生进程退出未确认。'); this.emit('state', 'error'); return; }
+    // Native /background ends this root like /exit, then its daemon starts the
+    // conversation under a new ID with this record's hook token. Briefly keep
+    // the token routed so that start can arrive; otherwise this is a plain exit.
+    if (this.rootEnding?.reason === 'prompt_input_exit' && !this.backgroundTo) {
+      this.closedAwaitingBackground = setTimeout(() => this.finishClose(), this.backgroundHandoffMs ?? 3000);
+      return;
+    }
+    this.finishClose();
+  }
+  finishClose() {
+    clearTimeout(this.closedAwaitingBackground); this.closedAwaitingBackground = null;
+    this.host.hookTargets.delete(this.token);
+    if (this.backgroundTo) {
+      this.emit('background', { nativeId: this.record.nativeId, backgroundId: this.backgroundTo });
+      this.emit('state', 'background');
+    } else this.emit('state', 'ended');
   }
   bindRoot(message) {
     if (message.sessionId !== this.record.nativeId || this.rootEnding || !this.terminal?.alive) throw Error('Root unavailable');
@@ -412,6 +428,15 @@ class Claude extends EventEmitter {
         this.contextEventsOverflow = true;
         this.emit('activity', '原生上下文同步记录已达上限；请在原生终端继续，图形输入保持关闭。');
       } else this.contextEvents.push(event);
+      return;
+    }
+    // A fork start right after this root ended like /exit is native /background:
+    // the conversation continues in the native daemon under the new ID.
+    if (event.hook_event_name === 'SessionStart' && event.source === 'fork' && !event.agent_id && !this.backgroundTo &&
+      this.rootEnding?.reason === 'prompt_input_exit' && this.rootEnding.sessionId === this.record.nativeId &&
+      typeof event.session_id === 'string' && event.session_id !== this.record.nativeId) {
+      this.backgroundTo = event.session_id;
+      if (this.closedAwaitingBackground) this.finishClose();
       return;
     }
     // Late events from a retired root must not become the current context's
