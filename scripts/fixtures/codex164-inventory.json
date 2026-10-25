@@ -1,0 +1,5429 @@
+{
+  "version": "0.164.0",
+  "commit": "6aaac694803004a63c6f393d153c96d22521a6b9",
+  "upstream": "https://github.com/openai/codex",
+  "archiveSHA256": "57f8c2f88fe5b6eaf08672212b6372362ca044bee43d6e57b6ad032152be772e",
+  "notice": "Source identifiers for coverage accounting, not a claim of native or GUI support. User-visible families and explicit merges are in docs/interaction.md. Runtime state must be captured from the installed app.",
+  "commands": [
+    {
+      "key": "Model",
+      "name": "model",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 15,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Presets",
+      "name": "presets",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 16,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Daybreak",
+      "name": "daybreak",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 17,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Ide",
+      "name": "ide",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 18,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Permissions",
+      "name": "permissions",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 19,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Keymap",
+      "name": "keymap",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 20,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Vim",
+      "name": "vim",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 21,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "ElevateSandbox",
+      "name": "setup-default-sandbox",
+      "attributes": [
+        "#[strum(serialize = \"setup-default-sandbox\")]"
+      ],
+      "source": "tui/src/slash_command.rs",
+      "line": 23,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Experimental",
+      "name": "experimental",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 24,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "AutoReview",
+      "name": "approve",
+      "attributes": [
+        "#[strum(to_string = \"approve\")]"
+      ],
+      "source": "tui/src/slash_command.rs",
+      "line": 26,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Memories",
+      "name": "memories",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 27,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Skills",
+      "name": "skills",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 28,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Import",
+      "name": "import",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 29,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Hooks",
+      "name": "hooks",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 30,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Review",
+      "name": "review",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 31,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Rename",
+      "name": "rename",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 32,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "New",
+      "name": "new",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 33,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Archive",
+      "name": "archive",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 34,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Delete",
+      "name": "delete",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 35,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Resume",
+      "name": "resume",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 36,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Fork",
+      "name": "fork",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 37,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Worktree",
+      "name": "worktree",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 38,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "App",
+      "name": "app",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 39,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Init",
+      "name": "init",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 40,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Compact",
+      "name": "compact",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 41,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Config",
+      "name": "config",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 42,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Recap",
+      "name": "recap",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 43,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Plan",
+      "name": "plan",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 44,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Voice",
+      "name": "voice",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 45,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Goal",
+      "name": "goal",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 46,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Agents",
+      "name": "agents",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 47,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Side",
+      "name": "side",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 48,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Btw",
+      "name": "btw",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 49,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": true
+      }
+    },
+    {
+      "key": "Copy",
+      "name": "copy",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 50,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Export",
+      "name": "export",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 51,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": false,
+        "sideConversation": true,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Raw",
+      "name": "raw",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 52,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Tui",
+      "name": "tui",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 53,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Diff",
+      "name": "diff",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 54,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Mention",
+      "name": "mention",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 55,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Status",
+      "name": "status",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 56,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Daemon",
+      "name": "daemon",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 57,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Warnings",
+      "name": "warnings",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 58,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Cd",
+      "name": "cd",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 59,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Pwd",
+      "name": "pwd",
+      "attributes": [
+        "#[strum(to_string = \"pwd\", serialize = \"cwd\")]"
+      ],
+      "source": "tui/src/slash_command.rs",
+      "line": 61,
+      "aliases": [
+        "cwd"
+      ],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Usage",
+      "name": "usage",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 62,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": true,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "DebugConfig",
+      "name": "debug-config",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 63,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": true
+      }
+    },
+    {
+      "key": "Title",
+      "name": "title",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 64,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Statusline",
+      "name": "statusline",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 65,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Theme",
+      "name": "theme",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 66,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Pets",
+      "name": "pets",
+      "attributes": [
+        "#[strum(to_string = \"pets\", serialize = \"pet\")]"
+      ],
+      "source": "tui/src/slash_command.rs",
+      "line": 68,
+      "aliases": [
+        "pet"
+      ],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Mcp",
+      "name": "mcp",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 69,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Apps",
+      "name": "apps",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 70,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": true
+      }
+    },
+    {
+      "key": "Plugins",
+      "name": "plugins",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 71,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Logout",
+      "name": "logout",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 72,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Quit",
+      "name": "quit",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 73,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": true
+      }
+    },
+    {
+      "key": "Exit",
+      "name": "exit",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 74,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Feedback",
+      "name": "feedback",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 75,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Rollout",
+      "name": "rollout",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 76,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": true,
+        "macReleaseVisible": false,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Ps",
+      "name": "ps",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 77,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Stop",
+      "name": "stop",
+      "attributes": [
+        "#[strum(to_string = \"stop\", serialize = \"clean\")]"
+      ],
+      "source": "tui/src/slash_command.rs",
+      "line": 79,
+      "aliases": [
+        "clean"
+      ],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "Clear",
+      "name": "clear",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 80,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": true,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "TestApproval",
+      "name": "test-approval",
+      "attributes": [],
+      "source": "tui/src/slash_command.rs",
+      "line": 81,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": false,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "MultiAgents",
+      "name": "subagents",
+      "attributes": [
+        "#[strum(serialize = \"subagents\")]"
+      ],
+      "source": "tui/src/slash_command.rs",
+      "line": 83,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": true,
+        "sideConversation": false,
+        "noCurrentThread": true,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": false
+      }
+    },
+    {
+      "key": "MemoryDrop",
+      "name": "debug-m-drop",
+      "attributes": [
+        "#[strum(serialize = \"debug-m-drop\")]"
+      ],
+      "source": "tui/src/slash_command.rs",
+      "line": 86,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": true
+      }
+    },
+    {
+      "key": "MemoryUpdate",
+      "name": "debug-m-update",
+      "attributes": [
+        "#[strum(serialize = \"debug-m-update\")]"
+      ],
+      "source": "tui/src/slash_command.rs",
+      "line": 88,
+      "aliases": [],
+      "sourceRules": {
+        "inlineArguments": false,
+        "duringTask": false,
+        "sideConversation": false,
+        "noCurrentThread": false,
+        "macReleaseVisible": true,
+        "unfilteredPopupHidden": true
+      }
+    }
+  ],
+  "keymapActions": [
+    {
+      "context": "global",
+      "action": "open_agents",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 281
+    },
+    {
+      "context": "global",
+      "action": "open_transcript",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 282
+    },
+    {
+      "context": "global",
+      "action": "find_transcript",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 283
+    },
+    {
+      "context": "global",
+      "action": "focus_activity",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 284
+    },
+    {
+      "context": "global",
+      "action": "open_warnings",
+      "runtimeOnly": true,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 285
+    },
+    {
+      "context": "global",
+      "action": "open_external_editor",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 286
+    },
+    {
+      "context": "global",
+      "action": "copy",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 287
+    },
+    {
+      "context": "global",
+      "action": "clear_terminal",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 288
+    },
+    {
+      "context": "global",
+      "action": "toggle_vim_mode",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 289
+    },
+    {
+      "context": "global",
+      "action": "toggle_fast_mode",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 290
+    },
+    {
+      "context": "global",
+      "action": "toggle_raw_output",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 291
+    },
+    {
+      "context": "global",
+      "action": "toggle_side_conversation",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 292
+    },
+    {
+      "context": "chat",
+      "action": "open_presets",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 295
+    },
+    {
+      "context": "chat",
+      "action": "toggle_voice",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 296
+    },
+    {
+      "context": "chat",
+      "action": "interrupt_turn",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 297
+    },
+    {
+      "context": "chat",
+      "action": "decrease_reasoning_effort",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 298
+    },
+    {
+      "context": "chat",
+      "action": "increase_reasoning_effort",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 299
+    },
+    {
+      "context": "chat",
+      "action": "previous_permission_mode",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 300
+    },
+    {
+      "context": "chat",
+      "action": "next_permission_mode",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 301
+    },
+    {
+      "context": "chat",
+      "action": "edit_queued_message",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 302
+    },
+    {
+      "context": "chat",
+      "action": "prompt_stack_back",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 303
+    },
+    {
+      "context": "chat",
+      "action": "skip_question",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 304
+    },
+    {
+      "context": "chat",
+      "action": "toggle_voice_mute",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 306
+    },
+    {
+      "context": "composer",
+      "action": "submit",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 308
+    },
+    {
+      "context": "composer",
+      "action": "queue",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 309
+    },
+    {
+      "context": "composer",
+      "action": "toggle_shortcuts",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 310
+    },
+    {
+      "context": "composer",
+      "action": "history_search_previous",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 311
+    },
+    {
+      "context": "composer",
+      "action": "history_search_next",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 312
+    },
+    {
+      "context": "editor",
+      "action": "insert_newline",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 315
+    },
+    {
+      "context": "editor",
+      "action": "move_left",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 316
+    },
+    {
+      "context": "editor",
+      "action": "move_right",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 317
+    },
+    {
+      "context": "editor",
+      "action": "move_up",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 318
+    },
+    {
+      "context": "editor",
+      "action": "move_down",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 319
+    },
+    {
+      "context": "editor",
+      "action": "move_word_left",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 320
+    },
+    {
+      "context": "editor",
+      "action": "move_word_right",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 321
+    },
+    {
+      "context": "editor",
+      "action": "move_line_start",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 322
+    },
+    {
+      "context": "editor",
+      "action": "move_line_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 323
+    },
+    {
+      "context": "editor",
+      "action": "delete_backward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 324
+    },
+    {
+      "context": "editor",
+      "action": "delete_forward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 325
+    },
+    {
+      "context": "editor",
+      "action": "delete_backward_word",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 326
+    },
+    {
+      "context": "editor",
+      "action": "delete_forward_word",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 327
+    },
+    {
+      "context": "editor",
+      "action": "kill_line_start",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 328
+    },
+    {
+      "context": "editor",
+      "action": "kill_whole_line",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 329
+    },
+    {
+      "context": "editor",
+      "action": "kill_line_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 330
+    },
+    {
+      "context": "editor",
+      "action": "yank",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 331
+    },
+    {
+      "context": "vim_normal",
+      "action": "enter_insert",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 334
+    },
+    {
+      "context": "vim_normal",
+      "action": "append_after_cursor",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 335
+    },
+    {
+      "context": "vim_normal",
+      "action": "append_line_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 336
+    },
+    {
+      "context": "vim_normal",
+      "action": "insert_line_start",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 337
+    },
+    {
+      "context": "vim_normal",
+      "action": "open_line_below",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 338
+    },
+    {
+      "context": "vim_normal",
+      "action": "open_line_above",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 339
+    },
+    {
+      "context": "vim_normal",
+      "action": "enter_replace_mode",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 340
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_left",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 341
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_right",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 342
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_up",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 343
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_down",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 344
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_word_forward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 345
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_word_backward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 346
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_word_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 347
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_line_start",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 348
+    },
+    {
+      "context": "vim_normal",
+      "action": "move_line_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 349
+    },
+    {
+      "context": "vim_normal",
+      "action": "find_forward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 350
+    },
+    {
+      "context": "vim_normal",
+      "action": "find_backward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 351
+    },
+    {
+      "context": "vim_normal",
+      "action": "till_forward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 352
+    },
+    {
+      "context": "vim_normal",
+      "action": "till_backward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 353
+    },
+    {
+      "context": "vim_normal",
+      "action": "jump_top",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 354
+    },
+    {
+      "context": "vim_normal",
+      "action": "jump_bottom",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 355
+    },
+    {
+      "context": "vim_normal",
+      "action": "delete_char",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 356
+    },
+    {
+      "context": "vim_normal",
+      "action": "replace_char",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 357
+    },
+    {
+      "context": "vim_normal",
+      "action": "repeat_last_change",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 358
+    },
+    {
+      "context": "vim_normal",
+      "action": "substitute_char",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 359
+    },
+    {
+      "context": "vim_normal",
+      "action": "delete_to_line_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 360
+    },
+    {
+      "context": "vim_normal",
+      "action": "change_to_line_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 361
+    },
+    {
+      "context": "vim_normal",
+      "action": "yank_line",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 362
+    },
+    {
+      "context": "vim_normal",
+      "action": "paste_after",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 363
+    },
+    {
+      "context": "vim_normal",
+      "action": "start_delete_operator",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 364
+    },
+    {
+      "context": "vim_normal",
+      "action": "start_yank_operator",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 365
+    },
+    {
+      "context": "vim_normal",
+      "action": "start_change_operator",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 366
+    },
+    {
+      "context": "vim_normal",
+      "action": "undo",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 367
+    },
+    {
+      "context": "vim_normal",
+      "action": "redo",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 368
+    },
+    {
+      "context": "vim_normal",
+      "action": "cancel_operator",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 369
+    },
+    {
+      "context": "vim_search",
+      "action": "forward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 371
+    },
+    {
+      "context": "vim_search",
+      "action": "backward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 371
+    },
+    {
+      "context": "vim_search",
+      "action": "next",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 371
+    },
+    {
+      "context": "vim_search",
+      "action": "previous",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 371
+    },
+    {
+      "context": "vim_operator",
+      "action": "delete_line",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 373
+    },
+    {
+      "context": "vim_operator",
+      "action": "yank_line",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 374
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_left",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 375
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_right",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 376
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_up",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 377
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_down",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 378
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_word_forward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 379
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_word_backward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 380
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_word_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 381
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_line_start",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 382
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_line_end",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 383
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_find_forward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 384
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_find_backward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 385
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_till_forward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 386
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_till_backward",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 387
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_jump_top",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 388
+    },
+    {
+      "context": "vim_operator",
+      "action": "motion_jump_bottom",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 389
+    },
+    {
+      "context": "vim_operator",
+      "action": "select_inner_text_object",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 390
+    },
+    {
+      "context": "vim_operator",
+      "action": "select_around_text_object",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 391
+    },
+    {
+      "context": "vim_operator",
+      "action": "cancel",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 392
+    },
+    {
+      "context": "vim_text_object",
+      "action": "word",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 395
+    },
+    {
+      "context": "vim_text_object",
+      "action": "big_word",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 396
+    },
+    {
+      "context": "vim_text_object",
+      "action": "parentheses",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 397
+    },
+    {
+      "context": "vim_text_object",
+      "action": "brackets",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 398
+    },
+    {
+      "context": "vim_text_object",
+      "action": "braces",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 399
+    },
+    {
+      "context": "vim_text_object",
+      "action": "double_quote",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 400
+    },
+    {
+      "context": "vim_text_object",
+      "action": "single_quote",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 401
+    },
+    {
+      "context": "vim_text_object",
+      "action": "backtick",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 402
+    },
+    {
+      "context": "vim_text_object",
+      "action": "cancel",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 403
+    },
+    {
+      "context": "pager",
+      "action": "scroll_up",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 406
+    },
+    {
+      "context": "pager",
+      "action": "scroll_down",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 407
+    },
+    {
+      "context": "pager",
+      "action": "page_up",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 408
+    },
+    {
+      "context": "pager",
+      "action": "page_down",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 409
+    },
+    {
+      "context": "pager",
+      "action": "half_page_up",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 410
+    },
+    {
+      "context": "pager",
+      "action": "half_page_down",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 411
+    },
+    {
+      "context": "pager",
+      "action": "jump_top",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 412
+    },
+    {
+      "context": "pager",
+      "action": "jump_bottom",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 413
+    },
+    {
+      "context": "pager",
+      "action": "close",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 414
+    },
+    {
+      "context": "pager",
+      "action": "close_transcript",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 415
+    },
+    {
+      "context": "pager",
+      "action": "find",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 416
+    },
+    {
+      "context": "list",
+      "action": "move_up",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 419
+    },
+    {
+      "context": "list",
+      "action": "move_down",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 420
+    },
+    {
+      "context": "list",
+      "action": "move_left",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 421
+    },
+    {
+      "context": "list",
+      "action": "move_right",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 422
+    },
+    {
+      "context": "list",
+      "action": "page_up",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 423
+    },
+    {
+      "context": "list",
+      "action": "page_down",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 424
+    },
+    {
+      "context": "list",
+      "action": "jump_top",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 425
+    },
+    {
+      "context": "list",
+      "action": "jump_bottom",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 426
+    },
+    {
+      "context": "list",
+      "action": "accept",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 427
+    },
+    {
+      "context": "list",
+      "action": "cancel",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 428
+    },
+    {
+      "context": "agents",
+      "action": "resume",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 431
+    },
+    {
+      "context": "agents",
+      "action": "search",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 432
+    },
+    {
+      "context": "agents",
+      "action": "new_task",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 433
+    },
+    {
+      "context": "agents",
+      "action": "new_worktree",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 434
+    },
+    {
+      "context": "agents",
+      "action": "fork",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 435
+    },
+    {
+      "context": "agents",
+      "action": "rename",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 436
+    },
+    {
+      "context": "agents",
+      "action": "stop",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 437
+    },
+    {
+      "context": "agents",
+      "action": "archive",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 438
+    },
+    {
+      "context": "agents",
+      "action": "delete",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 439
+    },
+    {
+      "context": "agents",
+      "action": "hide",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 440
+    },
+    {
+      "context": "agents",
+      "action": "toggle_pin",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 441
+    },
+    {
+      "context": "agents",
+      "action": "toggle_grouping",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 442
+    },
+    {
+      "context": "approval",
+      "action": "open_fullscreen",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 445
+    },
+    {
+      "context": "approval",
+      "action": "open_thread",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 446
+    },
+    {
+      "context": "approval",
+      "action": "approve",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 447
+    },
+    {
+      "context": "approval",
+      "action": "approve_for_session",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 448
+    },
+    {
+      "context": "approval",
+      "action": "approve_for_prefix",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 449
+    },
+    {
+      "context": "approval",
+      "action": "deny",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 450
+    },
+    {
+      "context": "approval",
+      "action": "decline",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 451
+    },
+    {
+      "context": "approval",
+      "action": "cancel",
+      "runtimeOnly": false,
+      "source": "tui/src/keymap/bindings.rs",
+      "line": 452
+    }
+  ],
+  "threadItems": [
+    {
+      "name": "UserMessage",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 241
+    },
+    {
+      "name": "HookPrompt",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 248
+    },
+    {
+      "name": "AgentMessage",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 254
+    },
+    {
+      "name": "FunctionCallOutput",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 268
+    },
+    {
+      "name": "Plan",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 278
+    },
+    {
+      "name": "Reasoning",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 284
+    },
+    {
+      "name": "CommandExecution",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 293
+    },
+    {
+      "name": "FileChange",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 332
+    },
+    {
+      "name": "McpToolCall",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 339
+    },
+    {
+      "name": "DynamicToolCall",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 362
+    },
+    {
+      "name": "CollabAgentToolCall",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 376
+    },
+    {
+      "name": "SubAgentActivity",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 399
+    },
+    {
+      "name": "WebSearch",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 409
+    },
+    {
+      "name": "ImageView",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 412
+    },
+    {
+      "name": "Sleep",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 416
+    },
+    {
+      "name": "ImageGeneration",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 417
+    },
+    {
+      "name": "EnteredReviewMode",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 420
+    },
+    {
+      "name": "ExitedReviewMode",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 426
+    },
+    {
+      "name": "ContextCompaction",
+      "source": "app-server-protocol/src/protocol/v2/item.rs",
+      "line": 432
+    }
+  ],
+  "serverRequests": [
+    {
+      "name": "CommandExecutionRequestApproval",
+      "wire": "item/commandExecution/requestApproval",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1816
+    },
+    {
+      "name": "FileChangeRequestApproval",
+      "wire": "item/fileChange/requestApproval",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1823
+    },
+    {
+      "name": "ToolRequestUserInput",
+      "wire": "item/tool/requestUserInput",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1829
+    },
+    {
+      "name": "McpServerElicitationRequest",
+      "wire": "mcpServer/elicitation/request",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1835
+    },
+    {
+      "name": "PermissionsRequestApproval",
+      "wire": "item/permissions/requestApproval",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1841
+    },
+    {
+      "name": "DynamicToolCall",
+      "wire": "item/tool/call",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1847
+    },
+    {
+      "name": "ChatgptAuthTokensRefresh",
+      "wire": "account/chatgptAuthTokens/refresh",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1852
+    },
+    {
+      "name": "AttestationGenerate",
+      "wire": "attestation/generate",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1858
+    },
+    {
+      "name": "CurrentTimeRead",
+      "wire": "currentTime/read",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1865
+    },
+    {
+      "name": "ApplyPatchApproval",
+      "wire": null,
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1873
+    },
+    {
+      "name": "ExecCommandApproval",
+      "wire": null,
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1879
+    }
+  ],
+  "serverNotifications": [
+    {
+      "name": "Error",
+      "wire": "error",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1969
+    },
+    {
+      "name": "ThreadStarted",
+      "wire": "thread/started",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1970
+    },
+    {
+      "name": "ThreadStatusChanged",
+      "wire": "thread/status/changed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1971
+    },
+    {
+      "name": "ThreadReadStateChanged",
+      "wire": "thread/readState/changed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1973
+    },
+    {
+      "name": "ThreadArchived",
+      "wire": "thread/archived",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1974
+    },
+    {
+      "name": "ThreadDeleted",
+      "wire": "thread/deleted",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1975
+    },
+    {
+      "name": "ThreadUnarchived",
+      "wire": "thread/unarchived",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1976
+    },
+    {
+      "name": "ThreadClosed",
+      "wire": "thread/closed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1977
+    },
+    {
+      "name": "ThreadReverted",
+      "wire": "thread/reverted",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1978
+    },
+    {
+      "name": "SkillsChanged",
+      "wire": "skills/changed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1979
+    },
+    {
+      "name": "ThreadNameUpdated",
+      "wire": "thread/name/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1980
+    },
+    {
+      "name": "ThreadAttachmentUpdated",
+      "wire": "thread/attachment/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1981
+    },
+    {
+      "name": "ThreadGoalUpdated",
+      "wire": "thread/goal/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1982
+    },
+    {
+      "name": "ThreadPredictionUpdated",
+      "wire": "thread/prediction/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1984
+    },
+    {
+      "name": "ThreadGoalCleared",
+      "wire": "thread/goal/cleared",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1985
+    },
+    {
+      "name": "ThreadQueueChanged",
+      "wire": "thread/queue/changed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1987
+    },
+    {
+      "name": "ProjectChanged",
+      "wire": "project/changed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1989
+    },
+    {
+      "name": "ThreadProjectUpdated",
+      "wire": "thread/project/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1991
+    },
+    {
+      "name": "EnvironmentConnected",
+      "wire": "thread/environment/connected",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1993
+    },
+    {
+      "name": "EnvironmentDisconnected",
+      "wire": "thread/environment/disconnected",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1995
+    },
+    {
+      "name": "ThreadSettingsUpdated",
+      "wire": "thread/settings/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1997
+    },
+    {
+      "name": "ThreadTokenUsageUpdated",
+      "wire": "thread/tokenUsage/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1998
+    },
+    {
+      "name": "TurnStarted",
+      "wire": "turn/started",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 1999
+    },
+    {
+      "name": "HookStarted",
+      "wire": "hook/started",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2000
+    },
+    {
+      "name": "TurnCompleted",
+      "wire": "turn/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2001
+    },
+    {
+      "name": "HookCompleted",
+      "wire": "hook/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2002
+    },
+    {
+      "name": "TurnDiffUpdated",
+      "wire": "turn/diff/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2003
+    },
+    {
+      "name": "TurnPlanUpdated",
+      "wire": "turn/plan/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2004
+    },
+    {
+      "name": "ItemStarted",
+      "wire": "item/started",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2005
+    },
+    {
+      "name": "ItemGuardianApprovalReviewStarted",
+      "wire": "item/autoApprovalReview/started",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2006
+    },
+    {
+      "name": "ItemGuardianApprovalReviewCompleted",
+      "wire": "item/autoApprovalReview/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2007
+    },
+    {
+      "name": "StrictReviewRequired",
+      "wire": "autoApprovalReview/strictReviewRequired",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2009
+    },
+    {
+      "name": "ItemCompleted",
+      "wire": "item/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2010
+    },
+    {
+      "name": "RawResponseItemCompleted",
+      "wire": "rawResponseItem/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2012
+    },
+    {
+      "name": "RawResponseCompleted",
+      "wire": "rawResponse/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2014
+    },
+    {
+      "name": "AgentMessageDelta",
+      "wire": "item/agentMessage/delta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2015
+    },
+    {
+      "name": "PlanDelta",
+      "wire": "item/plan/delta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2017
+    },
+    {
+      "name": "CommandExecOutputDelta",
+      "wire": "command/exec/outputDelta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2019
+    },
+    {
+      "name": "ProcessOutputDelta",
+      "wire": "process/outputDelta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2022
+    },
+    {
+      "name": "ProcessExited",
+      "wire": "process/exited",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2025
+    },
+    {
+      "name": "CommandExecutionOutputDelta",
+      "wire": "item/commandExecution/outputDelta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2026
+    },
+    {
+      "name": "TerminalInteraction",
+      "wire": "item/commandExecution/terminalInteraction",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2027
+    },
+    {
+      "name": "FileChangeOutputDelta",
+      "wire": "item/fileChange/outputDelta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2029
+    },
+    {
+      "name": "FileChangePatchUpdated",
+      "wire": "item/fileChange/patchUpdated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2030
+    },
+    {
+      "name": "ServerRequestResolved",
+      "wire": "serverRequest/resolved",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2031
+    },
+    {
+      "name": "McpToolCallProgress",
+      "wire": "item/mcpToolCall/progress",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2032
+    },
+    {
+      "name": "McpServerOauthLoginCompleted",
+      "wire": "mcpServer/oauthLogin/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2033
+    },
+    {
+      "name": "McpServerStatusUpdated",
+      "wire": "mcpServer/startupStatus/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2034
+    },
+    {
+      "name": "McpServerEventStream",
+      "wire": "mcpServer/event/stream/notification",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2036
+    },
+    {
+      "name": "AccountUpdated",
+      "wire": "account/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2037
+    },
+    {
+      "name": "GatewayOAuthChanged",
+      "wire": "account/gatewayOAuth/changed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2038
+    },
+    {
+      "name": "AccountRateLimitsUpdated",
+      "wire": "account/rateLimits/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2039
+    },
+    {
+      "name": "AppListUpdated",
+      "wire": "app/list/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2040
+    },
+    {
+      "name": "RemoteControlStatusChanged",
+      "wire": "remoteControl/status/changed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2041
+    },
+    {
+      "name": "ExternalAgentConfigImportProgress",
+      "wire": "externalAgentConfig/import/progress",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2042
+    },
+    {
+      "name": "ExternalAgentConfigImportCompleted",
+      "wire": "externalAgentConfig/import/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2043
+    },
+    {
+      "name": "FsChanged",
+      "wire": "fs/changed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2044
+    },
+    {
+      "name": "ReasoningSummaryTextDelta",
+      "wire": "item/reasoning/summaryTextDelta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2045
+    },
+    {
+      "name": "ReasoningSummaryPartAdded",
+      "wire": "item/reasoning/summaryPartAdded",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2046
+    },
+    {
+      "name": "ReasoningTextDelta",
+      "wire": "item/reasoning/textDelta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2047
+    },
+    {
+      "name": "ContextCompacted",
+      "wire": "thread/compacted",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2049
+    },
+    {
+      "name": "ModelRerouted",
+      "wire": "model/rerouted",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2050
+    },
+    {
+      "name": "ModelVerification",
+      "wire": "model/verification",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2051
+    },
+    {
+      "name": "AuthRecoveryStarted",
+      "wire": "modelProvider/authRecoveryStarted",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2052
+    },
+    {
+      "name": "AuthRecoveryCompleted",
+      "wire": "modelProvider/authRecoveryCompleted",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2053
+    },
+    {
+      "name": "TurnModerationMetadata",
+      "wire": "turn/moderationMetadata",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2055
+    },
+    {
+      "name": "ModelSafetyBufferingUpdated",
+      "wire": "model/safetyBuffering/updated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2056
+    },
+    {
+      "name": "Warning",
+      "wire": "warning",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2057
+    },
+    {
+      "name": "GuardianWarning",
+      "wire": "guardianWarning",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2058
+    },
+    {
+      "name": "DeprecationNotice",
+      "wire": "deprecationNotice",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2059
+    },
+    {
+      "name": "ConfigWarning",
+      "wire": "configWarning",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2060
+    },
+    {
+      "name": "FuzzyFileSearchSessionUpdated",
+      "wire": "fuzzyFileSearch/sessionUpdated",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2061
+    },
+    {
+      "name": "FuzzyFileSearchSessionCompleted",
+      "wire": "fuzzyFileSearch/sessionCompleted",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2062
+    },
+    {
+      "name": "ThreadRealtimeStarted",
+      "wire": "thread/realtime/started",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2064
+    },
+    {
+      "name": "ThreadRealtimeItemAdded",
+      "wire": "thread/realtime/itemAdded",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2066
+    },
+    {
+      "name": "ThreadRealtimeItemStarted",
+      "wire": "thread/realtime/item/started",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2068
+    },
+    {
+      "name": "ThreadRealtimeItemTranscriptDelta",
+      "wire": "thread/realtime/item/transcript/delta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2070
+    },
+    {
+      "name": "ThreadRealtimeItemCompleted",
+      "wire": "thread/realtime/item/completed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2072
+    },
+    {
+      "name": "ThreadRealtimeTranscriptDelta",
+      "wire": "thread/realtime/transcript/delta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2074
+    },
+    {
+      "name": "ThreadRealtimeTranscriptDone",
+      "wire": "thread/realtime/transcript/done",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2076
+    },
+    {
+      "name": "ThreadRealtimeOutputAudioDelta",
+      "wire": "thread/realtime/outputAudio/delta",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2078
+    },
+    {
+      "name": "ThreadRealtimeSdp",
+      "wire": "thread/realtime/sdp",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2080
+    },
+    {
+      "name": "ThreadRealtimeError",
+      "wire": "thread/realtime/error",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2082
+    },
+    {
+      "name": "ThreadRealtimeClosed",
+      "wire": "thread/realtime/closed",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2084
+    },
+    {
+      "name": "WindowsWorldWritableWarning",
+      "wire": "windows/worldWritableWarning",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2087
+    },
+    {
+      "name": "WindowsSandboxSetupCompleted",
+      "wire": "windowsSandbox/setupCompleted",
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2088
+    },
+    {
+      "name": "AccountLoginCompleted",
+      "wire": null,
+      "source": "app-server-protocol/src/protocol/common.rs",
+      "line": 2093
+    }
+  ],
+  "featureFlags": [
+    {
+      "name": "AnalyticsPlanHistory",
+      "key": "analytics_plan_history",
+      "source": "features/src/lib.rs",
+      "line": 1044
+    },
+    {
+      "name": "DaemonAutoStart",
+      "key": "daemon_auto_start",
+      "source": "features/src/lib.rs",
+      "line": 1054
+    },
+    {
+      "name": "AppServerWebSocketCompression",
+      "key": "app_server_websocket_compression",
+      "source": "features/src/lib.rs",
+      "line": 1060
+    },
+    {
+      "name": "TranscriptV2",
+      "key": "transcript_v2",
+      "source": "features/src/lib.rs",
+      "line": 1066
+    },
+    {
+      "name": "GhostCommit",
+      "key": "undo",
+      "source": "features/src/lib.rs",
+      "line": 1073
+    },
+    {
+      "name": "ShellTool",
+      "key": "shell_tool",
+      "source": "features/src/lib.rs",
+      "line": 1079
+    },
+    {
+      "name": "ViewImage",
+      "key": "view_image",
+      "source": "features/src/lib.rs",
+      "line": 1085
+    },
+    {
+      "name": "MultiEnvCopyFile",
+      "key": "multi_env_copy_file",
+      "source": "features/src/lib.rs",
+      "line": 1091
+    },
+    {
+      "name": "SleepTool",
+      "key": "sleep_tool",
+      "source": "features/src/lib.rs",
+      "line": 1097
+    },
+    {
+      "name": "SecretAuthStorage",
+      "key": "secret_auth_storage",
+      "source": "features/src/lib.rs",
+      "line": 1103
+    },
+    {
+      "name": "UnifiedExec",
+      "key": "unified_exec",
+      "source": "features/src/lib.rs",
+      "line": 1109
+    },
+    {
+      "name": "UnifiedExecTty",
+      "key": "unified_exec_tty",
+      "source": "features/src/lib.rs",
+      "line": 1115
+    },
+    {
+      "name": "ShellZshFork",
+      "key": "shell_zsh_fork",
+      "source": "features/src/lib.rs",
+      "line": 1121
+    },
+    {
+      "name": "UnifiedExecZshFork",
+      "key": "unified_exec_zsh_fork",
+      "source": "features/src/lib.rs",
+      "line": 1127
+    },
+    {
+      "name": "ShellSnapshot",
+      "key": "shell_snapshot",
+      "source": "features/src/lib.rs",
+      "line": 1133
+    },
+    {
+      "name": "LoginShellPackagePath",
+      "key": "login_shell_package_path",
+      "source": "features/src/lib.rs",
+      "line": 1139
+    },
+    {
+      "name": "PowerShellShellVersion",
+      "key": "powershell_shell_version",
+      "source": "features/src/lib.rs",
+      "line": 1149
+    },
+    {
+      "name": "ShellSnapshotV2",
+      "key": "shell_snapshot_v2",
+      "source": "features/src/lib.rs",
+      "line": 1155
+    },
+    {
+      "name": "DeferredExecutor",
+      "key": "deferred_executor",
+      "source": "features/src/lib.rs",
+      "line": 1161
+    },
+    {
+      "name": "CwdRelativeTurnDiffs",
+      "key": "cwd_relative_turn_diffs",
+      "source": "features/src/lib.rs",
+      "line": 1167
+    },
+    {
+      "name": "JsRepl",
+      "key": "js_repl",
+      "source": "features/src/lib.rs",
+      "line": 1173
+    },
+    {
+      "name": "ContentItemKinds",
+      "key": "content_item_kinds",
+      "source": "features/src/lib.rs",
+      "line": 1179
+    },
+    {
+      "name": "ExecutedToolCallMetadata",
+      "key": "executed_tool_call_metadata",
+      "source": "features/src/lib.rs",
+      "line": 1185
+    },
+    {
+      "name": "StableEnvironmentTools",
+      "key": "stable_environment_tools",
+      "source": "features/src/lib.rs",
+      "line": 1191
+    },
+    {
+      "name": "CodeMode",
+      "key": "code_mode",
+      "source": "features/src/lib.rs",
+      "line": 1197
+    },
+    {
+      "name": "CodeModeToolSearch",
+      "key": "code_mode_tool_search",
+      "source": "features/src/lib.rs",
+      "line": 1203
+    },
+    {
+      "name": "CodeModeBufferedExec",
+      "key": "code_mode_buffered_exec",
+      "source": "features/src/lib.rs",
+      "line": 1209
+    },
+    {
+      "name": "CodeModeHost",
+      "key": "code_mode_host",
+      "source": "features/src/lib.rs",
+      "line": 1215
+    },
+    {
+      "name": "CodeModeHostGrpc",
+      "key": "code_mode_host_grpc",
+      "source": "features/src/lib.rs",
+      "line": 1221
+    },
+    {
+      "name": "CodeModePrewarm",
+      "key": "code_mode_prewarm",
+      "source": "features/src/lib.rs",
+      "line": 1227
+    },
+    {
+      "name": "CodeModeInterrupt",
+      "key": "code_mode_interrupt",
+      "source": "features/src/lib.rs",
+      "line": 1233
+    },
+    {
+      "name": "CodeModeToolDescriptionFirst",
+      "key": "code_mode_tool_description_first",
+      "source": "features/src/lib.rs",
+      "line": 1239
+    },
+    {
+      "name": "InstantInterrupt",
+      "key": "instant_interrupt",
+      "source": "features/src/lib.rs",
+      "line": 1245
+    },
+    {
+      "name": "CodeModeOnly",
+      "key": "code_mode_only",
+      "source": "features/src/lib.rs",
+      "line": 1251
+    },
+    {
+      "name": "CodeModeOnlyStrictThirdPartyTools",
+      "key": "code_mode_only_strict_3p_tools",
+      "source": "features/src/lib.rs",
+      "line": 1257
+    },
+    {
+      "name": "JsReplToolsOnly",
+      "key": "js_repl_tools_only",
+      "source": "features/src/lib.rs",
+      "line": 1263
+    },
+    {
+      "name": "TerminalResizeReflow",
+      "key": "terminal_resize_reflow",
+      "source": "features/src/lib.rs",
+      "line": 1269
+    },
+    {
+      "name": "WebSearchRequest",
+      "key": "web_search_request",
+      "source": "features/src/lib.rs",
+      "line": 1275
+    },
+    {
+      "name": "WebSearchCached",
+      "key": "web_search_cached",
+      "source": "features/src/lib.rs",
+      "line": 1281
+    },
+    {
+      "name": "StandaloneWebSearch",
+      "key": "standalone_web_search",
+      "source": "features/src/lib.rs",
+      "line": 1287
+    },
+    {
+      "name": "SearchTool",
+      "key": "search_tool",
+      "source": "features/src/lib.rs",
+      "line": 1293
+    },
+    {
+      "name": "CodexGitCommit",
+      "key": "codex_git_commit",
+      "source": "features/src/lib.rs",
+      "line": 1299
+    },
+    {
+      "name": "RuntimeMetrics",
+      "key": "runtime_metrics",
+      "source": "features/src/lib.rs",
+      "line": 1305
+    },
+    {
+      "name": "Sqlite",
+      "key": "sqlite",
+      "source": "features/src/lib.rs",
+      "line": 1311
+    },
+    {
+      "name": "MemoryTool",
+      "key": "memories",
+      "source": "features/src/lib.rs",
+      "line": 1317
+    },
+    {
+      "name": "ExternalAgentMemoryImport",
+      "key": "external_agent_memory_import",
+      "source": "features/src/lib.rs",
+      "line": 1323
+    },
+    {
+      "name": "LocalThreadStoreCompression",
+      "key": "local_thread_store_compression",
+      "source": "features/src/lib.rs",
+      "line": 1329
+    },
+    {
+      "name": "LocalThreadStoreSharedCompression",
+      "key": "local_thread_store_shared_compression",
+      "source": "features/src/lib.rs",
+      "line": 1335
+    },
+    {
+      "name": "BackgroundPaginatedRolloutMigration",
+      "key": "background_paginated_rollout_migration",
+      "source": "features/src/lib.rs",
+      "line": 1341
+    },
+    {
+      "name": "Chronicle",
+      "key": "chronicle",
+      "source": "features/src/lib.rs",
+      "line": 1347
+    },
+    {
+      "name": "ApplyPatchFreeform",
+      "key": "apply_patch_freeform",
+      "source": "features/src/lib.rs",
+      "line": 1353
+    },
+    {
+      "name": "ApplyPatchStreamingEvents",
+      "key": "apply_patch_streaming_events",
+      "source": "features/src/lib.rs",
+      "line": 1359
+    },
+    {
+      "name": "ApplyPatchPreserveLineEndings",
+      "key": "apply_patch_preserve_line_endings",
+      "source": "features/src/lib.rs",
+      "line": 1365
+    },
+    {
+      "name": "ExecPermissionApprovals",
+      "key": "exec_permission_approvals",
+      "source": "features/src/lib.rs",
+      "line": 1371
+    },
+    {
+      "name": "WriteStdinApproval",
+      "key": "write_stdin_approval",
+      "source": "features/src/lib.rs",
+      "line": 1377
+    },
+    {
+      "name": "CodexHooks",
+      "key": "hooks",
+      "source": "features/src/lib.rs",
+      "line": 1383
+    },
+    {
+      "name": "RequestPermissionsTool",
+      "key": "request_permissions_tool",
+      "source": "features/src/lib.rs",
+      "line": 1389
+    },
+    {
+      "name": "UseLinuxSandboxBwrap",
+      "key": "use_linux_sandbox_bwrap",
+      "source": "features/src/lib.rs",
+      "line": 1395
+    },
+    {
+      "name": "UseLegacyLandlock",
+      "key": "use_legacy_landlock",
+      "source": "features/src/lib.rs",
+      "line": 1401
+    },
+    {
+      "name": "RequestRule",
+      "key": "request_rule",
+      "source": "features/src/lib.rs",
+      "line": 1407
+    },
+    {
+      "name": "WindowsSandbox",
+      "key": "experimental_windows_sandbox",
+      "source": "features/src/lib.rs",
+      "line": 1413
+    },
+    {
+      "name": "WindowsSandboxElevated",
+      "key": "elevated_windows_sandbox",
+      "source": "features/src/lib.rs",
+      "line": 1419
+    },
+    {
+      "name": "WindowsSandboxService",
+      "key": "windows_sandbox_service",
+      "source": "features/src/lib.rs",
+      "line": 1425
+    },
+    {
+      "name": "PreferMxc",
+      "key": "prefer_mxc",
+      "source": "features/src/lib.rs",
+      "line": 1431
+    },
+    {
+      "name": "RemoteModels",
+      "key": "remote_models",
+      "source": "features/src/lib.rs",
+      "line": 1437
+    },
+    {
+      "name": "ApiKeyModelDiscovery",
+      "key": "api_key_model_discovery",
+      "source": "features/src/lib.rs",
+      "line": 1443
+    },
+    {
+      "name": "CliDaybreak",
+      "key": "cli_daybreak",
+      "source": "features/src/lib.rs",
+      "line": 1449
+    },
+    {
+      "name": "ApiKeyCyberAccessPrograms",
+      "key": "api_key_cyber_access_programs",
+      "source": "features/src/lib.rs",
+      "line": 1455
+    },
+    {
+      "name": "EnableRequestCompression",
+      "key": "enable_request_compression",
+      "source": "features/src/lib.rs",
+      "line": 1461
+    },
+    {
+      "name": "UnboundedConnectionRetries",
+      "key": "unbounded_connection_retries",
+      "source": "features/src/lib.rs",
+      "line": 1467
+    },
+    {
+      "name": "NetworkProxy",
+      "key": "network_proxy",
+      "source": "features/src/lib.rs",
+      "line": 1473
+    },
+    {
+      "name": "CredentialMasking",
+      "key": "credential_masking",
+      "source": "features/src/lib.rs",
+      "line": 1483
+    },
+    {
+      "name": "Worktrees",
+      "key": "worktrees",
+      "source": "features/src/lib.rs",
+      "line": 1489
+    },
+    {
+      "name": "RespectSystemProxy",
+      "key": "respect_system_proxy",
+      "source": "features/src/lib.rs",
+      "line": 1495
+    },
+    {
+      "name": "SystemProxyFallback",
+      "key": "system_proxy_fallback",
+      "source": "features/src/lib.rs",
+      "line": 1501
+    },
+    {
+      "name": "Collab",
+      "key": "multi_agent",
+      "source": "features/src/lib.rs",
+      "line": 1507
+    },
+    {
+      "name": "MultiAgentV2",
+      "key": "multi_agent_v2",
+      "source": "features/src/lib.rs",
+      "line": 1513
+    },
+    {
+      "name": "ModelCatalogInContext",
+      "key": "model_catalog_in_context",
+      "source": "features/src/lib.rs",
+      "line": 1519
+    },
+    {
+      "name": "MultiAgentV2DynamicTools",
+      "key": "multi_agent_v2_dynamic_tools",
+      "source": "features/src/lib.rs",
+      "line": 1525
+    },
+    {
+      "name": "SubagentThreadEnvironments",
+      "key": "subagent_thread_environments",
+      "source": "features/src/lib.rs",
+      "line": 1531
+    },
+    {
+      "name": "SubagentDefaultContextLimits",
+      "key": "subagent_default_context_limits",
+      "source": "features/src/lib.rs",
+      "line": 1537
+    },
+    {
+      "name": "DeferMailboxPreemption",
+      "key": "defer_mailbox_preemption",
+      "source": "features/src/lib.rs",
+      "line": 1543
+    },
+    {
+      "name": "WakeOnAgentMessages",
+      "key": "wake_on_agent_messages",
+      "source": "features/src/lib.rs",
+      "line": 1549
+    },
+    {
+      "name": "AgentMessageBoard",
+      "key": "agent_message_board",
+      "source": "features/src/lib.rs",
+      "line": 1555
+    },
+    {
+      "name": "MultiAgentMode",
+      "key": "multi_agent_mode",
+      "source": "features/src/lib.rs",
+      "line": 1561
+    },
+    {
+      "name": "SpawnCsv",
+      "key": "enable_fanout",
+      "source": "features/src/lib.rs",
+      "line": 1567
+    },
+    {
+      "name": "Apps",
+      "key": "apps",
+      "source": "features/src/lib.rs",
+      "line": 1573
+    },
+    {
+      "name": "Psp",
+      "key": "psp",
+      "source": "features/src/lib.rs",
+      "line": 1579
+    },
+    {
+      "name": "EnableMcpApps",
+      "key": "enable_mcp_apps",
+      "source": "features/src/lib.rs",
+      "line": 1585
+    },
+    {
+      "name": "Mcp20260728",
+      "key": "mcp_2026_07_28",
+      "source": "features/src/lib.rs",
+      "line": 1591
+    },
+    {
+      "name": "McpToolListChanged",
+      "key": "mcp_tool_list_changed",
+      "source": "features/src/lib.rs",
+      "line": 1597
+    },
+    {
+      "name": "CodexAppsMcp20260728",
+      "key": "codex_apps_mcp_2026_07_28",
+      "source": "features/src/lib.rs",
+      "line": 1603
+    },
+    {
+      "name": "McpOAuthRefreshCoordination",
+      "key": "mcp_oauth_refresh_coordination",
+      "source": "features/src/lib.rs",
+      "line": 1609
+    },
+    {
+      "name": "UseXaa",
+      "key": "use_xaa",
+      "source": "features/src/lib.rs",
+      "line": 1615
+    },
+    {
+      "name": "AppsMcpPathOverride",
+      "key": "apps_mcp_path_override",
+      "source": "features/src/lib.rs",
+      "line": 1621
+    },
+    {
+      "name": "ToolSearch",
+      "key": "tool_search",
+      "source": "features/src/lib.rs",
+      "line": 1627
+    },
+    {
+      "name": "ToolSearchAlwaysDeferMcpTools",
+      "key": "tool_search_always_defer_mcp_tools",
+      "source": "features/src/lib.rs",
+      "line": 1633
+    },
+    {
+      "name": "DeferredToolWorldState",
+      "key": "deferred_tool_world_state",
+      "source": "features/src/lib.rs",
+      "line": 1639
+    },
+    {
+      "name": "IncrementalTools",
+      "key": "incremental_tools",
+      "source": "features/src/lib.rs",
+      "line": 1645
+    },
+    {
+      "name": "NonPrefixedMcpToolNames",
+      "key": "non_prefixed_mcp_tool_names",
+      "source": "features/src/lib.rs",
+      "line": 1651
+    },
+    {
+      "name": "UnavailableDummyTools",
+      "key": "unavailable_dummy_tools",
+      "source": "features/src/lib.rs",
+      "line": 1657
+    },
+    {
+      "name": "ToolSuggest",
+      "key": "tool_suggest",
+      "source": "features/src/lib.rs",
+      "line": 1663
+    },
+    {
+      "name": "RecommendedPlugins",
+      "key": "recommended_plugins",
+      "source": "features/src/lib.rs",
+      "line": 1669
+    },
+    {
+      "name": "Plugins",
+      "key": "plugins",
+      "source": "features/src/lib.rs",
+      "line": 1675
+    },
+    {
+      "name": "ExecutorCapabilityDiscovery",
+      "key": "executor_capability_discovery",
+      "source": "features/src/lib.rs",
+      "line": 1681
+    },
+    {
+      "name": "ExecutorCapabilityDiscoveryV2",
+      "key": "executor_capability_discovery_v2",
+      "source": "features/src/lib.rs",
+      "line": 1687
+    },
+    {
+      "name": "SkipHostSkillDiscovery",
+      "key": "skip_host_skill_discovery",
+      "source": "features/src/lib.rs",
+      "line": 1693
+    },
+    {
+      "name": "PluginHooks",
+      "key": "plugin_hooks",
+      "source": "features/src/lib.rs",
+      "line": 1699
+    },
+    {
+      "name": "InAppBrowser",
+      "key": "in_app_browser",
+      "source": "features/src/lib.rs",
+      "line": 1705
+    },
+    {
+      "name": "BrowserAnnotationApi",
+      "key": "browser_annotation_api",
+      "source": "features/src/lib.rs",
+      "line": 1711
+    },
+    {
+      "name": "InAppChat",
+      "key": "in_app_chat",
+      "source": "features/src/lib.rs",
+      "line": 1717
+    },
+    {
+      "name": "InAppDictation",
+      "key": "in_app_dictation",
+      "source": "features/src/lib.rs",
+      "line": 1723
+    },
+    {
+      "name": "InAppVoice",
+      "key": "in_app_voice",
+      "source": "features/src/lib.rs",
+      "line": 1729
+    },
+    {
+      "name": "InAppLocalAutomation",
+      "key": "in_app_local_automation",
+      "source": "features/src/lib.rs",
+      "line": 1735
+    },
+    {
+      "name": "InAppUpdates",
+      "key": "in_app_updates",
+      "source": "features/src/lib.rs",
+      "line": 1741
+    },
+    {
+      "name": "BrowserUse",
+      "key": "browser_use",
+      "source": "features/src/lib.rs",
+      "line": 1747
+    },
+    {
+      "name": "BrowserUseFullCdpAccess",
+      "key": "browser_use_full_cdp_access",
+      "source": "features/src/lib.rs",
+      "line": 1753
+    },
+    {
+      "name": "BrowserUseExternal",
+      "key": "browser_use_external",
+      "source": "features/src/lib.rs",
+      "line": 1759
+    },
+    {
+      "name": "ComputerUse",
+      "key": "computer_use",
+      "source": "features/src/lib.rs",
+      "line": 1765
+    },
+    {
+      "name": "RemotePlugin",
+      "key": "remote_plugin",
+      "source": "features/src/lib.rs",
+      "line": 1771
+    },
+    {
+      "name": "PluginSharing",
+      "key": "plugin_sharing",
+      "source": "features/src/lib.rs",
+      "line": 1777
+    },
+    {
+      "name": "ExternalMigration",
+      "key": "external_migration",
+      "source": "features/src/lib.rs",
+      "line": 1783
+    },
+    {
+      "name": "ImageGeneration",
+      "key": "image_generation",
+      "source": "features/src/lib.rs",
+      "line": 1789
+    },
+    {
+      "name": "OmitAppServerNotificationMedia",
+      "key": "omit_app_server_notification_media",
+      "source": "features/src/lib.rs",
+      "line": 1795
+    },
+    {
+      "name": "ImageResizeNotice",
+      "key": "image_resize_notice",
+      "source": "features/src/lib.rs",
+      "line": 1801
+    },
+    {
+      "name": "UnifiedImageBudget",
+      "key": "unified_image_budget",
+      "source": "features/src/lib.rs",
+      "line": 1807
+    },
+    {
+      "name": "ResizeAllImages",
+      "key": "resize_all_images",
+      "source": "features/src/lib.rs",
+      "line": 1813
+    },
+    {
+      "name": "ItemIds",
+      "key": "item_ids",
+      "source": "features/src/lib.rs",
+      "line": 1819
+    },
+    {
+      "name": "ConcurrentReasoningSummaries",
+      "key": "concurrent_reasoning_summaries",
+      "source": "features/src/lib.rs",
+      "line": 1825
+    },
+    {
+      "name": "OutputTokenReplay",
+      "key": "output_token_replay",
+      "source": "features/src/lib.rs",
+      "line": 1831
+    },
+    {
+      "name": "SkillMcpDependencyInstall",
+      "key": "skill_mcp_dependency_install",
+      "source": "features/src/lib.rs",
+      "line": 1837
+    },
+    {
+      "name": "SkillSearch",
+      "key": "skill_search",
+      "source": "features/src/lib.rs",
+      "line": 1843
+    },
+    {
+      "name": "SkillEnvVarDependencyPrompt",
+      "key": "skill_env_var_dependency_prompt",
+      "source": "features/src/lib.rs",
+      "line": 1849
+    },
+    {
+      "name": "MentionsV2",
+      "key": "mentions_v2",
+      "source": "features/src/lib.rs",
+      "line": 1855
+    },
+    {
+      "name": "Steer",
+      "key": "steer",
+      "source": "features/src/lib.rs",
+      "line": 1861
+    },
+    {
+      "name": "DefaultModeRequestUserInput",
+      "key": "default_mode_request_user_input",
+      "source": "features/src/lib.rs",
+      "line": 1867
+    },
+    {
+      "name": "SendAsyncMessage",
+      "key": "send_async_message",
+      "source": "features/src/lib.rs",
+      "line": 1873
+    },
+    {
+      "name": "SendMessageToUserAsync",
+      "key": "send_message_to_user_async",
+      "source": "features/src/lib.rs",
+      "line": 1879
+    },
+    {
+      "name": "TerminalVisualizationInstructions",
+      "key": "terminal_visualization_instructions",
+      "source": "features/src/lib.rs",
+      "line": 1885
+    },
+    {
+      "name": "GuardianApproval",
+      "key": "guardian_approval",
+      "source": "features/src/lib.rs",
+      "line": 1891
+    },
+    {
+      "name": "GuardianThreadContext",
+      "key": "guardianv2.thread_context",
+      "source": "features/src/lib.rs",
+      "line": 1897
+    },
+    {
+      "name": "GuardianReuseParentCompaction",
+      "key": "guardian_reuse_parent_compaction",
+      "source": "features/src/lib.rs",
+      "line": 1903
+    },
+    {
+      "name": "GuardianRootHandoffContext",
+      "key": "guardian_root_handoff_context",
+      "source": "features/src/lib.rs",
+      "line": 1909
+    },
+    {
+      "name": "GuardianEnhancedNodeReplTranscripts",
+      "key": "guardian_enhanced_node_repl_transcripts",
+      "source": "features/src/lib.rs",
+      "line": 1915
+    },
+    {
+      "name": "GuardianNodeReplTranscriptImages",
+      "key": "guardian_node_repl_transcript_images",
+      "source": "features/src/lib.rs",
+      "line": 1921
+    },
+    {
+      "name": "GuardianTrustOrchestratorConnectors",
+      "key": "guardian_trust_orchestrator_connectors",
+      "source": "features/src/lib.rs",
+      "line": 1927
+    },
+    {
+      "name": "GuardianConversationHistoryTools",
+      "key": "guardian_conversation_history_tools",
+      "source": "features/src/lib.rs",
+      "line": 1933
+    },
+    {
+      "name": "GuardianV2",
+      "key": "guardianv2",
+      "source": "features/src/lib.rs",
+      "line": 1939
+    },
+    {
+      "name": "GuardianV2DecisionsComparison",
+      "key": "guardianv2_decisions_comparison",
+      "source": "features/src/lib.rs",
+      "line": 1945
+    },
+    {
+      "name": "GuardianExt",
+      "key": "guardian_ext",
+      "source": "features/src/lib.rs",
+      "line": 1951
+    },
+    {
+      "name": "Goals",
+      "key": "goals",
+      "source": "features/src/lib.rs",
+      "line": 1957
+    },
+    {
+      "name": "TokenBudget",
+      "key": "token_budget",
+      "source": "features/src/lib.rs",
+      "line": 1963
+    },
+    {
+      "name": "ContextManagement",
+      "key": "context_management",
+      "source": "features/src/lib.rs",
+      "line": 1969
+    },
+    {
+      "name": "RolloutBudget",
+      "key": "rollout_budget",
+      "source": "features/src/lib.rs",
+      "line": 1975
+    },
+    {
+      "name": "ReasoningEffortOverride",
+      "key": "reasoning_effort_override",
+      "source": "features/src/lib.rs",
+      "line": 1981
+    },
+    {
+      "name": "CurrentTimeReminder",
+      "key": "current_time_reminder",
+      "source": "features/src/lib.rs",
+      "line": 1987
+    },
+    {
+      "name": "NonfatalClockReadErrors",
+      "key": "nonfatal_clock_read_errors",
+      "source": "features/src/lib.rs",
+      "line": 1993
+    },
+    {
+      "name": "CollaborationModes",
+      "key": "collaboration_modes",
+      "source": "features/src/lib.rs",
+      "line": 1999
+    },
+    {
+      "name": "ToolCallMcpElicitation",
+      "key": "tool_call_mcp_elicitation",
+      "source": "features/src/lib.rs",
+      "line": 2005
+    },
+    {
+      "name": "AuthElicitation",
+      "key": "auth_elicitation",
+      "source": "features/src/lib.rs",
+      "line": 2011
+    },
+    {
+      "name": "BedrockSetupWizard",
+      "key": "bedrock_setup_wizard",
+      "source": "features/src/lib.rs",
+      "line": 2017
+    },
+    {
+      "name": "Personality",
+      "key": "personality",
+      "source": "features/src/lib.rs",
+      "line": 2023
+    },
+    {
+      "name": "Artifact",
+      "key": "artifact",
+      "source": "features/src/lib.rs",
+      "line": 2029
+    },
+    {
+      "name": "FastMode",
+      "key": "fast_mode",
+      "source": "features/src/lib.rs",
+      "line": 2035
+    },
+    {
+      "name": "UltrafastMode",
+      "key": "ultrafast_mode",
+      "source": "features/src/lib.rs",
+      "line": 2041
+    },
+    {
+      "name": "StepModelSwitching",
+      "key": "step_model_switching",
+      "source": "features/src/lib.rs",
+      "line": 2047
+    },
+    {
+      "name": "RealtimeConversation",
+      "key": "realtime_conversation",
+      "source": "features/src/lib.rs",
+      "line": 2053
+    },
+    {
+      "name": "RemoteControl",
+      "key": "remote_control",
+      "source": "features/src/lib.rs",
+      "line": 2059
+    },
+    {
+      "name": "ImageDetailOriginal",
+      "key": "image_detail_original",
+      "source": "features/src/lib.rs",
+      "line": 2065
+    },
+    {
+      "name": "TuiAppServer",
+      "key": "tui_app_server",
+      "source": "features/src/lib.rs",
+      "line": 2071
+    },
+    {
+      "name": "PreventIdleSleep",
+      "key": "prevent_idle_sleep",
+      "source": "features/src/lib.rs",
+      "line": 2077
+    },
+    {
+      "name": "WorkspaceOwnerUsageNudge",
+      "key": "workspace_owner_usage_nudge",
+      "source": "features/src/lib.rs",
+      "line": 2095
+    },
+    {
+      "name": "ResponsesWebsockets",
+      "key": "responses_websockets",
+      "source": "features/src/lib.rs",
+      "line": 2101
+    },
+    {
+      "name": "ResponsesWebsocketsV2",
+      "key": "responses_websockets_v2",
+      "source": "features/src/lib.rs",
+      "line": 2107
+    },
+    {
+      "name": "RemoteCompactionV2",
+      "key": "remote_compaction_v2",
+      "source": "features/src/lib.rs",
+      "line": 2113
+    },
+    {
+      "name": "AsyncCompaction",
+      "key": "async_compaction",
+      "source": "features/src/lib.rs",
+      "line": 2119
+    },
+    {
+      "name": "CompactionImageBudget",
+      "key": "compaction_image_budget",
+      "source": "features/src/lib.rs",
+      "line": 2125
+    },
+    {
+      "name": "RetainClientDeveloperMessages",
+      "key": "retain_client_developer_messages",
+      "source": "features/src/lib.rs",
+      "line": 2131
+    },
+    {
+      "name": "RetainClientToolOutputs",
+      "key": "retain_client_tool_outputs",
+      "source": "features/src/lib.rs",
+      "line": 2137
+    },
+    {
+      "name": "UseAgentIdentity",
+      "key": "use_agent_identity",
+      "source": "features/src/lib.rs",
+      "line": 2143
+    },
+    {
+      "name": "RuntimeAgentInstances",
+      "key": "runtime_agent_instances",
+      "source": "features/src/lib.rs",
+      "line": 2149
+    },
+    {
+      "name": "WorkspaceDependencies",
+      "key": "workspace_dependencies",
+      "source": "features/src/lib.rs",
+      "line": 2155
+    }
+  ],
+  "registryLimits": {
+    "serverRequests": "Includes two deprecated v1 requests; nine v2 requests. Wire variants are coverage inputs, not all visible TUI surfaces.",
+    "serverNotifications": "Includes legacy notification; do not turn counts into support claims.",
+    "featureFlags": "Includes removed and internal gates; classify explicitly rather than claiming each is a user-facing feature."
+  },
+  "sourceHashes": {
+    "tui/src/slash_command.rs": "38f7b149fa54d62bbe6f99fad6bd6faed1c697663e75abe65379c27f4ff6bff2",
+    "tui/src/keymap/bindings.rs": "492f9ff4d19b1a9a433e353ed2edbc07772515e3124b4b82dbb8f0145b1e2b3c",
+    "tui/src/bottom_pane/slash_commands.rs": "9a13d56881065eb026c3425a93ff22f8c73d7d8cb228403ec63ea51bd55ceff2",
+    "tui/src/bottom_pane/command_popup.rs": "807d0301c7ffa244612db6500352e2bab162bcfd9851b6484ac0f2ab5cc9d49a",
+    "app-server-protocol/src/protocol/v2/item.rs": "7a1bcd40f31a301897c300e9245c7d84447dc07c0e755d0fd095aff394a0264a",
+    "app-server-protocol/src/protocol/common.rs": "bbc1bfee01178986dd4a7b59047ddb85bf4081c60fc36905da8fad61b79b472d",
+    "features/src/lib.rs": "53c99aa1176c0f4f8763cbf960f11eb574f63fb33214f2bcd3bf699ebb361337"
+  },
+  "keymapUiCatalog": [
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "open_agents",
+      "label": "Open Agents",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 114
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "open_transcript",
+      "label": "Open Transcript",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 115
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "find_transcript",
+      "label": "Find Transcript",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 116
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "focus_activity",
+      "label": "Focus Activity",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 119
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "open_external_editor",
+      "label": "Open External Editor",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 120
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "copy",
+      "label": "Copy",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 121
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "clear_terminal",
+      "label": "Clear Terminal",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 122
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "toggle_vim_mode",
+      "label": "Toggle Vim Mode",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 123
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "toggle_fast_mode",
+      "label": "Toggle Fast Mode",
+      "gate": "FastMode",
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 124
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "toggle_raw_output",
+      "label": "Toggle Raw Output",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 125
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "toggle_side_conversation",
+      "label": "Toggle Side Conversation",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 126
+    },
+    {
+      "context": "global",
+      "contextLabel": "Global",
+      "action": "leader",
+      "label": "Leader",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 127
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "interrupt_turn",
+      "label": "Interrupt Turn",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 130
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "decrease_reasoning_effort",
+      "label": "Decrease Reasoning Effort",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 131
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "increase_reasoning_effort",
+      "label": "Increase Reasoning Effort",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 132
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "previous_permission_mode",
+      "label": "Previous Permission Mode",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 133
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "next_permission_mode",
+      "label": "Next Permission Mode",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 134
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "edit_queued_message",
+      "label": "Edit Queued Message",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 135
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "prompt_stack_back",
+      "label": "Prompt Stack Back",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 136
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "skip_question",
+      "label": "Skip Question",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 137
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "toggle_voice",
+      "label": "Toggle Voice",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 138
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "open_presets",
+      "label": "Open Presets",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 139
+    },
+    {
+      "context": "chat",
+      "contextLabel": "Chat",
+      "action": "toggle_voice_mute",
+      "label": "Toggle Voice Mute",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 140
+    },
+    {
+      "context": "composer",
+      "contextLabel": "Composer",
+      "action": "submit",
+      "label": "Submit",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 143
+    },
+    {
+      "context": "composer",
+      "contextLabel": "Composer",
+      "action": "queue",
+      "label": "Queue",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 144
+    },
+    {
+      "context": "composer",
+      "contextLabel": "Composer",
+      "action": "toggle_shortcuts",
+      "label": "Toggle Shortcuts",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 145
+    },
+    {
+      "context": "composer",
+      "contextLabel": "Composer",
+      "action": "history_search_previous",
+      "label": "History Search Previous",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 146
+    },
+    {
+      "context": "composer",
+      "contextLabel": "Composer",
+      "action": "history_search_next",
+      "label": "History Search Next",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 147
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "insert_newline",
+      "label": "Insert Newline",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 150
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "move_left",
+      "label": "Move Left",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 151
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "move_right",
+      "label": "Move Right",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 152
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "move_up",
+      "label": "Move Up",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 153
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "move_down",
+      "label": "Move Down",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 154
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "move_word_left",
+      "label": "Move Word Left",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 155
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "move_word_right",
+      "label": "Move Word Right",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 156
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "move_line_start",
+      "label": "Move Line Start",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 157
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "move_line_end",
+      "label": "Move Line End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 158
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "delete_backward",
+      "label": "Delete Backward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 159
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "delete_forward",
+      "label": "Delete Forward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 160
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "delete_backward_word",
+      "label": "Delete Backward Word",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 161
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "delete_forward_word",
+      "label": "Delete Forward Word",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 162
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "kill_line_start",
+      "label": "Kill Line Start",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 163
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "kill_whole_line",
+      "label": "Kill Whole Line",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 164
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "kill_line_end",
+      "label": "Kill Line End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 165
+    },
+    {
+      "context": "editor",
+      "contextLabel": "Editor",
+      "action": "yank",
+      "label": "Yank",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 166
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "enter_insert",
+      "label": "Enter Insert",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 169
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "append_after_cursor",
+      "label": "Append After Cursor",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 170
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "append_line_end",
+      "label": "Append Line End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 171
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "insert_line_start",
+      "label": "Insert Line Start",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 172
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "open_line_below",
+      "label": "Open Line Below",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 173
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "open_line_above",
+      "label": "Open Line Above",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 174
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "enter_replace_mode",
+      "label": "Enter Replace Mode",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 175
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_left",
+      "label": "Move Left",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 176
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_right",
+      "label": "Move Right",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 177
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_up",
+      "label": "Move Up",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 178
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_down",
+      "label": "Move Down",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 179
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_word_forward",
+      "label": "Move Word Forward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 180
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_word_backward",
+      "label": "Move Word Backward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 181
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_word_end",
+      "label": "Move Word End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 182
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_line_start",
+      "label": "Move Line Start",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 183
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "move_line_end",
+      "label": "Move Line End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 184
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "find_forward",
+      "label": "Find Forward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 185
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "find_backward",
+      "label": "Find Backward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 186
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "till_forward",
+      "label": "Till Forward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 187
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "till_backward",
+      "label": "Till Backward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 188
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "jump_top",
+      "label": "Jump Top",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 189
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "jump_bottom",
+      "label": "Jump Bottom",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 190
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "delete_char",
+      "label": "Delete Char",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 191
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "replace_char",
+      "label": "Replace Char",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 192
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "repeat_last_change",
+      "label": "Repeat Last Change",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 193
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "substitute_char",
+      "label": "Substitute Char",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 194
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "delete_to_line_end",
+      "label": "Delete To Line End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 195
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "change_to_line_end",
+      "label": "Change To Line End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 196
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "yank_line",
+      "label": "Yank Line",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 197
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "paste_after",
+      "label": "Paste After",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 198
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "start_delete_operator",
+      "label": "Start Delete Operator",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 199
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "start_yank_operator",
+      "label": "Start Yank Operator",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 200
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "start_change_operator",
+      "label": "Start Change Operator",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 201
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "undo",
+      "label": "Undo",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 202
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "redo",
+      "label": "Redo",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 203
+    },
+    {
+      "context": "vim_normal",
+      "contextLabel": "Vim normal",
+      "action": "cancel_operator",
+      "label": "Cancel Operator",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 204
+    },
+    {
+      "context": "vim_search",
+      "contextLabel": "Vim search",
+      "action": "forward",
+      "label": "Forward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 207
+    },
+    {
+      "context": "vim_search",
+      "contextLabel": "Vim search",
+      "action": "backward",
+      "label": "Backward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 208
+    },
+    {
+      "context": "vim_search",
+      "contextLabel": "Vim search",
+      "action": "next",
+      "label": "Next",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 209
+    },
+    {
+      "context": "vim_search",
+      "contextLabel": "Vim search",
+      "action": "previous",
+      "label": "Previous",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 210
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "delete_line",
+      "label": "Delete Line",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 213
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "yank_line",
+      "label": "Yank Line",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 214
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_left",
+      "label": "Motion Left",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 215
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_right",
+      "label": "Motion Right",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 216
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_up",
+      "label": "Motion Up",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 217
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_down",
+      "label": "Motion Down",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 218
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_word_forward",
+      "label": "Motion Word Forward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 219
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_word_backward",
+      "label": "Motion Word Backward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 220
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_word_end",
+      "label": "Motion Word End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 221
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_line_start",
+      "label": "Motion Line Start",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 222
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_line_end",
+      "label": "Motion Line End",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 223
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_find_forward",
+      "label": "Motion Find Forward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 224
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_find_backward",
+      "label": "Motion Find Backward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 225
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_till_forward",
+      "label": "Motion Till Forward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 226
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_till_backward",
+      "label": "Motion Till Backward",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 227
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_jump_top",
+      "label": "Motion Jump Top",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 228
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "motion_jump_bottom",
+      "label": "Motion Jump Bottom",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 229
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "select_inner_text_object",
+      "label": "Select Inner Text Object",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 230
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "select_around_text_object",
+      "label": "Select Around Text Object",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 231
+    },
+    {
+      "context": "vim_operator",
+      "contextLabel": "Vim operator",
+      "action": "cancel",
+      "label": "Cancel",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 232
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "word",
+      "label": "Word",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 235
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "big_word",
+      "label": "Big Word",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 236
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "parentheses",
+      "label": "Parentheses",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 237
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "brackets",
+      "label": "Brackets",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 238
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "braces",
+      "label": "Braces",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 239
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "double_quote",
+      "label": "Double Quote",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 240
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "single_quote",
+      "label": "Single Quote",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 241
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "backtick",
+      "label": "Backtick",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 242
+    },
+    {
+      "context": "vim_text_object",
+      "contextLabel": "Vim text object",
+      "action": "cancel",
+      "label": "Cancel",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 243
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "scroll_up",
+      "label": "Scroll Up",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 246
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "scroll_down",
+      "label": "Scroll Down",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 247
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "page_up",
+      "label": "Page Up",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 248
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "page_down",
+      "label": "Page Down",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 249
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "half_page_up",
+      "label": "Half Page Up",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 250
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "half_page_down",
+      "label": "Half Page Down",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 251
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "jump_top",
+      "label": "Jump Top",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 252
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "jump_bottom",
+      "label": "Jump Bottom",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 253
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "close",
+      "label": "Close",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 254
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "close_transcript",
+      "label": "Close Transcript",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 255
+    },
+    {
+      "context": "pager",
+      "contextLabel": "Pager",
+      "action": "find",
+      "label": "Find",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 256
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "move_up",
+      "label": "Move Up",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 259
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "move_down",
+      "label": "Move Down",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 260
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "move_left",
+      "label": "Move Left",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 261
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "move_right",
+      "label": "Move Right",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 262
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "page_up",
+      "label": "Page Up",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 263
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "page_down",
+      "label": "Page Down",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 264
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "jump_top",
+      "label": "Jump Top",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 265
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "jump_bottom",
+      "label": "Jump Bottom",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 266
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "accept",
+      "label": "Accept",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 267
+    },
+    {
+      "context": "list",
+      "contextLabel": "List",
+      "action": "cancel",
+      "label": "Cancel",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 268
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "resume",
+      "label": "Resume",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 271
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "search",
+      "label": "Search",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 272
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "new_task",
+      "label": "New Task",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 273
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "new_worktree",
+      "label": "New Worktree",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 274
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "fork",
+      "label": "Fork",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 275
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "rename",
+      "label": "Rename",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 276
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "stop",
+      "label": "Stop",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 277
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "archive",
+      "label": "Archive",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 278
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "delete",
+      "label": "Delete",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 279
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "hide",
+      "label": "Hide",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 280
+    },
+    {
+      "context": "agents",
+      "contextLabel": "Agents",
+      "action": "toggle_grouping",
+      "label": "Toggle Grouping",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 281
+    },
+    {
+      "context": "approval",
+      "contextLabel": "Approval",
+      "action": "open_fullscreen",
+      "label": "Open Fullscreen",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 284
+    },
+    {
+      "context": "approval",
+      "contextLabel": "Approval",
+      "action": "open_thread",
+      "label": "Open Thread",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 285
+    },
+    {
+      "context": "approval",
+      "contextLabel": "Approval",
+      "action": "approve",
+      "label": "Approve",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 286
+    },
+    {
+      "context": "approval",
+      "contextLabel": "Approval",
+      "action": "approve_for_session",
+      "label": "Approve For Session",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 287
+    },
+    {
+      "context": "approval",
+      "contextLabel": "Approval",
+      "action": "approve_for_prefix",
+      "label": "Approve For Prefix",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 288
+    },
+    {
+      "context": "approval",
+      "contextLabel": "Approval",
+      "action": "deny",
+      "label": "Deny",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 289
+    },
+    {
+      "context": "approval",
+      "contextLabel": "Approval",
+      "action": "decline",
+      "label": "Decline",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 290
+    },
+    {
+      "context": "approval",
+      "contextLabel": "Approval",
+      "action": "cancel",
+      "label": "Cancel",
+      "gate": null,
+      "source": "tui/src/keymap_setup/actions.rs",
+      "line": 291
+    }
+  ],
+  "fixedActions": [
+    {
+      "name": "fixed.interrupt_or_quit",
+      "source": "tui/src/keymap.rs",
+      "line": 2513,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.quit",
+      "source": "tui/src/keymap.rs",
+      "line": 2516,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.paste_image",
+      "source": "tui/src/keymap.rs",
+      "line": 2517,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.cycle_collaboration_mode",
+      "source": "tui/src/keymap.rs",
+      "line": 2520,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.backtrack",
+      "source": "tui/src/keymap.rs",
+      "line": 2523,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.previous_agent",
+      "source": "tui/src/keymap.rs",
+      "line": 2524,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.next_agent",
+      "source": "tui/src/keymap.rs",
+      "line": 2525,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.slash_command",
+      "source": "tui/src/keymap.rs",
+      "line": 2526,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.shell_command",
+      "source": "tui/src/keymap.rs",
+      "line": 2527,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.file_paths",
+      "source": "tui/src/keymap.rs",
+      "line": 2528,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.connector_mentions",
+      "source": "tui/src/keymap.rs",
+      "line": 2530,
+      "scope": "main"
+    },
+    {
+      "name": "fixed.transcript_edit_previous",
+      "source": "tui/src/keymap.rs",
+      "line": 2537,
+      "scope": "transcript"
+    },
+    {
+      "name": "fixed.transcript_edit_next",
+      "source": "tui/src/keymap.rs",
+      "line": 2545,
+      "scope": "transcript"
+    },
+    {
+      "name": "fixed.transcript_confirm_edit",
+      "source": "tui/src/keymap.rs",
+      "line": 2549,
+      "scope": "transcript"
+    }
+  ]
+}

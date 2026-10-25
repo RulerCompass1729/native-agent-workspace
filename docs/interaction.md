@@ -3,6 +3,341 @@
 As of 2026-10-18。下面先记录 alpha.17 当前交互；后续章节仍包含设计目标，
 不能把草案中的全部能力当作已经实现。测试范围见 [审查与验收](review.md)。
 
+## 2026-10-24：GUI 事实验收与 U17 原生能力审计
+
+问题：GUI 必须准确反映同一个原生会话的内容和状态，接入差异必须明示。
+现有机制：`app/adapters.cjs`、`app/codex-terminal-bridge.cjs`、既有阅读区与同屏 xterm。
+最小增量：按完整用户任务验证核心事实；只修错位、丢失、矛盾和未经说明的接入限制。
+不做会坏什么：把排队当送达、把终端退出当会话结束，或用加工文字掩盖原生事实。
+
+**当前完成标准已由用户收窄，不再以逐条重做或执行所有 TUI 功能为目标。**
+下方 U17 表是能力归属审计表，每行标明“GUI 原样”或“同屏原生 TUI”；命令、键位不再逐行执行验收。
+Codex 归属审计已通过一次 headless Fable 独立复核（265 行均有归属）；这不批准尚未验收的 GUI 事实。
+GUI 事实按下列用户任务验收，每项需要安装版、零付费推理和独审证据。
+用户视觉验收、物理输入法、外部运行中会话接入不阻塞。**当前目标仍未完成。**
+
+| GUI 事实 | 必须保持的含义 | 安装版证据与状态 |
+| --- | --- | --- |
+| 线程身份 | new/resume/fork 跟随明确原生结果；退出显示端后继续同一线程，不靠全局 started 猜身份 | 已有 alpha.91 Codex164 安装版上下文任务；按未变行为复核复用范围 |
+| 状态 | running/idle/ended/等待审批/等待回答/已中断；终端退出不冒充模型结束，enqueue 不冒充接受 | 整理既有安装版证据并补缺口 |
+| 用户输入、助手正文 | 正文与来源不改写，不跨线程拼接；真实流式边界才结束消息块 | 整理既有证据；输入回归修复复验中 |
+| 工具调用与结果 | 原生公开字段、正文和终态；缺失或截断不伪装完整 | 整理既有证据并补缺口 |
+| 问题与选项 | 原文及对应等待状态；交互由同屏 TUI 处理 | alpha.94 Codex164 Plan 问题/回答安装版证据可核复用 |
+| Plan | 原生正文、步骤状态与当前模式，不补写模型计划 | 整理既有证据并补缺口 |
+| 错误 | 原生错误正文原样显示；可重试不等于失败结束 | 整理既有证据并补缺口 |
+| 模型与 effort | 只显示当前原生报告，线程改变后不沿用旧线程字段 | alpha.95 三次模型/effort 实际切换，待同一审查官核证 |
+| 用量 | 只表示原生报告的线程/周期范围；未知保持未知，不混算标题或他人线程 | 核对实际安装版已知值与未知值 |
+| 回合起止、耗时 | 仅原生报告才显示；不以收包时间、当前时间或推测补齐 | 核对原生字段与现有显示，缺口待修 |
+| Claude310 | 由 `.local/lanes/claude310.md` lane 提供已审改动与证据；主线程合并、装机验收、推送 | 等待/合并 lane 的 READY 交接，不重复实现 |
+
+### Codex 0.164 接入差异（明确披露）
+
+- 原生 CLI 使用本应用的私有 `--remote` 端点，不是 Codex 自己的默认本地 daemon。
+  原生 `/worktree` 和 new/fork 中的本地工作树分支因此不可用；本应用没有等价 GUI 工作树管理。
+- 本地 daemon 专属的空编辑框 Left 导航与提示不可用；原生 `/agents` command center 仍可使用。
+  `/daemon` 菜单可查看，但本应用不接管用户全局 daemon 的维护生命周期。
+- 本地图片经原生快照发送，非原路径透传。隔离 PNG 路径粘贴与发送已证字节不变；
+  系统图片剪贴板、所有媒体格式与外部图片服务未据此宣称已验。
+- `--add-dir`、额外 `writable_roots` 的显式启动覆盖被原生远程模式拒绝，应在原生服务端配置。
+  本应用不复制 credentials、不改变 CODEX_HOME 去冒充本地模式，也不静默启动第二个 agent。
+- 启动禁用 analytics；GUI 首次创建线程时加入本应用的定向消息动态工具，原生优先创建的线程不假定拥有它。
+  native side/subagent 视图仍由 TUI 管理，GUI 仅依据已确认的主线程切换结果跟随，不把全局活动冒充当前线程。
+- Mac Option 默认保留字符/重音输入。Option+字母的 Alt 快捷键受终端编码限制，使用原生替代绑定或命令；
+  不强制把 Option 设成 Meta。没有新增设置面板，也不宣称支持全部自定义键盘协议。
+- 没有键盘模式元数据的旧后台保留旧编码；本批增强按键验收不套用于原有 0.163 后台。
+
+### 审计来源与证据边界
+
+源码固定为 [Codex rust-v0.164.0](https://github.com/openai/codex/tree/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs)，
+提交 `6aaac694803004a63c6f393d153c96d22521a6b9`。标识索引
+[`codex164-inventory.json`](../scripts/fixtures/codex164-inventory.json) 保留 65 个命令、155 个可配置运行时动作、
+14 个固定动作、19 种消息项、11 个请求、87 个通知及 182 个功能项。
+协议/配置含内部或已移除项；数量不代表实现或验收数。原生配置目录有 154 项。
+7 个来源哈希与 505 条标识行已与固定源码核对，无错位。完整性仍按源码审计，不再逐行做运行测试。
+
+既有安装版证据仅在相关运行时、适配器和行为未变时复用，写明原版本和适用范围。
+`C164-INV-01` 是空闲/忙碌/side 菜单与 keymap 发现；`C164-MENU-01` 是 17 个菜单打开/取消；
+`C164-SET-01` 是三次模型/effort 切换；`C164-IMG-01` 是隔离 PNG 路径附件和同一回复。
+前两者不证明每个子操作执行成功。图片一轮含一个固定任务与一个原生标题响应，付费推理为零。
+早期 alpha.96 的 32 键录像包含未经批准的强制 Meta 方案，**不作为最终修复通过证据**；
+独审要求恢复 Option 字符输入后，修正安装版的六项按键接收、多行草稿、重载与合成输入已通过；
+`C164-INPUT-02` 不涉及模型请求，已通过同一审查官的 Fable 增量复核。物理输入法未据此宣称已验。
+失败证据均保留。
+
+GUI 字段的安装版验收、审计表的一次复核、未实现功能的披露，是三个不同要求，不互相顶替。
+原始截图、字节流、录像及用户会话资料留在私有验证目录，不进入公开仓库。
+
+| ID／功能 | 官方来源／条件 | GUI 或同屏原生 TUI；原因／当前缺口 | 安装版证据与状态 |
+| --- | --- | --- | --- |
+| C-CMD01 `/model` | [命令:15](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L15)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD02 `/presets` | [命令:16](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L16)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD03 `/daybreak` | [命令:17](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L17)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD04 `/ide` | [命令:18](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L18)；源规则 是/是/是/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD05 `/permissions` | [命令:19](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L19)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD06 `/keymap` | [命令:20](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L20)；源规则 是/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD07 `/vim` | [命令:21](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L21)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD08 `/setup-default-sandbox` | [命令:23](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L23)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD09 `/experimental` | [命令:24](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L24)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD10 `/approve` | [命令:26](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L26)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD11 `/memories` | [命令:27](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L27)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD12 `/skills` | [命令:28](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L28)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD13 `/import` | [命令:29](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L29)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD14 `/hooks` | [命令:30](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L30)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD15 `/review` | [命令:31](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L31)；源规则 是/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD16 `/rename` | [命令:32](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L32)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD17 `/new` | [命令:33](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L33)；源规则 是/否/否/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD18 `/archive` | [命令:34](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L34)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD19 `/delete` | [命令:35](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L35)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD20 `/resume` | [命令:36](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L36)；源规则 是/是/否/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD21 `/fork` | [命令:37](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L37)；源规则 是/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD22 `/worktree` | [命令:38](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L38)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；**产品接入缺口：本地有，安装版无** | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD23 `/app` | [命令:39](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L39)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD24 `/init` | [命令:40](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L40)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD25 `/compact` | [命令:41](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L41)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD26 `/config` | [命令:42](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L42)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD27 `/recap` | [命令:43](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L43)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD28 `/plan` | [命令:44](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L44)；源规则 是/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD29 `/voice` | [命令:45](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L45)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD30 `/goal` | [命令:46](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L46)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD31 `/agents` | [命令:47](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L47)；源规则 否/是/是/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD32 `/side` | [命令:48](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L48)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD33 `/btw` | [命令:49](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L49)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD34 `/copy` | [命令:50](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L50)；源规则 否/是/是/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD35 `/export` | [命令:51](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L51)；源规则 是/否/是/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD36 `/raw` | [命令:52](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L52)；源规则 是/是/是/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD37 `/tui` | [命令:53](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L53)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD38 `/diff` | [命令:54](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L54)；源规则 否/是/是/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD39 `/mention` | [命令:55](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L55)；源规则 否/是/是/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD40 `/status` | [命令:56](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L56)；源规则 否/是/是/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD41 `/daemon` | [命令:57](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L57)；源规则 否/是/是/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD42 `/warnings` | [命令:58](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L58)；源规则 否/是/是/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD43 `/cd` | [命令:59](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L59)；源规则 是/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD44 `/pwd` | [命令:61](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L61)；源规则 是/是/是/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD45 `/usage` | [命令:62](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L62)；源规则 是/是/是/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD46 `/debug-config` | [命令:63](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L63)；源规则 否/是/否/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD47 `/title` | [命令:64](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L64)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD48 `/statusline` | [命令:65](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L65)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD49 `/theme` | [命令:66](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L66)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD50 `/pets` | [命令:68](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L68)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD51 `/mcp` | [命令:69](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L69)；源规则 是/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD52 `/apps` | [命令:70](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L70)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD53 `/plugins` | [命令:71](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L71)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD54 `/logout` | [命令:72](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L72)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD55 `/quit` | [命令:73](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L73)；源规则 否/是/否/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD56 `/exit` | [命令:74](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L74)；源规则 否/是/否/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD57 `/feedback` | [命令:75](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L75)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD58 `/rollout` | [命令:76](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L76)；源规则 否/是/否/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD59 `/ps` | [命令:77](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L77)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD60 `/stop` | [命令:79](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L79)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD61 `/clear` | [命令:80](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L80)；源规则 是/否/否/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD62 `/test-approval` | [命令:81](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L81)；源规则 否/是/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD63 `/subagents` | [命令:83](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L83)；源规则 否/是/否/是 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD64 `/debug-m-drop` | [命令:86](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L86)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-CMD65 `/debug-m-update` | [命令:88](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/slash_command.rs#L88)；源规则 否/否/否/否 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY001 `global.open_agents` | [键位:281](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L281) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY002 `global.open_transcript` | [键位:282](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L282) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY003 `global.find_transcript` | [键位:283](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L283) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY004 `global.focus_activity` | [键位:284](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L284) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY005 `global.open_warnings` | [键位:285](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L285)；运行时动作 | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY006 `global.open_external_editor` | [键位:286](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L286) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY007 `global.copy` | [键位:287](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L287) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY008 `global.clear_terminal` | [键位:288](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L288) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY009 `global.toggle_vim_mode` | [键位:289](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L289) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY010 `global.toggle_fast_mode` | [键位:290](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L290) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY011 `global.toggle_raw_output` | [键位:291](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L291) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY012 `global.toggle_side_conversation` | [键位:292](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L292) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY013 `chat.open_presets` | [键位:295](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L295) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY014 `chat.toggle_voice` | [键位:296](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L296) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY015 `chat.interrupt_turn` | [键位:297](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L297) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY016 `chat.decrease_reasoning_effort` | [键位:298](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L298) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY017 `chat.increase_reasoning_effort` | [键位:299](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L299) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY018 `chat.previous_permission_mode` | [键位:300](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L300) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY019 `chat.next_permission_mode` | [键位:301](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L301) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY020 `chat.edit_queued_message` | [键位:302](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L302) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY021 `chat.prompt_stack_back` | [键位:303](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L303) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY022 `chat.skip_question` | [键位:304](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L304) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY023 `chat.toggle_voice_mute` | [键位:306](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L306) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY024 `composer.submit` | [键位:308](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L308) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY025 `composer.queue` | [键位:309](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L309) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY026 `composer.toggle_shortcuts` | [键位:310](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L310) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY027 `composer.history_search_previous` | [键位:311](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L311) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY028 `composer.history_search_next` | [键位:312](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L312) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY029 `editor.insert_newline` | [键位:315](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L315) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY030 `editor.move_left` | [键位:316](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L316) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY031 `editor.move_right` | [键位:317](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L317) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY032 `editor.move_up` | [键位:318](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L318) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY033 `editor.move_down` | [键位:319](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L319) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY034 `editor.move_word_left` | [键位:320](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L320) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY035 `editor.move_word_right` | [键位:321](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L321) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY036 `editor.move_line_start` | [键位:322](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L322) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY037 `editor.move_line_end` | [键位:323](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L323) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY038 `editor.delete_backward` | [键位:324](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L324) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY039 `editor.delete_forward` | [键位:325](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L325) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY040 `editor.delete_backward_word` | [键位:326](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L326) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY041 `editor.delete_forward_word` | [键位:327](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L327) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY042 `editor.kill_line_start` | [键位:328](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L328) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY043 `editor.kill_whole_line` | [键位:329](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L329) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY044 `editor.kill_line_end` | [键位:330](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L330) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY045 `editor.yank` | [键位:331](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L331) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY046 `vim_normal.enter_insert` | [键位:334](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L334) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY047 `vim_normal.append_after_cursor` | [键位:335](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L335) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY048 `vim_normal.append_line_end` | [键位:336](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L336) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY049 `vim_normal.insert_line_start` | [键位:337](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L337) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY050 `vim_normal.open_line_below` | [键位:338](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L338) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY051 `vim_normal.open_line_above` | [键位:339](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L339) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY052 `vim_normal.enter_replace_mode` | [键位:340](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L340) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY053 `vim_normal.move_left` | [键位:341](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L341) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY054 `vim_normal.move_right` | [键位:342](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L342) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY055 `vim_normal.move_up` | [键位:343](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L343) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY056 `vim_normal.move_down` | [键位:344](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L344) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY057 `vim_normal.move_word_forward` | [键位:345](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L345) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY058 `vim_normal.move_word_backward` | [键位:346](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L346) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY059 `vim_normal.move_word_end` | [键位:347](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L347) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY060 `vim_normal.move_line_start` | [键位:348](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L348) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY061 `vim_normal.move_line_end` | [键位:349](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L349) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY062 `vim_normal.find_forward` | [键位:350](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L350) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY063 `vim_normal.find_backward` | [键位:351](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L351) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY064 `vim_normal.till_forward` | [键位:352](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L352) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY065 `vim_normal.till_backward` | [键位:353](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L353) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY066 `vim_normal.jump_top` | [键位:354](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L354) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY067 `vim_normal.jump_bottom` | [键位:355](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L355) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY068 `vim_normal.delete_char` | [键位:356](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L356) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY069 `vim_normal.replace_char` | [键位:357](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L357) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY070 `vim_normal.repeat_last_change` | [键位:358](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L358) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY071 `vim_normal.substitute_char` | [键位:359](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L359) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY072 `vim_normal.delete_to_line_end` | [键位:360](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L360) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY073 `vim_normal.change_to_line_end` | [键位:361](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L361) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY074 `vim_normal.yank_line` | [键位:362](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L362) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY075 `vim_normal.paste_after` | [键位:363](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L363) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY076 `vim_normal.start_delete_operator` | [键位:364](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L364) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY077 `vim_normal.start_yank_operator` | [键位:365](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L365) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY078 `vim_normal.start_change_operator` | [键位:366](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L366) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY079 `vim_normal.undo` | [键位:367](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L367) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY080 `vim_normal.redo` | [键位:368](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L368) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY081 `vim_normal.cancel_operator` | [键位:369](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L369) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY082 `vim_search.forward` | [键位:371](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L371) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY083 `vim_search.backward` | [键位:371](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L371) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY084 `vim_search.next` | [键位:371](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L371) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY085 `vim_search.previous` | [键位:371](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L371) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY086 `vim_operator.delete_line` | [键位:373](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L373) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY087 `vim_operator.yank_line` | [键位:374](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L374) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY088 `vim_operator.motion_left` | [键位:375](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L375) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY089 `vim_operator.motion_right` | [键位:376](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L376) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY090 `vim_operator.motion_up` | [键位:377](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L377) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY091 `vim_operator.motion_down` | [键位:378](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L378) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY092 `vim_operator.motion_word_forward` | [键位:379](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L379) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY093 `vim_operator.motion_word_backward` | [键位:380](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L380) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY094 `vim_operator.motion_word_end` | [键位:381](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L381) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY095 `vim_operator.motion_line_start` | [键位:382](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L382) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY096 `vim_operator.motion_line_end` | [键位:383](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L383) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY097 `vim_operator.motion_find_forward` | [键位:384](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L384) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY098 `vim_operator.motion_find_backward` | [键位:385](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L385) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY099 `vim_operator.motion_till_forward` | [键位:386](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L386) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY100 `vim_operator.motion_till_backward` | [键位:387](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L387) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY101 `vim_operator.motion_jump_top` | [键位:388](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L388) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY102 `vim_operator.motion_jump_bottom` | [键位:389](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L389) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY103 `vim_operator.select_inner_text_object` | [键位:390](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L390) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY104 `vim_operator.select_around_text_object` | [键位:391](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L391) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY105 `vim_operator.cancel` | [键位:392](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L392) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY106 `vim_text_object.word` | [键位:395](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L395) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY107 `vim_text_object.big_word` | [键位:396](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L396) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY108 `vim_text_object.parentheses` | [键位:397](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L397) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY109 `vim_text_object.brackets` | [键位:398](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L398) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY110 `vim_text_object.braces` | [键位:399](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L399) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY111 `vim_text_object.double_quote` | [键位:400](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L400) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY112 `vim_text_object.single_quote` | [键位:401](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L401) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY113 `vim_text_object.backtick` | [键位:402](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L402) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY114 `vim_text_object.cancel` | [键位:403](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L403) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY115 `pager.scroll_up` | [键位:406](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L406) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY116 `pager.scroll_down` | [键位:407](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L407) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY117 `pager.page_up` | [键位:408](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L408) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY118 `pager.page_down` | [键位:409](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L409) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY119 `pager.half_page_up` | [键位:410](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L410) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY120 `pager.half_page_down` | [键位:411](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L411) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY121 `pager.jump_top` | [键位:412](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L412) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY122 `pager.jump_bottom` | [键位:413](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L413) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY123 `pager.close` | [键位:414](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L414) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY124 `pager.close_transcript` | [键位:415](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L415) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY125 `pager.find` | [键位:416](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L416) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY126 `list.move_up` | [键位:419](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L419) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY127 `list.move_down` | [键位:420](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L420) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY128 `list.move_left` | [键位:421](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L421) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY129 `list.move_right` | [键位:422](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L422) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY130 `list.page_up` | [键位:423](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L423) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY131 `list.page_down` | [键位:424](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L424) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY132 `list.jump_top` | [键位:425](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L425) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY133 `list.jump_bottom` | [键位:426](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L426) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY134 `list.accept` | [键位:427](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L427) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY135 `list.cancel` | [键位:428](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L428) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY136 `agents.resume` | [键位:431](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L431) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY137 `agents.search` | [键位:432](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L432) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY138 `agents.new_task` | [键位:433](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L433) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY139 `agents.new_worktree` | [键位:434](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L434) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY140 `agents.fork` | [键位:435](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L435) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY141 `agents.rename` | [键位:436](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L436) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY142 `agents.stop` | [键位:437](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L437) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY143 `agents.archive` | [键位:438](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L438) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY144 `agents.delete` | [键位:439](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L439) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY145 `agents.hide` | [键位:440](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L440) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY146 `agents.toggle_pin` | [键位:441](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L441) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY147 `agents.toggle_grouping` | [键位:442](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L442) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY148 `approval.open_fullscreen` | [键位:445](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L445) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY149 `approval.open_thread` | [键位:446](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L446) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY150 `approval.approve` | [键位:447](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L447) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY151 `approval.approve_for_session` | [键位:448](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L448) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY152 `approval.approve_for_prefix` | [键位:449](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L449) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY153 `approval.deny` | [键位:450](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L450) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY154 `approval.decline` | [键位:451](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L451) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY155 `approval.cancel` | [键位:452](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap/bindings.rs#L452) | 同屏原生 TUI；在同屏原生 TUI 里用；沿用其编辑／导航／菜单键位，不造第二套编辑器 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-KEY156 `global.leader` | [配置前缀:127](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap_setup/actions.rs#L127) | 同屏原生 TUI；在同屏原生 TUI 里用；原生共享前缀设置，不是独立运行时动作 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX01 `fixed.interrupt_or_quit` | [固定键:2513](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2513)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX02 `fixed.quit` | [固定键:2516](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2516)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX03 `fixed.paste_image` | [固定键:2517](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2517)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX04 `fixed.cycle_collaboration_mode` | [固定键:2520](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2520)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX05 `fixed.backtrack` | [固定键:2523](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2523)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX06 `fixed.previous_agent` | [固定键:2524](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2524)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX07 `fixed.next_agent` | [固定键:2525](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2525)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX08 `fixed.slash_command` | [固定键:2526](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2526)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX09 `fixed.shell_command` | [固定键:2527](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2527)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX10 `fixed.file_paths` | [固定键:2528](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2528)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX11 `fixed.connector_mentions` | [固定键:2530](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2530)；main | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX12 `fixed.transcript_edit_previous` | [固定键:2537](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2537)；transcript | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX13 `fixed.transcript_edit_next` | [固定键:2545](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2545)；transcript | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-FIX14 `fixed.transcript_confirm_edit` | [固定键:2549](https://github.com/openai/codex/blob/6aaac694803004a63c6f393d153c96d22521a6b9/codex-rs/tui/src/keymap.rs#L2549)；transcript | 同屏原生 TUI；在同屏原生 TUI 里用；原生固定行为，不属于可配置目录 | 归属审计；保留原生分派/配置条件，不再逐行执行验收 |
+| C-I01 Text, newline, cursor/word/line editing, undo/kill/yank | `bottom_pane/chat_composer.rs; keymap.rs` | GUI 原样；GUI basic input; native specialized editing 在同屏原生 TUI 里用, preserve native bindings | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-I02 Paste/bracketed paste, burst/large placeholders | `bottom_pane/paste_burst.rs; chat_composer/paste_input.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; native paste semantics/hidden chunks | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-I03 Input history/search, draft recall, Vim/keymap/chords | `keymap.rs; chat_composer/history_search.rs; textarea/vim.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; no second history/editor | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-I04 Queue/edit pending input, prompt stack, steer vs interrupt | `bottom_pane/chat_composer.rs InputResult; keymap.rs` | GUI 原样；GUI exact native steer and interrupt; native queue editing 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-I05 Slash/custom presets, skills, file/app/task mentions | `bottom_pane/slash_commands.rs; mentions_v2/mod.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; native completion/context binding | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-I06 Images local/remote, attachment removal, clipboard/drop | `bottom_pane/chat_composer/attachment_state.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; preserve attachment identity, no text substitute | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-I07 Shell ! and interactive background stdin; external editor | `app_command.rs RunUserShellCommand; keymap.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; no second shell/editor lifecycle | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R01 Streaming user/assistant text, markdown/links, reasoning summary | `chatwidget/protocol.rs; history_cell/messages.rs` | GUI 原样；GUI original text; native layout 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R02 Thinking, request/stream/retry phases, animation/elapsed/tokens | `status_indicator_widget.rs; chatwidget/protocol.rs` | 同屏原生 TUI；在同屏原生 TUI 里用 for exact local spinner/header; do not translate enums into invented labels | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R03 Tool command/output/status/duration/exit, terminal interactions | `history_cell/exec.rs; chatwidget/protocol.rs` | GUI 原样；GUI public native fields, native terminal interaction 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R04 File patches/diffs and apply results | `history_cell/patches.rs; diff_render.rs` | GUI 原样；GUI exact textual changes; native formatting 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R05 Web search/browse/find and progress headings | `history_cell/search.rs` | GUI 原样；GUI native-source formatter and original query/output; detailed native layout 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R06 MCP/dynamic tool result: text/image/content previews | `history_cell/mcp.rs; history_cell/dynamic.rs` | GUI 原样；GUI original public text; non-text preview 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R07 Plan updates/proposed plan/accept or revise | `history_cell/plans.rs; chatwidget/protocol.rs` | GUI 原样；GUI original plan; native Plan controls 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R08 Computer/image/media/realtime content and status | `history_cell/computer_activity.rs; app_command.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; no text-only fabricated result | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R09 Native completion time and duration | `history_cell/separators.rs:19,74 FinalMessageSeparator` | 同屏原生 TUI；在同屏原生 TUI 里用；本地排版／时间属于原生 renderer，GUI 不重造时钟 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R10 Recap/Next and recap loading | `history_cell/notices.rs ThreadRecapHistoryCell` | 同屏原生 TUI；在同屏原生 TUI 里用; native generates via own flow, no extra summary model | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-R11 Quota/context/token use, rates/reset/statusline | `status; token_usage.rs; bottom_pane/status_line_setup.rs` | 同屏原生 TUI；GUI public usage scope; full original statusline/reset 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-A01 Exec/patch/network/filesystem approvals, deny/amend/session grant | `bottom_pane/approval_overlay.rs; app_command.rs` | GUI 原样；GUI exact request; native policy actions 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-A02 Questions/options/free text/multi question/skip/native auto-resolution | `bottom_pane/request_user_input/mod.rs` | GUI 原样；GUI exact question/options; native answer controls 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-A03 MCP form/URL elicitation and verification, secrets | `bottom_pane/mcp_server_elicitation.rs; user_verification.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; avoid exporting secret/form semantics | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-A04 Background and subagent approval queue/source navigation | `bottom_pane/pending_thread_approvals.rs; approval_overlay.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; native source routing retained | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-S01 New/resume/fork/cwd context, archive/delete and native session checkout | `chatwidget/slash_dispatch.rs; resume_picker.rs` | GUI 原样；GUI follows verified root context; native session commands 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-S02 Model/effort/service tier/permission settings | `chatwidget/protocol.rs ThreadSettingsUpdated; slash_dispatch.rs` | GUI 原样；GUI effective public fields; native picker 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-S03 Agents/subagents/side conversations and native command center | `multi_agents.rs; chatwidget/slash_dispatch.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; cached child view not a GUI root-identity signal | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-S04 Transcript search/copy/select/bookmarks/raw/follow/resize | `transcript_view; keymap.rs; transcript_mode.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; existing native renderer, no snapshot cameras | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-S05 Configuration/memories/skills/hooks/apps/plugins/theme/pet/keymap | `chatwidget/slash_dispatch.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; preserve native config and feature gates | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-S06 Onboarding/auth/trust/update/IDE/worktree/external app handoff | `onboarding; update_prompt.rs; slash_dispatch.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; OS/native/account-specific actions | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-S07 Errors/retry/reauth/model safety/verification/warnings/reconnect | `chatwidget/protocol.rs; daemon_recovery.rs; backend_banners` | GUI 原样；GUI original public errors; native recovery/menu 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-S08 Terminal notification/title/accessibility/reduced-motion/voice | `notifications; keymap.rs; screen_reader.rs; voice_strip.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; native/OS surface, physical OS capabilities require actual evidence | GUI 事实按上方任务验收；其他交互保留原生能力 |
+
+以后做·触发条件：当前清单与接入缺口核对后，按完整使用任务逐家族实现、安装版验收和独审；
+Codex 完成后再补 Claude 310。当前不新增状态面板、TTY 解析器、前端框架或总结模型。
+
 ## 2026-10-23：原生能力核对与 alpha.89 修复
 
 问题：用户看到原生正在工作／等待选择，但对话区缺少相应状态，混用后输入和轨迹不连续。

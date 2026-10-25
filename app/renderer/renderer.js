@@ -1271,6 +1271,25 @@ async function ensureTerminal(id, explicit = false) {
       if (event.type === 'keyup') confirmingEnter = false;
       if (confirming) return false;
     }
+    // xterm 6 loses Shift+Enter and cannot encode Ctrl+/ or Ctrl+Shift+letters.
+    // Preserve those native Codex bindings with standard CSI-u through xterm's
+    // normal input path, after the composition-confirmation barrier above.
+    let extendedKey, nativeKey;
+    const composing = entry.composing || event.isComposing;
+    if (record.provider === 'codex' && !composing && !event.metaKey && event.ctrlKey && event.altKey && !event.shiftKey && /^[a-z]$/i.test(event.key)) {
+      nativeKey = '\x1b' + String.fromCharCode(event.key.toLowerCase().charCodeAt(0) - 96);
+    }
+    if (record.provider === 'codex' && !composing && (entry.keyboardFlags & 1) && !event.altKey && !event.metaKey) {
+      if (event.key === 'Enter' && (event.shiftKey || event.ctrlKey)) extendedKey = 13;
+      else if (event.ctrlKey && event.key === '/') extendedKey = 47;
+      else if (event.ctrlKey && event.shiftKey && /^[a-z]$/i.test(event.key)) extendedKey = event.key.toLowerCase().charCodeAt(0);
+    }
+    if (extendedKey !== undefined) nativeKey = `\x1b[${extendedKey};${1 + (event.shiftKey ? 1 : 0) + (event.ctrlKey ? 4 : 0)}u`;
+    if (nativeKey !== undefined) {
+      event.preventDefault();
+      if (event.type === 'keydown') term.input(nativeKey, true);
+      return false;
+    }
     if (event.type === 'keydown' && event.metaKey && event.key.toLowerCase() === 'c' && term.hasSelection()) { attempt(() => api.copy(term.getSelection())); return false; }
     return true;
   });
@@ -1290,6 +1309,7 @@ async function ensureTerminal(id, explicit = false) {
       entry.epoch = snapshot.epoch;
       term.resize(snapshot.cols || 100, snapshot.rows || 30);
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
+      entry.keyboardFlags = snapshot.keyboardFlags || 0;
       if (terminals.get(id) !== entry) return;
       entry.sequence = snapshot.sequence; entry.ready = true;
       for (const event of entry.queued) writeTerminal(entry, event);
@@ -1319,7 +1339,7 @@ function fitTerminal(id) {
     entry.fit.fit(); attempt(() => api.resize(id, entry.term.cols, entry.term.rows));
   });
 }
-function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data); entry.sequence = event.sequence; } }
+function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; } }
 const disposers = [
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),

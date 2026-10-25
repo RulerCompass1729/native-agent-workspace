@@ -24,6 +24,7 @@ class Terminal extends EventEmitter {
     super();
     this.pid = null; this.alive = true; this.sequence = 0; this.nativeExited = false;
     this.screen = new HeadlessTerminal({ cols: 100, rows: 30, scrollback: 5000, allowProposedApi: true });
+    this.keyboardModes = require('./terminal-keyboard.cjs').trackKeyboardModes(this.screen);
     this.serialize = new SerializeAddon(); this.screen.loadAddon(this.serialize);
     this.journal = new TerminalJournal(this.screen.cols, this.screen.rows);
     this.decoder = new StringDecoder('utf8');
@@ -42,7 +43,7 @@ class Terminal extends EventEmitter {
           const receivedAt = Date.now();
           this.screen.write(data, () => {
             const observation = this.journal.append('output', data, this.screen.cols, this.screen.rows, () => this.serialize.serialize());
-            this.emit('data', { ...observation, receivedAt, sequence: ++this.sequence });
+            this.emit('data', { ...observation, receivedAt, sequence: ++this.sequence, keyboardFlags: this.keyboardModes.flags });
           });
         }
       }
@@ -71,7 +72,7 @@ class Terminal extends EventEmitter {
       this.emit('data', { ...observation, sequence: this.sequence });
     });
   }
-  snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serialize.serialize(), sequence: this.sequence, epoch: this.journal.epoch, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid }))); }
+  snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serialize.serialize(), sequence: this.sequence, epoch: this.journal.epoch, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid, keyboardFlags: this.keyboardModes.flags }))); }
   observe() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.journal.snapshot(), alive: this.alive }))); }
   stop(timeout = 5000) {
     if (this.stopPending) return this.stopPending;
