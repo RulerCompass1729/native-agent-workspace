@@ -55,6 +55,6 @@ test('actual Codex start/completed envelope describes the activity, not child co
   for (const method of ['item/started', 'item/completed']) runtime.event({ method, params: {
     threadId: 'root', turnId: 'root-turn', item: { type: 'subAgentActivity', id: 'spawn-tool', kind: 'started', agentThreadId: 'child', agentPath: '/root/check' },
   } });
-  assert.equal(progress.length, 2); assert.ok(progress.every(p => p.status === 'observed' && p.title.includes('子任务已启动')));
+  assert.equal(progress.length, 2); assert.ok(progress.every(p => p.status === 'observed' && p.title.includes('started')));
   assert.equal(fleet.length, 1); assert.equal(fleet[0].active, true);
 });

@@ -288,6 +288,6 @@ test('native tool activity before resume ACK rejects its older idle status', asy
   f.r.event({ method: 'turn/started', params: { turn: { id: 'active-turn', startedAt: 1234 } } });
   await f.r.start();
   assert.ok(!f.states.includes('idle'));
-  assert.equal(f.r.nativeActivity.label, '执行命令');
+  assert.equal(f.r.nativeActivity.label, 'commandExecution');
   assert.equal(f.r.nativeActivity.turnId, 'active-turn');
 });

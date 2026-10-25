@@ -61,11 +61,14 @@ async function run() {
   assert.match(await code.locator('pre').innerText(),/const n = 1;/);
   await code.hover(); await code.locator('.message-actions').getByRole('button',{name:'复制',exact:true}).click();
   assert.match(await app.evaluate(()=>globalThis.copiedText.at(-1)),/第一段。\n\n第二段。/);
-  const boundary=page.locator('#messages .native-turn').first(); await boundary.waitFor();
-  const completion=await boundary.locator('.message-body').innerText(); assert.match(completion,/Worked for 2s/);
-  assert.ok(completion.includes(new Date(completedAt*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})));
-  await boundary.hover(); await boundary.getByRole('button',{name:'复制',exact:true}).click();
-  assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),completion,'Copy includes the displayed native completion metadata');
+  assert.equal(await page.locator('#messages .native-turn').count(),0,'Missing native footer must not be reconstructed or translated from clocks');
+  const originalFooter='✻ Cooked for 3s · done 4:55 PM';
+  await fixture('nativeBlock',a,{id:'turn:raw-footer',kind:'turn',turnId:'raw-footer',text:originalFooter,status:'complete'});
+  const boundary=page.locator('#messages .native-turn').filter({hasText:originalFooter});await boundary.waitFor();
+  await boundary.hover();await boundary.getByRole('button',{name:'复制',exact:true}).click();
+  assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),originalFooter,'Available original native text is copied verbatim');
+  await fixture('nativeBlock',a,{id:'turn:raw-cut',kind:'turn',turnId:'raw-cut',text:' \n',status:'interrupted'});
+  await page.locator('#messages .native-turn .message-body').getByText('interrupted',{exact:true}).waitFor();
   // Same-window task: full native originals, compact defaults, focused input only.
   const search = page.locator('#messages .process').filter({hasText:'Seattle forecast'});
   const reasoning = page.locator('#messages .process').filter({hasText:'原生摘要第一段。'});
@@ -207,7 +210,7 @@ async function run() {
   await page.locator('#run-status').waitFor({state:'hidden'});
   assert.equal(await page.locator('#run-status').isVisible(),false,'Completed agents do not leave a stale activity label');
   await page.locator('#room-messages').getByText('已核实，总额应为55，建议将60改为55。',{exact:true}).waitFor();
-  assert.equal(await page.locator('#room-messages .native-turn').count(),2);
+  assert.equal(await page.locator('#room-messages .native-turn').count(),0,'Shared history also omits invented native completion captions');
   const publicTask=(await snapshot()).room.messages;
   assert.equal(publicTask.filter(m=>m.sharedStream&&m.role==='assistant').length,2,'Streaming updates stay in their original attributed blocks');
   assert.ok(publicTask.some(m=>m.kind==='tool'&&m.text.split('\n').length>=14),'Collapsed process retains the complete native original');
@@ -225,7 +228,7 @@ async function run() {
   assert.equal(reopened.sessions.find(s=>s.id===b).nativeId,beforeTask.sessions.find(s=>s.id===b).nativeId);
   assert.equal(reopened.sessions.find(s=>s.id===b).roomId,null);
   assert.deepEqual(reopened.room.messages,publicTask);assert.equal(reopened.diagnostics.dispatches,2);
-  assert.equal(reopened.sessions.find(s=>s.id===a).messages.filter(m=>m.kind==='turn').length,3);
+  assert.equal(reopened.sessions.find(s=>s.id===a).messages.filter(m=>m.kind==='turn').length,5);
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
   await chooseRecipient(page,a);await fillRoomMessage(page,'控制场景：开始核查，然后私下接管。');await page.locator('#forward-button').click();
   await fixture('replyBound',a,{turnId:'control-turn'});

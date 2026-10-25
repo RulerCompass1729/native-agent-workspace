@@ -9,8 +9,8 @@ function fixture() {
 test('native retry retains its exact notice, stays working and never fails a newer turn',()=>{
  const {r,event,start}=fixture(),notices=[],failures=[];r.on('nativeBlock',n=>notices.push(n));r.on('failed',e=>failures.push(e));
  start('a');event('error',{turnId:'a',willRetry:true,error:{message:'Exact native stream error',additionalDetails:'Exact native detail'}});
- assert.equal(r.nativeActivity.label,'原生将重试');assert.equal(failures.length,0);assert.equal(notices[0].kind,'notice');assert.equal(notices[0].text,'Exact native stream error\n\nExact native detail');
- event('item/started',{turnId:'a',item:{id:'reply',type:'agentMessage'}});assert.equal(r.nativeActivity.label,'正在输出');
+ assert.equal(r.nativeActivity.label,'willRetry');assert.equal(failures.length,0);assert.equal(notices[0].kind,'notice');assert.equal(notices[0].text,'Exact native stream error\n\nExact native detail');
+ event('item/started',{turnId:'a',item:{id:'reply',type:'agentMessage'}});assert.equal(r.nativeActivity.label,'agentMessage');
  start('b');event('error',{turnId:'a',willRetry:false,error:{message:'Old native failure'}});assert.equal(failures.length,0);assert.equal(r.turnId,'b');
  event('error',{turnId:'b',willRetry:false,error:{message:'Current native failure'}});assert.equal(failures.length,1);
  event('warning',{message:'Native warning text'});assert.equal(notices.at(-1).text,'Native warning text');
@@ -19,19 +19,19 @@ test('native working phases follow concurrent items and exact turn timestamps', 
   const { r, event, start } = fixture(); start('turn-a', 1234);
   assert.equal(r.nativeActivity.startedAt, 1234000);
   event('item/started', { turnId: 'turn-a', item: { id: 'reason', type: 'reasoning', summary: [] } });
-  assert.equal(r.nativeActivity.label, '思考中');
+  assert.equal(r.nativeActivity.label, 'reasoning');
   event('item/started', { turnId: 'turn-a', item: { id: 'cmd', type: 'commandExecution', command: 'echo local' } });
-  assert.equal(r.nativeActivity.label, '执行命令');
+  assert.equal(r.nativeActivity.label, 'commandExecution');
   event('item/completed', { turnId: 'turn-a', item: { id: 'reason', type: 'reasoning', summary: [] } });
-  assert.equal(r.nativeActivity.label, '执行命令', 'Another completed item cannot stop the active command');
+  assert.equal(r.nativeActivity.label, 'commandExecution', 'Another completed item cannot stop the active command');
   event('item/completed', { turnId: 'turn-a', item: { id: 'cmd', type: 'commandExecution', status: 'completed' } });
-  assert.equal(r.nativeActivity.label, '正在处理');
+  assert.equal(r.nativeActivity.label, 'inProgress');
   event('item/started', { turnId: 'older-turn', item: { id: 'old', type: 'reasoning', summary: [] } });
-  assert.equal(r.nativeActivity.label, '正在处理');
+  assert.equal(r.nativeActivity.label, 'inProgress');
   event('thread/status/changed', { status: { type: 'active', activeFlags: ['waitingOnUserInput'] } });
-  assert.equal(r.nativeActivity.label, '等待回答');
+  assert.equal(r.nativeActivity.label, 'waitingOnUserInput');
   event('thread/status/changed', { status: { type: 'active', activeFlags: ['waitingOnApproval'] } });
-  assert.equal(r.nativeActivity.label, '等待确认');
+  assert.equal(r.nativeActivity.label, 'waitingOnApproval');
   event('turn/completed', { turn: { id: 'turn-a', status: 'completed' } });
   assert.equal(r.nativeActivity, null);
   start('turn-b'); assert.equal(r.nativeActivity.startedAt, null, 'Missing time is unknown, never local enqueue time');

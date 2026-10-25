@@ -91,7 +91,7 @@ class Claude extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
   get nativeActivity() {
     if (!this.liveTurn || this.rootEnding || this.disposed || !this.terminal?.alive) return null;
-    return { nativeId: this.record.nativeId, turnId: this.liveTurn.id, label: this.livePermissions?.size ? '等待原生权限确认' : this.liveTurn.label, phase: this.livePermissions?.size ? 'approval' : this.liveTurn.phase, observedAt: this.observationSeenAt };
+    return { nativeId: this.record.nativeId, turnId: this.liveTurn.id, label: this.livePermissions?.size ? [...this.livePermissions.values()].map(r => r.title).join(', ') : this.liveTurn.label, phase: this.livePermissions?.size ? 'approval' : this.liveTurn.phase, observedAt: this.observationSeenAt };
   }
   get nativeApproval() {
     if (this.rootEnding || this.disposed || !this.terminal?.alive || !this.livePermissions?.size) return null;
@@ -207,7 +207,7 @@ class Claude extends EventEmitter {
           this.seenRootTurns.add(message.turnId);
           while (this.seenRootTurns.size > 256) this.seenRootTurns.delete(this.seenRootTurns.values().next().value);
           this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
-          this.liveTurn = this.rootTurn ? { id: message.turnId, promptId: message.promptId, phase: 'requesting', label: '正在请求' } : null;
+          this.liveTurn = this.rootTurn ? { id: message.turnId, promptId: message.promptId, phase: 'requesting', label: 'requesting' } : null;
           this.livePermissions.clear();
           if (this.rootTurn) { this.nativeInputRequired = false; this.emit('inputRequired', false); }
         }
@@ -215,10 +215,10 @@ class Claude extends EventEmitter {
         // The observation lease has its own liveness proof; a held native
         // submit may legitimately leave the independent input poll pending.
       } else if (message.id === 'control:activity') {
-        const labels = { requesting: '正在请求', thinking: '思考中', responding: '正在输出', 'tool-input': '准备工具输入', 'tool-use': '正在处理工具' };
-        if (!Object.hasOwn(labels, message.phase) || typeof message.turnId !== 'string') throw Error('Invalid native activity');
+        const phases = ['requesting', 'thinking', 'text', 'input', 'tool', 'responding', 'tool-input', 'tool-use']; // Old mod phases remain readable during an exact-byte upgrade.
+        if (!phases.includes(message.phase) || typeof message.turnId !== 'string') throw Error('Invalid native activity');
         if (!message.replayed && !message.gap && this.liveTurn?.id === message.turnId) {
-          this.liveTurn.phase = message.phase; this.liveTurn.label = labels[message.phase];
+          this.liveTurn.phase = message.phase; this.liveTurn.label = message.phase;
         }
       } else if (message.id === 'control:permission-end') {
         if (typeof message.permissionId !== 'string' || !/^permission:[a-zA-Z0-9_:-]{1,160}$/.test(message.permissionId)) throw Error('Invalid native permission');
@@ -230,8 +230,10 @@ class Claude extends EventEmitter {
         if (message.id === 'control:permission' && !message.boundaryOnly && !message.replayed && !message.gap) {
           const id = message.permissionId || `permission:${message.sequence}`;
           if (!/^permission:[a-zA-Z0-9_:-]{1,160}$/.test(id) || this.livePermissions.size >= 16) throw Error('Invalid native permission');
-          this.livePermissions.set(id, { id, title: message.title || '原生工具', input: message.input || '', incomplete: message.incomplete === true, turnId: message.turnId || this.liveTurn?.id });
+          this.livePermissions.set(id, { id, title: message.title || '', input: message.input || '', incomplete: message.incomplete === true, turnId: message.turnId || this.liveTurn?.id });
+          if (message.title === 'AskUserQuestion' && this.liveTurn && this.liveTurn.question !== false) this.liveTurn.question = true;
         }
+        if (this.liveTurn && (message.id === 'control:input' || message.boundaryOnly && (!message.promptId || message.promptId !== this.liveTurn.promptId || message.turnId !== this.liveTurn.id))) this.liveTurn.question = false;
         this.rootTurn = null;
         // Current sessions need this boundary too: the classic permission/state
         // event can arrive later or be coalesced before a peer sees a snapshot.
@@ -256,8 +258,10 @@ class Claude extends EventEmitter {
       block.index = index; block.text += delta; block.final = status === 'complete';
       if (turn.blocks.size > 64 || [...turn.blocks.values()].reduce((n, b) => n + b.text.length, 0) > 500000) { turn.blocks.clear(); turn.incomplete = true; }
     }
+    const endedLiveTurn = kind === 'turn' && this.liveTurn?.id === turnId;
+    const endedQuestion = endedLiveTurn && this.liveTurn.question === true;
     if (kind === 'turn') {
-      if (this.liveTurn?.id === turnId) this.liveTurn = null;
+      if (endedLiveTurn) this.liveTurn = null;
       for (const [key, request] of this.livePermissions) if (!request.turnId || request.turnId === turnId) this.livePermissions.delete(key);
       turn.ended = true;
       const block = turn.blocks.get(message.finalDisplayId);
@@ -269,6 +273,17 @@ class Claude extends EventEmitter {
       this.rootTurn.completed = status === 'complete';
       if (status === 'interrupted') this.finishInterrupted(turnId);
       this.emit('capability');
+    }
+    // A native question revokes reply-sharing authority, not the independent
+    // live turn identity. Cancelling that dialog can finish without classic.Stop.
+    if (endedQuestion && !this.rootTurn && !message.replayed && !message.gap) {
+      if (status === 'interrupted') {
+        const pending = this.pending?.turnId === turnId ? this.pending : null;
+        if (pending) { clearTimeout(pending.displayTimer); this.pending = null; }
+        this.nativeInputRequired = true; this.emit('inputRequired', true);
+        this.emit('interrupted', { turnId, tag: pending?.tag });
+      }
+      this.emit('state', status === 'failed' ? 'error' : 'idle');
     }
     if (kind === 'turn' && this.pending?.turnId === turnId && this.pending.stopEvent) this.finishReply(this.pending, this.pending.stopEvent);
     return { observed: true };
@@ -404,7 +419,7 @@ class Claude extends EventEmitter {
           (this.pending.promptId && this.pending.promptId !== prompt)))) return;
     }
     if (['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name)) this.emit('progress', {
-      id: event.tool_use_id, source: 'claude-hook', kind: 'tool', title: event.tool_name || '原生工具',
+      id: event.tool_use_id, source: 'claude-hook', kind: 'tool', title: event.tool_name || '',
       status: event.hook_event_name === 'PreToolUse' ? 'running' : event.hook_event_name === 'PostToolUse' ? 'completed' : 'failed',
     });
     if (['PermissionRequest', 'Notification', 'StopFailure'].includes(event.hook_event_name)) this.emit('progress', {
@@ -414,6 +429,7 @@ class Claude extends EventEmitter {
     switch (event.hook_event_name) {
       case 'SessionStart': if (this.rootEnding) break; this.ready = true; this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告'); break;
       case 'UserPromptSubmit': {
+        if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false;
         // A settings hook observing a prompt is not its acceptance. The native
         // structured submission result acknowledges our own sends separately.
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
@@ -428,14 +444,14 @@ class Claude extends EventEmitter {
         }
         break;
       }
-      case 'PermissionRequest': this.rootTurn = null; if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); break;
+      case 'PermissionRequest': if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false; this.rootTurn = null; if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); break;
       case 'Notification':
-        if (/permission|elicitation|auth/.test(event.notification_type || '')) { this.rootTurn = null; if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); }
+        if (/permission|elicitation|auth/.test(event.notification_type || '')) { if (this.liveTurn) this.liveTurn.question = false; this.rootTurn = null; if (this.queued) this.queued.superseded = true; this.pending = null; this.emit('state', 'approval'); }
         break;
       case 'PreToolUse':
         if (this.pending) this.pending.replies.delete(event.prompt_id);
         if (this.queued) this.queued.replies.delete(event.prompt_id);
-        this.emit('activity', event.tool_name || '原生工具'); this.emit('state', 'working'); break;
+        this.emit('activity', event.tool_name || ''); this.emit('state', 'working'); break;
       case 'Stop': {
         const pending = this.queued?.prompts.has(event.prompt_id) ? this.queued : this.pending;
         // Native IDs, not arrival time or matching text, select the reply.
@@ -452,6 +468,7 @@ class Claude extends EventEmitter {
         break;
       }
       case 'StopFailure':
+        if (this.liveTurn) this.liveTurn.question = false;
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
         clearTimeout(this.pending?.displayTimer); this.pending = null;
         this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请查看失败记录。'); break;
@@ -968,11 +985,11 @@ class Codex extends EventEmitter {
   get nativeActivity() {
     if (!this.turnId || this.nativeTurnFinished || this.stopped || this.transportDisconnected || !['working', 'approval'].includes(this.latestState)) return null;
     if (this.nativeObservationPending) return { nativeId: this.record.nativeId, turnId: this.turnId, stale: true };
-    const labels = { commandExecution: '执行命令', fileChange: '修改文件', mcpToolCall: '调用工具', dynamicToolCall: '调用工具', reasoning: '思考中', plan: '更新计划', agentMessage: '正在输出' };
+    const labels = { commandExecution: 'commandExecution', fileChange: 'fileChange', mcpToolCall: 'mcpToolCall', dynamicToolCall: 'dynamicToolCall', webSearch: 'webSearch', reasoning: 'reasoning', plan: 'plan', agentMessage: 'agentMessage' };
     const kinds = [...this.activeNativeItems.values()];
-    const kind = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'reasoning', 'plan', 'agentMessage'].find(type => kinds.includes(type));
+    const kind = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'reasoning', 'plan', 'agentMessage'].find(type => kinds.includes(type));
     return { nativeId: this.record.nativeId, turnId: this.turnId, startedAt: this.nativeStartedAt,
-      label: this.nativeWait || (this.nativeRetry === this.turnId ? '原生将重试' : '') || labels[kind] || '正在处理' };
+      label: this.nativeWait || (this.nativeRetry === this.turnId ? 'willRetry' : '') || labels[kind] || 'inProgress' };
   }
   publishNativeActivity() {
     const label = this.nativeActivity?.label || '';
@@ -987,7 +1004,7 @@ class Codex extends EventEmitter {
     this.publishNativeActivity();
   }
   observeStatus(status) {
-    this.nativeWait = status?.activeFlags?.includes('waitingOnUserInput') ? '等待回答' : status?.activeFlags?.includes('waitingOnApproval') ? '等待确认' : null;
+    this.nativeWait = status?.activeFlags?.includes('waitingOnUserInput') ? 'waitingOnUserInput' : status?.activeFlags?.includes('waitingOnApproval') ? 'waitingOnApproval' : null;
     if (status?.type === 'idle') this.emit('state', 'idle');
     else if (status?.type === 'active') this.emit('state', status.activeFlags?.some(flag => ['waitingOnApproval', 'waitingOnUserInput'].includes(flag)) ? 'approval' : 'working');
     else if (status?.type === 'systemError') this.emit('state', 'error');
@@ -1051,11 +1068,11 @@ class Codex extends EventEmitter {
       const item = p.item;
       this.liveToolItems.add(item.id);
       const fleetActivity = item.type === 'subAgentActivity';
-      const fleetTitle = { started: '子任务已启动', completed: '子任务本轮已结束', interacted: '已联系子任务' }[item.kind] || '原生团队活动';
+      const fleetTitle = item.kind || '';
       this.emit('progress', { id: item.id, turnId: p.turnId, inputTag, source: 'codex-native', kind: item.type,
         title: fleetActivity ? `${fleetTitle}${item.agentPath ? ' · ' + item.agentPath : ''}` : item.command || item.tool || item.type,
         status: fleetActivity ? 'observed' : toolStatus(item, message.method === 'item/completed'),
-        ...toolContent(item),
+        ...toolContent(item, message.method === 'item/completed'),
       });
     }
     if (['item/commandExecution/outputDelta', 'item/mcpToolCall/progress'].includes(message.method) && !this.historyMessageItems.has(p.itemId)) {
@@ -1068,7 +1085,7 @@ class Codex extends EventEmitter {
     if (message.method === 'item/fileChange/patchUpdated') {
       this.liveToolItems.add(p.itemId);
       this.emit('progress', {
-        id: p.itemId, turnId: p.turnId, inputTag, source: 'codex-native', kind: 'fileChange', title: '文件修改',
+        id: p.itemId, turnId: p.turnId, inputTag, source: 'codex-native', kind: 'fileChange', title: '',
         ...fileChanges(p.changes),
       });
     }
@@ -1150,7 +1167,7 @@ class Codex extends EventEmitter {
       }
       const nonBlocking = message.method === 'item/tool/requestUserInput' && p.isBlocking === false;
       if (message.method === 'item/tool/requestUserInput') request.question = this.rememberQuestion(p);
-      if (!nonBlocking) this.nativeWait = message.method.endsWith('/requestUserInput') ? '等待回答' : '等待确认';
+      if (!nonBlocking) this.nativeWait = message.method.endsWith('/requestUserInput') ? 'waitingOnUserInput' : 'waitingOnApproval';
       this.emit('progress', { id: request.id, source: 'codex-native', kind: message.method, title: nonBlocking ? '原生问题（此问题不阻塞本轮）' : '等待原生确认', status: 'waiting' });
       this.emit('approval', { requestId: message.id, method: message.method, params: p }, sourceRpc); if (!nonBlocking) this.emit('state', 'approval'); this.publishNativeActivity(); return;
     }
@@ -1211,7 +1228,7 @@ class Codex extends EventEmitter {
       case 'error': {
         const text = [p.error?.message, p.error?.additionalDetails].filter(value => typeof value === 'string' && value).join('\n\n');
         if (text) this.emit('nativeBlock', { id: `notice:error:${p.turnId || crypto.randomUUID()}`, nativeId: this.record.nativeId, kind: 'notice', turnId: p.turnId,
-          title: p.willRetry ? '原生错误 · 将重试' : '原生错误', text, status: 'complete' });
+          title: '', text, status: 'complete' });
         if (!p.turnId || p.turnId === this.turnId) {
           if (p.willRetry === true) { this.nativeRetry = this.turnId; this.publishNativeActivity(); }
           else this.emit('failed', '原生会话返回错误，请检查原文或同屏终端。');
@@ -1219,7 +1236,7 @@ class Codex extends EventEmitter {
         break;
       }
       case 'warning':
-        if (typeof p.message === 'string') this.emit('nativeBlock', { id: `notice:warning:${crypto.randomUUID()}`, nativeId: this.record.nativeId, kind: 'notice', title: p.threadId ? '原生提示' : '原生全局提示', text: p.message, status: 'complete' });
+        if (typeof p.message === 'string') this.emit('nativeBlock', { id: `notice:warning:${crypto.randomUUID()}`, nativeId: this.record.nativeId, kind: 'notice', title: '', text: p.message, status: 'complete' });
         break;
     }
   }

@@ -1,7 +1,44 @@
 # Readiness and next gates
 
-As of 2026-10-24. Version 0.1.0-alpha.93 is a **local macOS technical-trial alpha**.
+As of 2026-10-24. Version 0.1.0-alpha.94 is a **local macOS technical-trial alpha**.
 
+
+**Alpha.94 — preserve native wording with less display rewriting:** remove generated
+completion sentences and locally reconstructed footer clocks. An available original
+turn text stays verbatim, including Copy; empty successful boundaries do not create
+extra reader rows, while failed/interrupted boundaries remain visible. Codex search
+headings follow the inspected native 163/164 wording, with raw action/results still
+expandable. Exact terminal turn history ends recovered searches; an existing cut
+cannot be overwritten by late successful metadata. Summary/plan/file-change and
+missing-tool captions no longer add translated native content.
+
+The existing private native-request area also receives Claude AskUserQuestion's
+original question/options, correlated to the exact root tool ID. Answers, free text
+and cancellation still use the same native terminal; no replacement answer form
+or permission bypass was added. Cancelling that native question may finish without
+classic.Stop, so its exact live question turn now clears the stale working state.
+A later input, new turn, replay or observation gap cannot use this path to revive
+sharing or finish a different task. Stream phases expose protocol kinds rather
+than translated aliases; these are not literal TUI spinner words.
+
+965 checks pass without skips. Actual installed Claude 310 free-answer and
+cancel journeys, Codex 164 search/TUI/reload and Plan question/native-answer
+journeys pass with fixed loopback responses and zero paid inference. The retained
+302/alpha.2 upgrade, permission, private continuation and reopen use the matching
+source evidence. Installed real-UI fixtures verify verbatim Copy, abnormal rows,
+folding, inline mentions and shared/private/reopen boundaries without providers.
+All 55 runtime files match; post-native strict signing and a single launcher pass.
+Original three-session reopening preserves IDs/PIDs, all 64 current GUI records,
+raw backend records, model, drafts/views and hidden windows with zero portal
+submissions. An earlier volatile empty tool cache is filled from native history;
+this is distinguished from rewriting an already completed original.
+
+Full formatted Claude footers, every native menu/control and Recap/Next are still
+outside GUI 1:1 coverage. The original same-screen TUI retains them. Final independent source and installed-artifact review passes for B49. The public
+native hook provides footer word/duration but not its final formatted text/time;
+this increment deliberately does not guess that text or attach terminal rows to
+turns by timing. Source and installed evidence are recorded in [review](review.md).
+This is a bounded fidelity repair, not closure of full U17.
 
 **Alpha.93 — continue after cold recovery:** recovery can announce a new
 connection before its native runtime exists. The reader now waits for that runtime
