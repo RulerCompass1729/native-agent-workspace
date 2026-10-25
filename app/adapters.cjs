@@ -99,6 +99,7 @@ const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 // A running claude process whose arguments name this native session ID.
 function claudeHolder(nativeId) {
   if (!/^[a-f0-9-]{36}$/i.test(nativeId || '')) return null;
+  // Without ps the check cannot run; recovery then proceeds as it did before.
   let lines; try { lines = execFileSync('/bin/ps', ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024 * 1024 }).split('\n'); } catch { return null; }
   for (const line of lines) {
     const [pid, ...args] = line.trim().split(/\s+/);
@@ -131,7 +132,7 @@ class Claude extends EventEmitter {
     // Native has no lock: a second --resume writes the same transcript. Refuse
     // while another claude process (e.g. an external terminal) names this ID.
     const holder = record.recovering && claudeHolder(record.nativeId);
-    if (holder) throw new Error(`这个原生会话正在另一个进程中运行（PID ${holder}）。请先在那里退出，避免两个程序同时写同一会话。`);
+    if (holder) throw new Error(`另一个 claude 进程（PID ${holder}）引用了这个原生会话，可能正在写入。请先在那里退出，避免两个程序同时写同一会话。`);
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};

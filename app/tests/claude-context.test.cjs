@@ -324,10 +324,10 @@ test('a recovery refuses while another claude process holds the same native ID',
 test('native processes do not inherit the service locations',()=>{
  const { nativeEnvironment } = require('../platform.cjs');
  const saved={...process.env};
- Object.assign(process.env,{NAW_WORKSPACE:'/live/workspace',NAW_RUNTIME_CONFIG:'/live/runtime-locations.json',NAW_APP_VERSION:'9.9.9'});
+ Object.assign(process.env,{NAW_WORKSPACE:'/live/workspace',NAW_RUNTIME_CONFIG:'/live/runtime-locations.json',NAW_APP_VERSION:'9.9.9',NAW_DATA_DIR:'/live/profile'});
  try{
   const env=nativeEnvironment({NAW_HOOK_TOKEN:'token'});
-  for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION']) assert.equal(env[key],undefined,key);
+  for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION','NAW_DATA_DIR']) assert.equal(env[key],undefined,key);
   assert.equal(env.NAW_HOOK_TOKEN,'token','Per-session values are still passed');
- }finally{for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION']) if(key in saved) process.env[key]=saved[key]; else delete process.env[key];}
+ }finally{for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION','NAW_DATA_DIR']) if(key in saved) process.env[key]=saved[key]; else delete process.env[key];}
 });
