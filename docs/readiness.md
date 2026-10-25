@@ -2,6 +2,19 @@
 
 As of 2026-10-24. Version 0.1.0-alpha.97 is a **local macOS technical-trial alpha**.
 
+**2026-10-25 — single-agent dogfood preflight:** a bounded installed candidate
+with native Codex164 proves native goal creation, automatic continuation and
+completion while the NAW window is closed. Reopening preserves the native ID/PID,
+unsent draft and final GUI reply with one human dispatch. Four fixed local
+responses plus one title, zero paid inference; scoped Fable review14 passes.
+Real workday use, update during work and process-death recovery remain unproven.
+
+Claude candidate `fb249cc` passes 999 units and installed direct resume/background
+tasks, but installed resume-then-background reports ended while native work moves
+to its background. Fable review14 requires changes. The candidate is held outside
+main and the accepted alpha.97 application is restored; no whole-goal completion
+or candidate release is claimed. The existing original sessions are preserved.
+
 **Alpha.97 — scoped Claude branch integration accepted:** integrates the lane's
 committed native `/branch` transition, preserving the same session row/process,
 history and unsent draft while the GUI follows the confirmed new native ID.

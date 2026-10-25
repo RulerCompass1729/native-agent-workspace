@@ -14,20 +14,32 @@ const profile=path.join(temporary,'profile'),cwd=path.join(base,'work'),home=pat
 for(const p of[profile,cwd,home,userHome])fs.mkdirSync(p,{mode:0o700});
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
-let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,budgetError;const errors=[],checks=[];
+let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,releaseGoal,goalRpc,goalCodeMode,budgetError;const errors=[],checks=[];
 const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIVE_REJECTED_REQUEST: Keep This BODY exactly.';
+const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(budgetError)throw budgetError;if(await fn())return;await sleep(80);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++seq,...body})}\n\n`);}
 const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
  if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
  const input=JSON.parse(body),title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
- const n=title?0:++calls;if(title)titles++;if(calls>(failureTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
+ const n=title?0:++calls;if(title)titles++;if(calls>(goalTrial?4:failureTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
  assert.equal(input.model,'gpt-6-luna');
  fs.writeFileSync(path.join(base,`request-${title?'title-'+titles:n}.json`),JSON.stringify(input,null,2));
  if(failureTrial&&n===1){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:{type:'invalid_request_error',message:failureBody}}));return;}
  const response={id:'context_'+seq,object:'response',created_at:Math.floor(Date.now()/1000),status:'in_progress',model:input.model,output:[],usage:{input_tokens:10,output_tokens:10,total_tokens:20}};
  res.writeHead(200,{'content-type':'text/event-stream'});event(res,'response.created',{response});
+ if(goalTrial&&!title&&(n===1||n===3)){
+  const name=n===1?'create_goal':'update_goal',args=n===1?{objective:'Verify native goal continuation with the NAW window closed, then mark this bounded fixture complete.'}:{status:'complete'};
+  if(n===1)goalCodeMode=input.input?.some(m=>m.tools?.some(t=>t.type==='namespace'&&t.name==='functions'&&t.tools?.some(f=>f.name==='exec')));
+  if(goalCodeMode){
+   const item={id:'goal_'+n,type:'custom_tool_call',call_id:'native_goal_'+n,namespace:'functions',name:'exec',input:'text(await tools.'+name+'('+JSON.stringify(args)+'));',status:'completed'};
+   event(res,'response.output_item.added',{output_index:0,item:{...item,input:'',status:'in_progress'}});event(res,'response.output_item.done',{output_index:0,item});event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();return;
+  }
+  const item={id:'goal_'+n,type:'function_call',call_id:'native_goal_'+n,name,arguments:JSON.stringify(args),status:'completed'};
+  event(res,'response.output_item.added',{output_index:0,item:{...item,arguments:'',status:'in_progress'}});event(res,'response.function_call_arguments.delta',{output_index:0,item_id:item.id,delta:item.arguments});event(res,'response.function_call_arguments.done',{output_index:0,item_id:item.id,arguments:item.arguments});event(res,'response.output_item.done',{output_index:0,item});event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();return;
+ }
+ if(goalTrial&&n===2)await new Promise(resolve=>{releaseGoal=resolve;});
  if(process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'&&!title&&n===1){
   const search={id:'native_web_search',type:'web_search_call',status:'completed',action:{type:'search',query:'Seattle forecast'}};
   event(res,'response.output_item.added',{output_index:0,item:{...search,status:'in_progress'}});
@@ -80,7 +92,31 @@ async function nativeCommand(command){
   fs.writeFileSync(path.join(base,'native-metadata.json'),JSON.stringify(await snapshot(),null,2));
   console.log(JSON.stringify({checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
- await page.locator('#message-input').fill('Make one small local check.');await page.locator('#send-button').click();
+ await page.locator('#message-input').fill(goalTrial?'Create the bounded native goal, verify its continuation while this window is closed, then complete it.':'Make one small local check.');await page.locator('#send-button').click();
+ if(goalTrial){
+  await until(()=>releaseGoal,'Native goal created before the first turn finishes');
+  const net=require('node:net'),WebSocket=require('ws'),{Rpc}=require('../app/adapters.cjs');
+  const entries=require('../app/service-layout.cjs').readLayout(profile).entries;assert.equal(entries.length,1);
+  const endpoint=path.join(path.dirname(JSON.parse(fs.readFileSync(path.join(profile,entries[0],'connection.json'))).endpoint),'codex.sock');
+  const ws=new WebSocket('ws://localhost',{createConnection:()=>net.connect(endpoint),handshakeTimeout:10000});
+  await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject);});goalRpc=new Rpc(ws);
+  await goalRpc.call('initialize',{clientInfo:{name:'naw_owned_goal_witness',version:'1'},capabilities:{experimentalApi:true}});ws.send(JSON.stringify({method:'initialized',params:{}}));
+  const active=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});assert.equal(active.goal.status,'active');assert.equal(active.goal.tokenBudget,null);
+  fs.writeFileSync(path.join(base,'goal-active.json'),JSON.stringify(active,null,2));
+  await page.locator('#message-input').fill('Unsent draft retained while the native goal runs.');await sleep(300);
+  await app.close();app=null;releaseGoal();releaseGoal=null;
+  await until(async()=>calls===4&&(await goalRpc.call('thread/goal/get',{threadId:before.nativeId})).goal.status==='complete','Native automatic goal continuation completes without an Electron window',30000);
+  const completed=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});fs.writeFileSync(path.join(base,'goal-complete-window-closed.json'),JSON.stringify(completed,null,2));
+  assert.match(fs.readFileSync(path.join(base,'request-3.json'),'utf8'),/Continue working toward the active thread goal/);
+  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],env:{...process.env,NAW_DATA_DIR:profile,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});
+  await until(async()=>{for(const p of app.windows())if(!p.isClosed()&&await p.locator('#new-session').count().catch(()=>0)){page=p;return true;}return false;},'Goal witness reopens');page.on('pageerror',e=>errors.push(e.message));
+  await page.locator('#messages').getByText('CONTEXT_TASK_4',{exact:true}).waitFor();
+  assert.equal(await page.locator('#message-input').inputValue(),'Unsent draft retained while the native goal runs.');
+  const reopened=await snapshot();assert.equal(reopened.sessions[0].nativeId,before.nativeId);assert.equal(reopened.sessions[0].pid,before.pid);assert.equal(reopened.diagnostics.dispatches,1);assert.equal(calls,4);assert.deepEqual(errors,[]);
+  fs.writeFileSync(path.join(base,'goal-reopened.json'),JSON.stringify(reopened,null,2));
+  if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'goal-reopened.png')});
+  console.log(JSON.stringify({checks:['Actual native goal create/automatic continuation/complete works through the installed app with its window closed; same thread/process, draft and final reader retained on reopen, one human dispatch'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+ }
  if(failureTrial){
   await until(async()=>{const s=(await snapshot()).sessions[0];return s.messages.some(m=>m.kind==='notice'&&m.text.includes(failureBody))&&s.messages.some(m=>m.kind==='turn'&&m.status==='failed')&&s.state==='idle';},'Native failure finishes without claiming a successful response');
   const failed=await snapshot(),s=failed.sessions[0],notice=s.messages.find(m=>m.kind==='notice'&&m.text.includes(failureBody));
@@ -245,7 +281,7 @@ async function nativeCommand(command){
  checks.push('Read-only native history catalog retains the original contexts without another task');
  assert.equal(calls,3);assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));
 })().catch(async e=>{console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
- releaseRetry?.();if(app)await app.close().catch(()=>{});server.closeAllConnections();
+ releaseRetry?.();releaseGoal?.();goalRpc?.ws.close();if(app)await app.close().catch(()=>{});server.closeAllConnections();
  try{const c=await connect(profile,'native-context-cleanup');try{for(const s of(await c.call('initial')).sessions)await c.call('stop',s.id);const owned=c.entries.map(e=>processIdentity(e.state.servicePid));for(const p of owned){assert.ok(p&&processMayBeAlive(p));process.kill(p.pid,'SIGTERM');}await until(()=>owned.every(p=>!processMayBeAlive(p)),'Owned service exit',15000);}finally{c.close();}}catch(e){console.error('Cleanup:',e.message);process.exitCode=1;}
  await new Promise(r=>server.close(r));
 }));

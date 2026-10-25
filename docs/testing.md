@@ -1,5 +1,28 @@
 # Bounded testing
 
+## Single-agent native goal preflight — 2026-10-25
+
+`NAW_NATIVE_GOAL_TRIAL=1 NAW_CODEX_VERSION=0.164.0` with native-first startup
+extends the existing context runner. Actual native create_goal and native automatic
+continuation complete while Electron is closed; thread/goal/get confirms active
+then complete. Reopening retains the same native ID/PID, unsent draft and final GUI
+reply with one human dispatch. Four fixed loopback responses plus one title, zero
+paid inference. Native code-mode calls use functions.exec rather than assuming
+flat tool declarations. The first failed harness assumption remains in the private
+evidence; the final witness restores exact temporary sets. Fable review14 passes
+this bounded scope and the private shared migration plan. No product runtime,
+scheduler or framework is added. This is not real productive use, a full workday,
+an in-flight application update or native-process-death recovery.
+
+The tested alpha.98 Claude integration candidate passes 999 units without skips
+and real310 direct resume/background, one fixed local reply each, but fails the
+resume-background combination. The original native display reports backgrounded
+while the GUI says ended. Independent review14 requires a lane fix, so that runtime
+candidate is held outside main and the accepted installed alpha.97 is restored.
+Its complete source diff, archive, passing/failed evidence and regression delta
+are retained privately. The Codex goal preflight is an independent test-only
+change; its Codex runtime path is unchanged by that rejected Claude candidate.
+
 ## Rejection, explicit continuation and thread closure — alpha.97
 
 `NAW_NATIVE_FAILURE_TRIAL=1` on `test-native-codex-context.cjs`, with Codex164
