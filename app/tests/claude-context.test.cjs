@@ -219,3 +219,53 @@ test('an exit for another reason ends at once; a fork start without an exit-like
  const g=await fixture(t);g.r.host={hookTargets:new Map()};g.r.cancelNativeAbort=()=>{};
  g.r.hook({hook_event_name:'SessionEnd',session_id:g.s.nativeId,reason:'other'});g.r.terminalClosed({confirmed:true});assert.equal(g.s.state,'ended');
 });
+test('CL310-02: /resume away then /background is shown as moved to background, not ended',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ const old=f.bind(),away=randomUUID(),bg=randomUUID();
+ r.endRoot({...old,reason:'resume'});r.hook({hook_event_name:'SessionEnd',session_id:old.sessionId,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:away,source:'resume'});
+ r.hook({hook_event_name:'SessionEnd',session_id:away,reason:'prompt_input_exit'});
+ r.terminalClosed({confirmed:true});assert.notEqual(s.state,'ended','Waits for a possible handoff of the switched-to session');
+ r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
+ assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));assert.equal(s.nativeId,old.sessionId);
+});
+test('CL310-02: after /resume away, a plain exit or a foreign/late fork never becomes background; the switch stays explicit',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};r.backgroundHandoffMs=20;
+ const old=f.bind(),away=randomUUID();
+ r.endRoot({...old,reason:'resume'});r.hook({hook_event_name:'SessionEnd',session_id:old.sessionId,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:away,source:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork'}); // a fork before the switched session ended (e.g. /fork copy)
+ assert.notEqual(s.state,'background');
+ r.hook({hook_event_name:'SessionEnd',session_id:away,reason:'prompt_input_exit'});r.terminalClosed({confirmed:true});
+ await new Promise(resolve=>setTimeout(resolve,60));
+ assert.equal(s.state,'ended');assert.match(s.activity,new RegExp(away.slice(0,8)),'Names the switched-to session whose continuation is not confirmed');
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork'});assert.equal(s.state,'ended','A late fork after the window cannot revive it');
+});
+test('stop() clears a pending background-handoff wait',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ r.terminal.stop=async()=>{};
+ r.hook({hook_event_name:'SessionEnd',session_id:s.nativeId,reason:'prompt_input_exit'});r.terminalClosed({confirmed:true});assert.ok(r.closedAwaitingBackground);
+ await r.stop();assert.equal(r.closedAwaitingBackground,null);
+});
+test('CL310-02: /resume back to a retired context of this row, then /background, is shown as moved to background',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ const first=s.nativeId;f.clear();const current=f.bind(),bg=randomUUID();
+ assert.equal(s.nativeContexts.at(-1).nativeId,first);
+ r.endRoot({...current,reason:'resume'});r.hook({hook_event_name:'SessionEnd',session_id:current.sessionId,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:first,source:'resume'});
+ r.hook({hook_event_name:'SessionEnd',session_id:first,reason:'prompt_input_exit'});
+ r.terminalClosed({confirmed:true});assert.notEqual(s.state,'ended');
+ r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
+ assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));
+});
+for(const [label,end,start] of [['resume','resume','resume'],['clear','clear','clear'],['branch','resume','fork']])test(`CL310-02: a further ${label} inside the switched session is followed, then /background is recognised`,async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ const old=f.bind(),away=randomUUID(),next=randomUUID(),bg=randomUUID();
+ r.endRoot({...old,reason:'resume'});r.hook({hook_event_name:'SessionEnd',session_id:old.sessionId,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:away,source:'resume'});
+ r.hook({hook_event_name:'SessionEnd',session_id:away,reason:end});r.hook({hook_event_name:'SessionStart',session_id:next,source:start});
+ assert.equal(r.switchedTo,next);
+ r.hook({hook_event_name:'SessionEnd',session_id:next,reason:'prompt_input_exit'});r.terminalClosed({confirmed:true});
+ r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
+ assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));
+});

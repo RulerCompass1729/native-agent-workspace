@@ -141,7 +141,7 @@ class Claude extends EventEmitter {
     // Native /background ends this root like /exit, then its daemon starts the
     // conversation under a new ID with this record's hook token. Briefly keep
     // the token routed so that start can arrive; otherwise this is a plain exit.
-    if (this.rootEnding?.reason === 'prompt_input_exit' && !this.backgroundTo) {
+    if ((this.rootEnding?.reason === 'prompt_input_exit' || this.switchedEnding === 'prompt_input_exit') && !this.backgroundTo) {
       this.closedAwaitingBackground = setTimeout(() => this.finishClose(), this.backgroundHandoffMs ?? 3000);
       return;
     }
@@ -153,7 +153,10 @@ class Claude extends EventEmitter {
     if (this.backgroundTo) {
       this.emit('background', { nativeId: this.record.nativeId, backgroundId: this.backgroundTo });
       this.emit('state', 'background');
-    } else this.emit('state', 'ended');
+    } else {
+      if (this.switchedTo) this.emit('activity', `原生终端已退出；它切换到的会话 ${this.switchedTo.slice(0, 8)} 是否在别处继续无法确认。`);
+      this.emit('state', 'ended');
+    }
   }
   bindRoot(message) {
     if (message.sessionId !== this.record.nativeId || this.rootEnding || !this.terminal?.alive) throw Error('Root unavailable');
@@ -421,7 +424,13 @@ class Claude extends EventEmitter {
         const expected = FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason];
         const successorSeen = (this.contextEvents || []).some(e => e.hook_event_name === 'SessionStart' &&
           e.session_id !== this.rootEnding.sessionId && e.source === expected);
-        if (!successorSeen) { this.rootEnding.unfollowed = true; return; }
+        if (!successorSeen) {
+          this.rootEnding.unfollowed = true;
+          // The same terminal now shows that session; its own exit-like end and a
+          // following fork are still this window's background handoff.
+          if (event.source === 'resume' && !event.agent_id) this.switchedTo = event.session_id;
+          return;
+        }
       }
       this.contextEvents ||= [];
       if (this.contextEvents.length >= 256 || this.contextEvents.reduce((n, e) => n + JSON.stringify(e).length, 0) + JSON.stringify(event).length > 1024 * 1024) {
@@ -432,12 +441,30 @@ class Claude extends EventEmitter {
     }
     // A fork start right after this root ended like /exit is native /background:
     // the conversation continues in the native daemon under the new ID.
-    if (event.hook_event_name === 'SessionStart' && event.source === 'fork' && !event.agent_id && !this.backgroundTo &&
-      this.rootEnding?.reason === 'prompt_input_exit' && this.rootEnding.sessionId === this.record.nativeId &&
-      typeof event.session_id === 'string' && event.session_id !== this.record.nativeId) {
+    if (this.switchedTo && event.hook_event_name === 'SessionEnd' && !event.agent_id && event.session_id === this.switchedTo) {
+      this.switchedEnding = event.reason; return;
+    }
+    // A further /resume, /clear or /branch inside the switched session moves the
+    // terminal on again; follow it so a later /background is still recognised.
+    if (this.switchedTo && this.switchedEnding && this.switchedEnding !== 'prompt_input_exit' &&
+      event.hook_event_name === 'SessionStart' && !event.agent_id && typeof event.session_id === 'string' &&
+      event.session_id !== this.switchedTo && event.session_id !== this.record.nativeId) {
+      this.switchedTo = event.session_id; this.switchedEnding = undefined; return;
+    }
+    const exitedHere = (this.rootEnding?.reason === 'prompt_input_exit' && this.rootEnding.sessionId === this.record.nativeId) ||
+      (this.switchedTo && this.switchedEnding === 'prompt_input_exit');
+    if (event.hook_event_name === 'SessionStart' && event.source === 'fork' && !event.agent_id && !this.backgroundTo && exitedHere &&
+      typeof event.session_id === 'string' && event.session_id !== this.record.nativeId && event.session_id !== this.switchedTo) {
       this.backgroundTo = event.session_id;
       if (this.closedAwaitingBackground) this.finishClose();
       return;
+    }
+    // A /resume back to a retired context of this row (e.g. the original after a
+    // /branch) is the same unfollowed switch; remember it before dropping its events.
+    if (event.hook_event_name === 'SessionStart' && event.source === 'resume' && !event.agent_id &&
+      this.rootEnding?.reason === 'resume' && !this.rootEnding.unfollowed && !this.switchedTo &&
+      event.session_id !== this.rootEnding.sessionId && this.record.nativeContexts?.some(c => c.nativeId === event.session_id)) {
+      this.rootEnding.unfollowed = true; this.switchedTo = event.session_id; return;
     }
     // Late events from a retired root must not become the current context's
     // replies, approvals, fleet or readiness. Its saved history stays intact.
@@ -628,7 +655,7 @@ class Claude extends EventEmitter {
     return request.done;
   }
   async openTerminal() { return this.terminal; }
-  async stop() { this.cancelNativeAbort(); await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
+  async stop() { this.cancelNativeAbort(); clearTimeout(this.closedAwaitingBackground); this.closedAwaitingBackground = null; await this.terminal.stop(); this.host.hookTargets.delete(this.token); return { state: 'ended' }; }
 }
 
 class Rpc extends EventEmitter {
