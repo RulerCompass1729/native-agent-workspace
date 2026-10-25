@@ -15,7 +15,7 @@ for (const dir of [profile, cwd, config, userHome]) fs.mkdirSync(dir, { mode: 0o
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 assert.match(nativeVersion, /^2\.1\.310\b/, 'Switch signals are verified against the native contract of 2.1.310 only');
-const switchCase = process.env.NAW_SWITCH_CASE || 'resume'; if (!['resume', 'background'].includes(switchCase)) throw Error('Unknown switch case');
+const switchCase = process.env.NAW_SWITCH_CASE || 'resume'; if (!['resume', 'background', 'resume-background'].includes(switchCase)) throw Error('Unknown switch case');
 let application, page, client, calls = 0;
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -123,7 +123,7 @@ async function sendFromGui(text, marker) {
   await sendFromGui('Say the first probe word.', 'SWITCH_PROBE_ONE');
   assert.equal(calls, 1);
   const original = (await snapshot()).sessions[0];
-  if (switchCase === 'resume') {
+  if (switchCase !== 'background') {
   // /branch is followed (verified separately); it gives a second session to resume away from.
   await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen').click();
   await page.keyboard.type('/branch'); await page.keyboard.press('Enter');
@@ -158,6 +158,20 @@ async function sendFromGui(text, marker) {
   assert.equal(await page.locator('#message-input').inputValue(), '切换前未发送的草稿');
   assert.equal(calls, 1);
   checks.push('After a native /resume away the same process is shown as switched (not exiting), the GUI keeps its last verified identity and the draft');
+  if (switchCase === 'resume-background') {
+    await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen').click();
+    await page.keyboard.type('/background');
+    await until(async () => (await editLine()).startsWith('❯ /background'), 'Background command on the resumed native edit line');
+    await stage('resume-background-line'); await page.keyboard.press('Enter');
+    await until(async () => ['background', 'ended', 'error', 'recoverable', 'disconnected'].includes((await snapshot()).sessions[0].state), 'Resumed native display leaves');
+    const combined = (await snapshot()).sessions[0]; await stage('resume-background');
+    if (process.env.NAW_EVIDENCE_DIR) { fs.writeFileSync(path.join(process.env.NAW_EVIDENCE_DIR, 'resume-background.json'), JSON.stringify(combined, null, 2)); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'resume-background.png') }); }
+    assert.match(await terminalText(), /claude agents|claude attach/, 'The original native display reports its background handoff');
+    assert.ok(ownedNativeProcesses().length > 0, 'The owned native background process really continues');
+    assert.notEqual(combined.state, 'ended', 'This run proves the background handoff (TUI text and owned daemon above), so the row must not say ended');
+    assert.ok(!(await row.innerText()).includes('已结束'));
+    checks.push('Resume then background keeps the observed handoff or an explicit unknown state, without claiming that native work ended');
+  }
   } else {
   await openChat(); await page.locator('#message-input').fill('切换前未发送的草稿');
   const row = page.locator(`[data-session-id="${original.id}"]`);

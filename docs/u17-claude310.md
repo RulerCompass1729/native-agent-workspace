@@ -12,7 +12,7 @@ As of 2026-10-24。本文件是 [interaction](interaction.md) 中 U17 验收表�
 
 | GUI 事实 | 必须保持的含义 | 证据与状态 |
 | --- | --- | --- |
-| 线程身份 | clear/branch 跟随；普通 `/resume` 到别的会话不跟随且不冒充退出；`/background` 不冒充结束 | clear：`test-native-blocks.cjs`。branch：`test-native-branch.cjs`，alpha.97 安装版通过。`CL-INV-04`（`test-native-switch.cjs`，两种 case 各 1 次固定回复）：`/resume` 后行状态为“原生已切换会话”，进程、草稿与最后确认的身份保留，停止按钮可用；`/background` 后为“已转到后台运行”，活动写明后台会话 ID 与 `claude agents`/`claude attach`，不提供恢复旧 ID，可移除该行；应用重开后状态与说明保留（单元测试）；运行服务可正常关闭。已知限制：先 `/resume` 到别的会话再 `/background` 时仍显示“已结束”。**待安装版验收** |
+| 线程身份 | clear/branch 跟随；普通 `/resume` 到别的会话不跟随且不冒充退出；`/background` 不冒充结束 | clear：`test-native-blocks.cjs`。branch：`test-native-branch.cjs`，alpha.97 安装版通过。`CL-INV-04`（`test-native-switch.cjs`，两种 case 各 1 次固定回复）：`/resume` 后行状态为“原生已切换会话”，进程、草稿与最后确认的身份保留，停止按钮可用；`/background` 后为“已转到后台运行”，活动写明后台会话 ID 与 `claude agents`/`claude attach`，不提供恢复旧 ID，可移除该行；应用重开后状态与说明保留（单元测试）；运行服务可正常关闭。先 `/resume` 到别的会话（含分支后切回原会话）再 `/background`，同样显示为转到后台；没有交接证据时显示“已结束”并写明切换到的会话是否继续无法确认（CL310-02，`NAW_SWITCH_CASE=resume-background`）。**待安装版验收** |
 | 状态 | 运行/空闲/结束/等审批/等回答/中断/排队；终端退出不冒充结束 | 中断：`test-native-abort.cjs`（310）。问题等待：alpha.94 安装版。排队：`test-native-queue.cjs` 放开 310 后源码运行通过（同一 nativeId/pid，排队只送达一次；运行摘要随私有证据保存）。后台转移见上行 |
 | 用户输入、助手正文 | 原文不改写，真实流式边界才结束 | `test-native-blocks.cjs`（307–310）；alpha.94 安装版原文任务 |
 | 工具调用与结果 | 原生公开字段、正文与终态；非文本只标未完整 | `test-native-blocks.cjs` 工具输入/完成/顺序；非文本结果只有单元测试 |
