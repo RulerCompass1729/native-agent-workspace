@@ -1,5 +1,30 @@
 # Bounded testing
 
+## Rejection, explicit continuation and thread closure — alpha.97
+
+`NAW_NATIVE_FAILURE_TRIAL=1` on `test-native-codex-context.cjs`, with Codex164
+and native-first startup, tests an actual nonretryable HTTP400 from a loopback
+provider. GUI error text/failed boundary remain intact, no assistant reply is
+invented and no automatic resubmission occurs. One explicit next GUI task completes
+in the same native thread. Two task attempts plus one native title, zero paid
+inference. The native TUI hard-wraps the error; only its display comparison ignores
+whitespace, while the GUI text is checked verbatim.
+
+`NAW_NATIVE_CLOSED_TRIAL=1` on `test-native-confirmation.cjs` separately sends a
+controlled `thread/closed` notification through the real adapter/workspace and
+installed GUI. Injection enters the session runtime directly, bypassing host
+per-thread routing; it does not certify that routing. It displays ended, retains
+native identity and the unsent draft,
+and makes no task dispatch or provider call. This bounded mode does not execute
+or certify the older approval-history scenario. Two attempts to extend that full
+scenario encountered obsolete heading/removed-progress-panel selectors before
+the closure assertion; those are retained as failed harness trials, not passes.
+Actual display-only exit/continuation reuses the unchanged native identity task.
+Both final witnesses exit successfully and restore identical complete temporary
+sets; all 56 runtime payloads, strict signature after native use and single-launcher
+check still pass. Fable review13 passes these bounded scopes. These test-only additions do not
+rebuild or bump the application.
+
 ## Owned temporary resources — alpha.95
 
 All 57 standalone temporary-profile scripts allocate through the explicit

@@ -40,6 +40,24 @@ async function run() {
   await page.locator('#confirm-create').click();
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Session ready');
   const id = (await snapshot()).sessions[0].id;
+  if (process.env.NAW_NATIVE_CLOSED_TRIAL === '1') {
+    const before = (await snapshot()).sessions[0];
+    await page.locator('#message-input').fill('Draft retained after native closure.');
+    await event(id, { method: 'thread/closed', params: { threadId: before.nativeId } });
+    await until(async () => (await snapshot()).sessions[0].state === 'ended', 'Native thread closure reaches the original GUI row');
+    assert.match(await page.locator('#session-status').innerText(), /已结束/);
+    const ended = await snapshot();
+    assert.equal(ended.sessions[0].nativeId, before.nativeId);
+    assert.equal(await page.locator('#message-input').inputValue(), 'Draft retained after native closure.');
+    assert.equal((await fixture('inspect')).calls.some(c => ['turn/start', 'turn/steer'].includes(c.method)), false);
+    assert.equal(ended.diagnostics.dispatches, 0); assert.deepEqual(errors, []);
+    const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
+    assert.deepEqual(windows, [{ visible: false, focusable: false }]);
+    if (evidence) fs.writeFileSync(path.join(evidence, 'native-closed.json'), JSON.stringify(ended, null, 2));
+    await shot('native-closed');
+    console.log(JSON.stringify({ checks: ['Installed controlled thread/closed notification preserves native identity/draft and displays ended, without a task dispatch; display exit alone is separately native-tested'], modelTasks: 0, nativeProcesses: 0, profile, windows }));
+    return;
+  }
   await page.locator('#message-input').fill('这份草稿保留，不发送');
   await request(id, 7, '第一项合成确认');
   await page.locator('#approval').getByText('第一项合成确认', { exact: true }).waitFor();

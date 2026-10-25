@@ -19,12 +19,12 @@ GUI 事实按下列用户任务验收，每项需要安装版、零付费推理�
 | GUI 事实 | 必须保持的含义 | 安装版证据与状态 |
 | --- | --- | --- |
 | 线程身份 | new/resume/fork 跟随明确原生结果；退出显示端后继续同一线程，不靠全局 started 猜身份 | 复用 alpha.91 Codex164 安装版上下文任务，仅身份范围；Fable review08 核对相关代码未变并通过，不复用旧完成文案 |
-| 状态 | running/idle/ended/等待审批/等待回答/已中断；终端退出不冒充模型结束，enqueue 不冒充接受 | `C164-TOOLS-01` 审批→执行→idle、alpha.94 问题等待状态经 review08 通过；`C164-PLAN-01` 原生 Escape 的 interrupted 与复开经 review09 通过；原生断流/retry→idle 经 Fable review10 通过 |
+| 状态 | running/idle/ended/等待审批/等待回答/已中断；终端退出不冒充模型结束，enqueue 不冒充接受 | `C164-TOOLS-01` 审批→执行→idle、alpha.94 问题等待状态经 review08 通过；`C164-PLAN-01` 原生 Escape 的 interrupted 与复开经 review09 通过；原生断流/retry→idle 经 Fable review10 通过。`C164-END-01` 安装 alpha.97 受控 thread/closed 事件验证已结束、身份/草稿保留且零派发；不冒充实际 CLI 关闭证据；Fable review13 按 runtime→GUI 范围通过 |
 | 用户输入、助手正文 | 正文与来源不改写，不跨线程拼接；真实流式边界才结束消息块 | 复用 alpha.91 上下文任务、alpha.94 原文任务，经 Fable review08 核证；alpha.96 输入回归经 review07、原生 Plan 正文与截断经 review09 通过 |
 | 工具调用与结果 | 原生公开字段、正文和终态；缺失或截断不伪装完整 | `C164-TOOLS-01` 安装 alpha.96 / Codex164：实际文件审批、写入与读取；原生 add/diff 和输出正文、重载与同线程恢复通过；Fable review08 通过。alpha.94 搜索只证明原文标题和 query，不当作搜索结果正文证据 |
 | 问题与选项 | 原文及对应等待状态；交互由同屏 TUI 处理 | alpha.94 Codex164 Plan 问题/回答安装版证据；Fable review08 通过原文和等待状态范围，不据此覆盖所有问题变体 |
 | Plan | GUI 原样呈现 proposed plan 正文与当前模式；update_plan 步骤进度、接受/修改在同屏 TUI，不补写模型计划 | `C164-PLAN-01` 安装 alpha.96 / Codex164：原生 Plan 模式、流式正文、同块完成、共享范围、原生截断与复开通过；四个固定任务和一个标题响应，零付费；Fable review09/10 通过。步骤进度没有 GUI 投影，不据此宣称已实现 |
-| 错误 | 原生公开错误正文原样显示；可重试不等于失败结束；TUI 自身排版仍由 TUI 保留 | `C164-RETRY-01` 安装 alpha.96 / Codex164：实际断流、原生 willRetry、GUI 原文、TUI 重连、同线程恢复及计时隐藏通过；两个固定任务和一个原生标题响应，零付费；Fable review10 通过 |
+| 错误 | 原生公开错误正文原样显示；可重试不等于失败结束；TUI 自身排版仍由 TUI 保留 | `C164-RETRY-01` 安装 alpha.96 / Codex164：实际断流、原生 willRetry、GUI 原文、TUI 重连、同线程恢复及计时隐藏通过，Fable review10 通过。`C164-FAIL-01` 安装 alpha.97 / Codex164：不可重试的拒绝保留原文和 failed 边界，无虚构助手回复/自动重发；下一条显式 GUI 任务在同线程完成。两次本地任务请求和一个标题响应，零付费；Fable review13 通过 |
 | 模型与 effort | 只显示当前原生报告，线程改变后不沿用旧线程字段 | `C164-SET-01` 安装 alpha.95 的三次原生 model/effort 切换，GUI 标题一致；零推理；Fable review08 核证复用通过 |
 | 用量 | 只表示原生报告的线程/周期范围；未知保持未知，不混算标题或他人线程 | 安装 alpha.91 / Codex164 定向协作任务验证实际用量与 session/room 范围；同版本合成 UI 验证未知非零与刷新无派发；Fable review08 核证最终通过记录，排除失败试次 |
 | 回合起止、耗时 | GUI 运行计时只用已确认的原生开始时间，未知不显示；完成时间/耗时与 Worked/Cooked 文案保留同屏 TUI，不由 GUI 重构 | `C164-PLAN-01` 安装版完成/截断复开无运行计时或拼造 footer；`C164-TIME-01` 安装版受控事件验证未知→原生开始时间→未知→空闲的显示；零推理，Fable review10 通过 |

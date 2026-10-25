@@ -18,6 +18,14 @@ retains original three native IDs/PIDs, records and drafts with no new dispatch.
 Same-session headless Fable review12 approves this integration. This changes only the
 lane's branch path and its integration; the overall Claude fact goal remains open.
 
+Two additional installed alpha.97 witnesses pass without product-runtime changes:
+actual Codex164 nonretryable rejection→explicit next GUI task preserves the original
+error and same thread, with no invented assistant reply or automatic replay;
+controlled runtime-level `thread/closed` delivery displays ended while retaining identity/draft
+and dispatching nothing. The latter is a protocol-to-installed-UI check, not an
+actual CLI close trial. The first uses two local task attempts and one title,
+zero paid inference; both restore exact temporary sets. Fable review13 passes
+these scoped witnesses; closure injection bypasses host per-thread routing.
 
 **Alpha.96 — bounded input repair accepted; GUI-truth goal open:** the goal is accurate GUI facts
 with native interactions retained in the same-screen TUI, not recreating or
@@ -27,7 +35,7 @@ acceptance and independent review; Claude 310 implementation belongs to the
 separate lane, then main integrates and accepts.
 Visual approval, physical IME and external running-session attachment do not block.
 
-A measured input repair is still under review. Native Shift+Enter was decoded as
+A measured input repair passed independent review07. Native Shift+Enter was decoded as
 Enter, and Ctrl+/ was absent. The native program's keyboard mode now gates the
 ambiguous CSI-u encodings; snapshot/live state preserves it across reader reload
 and restores legacy encoding when native disables it. Original controls, ownership
