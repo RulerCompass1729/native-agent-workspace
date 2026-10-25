@@ -4,6 +4,26 @@ As of 2026-10-24。本文件是 [interaction](interaction.md) 中 U17 验收表�
 由 Claude lane 提供并经其独立审查；主线合并时仅调整为现行审计口径。**Claude 实现与安装版验收未完成。**
 每行明确归属 GUI 或同屏原生 TUI；命令和键位不再逐条执行验收。功能可用性仍受表中条件限制。
 
+## GUI 事实（Claude 310，lane 交付状态，2026-10-25）
+
+与 interaction 中 Codex 表同一标准：GUI 不与原生状态矛盾，交互留在同屏 TUI。
+“源码运行”是 lane 工作树里的真实 Electron + Claude 2.1.310（本地固定回复，零付费）；
+安装版验收由主线合并后完成。只处理改变会话身份或生命周期的命令，其余斜杠命令留在 TUI。
+
+| GUI 事实 | 必须保持的含义 | 证据与状态 |
+| --- | --- | --- |
+| 线程身份 | clear/branch 跟随；普通 `/resume` 到别的会话不跟随且不冒充退出；`/background` 不冒充结束 | clear：`test-native-blocks.cjs`。branch：`test-native-branch.cjs`，alpha.97 安装版通过。`CL-INV-04`（`test-native-switch.cjs`，两种 case 各 1 次固定回复）：`/resume` 后行状态为“原生已切换会话”，进程、草稿与最后确认的身份保留，停止按钮可用；`/background` 后为“已转到后台运行”，活动写明后台会话 ID 与 `claude agents`/`claude attach`，不提供恢复旧 ID，可移除该行；应用重开后状态与说明保留（单元测试）；运行服务可正常关闭。已知限制：先 `/resume` 到别的会话再 `/background` 时仍显示“已结束”。**待安装版验收** |
+| 状态 | 运行/空闲/结束/等审批/等回答/中断/排队；终端退出不冒充结束 | 中断：`test-native-abort.cjs`（310）。问题等待：alpha.94 安装版。排队：`test-native-queue.cjs` 放开 310 后源码运行通过（同一 nativeId/pid，排队只送达一次；运行摘要随私有证据保存）。后台转移见上行 |
+| 用户输入、助手正文 | 原文不改写，真实流式边界才结束 | `test-native-blocks.cjs`（307–310）；alpha.94 安装版原文任务 |
+| 工具调用与结果 | 原生公开字段、正文与终态；非文本只标未完整 | `test-native-blocks.cjs` 工具输入/完成/顺序；非文本结果只有单元测试 |
+| 问题与选项 | 原文与等待状态；作答在 TUI | alpha.94 安装版自由回答与取消；多问题、多选未验 |
+| Plan | GUI 不补写计划 | Claude 侧没有 Plan 投影，`ExitPlanMode` 显示为普通权限请求（工具名与输入原文）。**未验** |
+| 错误 | 原生错误正文原样，身份不变 | `test-native-error.cjs` 放开 310 后源码运行通过：阅读区与终端同显原生 400 正文，派发 1 次（运行摘要随私有证据保存） |
+| 模型与 effort | 只显示原生报告 | 310 正向单元测试（有效切换、无效与超长忽略）；未知版本不读取。真实 310 切换与 effort 未验 |
+| 用量 | 原生报告范围；未知不当零 | 310 正向单元测试（turn 结束后读取、缺值保持未知）；`test-native-addressed.cjs`（309/310）真实用量 |
+| 回合起止、耗时 | GUI 不重建计时 | GUI 不显示 Claude 计时，完整页脚在 TUI，无矛盾可能 |
+| 接入差异 | 明示或由用户决定 | CL-X01–X08。用户 2026-10-25 决定：CL-X02 不再强制关闭遥测（与普通 claude 一致）；CL-X03 关闭自动 session recap（`awaySummaryEnabled: false`，手动 `/recap` 仍可用），auto 模式分类器保持原生行为。一次早期源码运行中观察到切换标签后出现 recap 后台请求，原始证据未保留，触发时机未证实；测试配置已关闭 recap |
+
 问题：Claude 310 的 GUI 与原生 TUI 缺口没有完整清单。
 现有机制：`app/adapters.cjs` 的 Claude 启动参数、`app/claude-bridge/hooks/register.js` 订阅的原生事件、同屏 xterm。
 最小增量：按官方来源逐项列出，标明 GUI 原样或同屏原生 TUI，并单列 NAW 启动方式造成的差异。
@@ -28,6 +48,8 @@ hook、SDK 与引擎项包含非交互界面，数量不等于用户功能数，
 其中 3 个文档注明已移除，7 个按文档受 CL-X02 影响（探测无法单独证明原因），
 2 个依赖上下文，19 个需要 claude.ai 订阅、`gh` 登录、云会话或 Chrome，用 API key fixture 无法区分。
 这是菜单发现，不是执行验收。键位只有来源，尚无运行证据。逐项画面留在私有验证目录。
+
+2026-10-25 用户决定后（CL-X02、CL-X03）：NAW 不再设置 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`，启动设置加入 `awaySummaryEnabled: false` 与 `promptSuggestionEnabled: false`。下方凡写“受 CL-X02 影响/NAW 启动时关闭/不可用”的行，记录的是设置了该变量时的探测；现在这些功能按普通 claude 的条件可用，未逐项实测。测试脚本仍为隔离起见设置该变量，所以真实测试证据与产品启动在这一点上不同。
 
 发现证据 `CL-INV-02`：同样的隔离环境与启动方式，加了只记录 SessionStart/SessionEnd 的 hook。
 1 次本地固定回复，零付费。`/branch`：进程不变，原生会话 ID 变化，事件为 SessionEnd `resume`
@@ -60,7 +82,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-I05 `/` 命令补全、技能串联、`@` 文件提及、MCP prompts | `commands#how-the-command-menu-matches-what-you-type` | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生补全与上下文绑定 | **待验** |
 | CL-I06 图片粘贴与附件 | `keybindings#attachments-actions` | 同屏原生 TUI；在同屏原生 TUI 里用；**内嵌终端能否传入剪贴板图片待实测** | **待验** |
 | CL-I07 `!` shell 模式与后台 Bash | `interactive-mode#shell-mode-with--prefix; #background-bash-commands` | 同屏原生 TUI；在同屏原生 TUI 里用；不另起 shell 生命周期 | **待验** |
-| CL-I08 提示建议（灰字示例与下一步建议） | `interactive-mode#prompt-suggestions` | 同屏原生 TUI；**NAW 意图关闭**：每条建议是一次后台模型请求，与“无隐藏模型调用”冲突；但所传参数的交互模式效果未核（CL-X01） | **待验** |
+| CL-I08 提示建议（灰字示例与下一步建议） | `interactive-mode#prompt-suggestions` | **NAW 关闭**：启动设置 `promptSuggestionEnabled: false`（CL-X01） | 待安装版验收 |
 | CL-I09 拼写检查、emoji 短码、不可见字符提示 | `interactive-mode#check-spelling-as-you-type; #emoji-shortcodes` | 同屏原生 TUI；在同屏原生 TUI 里用 | **待验** |
 | CL-I10 语音输入 | `interactive-mode#voice-input` | 同屏原生 TUI；在同屏原生 TUI 里用；物理麦克风需实测 | **待验** |
 | CL-R01 助手正文流式显示、Markdown、链接 | `hooks#messagedisplay; engine ui.render` | GUI 原样；GUI 原文（`classic.MessageDisplay` 的可见内容）；原生排版在同屏原生 TUI 里用 | **待验** |
@@ -87,20 +109,20 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-S05 上下文压缩（手动、自动、空闲压缩） | `hooks#precompact; settings-reference#idlecompaction` | 同屏原生 TUI；在同屏原生 TUI 里用；**空闲压缩需要 feature flag，NAW 启动时不可用（CL-X02）** | **待验** |
 | CL-S06 错误、重试、重新登录与恢复 | `errors` | GUI 原样；GUI 原样显示原生 API 错误正文与失败边界；恢复操作在同屏原生 TUI 里用 | **待验** |
 | CL-S07 通知、终端标题、无障碍 | `terminal-config` | 同屏原生 TUI；在同屏原生 TUI 里用；**内嵌 xterm 是否转发系统通知与标题待实测** | **待验** |
-| CL-X01 `--prompt-suggestions false` | `app/adapters.cjs Claude 启动参数; cli-reference; interactive-mode#turn-prompt-suggestions-off` | 同屏原生 TUI；意图关闭后台建议请求。**文档只把该参数写在 `--print` 输出模式下**，交互模式的关闭方式是 `/config`、`promptSuggestionEnabled` 或 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION`；文档另称不获取 feature flag 时交互模式默认不显示建议（与 CL-X02 相关）。参数在交互模式的实际效果待验 | **待验** |
-| CL-X02 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` | `env-vars#features-that-need-feature-flag-fetching; env-vars CLAUDE_CODE_ARTIFACT_COMMENTS` | 同屏原生 TUI；**当前启动差异，已披露**：按官方文档，该变量关闭遥测、`/feedback`、release notes、PR 徽标与 artifacts，并关闭 feature flag 获取，约 15 项原生功能不可用（Remote Control、`/import`、`/skill-doctor`、advisor、云端技能同步、长粘贴识别、空闲压缩等）。菜单探测：`/advisor`、`/import`、`/skill-doctor`、`/remote-control`、`/artifacts`、`/artifact-capabilities`、`/artifact-diagramming` 未列出，但探测是首次会话且无对照，不能单独证明原因；`/feedback`、`/release-notes` 仍列出，执行结果待验。不设此变量的普通 claude 没有这些差异 | **待验** |
-| CL-X03 原生自行发起的后台模型请求 | `interactive-mode#session-recap; settings-reference#awaysummaryenabled; permission-modes; auto-mode-classifier-billing` | 同屏原生 TUI；**原生后台请求范围，已披露**：自动 session recap 默认开启（会话满 3 轮、上一轮结束 3 分钟且终端失焦后发一次后台请求）；auto 是原生默认权限模式，默认在会话自身的模型请求中检查操作，服务端检查不可用时原生会另发分类器请求。两者都是原生行为、NAW 未改，与 CL-X01 关闭建议请求的理由不一致 | **待验** |
+| CL-X01 `--prompt-suggestions false` | `app/adapters.cjs Claude 启动参数; cli-reference; interactive-mode#turn-prompt-suggestions-off` | **已处理（2026-10-25）**：该参数按文档只用于 `--print`；交互模式改由启动设置 `promptSuggestionEnabled: false` 关闭（官方交互开关），因为每条建议是一次后台模型请求 | 待安装版验收 |
+| CL-X02 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` | `env-vars#features-that-need-feature-flag-fetching; env-vars CLAUDE_CODE_ARTIFACT_COMMENTS` | **已决定（2026-10-25）**：NAW 不再设置该变量，遥测、feature flag 与相关原生功能与用户自己的 claude 一致 | 待安装版验收 |
+| CL-X03 原生自行发起的后台模型请求 | `interactive-mode#session-recap; settings-reference#awaysummaryenabled; permission-modes; auto-mode-classifier-billing` | **已决定（2026-10-25）**：NAW 启动设置 `awaySummaryEnabled: false` 关闭自动 session recap，手动 `/recap` 可用；auto 模式分类器保持原生行为 | 待安装版验收 |
 | CL-X04 Agent Teams 打开且 `teammateMode: in-process` | `env-vars CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS; settings-reference#teammatemode` | 同屏原生 TUI；有意设置：在同一终端内显示队友，不拆 tmux 窗格 | **待验** |
 | CL-X05 附加 MCP 服务 `native_workspace` 与插件目录 | `app/adapters.cjs Claude 启动参数` | 同屏原生 TUI；有意添加：`/mcp` 与工具列表多出 NAW 的定向消息工具 | **待验** |
 | CL-X06 `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` | `env-vars` | 同屏原生 TUI；有意设置：不自动安装官方插件市场 | **待验** |
 | CL-X07 `--allowedTools mcp__native_workspace__workspace_message` | `app/adapters.cjs Claude 启动参数; register.js tool.call` | 同屏原生 TUI；有意设置：预先允许 NAW 的定向消息工具，原生不再为它弹权限确认；是否放行改由 NAW 自己的协作授权检查决定。**影响真人控制，需在验收中写明** | **待验** |
 | CL-X08 设置文件加入 14 个 command hook | `app/adapters.cjs Claude 启动参数; app/claude_hook.py` | 同屏原生 TUI；有意设置：只做本地观察、不回答原生审批，每个 hook 限时 2 秒；`/hooks` 会列出这些 hook | **待验** |
 | CL-CMD001 `/add-dir <path>` | [命令:52](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
-| CL-CMD002 `/advisor [model\|off]` | [命令:53](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**：advisor 需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；当前仅披露，不改配置 |
+| CL-CMD002 `/advisor [model\|off]` | [命令:53](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**：advisor 需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；已于 2026-10-25 取消该变量 |
 | CL-CMD003 `/agents` | [命令:54](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；2.1.310 菜单标为 (removed)，只打印提醒 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
-| CL-CMD004 `/artifact-capabilities` | [命令:55](https://code.claude.com/docs/en/commands)；内置技能 | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；当前仅披露，不改配置 |
-| CL-CMD005 `/artifact-diagramming` | [命令:56](https://code.claude.com/docs/en/commands)；内置技能 | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；当前仅披露，不改配置 |
-| CL-CMD006 `/artifacts` | [命令:57](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；当前仅披露，不改配置 |
+| CL-CMD004 `/artifact-capabilities` | [命令:55](https://code.claude.com/docs/en/commands)；内置技能 | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；已于 2026-10-25 取消该变量 |
+| CL-CMD005 `/artifact-diagramming` | [命令:56](https://code.claude.com/docs/en/commands)；内置技能 | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；已于 2026-10-25 取消该变量 |
+| CL-CMD006 `/artifacts` | [命令:57](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；已于 2026-10-25 取消该变量 |
 | CL-CMD007 `/auto-mode-setup` | [命令:58](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD008 `/autocompact [auto\|<tokens>]` | [命令:59](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD009 `/autofix-pr [prompt]` | [命令:60](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：菜单未列出；需 claude.ai 订阅、`gh` 登录、云会话或 Chrome 等条件；探测用 API key fixture，无法区分是账号条件还是 CL-X02，**需在用户真实登录环境核对** |
@@ -145,7 +167,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-CMD048 `/help` | [命令:98](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD049 `/hooks` | [命令:99](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD050 `/ide` | [命令:100](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
-| CL-CMD051 `/import [codex\|gemini\|cursor] [--dry-run] [--yes]` | [命令:101](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**：需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；当前仅披露，不改配置 |
+| CL-CMD051 `/import [codex\|gemini\|cursor] [--dry-run] [--yes]` | [命令:101](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**：需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；已于 2026-10-25 取消该变量 |
 | CL-CMD052 `/init` | [命令:102](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD053 `/insights` | [命令:103](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD054 `/install-github-app` | [命令:104](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：菜单未列出；需 claude.ai 订阅、`gh` 登录、云会话或 Chrome 等条件；探测用 API key fixture，无法区分是账号条件还是 CL-X02，**需在用户真实登录环境核对** |
@@ -174,7 +196,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-CMD077 `/release-notes` | [命令:127](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；文档称同一变量关闭 release notes，菜单仍列出，**执行结果待验**（CL-X02） | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD078 `/reload-plugins [--force]` | [命令:128](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD079 `/reload-skills` | [命令:129](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
-| CL-CMD080 `/remote-control` | [命令:130](https://code.claude.com/docs/en/commands)；别名 `/rc` | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**：Remote Control 需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；当前仅披露，不改配置 |
+| CL-CMD080 `/remote-control` | [命令:130](https://code.claude.com/docs/en/commands)；别名 `/rc` | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**：Remote Control 需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；已于 2026-10-25 取消该变量 |
 | CL-CMD081 `/remote-env` | [命令:131](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：菜单未列出；需 claude.ai 订阅、`gh` 登录、云会话或 Chrome 等条件；探测用 API key fixture，无法区分是账号条件还是 CL-X02，**需在用户真实登录环境核对** |
 | CL-CMD082 `/rename [name]` | [命令:132](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD083 `/resume [session]` | [命令:133](https://code.claude.com/docs/en/commands)；别名 `/continue` | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；会在同一终端换到另一会话；选择器已实测可打开与取消，换会话后 GUI 是否跟随待验（现只跟随 clear） | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
@@ -189,7 +211,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-CMD092 `/setup-bedrock` | [命令:142](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD093 `/setup-vertex` | [命令:143](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD094 `/simplify [target]` | [命令:144](https://code.claude.com/docs/en/commands)；内置技能 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
-| CL-CMD095 `/skill-doctor` | [命令:145](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**：需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；当前仅披露，不改配置 |
+| CL-CMD095 `/skill-doctor` | [命令:145](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；**按文档在 NAW 启动环境下不可用**：需要 feature flag（CL-X02） | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；已于 2026-10-25 取消该变量 |
 | CL-CMD096 `/skills` | [命令:146](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD097 `/slides [brief]` | [命令:147](https://code.claude.com/docs/en/commands)；内置技能 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：菜单未列出；需 claude.ai 订阅、`gh` 登录、云会话或 Chrome 等条件；探测用 API key fixture，无法区分是账号条件还是 CL-X02，**需在用户真实登录环境核对** |
 | CL-CMD098 `/stats` | [命令:148](https://code.claude.com/docs/en/commands)；`/usage` 的别名 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；GUI 只显示原生 `session.usage()` 的范围用量 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |

@@ -195,3 +195,27 @@ test('events of an unfollowed new root (plain /resume) are dropped, not buffered
  assert.equal(r.contextEvents?.length||0,0);assert.equal(r.contextEventsOverflow,undefined);assert.equal(r.ready,false);assert.equal(s.nativeId,old.sessionId);
  assert.throws(()=>r.clearRoot({...old,nextSessionId:other,source:'fork'}),'A fork start cannot be claimed after a resume start was seen');
 });
+test('native /background: an exit-like end followed by a fork start with this token is shown as moved to background, not ended',async t=>{
+ const f=await fixture(t),{w,id,s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ const original=s.nativeId,bg=randomUUID();
+ r.hook({hook_event_name:'SessionEnd',session_id:original,reason:'prompt_input_exit'});assert.equal(s.state,'stopping');
+ r.terminalClosed({confirmed:true});assert.equal(s.state,'stopping','Waits briefly for a background handoff');assert.ok(r.host.hookTargets.has(r.token),'Token stays routed during the window');
+ r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
+ assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));assert.equal(s.nativeId,original,'The GUI row keeps its own native identity');
+ assert.equal(w.runtimes.has(id),false);assert.equal(r.host.hookTargets.has(r.token),false);
+ w.persist();const restored=new (require('../workspace.cjs').Workspace)({binaries:{},close(){}},f.dir);assert.equal(restored.get(id).state,'background','Reopen does not offer resuming the stale ID');assert.match(restored.get(id).activity,new RegExp(bg.slice(0,8)),'Reopen keeps the background ID text');restored.close();
+});
+test('a plain native /exit still ends after the short handoff window, and a late fork start cannot revive it',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};r.backgroundHandoffMs=20;
+ r.hook({hook_event_name:'SessionEnd',session_id:s.nativeId,reason:'prompt_input_exit'});r.terminalClosed({confirmed:true});
+ await new Promise(resolve=>setTimeout(resolve,60));assert.equal(s.state,'ended');assert.equal(r.host.hookTargets.has(r.token),false);
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork'});assert.equal(s.state,'ended');
+});
+test('an exit for another reason ends at once; a fork start without an exit-like root end is not background',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork'});assert.equal(r.backgroundTo,undefined);
+ r.hook({hook_event_name:'SessionEnd',session_id:s.nativeId,reason:'prompt_input_exit'});
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork',agent_id:'child'});assert.equal(r.backgroundTo,undefined);
+ const g=await fixture(t);g.r.host={hookTargets:new Map()};g.r.cancelNativeAbort=()=>{};
+ g.r.hook({hook_event_name:'SessionEnd',session_id:g.s.nativeId,reason:'other'});g.r.terminalClosed({confirmed:true});assert.equal(g.s.state,'ended');
+});
