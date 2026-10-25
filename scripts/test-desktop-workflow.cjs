@@ -1,13 +1,14 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron renderer/IPC/storage; provider replies and OS dialog selection
 // are controlled local fixtures. This does not certify physical macOS dialog use.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { execFileSync } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { execFileSync } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-desktop-workflow-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-desktop-workflow-'));
 const evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/daily-native.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
@@ -149,7 +150,7 @@ async function run() {
   passed.push('Detach → solo material draft → archive/reopen → app restart retains identity, shared results and private draft without replay');
   console.log(JSON.stringify({ passed, errors, syntheticDispatches: 6, nativeModelCalls: 0, oneWindow: true }, null, 2));
 }
-run().catch(async e => { console.error(e.stack, errors); if (page) await shot('failed').catch(() => {}); process.exitCode = 1; }).finally(async () => {
+run().catch(async e => { console.error(e.stack, errors); if (page) await shot('failed').catch(() => {}); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await closeApp(); if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
   if (evidence && frames && !process.exitCode) execFileSync('ffmpeg', ['-y', '-framerate', '1', '-i', path.join(evidence, 'frames', '%05d.png'), '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', path.join(evidence, 'desktop-workflow.mp4')], { stdio: 'ignore' });
-});
+}));

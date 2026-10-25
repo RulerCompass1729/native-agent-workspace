@@ -1,12 +1,13 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex tool execution and Electron with two bounded loopback summary streams.
 // Private native configuration; no paid inference or normal-profile edits.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { execFileSync } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { execFileSync } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs'), { connect } = require('../app/service-client.cjs');
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-summaries-'));
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-summaries-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex');
 for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('codex'); if (!binary) throw Error('Real Codex required');
@@ -178,7 +179,7 @@ async function launch() {
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nEvidence:', base, JSON.stringify({calls,titleCalls,releaseStart:Boolean(releaseStart),releaseFinal:Boolean(releaseFinal)})); process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   releaseStart?.(); releaseFinal?.(); server.closeAllConnections();
   if (application) await application.close().catch(() => {});
   try {
@@ -197,4 +198,4 @@ async function launch() {
     } finally { client.close(); }
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
   await new Promise(resolve => server.close(resolve));
-});
+}));

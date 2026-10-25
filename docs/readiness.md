@@ -1,7 +1,30 @@
 # Readiness and next gates
 
-As of 2026-10-24. Version 0.1.0-alpha.94 is a **local macOS technical-trial alpha**.
+As of 2026-10-24. Version 0.1.0-alpha.95 is a **local macOS technical-trial alpha**.
 
+
+**Alpha.95 — owned test scratch and daemon exit cleanup:** all 57
+standalone temporary-profile test entry points use one explicit allocator/finalizer.
+It registers owned processes, waits for teardown, handles errors and signals, and
+exports requested diagnostics before deleting the test profile. It does not sweep
+old temporary directories or touch a reused/user-supplied profile. Each daemon
+also removes only its own socket directory, including startup failure. Deliberate
+hard-kill trials record that directory before the crash; their owner can clean it
+after confirming the process has ended. Reusable native-history fixtures export
+provider data/workspaces separately from disposable Chromium profiles.
+
+Source full-unit and real UI/native trials restore the complete `naw-*` sets in
+both temporary roots. Export/import preserves the native history with no extra
+inference; the two crash fixtures now compare preserved records with pending
+statuses correctly changed to unknown after a dead connection. Installed
+acceptance passed: state/permissions, hard-crash recovery, large retained history and
+native-history import each restore identical directory sets in both temporary
+roots. All 981 units pass without skips. The 55 installed runtime files match;
+strict signing and the single application-search entry pass after native use.
+Hidden reopening retains all three original native IDs/PIDs, GUI records and
+drafts/views, with zero new portal dispatches. Headless Claude independent final review passes for this bounded cleanup task.
+Full U17 mapping is the active
+next goal, first Codex 164 then Claude 310; see [interaction](interaction.md).
 
 **Alpha.94 — preserve native wording with less display rewriting:** remove generated
 completion sentences and locally reconstructed footer clocks. An available original

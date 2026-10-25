@@ -1,9 +1,10 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Real hidden Electron navigation with many synthetic histories; no model tasks.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
-const { fork } = require('node:child_process'), { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-navigation-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-navigation-ui-'));
 const records = Array.from({ length: 90 }, (_, i) => ({ id: `synthetic-session-${i}`, nativeId: `synthetic-native-${i}`, name: `学习项目 ${String(i).padStart(2, '0')}`, provider: i % 2 ? 'claude' : 'codex', cwd: profile, roomId: null, view: 'chat', state: 'ended', messages: [{ id: `message-${i}`, role: 'assistant', text: `合成学习资料 ${i}`, status: 'complete' }], fleet: [], background: null, scheduled: null, model: 'synthetic', usage: null, pendingTag: null, activity: '' }));
 fs.writeFileSync(path.join(profile, 'workspace.json'), JSON.stringify({ sessions: records, room: { messages: [] }, drafts: {} }), { mode: 0o600 });
 fs.writeFileSync(path.join(profile, 'room-state.json'), JSON.stringify({ version: 1, name: '共同工作', notes: '', revision: 0, events: [], archived: false, archivedSessions: records.slice(60).map(s => s.id), restoreMembers: [] }), { mode: 0o600 });
@@ -102,11 +103,11 @@ async function run() {
   checks.push('Reopen reveals the selected history and preserves names, archives, native identities, content and drafts with zero native inputs or model tasks');
   console.log(JSON.stringify({ checks, geometry, errors, modelTasks: 0, nativeProcesses: 0, windows, profile }, null, 2));
 }
-run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await capture('failure'); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await capture('failure'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close(); if (client) client.close();
   if (child.exitCode === null && child.signalCode === null) await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(Error('Test-owned daemon did not exit')), 8000);
     child.once('exit', () => { clearTimeout(timer); resolve(); }); child.kill('SIGTERM');
   });
   console.log(JSON.stringify({ testDaemonExited: child.exitCode !== null || child.signalCode !== null }));
-});
+}));

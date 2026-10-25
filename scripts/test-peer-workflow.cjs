@@ -1,12 +1,13 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual hidden desktop, two independent local services and shipped routing.
 // Controlled provider transports; no native process or model inference.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
-const { fork } = require('node:child_process'), assert = require('node:assert/strict');
-const { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, assert = require('node:assert/strict');
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-peer-workflow-')), key = 'backends/' + 'b'.repeat(20);
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-peer-workflow-')), key = 'backends/' + 'b'.repeat(20);
 const children = [], errors = [], checks = [], version = require(path.join(code, 'package.json')).version;
 let app, page, observer, requestId = 0;
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -118,7 +119,7 @@ async function main() {
   fs.writeFileSync(path.join(profile, 'evidence.json'), JSON.stringify({ checks, state }, null, 2));
   console.log(JSON.stringify({ checks, syntheticDispatches: 7, nativeProcesses: 0, modelCalls: 0, evidence: profile }, null, 2));
 }
-main().catch(async error => { console.error(error.stack); process.exitCode = 1; if (page && !page.isClosed()) { console.error((await page.locator('#toast').innerText().catch(() => ''))); await page.screenshot({ path: path.join(profile, 'failure.png') }).catch(() => {}); } }).finally(async () => {
+main().catch(async error => { console.error(error.stack); process.exitCode = 1; if (page && !page.isClosed()) { console.error((await page.locator('#toast').innerText().catch(() => ''))); await page.screenshot({ path: path.join(profile, 'failure.png') }).catch(() => {}); } }).finally(testScratch.cleanup(async () => {
   observer?.close(); if (app) await app.close();
   for (const child of children) if (child.exitCode === null) child.kill('SIGTERM');
-});
+}));

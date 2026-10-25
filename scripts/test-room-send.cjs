@@ -1,9 +1,10 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real desktop/IPC/workspace, synthetic delayed replies. No native processes.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright'), { connect } = require('../app/service-client.cjs');
-const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root, profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-room-send-'));
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright')), { connect } = require('../app/service-client.cjs');
+const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root, profile = testScratch.directory(path.join(os.tmpdir(), 'naw-room-send-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/delayed-native.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, sequence = 0; const errors = [], passed = [];
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -144,8 +145,8 @@ async function run() {
   await page.locator('#room-messages').getByText('EXPLICIT-RECIPIENT-REPLY', { exact: true }).scrollIntoViewIfNeeded(); await capture('directed-default');
   assert.deepEqual(errors, []); assert.equal(app.windows().length, 1); console.log(JSON.stringify({ passed, errors, syntheticDispatches: 9, nativeProviderProcesses: 0, nativeModelCalls: 0, oneWindow: true }));
 }
-run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close(); if (client) { const s = await client.call('initial'); for (const x of s.sessions) await client.call('stop', x.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
-});
+}));
 
 async function chooseRecipient(id) { await inlineRecipient(page, id); }

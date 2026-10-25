@@ -1,11 +1,16 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual Electron + Codex TUI; fixed loopback inference, isolated credentials/config.
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http');
-const assert=require('node:assert/strict'),{execFileSync}=require('node:child_process');
-const {_electron}=require('playwright');
+const assert=require('node:assert/strict'),{execFileSync}=testScratch.childProcess;
+const {_electron}=testScratch.playwright(require('playwright'));
 const {executable,processIdentity,processMayBeAlive}=require('../app/platform.cjs');
 const {connect}=require('../app/service-client.cjs');
-const root=path.resolve(__dirname,'..'),base=fs.mkdtempSync(path.join(os.tmpdir(),'naw-native-context-'));
-const profile=path.join(base,'profile'),cwd=path.join(base,'work'),home=path.join(base,'codex');
+const root=path.resolve(__dirname,'..'),temporary=testScratch.directory(path.join(os.tmpdir(),'naw-native-context-'));
+// Only the explicitly requested reusable native fixture survives; Chromium does not.
+const base=process.env.NAW_EVIDENCE_DIR?path.resolve(process.env.NAW_EVIDENCE_DIR,'fixture',path.basename(temporary)):temporary;
+fs.mkdirSync(base,{recursive:true,mode:0o700});
+fs.writeFileSync(path.join(base,'owned-fixture.json'),JSON.stringify({kind:'naw-native-fixture-v1',producer:'test-native-codex-context.cjs',uid:process.getuid()}),{mode:0o600});
+const profile=path.join(temporary,'profile'),cwd=path.join(base,'work'),home=path.join(base,'codex');
 for(const p of[profile,cwd,home])fs.mkdirSync(p,{mode:0o700});
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
@@ -208,8 +213,8 @@ async function nativeCommand(command){
  assert.ok(catalog.data.some(row=>row.nativeId===before.nativeId||row.nativeId===current),'The original native thread remains in the read-only catalog');
  checks.push('Read-only native history catalog retains the original contexts without another task');
  assert.equal(calls,3);assert.deepEqual(errors,[]);console.log(JSON.stringify({checks,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));
-})().catch(async e=>{console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(async()=>{
+})().catch(async e=>{console.error(e.stack,'\nEvidence:',base);if(page&&!page.isClosed()){fs.writeFileSync(path.join(base,'failure.txt'),await page.locator('body').innerText());await page.screenshot({path:path.join(base,'failure.png')});}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
  releaseRetry?.();if(app)await app.close().catch(()=>{});server.closeAllConnections();
  try{const c=await connect(profile,'native-context-cleanup');try{for(const s of(await c.call('initial')).sessions)await c.call('stop',s.id);const owned=c.entries.map(e=>processIdentity(e.state.servicePid));for(const p of owned){assert.ok(p&&processMayBeAlive(p));process.kill(p.pid,'SIGTERM');}await until(()=>owned.every(p=>!processMayBeAlive(p)),'Owned service exit',15000);}finally{c.close();}}catch(e){console.error('Cleanup:',e.message);process.exitCode=1;}
  await new Promise(r=>server.close(r));
-});
+}));

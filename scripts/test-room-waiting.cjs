@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual hidden Electron actions; controlled provider acknowledgements only.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process'), { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-room-wait-')), evidence = process.env.NAW_EVIDENCE_DIR;
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-room-wait-')), evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/daily-native.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
@@ -151,8 +152,8 @@ async function run() {
   checks.push('Directed sends identify their recipient while waiting, offer no false task cancellation and retain a newer draft when acknowledgement arrives');
   assert.deepEqual(errors, []); console.log(JSON.stringify({ checks, dispatches: 12, modelCalls: 0, errors }, null, 2));
 }
-run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close().catch(() => {});
   if (client) { try { for (const s of (await snapshot()).sessions) await client.call('stop', s.id); await client.call('shutdown'); } finally { client.close(); } }
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-});
+}));

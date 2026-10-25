@@ -1,13 +1,14 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex and Electron with two canned loopback Responses streams.
 // Private native configuration; no paid inference or normal-profile edits.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { execFileSync, fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { execFileSync, fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs'), { connect, connectService } = require('../app/service-client.cjs');
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-steer-'));
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-steer-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), home = path.join(base, 'codex');
 for (const dir of [profile, cwd, home]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('codex'); if (!binary) throw Error('Real Codex required');
@@ -160,7 +161,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   release?.(); releaseSecond?.(); server.closeAllConnections();
   if (application) await application.close().catch(() => {});
   legacyClient?.close();
@@ -181,4 +182,4 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
   if (child?.connected) child.disconnect();
   await new Promise(resolve => server.close(resolve));
-});
+}));

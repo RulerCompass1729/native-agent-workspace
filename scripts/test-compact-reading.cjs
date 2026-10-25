@@ -1,9 +1,10 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-compact-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-compact-ui-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/native-progress.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let application, page, client, sequence = 0; const errors = [], checks = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -162,9 +163,9 @@ async function run() {
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
   console.log(JSON.stringify({ checks, metrics, stats, windows, errors }, null, 2));
 }
-run().catch(async error => { console.error(error.stack); await capture('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => { console.error(error.stack); await capture('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (application) await application.close();
   if (client) { await fixture('stop'); await client.call('shutdown'); client.close(); }
   if (child.connected) child.disconnect();
   await until(() => child.exitCode !== null, 'Owned fixture daemon exits');
-});
+}));

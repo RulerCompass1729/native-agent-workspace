@@ -1,8 +1,9 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
-const {fork}=require('node:child_process'),{_electron}=require('playwright');
+const {fork}=testScratch.childProcess,{_electron}=testScratch.playwright(require('playwright'));
 const root=path.resolve(__dirname,'..'),code=process.env.NAW_TEST_APP_ROOT||root,{connect}=require(path.join(code,'app/service-client.cjs'));
-const profile=fs.mkdtempSync(path.join(os.tmpdir(),'naw-context-ui-')),evidence=process.env.NAW_EVIDENCE_DIR;
+const profile=testScratch.directory(path.join(os.tmpdir(),'naw-context-ui-')),evidence=process.env.NAW_EVIDENCE_DIR;
 if(evidence)fs.mkdirSync(evidence,{recursive:true,mode:0o700});
 const child=fork(path.join(code,'app/daemon.cjs'),[profile],{execArgv:['--require',path.join(__dirname,'fixtures/context-native.cjs')],env:{...process.env,NAW_APP_VERSION:require(path.join(code,'package.json')).version,NAW_WORKSPACE:profile,NAW_TEST_APP_ROOT:code},stdio:['ignore','ignore','inherit','ipc']});
 let app,page,client,seq=0;const checks=[],errors=[],delay=ms=>new Promise(r=>setTimeout(r,ms));
@@ -37,4 +38,4 @@ async function launch(){app=await _electron.launch({executablePath:process.env.N
  await app.close();app=null;await launch();await page.locator(`[data-session-id="${id}"]`).click();await page.locator('#chat-tab').click();
  const after=(await snapshot()).sessions[0];assert.equal(after.nativeId,before.nativeId);assert.deepEqual(after.nativeContexts,before.nativeContexts);assert.deepEqual(after.messages,before.messages);assert.equal(await page.locator('#message-input').inputValue(),before.liveDraft);assert.equal((await fixture('stats')).sends.length,3);
  checks.push('UI reopen preserves exact context history, current native identity and draft with no dispatch');assert.deepEqual(errors,[]);checks.forEach(c=>console.log('PASS',c));console.log(JSON.stringify({checks:checks.length,syntheticSubmissions:3,modelCalls:0,errors}));
-})().catch(async e=>{console.error(e.stack);await shot('failure').catch(()=>{});process.exitCode=1}).finally(async()=>{if(app)await app.close().catch(()=>{});if(client){try{for(const s of(await snapshot()).sessions)await client.call('stop',s.id);await client.call('shutdown')}catch{}client.close()}if(child.exitCode===null&&!child.signalCode)child.kill('SIGTERM')});
+})().catch(async e=>{console.error(e.stack);await shot('failure').catch(()=>{});process.exitCode=1}).finally(testScratch.cleanup(async()=>{if(app)await app.close().catch(()=>{});if(client){try{for(const s of(await snapshot()).sessions)await client.call('stop',s.id);await client.call('shutdown')}catch{}client.close()}if(child.exitCode===null&&!child.signalCode)child.kill('SIGTERM')}));

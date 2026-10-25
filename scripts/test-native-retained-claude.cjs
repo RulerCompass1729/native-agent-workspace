@@ -1,14 +1,15 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual alpha.2 backend + Claude 2.1.302 + current Electron. Three loopback
 // responses (four with NAW_RETAINED_QUEUE=1, five with NAW_RETAINED_SHARED=1), zero paid inference. No original profile or global keyboard access.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { fork, execFileSync } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork, execFileSync } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
 const { connectService, connect } = require(path.join(code, 'app/service-client.cjs'));
 const { installPlugin } = require(path.join(code, 'app/legacy-input.cjs'));
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-retained-claude-'));
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-retained-claude-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), config = path.join(base, 'claude'), old = path.join(base, 'old'), bin = path.join(base, 'bin');
 for (const directory of [profile, cwd, config, old, bin]) fs.mkdirSync(directory, { mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_302;
@@ -447,9 +448,9 @@ async function launch() {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {}); }
   if (client) try { const s = (await client.call('initial')).sessions[0]; fs.writeFileSync(path.join(base, 'failure-native.json'), JSON.stringify(await client.call('snapshot', s.id))); } catch {}
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   finishFinal?.(); if (application) await application.close(); client?.close();
   try { const cleanup = await connect(profile, 'cleanup'); for (const s of (await cleanup.call('initial')).sessions) await cleanup.call('stop', s.id);
     for (const entry of cleanup.entries) await entry.client.call('shutdown'); cleanup.close(); } catch {}
   if (child?.connected) child.disconnect(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
-});
+}));

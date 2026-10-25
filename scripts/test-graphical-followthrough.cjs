@@ -1,12 +1,13 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron interface, native adapters/workspace and persisted records.
 // Controlled provider events prove UI behavior, not model reasoning or OS IME.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-graphical-followthrough-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-graphical-followthrough-'));
 const evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
@@ -237,8 +238,8 @@ async function run() {
   checks.push('Close/reopen retains history, local decision, private draft and native identities; one hidden non-focusable window, five authorized synthetic submissions and no model calls');
   console.log(JSON.stringify({ checks, errors, syntheticDispatches: log.sends.length, modelCalls: log.modelCalls, nativeProcesses: log.nativeProcesses, windows, profile }, null, 2));
 }
-run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(async () => {
+run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close();
   if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); }
   if (child.connected) child.disconnect();
-});
+}));

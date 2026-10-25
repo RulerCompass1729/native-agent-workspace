@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron, Claude and Codex. Four task responses (five for native interruption),
 // plus at most one native title response; all fixed loopback data, no paid inference.
 // Tests the existing room interaction, including real mouse drag and native streaming.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const assert = require('node:assert/strict'), { execFileSync, fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { execFileSync, fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const { executable, processIdentity, processMayBeAlive } = require('../app/platform.cjs');
 const { connect, connectService } = require('../app/service-client.cjs');
@@ -19,7 +20,7 @@ assert.ok(!peerRound || !retained && !nativeInterrupt && !emptyTerminal);
 assert.ok(!peerReleased || peerRound);
 const providers = emptyTerminal ? ['codex'] : ['claude', 'codex'];
 if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-concurrent-'));
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-concurrent-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work');
 const claudeHome = path.join(base, 'claude'), codexHome = path.join(base, 'codex');
 for (const dir of [profile, cwd, claudeHome, codexHome]) fs.mkdirSync(dir, { mode: 0o700 });
@@ -593,7 +594,7 @@ async function openApplication() {
     await save('failure').catch(() => {}); await page.screenshot({ path: path.join(base, 'failure.png') }).catch(() => {});
   }
   console.error(error.stack, '\nEvidence:', base); process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   server.closeAllConnections(); if (application) await application.close().catch(() => {});
   try {
     const client = await connect(profile, 'concurrent-cleanup');
@@ -607,4 +608,4 @@ async function openApplication() {
   } catch (error) { console.error('Owned trial cleanup not confirmed:', error.message); process.exitCode = 1; }
   legacyClient?.close(); if (child?.connected) child.disconnect();
   await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
-});
+}));

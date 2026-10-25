@@ -1,12 +1,13 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // One visible app, real shipped adapter/workspace/IPC, synthetic providers.
 // This tests the complete daily-use path, not native login, models or fleets.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork, spawn, execFileSync } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork, spawn, execFileSync } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-daily-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-daily-ui-'));
 const executablePath = process.env.NAW_APP_EXECUTABLE || require('electron'), args = process.env.NAW_APP_EXECUTABLE ? [] : [root];
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/daily-native.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, client, sequence = 0; const errors = [], passed = [], requests = new Set(), startupMs = [];
@@ -121,8 +122,8 @@ async function run() {
   const resources = { startupMs, processes: sample.length, summedRssMiB: Math.round(sample.reduce((n, row) => n + row[2], 0) / 1024), sampledCpuPercent: sample.reduce((n, row) => n + row[3], 0), scope: 'Synthetic test app/services only; summed RSS may double-count shared pages; one sample, not steady-state or native costs' };
   console.log(JSON.stringify({ passed, errors, resources, syntheticDispatches: 3, nativeProcesses: 0, modelCalls: 0, oneWindow: app.windows().length === 1, observedRendererHosts: [...requests] }, null, 2));
 }
-run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(async () => {
+run().catch(async e => { console.error(e.stack); if (page) await capture('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close(); if (client) { const state = await client.call('initial'); for (const s of state.sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
-});
+}));
 
 async function chooseRecipient(id) { await inlineRecipient(page, id); }

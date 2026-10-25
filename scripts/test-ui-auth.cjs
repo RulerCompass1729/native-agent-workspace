@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Real Electron cookie/header regression. Uses only a private empty profile.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
-const { _electron } = require('playwright');
+const { _electron } = testScratch.playwright(require('playwright'));
 const { connect } = require('../app/service-client.cjs');
 const root = path.resolve(__dirname, '..');
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-ui-auth-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-ui-auth-'));
 let application, page;
 async function launch() {
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
@@ -46,7 +47,7 @@ async function run() {
   assert.equal((await second.evaluate(() => workspace.initial())).sessions.length, 0);
   console.log('PASS: reproduced HTTP 431 with accumulated UI cookies; restart restores usable UI, keeps unrelated preference, supports reload/second window; zero native sessions or model calls.');
 }
-run().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+run().catch(error => { console.error(error); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (application) await application.close();
   try { const client = await connect(profile, 'ui-auth-cleanup'); try { await client.call('shutdown'); } finally { client.close(); } } catch { /* No unrelated processes are touched. */ }
-});
+}));

@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Hidden real Electron windows/IPC/service; synthetic transport, no model tasks.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-draft-owner-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-draft-owner-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/delayed-native.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code },
@@ -140,9 +141,9 @@ async function run() {
   for (const check of observations) assert.equal(check.actual, check.expected, check.check);
   assert.deepEqual(errors, []);
 }
-run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   try {
     if (app) await app.close();
     if (client) { const s = await client.call('initial'); for (const record of s.sessions) await client.call('stop', record.id); await client.call('shutdown'); client.close(); }
   } finally { if (child.connected) child.disconnect(); if (child.exitCode === null) child.kill('SIGTERM'); }
-});
+}));

@@ -1,10 +1,11 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual hidden Electron/workspace, synthetic native transport. No provider or model call.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const { chooseRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-pending-actions-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-pending-actions-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/daily-native.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore','ignore','inherit','ipc'] });
 let app, page, sequence = 0; const errors = [];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -63,7 +64,7 @@ async function capture(name) { if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(pro
   assert.ok(!JSON.stringify(final.room.messages).includes('PRIVATE_B_'));
   fs.writeFileSync(path.join(profile,'final-evidence.json'),JSON.stringify(final,null,2));await capture('pending-resolved');
   console.log(JSON.stringify({checks:['Three members: view A, address C, find waiting B without publishing its private request','Resolving newer nonblocking question preserves older confirmation; selected request routes exactly once','Pending request survives reload; another resolution clears only itself; recipient and unsent room draft unchanged'],syntheticDecisions:stats.decisions.length,modelCalls:0,evidence:profile,errors}));
-})().catch(async e=>{console.error(e.stack,'Evidence:',profile);if(page&&!page.isClosed()){await capture('failed');fs.writeFileSync(path.join(profile,'failure.json'),JSON.stringify(await snapshot(),null,2));fs.writeFileSync(path.join(profile,'failure.txt'),await page.locator('body').innerText());}process.exitCode=1;}).finally(async()=>{
+})().catch(async e=>{console.error(e.stack,'Evidence:',profile);if(page&&!page.isClosed()){await capture('failed');fs.writeFileSync(path.join(profile,'failure.json'),JSON.stringify(await snapshot(),null,2));fs.writeFileSync(path.join(profile,'failure.txt'),await page.locator('body').innerText());}process.exitCode=1;}).finally(testScratch.cleanup(async()=>{
   if(app)await app.close().catch(()=>{});if(child.connected)child.send({id:++sequence,method:'finish'});
   if(child.exitCode===null)await new Promise(resolve=>{const timer=setTimeout(()=>{child.kill('SIGTERM');resolve();},4000);child.once('exit',()=>{clearTimeout(timer);resolve();});});
-});
+}));

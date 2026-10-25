@@ -1,8 +1,9 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Real Electron controls with synthetic native protocol events; no provider/model.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
-const { fork } = require('node:child_process'), { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-confirmation-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-confirmation-ui-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/reconnect-native.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code },
@@ -141,7 +142,7 @@ run().catch(async error => {
     await shot('failure').catch(() => {});
     console.error(await page.locator('body').innerText().catch(() => 'Renderer unavailable'));
   }
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   if (app) await app.close();
   if (child.exitCode === null && child.signalCode === null) {
     await new Promise((resolve, reject) => {
@@ -150,4 +151,4 @@ run().catch(async error => {
     });
   }
   console.log(JSON.stringify({ testDaemonExited: child.exitCode !== null || child.signalCode !== null }));
-});
+}));

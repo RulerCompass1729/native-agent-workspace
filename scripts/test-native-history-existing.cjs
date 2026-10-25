@@ -1,14 +1,17 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Import a stopped, actual context-runner history into a completely fresh app.
 // Explicit owned fixture required; no normal profile. Optional cold continuation
 // serves only the explicitly sent draft with one fixed reply and at most one native title.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http'), { randomUUID } = require('node:crypto');
-const assert = require('node:assert/strict'), { _electron } = require('playwright');
+const assert = require('node:assert/strict'), { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { processIdentity, processMayBeAlive } = require(path.join(code, 'app/platform.cjs'));
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
 const source = fs.realpathSync(process.env.NAW_NATIVE_HISTORY_EVIDENCE || 'MISSING_OWNED_FIXTURE');
-assert.equal(path.dirname(source), fs.realpathSync(os.tmpdir())); assert.match(path.basename(source), /^naw-native-context-/);
 assert.equal(fs.statSync(source).uid, process.getuid());
+const marker=JSON.parse(fs.readFileSync(path.join(source,'owned-fixture.json'),'utf8'));
+assert.equal(marker.kind,'naw-native-fixture-v1');assert.equal(marker.producer,'test-native-codex-context.cjs');assert.equal(marker.uid,process.getuid());
+assert.match(path.basename(source),/^naw-native-context-/);
 const original = JSON.parse(fs.readFileSync(path.join(source, 'resumed.json'))).sessions[0];
 assert.match(original.nativeId, /^[a-f0-9-]{36}$/); assert.equal(original.provider, 'codex');
 assert.ok(original.messages.some(m => m.text === 'CONTEXT_TASK_1'));
@@ -16,7 +19,26 @@ for (const identity of [original.processIdentity, original.serverIdentity]) asse
 const config = fs.readFileSync(path.join(source, 'codex/config.toml'), 'utf8');
 const url = new URL(config.match(/^base_url\s*=\s*"([^"]+)"/m)?.[1]);
 assert.equal(url.protocol, 'http:'); assert.equal(url.hostname, '127.0.0.1'); assert.ok(Number(url.port) > 0);
-const base = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-import-')), profile = path.join(base, 'profile');
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-import-')), profile = path.join(base, 'profile');
+const originalRollouts = new Map();
+function collectRollouts(folder) {
+  for (const entry of fs.readdirSync(folder, {withFileTypes:true})) {
+    const file=path.join(folder,entry.name);
+    if (entry.isDirectory()) collectRollouts(file);
+    else if (entry.isFile() && entry.name.endsWith('.jsonl')) originalRollouts.set(file,fs.readFileSync(file));
+  }
+}
+for (const name of ['sessions','archived_sessions']) { const folder=path.join(source,'codex',name);if(fs.existsSync(folder))collectRollouts(folder); }
+const nativeWrites=[];
+function checkNativeHistoryPrefix() {
+  const hash=value=>require('node:crypto').createHash('sha256').update(value).digest('hex');
+  for (const [file,before] of originalRollouts) {
+    const after=fs.readFileSync(file);assert.ok(after.length>=before.length && after.subarray(0,before.length).equals(before),'Native import preserves every existing rollout byte');
+    nativeWrites.push({file:path.relative(source,file),beforeBytes:before.length,afterBytes:after.length,beforeSHA256:hash(before),afterSHA256:hash(after),unchangedPrefix:true});
+  }
+  fs.writeFileSync(path.join(base,'native-history-writes.json'),JSON.stringify({rollouts:nativeWrites,nativeDatabaseMayChange:true},null,2));
+}
+
 const profiles = [];
 function setupProfile(folder) {
   fs.mkdirSync(folder, { mode: 0o700 }); profiles.push(folder);
@@ -207,15 +229,16 @@ async function selectOriginal(accepted = true) {
     }
   }
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-import.png') }); }
-  console.log(JSON.stringify({ checks, originalTextBlocks: expected.length, recoveryInferenceRequests: requests.length - taskResponses - titleResponses, explicitContinuationResponses: taskResponses, nativeTitleResponses: titleResponses, portalDispatches: (await snapshot()).diagnostics.dispatches, paidModelCalls: 0, errors, evidence: base }));
+  checkNativeHistoryPrefix();
+  console.log(JSON.stringify({ checks, nativeRolloutsPreserved:nativeWrites.length, nativeSettingsMayAppend:true, originalTextBlocks: expected.length, recoveryInferenceRequests: requests.length - taskResponses - titleResponses, explicitContinuationResponses: taskResponses, nativeTitleResponses: titleResponses, portalDispatches: (await snapshot()).diagnostics.dispatches, paidModelCalls: 0, errors, evidence: base }));
 })().catch(async e => {
   console.error(e.stack);
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2)); fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); }
   process.exitCode = 1;
-}).finally(async () => {
+}).finally(testScratch.cleanup(async () => {
   try {
     if (app) await app.close().catch(() => {});
     for (const target of profiles) await cleanupProfile(target);
   } finally { trap.closeAllConnections(); await new Promise(resolve => trap.close(resolve)); }
   assert.equal(requests.length, taskResponses + titleResponses, 'Cleanup must not initiate inference');
-});
+}));

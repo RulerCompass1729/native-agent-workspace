@@ -1,13 +1,14 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Actual rendered model content and network boundary, entirely on loopback.
 // The local receiver contains no credentials or real user data.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const http = require('node:http'), assert = require('node:assert/strict');
 const { pathToFileURL } = require('node:url');
-const { fork } = require('node:child_process'), { _electron } = require('playwright');
+const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
 const { readLayout } = require(path.join(code, 'app/service-layout.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-privacy-ui-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-privacy-ui-'));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const received = [], errors = [], checks = [];
 const receiver = http.createServer((request, response) => { received.push(request.url); response.end('synthetic receiver'); });
@@ -130,7 +131,7 @@ async function run() {
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true, mode: 0o700 }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'privacy-boundaries.png') }); }
   console.log(JSON.stringify({ checks, received, errors, windows, modelTasks: 0, nativeProviderProcesses: 0, clipboard: 'intercepted; system clipboard untouched', externalBrowser: 'intercepted; not opened' }, null, 2));
 }
-run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   if (app) await app.close();
   try {
     client?.close();
@@ -151,4 +152,4 @@ run().catch(error => { console.error(error.stack); process.exitCode = 1; }).fina
     if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     receiver.closeAllConnections(); receiver.close();
   }
-});
+}));

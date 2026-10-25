@@ -1,13 +1,14 @@
+const testScratch = require('./fixtures/test-scratch.cjs');
 // Real headed app, IPC, persistence and workspace; delayed synthetic transport.
 // No provider processes, native sessions, credentials or model requests.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
-const { fork } = require('node:child_process');
-const { _electron } = require('playwright');
+const { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-draft-test-'));
+const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-draft-test-'));
 const shots = process.env.NAW_EVIDENCE_DIR;
 if (shots) fs.mkdirSync(shots, { recursive: true, mode: 0o700 });
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
@@ -128,7 +129,7 @@ async function run() {
   const final = await snapshot(); assert.equal(final.diagnostics.shellModelCalls, 0);
   console.log(JSON.stringify({ passed, errors, nativeModelCalls: 0, transport: 'synthetic; real headed desktop, IPC, service, persistence', sends: (await native('stats')).sends.length }));
 }
-run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   try {
     await close(); client?.close();
     // Read the final layout: a UI version change may have added a backend
@@ -145,4 +146,4 @@ run().catch(error => { console.error(error.stack); process.exitCode = 1; }).fina
     } finally { client.close(); }
   }
   finally { if (child.connected) child.disconnect(); setTimeout(() => { if (child.exitCode === null) child.kill('SIGTERM'); }, 1000).unref(); }
-});
+}));
