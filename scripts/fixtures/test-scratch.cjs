@@ -126,7 +126,12 @@ function terminate(record, signal) {
   if (record.child && (record.child.exitCode !== null || record.child.signalCode !== null)) return;
   if (!processMayBeAlive(record.identity)) return;
   const current = processIdentity(record.identity.pid);
-  if (!current || current.started !== record.identity.started) throw Error('Owned test process identity is unconfirmed');
+  if (!current || current.started !== record.identity.started) {
+    // A verified child may finish between the liveness and identity reads.
+    // A second negative check permits no signal; unknown live identity still fails.
+    if (!processMayBeAlive(record.identity)) return;
+    throw Error('Owned test process identity is unconfirmed');
+  }
   if (record.serviceProfiles) {
     const command = cp.execFileSync('/bin/ps', ['-p', String(record.identity.pid), '-o', 'command='], { encoding: 'utf8', timeout: 1000 });
     if (!command.includes('daemon.cjs') || !record.serviceProfiles.some(p => command.includes(p))) throw Error('Owned service command identity changed');

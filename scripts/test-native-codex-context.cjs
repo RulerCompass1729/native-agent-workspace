@@ -115,7 +115,33 @@ async function nativeCommand(command){
   const reopened=await snapshot();assert.equal(reopened.sessions[0].nativeId,before.nativeId);assert.equal(reopened.sessions[0].pid,before.pid);assert.equal(reopened.diagnostics.dispatches,1);assert.equal(calls,4);assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(base,'goal-reopened.json'),JSON.stringify(reopened,null,2));
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'goal-reopened.png')});
-  console.log(JSON.stringify({checks:['Actual native goal create/automatic continuation/complete works through the installed app with its window closed; same thread/process, draft and final reader retained on reopen, one human dispatch'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  if(process.env.NAW_NATIVE_RECOVERY_TRIAL==='1'){
+   // Kill only the isolated native server started by this fixture. The real
+   // provider's persisted goal/history must survive; no task is replayed.
+   const identity=processIdentity(reopened.sessions[0].serverIdentity?.pid);
+   assert.ok(identity&&processMayBeAlive(identity),'Owned native server exists');
+   assert.equal(identity.pid,reopened.sessions[0].serverIdentity.pid);
+   goalRpc.ws.close();goalRpc=null;process.kill(identity.pid,'SIGKILL');
+   await until(async()=>!processMayBeAlive(identity)&&(await snapshot()).sessions[0].state==='recoverable','Native server loss reaches recoverable state');
+   fs.writeFileSync(path.join(base,'goal-process-lost.json'),JSON.stringify(await snapshot(),null,2));
+   await app.evaluate(({dialog})=>{const original=dialog.showMessageBox;dialog.showMessageBox=(...args)=>{if(args.some(a=>a?.message==='继续这个原生会话？'))throw Error('Unattended recovery must not require a second confirmation');return original.apply(dialog,args);};});
+   const resume=page.locator('#composer').getByRole('button',{name:'继续原生会话',exact:true});assert.equal(await resume.count(),1);await resume.click();
+   await until(async()=>{const s=(await snapshot()).sessions[0];return s.state==='idle'&&s.serverIdentity?.pid!==identity.pid;},'Same saved native thread resumes on a new server',45000);
+   const recovered=await snapshot();assert.equal(recovered.sessions[0].nativeId,before.nativeId);
+   assert.equal(recovered.sessions[0].model,before.model);assert.equal(recovered.diagnostics.dispatches,1);
+   assert.equal(await page.locator('#message-input').inputValue(),'Unsent draft retained while the native goal runs.');
+   await page.locator('#messages').getByText('CONTEXT_TASK_4',{exact:true}).waitFor();
+   const nextEndpoint=path.join(path.dirname(JSON.parse(fs.readFileSync(path.join(profile,entries[0],'connection.json'))).endpoint),'codex.sock');
+   const nextWs=new WebSocket('ws://localhost',{createConnection:()=>net.connect(nextEndpoint),handshakeTimeout:10000});
+   await new Promise((resolve,reject)=>{nextWs.once('open',resolve);nextWs.once('error',reject);});goalRpc=new Rpc(nextWs);
+   await goalRpc.call('initialize',{clientInfo:{name:'naw_owned_recovery_witness',version:'1'},capabilities:{experimentalApi:true}});nextWs.send(JSON.stringify({method:'initialized',params:{}}));
+   const savedGoal=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});assert.deepEqual(savedGoal,completed);
+   assert.equal(calls,4);assert.equal(titles,1);assert.deepEqual(errors,[]);
+   fs.writeFileSync(path.join(base,'goal-process-recovered.json'),JSON.stringify({state:recovered,goal:savedGoal},null,2));
+   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'goal-process-recovered.png')});
+   checks.push('Owned native server death resumes the exact saved native ID/model/history/goal/draft on a new PID without replay or inference');
+  }
+  console.log(JSON.stringify({checks:['Actual native goal create/automatic continuation/complete works through the installed app with its window closed; same thread/process, draft and final reader retained on reopen, one human dispatch',...checks],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(failureTrial){
   await until(async()=>{const s=(await snapshot()).sessions[0];return s.messages.some(m=>m.kind==='notice'&&m.text.includes(failureBody))&&s.messages.some(m=>m.kind==='turn'&&m.status==='failed')&&s.state==='idle';},'Native failure finishes without claiming a successful response');

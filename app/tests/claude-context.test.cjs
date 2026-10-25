@@ -195,3 +195,77 @@ test('events of an unfollowed new root (plain /resume) are dropped, not buffered
  assert.equal(r.contextEvents?.length||0,0);assert.equal(r.contextEventsOverflow,undefined);assert.equal(r.ready,false);assert.equal(s.nativeId,old.sessionId);
  assert.throws(()=>r.clearRoot({...old,nextSessionId:other,source:'fork'}),'A fork start cannot be claimed after a resume start was seen');
 });
+test('native /background: an exit-like end followed by a fork start with this token is shown as moved to background, not ended',async t=>{
+ const f=await fixture(t),{w,id,s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ const original=s.nativeId,bg=randomUUID();
+ r.hook({hook_event_name:'SessionEnd',session_id:original,reason:'prompt_input_exit'});assert.equal(s.state,'stopping');
+ r.terminalClosed({confirmed:true});assert.equal(s.state,'stopping','Waits briefly for a background handoff');assert.ok(r.host.hookTargets.has(r.token),'Token stays routed during the window');
+ r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
+ assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));assert.equal(s.nativeId,original,'The GUI row keeps its own native identity');
+ assert.equal(w.runtimes.has(id),false);assert.equal(r.host.hookTargets.has(r.token),false);
+ w.persist();const restored=new (require('../workspace.cjs').Workspace)({binaries:{},close(){}},f.dir);assert.equal(restored.get(id).state,'background','Reopen does not offer resuming the stale ID');assert.match(restored.get(id).activity,new RegExp(bg.slice(0,8)),'Reopen keeps the background ID text');restored.close();
+});
+test('a plain native /exit still ends after the short handoff window, and a late fork start cannot revive it',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};r.backgroundHandoffMs=20;
+ r.hook({hook_event_name:'SessionEnd',session_id:s.nativeId,reason:'prompt_input_exit'});r.terminalClosed({confirmed:true});
+ await new Promise(resolve=>setTimeout(resolve,60));assert.equal(s.state,'ended');assert.equal(r.host.hookTargets.has(r.token),false);
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork'});assert.equal(s.state,'ended');
+});
+test('an exit for another reason ends at once; a fork start without an exit-like root end is not background',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork'});assert.equal(r.backgroundTo,undefined);
+ r.hook({hook_event_name:'SessionEnd',session_id:s.nativeId,reason:'prompt_input_exit'});
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork',agent_id:'child'});assert.equal(r.backgroundTo,undefined);
+ const g=await fixture(t);g.r.host={hookTargets:new Map()};g.r.cancelNativeAbort=()=>{};
+ g.r.hook({hook_event_name:'SessionEnd',session_id:g.s.nativeId,reason:'other'});g.r.terminalClosed({confirmed:true});assert.equal(g.s.state,'ended');
+});
+test('CL310-02: /resume away then /background is shown as moved to background, not ended',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ const old=f.bind(),away=randomUUID(),bg=randomUUID();
+ r.endRoot({...old,reason:'resume'});r.hook({hook_event_name:'SessionEnd',session_id:old.sessionId,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:away,source:'resume'});
+ r.hook({hook_event_name:'SessionEnd',session_id:away,reason:'prompt_input_exit'});
+ r.terminalClosed({confirmed:true});assert.notEqual(s.state,'ended','Waits for a possible handoff of the switched-to session');
+ r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
+ assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));assert.equal(s.nativeId,old.sessionId);
+});
+test('CL310-02: after /resume away, a plain exit or a foreign/late fork never becomes background; the switch stays explicit',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};r.backgroundHandoffMs=20;
+ const old=f.bind(),away=randomUUID();
+ r.endRoot({...old,reason:'resume'});r.hook({hook_event_name:'SessionEnd',session_id:old.sessionId,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:away,source:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork'}); // a fork before the switched session ended (e.g. /fork copy)
+ assert.notEqual(s.state,'background');
+ r.hook({hook_event_name:'SessionEnd',session_id:away,reason:'prompt_input_exit'});r.terminalClosed({confirmed:true});
+ await new Promise(resolve=>setTimeout(resolve,60));
+ assert.equal(s.state,'ended');assert.match(s.activity,new RegExp(away.slice(0,8)),'Names the switched-to session whose continuation is not confirmed');
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'fork'});assert.equal(s.state,'ended','A late fork after the window cannot revive it');
+});
+test('stop() clears a pending background-handoff wait',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ r.terminal.stop=async()=>{};
+ r.hook({hook_event_name:'SessionEnd',session_id:s.nativeId,reason:'prompt_input_exit'});r.terminalClosed({confirmed:true});assert.ok(r.closedAwaitingBackground);
+ await r.stop();assert.equal(r.closedAwaitingBackground,null);
+});
+test('CL310-02: /resume back to a retired context of this row, then /background, is shown as moved to background',async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ const first=s.nativeId;f.clear();const current=f.bind(),bg=randomUUID();
+ assert.equal(s.nativeContexts.at(-1).nativeId,first);
+ r.endRoot({...current,reason:'resume'});r.hook({hook_event_name:'SessionEnd',session_id:current.sessionId,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:first,source:'resume'});
+ r.hook({hook_event_name:'SessionEnd',session_id:first,reason:'prompt_input_exit'});
+ r.terminalClosed({confirmed:true});assert.notEqual(s.state,'ended');
+ r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
+ assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));
+});
+for(const [label,end,start] of [['resume','resume','resume'],['clear','clear','clear'],['branch','resume','fork']])test(`CL310-02: a further ${label} inside the switched session is followed, then /background is recognised`,async t=>{
+ const f=await fixture(t),{s,r}=f;r.host={hookTargets:new Map([[r.token,r]])};r.cancelNativeAbort=()=>{};
+ const old=f.bind(),away=randomUUID(),next=randomUUID(),bg=randomUUID();
+ r.endRoot({...old,reason:'resume'});r.hook({hook_event_name:'SessionEnd',session_id:old.sessionId,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:away,source:'resume'});
+ r.hook({hook_event_name:'SessionEnd',session_id:away,reason:end});r.hook({hook_event_name:'SessionStart',session_id:next,source:start});
+ assert.equal(r.switchedTo,next);
+ r.hook({hook_event_name:'SessionEnd',session_id:next,reason:'prompt_input_exit'});r.terminalClosed({confirmed:true});
+ r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
+ assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));
+});

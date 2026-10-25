@@ -3137,3 +3137,34 @@ and application search has one installed entry. The original three sessions keep
 native IDs/PIDs, selection and drafts through hidden reopening with no new
 dispatch. Final independent source/artifact review passes for U26; U17, physical
 system/WeChat IME acceptance and Claude native phase parity remain open.
+
+
+### Single-session unattended recovery qualification
+
+The explicit **continue native session** action now has one consent step: the action
+itself. It preserves the existing backend capability, ownership, process-liveness and
+exact-native-ID checks. It does not replay a task, reauthorize room cooperation, revive
+an intentionally ended conversation automatically, or bypass native questions.
+Deleting a local record still requires its separate cancellable confirmation.
+
+Extend the bounded installed Codex164 goal fixture with `NAW_NATIVE_RECOVERY_TRIAL=1`
+(and `NAW_NATIVE_GOAL_TRIAL=1`, `NAW_NATIVE_INITIAL_TERMINAL=1`,
+`NAW_CODEX_VERSION=0.164.0`). It closes/reopens the actual installed GUI, terminates only
+its isolated native server, clicks the unique recovery action inside the composer,
+and verifies the same saved thread/model/history/goal/draft on a different server PID.
+The runner fails rather than silently waiting if recovery calls the old confirmation
+modal. Four fixed task responses plus one title; zero paid inference. The saved goal
+is already complete at the process-loss checkpoint: this proves persisted goal state,
+not automatic recovery of an in-flight tool or fleet. Window-closed automatic goal
+continuation is verified separately earlier in the same task.
+
+The installer qualification also uses the real Claude310 CLI with two fixed local
+responses: window close/reopen, owned native-process loss, then cold registration via
+the existing workspace serializer and native `--resume` of that original ID into an
+assigned checkout. Its second native request must retain the first native response;
+a copied GUI transcript cannot satisfy that assertion. This is a private one-time
+operator qualification, not a public arbitrary/live Claude attachment feature. The GUI
+reader explicitly marks pre-import history as unavailable there; original history stays
+readable in the same-screen TUI and remains in the model context.
+These are controlled trials, not a full development workday. Actual developer handoff
+and prolonged use remain a separate acceptance record.
