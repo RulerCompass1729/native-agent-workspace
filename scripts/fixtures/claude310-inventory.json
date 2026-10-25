@@ -1,0 +1,4405 @@
+{
+ "version": "2.1.310",
+ "upstream": "https://code.claude.com/docs/llms.txt",
+ "fetchedAt": "2026-10-25T04:16:49Z",
+ "sources": {
+  "commands": {
+   "origin": "https://code.claude.com/docs/en/commands.md",
+   "archivedAs": "commands.md",
+   "sha256": "88c29422eaa030363a3fcb75ab0a9aeac53e905658c34895e047cdd22c5aaa9f"
+  },
+  "keybindings": {
+   "origin": "https://code.claude.com/docs/en/keybindings.md",
+   "archivedAs": "keybindings.md",
+   "sha256": "7619c12e48223c41e5a0175043dfda4c91669ed1e1251b0589f79217394c7a78"
+  },
+  "interactive-mode": {
+   "origin": "https://code.claude.com/docs/en/interactive-mode.md",
+   "archivedAs": "interactive-mode.md",
+   "sha256": "a20529e1f84261b71a776204ce778a1870f94d500fdb29daa73cb9b755af88e5"
+  },
+  "hooks": {
+   "origin": "https://code.claude.com/docs/en/hooks.md",
+   "archivedAs": "hooks.md",
+   "sha256": "3ce0f8a007da9192d076b08ca1aa9332b28c12f443189066e3534b1595eaeb47"
+  },
+  "permission-modes": {
+   "origin": "https://code.claude.com/docs/en/permission-modes.md",
+   "archivedAs": "permission-modes.md",
+   "sha256": "5e07339f3924fc487e58551bba005de871ab3bdf6de73e08b47f79834eac018f"
+  },
+  "statusline": {
+   "origin": "https://code.claude.com/docs/en/statusline.md",
+   "archivedAs": "statusline.md",
+   "sha256": "ae281440ad99e518a74a6d44da7038f17ad45217dba5ee9fe58815bc386913b3"
+  },
+  "fullscreen": {
+   "origin": "https://code.claude.com/docs/en/fullscreen.md",
+   "archivedAs": "fullscreen.md",
+   "sha256": "6c67c375fb8bc2dea3a4f9547a87e0416f04edcb42de38a9a920e8949026c4d1"
+  },
+  "checkpointing": {
+   "origin": "https://code.claude.com/docs/en/checkpointing.md",
+   "archivedAs": "checkpointing.md",
+   "sha256": "e12d88404a36511c0fac5e9aaf1def707e4465b559aacbe258f854749dcffc32"
+  },
+  "agent-sdk/typescript": {
+   "origin": "https://code.claude.com/docs/en/agent-sdk/typescript.md",
+   "archivedAs": "agent-sdk_typescript.md",
+   "sha256": "018d7961aae1aa9cc3f9965f3a1a8442ad4909301d25ab83d0ccdb471c14c3f6"
+  },
+  "engine-types": {
+   "origin": "Written by Claude Code 2.1.310 beside a loaded mod as .claude-plugin/types/claude-code/index.d.ts",
+   "archivedAs": "claude-code-2.1.310-engine-index.d.ts",
+   "sha256": "95bd52583669d28e8fefb0675fe48630a4f7cc42a1d3ee22aa445d7998a45334"
+  }
+ },
+ "notice": "Identifiers from official Claude Code documentation and the engine-written mod type declarations, for coverage accounting only. Not a claim of native or GUI support. Claude Code is closed source; the installed bundle was not unpacked. Line numbers refer to the archived copies identified by sha256. Bundled skills/workflows, hook events, SDK messages and engine events include non-interactive or programmatic surfaces; each still has to be grouped into user-visible rows before any support claim.",
+ "commands": [
+  {
+   "name": "/add-dir",
+   "arguments": "<path>",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 52
+  },
+  {
+   "name": "/advisor",
+   "arguments": "[model|off]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 53
+  },
+  {
+   "name": "/agents",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 54
+  },
+  {
+   "name": "/artifact-capabilities",
+   "arguments": "",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 55
+  },
+  {
+   "name": "/artifact-diagramming",
+   "arguments": "",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 56
+  },
+  {
+   "name": "/artifacts",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 57
+  },
+  {
+   "name": "/auto-mode-setup",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 58
+  },
+  {
+   "name": "/autocompact",
+   "arguments": "[auto|<tokens>]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 59
+  },
+  {
+   "name": "/autofix-pr",
+   "arguments": "[prompt]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 60
+  },
+  {
+   "name": "/background",
+   "arguments": "[prompt]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/bg"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 61
+  },
+  {
+   "name": "/batch",
+   "arguments": "<instruction>",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 62
+  },
+  {
+   "name": "/branch",
+   "arguments": "[name]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 63
+  },
+  {
+   "name": "/btw",
+   "arguments": "[question]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 64
+  },
+  {
+   "name": "/bug",
+   "arguments": "[report]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/share"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 65
+  },
+  {
+   "name": "/cd",
+   "arguments": "<path>",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 66
+  },
+  {
+   "name": "/chrome",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 67
+  },
+  {
+   "name": "/claude-api",
+   "arguments": "[migrate|upgrade|api-version|managed-agents-onboard|managed-agents-secure|prompt-audit|cost-optimize|build-eval|hillclimb|preserved-thinking-migration]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 68
+  },
+  {
+   "name": "/claude-in-chrome",
+   "arguments": "[task]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 69
+  },
+  {
+   "name": "/clear",
+   "arguments": "[name]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/reset",
+    "/new"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 70
+  },
+  {
+   "name": "/code-review",
+   "arguments": "[low|medium|high|xhigh|max|ultra] [--fix] [--comment] [--max-findings n|all|default] [pr#|branch|path]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [
+    "/review"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 71
+  },
+  {
+   "name": "/color",
+   "arguments": "[color|default]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 72
+  },
+  {
+   "name": "/compact",
+   "arguments": "[instructions]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 73
+  },
+  {
+   "name": "/config",
+   "arguments": "[key=value ...]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/settings"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 74
+  },
+  {
+   "name": "/context",
+   "arguments": "[all]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 75
+  },
+  {
+   "name": "/copy",
+   "arguments": "[N]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 76
+  },
+  {
+   "name": "/cost",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": "/usage",
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 77
+  },
+  {
+   "name": "/dataviz",
+   "arguments": "[request]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 78
+  },
+  {
+   "name": "/debug",
+   "arguments": "[description]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 79
+  },
+  {
+   "name": "/deep-research",
+   "arguments": "<question>",
+   "kind": "bundled-workflow",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 80
+  },
+  {
+   "name": "/design",
+   "arguments": "[brief]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 81
+  },
+  {
+   "name": "/design",
+   "arguments": "consent",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 82
+  },
+  {
+   "name": "/design",
+   "arguments": "revoke",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 82
+  },
+  {
+   "name": "/design-login",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 83
+  },
+  {
+   "name": "/design-sync",
+   "arguments": "[hint]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 84
+  },
+  {
+   "name": "/desktop",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/app"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 85
+  },
+  {
+   "name": "/diff",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 86
+  },
+  {
+   "name": "/doctor",
+   "arguments": "[prompt-audit [path]]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [
+    "/checkup"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 87
+  },
+  {
+   "name": "/effort",
+   "arguments": "[level|auto|status|ultracode [on|off]]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 88
+  },
+  {
+   "name": "/exit",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/quit"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 89
+  },
+  {
+   "name": "/export",
+   "arguments": "[filename]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 90
+  },
+  {
+   "name": "/fast",
+   "arguments": "[on|off]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 91
+  },
+  {
+   "name": "/feedback",
+   "arguments": "[report]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 92
+  },
+  {
+   "name": "/fewer-permission-prompts",
+   "arguments": "",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 93
+  },
+  {
+   "name": "/focus",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 94
+  },
+  {
+   "name": "/fork",
+   "arguments": "[prompt]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 95
+  },
+  {
+   "name": "/goal",
+   "arguments": "[condition|clear]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 96
+  },
+  {
+   "name": "/heapdump",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 97
+  },
+  {
+   "name": "/help",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 98
+  },
+  {
+   "name": "/hooks",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 99
+  },
+  {
+   "name": "/ide",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 100
+  },
+  {
+   "name": "/import",
+   "arguments": "[codex|gemini|cursor] [--dry-run] [--yes]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 101
+  },
+  {
+   "name": "/init",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 102
+  },
+  {
+   "name": "/insights",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 103
+  },
+  {
+   "name": "/install-github-app",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 104
+  },
+  {
+   "name": "/install-slack-app",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 105
+  },
+  {
+   "name": "/keybindings",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 106
+  },
+  {
+   "name": "/list-agents",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/peers"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 107
+  },
+  {
+   "name": "/login",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 108
+  },
+  {
+   "name": "/logout",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 109
+  },
+  {
+   "name": "/loop",
+   "arguments": "[interval] [prompt]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [
+    "/proactive"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 110
+  },
+  {
+   "name": "/mcp",
+   "arguments": "[reconnect (<server>|all)|enable|disable [<server>|all]]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 111
+  },
+  {
+   "name": "/memory",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 112
+  },
+  {
+   "name": "/mobile",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/ios",
+    "/android"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 113
+  },
+  {
+   "name": "/model",
+   "arguments": "[model]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 114
+  },
+  {
+   "name": "/output-style",
+   "arguments": "[style]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 115
+  },
+  {
+   "name": "/passes",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 116
+  },
+  {
+   "name": "/permissions",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/allowed-tools"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 117
+  },
+  {
+   "name": "/plan",
+   "arguments": "[description]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 118
+  },
+  {
+   "name": "/plugin",
+   "arguments": "[subcommand]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 119
+  },
+  {
+   "name": "/plugin-authoring",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 120
+  },
+  {
+   "name": "/powerup",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 121
+  },
+  {
+   "name": "/pr-comments",
+   "arguments": "[PR]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": true,
+   "source": "commands",
+   "line": 122
+  },
+  {
+   "name": "/privacy-settings",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 123
+  },
+  {
+   "name": "/radio",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 124
+  },
+  {
+   "name": "/rate-limit-options",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 125
+  },
+  {
+   "name": "/recap",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 126
+  },
+  {
+   "name": "/release-notes",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 127
+  },
+  {
+   "name": "/reload-plugins",
+   "arguments": "[--force]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 128
+  },
+  {
+   "name": "/reload-skills",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 129
+  },
+  {
+   "name": "/remote-control",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/rc"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 130
+  },
+  {
+   "name": "/remote-env",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 131
+  },
+  {
+   "name": "/rename",
+   "arguments": "[name]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 132
+  },
+  {
+   "name": "/resume",
+   "arguments": "[session]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/continue"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 133
+  },
+  {
+   "name": "/review",
+   "arguments": "[low|medium|high|xhigh|max|ultra] [--fix] [--comment] [--max-findings n|all|default] [pr#|branch|path]",
+   "kind": "built-in",
+   "aliasOf": "/code-review",
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 134
+  },
+  {
+   "name": "/rewind",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/checkpoint",
+    "/undo"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 135
+  },
+  {
+   "name": "/run",
+   "arguments": "",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 136
+  },
+  {
+   "name": "/run-skill-generator",
+   "arguments": "",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 137
+  },
+  {
+   "name": "/sandbox",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 138
+  },
+  {
+   "name": "/schedule",
+   "arguments": "[description]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/routines"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 139
+  },
+  {
+   "name": "/scroll-speed",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 140
+  },
+  {
+   "name": "/security-review",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 141
+  },
+  {
+   "name": "/setup-bedrock",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 142
+  },
+  {
+   "name": "/setup-vertex",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 143
+  },
+  {
+   "name": "/simplify",
+   "arguments": "[target]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 144
+  },
+  {
+   "name": "/skill-doctor",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 145
+  },
+  {
+   "name": "/skills",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 146
+  },
+  {
+   "name": "/slides",
+   "arguments": "[brief]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 147
+  },
+  {
+   "name": "/stats",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": "/usage",
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 148
+  },
+  {
+   "name": "/status",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 149
+  },
+  {
+   "name": "/statusline",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 150
+  },
+  {
+   "name": "/stickers",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 151
+  },
+  {
+   "name": "/stop",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 152
+  },
+  {
+   "name": "/subtask",
+   "arguments": "<task>",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 153
+  },
+  {
+   "name": "/tasks",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/bashes"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 154
+  },
+  {
+   "name": "/team-onboarding",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 155
+  },
+  {
+   "name": "/teleport",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [
+    "/tp"
+   ],
+   "removed": false,
+   "source": "commands",
+   "line": 156
+  },
+  {
+   "name": "/terminal-setup",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 157
+  },
+  {
+   "name": "/theme",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 158
+  },
+  {
+   "name": "/tui",
+   "arguments": "[default|fullscreen]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 159
+  },
+  {
+   "name": "/ultraplan",
+   "arguments": "<prompt>",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": true,
+   "source": "commands",
+   "line": 160
+  },
+  {
+   "name": "/ultrareview",
+   "arguments": "[PR or branch]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 161
+  },
+  {
+   "name": "/update-config",
+   "arguments": "[request]",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 162
+  },
+  {
+   "name": "/upgrade",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 163
+  },
+  {
+   "name": "/usage",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 164
+  },
+  {
+   "name": "/usage-credits",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 165
+  },
+  {
+   "name": "/verify",
+   "arguments": "",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 166
+  },
+  {
+   "name": "/vim",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": true,
+   "source": "commands",
+   "line": 167
+  },
+  {
+   "name": "/voice",
+   "arguments": "[hold|tap|off]",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 168
+  },
+  {
+   "name": "/web-setup",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 169
+  },
+  {
+   "name": "/workflow-authoring",
+   "arguments": "",
+   "kind": "bundled-skill",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 170
+  },
+  {
+   "name": "/workflows",
+   "arguments": "",
+   "kind": "built-in",
+   "aliasOf": null,
+   "aliases": [],
+   "removed": false,
+   "source": "commands",
+   "line": 171
+  }
+ ],
+ "keymapContexts": [
+  {
+   "context": "Global",
+   "source": "keybindings",
+   "line": 49
+  },
+  {
+   "context": "Chat",
+   "source": "keybindings",
+   "line": 50
+  },
+  {
+   "context": "Autocomplete",
+   "source": "keybindings",
+   "line": 51
+  },
+  {
+   "context": "Settings",
+   "source": "keybindings",
+   "line": 52
+  },
+  {
+   "context": "Confirmation",
+   "source": "keybindings",
+   "line": 53
+  },
+  {
+   "context": "Tabs",
+   "source": "keybindings",
+   "line": 54
+  },
+  {
+   "context": "Help",
+   "source": "keybindings",
+   "line": 55
+  },
+  {
+   "context": "Transcript",
+   "source": "keybindings",
+   "line": 56
+  },
+  {
+   "context": "HistorySearch",
+   "source": "keybindings",
+   "line": 57
+  },
+  {
+   "context": "Task",
+   "source": "keybindings",
+   "line": 58
+  },
+  {
+   "context": "ThemePicker",
+   "source": "keybindings",
+   "line": 59
+  },
+  {
+   "context": "Attachments",
+   "source": "keybindings",
+   "line": 60
+  },
+  {
+   "context": "Footer",
+   "source": "keybindings",
+   "line": 61
+  },
+  {
+   "context": "MessageSelector",
+   "source": "keybindings",
+   "line": 62
+  },
+  {
+   "context": "DiffDialog",
+   "source": "keybindings",
+   "line": 63
+  },
+  {
+   "context": "DiffPanel",
+   "source": "keybindings",
+   "line": 64
+  },
+  {
+   "context": "ModelPicker",
+   "source": "keybindings",
+   "line": 65
+  },
+  {
+   "context": "EffortSlider",
+   "source": "keybindings",
+   "line": 66
+  },
+  {
+   "context": "Select",
+   "source": "keybindings",
+   "line": 67
+  },
+  {
+   "context": "Plugin",
+   "source": "keybindings",
+   "line": 68
+  },
+  {
+   "context": "AbovePrompt",
+   "source": "keybindings",
+   "line": 69
+  },
+  {
+   "context": "AbovePromptInput",
+   "source": "keybindings",
+   "line": 70
+  },
+  {
+   "context": "AbovePromptSelect",
+   "source": "keybindings",
+   "line": 71
+  },
+  {
+   "context": "Pane",
+   "source": "keybindings",
+   "line": 72
+  },
+  {
+   "context": "PaneField",
+   "source": "keybindings",
+   "line": 73
+  },
+  {
+   "context": "Agents",
+   "source": "keybindings",
+   "line": 74
+  },
+  {
+   "context": "Scroll",
+   "source": "keybindings",
+   "line": 75
+  }
+ ],
+ "keymapActions": [
+  {
+   "contexts": [
+    "Global"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "app:interrupt",
+   "default": "Ctrl+C",
+   "source": "keybindings",
+   "line": 89
+  },
+  {
+   "contexts": [
+    "Global"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "app:exit",
+   "default": "Ctrl+D",
+   "source": "keybindings",
+   "line": 90
+  },
+  {
+   "contexts": [
+    "Global"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "app:redraw",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 91
+  },
+  {
+   "contexts": [
+    "Global"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "app:toggleTodos",
+   "default": "Ctrl+T",
+   "source": "keybindings",
+   "line": 92
+  },
+  {
+   "contexts": [
+    "Global"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "app:toggleTranscript",
+   "default": "Ctrl+O",
+   "source": "keybindings",
+   "line": 93
+  },
+  {
+   "contexts": [],
+   "contextSource": "unspecified",
+   "contextProseLine": null,
+   "action": "history:search",
+   "default": "Ctrl+R",
+   "source": "keybindings",
+   "line": 101
+  },
+  {
+   "contexts": [],
+   "contextSource": "unspecified",
+   "contextProseLine": null,
+   "action": "history:previous",
+   "default": "Up",
+   "source": "keybindings",
+   "line": 102
+  },
+  {
+   "contexts": [],
+   "contextSource": "unspecified",
+   "contextProseLine": null,
+   "action": "history:next",
+   "default": "Down",
+   "source": "keybindings",
+   "line": 103
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:cancel",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 111
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:clearInput",
+   "default": "Ctrl+L",
+   "source": "keybindings",
+   "line": 112
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:clearScreen",
+   "default": "Cmd+K",
+   "source": "keybindings",
+   "line": 113
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:killAgents",
+   "default": "Ctrl+X Ctrl+K",
+   "source": "keybindings",
+   "line": 114
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:cycleMode",
+   "default": "Shift+Tab\\*",
+   "source": "keybindings",
+   "line": 115
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:modelPicker",
+   "default": "Meta+P",
+   "source": "keybindings",
+   "line": 116
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:fastMode",
+   "default": "Meta+O",
+   "source": "keybindings",
+   "line": 117
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:thinkingToggle",
+   "default": "Meta+T",
+   "source": "keybindings",
+   "line": 118
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:submit",
+   "default": "Enter",
+   "source": "keybindings",
+   "line": 119
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:queueSubmit",
+   "default": "Ctrl+X Enter",
+   "source": "keybindings",
+   "line": 120
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:sendNow",
+   "default": "Ctrl+Enter, Ctrl+X Ctrl+S",
+   "source": "keybindings",
+   "line": 121
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:newline",
+   "default": "Ctrl+J",
+   "source": "keybindings",
+   "line": 122
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:undo",
+   "default": "Ctrl+\\_, Ctrl+Shift+-",
+   "source": "keybindings",
+   "line": 123
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:externalEditor",
+   "default": "Ctrl+G, Ctrl+X Ctrl+E",
+   "source": "keybindings",
+   "line": 124
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:stash",
+   "default": "Ctrl+S",
+   "source": "keybindings",
+   "line": 125
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "chat:imagePaste",
+   "default": "Ctrl+V (Alt+V on Windows and WSL)",
+   "source": "keybindings",
+   "line": 126
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "command:<name>",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 127
+  },
+  {
+   "contexts": [
+    "Autocomplete"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "autocomplete:accept",
+   "default": "Tab",
+   "source": "keybindings",
+   "line": 137
+  },
+  {
+   "contexts": [
+    "Autocomplete"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "autocomplete:dismiss",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 138
+  },
+  {
+   "contexts": [
+    "Autocomplete"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "autocomplete:previous",
+   "default": "Up",
+   "source": "keybindings",
+   "line": 139
+  },
+  {
+   "contexts": [
+    "Autocomplete"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "autocomplete:next",
+   "default": "Down",
+   "source": "keybindings",
+   "line": 140
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:yes",
+   "default": "Enter",
+   "source": "keybindings",
+   "line": 148
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:no",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 149
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:previous",
+   "default": "Up",
+   "source": "keybindings",
+   "line": 150
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:next",
+   "default": "Down",
+   "source": "keybindings",
+   "line": 151
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:nextField",
+   "default": "Tab",
+   "source": "keybindings",
+   "line": 152
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:previousField",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 153
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:toggle",
+   "default": "Space",
+   "source": "keybindings",
+   "line": 154
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:cycleMode",
+   "default": "Shift+Tab\\*",
+   "source": "keybindings",
+   "line": 155
+  },
+  {
+   "contexts": [
+    "Confirmation"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "permission:toggleDebug",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 191
+  },
+  {
+   "contexts": [
+    "Transcript"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "transcript:toggleShowAll",
+   "default": "Ctrl+E",
+   "source": "keybindings",
+   "line": 199
+  },
+  {
+   "contexts": [
+    "Transcript"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "transcript:exit",
+   "default": "q, Ctrl+C, Escape",
+   "source": "keybindings",
+   "line": 200
+  },
+  {
+   "contexts": [
+    "HistorySearch"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "historySearch:next",
+   "default": "Ctrl+R",
+   "source": "keybindings",
+   "line": 210
+  },
+  {
+   "contexts": [
+    "HistorySearch"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "historySearch:accept",
+   "default": "Escape, Tab",
+   "source": "keybindings",
+   "line": 211
+  },
+  {
+   "contexts": [
+    "HistorySearch"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "historySearch:cancel",
+   "default": "Ctrl+C",
+   "source": "keybindings",
+   "line": 212
+  },
+  {
+   "contexts": [
+    "HistorySearch"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "historySearch:execute",
+   "default": "Enter",
+   "source": "keybindings",
+   "line": 213
+  },
+  {
+   "contexts": [
+    "HistorySearch"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "historySearch:cycleScope",
+   "default": "Ctrl+S",
+   "source": "keybindings",
+   "line": 214
+  },
+  {
+   "contexts": [
+    "Task"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "task:background",
+   "default": "Ctrl+B, Ctrl+X Ctrl+B",
+   "source": "keybindings",
+   "line": 224
+  },
+  {
+   "contexts": [
+    "ThemePicker"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "theme:toggleSyntaxHighlighting",
+   "default": "Ctrl+T",
+   "source": "keybindings",
+   "line": 232
+  },
+  {
+   "contexts": [
+    "Help"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "help:dismiss",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 240
+  },
+  {
+   "contexts": [
+    "Tabs"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "tabs:next",
+   "default": "Tab, Right",
+   "source": "keybindings",
+   "line": 248
+  },
+  {
+   "contexts": [
+    "Tabs"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "tabs:previous",
+   "default": "Shift+Tab, Left",
+   "source": "keybindings",
+   "line": 249
+  },
+  {
+   "contexts": [
+    "Attachments"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "attachments:next",
+   "default": "Right",
+   "source": "keybindings",
+   "line": 261
+  },
+  {
+   "contexts": [
+    "Attachments"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "attachments:previous",
+   "default": "Left",
+   "source": "keybindings",
+   "line": 262
+  },
+  {
+   "contexts": [
+    "Attachments"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "attachments:remove",
+   "default": "Backspace, Delete",
+   "source": "keybindings",
+   "line": 263
+  },
+  {
+   "contexts": [
+    "Attachments"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "attachments:exit",
+   "default": "Down, Escape",
+   "source": "keybindings",
+   "line": 264
+  },
+  {
+   "contexts": [
+    "Footer"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "footer:next",
+   "default": "Right",
+   "source": "keybindings",
+   "line": 272
+  },
+  {
+   "contexts": [
+    "Footer"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "footer:previous",
+   "default": "Left",
+   "source": "keybindings",
+   "line": 273
+  },
+  {
+   "contexts": [
+    "Footer"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "footer:up",
+   "default": "Up, Ctrl+P",
+   "source": "keybindings",
+   "line": 274
+  },
+  {
+   "contexts": [
+    "Footer"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "footer:down",
+   "default": "Down, Ctrl+N",
+   "source": "keybindings",
+   "line": 275
+  },
+  {
+   "contexts": [
+    "Footer"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "footer:openSelected",
+   "default": "Enter",
+   "source": "keybindings",
+   "line": 276
+  },
+  {
+   "contexts": [
+    "Footer"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "footer:clearSelection",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 277
+  },
+  {
+   "contexts": [
+    "Footer"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "footer:close",
+   "default": "x",
+   "source": "keybindings",
+   "line": 278
+  },
+  {
+   "contexts": [
+    "Footer"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "footer:dismiss",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 279
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "diff:dismiss",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 314
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "diff:previousSource",
+   "default": "Left",
+   "source": "keybindings",
+   "line": 315
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "diff:nextSource",
+   "default": "Right",
+   "source": "keybindings",
+   "line": 316
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "diff:previousFile",
+   "default": "Up, K",
+   "source": "keybindings",
+   "line": 317
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "diff:nextFile",
+   "default": "Down, J",
+   "source": "keybindings",
+   "line": 318
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "diff:back",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 319
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:pageUp",
+   "default": "PageUp",
+   "source": "keybindings",
+   "line": 329
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:pageDown",
+   "default": "PageDown",
+   "source": "keybindings",
+   "line": 330
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:fullPageUp",
+   "default": "Shift+Space, B",
+   "source": "keybindings",
+   "line": 331
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:fullPageDown",
+   "default": "Space",
+   "source": "keybindings",
+   "line": 332
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:top",
+   "default": "G, Home",
+   "source": "keybindings",
+   "line": 333
+  },
+  {
+   "contexts": [
+    "DiffDialog"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:bottom",
+   "default": "Shift+G, End",
+   "source": "keybindings",
+   "line": 334
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 338,
+   "action": "app:toggleReplTab",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 344
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 338,
+   "action": "app:cycleDiffBase",
+   "default": "Ctrl+X B",
+   "source": "keybindings",
+   "line": 345
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 338,
+   "action": "app:diffFileListUp",
+   "default": "Ctrl+Up, Meta+Up",
+   "source": "keybindings",
+   "line": 346
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 338,
+   "action": "app:diffFileListDown",
+   "default": "Ctrl+Down, Meta+Down",
+   "source": "keybindings",
+   "line": 347
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 338,
+   "action": "app:toggleDiffNoiseFilter",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 348
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 338,
+   "action": "app:toggleDiffPreSession",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 349
+  },
+  {
+   "contexts": [
+    "ModelPicker"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "modelPicker:decreaseEffort",
+   "default": "Left",
+   "source": "keybindings",
+   "line": 357
+  },
+  {
+   "contexts": [
+    "ModelPicker"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "modelPicker:increaseEffort",
+   "default": "Right",
+   "source": "keybindings",
+   "line": 358
+  },
+  {
+   "contexts": [
+    "ModelPicker"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "modelPicker:thisSessionOnly",
+   "default": "s",
+   "source": "keybindings",
+   "line": 359
+  },
+  {
+   "contexts": [
+    "EffortSlider"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "effortSlider:decreaseEffort",
+   "default": "Left",
+   "source": "keybindings",
+   "line": 367
+  },
+  {
+   "contexts": [
+    "EffortSlider"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "effortSlider:increaseEffort",
+   "default": "Right",
+   "source": "keybindings",
+   "line": 368
+  },
+  {
+   "contexts": [
+    "EffortSlider"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "effortSlider:toggleUltracode",
+   "default": "Tab",
+   "source": "keybindings",
+   "line": 369
+  },
+  {
+   "contexts": [
+    "EffortSlider"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "effortSlider:thisSessionOnly",
+   "default": "s",
+   "source": "keybindings",
+   "line": 370
+  },
+  {
+   "contexts": [
+    "Select"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:next",
+   "default": "Down, J, Ctrl+N",
+   "source": "keybindings",
+   "line": 378
+  },
+  {
+   "contexts": [
+    "Select"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:previous",
+   "default": "Up, K, Ctrl+P",
+   "source": "keybindings",
+   "line": 379
+  },
+  {
+   "contexts": [
+    "Select"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:pageUp",
+   "default": "PageUp",
+   "source": "keybindings",
+   "line": 380
+  },
+  {
+   "contexts": [
+    "Select"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:pageDown",
+   "default": "PageDown",
+   "source": "keybindings",
+   "line": 381
+  },
+  {
+   "contexts": [
+    "Select"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:first",
+   "default": "Home",
+   "source": "keybindings",
+   "line": 382
+  },
+  {
+   "contexts": [
+    "Select"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:last",
+   "default": "End",
+   "source": "keybindings",
+   "line": 383
+  },
+  {
+   "contexts": [
+    "Select"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:accept",
+   "default": "Enter",
+   "source": "keybindings",
+   "line": 384
+  },
+  {
+   "contexts": [
+    "Select"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:cancel",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 385
+  },
+  {
+   "contexts": [
+    "Plugin"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "plugin:toggle",
+   "default": "Space",
+   "source": "keybindings",
+   "line": 399
+  },
+  {
+   "contexts": [
+    "Plugin"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "plugin:install",
+   "default": "I",
+   "source": "keybindings",
+   "line": 400
+  },
+  {
+   "contexts": [
+    "Plugin"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "plugin:favorite",
+   "default": "F",
+   "source": "keybindings",
+   "line": 401
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 405,
+   "action": "abovePrompt:toggle",
+   "default": "Ctrl+X Ctrl+A",
+   "source": "keybindings",
+   "line": 409
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 405,
+   "action": "abovePrompt:focus",
+   "default": "Ctrl+X Tab",
+   "source": "keybindings",
+   "line": 410
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 405,
+   "action": "abovePrompt:next",
+   "default": "Tab",
+   "source": "keybindings",
+   "line": 411
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 405,
+   "action": "abovePrompt:previous",
+   "default": "Shift+Tab",
+   "source": "keybindings",
+   "line": 412
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 405,
+   "action": "abovePrompt:press",
+   "default": "Enter",
+   "source": "keybindings",
+   "line": 413
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 405,
+   "action": "abovePrompt:leave",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 414
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 405,
+   "action": "abovePrompt:highlightNext",
+   "default": "Down",
+   "source": "keybindings",
+   "line": 415
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 405,
+   "action": "abovePrompt:highlightPrevious",
+   "default": "Up",
+   "source": "keybindings",
+   "line": 416
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:scrollUp",
+   "default": "Up",
+   "source": "keybindings",
+   "line": 428
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:scrollDown",
+   "default": "Down",
+   "source": "keybindings",
+   "line": 429
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:pageUp",
+   "default": "PageUp",
+   "source": "keybindings",
+   "line": 430
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:pageDown",
+   "default": "PageDown",
+   "source": "keybindings",
+   "line": 431
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:top",
+   "default": "Home",
+   "source": "keybindings",
+   "line": 432
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:bottom",
+   "default": "End",
+   "source": "keybindings",
+   "line": 433
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:grow",
+   "default": "Ctrl+X Left, Ctrl+X Up",
+   "source": "keybindings",
+   "line": 434
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:shrink",
+   "default": "Ctrl+X Right, Ctrl+X Down",
+   "source": "keybindings",
+   "line": 435
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:close",
+   "default": "Ctrl+X X",
+   "source": "keybindings",
+   "line": 436
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:next",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 437
+  },
+  {
+   "contexts": [],
+   "contextSource": "prose",
+   "contextProseLine": 424,
+   "action": "pane:previous",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 438
+  },
+  {
+   "contexts": [
+    "Settings"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "settings:search",
+   "default": "/",
+   "source": "keybindings",
+   "line": 448
+  },
+  {
+   "contexts": [
+    "Settings"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "settings:retry",
+   "default": "R",
+   "source": "keybindings",
+   "line": 449
+  },
+  {
+   "contexts": [
+    "Settings"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "settings:fixUsage",
+   "default": "F",
+   "source": "keybindings",
+   "line": 450
+  },
+  {
+   "contexts": [
+    "Settings"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "select:accept",
+   "default": "Enter, Space",
+   "source": "keybindings",
+   "line": 451
+  },
+  {
+   "contexts": [
+    "Settings"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "confirm:no",
+   "default": "Escape",
+   "source": "keybindings",
+   "line": 452
+  },
+  {
+   "contexts": [
+    "Agents"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "agents:switchView",
+   "default": "Ctrl+S",
+   "source": "keybindings",
+   "line": 460
+  },
+  {
+   "contexts": [
+    "Agents"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "agents:togglePin",
+   "default": "Ctrl+T",
+   "source": "keybindings",
+   "line": 461
+  },
+  {
+   "contexts": [
+    "Agents"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "agents:find",
+   "default": "Ctrl+F",
+   "source": "keybindings",
+   "line": 462
+  },
+  {
+   "contexts": [
+    "Agents"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "agents:rename",
+   "default": "Ctrl+R",
+   "source": "keybindings",
+   "line": 463
+  },
+  {
+   "contexts": [
+    "Agents"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "agents:previousGroup",
+   "default": "Ctrl+Up, Meta+Up",
+   "source": "keybindings",
+   "line": 464
+  },
+  {
+   "contexts": [
+    "Agents"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "agents:nextGroup",
+   "default": "Ctrl+Down, Meta+Down",
+   "source": "keybindings",
+   "line": 465
+  },
+  {
+   "contexts": [
+    "Chat"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "voice:pushToTalk",
+   "default": "Space",
+   "source": "keybindings",
+   "line": 479
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:lineUp",
+   "default": "`wheelup`",
+   "source": "keybindings",
+   "line": 487
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:lineDown",
+   "default": "`wheeldown`",
+   "source": "keybindings",
+   "line": 488
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:pageUp",
+   "default": "PageUp",
+   "source": "keybindings",
+   "line": 489
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:pageDown",
+   "default": "PageDown",
+   "source": "keybindings",
+   "line": 490
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:top",
+   "default": "Ctrl+Home",
+   "source": "keybindings",
+   "line": 491
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:bottom",
+   "default": "Ctrl+End",
+   "source": "keybindings",
+   "line": 492
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:halfPageUp",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 493
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:halfPageDown",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 494
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:fullPageUp",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 495
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "scroll:fullPageDown",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 496
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "selection:copy",
+   "default": "Ctrl+Shift+C / Cmd+C",
+   "source": "keybindings",
+   "line": 497
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "selection:clear",
+   "default": "(unbound)",
+   "source": "keybindings",
+   "line": 498
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "selection:extendLeft",
+   "default": "Shift+Left",
+   "source": "keybindings",
+   "line": 499
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "selection:extendRight",
+   "default": "Shift+Right",
+   "source": "keybindings",
+   "line": 500
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "selection:extendUp",
+   "default": "Shift+Up",
+   "source": "keybindings",
+   "line": 501
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "selection:extendDown",
+   "default": "Shift+Down",
+   "source": "keybindings",
+   "line": 502
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "selection:extendLineStart",
+   "default": "Shift+Home",
+   "source": "keybindings",
+   "line": 503
+  },
+  {
+   "contexts": [
+    "Scroll"
+   ],
+   "contextSource": "stated",
+   "contextProseLine": null,
+   "action": "selection:extendLineEnd",
+   "default": "Shift+End",
+   "source": "keybindings",
+   "line": 504
+  }
+ ],
+ "uiSurfaces": [
+  {
+   "name": "Keyboard shortcuts",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 9
+  },
+  {
+   "name": "General controls",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 17
+  },
+  {
+   "name": "Text editing",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 44
+  },
+  {
+   "name": "Word boundaries in editing shortcuts",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 60
+  },
+  {
+   "name": "Theme and display",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 72
+  },
+  {
+   "name": "Multiline input",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 78
+  },
+  {
+   "name": "Quick commands",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 88
+  },
+  {
+   "name": "Transcript viewer",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 98
+  },
+  {
+   "name": "Voice input",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 111
+  },
+  {
+   "name": "Commands",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 117
+  },
+  {
+   "name": "Complete a command mid-prompt",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 125
+  },
+  {
+   "name": "Vim editor mode",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 136
+  },
+  {
+   "name": "Mode switching",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 142
+  },
+  {
+   "name": "Remap INSERT-mode key sequences",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 156
+  },
+  {
+   "name": "Navigation (NORMAL mode)",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 175
+  },
+  {
+   "name": "Editing (NORMAL mode)",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 202
+  },
+  {
+   "name": "Text objects (NORMAL mode)",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 231
+  },
+  {
+   "name": "Visual mode",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 245
+  },
+  {
+   "name": "Cancel a question in vim mode",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 265
+  },
+  {
+   "name": "Command history",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 271
+  },
+  {
+   "name": "Bring back a cleared draft",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 281
+  },
+  {
+   "name": "Reverse search with Ctrl+R",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 288
+  },
+  {
+   "name": "Background Bash commands",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 307
+  },
+  {
+   "name": "How backgrounding works",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 311
+  },
+  {
+   "name": "Shell mode with `!` prefix",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 345
+  },
+  {
+   "name": "Queue messages while Claude works",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 370
+  },
+  {
+   "name": "When Claude Code sends what you queued",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 378
+  },
+  {
+   "name": "Background a session with messages queued",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 402
+  },
+  {
+   "name": "Take back what you queued",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 411
+  },
+  {
+   "name": "Prompt suggestions",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 419
+  },
+  {
+   "name": "When Claude Code skips suggestions",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 430
+  },
+  {
+   "name": "Turn prompt suggestions off",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 447
+  },
+  {
+   "name": "You should know suggestions",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 460
+  },
+  {
+   "name": "Cost of checks",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 486
+  },
+  {
+   "name": "Answer a note",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 492
+  },
+  {
+   "name": "Turn off You should know",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 507
+  },
+  {
+   "name": "Emoji shortcodes",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 514
+  },
+  {
+   "name": "Check spelling as you type",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 525
+  },
+  {
+   "name": "Turn spell checking on or off",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 536
+  },
+  {
+   "name": "What Claude Code underlines",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 599
+  },
+  {
+   "name": "When Claude Code underlines nothing",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 610
+  },
+  {
+   "name": "Invisible characters in prompts",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 620
+  },
+  {
+   "name": "Review changes with /diff",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 628
+  },
+  {
+   "name": "Diff panel",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 639
+  },
+  {
+   "name": "Diff dialog",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 664
+  },
+  {
+   "name": "Side questions with /btw",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 677
+  },
+  {
+   "name": "Task list",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 713
+  },
+  {
+   "name": "Session recap",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 725
+  },
+  {
+   "name": "Wait for a usage limit to reset",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 733
+  },
+  {
+   "name": "Cancel the wait",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 754
+  },
+  {
+   "name": "Start a wait yourself",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 768
+  },
+  {
+   "name": "Turn automatic continue off",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 784
+  },
+  {
+   "name": "PR review status",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 788
+  },
+  {
+   "name": "GitLab merge requests",
+   "level": 3,
+   "source": "interactive-mode",
+   "line": 815
+  },
+  {
+   "name": "Issue reference links",
+   "level": 2,
+   "source": "interactive-mode",
+   "line": 835
+  },
+  {
+   "name": "Enable fullscreen rendering",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 21
+  },
+  {
+   "name": "What changes",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 76
+  },
+  {
+   "name": "Use the mouse",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 90
+  },
+  {
+   "name": "Scroll the conversation",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 129
+  },
+  {
+   "name": "Search and review the conversation",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 190
+  },
+  {
+   "name": "Watch your changes in the diff panel",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 214
+  },
+  {
+   "name": "Clear the conversation",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 218
+  },
+  {
+   "name": "Use with tmux",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 226
+  },
+  {
+   "name": "Keep native text selection",
+   "level": 2,
+   "source": "fullscreen",
+   "line": 242
+  },
+  {
+   "name": "Set up a status line",
+   "level": 2,
+   "source": "statusline",
+   "line": 26
+  },
+  {
+   "name": "Build a status line step by step",
+   "level": 2,
+   "source": "statusline",
+   "line": 75
+  },
+  {
+   "name": "How status lines work",
+   "level": 2,
+   "source": "statusline",
+   "line": 131
+  },
+  {
+   "name": "Available data",
+   "level": 2,
+   "source": "statusline",
+   "line": 168
+  },
+  {
+   "name": "Subagent status lines",
+   "level": 2,
+   "source": "statusline",
+   "line": 1088
+  },
+  {
+   "name": "How checkpoints work",
+   "level": 2,
+   "source": "checkpointing",
+   "line": 11
+  }
+ ],
+ "permissionModes": [
+  {
+   "name": "default",
+   "source": "permission-modes",
+   "line": 19
+  },
+  {
+   "name": "acceptEdits",
+   "source": "permission-modes",
+   "line": 20
+  },
+  {
+   "name": "plan",
+   "source": "permission-modes",
+   "line": 21
+  },
+  {
+   "name": "auto",
+   "source": "permission-modes",
+   "line": 22
+  },
+  {
+   "name": "dontAsk",
+   "source": "permission-modes",
+   "line": 23
+  },
+  {
+   "name": "bypassPermissions",
+   "source": "permission-modes",
+   "line": 24
+  }
+ ],
+ "hookEvents": [
+  {
+   "name": "SessionStart",
+   "source": "hooks",
+   "line": 33
+  },
+  {
+   "name": "Setup",
+   "source": "hooks",
+   "line": 34
+  },
+  {
+   "name": "UserPromptSubmit",
+   "source": "hooks",
+   "line": 35
+  },
+  {
+   "name": "UserPromptExpansion",
+   "source": "hooks",
+   "line": 36
+  },
+  {
+   "name": "PreToolUse",
+   "source": "hooks",
+   "line": 37
+  },
+  {
+   "name": "PermissionRequest",
+   "source": "hooks",
+   "line": 38
+  },
+  {
+   "name": "PermissionDenied",
+   "source": "hooks",
+   "line": 39
+  },
+  {
+   "name": "PostToolUse",
+   "source": "hooks",
+   "line": 40
+  },
+  {
+   "name": "PostToolUseFailure",
+   "source": "hooks",
+   "line": 41
+  },
+  {
+   "name": "PostToolBatch",
+   "source": "hooks",
+   "line": 42
+  },
+  {
+   "name": "Notification",
+   "source": "hooks",
+   "line": 43
+  },
+  {
+   "name": "MessageDisplay",
+   "source": "hooks",
+   "line": 44
+  },
+  {
+   "name": "SubagentStart",
+   "source": "hooks",
+   "line": 45
+  },
+  {
+   "name": "SubagentStop",
+   "source": "hooks",
+   "line": 46
+  },
+  {
+   "name": "TaskCreated",
+   "source": "hooks",
+   "line": 47
+  },
+  {
+   "name": "TaskCompleted",
+   "source": "hooks",
+   "line": 48
+  },
+  {
+   "name": "Stop",
+   "source": "hooks",
+   "line": 49
+  },
+  {
+   "name": "StopFailure",
+   "source": "hooks",
+   "line": 50
+  },
+  {
+   "name": "TeammateIdle",
+   "source": "hooks",
+   "line": 51
+  },
+  {
+   "name": "InstructionsLoaded",
+   "source": "hooks",
+   "line": 52
+  },
+  {
+   "name": "ConfigChange",
+   "source": "hooks",
+   "line": 53
+  },
+  {
+   "name": "CwdChanged",
+   "source": "hooks",
+   "line": 54
+  },
+  {
+   "name": "DirectoryAdded",
+   "source": "hooks",
+   "line": 55
+  },
+  {
+   "name": "FileChanged",
+   "source": "hooks",
+   "line": 56
+  },
+  {
+   "name": "WorktreeCreate",
+   "source": "hooks",
+   "line": 57
+  },
+  {
+   "name": "WorktreeRemove",
+   "source": "hooks",
+   "line": 58
+  },
+  {
+   "name": "PreCompact",
+   "source": "hooks",
+   "line": 59
+  },
+  {
+   "name": "PostCompact",
+   "source": "hooks",
+   "line": 60
+  },
+  {
+   "name": "PreModelSwitch",
+   "source": "hooks",
+   "line": 61
+  },
+  {
+   "name": "PostModelSwitch",
+   "source": "hooks",
+   "line": 62
+  },
+  {
+   "name": "Elicitation",
+   "source": "hooks",
+   "line": 63
+  },
+  {
+   "name": "ElicitationResult",
+   "source": "hooks",
+   "line": 64
+  },
+  {
+   "name": "SessionEnd",
+   "source": "hooks",
+   "line": 65
+  }
+ ],
+ "sdkMessages": [
+  {
+   "name": "SDKAssistantMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1480,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKUserMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1532,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKUserMessageReplay",
+   "source": "agent-sdk/typescript",
+   "line": 1598,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKResultMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1619,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKSystemMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1861,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKPartialAssistantMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1931,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKCompactBoundaryMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1953,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKStatusMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5279,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKLocalCommandOutputMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5672,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKHookStartedMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5343,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKHookProgressMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5361,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKHookResponseMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5380,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKPluginInstallMessage",
+   "source": "agent-sdk/typescript",
+   "line": 2005,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKToolProgressMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5401,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKAuthStatusMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5438,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKTaskNotificationMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5294,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKTaskStartedMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5453,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKTaskProgressMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5508,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKTaskUpdatedMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5535,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKBackgroundTasksChangedMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5558,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKThinkingTokensMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5592,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKSessionStateChangedMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5612,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKWorkerShuttingDownMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1991,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKCommandsChangedMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5686,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKNotificationMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1466,
+   "documentedSection": false
+  },
+  {
+   "name": "SDKFilesPersistedEvent",
+   "source": "agent-sdk/typescript",
+   "line": 5634,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKToolUseSummaryMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5329,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKMemoryRecallMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1469,
+   "documentedSection": false
+  },
+  {
+   "name": "SDKRateLimitEvent",
+   "source": "agent-sdk/typescript",
+   "line": 5650,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKElicitationCompleteMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1471,
+   "documentedSection": false
+  },
+  {
+   "name": "SDKPermissionDeniedMessage",
+   "source": "agent-sdk/typescript",
+   "line": 2021,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKPromptSuggestionMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5702,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKAPIRetryMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1474,
+   "documentedSection": false
+  },
+  {
+   "name": "SDKMirrorErrorMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1475,
+   "documentedSection": false
+  },
+  {
+   "name": "SDKInformationalMessage",
+   "source": "agent-sdk/typescript",
+   "line": 1970,
+   "documentedSection": true
+  },
+  {
+   "name": "SDKConversationResetMessage",
+   "source": "agent-sdk/typescript",
+   "line": 5715,
+   "documentedSection": true
+  }
+ ],
+ "engineEvents": [
+  {
+   "name": "turn.step",
+   "source": "engine-types",
+   "line": 1244
+  },
+  {
+   "name": "process.spawn",
+   "source": "engine-types",
+   "line": 1248
+  },
+  {
+   "name": "tool.call",
+   "source": "engine-types",
+   "line": 4082
+  },
+  {
+   "name": "tool.check",
+   "source": "engine-types",
+   "line": 4096
+  },
+  {
+   "name": "ui.render",
+   "source": "engine-types",
+   "line": 4108
+  },
+  {
+   "name": "ui.resolve",
+   "source": "engine-types",
+   "line": 4117
+  },
+  {
+   "name": "ui.press",
+   "source": "engine-types",
+   "line": 4126
+  },
+  {
+   "name": "ui.input",
+   "source": "engine-types",
+   "line": 4135
+  },
+  {
+   "name": "ui.select",
+   "source": "engine-types",
+   "line": 4144
+  },
+  {
+   "name": "ui.message",
+   "source": "engine-types",
+   "line": 4153
+  },
+  {
+   "name": "ui.fault",
+   "source": "engine-types",
+   "line": 4167
+  },
+  {
+   "name": "ui.scroll",
+   "source": "engine-types",
+   "line": 4179
+  },
+  {
+   "name": "ui.focus",
+   "source": "engine-types",
+   "line": 4191
+  },
+  {
+   "name": "agent.offer",
+   "source": "engine-types",
+   "line": 4204
+  },
+  {
+   "name": "agent.spawn",
+   "source": "engine-types",
+   "line": 4216
+  },
+  {
+   "name": "prompt.submit",
+   "source": "engine-types",
+   "line": 4228
+  },
+  {
+   "name": "prompt.fill",
+   "source": "engine-types",
+   "line": 4240
+  },
+  {
+   "name": "prompt.suggest",
+   "source": "engine-types",
+   "line": 4252
+  },
+  {
+   "name": "prompt.edit",
+   "source": "engine-types",
+   "line": 4264
+  },
+  {
+   "name": "prompt.change",
+   "source": "engine-types",
+   "line": 4275
+  },
+  {
+   "name": "prompt.autocomplete",
+   "source": "engine-types",
+   "line": 4287
+  },
+  {
+   "name": "prompt.section",
+   "source": "engine-types",
+   "line": 4299
+  },
+  {
+   "name": "prompt.context",
+   "source": "engine-types",
+   "line": 4311
+  },
+  {
+   "name": "prompt.compose",
+   "source": "engine-types",
+   "line": 4320
+  },
+  {
+   "name": "prompt.attachment",
+   "source": "engine-types",
+   "line": 4332
+  },
+  {
+   "name": "prompt.mention",
+   "source": "engine-types",
+   "line": 4346
+  },
+  {
+   "name": "tool.describe",
+   "source": "engine-types",
+   "line": 4364
+  },
+  {
+   "name": "command.run",
+   "source": "engine-types",
+   "line": 4378
+  },
+  {
+   "name": "command.describe",
+   "source": "engine-types",
+   "line": 4390
+  },
+  {
+   "name": "config.set",
+   "source": "engine-types",
+   "line": 4404
+  },
+  {
+   "name": "config.describe",
+   "source": "engine-types",
+   "line": 4416
+  },
+  {
+   "name": "telemetry.log",
+   "source": "engine-types",
+   "line": 4428
+  },
+  {
+   "name": "telemetry.mark",
+   "source": "engine-types",
+   "line": 4439
+  },
+  {
+   "name": "skill.prompt",
+   "source": "engine-types",
+   "line": 4450
+  },
+  {
+   "name": "attribution.text",
+   "source": "engine-types",
+   "line": 4461
+  },
+  {
+   "name": "session.start",
+   "source": "engine-types",
+   "line": 4473
+  },
+  {
+   "name": "session.receive",
+   "source": "engine-types",
+   "line": 4485
+  },
+  {
+   "name": "session.append",
+   "source": "engine-types",
+   "line": 4497
+  },
+  {
+   "name": "session.send",
+   "source": "engine-types",
+   "line": 4509
+  },
+  {
+   "name": "session.compact",
+   "source": "engine-types",
+   "line": 4521
+  },
+  {
+   "name": "session.attach",
+   "source": "engine-types",
+   "line": 4533
+  },
+  {
+   "name": "session.detach",
+   "source": "engine-types",
+   "line": 4541
+  },
+  {
+   "name": "session.measure",
+   "source": "engine-types",
+   "line": 4553
+  },
+  {
+   "name": "session.end",
+   "source": "engine-types",
+   "line": 4565
+  },
+  {
+   "name": "plugin.register",
+   "source": "engine-types",
+   "line": 4579
+  },
+  {
+   "name": "turn.start",
+   "source": "engine-types",
+   "line": 4588
+  },
+  {
+   "name": "turn.complete",
+   "source": "engine-types",
+   "line": 4609
+  },
+  {
+   "name": "engine.create",
+   "source": "engine-types",
+   "line": 4618
+  },
+  {
+   "name": "model.complete",
+   "source": "engine-types",
+   "line": 7026
+  },
+  {
+   "name": "model.fork",
+   "source": "engine-types",
+   "line": 7038
+  },
+  {
+   "name": "audio.speak",
+   "source": "engine-types",
+   "line": 7051
+  },
+  {
+   "name": "session.cwd",
+   "source": "engine-types",
+   "line": 7069
+  },
+  {
+   "name": "session.root",
+   "source": "engine-types",
+   "line": 7073
+  },
+  {
+   "name": "session.model",
+   "source": "engine-types",
+   "line": 7077
+  },
+  {
+   "name": "session.turns",
+   "source": "engine-types",
+   "line": 7081
+  },
+  {
+   "name": "session.id",
+   "source": "engine-types",
+   "line": 7085
+  },
+  {
+   "name": "session.messages",
+   "source": "engine-types",
+   "line": 7090
+  },
+  {
+   "name": "session.repo",
+   "source": "engine-types",
+   "line": 7094
+  },
+  {
+   "name": "session.surface",
+   "source": "engine-types",
+   "line": 7100
+  },
+  {
+   "name": "session.surfaces",
+   "source": "engine-types",
+   "line": 7104
+  },
+  {
+   "name": "session.authorize",
+   "source": "engine-types",
+   "line": 7108
+  },
+  {
+   "name": "session.identity",
+   "source": "engine-types",
+   "line": 7112
+  },
+  {
+   "name": "session.usage",
+   "source": "engine-types",
+   "line": 7116
+  },
+  {
+   "name": "session.version",
+   "source": "engine-types",
+   "line": 7120
+  },
+  {
+   "name": "prompt.read",
+   "source": "engine-types",
+   "line": 7130
+  },
+  {
+   "name": "tool.list",
+   "source": "engine-types",
+   "line": 7134
+  },
+  {
+   "name": "tool.register",
+   "source": "engine-types",
+   "line": 7138
+  },
+  {
+   "name": "command.list",
+   "source": "engine-types",
+   "line": 7142
+  },
+  {
+   "name": "command.register",
+   "source": "engine-types",
+   "line": 7146
+  },
+  {
+   "name": "config.list",
+   "source": "engine-types",
+   "line": 7150
+  },
+  {
+   "name": "agent.list",
+   "source": "engine-types",
+   "line": 7154
+  },
+  {
+   "name": "agent.register",
+   "source": "engine-types",
+   "line": 7159
+  },
+  {
+   "name": "ui.open",
+   "source": "engine-types",
+   "line": 7198
+  },
+  {
+   "name": "ui.close",
+   "source": "engine-types",
+   "line": 7203
+  },
+  {
+   "name": "ui.panes",
+   "source": "engine-types",
+   "line": 7207
+  },
+  {
+   "name": "ui.selection",
+   "source": "engine-types",
+   "line": 7211
+  },
+  {
+   "name": "ui.copy",
+   "source": "engine-types",
+   "line": 7216
+  },
+  {
+   "name": "ui.view",
+   "source": "engine-types",
+   "line": 7221
+  },
+  {
+   "name": "ui.blit",
+   "source": "engine-types",
+   "line": 7238
+  },
+  {
+   "name": "fs.ancestors",
+   "source": "engine-types",
+   "line": 7277
+  },
+  {
+   "name": "store.keys",
+   "source": "engine-types",
+   "line": 7300
+  },
+  {
+   "name": "state.get",
+   "source": "engine-types",
+   "line": 7305
+  },
+  {
+   "name": "state.set",
+   "source": "engine-types",
+   "line": 7314
+  },
+  {
+   "name": "clock.now",
+   "source": "engine-types",
+   "line": 7318
+  },
+  {
+   "name": "clock.sleep",
+   "source": "engine-types",
+   "line": 7323
+  },
+  {
+   "name": "clock.after",
+   "source": "engine-types",
+   "line": 7328
+  },
+  {
+   "name": "clock.every",
+   "source": "engine-types",
+   "line": 7333
+  },
+  {
+   "name": "settings.read",
+   "source": "engine-types",
+   "line": 7360
+  },
+  {
+   "name": "model.classify",
+   "source": "engine-types",
+   "line": 7392
+  },
+  {
+   "name": "audio.play",
+   "source": "engine-types",
+   "line": 7394
+  },
+  {
+   "name": "mcp.call",
+   "source": "engine-types",
+   "line": 7396
+  },
+  {
+   "name": "mcp.connect",
+   "source": "engine-types",
+   "line": 7397
+  },
+  {
+   "name": "turn.abort",
+   "source": "engine-types",
+   "line": 7426
+  },
+  {
+   "name": "ui.toast",
+   "source": "engine-types",
+   "line": 7444
+  },
+  {
+   "name": "ui.status",
+   "source": "engine-types",
+   "line": 7445
+  },
+  {
+   "name": "ui.log",
+   "source": "engine-types",
+   "line": 7446
+  },
+  {
+   "name": "ui.notice",
+   "source": "engine-types",
+   "line": 7447
+  },
+  {
+   "name": "ui.invalidate",
+   "source": "engine-types",
+   "line": 7448
+  },
+  {
+   "name": "ui.notify",
+   "source": "engine-types",
+   "line": 7467
+  },
+  {
+   "name": "fs.read",
+   "source": "engine-types",
+   "line": 7472
+  },
+  {
+   "name": "fs.write",
+   "source": "engine-types",
+   "line": 7473
+  },
+  {
+   "name": "fs.list",
+   "source": "engine-types",
+   "line": 7474
+  },
+  {
+   "name": "fs.exists",
+   "source": "engine-types",
+   "line": 7475
+  },
+  {
+   "name": "fs.stat",
+   "source": "engine-types",
+   "line": 7476
+  },
+  {
+   "name": "store.get",
+   "source": "engine-types",
+   "line": 7478
+  },
+  {
+   "name": "store.set",
+   "source": "engine-types",
+   "line": 7479
+  },
+  {
+   "name": "store.delete",
+   "source": "engine-types",
+   "line": 7480
+  },
+  {
+   "name": "http.fetch",
+   "source": "engine-types",
+   "line": 7498
+  },
+  {
+   "name": "process.run",
+   "source": "engine-types",
+   "line": 7499
+  },
+  {
+   "name": "env.get",
+   "source": "engine-types",
+   "line": 7502
+  },
+  {
+   "name": "env.set",
+   "source": "engine-types",
+   "line": 7503
+  }
+ ]
+}
