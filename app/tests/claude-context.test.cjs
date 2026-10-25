@@ -39,7 +39,7 @@ test('child IDs and late root events cannot change the current binding, readines
  r.hook({hook_event_name:'SessionEnd',session_id:child,agent_id:'child',reason:'clear'});assert.equal(r.ready,true);
  assert.throws(()=>r.clearRoot({...old,nextSessionId:child,source:'clear'}));
  r.endRoot({...old,reason:'clear'});
- for(const payload of [{lease:'wrong'},{sessionId:child},{source:'resume'},{agentId:'child'},{nextSessionId:old.sessionId}])assert.throws(()=>r.clearRoot({...old,nextSessionId:child,source:'clear',...payload}));
+ for(const payload of [{lease:'wrong'},{sessionId:child},{source:'resume'},{source:undefined},{agentId:'child'},{nextSessionId:old.sessionId}])assert.throws(()=>r.clearRoot({...old,nextSessionId:child,source:'clear',...payload}));
  const next=randomUUID();r.clearRoot({...old,nextSessionId:next,source:'clear'});let observations=0;for(const name of ['complete','state','progress','fleet'])r.on(name,()=>observations++);
  for(const event of ['SessionStart','SessionEnd','Stop','PermissionRequest','SubagentStart'])r.hook({hook_event_name:event,session_id:old.sessionId,last_assistant_message:'late old reply'});
  assert.equal(observations,0);assert.equal(s.nativeId,next);assert.equal(r.ready,true);
@@ -131,4 +131,67 @@ for(const scenario of ['held-ack','lost-ack','held-final-id'])test(`real mod reg
  for(let i=0;i<12&&s.nativeId!==c;i++){assert.ok(clock.length);await clock.shift()()}
  assert.equal(s.nativeId,c);assert.deepEqual(s.nativeContexts.map(x=>x.nativeId),[a,b]);assert.equal(s.state,'idle');assert.equal(r.ready,true);assert.equal(submits,0);
  assert.deepEqual([...new Set(transitions)],[b,c]);
+});
+test('a native /branch (SessionEnd resume, SessionStart fork) is followed like clear; a plain resume is not',async t=>{
+ const f=await fixture(t),{w,id,s,r}=f;const first=s.nativeId,old=f.bind();
+ s.messages.push({id:'before-branch',role:'user',text:'Before the branch'});w.setDraft(id,'Kept draft','owner');
+ r.endRoot({...old,reason:'resume'});assert.equal(r.ready,false);assert.equal(s.nativeContextPending.reason,'resume');
+ const branch=randomUUID();
+ for(const payload of [{source:'resume'},{source:'clear'}])assert.throws(()=>r.clearRoot({...old,nextSessionId:branch,...payload}),'Only the fork start of the same process follows a resume end');
+ const result=r.clearRoot({...old,nextSessionId:branch,source:'fork'});assert.ok(result.lease);assert.equal(r.ready,true);
+ assert.equal(s.nativeId,branch);assert.equal(s.nativeContexts.length,1);assert.equal(s.nativeContexts[0].nativeId,first);assert.equal(s.nativeContexts[0].reason,'branch');
+ const boundary=s.messages.find(m=>m.kind==='context');assert.match(boundary.text,/分支/);assert.equal(s.messages[0].text,'Before the branch');assert.equal(w.drafts.get(id),'Kept draft');
+ assert.equal(s.nativeContextPending,null);assert.equal(r.validRootBinding(old),false);
+ // A clear end can still only be followed by a clear start.
+ const second=f.bind();r.endRoot({...second,reason:'clear'});assert.throws(()=>r.clearRoot({...second,nextSessionId:randomUUID(),source:'fork'}));
+});
+for(const reason of ['other','logout','prompt_input_exit'])test(`an unfollowed ending (${reason}) never accepts a transition, even without a source`,async t=>{
+ const f=await fixture(t),{r}=f,b=f.bind();r.endRoot({...b,reason});
+ for(const source of [undefined,'clear','fork','resume'])assert.throws(()=>r.clearRoot({...b,nextSessionId:randomUUID(),source}));
+});
+function modHarness(r,s){
+ const hooks=new Map(),clock=[],transitions=[];const state={native:s.nativeId,submits:0};
+ const $={session:{id:async()=>state.native,version:async()=>({version:'2.1.310'})},env:{get:async key=>key==='NAW_SUBMIT_SOCKET'?'/test/socket':'test-token'},clock:{after:(_ms,fn)=>clock.push(fn)},prompt:{submit:async()=>{state.submits++}},tool:{list:async()=>[]},http:{fetch:async(url,opts)=>{
+  const body=JSON.parse(opts.body);let answer;
+  if(url.endsWith('/root-bind'))answer=r.bindRoot(body);
+  else if(url.endsWith('/root-end'))answer=r.endRoot(body);
+  else if(url.endsWith('/root-clear')){answer=r.clearRoot(body);transitions.push(body.source+':'+body.nextSessionId)}
+  else if(url.endsWith('/next'))answer={idle:true};else if(url.endsWith('/addressed-capability'))answer={};else throw Error('Unexpected dispatch '+url);
+  return {ok:true,text:JSON.stringify(answer)};
+ }}};
+ return {hooks,clock,transitions,state,$,invoke:(name,e)=>hooks.get(name)($,e,async x=>x)};
+}
+async function loadMod(){
+ const source=fs.readFileSync(path.join(__dirname,'../claude-bridge/hooks/register.js'),'utf8');
+ return (await import('data:text/javascript;base64,'+Buffer.from(source+'\n//'+randomUUID()).toString('base64'))).register;
+}
+test('real mod: a fork admitted before it is current is sent once a later clear proves it',async t=>{
+ const f=await fixture(t),{r,s}=f,h=modHarness(r,s),register=await loadMod();
+ register((name,fn)=>{h.hooks.set(name,fn);return {catch(){}}});
+ await h.invoke('session.start',{});await h.clock.shift()();h.clock.length=0;const a=h.state.native,b=randomUUID(),c=randomUUID();
+ r.hook({hook_event_name:'SessionEnd',session_id:a,reason:'resume'});await h.invoke('session.end',{sessionId:a,reason:'resume'});
+ const fork={session_id:b,source:'fork'};r.hook({hook_event_name:'SessionStart',...fork});await h.invoke('classic.SessionStart',fork); // engine still answers the old id here
+ h.state.native=b;r.hook({hook_event_name:'SessionEnd',session_id:b,reason:'clear'});await h.invoke('session.end',{sessionId:b,reason:'clear'});
+ h.state.native=c;const clear={session_id:c,source:'clear'};r.hook({hook_event_name:'SessionStart',...clear});await h.invoke('classic.SessionStart',clear);
+ for(let i=0;i<40&&s.nativeId!==c;i++){if(!h.clock.length)await tick();else await h.clock.shift()()}
+ assert.equal(s.nativeId,c);assert.deepEqual(s.nativeContexts.map(x=>[x.nativeId,x.reason]),[[a,'branch'],[b,'clear']]);assert.deepEqual(h.transitions,['fork:'+b,'clear:'+c]);
+ assert.equal(r.ready,true);assert.equal(h.state.submits,0);
+});
+test('real mod: a fork that never becomes current is dropped after bounded retries, GUI stays closed',async t=>{
+ const f=await fixture(t),{r,s}=f,h=modHarness(r,s),register=await loadMod();
+ register((name,fn)=>{h.hooks.set(name,fn);return {catch(){}}});
+ await h.invoke('session.start',{});await h.clock.shift()();h.clock.length=0;const a=h.state.native,b=randomUUID();
+ r.hook({hook_event_name:'SessionEnd',session_id:a,reason:'resume'});await h.invoke('session.end',{sessionId:a,reason:'resume'});
+ const fork={session_id:b,source:'fork'};r.hook({hook_event_name:'SessionStart',...fork});await h.invoke('classic.SessionStart',fork);
+ let runs=0;while(h.clock.length&&runs<80){runs++;await h.clock.shift()();for(let i=0;i<3;i++)await tick()}
+ assert.ok(runs<80,'Retries stop');assert.ok(runs>=30,'Retried before giving up');assert.deepEqual(h.transitions,[]);assert.equal(h.clock.length,0);
+ assert.equal(s.nativeId,a);assert.equal(s.nativeContextPending?.reason,'resume');assert.equal(r.ready,false);assert.equal(h.state.submits,0);
+});
+test('events of an unfollowed new root (plain /resume) are dropped, not buffered',async t=>{
+ const f=await fixture(t),{s,r}=f,old=f.bind(),other=randomUUID();
+ r.endRoot({...old,reason:'resume'});
+ r.hook({hook_event_name:'SessionStart',session_id:other,source:'resume'});
+ for(let i=0;i<300;i++)r.hook({hook_event_name:'Notification',session_id:other,message:'late'});
+ assert.equal(r.contextEvents?.length||0,0);assert.equal(r.contextEventsOverflow,undefined);assert.equal(r.ready,false);assert.equal(s.nativeId,old.sessionId);
+ assert.throws(()=>r.clearRoot({...old,nextSessionId:other,source:'fork'}),'A fork start cannot be claimed after a resume start was seen');
 });

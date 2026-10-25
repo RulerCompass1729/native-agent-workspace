@@ -36,6 +36,16 @@ hook、SDK 与引擎项包含非交互界面，数量不等于用户功能数，
 终端退出即记为结束；两项的 GUI 表现是按源码推断，未在 GUI 里实测。探测结束时向本探测启动的后台进程发了 SIGTERM，
 1.5 秒后仍有 2 个 `bg-pty-host` 在运行，复核时已退出。
 
+发现与验收证据 `CL-INV-03`（`/branch` 跟随）：原生在 `/branch` 时先发 classic SessionStart（source `fork`），
+此时 `$.session.id()` 仍返回旧 ID，之后才切换（事件顺序探测，1 次本地固定回复）。插件据此在 fork 时
+先登记、发送前再确认新 ID 已成为当前会话；adapter 与 workspace 把 `resume → fork` 当作同进程的分支
+跟随，边界标注为分支。真实 Electron + Claude 2.1.310 测试 `scripts/test-native-branch.cjs`：GUI 发一条
+（固定回复）→ 在同屏 TUI 输入 `/branch` → GUI 跟到新会话 ID，同一行、同一进程、历史与草稿保留，
+分支边界可见 → GUI 再发一条，回复在阅读区与 TUI 同现。2 次本地固定回复，零付费；测试日志记录
+临时 profile 已删除，运行时另行核对的临时目录计数前后相同（计数不在日志里）；合成 Electron 上下文
+测试与单元检查通过。事件顺序的结论来自一次探测样本。普通 `/resume` 换到别的会话不跟随，这一点只有
+单元测试，未在真实 Claude 上验。
+
 需要用户决定：CL-X02（关闭遥测连带关闭的原生功能）和 CL-X03（原生自行发起的后台模型请求）。
 CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收中写明。
 
@@ -68,7 +78,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-A03 Plan 模式与退出 Plan 的确认 | `permission-modes#analyze-before-you-edit-with-plan-mode` | 在同屏原生 TUI 里用；GUI 只见对应权限请求 | **待验** |
 | CL-A04 MCP elicitation 表单与密钥 | `hooks#elicitation` | 在同屏原生 TUI 里用；不导出表单或密钥 | **待验** |
 | CL-A05 权限模式与切换（Shift+Tab 等） | `permission-modes; auto-mode-classifier-billing` | 在同屏原生 TUI 里用；NAW 当前不传 `--permission-mode`，原生默认为 auto（探测启动横幅可见）；分类器请求见 CL-X03 | **待验** |
-| CL-S01 新建、恢复、分支、fork、teleport 与根会话身份 | `sessions; commands` | GUI 跟随原生 clear；**`/branch` 与 `/background` 已实测会换原生会话 ID（CL-INV-02）；按源码 NAW 不跟随，GUI 实测待验**；resume/teleport/tui 待验 | **待验** |
+| CL-S01 新建、恢复、分支、fork、teleport 与根会话身份 | `sessions; commands` | GUI 跟随原生 clear 与 branch（CL-INV-03）；**`/background` 已实测换会话 ID 且内嵌进程退出（CL-INV-02），按源码 NAW 记为结束，GUI 实测待验**；resume/teleport/tui 待验 | **待验** |
 | CL-S02 模型、effort、fast mode、output style | `model-config; fast-mode; output-styles` | GUI 只跟随模型名；选择器在同屏原生 TUI 里用；**fast mode 可用性检查被 CL-X02 关闭，影响待验** | **待验** |
 | CL-S03 配置、记忆、技能、hooks、插件、主题、快捷键设置 | `commands; settings-reference` | 在同屏原生 TUI 里用；**云端同步的技能与插件因 CL-X02 不加载** | **待验** |
 | CL-S04 检查点与 `/rewind` | `checkpointing` | 在同屏原生 TUI 里用；**回退对 GUI 已显示记录的影响待验** | **待验** |
@@ -94,7 +104,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-CMD009 `/autofix-pr [prompt]` | [命令:60](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：菜单未列出；需 claude.ai 订阅、`gh` 登录、云会话或 Chrome 等条件；探测用 API key fixture，无法区分是账号条件还是 CL-X02，**需在用户真实登录环境核对** |
 | CL-CMD010 `/background [prompt]` | [命令:61](https://code.claude.com/docs/en/commands)；别名 `/bg` | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；**缺口（CL-INV-02）**：内嵌终端里的原生进程退出（SessionEnd `prompt_input_exit`），原生守护进程继续运行，hook 显示新会话 ID（SessionStart `fork`）；按源码，NAW 会按终端退出把会话记为结束、看不到后台会话，GUI 实测待验 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD011 `/batch <instruction>` | [命令:62](https://code.claude.com/docs/en/commands)；内置技能 | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
-| CL-CMD012 `/branch [name]` | [命令:63](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；**缺口（CL-INV-02）**：同一进程换到新会话 ID（SessionEnd `resume` → SessionStart `fork`）；NAW 只跟随 clear，按源码会停止跟随并关闭 GUI 输入，GUI 实测待验 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
+| CL-CMD012 `/branch [name]` | [命令:63](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置；GUI 跟随（CL-INV-03）：同一进程换到新会话 ID（SessionEnd `resume` → SessionStart `fork`），GUI 保留同一行、进程、历史与草稿，记一条分支边界，发送继续到分支会话 | CL-INV-03：无参数 `/branch` 已在真实 Electron+Claude 跟随；`/branch name` 待验 |
 | CL-CMD013 `/btw [question]` | [命令:64](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD014 `/bug [report]` | [命令:65](https://code.claude.com/docs/en/commands)；别名 `/share` | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |
 | CL-CMD015 `/cd <path>` | [命令:66](https://code.claude.com/docs/en/commands) | 在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；**待执行验收** |

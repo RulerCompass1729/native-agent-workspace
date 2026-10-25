@@ -30,6 +30,14 @@ process.on('message',q=>{
    const nextSessionId=randomUUID();r.clearRoot({sessionId,lease,nextSessionId,source:'clear'});
    r.chatAvailable=true;r.emit('capability');
   }
+  if(q.method==='branch'){
+   const sessionId=r.record.nativeId,lease=r.bindRoot({sessionId}).lease;
+   r.hook({session_id:sessionId,hook_event_name:'SessionEnd',reason:'resume'});
+   r.endRoot({sessionId,lease,reason:'resume'});
+   const nextSessionId=randomUUID();r.hook({session_id:nextSessionId,hook_event_name:'SessionStart',source:'fork'});
+   r.clearRoot({sessionId,lease,nextSessionId,source:'fork'});
+   r.chatAvailable=true;r.emit('capability');
+  }
   if(q.method==='reply')r.hook({session_id:r.record.nativeId,hook_event_name:'Stop',prompt_id:randomUUID(),last_assistant_message:q.text});
   process.send({requestId:q.id,sends,modelCalls:0,nativeProcesses:0});
  }catch(error){process.send({requestId:q.id,error:error.message})}
