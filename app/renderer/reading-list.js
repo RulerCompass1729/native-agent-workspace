@@ -21,6 +21,9 @@ function captureReading(view) {
   const anchor = [...el.querySelectorAll(':scope > [data-message-id]')].find(row => row.getBoundingClientRect().bottom > top);
   saveReading(view, { top: el.scrollTop, follow: !selecting && el.scrollHeight - el.scrollTop - el.clientHeight < 80, anchor: anchor?.dataset.messageId || '', offset: anchor ? anchor.getBoundingClientRect().top - top : 0 });
 }
+// Like the native terminal's "Jump to bottom": shown once the reader leaves the latest output.
+// Its bar has no height, so showing it never moves the scroll position.
+function updateJump(view) { view.jumpBar.hidden = !view.el.clientHeight || view.el.scrollHeight - view.el.scrollTop - view.el.clientHeight < 80; }
 function captureReadingViews() { for (const view of messageViews.values()) captureReading(view); }
 function restoreVisibleReading() {
   for (const view of messageViews.values()) {
@@ -72,17 +75,22 @@ function scheduleReading(view, intent = view.intent) {
       }
     }
     el.scrollTop = p.follow ? el.scrollHeight : anchor ? el.scrollTop + anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - p.offset : p.top;
-    view.assignedTop = el.scrollTop;
+    view.assignedTop = el.scrollTop; updateJump(view);
   });
 }
 function readingView(el, key) {
   let view = messageViews.get(el);
   if (!view) {
     view = { el, key: '', entries: new Map(), days: new Map(), assignedTop: el.scrollTop, frame: 0, intent: null };
+    view.jump = button('↓ 跳到最新', () => {
+      view.intent = { position: { top: 0, follow: true, anchor: '', offset: 0 } };
+      saveReading(view, { ...view.intent.position }); attempt(() => api.readingState(readingPositions)); scheduleReading(view);
+    }, 'jump-latest'); view.jumpBar = node('div', undefined, 'jump-bar'); view.jumpBar.append(view.jump); view.jumpBar.hidden = true;
     const interact = () => { view.intent = null; view.assignedTop = undefined; };
     const scroll = () => {
       if (!el.clientHeight) return;
       const assigned = view.assignedTop; view.assignedTop = undefined;
+      updateJump(view);
       if (el.scrollTop === assigned) return;
       view.intent = null; captureReading(view);
       // Hand the geometry to main now; it coalesces disk writes and flushes on
@@ -304,10 +312,11 @@ function messageList(el, messages, room = false, key = 'room') {
     const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对上方请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
     rows.push(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : empty, 'message empty'));
   }
+  rows.push(view.jumpBar);
   // Do not detach/reinsert unchanged rows: that would destroy live selections.
   let cursor = el.firstChild;
   for (const row of rows) { if (row === cursor) cursor = cursor.nextSibling; else el.insertBefore(row, cursor); }
   while (cursor) { const next = cursor.nextSibling; ui.clearMarkdown(cursor); cursor.remove(); cursor = next; }
-  scheduleReading(view, intent);
+  updateJump(view); scheduleReading(view, intent);
 }
 function disposeReadingViews() { for (const view of messageViews.values()) view.dispose(); messageViews.clear(); }
