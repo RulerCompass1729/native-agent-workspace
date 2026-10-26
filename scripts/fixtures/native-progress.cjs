@@ -17,6 +17,12 @@ NativeHost.prototype.start = async function () { this.binaries = { claude: 'fixt
 NativeHost.prototype.close = function () { for (const r of runtimes.values()) r.screen.dispose(); };
 NativeHost.prototype.create = function (record) {
   const r = new EventEmitter(); r.record = record; r.chatAvailable = true;
+  r.approvalReplies = [];
+  r.approvalRpc = { reply(requestId, result) {
+    r.approvalReplies.push({ requestId, result });
+    setImmediate(() => { r.emit('approvalResolved', requestId, r.approvalRpc); r.emit('state', 'idle'); });
+  } };
+  r.currentRpc = rpc => rpc === r.approvalRpc;
   r.rootLease = 'fixture-lease'; r.observationEpoch = 'fixture-observer'; r.validRootBinding = Claude.prototype.validRootBinding;
   r.observeRootGap = Claude.prototype.observeRootGap;
   record.nativeId ||= 'synthetic-' + record.id;
@@ -66,10 +72,10 @@ process.on('message', async q => {
     if (q.method === 'nativeObservation') Claude.prototype.observeRoot.call(r, { ...q.value, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1 });
     if (q.method === 'fleet') r.emit('fleet', q.value);
     if (q.method === 'history') r.emit('history', q.value);
-    if (q.method === 'approval') { r.emit('approval', q.value); r.emit('state', 'approval'); }
+    if (q.method === 'approval') { r.emit('approval', q.value, r.approvalRpc); r.emit('state', 'approval'); }
     if (q.method === 'gap') r.emit('terminal', { epoch: r.journal.epoch, index: r.journal.index + 2, data: 'must-not-paint', cols: 80, rows: 24 });
     if (q.method === 'stop') for (const x of runtimes.values()) x.emit('state', 'ended');
     const b = r?.screen.buffer.active;
-    process.send({ requestId: q.id, stats, lastSend: r?.lastSend, waiting: [...waiting.keys()], screen: b && { cols: r.screen.cols, rows: r.screen.rows, type: b.type, cursor: [b.cursorX, b.cursorY], lines: Array.from({ length: b.length }, (_, i) => b.getLine(i).translateToString()) }, index: r?.journal.index });
+    process.send({ requestId: q.id, stats, approvalReplies: r?.approvalReplies, lastSend: r?.lastSend, waiting: [...waiting.keys()], screen: b && { cols: r.screen.cols, rows: r.screen.rows, type: b.type, cursor: [b.cursorX, b.cursorY], lines: Array.from({ length: b.length }, (_, i) => b.getLine(i).translateToString()) }, index: r?.journal.index });
   } catch (error) { process.send({ requestId: q.id, error: error.message }); }
 });
