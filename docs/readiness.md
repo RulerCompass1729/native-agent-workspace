@@ -34,9 +34,10 @@ Still required for this milestone:
 - Validate window reopening, update during work and controlled native-process
   recovery on the actual author sessions, after owned-fixture rehearsal and a
   durable checkpoint. Never replay a possibly completed task automatically.
-- Keep the first old-backend-to-new-backend recovery transition honest: an old
-  record may lack Claude posture fields. Do not overwrite a later native choice
-  using only initial launch settings.
+- Actual-author external escape and window-only close remain open. The accepted
+  old-to-new transition retains native IDs/drafts and Codex’s active goal; Claude’s
+  approved posture was seeded once after stopping its old backend. A native human
+  question currently hides its goal footer; do not infer the live flag.
 
 User visual approval, physical IME and outside running-session attachment do not
 block this narrowed milestone. Unverified cases remain unverified.
