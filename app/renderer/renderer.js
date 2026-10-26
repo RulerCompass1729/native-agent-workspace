@@ -215,7 +215,8 @@ function soloAction(s) {
     : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
   if (s.chatAvailable === false || s.state === 'starting') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
   if (s.legacyReaderPending && s.state === 'idle') return { kind: 'send', label: '发送 ↑', hint: '输入已接通；实时过程尚待更新。在原生终端运行 /reload-plugins 后生效，无需重启。' };
-  if (s.pendingQueue) return { kind: 'send', label: '等待原生接收', hint: '下一条正在等待原生开始；当前工作继续。不会自动重发，可先编辑后续草稿。' };
+  // Native runs a plugin's queued prompt only once idle; text typed in the TUI reaches the running turn.
+  if (s.pendingQueue) return { kind: 'send', label: '等待原生接收', hint: '要等 Claude 空闲后才发送；想中途插话，请在原生终端输入。可先编辑后续草稿。' };
   if (s.state === 'working' && s.queueAvailable && !s.approval) return { kind: 'send', label: '等本轮结束后发送 ↑', hint: '使用原生等待队列；保留当前工作，不强制中断。' };
   if (s.state === 'working' && s.steerAvailable && s.activeTurnId && !s.approval) return { kind: 'send', label: '追加指令 ↑', hint: '发送到当前原生回合；不会另开回合或强制中断。' };
   return { kind: 'send', label: '发送 ↑', hint: s.state === 'approval'
@@ -1077,7 +1078,7 @@ function render() {
       if (run?.status === 'running' && next) runText += ` · 等待 ${next.name}`;
       if (pendingRun && roomSubmitting.cancelling) runText = '正在取消后续交接；草稿保留，已接收的任务仍在原会话中。';
       else if (pendingRun && run?.status !== 'running') runText = '正在准备核查，等待先前操作或原生接收确认。可取消本次等待；已开始的原生任务不受影响。';
-      if (waiting && !pendingRun) runText = `正在发给 ${waiting.recipientName}，等待原生接收确认。可以选择其他成员继续输入。`;
+      if (waiting && !pendingRun) runText = waiting.queued ? `已排队给 ${waiting.recipientName}：要等它空闲后才发送；想中途插话，请在它的原生终端输入。` : `正在发给 ${waiting.recipientName}，等待原生接收确认。可以选择其他成员继续输入。`;
       const active = people.filter(person => {
         const activity = person.sharedActivity;
         if (disconnected || person.transportDisconnected || !['working', 'approval'].includes(person.state) ||
@@ -1606,7 +1607,7 @@ async function submitRoom(automatic) {
   // Return focus before the clicked control becomes disabled. Never steal it
   // back asynchronously after the person has opened another view or dialog.
   $('shared-input').focus();
-  const submission = { automatic: Boolean(automatic), recipientName: participantLabel(recipient), cancelling: false, cancelRequested: false };
+  const submission = { automatic: Boolean(automatic), recipientName: participantLabel(recipient), queued: !automatic && roomQueueAvailable(recipient), cancelling: false, cancelRequested: false };
   if (automatic) roomSubmitting = submission;
   else roomPendingRecipients.set(first, submission);
   render();

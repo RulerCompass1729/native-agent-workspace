@@ -202,7 +202,8 @@ function messageList(el, messages, room = false, key = 'room') {
       if (Number.isFinite(messageTime)) { const time = node('time', new Date(messageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(messageTime).toISOString(); time.title = new Date(messageTime).toLocaleString(); entry.heading.append(time); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
-      const status = { 'awaiting-native': '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: !room && current()?.provider === 'claude' && m.role === 'tool' ? '已请求工具' : '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
+      // Only Claude rows take queued input; native sends it once the agent is idle.
+      const status = { 'awaiting-native': m.inputMode === 'queue' ? '排队中，等空闲后发送' : '等待原生确认', unconfirmed: '结果未确认', streaming: '正在输出', running: !room && current()?.provider === 'claude' && m.role === 'tool' ? '已请求工具' : '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
       if (status && !m.nativeBlock && !m.sharedStream) entry.heading.append(node('span', status));
       else if ((m.nativeBlock || m.sharedStream) && ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status)) entry.heading.append(node('span', m.status));
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
@@ -243,7 +244,7 @@ function messageList(el, messages, room = false, key = 'room') {
       const deliveryKey = JSON.stringify([m.deliveryTracked, deliveries]);
       if (entry.deliveryKey !== deliveryKey) {
         entry.deliveryKey = deliveryKey;
-        const status = d => ({ submitted: '原生已接收', 'awaiting-native': '等待原生确认', unconfirmed: '接收结果未确认' }[d.status] || '接收结果未记录');
+        const status = d => ({ submitted: '原生已接收', 'awaiting-native': m.inputMode === 'queue' ? '排队中，等空闲后发送' : '等待原生确认', unconfirmed: '接收结果未确认' }[d.status] || '接收结果未记录');
         entry.deliverySummary.textContent = deliveries.length
           ? `发送详情 · ${deliveries.map(d => `${d.label}：${status(d)}`).join('；')}`
           : m.deliveryTracked ? '本条未由工作区转发' : '旧记录 · 发送详情未记录';
