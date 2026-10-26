@@ -144,3 +144,69 @@ test('source catch-up cannot append an unknown suffix to an old partial before a
  history({data:[{turnId:'turn',item:{id:'cached',type:'agentMessage',text:'FIRSTMIDDLETAIL'}}]});await r.observing;
  const row=s.messages.find(m=>m.id==='cached');assert.equal(row.text,'FIRST');assert.equal(row.status,'interrupted');assert.equal(row.incomplete,true,'An observation gap cannot claim the exact native cut');
 });
+
+function capacityFixture(t) {
+ const f=fixture(t);f.s.roomId=null;f.s.view='chat';f.r.chatAvailable=true;f.host.rpc.nativeVersion='0.164.0';f.calls=[];
+ f.host.rpc.call=async(method,params)=>{f.calls.push({method,params});return {turn:{id:'automatic-'+f.calls.length}};};
+ f.start=id=>f.r.event({method:'turn/started',params:{threadId:f.s.nativeId,turn:{id}}});
+ f.end=(id,code='serverOverloaded',status='failed')=>f.r.event({method:'turn/completed',params:{threadId:f.s.nativeId,turn:{id,status,error:status==='failed'?{message:'NATIVE ORIGINAL',codexErrorInfo:code}:null}}});
+ f.fail=(id='original',code='serverOverloaded')=>{f.start(id);f.end(id,code);};return f;
+}
+const capacityTick=()=>new Promise(resolve=>setImmediate(resolve));
+test('live terminal overload alone schedules a delayed new continuation; three attempts then stop without task replay',async t=>{
+ const f=capacityFixture(t),{w,r,s,calls}=f;s.messages.push({id:'original-input',role:'user',text:'Original task with side effects',status:'submitted'});
+ f.start('original');r.event({method:'error',params:{threadId:s.nativeId,turnId:'original',willRetry:true,error:{message:'NATIVE ORIGINAL',codexErrorInfo:'serverOverloaded'}}});
+ assert.equal(w.capacityStatus(s.id),null,'Native retry stays in charge');f.end('original');
+ const first=w.capacityStatus(s.id);assert.equal(first.status,'scheduled');assert.ok(first.due-Date.now()>119000);w.tickCapacity(first.due-1);assert.equal(calls.length,0);
+ for(let n=1;n<=3;n++){
+  const scheduled=w.capacityStatus(s.id);assert.equal(scheduled.attempt,n-1);const remaining=scheduled.due-Date.now();assert.ok(remaining>[120000,300000,600000][n-1]-1000);
+  w.tickCapacity(scheduled.due);w.tickCapacity(scheduled.due+1);await capacityTick();assert.equal(calls.length,n,'One send even if tick runs again before acknowledgement');
+  assert.equal(calls[n-1].method,'turn/start');assert.equal(calls[n-1].params.threadId,s.nativeId);assert.deepEqual(calls[n-1].params.input,[{type:'text',text:'继续',text_elements:[]}]);
+  assert.equal(s.messages.filter(m=>m.origin==='capacity-recovery').length,n);assert.equal(s.messages.find(m=>m.origin==='capacity-recovery').name,'NAW');
+  f.start('automatic-'+n);f.end('automatic-'+n);
+ }
+ assert.equal(w.capacityStatus(s.id).status,'exhausted');w.tickCapacity(Date.now()+86400000);await capacityTick();assert.equal(calls.length,3);
+ assert.ok(s.messages.some(m=>m.name==='NAW'&&m.text.includes('3 次上限')));assert.ok(s.messages.some(m=>m.text==='NATIVE ORIGINAL'));assert.equal(w.room.messages.length,0);
+ assert.equal(s.messages.filter(m=>m.text==='Original task with side effects').length,1);assert.equal(w.versions.dispatches,3);
+});
+for(const code of ['usageLimitExceeded','sessionBudgetExceeded','rateLimitExceeded','unauthorized','badRequest','server_overloaded',null])test('no automatic continuation for non-capacity code '+code,t=>{
+ const f=capacityFixture(t);f.fail('failure',code);assert.equal(f.w.capacityStatus(f.s.id),null);f.w.tickCapacity(Date.now()+86400000);assert.equal(f.calls.length,0);
+});
+test('history-only, old-thread and duplicate outcomes never arm or renew capacity recovery',t=>{
+ const f=capacityFixture(t);f.end('historical');assert.equal(f.w.capacityStatus(f.s.id),null);
+ f.r.event({method:'turn/started',params:{threadId:'another-thread',turn:{id:'foreign'}}});f.end('foreign');assert.equal(f.w.capacityStatus(f.s.id),null);
+ f.fail();const before=f.w.capacityStatus(f.s.id);f.end('original');assert.deepEqual(f.w.capacityStatus(f.s.id),before);
+});
+for(const [name,change] of [
+ ['draft',f=>f.w.setDraft(f.s.id,'new human draft','window')],
+ ['native key',f=>{f.s.view='terminal';f.r.terminal={alive:true,input(){}};f.w.input(f.s.id,'a','window');}],
+ ['new native turn',f=>f.start('human-turn')],
+ ['takeover',f=>f.w.claim(f.s.id,'another-window')],
+ ['membership',f=>f.w.join(f.s.id,true)],
+ ['thread',f=>f.s.nativeId=randomUUID()],
+ ['connection',f=>f.r.transportDisconnected=true],
+ ['runtime lifecycle',f=>f.r.lifecycleRevision++],
+ ['archive',f=>f.s.archived=true],
+ ['approval',f=>f.r.emit('state','approval')],
+ ['save failure',f=>f.w.storageWarning='disk full']
+])test('capacity recovery cancels on '+name,async t=>{
+ const f=capacityFixture(t);f.fail();change(f);f.w.tickCapacity(Date.now()+86400000);await capacityTick();assert.equal(f.calls.length,0);assert.equal(f.w.capacityStatus(f.s.id),null);
+});
+test('explicit cancel stops a scheduled recovery without sending a native interrupt',async t=>{
+ const f=capacityFixture(t);f.fail();await f.w.interrupt(f.s.id,'window');assert.equal(f.calls.length,0);assert.equal(f.w.capacityStatus(f.s.id),null);
+});
+test('successful continuation clears the retry chain and preserves model/settings; uncertain receipt never retries',async t=>{
+ const f=capacityFixture(t);f.s.model='unchanged-model';f.r.nativeSettings={model:'unchanged-model',effort:'ultra'};f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();
+ f.start('automatic-1');f.end('automatic-1',null,'completed');assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.s.model,'unchanged-model');assert.equal(f.r.nativeSettings.effort,'ultra');
+ f.fail('later');assert.equal(f.w.capacityStatus(f.s.id).attempt,0);f.host.rpc.call=async()=>{throw Error('ACK lost');};f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();
+ assert.equal(f.w.capacityStatus(f.s.id),null);assert.ok(f.s.messages.some(m=>m.text.includes('接收结果未确认')));f.w.tickCapacity(Date.now()+86400000);assert.equal(f.calls.length,1);
+});
+test('pending recovery is not restored by service restart or inferred from an old failure',t=>{
+ const f=capacityFixture(t);f.fail();f.w.persist();const stored=JSON.parse(fs.readFileSync(path.join(f.dir,'workspace.json')));assert.equal(stored.sessions[0].capacityRecovery,undefined);
+ const restored=new Workspace({binaries:{},close(){}},f.dir);t.after(()=>restored.close());assert.equal(restored.capacityStatus(f.s.id),null);restored.tickCapacity(Date.now()+86400000);assert.equal(f.calls.length,0);
+});
+test('a non-owner send rejection does not cancel the owner capacity schedule',async t=>{
+ const f=capacityFixture(t);f.fail();const scheduled=f.w.capacityStatus(f.s.id);
+ await assert.rejects(f.w.send(f.s.id,'not mine','another-window'),/接管/);
+ assert.deepEqual(f.w.capacityStatus(f.s.id),scheduled);assert.equal(f.calls.length,0);
+});

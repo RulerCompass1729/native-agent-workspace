@@ -23,10 +23,11 @@ class Workspace extends EventEmitter {
   constructor(host, dataDir) {
     super(); this.host = host; this.dataDir = dataDir; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
     this.claudeAsks = new Map();
+    this.capacityRecoveries = new Map();
     this.room = { id: 'shared', name: '共同工作', revision: 0, run: null, messages: [] };
     this.versions = { shellModelCalls: 0, dispatches: 0 };
     this.saveTimer = null;
-    this.deadlineTimer = setInterval(() => this.expireRun(), 1000);
+    this.deadlineTimer = setInterval(() => { this.expireRun(); this.tickCapacity(); }, 1000);
     this.deadlineTimer.unref();
     this.forwards = new Map(); this.pendingDrafts = new Map();
     this.sharedReplies = new SharedReplies(this);
@@ -56,7 +57,7 @@ class Workspace extends EventEmitter {
     this.activityMarks = new Map([...this.sessions.values()].map(s => [s.id, activityMark(s)]));
   }
   snapshot() {
-    return { peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     for (const s of this.sessions.values()) {
@@ -171,6 +172,58 @@ class Workspace extends EventEmitter {
     const tracked = operation.finally(() => { this.pendingNativeImports--; });
     this.historyQueue = tracked.catch(() => {}); return tracked;
   }
+  // Only a live native failed turn can arm this bounded recovery. Nothing is
+  // restored from history or disk, and the original task is never replayed.
+  capacityStatus(id) {
+    const r = this.capacityRecoveries.get(id);
+    return r ? { status: r.status, attempt: r.attempt, due: r.due } : null;
+  }
+  cancelCapacity(id) {
+    if (this.capacityRecoveries.delete(id)) this.changed();
+  }
+  capacityValid(s, r) {
+    const runtime = this.runtimes.get(s.id);
+    return !this.closed && !this.storageWarning && this.capacityRecoveries.get(s.id) === r && runtime === r.runtime &&
+      s.nativeId === r.nativeId && runtime.host?.rpc === r.rpc && runtime.lifecycleRevision === r.lifecycle &&
+      s.owner === r.owner && s.controlRevision === r.control && s.memberRevision === r.member &&
+      this.draftRevisions.get(s.id) === r.draft && !this.drafts.get(s.id) && !s.archived && !s.nativeContextPending &&
+      ['idle', 'error'].includes(s.state) && (!s.pendingTag || s.pendingTag === r.tag) && !s.approval && !s.approvalOverflow && !s.claudeQuestion &&
+      !runtime.stopped && !runtime.transportDisconnected && !runtime.nativeObservationPending && !runtime.backendExitConfirmed && runtime.chatAvailable !== false &&
+      !runtime.turnId && !runtime.pendingQueue && !runtime.pendingSteer && !runtime.nativeInputRequired && !runtime.nativeAbortRequest;
+  }
+  scheduleCapacity(s, runtime, turnId) {
+    const previous = this.capacityRecoveries.get(s.id);
+    if (previous?.turnId === turnId) return;
+    const r = { runtime, rpc: runtime.host?.rpc, lifecycle: runtime.lifecycleRevision, nativeId: s.nativeId, turnId, owner: s.owner, control: s.controlRevision, member: s.memberRevision,
+      draft: this.draftRevisions.get(s.id), attempt: previous?.attempt || 0, status: 'scheduled', due: 0 };
+    this.capacityRecoveries.set(s.id, r);
+    if (!this.capacityValid(s, r)) { this.capacityRecoveries.delete(s.id); return; }
+    const delays = [120000, 300000, 600000];
+    if (r.attempt >= delays.length) {
+      r.status = 'exhausted';
+      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: '模型满载自动继续已达 3 次上限，需要你处理。', status: 'complete', time: Date.now() });
+    } else r.due = Date.now() + delays[r.attempt];
+    this.changed();
+  }
+  tickCapacity(now = Date.now()) {
+    for (const [id, r] of this.capacityRecoveries) {
+      if (r.status !== 'scheduled') continue;
+      const s = this.sessions.get(id);
+      if (!s || !this.capacityValid(s, r)) { this.cancelCapacity(id); continue; }
+      if (now < r.due) continue;
+      r.attempt++; r.status = 'sending';
+      const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: `${time} 因模型满载自动继续（第 ${r.attempt} 次）`, status: 'complete', time: now });
+      // send() and the adapter recheck the same identity/control before writing.
+      // An uncertain receipt stops recovery rather than sending again.
+      this.send(id, '继续', r.owner, null, null, null, r).catch(() => {
+        if (this.capacityRecoveries.get(id) !== r) return;
+        this.capacityRecoveries.delete(id);
+        s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: '自动继续的接收结果未确认；已停止自动发送，请核对原生终端。', status: 'complete', time: Date.now() });
+        this.changed();
+      });
+    }
+  }
   bind(s, runtime) {
     runtime.addressedCall = (identity, args) => addressed.accept(this, s, runtime, identity, args);
     runtime.addressedFailed = identity => addressed.failed(this, s, runtime, identity);
@@ -206,6 +259,10 @@ class Workspace extends EventEmitter {
     on('sharingBoundary', reason => this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id));
     on('nativeControlBoundary', reason => { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id); });
     on('capability', () => this.changed());
+    on('nativeTurnEnd', info => {
+      if (s.provider === 'codex' && runtime.host?.rpc?.nativeVersion === '0.164.0' && info.nativeId === s.nativeId && info.status === 'failed' && info.errorInfo === 'serverOverloaded') this.scheduleCapacity(s, runtime, info.turnId);
+      else this.cancelCapacity(s.id);
+    });
     on('inputRequired', () => this.changed());
     on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
     on('model', model => { s.model = model; this.changed(); });
@@ -214,6 +271,7 @@ class Workspace extends EventEmitter {
     on('nativeTitle', title => { const clean = String(title).replace(/[\x00-\x1f\x7f]/g, ' ').trim(); const name = clean && `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${clean}`.slice(0, 60); if (s.autoName && name && (name !== s.name || s.nameSource !== 'native')) { s.name = name; s.nameSource = 'native'; this.changed(); } });
     on('state', state => {
       if (this.stops.has(s.id) && !['ended', 'recoverable', 'error', 'disconnected'].includes(state)) return;
+      if (['approval', 'ended', 'background', 'recoverable', 'disconnected'].includes(state) || state === 'working' && this.capacityRecoveries.get(s.id)?.status === 'scheduled') this.cancelCapacity(s.id);
       s.state = state;
       if (['ended', 'background', 'recoverable', 'error', 'disconnected'].includes(state)) for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
       if (runtime.transportDisconnected || ['disconnected', 'ended', 'background', 'recoverable'].includes(state)) s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
@@ -271,6 +329,7 @@ class Workspace extends EventEmitter {
       s.activity = '原生确认连接已变化；正在核对原会话，未自动发送决定。'; this.changed();
     });
     on('nativeInput', (text, item) => {
+      this.cancelCapacity(s.id);
       this.pause('真人在原生终端输入'); s.controlRevision++;
       if (!item?.id || !s.messages.some(m => m.id === item.id)) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
       this.changed();
@@ -297,6 +356,7 @@ class Workspace extends EventEmitter {
     on('delta', item => { this.sharedReplies.record(s, applyCodexDelta(s, item)); this.changed(); });
     on('messageItem', item => { this.sharedReplies.record(s, applyCodexMessage(s, item)); this.changed(); });
     on('complete', info => {
+      this.cancelCapacity(s.id);
       // Only the adapter's verified native identity can authorize a forward.
       // An untagged completion can clear bookkeeping, never share its body.
       const forwardTag = info.tag || (s.provider === 'claude' ? s.pendingTag : null);
@@ -396,6 +456,7 @@ class Workspace extends EventEmitter {
     const s = this.get(id);
     if (owner !== undefined && s.owner !== owner) throw new Error('会话已由另一窗口控制；本窗口的草稿副本已保留。');
     if (typeof text !== 'string' || text.length > 16000) throw new Error('草稿过长。');
+    this.cancelCapacity(id);
     this.drafts.set(id, text); this.draftRevisions.set(id, (this.draftRevisions.get(id) || 0) + 1); this.changed();
   }
   assertNativeContext(id, expected) {
@@ -412,25 +473,27 @@ class Workspace extends EventEmitter {
     }
   }
   routeValid(route) { return route?.peerLease ? this.peerLeases?.valid(route) === true : this.room.run === route && route?.status === 'running' && Date.now() < route.deadline; }
-  async send(id, text, owner, route = null, forward = null, sourceMessage = null) {
+  async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null) {
     text = cleanText(text); const s = this.get(id); const runtime = this.runtime(id);
     if (runtime.nativeAbortRequest) throw Error('正在等待原生中断确认；草稿保留。');
-    if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); s.peerRevision = (s.peerRevision || 0) + 1; this.pause('真人输入优先'); }
+    if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); s.peerRevision = (s.peerRevision || 0) + 1; this.pause(recovery ? '模型满载自动继续；原协作交接保持暂停' : '真人输入优先'); }
     const failedTurn = !route && s.state === 'error' ? runtime.failedTurnInputId : null;
-    if ((s.state !== 'idle' && !failedTurn) || s.pendingTag || runtime.pendingQueue || s.approval || runtime.nativeInputRequired) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
+    if ((s.state !== 'idle' && !failedTurn && !(recovery && s.state === 'error')) || s.pendingTag || runtime.pendingQueue || s.approval || runtime.nativeInputRequired) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
     if (runtime.chatAvailable === false) throw new Error(s.provider === 'claude' ? '安全发送接口尚未连接；请在原生终端继续，草稿已保留。' : '请先在原生终端完成第一条消息；草稿已保留。');
     const control = s.controlRevision; const member = s.memberRevision; const connection = s.connectionRevision;
     const guard = () => {
       this.expireRun(route);
-      return !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
+      return (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
         (!failedTurn || runtime.submission?.pending?.authorized || runtime.pending?.accepted || runtime.failedTurnInputMatches(failedTurn)) &&
         (!(route || forward) || (s.roomId === 'shared' && s.memberRevision === member)) && (!route || (this.routeValid(route)));
     };
     if (!guard()) throw new Error('交接已经失效。');
+    if (!recovery) this.cancelCapacity(id);
     const tag = randomUUID(); s.pendingTag = tag;
+    if (recovery) recovery.tag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     const clearedDraft = !route && !forward && typeof draft === 'string' && draft.trim() === text;
-    s.messages.push({ id: tag, role: 'user', text, origin: route ? 'room' : 'human', status: 'awaiting-native' });
+    s.messages.push({ id: tag, role: 'user', text, ...(recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native' });
     if (forward) {
       this.forwards.set(tag, { ...forward, control });
       sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
@@ -446,6 +509,7 @@ class Workspace extends EventEmitter {
     else if (clearedDraft) { this.pendingDrafts.set(id, { tag, text: draft, revision: draftRevision }); this.drafts.set(id, ''); }
     this.changed();
     try {
+      if (recovery) { this.persist(); if (this.storageWarning) throw Error('自动继续记录未能保存，没有派发。'); }
       if (route?.peerLease) { this.persist(); if (this.storageWarning) throw Error('交接记录未能保存，没有向原生派发。'); }
       await runtime.send(text, tag, guard);
     }
@@ -585,12 +649,13 @@ class Workspace extends EventEmitter {
     // Terminal-generated device/cursor replies are not human instructions.
     const response = isTerminalResponse(data);
     if (!response && s.view !== 'terminal') throw new Error('请切换到原生终端后输入。');
-    if (!response) { this.pause('真人在原生终端操作'); s.controlRevision++; }
+    if (!response) { this.cancelCapacity(id); this.pause('真人在原生终端操作'); s.controlRevision++; }
     const t = runtime.terminal; if (!t?.alive) throw new Error('终端尚未连接。'); t.input(data);
   }
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }
   async interrupt(id, owner) {
     const s = this.get(id); this.claim(id, owner, s.view); const runtime = this.runtime(id);
+    if (this.capacityRecoveries.get(id)?.status === 'scheduled') { this.cancelCapacity(id); return; }
     // A held question is declined, like Esc on the native dialog, so native
     // neither waits on the hook nor opens the dialog; then the turn is aborted.
     if (this.claudeAsks.get(id)) this.releaseQuestion(s, null, { stop: true });

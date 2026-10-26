@@ -171,7 +171,7 @@ test('workspace native version metadata follows its actual runtime RPC and never
   const workspace = Object.assign(Object.create(Workspace.prototype), {
     sessions: new Map([['test', { id: 'test', provider: 'codex', nativeVersion: '0.164.0', nativeVersionStatus: 'verified' }]]),
     runtimes: new Map([['test', runtime]]), host: { binaries: {}, rpc: { nativeVersion: '0.164.0' } },
-    sharedReplies: { activity: () => null }, drafts: new Map(), room: {}, versions: {},
+    sharedReplies: { activity: () => null }, drafts: new Map(), capacityRecoveries: new Map(), room: {}, versions: {},
   });
   assert.equal(workspace.snapshot().sessions[0].nativeVersion, '0.163.0');
   runtime.transportDisconnected = true;

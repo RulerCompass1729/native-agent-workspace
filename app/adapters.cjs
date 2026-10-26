@@ -1336,6 +1336,7 @@ class Codex extends EventEmitter {
       case 'thread/name/updated': if (p.threadId === this.record.nativeId && typeof p.threadName === 'string') this.emit('nativeTitle', p.threadName); break;
       case 'turn/started':
         this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeRetry = null; this.nativeTurnFinished = false;
+        this.turn(p.turn.id).liveStarted = true;
         this.nativeStartedAt = Number.isFinite(p.turn.startedAt) && p.turn.startedAt > 0 ? p.turn.startedAt * 1000 : null;
         this.emit('state', 'working'); this.publishNativeActivity(); break;
       case 'item/agentMessage/delta':
@@ -1392,12 +1393,14 @@ class Codex extends EventEmitter {
   turn(id) { if (!this.turns.has(id)) this.turns.set(id, { text: '', inputItems: new Set(), itemInputs: new Map(), inputTag: '' }); return this.turns.get(id); }
   finishTurn(id) {
     const turn = this.turns.get(id); if (!turn?.completed || this.steering?.turnId === id) return;
+    const live = turn.liveStarted === true && this.turnId === id && !this.stopped && !this.transportDisconnected;
     const pending = this.pending?.turnId === id ? this.pending : null;
     if (pending) this.pending = null;
     this.turns.delete(id); this.hasHistory = true;
     if (this.turnId === id) { this.turnId = null; this.emit('state', 'idle'); }
     if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag, supersededTag: pending?.supersededTag });
     else this.emit('complete', { tag: pending?.tag, supersededTag: pending?.supersededTag, messageId: turn.messageId, inputTag: turn.itemInputs.get(turn.messageId) || '', text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
+    if (live) this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: id, status: turn.completed.status, errorInfo: turn.completed.error?.codexErrorInfo });
   }
   get steerAvailable() { return verifiedCodexProtocol(this.host.rpc) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   async steer(text, tag, expectedTurnId, guard, shared = false, acceptedGuard = guard) {
