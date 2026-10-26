@@ -269,3 +269,65 @@ for(const [label,end,start] of [['resume','resume','resume'],['clear','clear','c
  r.hook({hook_event_name:'SessionStart',session_id:bg,source:'fork'});
  assert.equal(s.state,'background');assert.match(s.activity,new RegExp(bg.slice(0,8)));
 });
+test('the root hook-reported permission mode and effort are kept on the row; children and retired contexts cannot change them',async t=>{
+ const f=await fixture(t),{w,s,r}=f;const first=s.nativeId;
+ const tool=(fields)=>r.hook({hook_event_name:'PreToolUse',tool_name:'Read',tool_use_id:randomUUID(),session_id:s.nativeId,...fields});
+ tool({permission_mode:'bypassPermissions'});assert.equal(s.nativePermissionMode,'bypassPermissions');
+ tool({permission_mode:'auto',agent_id:'child-agent'});tool({permission_mode:'plan',session_id:randomUUID()});tool({permission_mode:'not-a-mode'});
+ assert.equal(s.nativePermissionMode,'bypassPermissions','Only the root reports the session mode');
+ f.clear();tool({permission_mode:'default',session_id:first});assert.equal(s.nativePermissionMode,'bypassPermissions','A retired context cannot change it');
+ w.persist();assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir,'workspace.json'))).sessions[0].nativePermissionMode,'bypassPermissions');
+ tool({permission_mode:'auto'});assert.equal(s.nativePermissionMode,'auto','A later native choice replaces it');
+ tool({effort:{level:'xhigh'}});assert.equal(s.nativeEffort,'xhigh');assert.equal(s.nativePermissionMode,'auto','A hook without a mode keeps the last one');
+ tool({effort:{level:'low'},agent_id:'child-agent'});tool({effort:{level:'turbo'}});tool({effort:'max'});
+ assert.equal(s.nativeEffort,'xhigh','Only a valid root effort report counts');
+ tool({effort:{level:'max'}});assert.equal(s.nativeEffort,'max');
+});
+test('a recovery relaunch passes bypass and effort again only as the session last reported them',async t=>{
+ const { Claude: Adapter } = require('../adapters.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-posture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const argvFile=path.join(dir,'argv.txt'),binary=path.join(dir,'claude');
+ // A stand-in native binary that only records how NAW launched it.
+ fs.writeFileSync(binary,`#!/bin/sh\nprintf '%s\\n' "$@" > '${argvFile}'\n`,{mode:0o700});
+ const launch=async record=>{
+  fs.rmSync(argvFile,{force:true});
+  const host={binaries:{claude:binary},privateDir:dir,hookTargets:new Map(),hookSocket:path.join(dir,'hook.sock'),submitSocket:path.join(dir,'submit.sock')};
+  const r=new Adapter({id:randomUUID(),nativeId:randomUUID(),name:'Posture',cwd:dir,...record},host);
+  await new Promise(resolve=>r.terminal.once('closed',resolve));r.submission.close();
+  return fs.readFileSync(argvFile,'utf8').trim().split('\n');
+ };
+ const bypass=await launch({recovering:true,nativePermissionMode:'bypassPermissions',nativeEffort:'xhigh'});
+ assert.equal(bypass[0],'--resume');assert.deepEqual(bypass.slice(-4),['--permission-mode','bypassPermissions','--effort','xhigh']);
+ assert.deepEqual((await launch({recovering:true,nativePermissionMode:'auto',nativeEffort:'max'})).slice(-2),['--effort','max'],'Effort is kept without bypass');
+ for(const record of [{recovering:true,nativePermissionMode:'auto'},{recovering:true,nativeEffort:'turbo'},{recovering:false,nativePermissionMode:'bypassPermissions',nativeEffort:'xhigh'}]){
+  const argv=await launch(record);assert.ok(!argv.includes('--permission-mode')&&!argv.includes('--effort'),`No posture flag for ${JSON.stringify(record)}`);
+ }
+});
+test('a recovery refuses while another claude process holds the same native ID',async t=>{
+ const { Claude: Adapter } = require('../adapters.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-holder-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const id=randomUUID(),external=path.join(dir,'claude'),launched=path.join(dir,'launched');
+ // An external terminal's `claude --resume <id>`, as ps shows it.
+ fs.writeFileSync(external,'#!/bin/sh\nsleep 30\n',{mode:0o700});
+ const holder=require('node:child_process').spawn('/bin/sh',[external,'--resume',id],{stdio:'ignore'});t.after(()=>{try{holder.kill('SIGKILL');}catch{}});
+ const binary=path.join(dir,'native');fs.writeFileSync(binary,`#!/bin/sh\ntouch '${launched}'\n`,{mode:0o700});
+ const host={binaries:{claude:binary},privateDir:dir,hookTargets:new Map(),hookSocket:path.join(dir,'hook.sock'),submitSocket:path.join(dir,'submit.sock')};
+ const record={id:randomUUID(),nativeId:id,name:'Holder',cwd:dir,recovering:true};
+ await new Promise(resolve=>setTimeout(resolve,200));
+ assert.throws(()=>new Adapter(record,host),new RegExp(`PID ${holder.pid}`));
+ assert.equal(host.hookTargets.size,0,'A refused recovery registers no hook target');
+ assert.doesNotThrow(()=>new Adapter({...record,id:randomUUID(),nativeId:randomUUID()},host).submission.close(),'Another session ID is not blocked');
+ holder.kill('SIGKILL');await new Promise(resolve=>holder.once('exit',resolve));
+ const r=new Adapter(record,host);await new Promise(resolve=>r.terminal.once('closed',resolve));r.submission.close();
+ assert.ok(fs.existsSync(launched),'Once the other writer exits, recovery launches');
+});
+test('native processes do not inherit the service locations',()=>{
+ const { nativeEnvironment } = require('../platform.cjs');
+ const saved={...process.env};
+ Object.assign(process.env,{NAW_WORKSPACE:'/live/workspace',NAW_RUNTIME_CONFIG:'/live/runtime-locations.json',NAW_APP_VERSION:'9.9.9',NAW_DATA_DIR:'/live/profile'});
+ try{
+  const env=nativeEnvironment({NAW_HOOK_TOKEN:'token'});
+  for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION','NAW_DATA_DIR']) assert.equal(env[key],undefined,key);
+  assert.equal(env.NAW_HOOK_TOKEN,'token','Per-session values are still passed');
+ }finally{for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION','NAW_DATA_DIR']) if(key in saved) process.env[key]=saved[key]; else delete process.env[key];}
+});

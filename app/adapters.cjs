@@ -92,7 +92,21 @@ class Terminal extends EventEmitter {
 // Native root transitions the GUI follows: SessionEnd reason -> SessionStart source
 // of the same process. /clear ends with 'clear'; /branch ends with 'resume' and
 // starts the branch as 'fork'. A plain /resume starts as 'resume' and is not followed.
+// Claude Code's PermissionMode values and effort levels, as hook inputs report them.
+const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'];
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
+// A running claude process whose arguments name this native session ID.
+function claudeHolder(nativeId) {
+  if (!/^[a-f0-9-]{36}$/i.test(nativeId || '')) return null;
+  // Without ps the check cannot run; recovery then proceeds as it did before.
+  let lines; try { lines = execFileSync('/bin/ps', ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024 * 1024 }).split('\n'); } catch { return null; }
+  for (const line of lines) {
+    const [pid, ...args] = line.trim().split(/\s+/);
+    if (Number(pid) !== process.pid && args.some(arg => path.basename(arg) === 'claude') && args.includes(nativeId)) return Number(pid);
+  }
+  return null;
+}
 class Claude extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
   get nativeActivity() {
@@ -115,6 +129,10 @@ class Claude extends EventEmitter {
     // A retained reader uses these same native validators and channel, but
     // cannot write settings, register command hooks or launch another CLI.
     if (attachOnly) return;
+    // Native has no lock: a second --resume writes the same transcript. Refuse
+    // while another claude process (e.g. an external terminal) names this ID.
+    const holder = record.recovering && claudeHolder(record.nativeId);
+    if (holder) throw new Error(`另一个 claude 进程（PID ${holder}）引用了这个原生会话，可能正在写入。请先在那里退出，避免两个程序同时写同一会话。`);
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};
@@ -127,7 +145,13 @@ class Claude extends EventEmitter {
     fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', awaySummaryEnabled: false, promptSuggestionEnabled: false, hooks }), { mode: 0o600 });
     const mcp = JSON.stringify({ mcpServers: { native_workspace: { command: process.execPath,
       args: [path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
-    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge')], record.cwd, {
+    // Native --resume restores the saved model and every permission mode except
+    // bypassPermissions, but resolves effort from settings again. Re-pass only
+    // those two, as this session's own last native reports had them.
+    const posture = !record.recovering ? [] : [
+      ...(record.nativePermissionMode === 'bypassPermissions' ? ['--permission-mode', 'bypassPermissions'] : []),
+      ...(EFFORT_LEVELS.includes(record.nativeEffort) ? ['--effort', record.nativeEffort] : [])];
+    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
@@ -477,6 +501,11 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
     });
     if (isChild) return;
+    const mode = PERMISSION_MODES.includes(event.permission_mode) ? event.permission_mode : this.record.nativePermissionMode;
+    const effort = EFFORT_LEVELS.includes(event.effort?.level) ? event.effort.level : this.record.nativeEffort;
+    if (mode !== this.record.nativePermissionMode || effort !== this.record.nativeEffort) {
+      this.record.nativePermissionMode = mode; this.record.nativeEffort = effort; this.emit('capability');
+    }
     if (event.hook_event_name === 'StopFailure') {
       // Settings hooks may arrive after ordered native events, or after a
       // human has submitted B while A's failure is still being reported.

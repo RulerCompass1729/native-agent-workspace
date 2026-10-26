@@ -13,6 +13,7 @@ def main():
         "prompt", "prompt_id", "last_assistant_message", "stop_hook_active", "model",
         "teammate_name", "team_name", "task_id", "task_subject", "tool_name",
         "notification_type", "message", "background_tasks", "session_crons", "tool_use_id",
+        "permission_mode", "effort",
     )
     event = {key: message[key] for key in fields if key in message}
     event["token"] = os.environ["NAW_HOOK_TOKEN"]

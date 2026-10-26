@@ -17,8 +17,15 @@ assert.match(nativeVersion, /^2\.1\.(307|308|309|310)\b/, 'Verify the updated na
 let application, page, client, calls = 0, held, releaseFinal, releaseStart;
 const errors = [], checks = [];
 const questionTrial = process.env.NAW_TEST_NATIVE_QUESTION === '1';
-const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel'].includes(answerMode))throw Error('Unknown bounded native answer case');
+// Plan case: the session starts in native plan mode; the model writes its plan
+// file, then ExitPlanMode opens the native approval with that plan.
+const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_MARKER\n1. Read the local file.\n2. Report the result.\n';
+let planFile = null; const planSteps = [];
+const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
+// The multi case asks two questions at once, the second multi-select.
+const checksQuestion = { question: 'Which checks should run?', header: 'Checks', multiSelect: true, options: [{ label: 'Unit tests', description: 'Run the local unit tests.' }, { label: 'Lint', description: 'Check style.' }, { label: 'Build', description: 'Build the bundle.' }] };
+const nativeQuestions = answerMode === 'multi' ? [nativeQuestion, checksQuestion] : [nativeQuestion];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
   const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
@@ -36,14 +43,27 @@ const server = http.createServer((req, res) => {
     }
     const number = ++calls;
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
-    if (number > (questionTrial ? 2 : 3)) { res.writeHead(429); res.end(); return; }
+    if (number > (questionTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'message_start', { message: { id: `msg_local_${number}`, type: 'message', role: 'assistant', model: request.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
+    if (planTrial) {
+      // Native names the plan file in plan mode's instructions to the model; for a
+      // bridge-submitted first prompt they arrive with the next request, so look first.
+      planFile ||= (body.match(/\/[^"\\\s]*\/plans\/[^"\\\s]+\.md/) || [])[0] || null;
+      const step = !planFile && !planSteps.length ? 'look' : !planSteps.includes('write') ? 'write' : !planSteps.includes('exit') ? 'exit' : 'final';
+      planSteps.push(step);
+      if (step === 'look') block(res, 0, { type: 'tool_use', id: 'toolu_local_plan_look', name: 'Read', input: { file_path: path.join(fs.realpathSync(cwd), 'notes.txt') } });
+      else if (step === 'write') block(res, 0, { type: 'tool_use', id: 'toolu_local_plan_write', name: 'Write', input: { file_path: planFile, content: planText } });
+      else if (step === 'exit') block(res, 0, { type: 'tool_use', id: 'toolu_local_plan_exit', name: 'ExitPlanMode', input: {} });
+      else block(res, 0, { type: 'text', text: 'NATIVE_FINAL: the plan was approved.\n' });
+      event(res, 'message_delta', { delta: { stop_reason: step === 'final' ? 'end_turn' : 'tool_use', stop_sequence: null }, usage: { output_tokens: 10 } });
+      event(res, 'message_stop', {}); res.end(); return;
+    }
     if (number === 1) {
       block(res, 0, { type: 'text', text: 'NATIVE_FIRST: checking locally.\n' });
-      block(res, 1, questionTrial ? { type: 'tool_use', id: 'toolu_local_question', name: 'AskUserQuestion', input: { questions: [nativeQuestion] } } : { type: 'tool_use', id: 'toolu_local_block', name: 'Bash', input: { command: 'printf "NATIVE_TOOL: 42\\n"', description: 'Print the local test marker' } });
+      block(res, 1, questionTrial ? { type: 'tool_use', id: 'toolu_local_question', name: 'AskUserQuestion', input: { questions: nativeQuestions } } : { type: 'tool_use', id: 'toolu_local_block', name: 'Bash', input: { command: 'printf "NATIVE_TOOL: 42\\n"', description: 'Print the local test marker' } });
     } else if (number === 2) {
       if (!questionTrial) await new Promise(resolve => { releaseFinal = resolve; });
       block(res, 0, { type: 'text', text: 'NATIVE_FINAL: the result is 42.\n' });
@@ -70,7 +90,8 @@ async function cleanup() {
   // production adapter methods are replaced by this test.
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
     `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")\n` +
-    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"])\n`, { mode: 0o700 });
+    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"${planTrial ? ',"--permission-mode","plan"' : ''}])\n`, { mode: 0o700 });
+  if (planTrial) fs.writeFileSync(path.join(cwd, 'notes.txt'), 'local notes\n');
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
@@ -93,13 +114,45 @@ async function cleanup() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Run the local check.'); await page.locator('#forward-button').click();
+  if (planTrial) {
+    const rows = () => page.locator('#terminal-area .xterm-rows').innerText();
+    await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
+    await until(async () => (await snapshot()).sessions[0].nativeApproval?.requests.some(r => r.title === 'ExitPlanMode'), 'Native plan approval reaches the existing private panel', 60000);
+    assert.ok(planFile, 'Native named a plan file in plan mode');
+    // Native fills the ExitPlanMode request with the plan file's text and path; the
+    // panel shows that native input as is, and the reader keeps the Write call.
+    const panel = await page.locator('#approval').innerText(); fs.writeFileSync(path.join(base, 'plan-panel.txt'), panel);
+    const request = (await snapshot()).sessions[0].nativeApproval.requests.find(r => r.title === 'ExitPlanMode');
+    assert.deepEqual(JSON.parse(request.input), { plan: planText, planFilePath: planFile }, 'The request input is native\'s own plan text and file');
+    assert.ok(panel.includes('ExitPlanMode') && panel.includes('PLAN_MARKER') && panel.includes(planFile), 'The panel shows the native plan request as is');
+    assert.ok((await page.locator('#messages').innerText()).includes('Write'), 'The reader keeps the native plan file write');
+    assert.equal((await snapshot()).sessions[0].nativePermissionMode, 'plan');
+    await page.locator('#terminal-tab').click();
+    await until(async () => (await rows()).includes('Ready to code?') && (await rows()).includes('PLAN_MARKER'), 'The same native TUI shows the plan for approval');
+    fs.writeFileSync(path.join(base, 'plan-terminal.txt'), await rows());
+    const nativeInput = page.locator('#terminal-area .xterm-helper-textarea');
+    await nativeInput.press('ArrowDown');
+    await until(async () => (await rows()).includes('❯ 2. Yes, manually approve edits'), 'Native option selected before Enter');
+    await nativeInput.press('Enter');
+    await until(async () => { const s = (await snapshot()).sessions[0]; return planSteps.at(-1) === 'final' && s.state === 'idle' && s.messages.some(m => m.text?.includes('NATIVE_FINAL:')); }, 'Approved plan continues the same native turn', 60000);
+    const after = (await snapshot()).sessions[0];
+    assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid); assert.deepEqual(planSteps.filter(s => s !== 'look'), ['write', 'exit', 'final']);
+    assert.equal(after.nativePermissionMode, 'default', 'The recorded mode follows native out of plan mode');
+    await page.locator('#chat-tab').click(); await until(() => page.locator('#approval').isHidden(), 'Approved plan clears the panel');
+    assert.deepEqual(errors, []); fs.writeFileSync(path.join(base, 'plan-finished.json'), JSON.stringify(after, null, 2));
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-plan.png') }); }
+    console.log(JSON.stringify({ planSteps, checks: ['Native plan: the panel shows the ExitPlanMode request with the plan text and file native put in it, approval happens in the same TUI, the turn continues with the same identity and the recorded mode leaves plan'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+  }
   if (questionTrial) {
     await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
     await until(async () => (await snapshot()).sessions[0].nativeApproval?.requests.some(r => r.title === 'AskUserQuestion'), 'Actual native question reaches existing private panel');
-    await page.locator('#approval').getByText(nativeQuestion.question, {exact:true}).waitFor();
-    for (const option of nativeQuestion.options) {
-      await page.locator('#approval').getByText(option.label,{exact:true}).waitFor();
-      await page.locator('#approval').getByText(option.description,{exact:true}).waitFor();
+    for (const question of nativeQuestions) {
+      await page.locator('#approval').getByText(question.question, {exact:true}).waitFor();
+      await page.locator('#approval').getByText(question.header, {exact:true}).waitFor();
+      for (const option of question.options) {
+        await page.locator('#approval').getByText(option.label,{exact:true}).waitFor();
+        await page.locator('#approval').getByText(option.description,{exact:true}).waitFor();
+      }
     }
     fs.writeFileSync(path.join(base,'question-wait.json'),JSON.stringify(await snapshot(),null,2));
     fs.writeFileSync(path.join(base,'question-panel.txt'),await page.locator('#approval').innerText());
@@ -118,7 +171,19 @@ async function cleanup() {
       fs.writeFileSync(path.join(base,'question-cancelled.json'),JSON.stringify(after,null,2));
       console.log(JSON.stringify({checks:['Original question/options; native Esc cancellation retained as an abnormal boundary without fabricating an answer'],nativeVersion,answerMode,localResponses:calls,paidModelCalls:0,evidence:base}));return;
     }
-    const expectedAnswer=answerMode==='other'?'Use my own original answer.':'Keep original';
+    if(answerMode==='multi') {
+      // Native flow: Enter answers the first question; Space toggles choices; Tab opens the review.
+      const rows=()=>page.locator('#terminal-area .xterm-rows').innerText();
+      await nativeInput.press('Enter');
+      await until(async()=>(await rows()).includes(checksQuestion.question),'The same native dialog moves to the second question');
+      await nativeInput.press(' ');await nativeInput.press('ArrowDown');await nativeInput.press('ArrowDown');await nativeInput.press(' ');
+      await until(async()=>/\[✔\] Unit tests[\s\S]*\[ \] Lint[\s\S]*\[✔\] Build/.test(await rows()),'Two native selections in the multi-select question');
+      assert.ok((await snapshot()).sessions[0].nativeApproval,'The GUI keeps showing the open native question while it is answered');
+      await nativeInput.press('Tab');
+      await until(async()=>(await rows()).includes('Review your answers')&&(await rows()).includes('Unit tests, Build'),'Native review of both answers');
+      fs.writeFileSync(path.join(base,'question-multi-review.txt'),await rows());
+    }
+    const expectedAnswer=answerMode==='other'?'Use my own original answer.':answerMode==='multi'?'Unit tests, Build':'Keep original';
     if(answerMode==='other') {
       assert.ok((await page.locator('#terminal-area .xterm-rows').innerText()).includes('3. Type something.'));
       await nativeInput.press('ArrowDown');await nativeInput.press('ArrowDown');
@@ -147,7 +212,7 @@ async function cleanup() {
     assert.ok(!(await page.locator('#messages').innerText()).includes('原生本轮已结束'));
     assert.deepEqual(errors,[]);fs.writeFileSync(path.join(base,'question-finished.json'),JSON.stringify(await snapshot(),null,2));
     if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-question.png')});}
-    console.log(JSON.stringify({checks:['Exact native question/options in the existing GUI panel and same TUI; actual native answer result; same identity; no late private sharing; no invented completion sentence'],nativeVersion,answerMode,localResponses:calls,paidModelCalls:0,evidence:base}));return;
+    console.log(JSON.stringify({checks:[`Exact native question${nativeQuestions.length>1?'s (one multi-select)':''}/options in the existing GUI panel and same TUI; actual native answer result; same identity; no late private sharing; no invented completion sentence`],nativeVersion,answerMode,localResponses:calls,paidModelCalls:0,evidence:base}));return;
   }
   if (process.env.NAW_TEST_NATIVE_PHASE === '1') {
     await until(()=>Boolean(releaseStart),'One bounded native request waits before text');
