@@ -176,15 +176,16 @@ async function cleanup() {
     await page.keyboard.type('/' + command, { delay: 20 });
     await until(async () => (await editLine()) === '❯ /' + command && (await terminalText()).split('\n').some(l => new RegExp('^\\s+❯ /' + command + '\\s').test(l)), 'Edit line and menu show /' + command, 5000);
     await page.keyboard.press('Enter'); await sleep(1200); await record(command);
-    await page.keyboard.press('Escape'); await sleep(500);
-    if ((await editLine()) !== '❯') await page.keyboard.press('Escape');
+    // One Escape may only clear a filter (/config); press again only if still open.
+    await page.keyboard.press('Escape');
+    if (!await until(async () => (await editLine()) === '❯', '', 1000).then(() => true, () => false)) await page.keyboard.press('Escape');
     await until(async () => (await editLine()) === '❯', '/' + command + ' closed', 5000);
     return screens[command];
   }
   const modelPicker = /Haiku ✔/.test(await openNative('model')) && /Sonnet/.test(screens.model);
   const configDialog = /Type to filter/.test(await openNative('config')) && /Show tips/.test(screens.config);
   const memoryDialog = /Auto-memory/.test(await openNative('memory')) && /Esc to cancel/.test(screens.memory);
-  // NAW's own hooks (launch settings and the bridge plugin) are not listed in this read-only menu.
+  // Only the menu's top level is read; its event lists are not opened.
   const hooksMenu = /This menu is read-only/.test(await openNative('hooks'));
 
   // CL-R05: Ctrl+T shows nothing without tasks, and making a task needs a model
