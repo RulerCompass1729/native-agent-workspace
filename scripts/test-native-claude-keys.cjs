@@ -185,6 +185,8 @@ async function cleanup() {
   const modelPicker = /Haiku ✔/.test(await openNative('model')) && /Sonnet/.test(screens.model);
   const configDialog = /Type to filter/.test(await openNative('config')) && /Show tips/.test(screens.config);
   const memoryDialog = /Auto-memory/.test(await openNative('memory')) && /Esc to cancel/.test(screens.memory);
+  // CL-X05: NAW's directed-message MCP server is connected with its one tool.
+  const mcpListed = /✔ native_workspace\s+1 tool/.test(await openNative('mcp'));
   const hooksMenu = /This menu is read-only/.test(await openNative('hooks'));
   // NAW's launch settings add PreToolUse hooks, yet the native menu lists none
   // there: All events, then the first event (PreToolUse).
@@ -202,7 +204,7 @@ async function cleanup() {
   await page.keyboard.press('Control+t'); await sleep(500); await record('ctrl-t');
   await page.keyboard.press('Control+t'); await sleep(300); await reset();
 
-  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog, modelPicker, configDialog, memoryDialog, hooksMenu, nawHooksUnlisted };
+  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog, modelPicker, configDialog, memoryDialog, mcpListed, hooksMenu, nawHooksUnlisted };
   fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter, modeRestored }, null, 2));
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
