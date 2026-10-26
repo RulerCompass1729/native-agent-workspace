@@ -73,7 +73,7 @@ async function run() {
   assert.equal(await view.evaluate(el => document.activeElement === el), true);
   await page.keyboard.press('Enter'); await until(async () => !(await page.locator('#members-dialog').evaluate(el => el.open)), 'Members closed');
   await until(async () => (await snapshot()).viewState.roomSession === a, 'Exact member selected');
-  await page.locator('#terminal-area .xterm-screen').waitFor();
+  await page.locator('#terminal-area .xterm-screen:visible').waitFor();
   checks.push('Member action retains focus while history and local name change; Enter opens that same member terminal');
 
   await page.locator('#room-record').click(); await page.locator('#manage-members').click(); await view.focus();
@@ -88,17 +88,25 @@ async function run() {
   const approve = page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }); await approve.waitFor();
   await hold(approve, () => update(b)); await shot('approval-focus');
   const old = await approve.elementHandle(), oldRequest = (await snapshot()).sessions.find(s => s.id === b).approval.requestId;
-  await fixture('approval', b, { requestId: 18, method: 'item/commandExecution/requestApproval', params: { command: 'echo changed-scope', cwd: '/synthetic', reason: 'New request' } });
+  // A changed scope for the SAME native request invalidates its GUI credential.
+  // A different native request would remain queued alongside the first one.
+  await fixture('approval', b, { requestId: 17, method: 'item/commandExecution/requestApproval', params: { command: 'echo changed-scope', cwd: '/synthetic', reason: 'Changed request' } });
   await page.locator('#approval').getByText('echo changed-scope', { exact: true }).waitFor();
   assert.equal(await old.evaluate(el => el.isConnected), false);
   assert.equal(await approve.evaluate(el => document.activeElement === el), false, 'Changed permission is not silently focused');
   await page.evaluate(({ id, requestId }) => workspace.approve(id, requestId, 'accept').then(() => { throw Error('Stale approval accepted'); }, e => { if (!e.message.includes('权限请求已变化')) throw e; }), { id: b, requestId: oldRequest });
+  assert.deepEqual((await fixture('stats', b)).approvalReplies, [], 'Stale GUI credential never reaches the native reply transport');
   const fresh = (await snapshot()).sessions.find(s => s.id === b);
   await client.call('claim', b, 'chat');
   await until(async () => await approve.isDisabled(), 'Observer loses decision control');
+  await page.evaluate(({ id, requestId }) => workspace.approve(id, requestId, 'accept').then(() => { throw Error('Non-owner approval accepted'); }, e => { if (!e.message.includes('权限请求已变化')) throw e; }), { id: b, requestId: fresh.approval.requestId });
+  assert.deepEqual((await fixture('stats', b)).approvalReplies, [], 'Losing control never replies to the native request');
   await page.evaluate(id => workspace.claim(id, 'chat'), b); await until(async () => await approve.isEnabled(), 'Explicit takeover restores decision control');
   assert.notEqual(fresh.approval.requestId, oldRequest);
-  checks.push('Unrelated updates retain permission-button focus; changed request replaces it without implicit focus, stale request is rejected and owner changes disable decisions');
+  await approve.click();
+  await until(async () => !(await snapshot()).sessions.find(s => s.id === b).approval, 'Native resolution clears the current approval');
+  assert.deepEqual((await fixture('stats', b)).approvalReplies, [{ requestId: 17, result: { decision: 'accept' } }], 'Only the fresh authorized decision reaches the exact native request once');
+  checks.push('Unrelated updates retain permission-button focus; changed scope replaces the GUI credential without implicit focus; stale and non-owner decisions cannot reply; fresh acceptance resolves the exact native request once');
 
   await page.locator(`[data-session-id="${a}"]`).click();
   const join = header.getByRole('button', { name: '加入协作', exact: true });
