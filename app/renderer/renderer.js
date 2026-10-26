@@ -269,7 +269,8 @@ function renderComposer(s) {
   send.disabled = action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
   $('compose-hint').textContent = inputRecoveries.get(s?.id)?.text.value ? '上一段原生输入未确认。草稿可继续编辑；请在原生终端查看保留的文字。' : pendingMode?.id === s?.id ? '正在切换输入方式，可以先编辑草稿。' : action.hint;
 }
-function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
+function toast(text) { $('toast-text').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
+$('toast-close').onclick = () => { clearTimeout(toastTimer); $('toast').hidden = true; };
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
 function persistView() { normalizeRoomMention(); captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalLayout, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
