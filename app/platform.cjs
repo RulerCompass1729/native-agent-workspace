@@ -25,8 +25,12 @@ function nativeEnvironment(extra = {}) {
   // the same conventional locations used by executable discovery.
   env.PATH = [...new Set([...(env.PATH || '').split(path.delimiter).filter(Boolean), path.join(require('node:os').homedir(), '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'])].join(path.delimiter);
   delete env.ELECTRON_RUN_AS_NODE;
-  delete env.CLAUDECODE;
-  delete env.CODEX_THREAD_ID;
+  // A NAW started from an agent's command tool must not pass that agent's
+  // session identity on. Codex marks its non-interactive tool shell CODEX_CI=1
+  // and sets NO_COLOR=1 there, which would leave every native terminal colourless;
+  // a person's own NO_COLOR (no such marker) is kept.
+  if (env.CODEX_CI === '1') delete env.NO_COLOR;
+  for (const key of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI']) delete env[key];
   // The service's own locations: a NAW started from a native terminal must not
   // inherit this service's profile, workspace, runtime configuration or version.
   delete env.NAW_WORKSPACE;

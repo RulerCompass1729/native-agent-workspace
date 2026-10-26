@@ -33,7 +33,11 @@ const memberRows = new Map();
 let headerControls, advancedControls;
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
 const terminalThemes = {
-  dark: { background: '#191b1e', foreground: '#e6e8eb', cursor: '#e6e8eb', selectionBackground: '#53677b88' },
+  // The maintainer's iTerm2 default profile, dark-mode colours (user request, T-14).
+  // Native programs' own truecolour output is drawn as sent, never remapped.
+  dark: { background: '#15191f', foreground: '#dcdcdc', cursor: '#ffffff', cursorAccent: '#000000', selectionBackground: '#b3d7ff', selectionForeground: '#000000',
+    black: '#14191e', red: '#b43c2a', green: '#00c200', yellow: '#c7c400', blue: '#2744c7', magenta: '#c040be', cyan: '#00c5c7', white: '#c7c7c7',
+    brightBlack: '#686868', brightRed: '#dd7975', brightGreen: '#58e790', brightYellow: '#ece100', brightBlue: '#a7abf2', brightMagenta: '#e17ee1', brightCyan: '#60fdff', brightWhite: '#ffffff' },
   green: { background: '#20261f', foreground: '#eef2e8', cursor: '#e0edc9', selectionBackground: '#637a5988' },
 };
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
@@ -1248,7 +1252,7 @@ async function ensureTerminal(id, explicit = false) {
   $('terminal-area').style.backgroundColor = theme.background;
   const loading = node('p', '正在连接原生终端…', 'terminal-loading'); loading.setAttribute('role', 'status');
   const surface = node('div', undefined, 'terminal-surface'); surface.hidden = true; surface.inert = true; element.append(loading, surface);
-  const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
+  const term = new Terminal({ fontFamily: '"MesloLGS NF", Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
   const intent = selectionRevision;
   const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: record?.messages.some(message => message.role === 'assistant') }; terminals.set(id, entry);
