@@ -303,7 +303,7 @@ async function openApplication() {
     const activity = (await session(codex.id)).nativeActivity;
     assert.equal(activity.nativeId, codex.nativeId); assert.equal(activity.turnId, (await session(codex.id)).activeTurnId);
     assert.ok(Number.isFinite(activity.startedAt), 'Native Turn supplies its own start time');
-    await until(async () => /本轮已运行 \d+ 秒/u.test(await page.locator('#native-elapsed').innerText()), 'Native elapsed time visible');
+    await until(async () => /已用 \d+ (秒|分 \d{2} 秒)/u.test(await page.locator('#native-elapsed').innerText()), 'Native elapsed time visible');
     await save('codex-live-activity');
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-codex-activity.png') }); }
     await page.locator('#terminal-tab').click();

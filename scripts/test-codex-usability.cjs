@@ -76,7 +76,11 @@ async function run() {
   const command = page.locator('#messages .process').filter({hasText:'check-document'});
   assert.equal(await search.locator('.process-details').evaluate(el=>el.open),false);
   assert.equal(await reasoning.locator('.process-details').evaluate(el=>el.open),false);
-  assert.equal(await command.locator('.process-tail').innerText(),'line three\nline four\nline five');
+  // A finished command keeps its first two output lines and says how many more there are.
+  assert.equal(await command.locator('.process-tail').innerText(),'line one\nline two');
+  assert.equal(await command.locator('.process-more').innerText(),'+3 行');
+  await command.locator('.process-more').click();assert.equal(await command.locator('.process-details').evaluate(el=>el.open),true);
+  assert.equal(await command.locator('.process-tail').isVisible(),false);await command.locator('.process-details > summary').click();
   await search.locator('.process-details > summary').click();assert.match(await search.locator('.message-body').innerText(),/Exact native result, retained in full/);
   await reasoning.locator('.process-details > summary').focus();await page.keyboard.press('Enter');assert.match(await reasoning.locator('.message-body').innerText(),/原生摘要第二段。/);
   await command.locator('.process-details > summary').click();await command.hover();await command.getByRole('button',{name:'复制',exact:true}).click();assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),'line one\nline two\nline three\nline four\nline five');

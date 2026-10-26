@@ -129,6 +129,10 @@ async function run() {
   assert.ok(!(await page.locator('#toast').innerText()).includes('Synthetic old send rejected'));
   await fixture('rejectPause', { text: 'Synthetic pause confirmation lost' });
   await until(async () => (await page.locator('#toast').innerText()).includes('Synthetic pause confirmation lost'), 'Pause failure remains visible');
+  // A notice never covers where the person types, and the person can close it.
+  const [notice, composer] = await Promise.all(['#toast', '#room-composer'].map(selector => page.locator(selector).boundingBox()));
+  assert.ok(notice.y + notice.height <= composer.y || notice.y >= composer.y + composer.height, 'The notice does not cover the composer');
+  await shot('notice-above-composer'); await page.getByRole('button', { name: '关闭提示', exact: true }).click(); assert.equal(await page.locator('#toast').isVisible(), false);
   await until(() => page.locator('#run-button').isEnabled(), 'Failed confirmation permits fresh explicit action');
   assert.equal(await roomBody(page), failedPauseDraft); await shot('pause-failure-material-retained');
   await authorize(a, '重新明确授权后核查每日35分钟'); await completePair(a, b, 8);
