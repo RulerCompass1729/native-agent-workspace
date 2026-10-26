@@ -2,8 +2,9 @@ const testScratch = require('./fixtures/test-scratch.cjs');
 // Real Electron + Claude Code 2.1.310 on a loopback fake API: "从已有 Claude 会话分支…"
 // opens the native session picker in a new row's terminal and forks the chosen
 // session into the row's pre-assigned ID; the original transcript is untouched.
-// A cancelled picker ends the row saying no branch was made. Two main turns at
-// most, all fixed local replies; nothing paid, no profile edits.
+// A cancelled picker ends the row saying no branch was made. The parent prompt
+// also checks that Shift+Enter is a native newline. Two main turns at most, all
+// fixed local replies; nothing paid, no profile edits.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http'), crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { _electron } = testScratch.playwright(require('playwright'));
@@ -45,6 +46,7 @@ const server = http.createServer((req, res) => {
     if (!main) { if (++titles > 2) return refuse('fork test budget: at most two native titles'); return reply(res, request.model, 'Native fork check'); }
     if (++mains > 2) return refuse('fork test budget: at most two main turns');
     // The branch turn must carry the parent's history: the fork copied it.
+    if (mains === 1) assert.ok(userText(request).includes('PARENT_PROMPT\nSECOND_LINE'), 'Shift+Enter put a newline inside the one parent prompt');
     if (mains === 2) assert.ok(userText(request).includes('PARENT_PROMPT') && userText(request).includes('BRANCH_PROMPT'), 'The branch turn carries the parent history');
     reply(res, request.model, mains === 1 ? 'PARENT_REPLY' : 'BRANCH_REPLY');
   });
@@ -120,7 +122,10 @@ async function openBranch() {
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Parent ready', 60000);
   const parent = (await snapshot()).sessions[0];
   await focusTerminal(); await page.keyboard.type('PARENT_PROMPT', { delay: 20 });
-  await until(async () => (await editLine()) === '❯ PARENT_PROMPT', 'Parent prompt on the edit line'); await page.keyboard.press('Enter');
+  await until(async () => (await editLine()) === '❯ PARENT_PROMPT', 'Parent prompt on the edit line');
+  await page.keyboard.press('Shift+Enter'); await page.keyboard.type('SECOND_LINE', { delay: 20 });
+  await until(async () => /❯ PARENT_PROMPT\n\s*SECOND_LINE/.test(await terminalText()), 'Shift+Enter keeps the draft on two native lines');
+  assert.equal(mains, 0, 'Shift+Enter did not submit'); await page.keyboard.press('Enter');
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.role === 'assistant' && m.text?.includes('PARENT_REPLY')) && (await snapshot()).sessions[0].state === 'idle', 'Parent reply', 60000);
   await sleep(1500); await client.call('stop', parent.id);
   await until(async () => (await snapshot()).sessions.find(s => s.id === parent.id).state === 'ended', 'Parent writer stopped', 30000);
