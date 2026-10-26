@@ -3155,7 +3155,10 @@ Extend the bounded installed Codex164 goal fixture with `NAW_NATIVE_RECOVERY_TRI
 its isolated native server, clicks the unique recovery action inside the composer,
 and verifies the same saved thread/model/history/goal/draft on a different server PID.
 The runner fails rather than silently waiting if recovery calls the old confirmation
-modal. Four fixed task responses plus one title; zero paid inference. The saved goal
+modal. Four fixed task responses and at most one optional native title; zero paid inference.
+Window continuity compares the native server identity and checks that the original
+reported process is still alive: the displayed PID can switch from server to the
+already-running terminal without a process restart. The saved goal
 is already complete at the process-loss checkpoint: this proves persisted goal state,
 not automatic recovery of an in-flight tool or fleet. Window-closed automatic goal
 continuation is verified separately earlier in the same task.

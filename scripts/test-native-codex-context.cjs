@@ -21,6 +21,13 @@ const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIV
 const activeGoalRecovery=process.env.NAW_NATIVE_ACTIVE_GOAL_RECOVERY==='1';
 const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1'||activeGoalRecovery;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function sameLiveServer(before, after) {
+ assert.deepEqual(after.serverIdentity,before.serverIdentity,'Window reopening preserves the native server');
+ assert.ok(before.serverIdentity&&processMayBeAlive(before.serverIdentity),'Original native server remains alive');
+ // pid follows the interactive terminal once it starts; it initially names the
+ // server. A change between those existing processes is not a native restart.
+ if(before.processIdentity)assert.ok(processMayBeAlive(before.processIdentity),'Original reported process remains alive');
+}
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(budgetError)throw budgetError;if(await fn())return;await sleep(80);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++seq,...body})}\n\n`);}
 const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
@@ -84,7 +91,9 @@ async function nativeCommand(command){
  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],...(process.env.NAW_VIDEO_DIR?{recordVideo:{dir:process.env.NAW_VIDEO_DIR,size:{width:1280,height:900}}}:{}),env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});
  await until(async()=>{for(const p of app.windows())if(!p.isClosed()&&await p.locator('#new-session').count().catch(()=>0)){page=p;return true;}return false;},'Main window');
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
- const initialTerminal=process.env.NAW_NATIVE_INITIAL_TERMINAL==='1';
+ // Search parity reads the real TUI, so settle its owned-folder trust prompt
+ // before the GUI task instead of waiting for output behind that prompt.
+ const initialTerminal=process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1';
  await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption(initialTerminal?'terminal':'chat');await page.locator('#session-name').fill('Native context');await page.locator('#confirm-create').click();
  if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);await page.locator('#chat-tab').click();}
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
@@ -164,7 +173,7 @@ async function nativeCommand(command){
   await until(async()=>{for(const p of app.windows())if(!p.isClosed()&&await p.locator('#new-session').count().catch(()=>0)){page=p;return true;}return false;},'Goal witness reopens');page.on('pageerror',e=>errors.push(e.message));
   await page.locator('#messages').getByText('CONTEXT_TASK_4',{exact:true}).waitFor();
   assert.equal(await page.locator('#message-input').inputValue(),'Unsent draft retained while the native goal runs.');
-  const reopened=await snapshot();assert.equal(reopened.sessions[0].nativeId,before.nativeId);assert.equal(reopened.sessions[0].pid,before.pid);assert.equal(reopened.diagnostics.dispatches,1);assert.equal(calls,4);assert.deepEqual(errors,[]);
+  const reopened=await snapshot();assert.equal(reopened.sessions[0].nativeId,before.nativeId);sameLiveServer(before,reopened.sessions[0]);assert.equal(reopened.diagnostics.dispatches,1);assert.equal(calls,4);assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(base,'goal-reopened.json'),JSON.stringify(reopened,null,2));
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'goal-reopened.png')});
   if(process.env.NAW_NATIVE_RECOVERY_TRIAL==='1'){
@@ -188,7 +197,7 @@ async function nativeCommand(command){
    await new Promise((resolve,reject)=>{nextWs.once('open',resolve);nextWs.once('error',reject);});goalRpc=new Rpc(nextWs);
    await goalRpc.call('initialize',{clientInfo:{name:'naw_owned_recovery_witness',version:'1'},capabilities:{experimentalApi:true}});nextWs.send(JSON.stringify({method:'initialized',params:{}}));
    const savedGoal=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});assert.deepEqual(savedGoal,completed);
-   assert.equal(calls,4);assert.equal(titles,1);assert.deepEqual(errors,[]);
+   assert.equal(calls,4);assert.ok(titles===0||titles===1,'Native title generation is optional and bounded');assert.deepEqual(errors,[]);
    fs.writeFileSync(path.join(base,'goal-process-recovered.json'),JSON.stringify({state:recovered,goal:savedGoal},null,2));
    if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'goal-process-recovered.png')});
    checks.push('Owned native server death resumes the exact saved native ID/model/history/goal/draft on a new PID without replay or inference');
@@ -257,7 +266,7 @@ async function nativeCommand(command){
   await page.reload();await page.locator('#new-session').waitFor();
   await page.locator('#messages').getByText(row.title,{exact:true}).waitFor();
   const reopened=await snapshot(),again=reopened.sessions[0].messages.find(m=>m.id===row.id);
-  assert.equal(again.status,'complete');assert.equal(again.title,row.title);assert.equal(reopened.sessions[0].nativeId,before.nativeId);assert.equal(reopened.sessions[0].pid,before.pid);assert.equal(calls,1);
+  assert.equal(again.status,'complete');assert.equal(again.title,row.title);assert.equal(reopened.sessions[0].nativeId,before.nativeId);sameLiveServer(before,reopened.sessions[0]);assert.equal(calls,1);
   fs.writeFileSync(path.join(base,'web-search-reopened.json'),JSON.stringify(reopened,null,2));assert.deepEqual(errors,[]);
   console.log(JSON.stringify({checks:['Actual Codex search starts and completes with its original English native summary in the GUI and same TUI; compact disclosure; reader reload preserves exact identity and completed status; no fabricated footer'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
