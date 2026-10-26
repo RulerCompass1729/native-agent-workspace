@@ -22,6 +22,8 @@ const activeGoalRecovery=process.env.NAW_NATIVE_ACTIVE_GOAL_RECOVERY==='1';
 const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1'||activeGoalRecovery;
 // An unnamed row takes the thread name the native TUI generates (T-12).
 const autoName=process.env.NAW_NATIVE_AUTO_NAME==='1';
+// A row created with skip-all-confirmations gets never + full access (T-13); no model call.
+const skipPermissions=process.env.NAW_NATIVE_SKIP_PERMISSIONS==='1';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function sameLiveServer(before, after) {
  assert.deepEqual(after.serverIdentity,before.serverIdentity,'Window reopening preserves the native server');
@@ -96,7 +98,7 @@ async function nativeCommand(command){
  // Search parity reads the real TUI, so settle its owned-folder trust prompt
  // before the GUI task instead of waiting for output behind that prompt.
  const initialTerminal=process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1';
- await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption(initialTerminal?'terminal':'chat');await page.locator('#session-name').fill(autoName?'':'Native context');await page.locator('#confirm-create').click();
+ await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption(initialTerminal?'terminal':'chat');await page.locator('#session-name').fill(autoName?'':'Native context');if(skipPermissions)await page.locator('#skip-permissions').check();await page.locator('#confirm-create').click();
  if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);await page.locator('#chat-tab').click();}
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
  if(process.env.NAW_NATIVE_METADATA_ONLY==='1'){
@@ -108,6 +110,21 @@ async function nativeCommand(command){
   console.log(JSON.stringify({checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(!activeGoalRecovery){await page.locator('#message-input').fill(goalTrial?'Create the bounded native goal, verify its continuation while this window is closed, then complete it.':'Make one small local check.');await page.locator('#send-button').click();}
+ if(skipPermissions){
+  assert.equal(before.skipPermissions,true);
+  // A thread is readable by another client once its first turn (sent above) exists: one local reply.
+  await until(async()=>calls===1&&(await snapshot()).sessions[0].state==='idle','First native task');
+  const net=require('node:net'),WebSocket=require('ws'),{Rpc}=require('../app/adapters.cjs');
+  const entries=require('../app/service-layout.cjs').readLayout(profile).entries;assert.equal(entries.length,1);
+  const endpoint=path.join(path.dirname(JSON.parse(fs.readFileSync(path.join(profile,entries[0],'connection.json'))).endpoint),'codex.sock');
+  const ws=new WebSocket('ws://localhost',{createConnection:()=>net.connect(endpoint),handshakeTimeout:10000});
+  await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject);});const rpc=new Rpc(ws);
+  await rpc.call('initialize',{clientInfo:{name:'naw_owned_posture_witness',version:'1'},capabilities:{experimentalApi:true}});ws.send(JSON.stringify({method:'initialized',params:{}}));
+  const r=await rpc.call('thread/resume',{threadId:before.nativeId,excludeTurns:true});ws.close();
+  assert.deepEqual({approvalPolicy:r.approvalPolicy,sandbox:r.sandbox?.type},{approvalPolicy:'never',sandbox:'dangerFullAccess'},'The chosen thread runs with never + full access');
+  assert.equal(calls,1);assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({checks:[`A Codex row created ${initialTerminal?'in the terminal view':'in the chat view'} with skip-all-confirmations gets never + full access`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+ }
  if(autoName){
   await until(()=>calls===1,'First native task');assert.equal(before.autoName,true);
   // The native TUI names an unnamed thread with its generated title (codex-rs/tui/src/app/

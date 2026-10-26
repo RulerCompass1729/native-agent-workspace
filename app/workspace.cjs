@@ -97,15 +97,16 @@ class Workspace extends EventEmitter {
     return { terminal: terminal?.observe ? await terminal.observe() : null,
       progress: this.progress.get(id)?.snapshot() || { items: [], revision: 0, truncated: false } };
   }
-  async create(provider, cwd, owner, name, view = 'chat', { fork } = {}) {
+  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions } = {}) {
     if (!['chat', 'terminal'].includes(view)) throw new Error('未知视图。');
+    if (skipPermissions != null && skipPermissions !== true) throw new Error('无效的权限选项。');
     if (fork != null && (fork !== 'picker' || provider !== 'claude')) throw new Error('无效的分支请求。');
     // The native session picker that chooses what to branch needs the terminal.
     if (fork) view = 'terminal';
     if (!['claude', 'codex'].includes(provider) || !path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error('请选择可用 agent 和工作目录。');
     if ([...this.sessions.values()].filter(s => s.state !== 'ended').length >= 6) throw new Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
     const id = randomUUID();
-    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`, ...(name ? {} : { autoName: true }), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
+    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
     if (fork) record.forkPicker = true;
     this.sessions.set(id, record); this.changed();
     let runtime;

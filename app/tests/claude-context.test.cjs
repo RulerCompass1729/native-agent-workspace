@@ -304,6 +304,7 @@ test('a recovery relaunch passes bypass and effort again only as the session las
  }
  const named=await launch({});assert.equal(named[named.indexOf('--name')+1],'Posture','A named session keeps its native name');
  assert.ok(!(await launch({autoName:true})).includes('--name'),'An unnamed session lets Claude generate its title');
+ const chosen=await launch({skipPermissions:true});assert.deepEqual(chosen.slice(chosen.indexOf('--permission-mode'),chosen.indexOf('--permission-mode')+2),['--permission-mode','bypassPermissions'],'A new session starts in bypass only when chosen at creation');
 });
 test('an unnamed row takes Claude\'s generated title from its own transcript; named rows and other files never do',async t=>{
  const { claudeGeneratedTitle } = require('../adapters.cjs');
