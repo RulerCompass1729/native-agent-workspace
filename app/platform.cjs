@@ -27,6 +27,12 @@ function nativeEnvironment(extra = {}) {
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.CLAUDECODE;
   delete env.CODEX_THREAD_ID;
+  // The service's own locations: a NAW started from a native terminal must not
+  // inherit this service's profile, workspace, runtime configuration or version.
+  delete env.NAW_WORKSPACE;
+  delete env.NAW_RUNTIME_CONFIG;
+  delete env.NAW_APP_VERSION;
+  delete env.NAW_DATA_DIR;
   return env;
 }
 
