@@ -267,7 +267,10 @@ header h1, header p { overflow-wrap: anywhere; }
 .process-label{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-weight:400;min-width:0}
 .process-details[open] .process-label{display:none}
 .process-content{padding:4px 0 8px 12px;min-width:0}
-.process-tail{margin:0 0 6px 12px;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,monospace;color:var(--muted)}
+.process-tail{margin:0 0 2px 12px;white-space:pre;overflow:hidden;text-overflow:ellipsis;font:12px/1.5 ui-monospace,monospace;color:var(--muted)}
+.process-more{display:block;margin:0 0 6px 12px;padding:0;border:0;background:none;font:12px/1.5 ui-monospace,monospace;color:var(--muted);cursor:pointer}
+.process-more:hover{color:var(--ink)}
+.process-details[open]~.process-tail,.process-details[open]~.process-more{display:none}
 .message.process[data-running='true']>details>summary::before{content:'';width:8px;height:8px;border:1.5px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:process-spin 1s linear infinite}
 @keyframes process-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.message.process[data-running='true']>details>summary::before{animation:none;background:var(--green)}}

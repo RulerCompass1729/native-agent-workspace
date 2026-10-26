@@ -993,6 +993,11 @@ function renderMembers() {
     const slot = list.children[index]; if (slot !== row.element) list.insertBefore(row.element, slot || null);
   });
 }
+// Native activity words as plain Chinese; a native permission title passes through.
+const nativeActivityLabels = { requesting: '正在请求', thinking: '思考中', text: '正在输出', input: '正在准备工具', tool: '正在运行工具',
+  inProgress: '工作中', commandExecution: '正在运行命令', fileChange: '正在修改文件', mcpToolCall: '正在调用工具', dynamicToolCall: '正在调用工具',
+  webSearch: '正在搜索网页', reasoning: '思考中', plan: '正在更新计划', agentMessage: '正在输出', waitingOnUserInput: '等待回答', waitingOnApproval: '等待确认', willRetry: '正在重试' };
+const elapsedText = seconds => seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`;
 function renderNativeActivity(s) {
   const el = $('native-activity');
   const question = s?.approval?.method === 'item/tool/requestUserInput';
@@ -1003,10 +1008,10 @@ function renderNativeActivity(s) {
   const status = s.nativeActivity;
   const matched = status && nativeStatusFresh(status) && status.nativeId === s.nativeId && status.turnId === s.activeTurnId;
   const seconds = matched && Number.isFinite(status.startedAt) && status.startedAt <= Date.now() ? Math.floor((Date.now() - status.startedAt) / 1000) : null;
-  const label = status && !nativeStatusFresh(status) ? '原生状态待同步' : matched && status.label ? status.label : waiting ? question ? '等待回答' : '等待原生确认' : '正在处理';
+  const label = status && !nativeStatusFresh(status) ? '原生状态待同步' : matched && status.label ? nativeActivityLabels[status.label] || status.label : waiting ? question ? '等待回答' : '等待原生确认' : '正在处理';
   const text = (s.name || 'Codex') + ' · ' + label;
   if ($('native-phase').textContent !== text) $('native-phase').textContent = text;
-  const elapsed = seconds === null ? '' : ' · 本轮已运行 ' + seconds + ' 秒';
+  const elapsed = seconds === null ? '' : ' · 已用 ' + elapsedText(seconds);
   if ($('native-elapsed').textContent !== elapsed) $('native-elapsed').textContent = elapsed;
 }
 const nativeActivityClock = setInterval(() => {

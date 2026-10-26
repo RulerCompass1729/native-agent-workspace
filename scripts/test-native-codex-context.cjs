@@ -268,7 +268,7 @@ async function nativeCommand(command){
   const retry=await snapshot();fs.writeFileSync(path.join(base,'retrying.json'),JSON.stringify(retry,null,2));
   await page.locator('#messages').getByText('stream disconnected before completion',{exact:false}).waitFor();
   assert.equal(retry.sessions[0].state,'working');assert.equal(retry.sessions[0].nativeActivity.label,'willRetry');
-  await page.locator('#native-phase').getByText('Native context · willRetry',{exact:true}).waitFor();
+  await page.locator('#native-phase').getByText('Native context · 正在重试',{exact:true}).waitFor();
   const original=retry.sessions[0].messages.find(m=>m.kind==='notice'&&m.text.includes('stream disconnected before completion'));
   assert.equal(await page.locator('#messages').getByText(original.text,{exact:true}).innerText(),original.text,'Native error body is not translated or replaced');
   await until(async()=>{const text=(await terminalText()).replace(/\s+/g,' ');return text.includes('Reconnecting... 1/5')&&/[Ss]tream disconnected before completion:/.test(text);},'Native TUI shows its reconnect state and error');
@@ -331,7 +331,7 @@ async function nativeCommand(command){
   else{await nativeInput.type('Ask me which small approach to use.');await until(async()=>(await terminalText()).includes('Ask me which small approach to use.'),'Native task edit line');await sleep(300);await nativeInput.press('Enter');}
   await until(async()=>(await terminalText()).includes('Which small implementation should be used?'),'Actual native user question');
   await page.locator('#approval').getByText('Which small implementation should be used?',{exact:true}).waitFor();
-  await page.locator('#native-phase').getByText('Native context · waitingOnUserInput',{exact:true}).waitFor();
+  await page.locator('#native-phase').getByText('Native context · 等待回答',{exact:true}).waitFor();
   await page.locator('#approval').getByText('Use existing primitives',{exact:false}).waitFor();
   fs.writeFileSync(path.join(base,'native-question.txt'),await terminalText());fs.writeFileSync(path.join(base,'gui-question.json'),JSON.stringify(await snapshot(),null,2));
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-question.png')});}
