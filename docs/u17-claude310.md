@@ -97,34 +97,34 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 
 | ID／功能 | 官方来源／条件 | GUI 或同屏原生 TUI；原因／当前缺口 | 证据与状态 |
 | --- | --- | --- | --- |
-| CL-I01 文字输入、换行、光标与单词编辑、撤销 | `interactive-mode#text-editing; keybindings chat:*` | GUI 原样；GUI 基本输入；原生专用编辑在同屏原生 TUI 里用，保留原生键位 | **待验** |
+| CL-I01 文字输入、换行、光标与单词编辑、撤销 | `interactive-mode#text-editing; keybindings chat:*` | GUI 原样；GUI 基本输入；原生专用编辑在同屏原生 TUI 里用，保留原生键位 | 部分实测：`scripts/test-native-claude-keys.cjs`（真实 310 与 311，NAW 终端按键后读原生画面，0 次模型请求）：Option+Backspace 删一个词、Option+← 回退一个词、Ctrl+U 删到行首均生效。Option+字母（如 Option+B/F）在 macOS 上由键盘布局产生字符，合成按键无法复现，需实体键盘验证；撤销**待验** |
 | CL-I02 粘贴与大段粘贴占位 `[Pasted text #N]` | `terminal-config#how-claude-treats-pasted-text` | 同屏原生 TUI；在同屏原生 TUI 里用；“按粘贴而非打字处理”需要 feature flag：NAW 自 2026-10-25 起不再设置 CL-X02 的变量，条件与普通 claude 相同，未在 NAW 终端实测 | **待验** |
-| CL-I03 输入历史、Ctrl+R 反向搜索、找回清除的草稿、Vim 模式 | `interactive-mode#command-history; #vim-editor-mode` | 同屏原生 TUI；在同屏原生 TUI 里用；不另做历史或编辑器 | **待验** |
-| CL-I04 运行中排队消息、取回排队、`/btw` 旁问 | `interactive-mode#queue-messages-while-claude-works; #side-questions-with-btw` | GUI 原样；GUI 发送走原生 `prompt.submit`；排队编辑与旁问在同屏原生 TUI 里用 | **待验** |
-| CL-I05 `/` 命令补全、技能串联、`@` 文件提及、MCP prompts | `commands#how-the-command-menu-matches-what-you-type` | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生补全与上下文绑定 | **待验** |
+| CL-I03 输入历史、Ctrl+R 反向搜索、找回清除的草稿、Vim 模式 | `interactive-mode#command-history; #vim-editor-mode` | 同屏原生 TUI；在同屏原生 TUI 里用；不另做历史或编辑器 | 部分实测：`scripts/test-native-claude-keys.cjs`（真实 310 与 311，NAW 终端按键后读原生画面，0 次模型请求）：Ctrl+R 打开原生“Search prompts”历史筛选。找回清除的草稿、Vim 模式**待验** |
+| CL-I04 运行中排队消息、取回排队、`/btw` 旁问 | `interactive-mode#queue-messages-while-claude-works; #side-questions-with-btw` | GUI 原样；GUI 发送走原生 `prompt.submit`；排队编辑与旁问在同屏原生 TUI 里用 | 部分实测：`test-native-queue.cjs`（真实 2.1.311、本机假 API、0 付费，2026-10-26）：运行中从 GUI 发出的消息进入原生排队，原回合结束后原生只消费一次，终端与对话里的输入和回复一致；视图切换与渲染器重载不重放。`/btw` 旁问与在 TUI 里取回排队**待验** |
+| CL-I05 `/` 命令补全、技能串联、`@` 文件提及、MCP prompts | `commands#how-the-command-menu-matches-what-you-type` | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生补全与上下文绑定 | 部分实测：`scripts/test-native-claude-keys.cjs`（真实 310 与 311，NAW 终端按键后读原生画面，0 次模型请求）：输入 `/` 出现原生命令菜单，`@` 出现工作目录里的文件。技能串联与 MCP prompts **待验** |
 | CL-I06 图片粘贴与附件 | `keybindings#attachments-actions` | 同屏原生 TUI；显式粘贴/拖入通过同一原生附件输入区，文字草稿保留 | 三入口原生图片载荷核验使用 `test-native-blocks.cjs` 的 `NAW_TEST_NATIVE_IMAGE=1`，物理系统剪贴板仍待验；签名候选104验收通过，1 次本地回复、3 张同像素图片；日常安装待许可 |
-| CL-I07 `!` shell 模式与后台 Bash | `interactive-mode#shell-mode-with--prefix; #background-bash-commands` | 同屏原生 TUI；在同屏原生 TUI 里用；不另起 shell 生命周期 | **待验** |
+| CL-I07 `!` shell 模式与后台 Bash | `interactive-mode#shell-mode-with--prefix; #background-bash-commands` | 同屏原生 TUI；在同屏原生 TUI 里用；不另起 shell 生命周期 | 部分实测：`scripts/test-native-claude-keys.cjs`（真实 310 与 311，NAW 终端按键后读原生画面，0 次模型请求）：输入 `!` 进入原生 shell 模式（提示符变为 `!`，页脚“! for shell mode”），退格退出。后台 Bash **待验** |
 | CL-I08 提示建议（灰字示例与下一步建议） | `interactive-mode#prompt-suggestions` | **NAW 关闭**：启动设置 `promptSuggestionEnabled: false`（CL-X01） | 待安装版验收 |
 | CL-I09 拼写检查、emoji 短码、不可见字符提示 | `interactive-mode#check-spelling-as-you-type; #emoji-shortcodes` | 同屏原生 TUI；在同屏原生 TUI 里用 | **待验** |
 | CL-I10 语音输入 | `interactive-mode#voice-input` | 同屏原生 TUI；在同屏原生 TUI 里用；物理麦克风需实测 | **待验** |
-| CL-R01 助手正文流式显示、Markdown、链接 | `hooks#messagedisplay; engine ui.render` | GUI 原样；GUI 原文（`classic.MessageDisplay` 的可见内容）；原生排版在同屏原生 TUI 里用 | **待验** |
-| CL-R02 思考、请求/流式阶段、spinner、计时与 token | `engine turn.step` | GUI 原样；GUI 只显示原生阶段种类（requesting/thinking/text/input/tool）；原生 spinner 文字与计时在同屏原生 TUI 里用，不翻译 | **待验** |
-| CL-R03 工具调用、输入、结果、失败 | `engine tool.call; session.append` | GUI 原样；GUI 原生工具名、输入 JSON 与文本结果；非文本结果只标未完整，原样在同屏原生 TUI 里用 | **待验** |
+| CL-R01 助手正文流式显示、Markdown、链接 | `hooks#messagedisplay; engine ui.render` | GUI 原样；GUI 原文（`classic.MessageDisplay` 的可见内容）；原生排版在同屏原生 TUI 里用 | 部分实测：`test-native-blocks.cjs`（真实 2.1.311、本机假 API、0 付费，2026-10-26）：中间正文与最终回复按原生顺序出现在阅读区。Markdown 与链接排版**待验** |
+| CL-R02 思考、请求/流式阶段、spinner、计时与 token | `engine turn.step` | GUI 原样；GUI 只显示原生阶段种类（requesting/thinking/text/input/tool），以中文标签显示（正在请求、思考中、正在输出、正在准备工具、正在运行工具）；原生 spinner 文字、计时与 token 在同屏原生 TUI 里用 | **待验** |
+| CL-R03 工具调用、输入、结果、失败 | `engine tool.call; session.append` | GUI 原样；GUI 原生工具名、输入 JSON 与文本结果；非文本结果只标未完整，原样在同屏原生 TUI 里用 | 部分实测：`test-native-blocks.cjs`（真实 2.1.311、本机假 API、0 付费，2026-10-26）：工具输入与文本结果在最终回复前出现在阅读区，状态为完成；工具失败（取消问题后工具行为“失败”并显示原生拒绝文字）见同一测试的 `NAW_NATIVE_QUESTION_ANSWER=cancel`。工具名显示与非文本结果“只标未完整”**待验** |
 | CL-R04 文件 diff、`/diff` 面板与 diff 对话框 | `interactive-mode#review-changes-with-diff` | 同屏原生 TUI；在同屏原生 TUI 里用 | **待验** |
-| CL-R05 任务清单（Ctrl+T to-do） | `interactive-mode#task-list` | 同屏原生 TUI；在同屏原生 TUI 里用；GUI 只见对应工具调用，不重画清单 | **待验** |
+| CL-R05 任务清单（Ctrl+T to-do） | `interactive-mode#task-list` | 同屏原生 TUI；在同屏原生 TUI 里用；GUI 只见对应工具调用，不重画清单 | **待验**：没有任务时 Ctrl+T 不显示内容，产生任务需要一次模型回合；`test-native-claude-keys.cjs` 只留画面证据，不算通过 |
 | CL-R06 子 agent、Agent Teams、后台任务与 `/tasks` | `sub-agents; agent-teams; agent-view` | 同屏原生 TUI；在同屏原生 TUI 里用；GUI 过滤 `agentId` 事件，不把子 agent 当根会话 | **待验** |
-| CL-R07 完成时间、耗时与回合页脚 | `engine turn.complete` | GUI 原样；GUI 只显示原生回合边界与状态；完整页脚在同屏原生 TUI 里用，不重建时钟 | **待验** |
+| CL-R07 完成时间、耗时与回合页脚 | `engine turn.complete` | GUI 原样；GUI 只显示原生回合边界与状态；完整页脚在同屏原生 TUI 里用，不重建时钟 | 部分实测：原生回合边界与状态写入记录——完成与中断边界（`test-native-blocks.cjs`）、失败（`test-native-error.cjs`，2.1.310 与 2.1.311）。原生 turn.start 不带时间、NAW 也不自行打点，GUI 不显示计时（源码：`startedAt` 只在 Codex 路径）。完整页脚**待验** |
 | CL-R08 Session recap 与 `/recap` | `interactive-mode#session-recap` | 同屏原生 TUI；在同屏原生 TUI 里用；**自动 recap 默认开启且是后台模型请求（CL-X03）** | **待验** |
-| CL-R09 用量、上下文、额度等待与自动继续 | `interactive-mode#wait-for-a-usage-limit-to-reset; costs` | GUI 原样；GUI 只显示 `session.usage()` 范围；完整状态与等待在同屏原生 TUI 里用 | **待验** |
+| CL-R09 用量、上下文、额度等待与自动继续 | `interactive-mode#wait-for-a-usage-limit-to-reset; costs` | GUI 原样；GUI 只显示 `session.usage()` 范围；完整状态与等待在同屏原生 TUI 里用 | 部分实测：`test-native-blocks.cjs` 断言回合结束后读到原生 `session.usage()`（上下文窗口大于 0），2.1.310 与 2.1.311 读数相同；GUI 用量面板的显示与额度等待**待验** |
 | CL-R10 状态行（statusline） | `statusline` | 同屏原生 TUI；在同屏原生 TUI 里用；按用户自己的 statusline 设置 | **待验** |
 | CL-R11 PR/MR 状态徽标 | `interactive-mode#pr-review-status` | 同屏原生 TUI；在同屏原生 TUI 里用；PR/MR 状态检查曾被 CL-X02 的变量关闭，NAW 自 2026-10-25 起不设置该变量，未在 NAW 终端实测 | **待验** |
 | CL-R12 全屏渲染、鼠标、滚动与选择 | `fullscreen` | 同屏原生 TUI；在同屏原生 TUI 里用；**内嵌 xterm 的鼠标与 alt-screen 行为待实测** | **待验** |
 | CL-A01 工具权限请求与决定 | `permission-modes; hooks#permissionrequest` | GUI 原样；GUI 原样显示请求（工具名与输入）；决定在同屏原生 TUI 里做，NAW 不代答 | **待验** |
-| CL-A02 AskUserQuestion 问题、选项与自由回答 | `engine ui.render AskUserQuestion` | GUI 原样；GUI 原样显示问题与选项；作答与取消在同屏原生 TUI 里用 | **待验** |
+| CL-A02 AskUserQuestion 问题、选项与自由回答 | `engine ui.render AskUserQuestion` | GUI 原样显示问题、标题、选项与说明；单人且在对话视图时可在对话里作答（见上方「在对话里回答 Codex 的问题」行的 Claude 部分），交回终端、终端视图、协作空间或任何失败时由原生弹框作答；点“中断”即拒答 | 实测：`test-native-blocks.cjs` 在 `NAW_TEST_NATIVE_QUESTION=1` 下按 `NAW_NATIVE_QUESTION_ANSWER` 的七种作答方式（first/other/cancel/multi 在原生弹框，gui/handback/interrupt 经对话视图）通过（真实 2.1.311、本机假 API、0 付费，2026-10-26）；对话里填“其他”只有无模型测试 `test-control-focus.cjs`，真实原生的自由回答走原生弹框（other）；对话作答、交回终端、中断已在签名 105 安装验收 |
 | CL-A03 Plan 模式与退出 Plan 的确认 | `permission-modes#analyze-before-you-edit-with-plan-mode` | 同屏原生 TUI；在同屏原生 TUI 里用；GUI 只见对应权限请求 | **待验** |
 | CL-A04 MCP elicitation 表单与密钥 | `hooks#elicitation` | 同屏原生 TUI；在同屏原生 TUI 里用；不导出表单或密钥 | **待验** |
-| CL-A05 权限模式与切换（Shift+Tab 等） | `permission-modes; auto-mode-classifier-billing` | 同屏原生 TUI；在同屏原生 TUI 里用；NAW 默认不传 `--permission-mode`，原生按用户设置或内置默认起步（内置默认 auto，官方文档：v2.1.283 起）；新建时勾选「跳过所有权限确认」才传 `bypassPermissions`，恢复重启时只在原生上次报告 `bypassPermissions` 时沿用（`app/adapters.cjs` 启动参数）；分类器请求见 CL-X03 | **待验** |
-| CL-S01 新建、恢复、分支、fork、teleport 与根会话身份 | `sessions; commands` | GUI 原样；GUI 跟随原生 clear 与 branch（CL-INV-03）；**`/background` 已实测换会话 ID 且内嵌进程退出（CL-INV-02），按源码 NAW 记为结束，GUI 实测待验**；resume/teleport/tui 待验 | **待验** |
+| CL-A05 权限模式与切换（Shift+Tab 等） | `permission-modes; auto-mode-classifier-billing` | 同屏原生 TUI；在同屏原生 TUI 里用；NAW 默认不传 `--permission-mode`，原生按用户设置或内置默认起步（内置默认 auto，官方文档：v2.1.283 起）；新建时勾选「跳过所有权限确认」才传 `bypassPermissions`，恢复重启时只在原生上次报告 `bypassPermissions` 时沿用（`app/adapters.cjs` 启动参数）；分类器请求见 CL-X03 | 部分实测：`scripts/test-native-claude-keys.cjs`（真实 310 与 311，NAW 终端按键后读原生画面，0 次模型请求）：Shift+Tab 切换原生权限模式（页脚由 auto 变为 manual，再按回到原模式）。分类器请求见 CL-X03 |
+| CL-S01 新建、恢复、分支、fork、teleport 与根会话身份 | `sessions; commands` | GUI 原样；GUI 跟随原生 clear 与 branch；`/resume` 到别的会话时显示已切换并保留上次核实的身份，`/background` 时显示工作已转到原生后台；teleport 与 `claude --tui` 待验 | 部分实测（真实 2.1.311、本机假 API、0 付费，2026-10-26）：`/clear` 换上下文身份而不换进程（`test-native-blocks.cjs`）；`/branch` 跟随（`test-native-branch.cjs`）；从已有会话 fork（`test-native-claude-fork.cjs`）；`/resume` 到别的会话显示为“切换”而非退出，`/background` 显示工作已转到原生后台并给出 ID（`test-native-switch.cjs` 默认、`NAW_SWITCH_CASE=background` 与 `resume-background` 三个场景）。teleport 与 `claude --tui` **待验** |
 | CL-S02 模型、effort、fast mode、output style | `model-config; fast-mode; output-styles` | GUI 原样；GUI 只跟随模型名；选择器在同屏原生 TUI 里用；fast mode 可用性检查曾被 CL-X02 的变量关闭，NAW 自 2026-10-25 起不设置该变量，未在 NAW 终端实测 | **待验** |
 | CL-S03 配置、记忆、技能、hooks、插件、主题、快捷键设置 | `commands; settings-reference` | 同屏原生 TUI；在同屏原生 TUI 里用；云端同步的技能与插件曾因 CL-X02 的变量不加载，NAW 自 2026-10-25 起不设置该变量，未在 NAW 终端实测 | **待验** |
 | CL-S04 检查点与 `/rewind` | `checkpointing` | 同屏原生 TUI；在同屏原生 TUI 里用；**回退对 GUI 已显示记录的影响待验** | **待验** |
@@ -180,7 +180,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-CMD039 `/exit` | [命令:89](https://code.claude.com/docs/en/commands)；别名 `/quit` | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；GUI 只跟随原生退出状态 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD040 `/export [filename]` | [命令:90](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD041 `/fast [on\|off]` | [命令:91](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
-| CL-CMD042 `/feedback [report]` | [命令:92](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；文档称 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 关闭 `/feedback`；NAW 自 2026-10-25 起不设置该变量（CL-X02），执行结果与普通 claude 相同，未在 NAW 终端实测 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
+| CL-CMD042 `/feedback [report]` | [命令:92](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；文档称 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 关闭 `/feedback`；NAW 自 2026-10-25 起不设置该变量（CL-X02），条件与普通 claude 相同，未在 NAW 终端实测 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD043 `/fewer-permission-prompts` | [命令:93](https://code.claude.com/docs/en/commands)；内置技能 | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD044 `/focus` | [命令:94](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD045 `/fork [prompt]` | [命令:95](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；复制到新的后台会话，**该会话在 GUI 中如何出现待验** | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
@@ -215,7 +215,7 @@ CL-X07（预先放行 NAW 定向消息工具）影响真人控制，需在验收
 | CL-CMD074 `/radio` | [命令:124](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD075 `/rate-limit-options` | [命令:125](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：菜单未列出；需 claude.ai 订阅、`gh` 登录、云会话或 Chrome 等条件；探测用 API key fixture，无法区分是账号条件还是 CL-X02，**需在用户真实登录环境核对** |
 | CL-CMD076 `/recap` | [命令:126](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；原生自己生成，GUI 不另调模型 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
-| CL-CMD077 `/release-notes` | [命令:127](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；文档称同一变量关闭 release notes；NAW 自 2026-10-25 起不设置该变量（CL-X02），执行结果与普通 claude 相同，未在 NAW 终端实测 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
+| CL-CMD077 `/release-notes` | [命令:127](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置；文档称同一变量关闭 release notes；NAW 自 2026-10-25 起不设置该变量（CL-X02），条件与普通 claude 相同，未在 NAW 终端实测 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD078 `/reload-plugins [--force]` | [命令:128](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD079 `/reload-skills` | [命令:129](https://code.claude.com/docs/en/commands) | 同屏原生 TUI；在同屏原生 TUI 里用；保留原生分派、菜单和配置 | INV：NAW 启动参数与环境下菜单列出；归属审计；不逐项执行验收 |
 | CL-CMD080 `/remote-control` | [命令:130](https://code.claude.com/docs/en/commands)；别名 `/rc` | 同屏原生 TUI；Remote Control 需要 feature flag：NAW 自 2026-10-25 起不再设置 CL-X02 的变量，条件与普通 claude 相同，未在 NAW 终端实测 | INV：菜单未列出；按文档受 CL-X02 影响，但探测是首次会话且无对照，不能单独证明原因；启动差异见 CL-X02；已于 2026-10-25 取消该变量 |
