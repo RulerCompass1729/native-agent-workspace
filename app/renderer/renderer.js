@@ -557,6 +557,7 @@ function renderSessions() {
     const label = `${identity}${duplicate ? '' : record.provider === 'claude' ? ' · Claude' : ' · Codex'} · ${sessionStatus(record)}`;
     row.link.setAttribute('aria-label', label); row.link.title = label;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
+    if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
     row.more.setAttribute('aria-label', `会话操作：${identity}`); row.more.title = `会话操作：${identity}`; row.more.disabled = disconnected;
     row.name.textContent = record.name; row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}${duplicate ? ` · ${record.id.slice(0, 6)}` : ''}`; row.dot.className = `state-dot ${record.state}`;
     // Keep existing DOM nodes: native state updates must not remove a focused
@@ -1043,6 +1044,7 @@ function render() {
     renderArchives(); $('room-nav').parentElement.hidden = Boolean(state.room.archived); document.querySelector('.drop-hint').hidden = Boolean(state.room.archived);
     $('workspace-empty').hidden = !state.room.archived;
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
+    if (inRoom) $('room-nav').setAttribute('aria-current', 'page'); else $('room-nav').removeAttribute('aria-current');
     $('room-nav-name').textContent = `◉ ${state.room.name}`; $('room-nav').title = state.room.name; $('room-nav').setAttribute('aria-label', state.room.name);
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
