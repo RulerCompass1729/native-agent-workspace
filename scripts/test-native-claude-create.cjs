@@ -1,15 +1,17 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
-// Real Electron + Claude Code 2.1.310 on a loopback fake API: a session created
-// without a name is launched without --name, so Claude generates its own title,
-// and the row takes it as "Claude · <title>"; a desktop rename still wins.
-// One main turn and one native title, both fixed local replies; nothing paid.
+// Real Electron + Claude Code 2.1.310 on a loopback fake API, creation choices:
+// a session created without a name is launched without --name, so Claude
+// generates its own title and the row takes it as "Claude · <title>" (a desktop
+// rename still wins); a session created with "skip all confirmations" starts in
+// bypassPermissions. One main turn and one native title, both fixed local
+// replies; the bypass row sends nothing. Nothing paid.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http'), crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..');
 const { connectService } = require('../app/service-client.cjs');
 const { executable } = require('../app/platform.cjs');
-const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-claude-name-'));
+const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-claude-create-'));
 const profile = path.join(base, 'profile'), config = path.join(base, 'claude'), userHome = path.join(base, 'home');
 for (const dir of [profile, config, userHome]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
@@ -89,7 +91,7 @@ async function acceptKeyDialog() {
     env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: serviceCwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 60000 });
   await until(async () => { for (const p of application.windows()) if (!p.isClosed() && await p.locator('#new-session').count().catch(() => 0)) { page = p; return true; } return false; }, 'Main window', 60000);
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
-  client = await connectService(profile, 'native-claude-name-test');
+  client = await connectService(profile, 'native-claude-create-test');
 
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
   await page.locator('#initial-view').selectOption('terminal'); assert.equal(await page.locator('#session-name').inputValue(), ''); await page.locator('#confirm-create').click();
@@ -110,6 +112,27 @@ async function acceptKeyDialog() {
   await until(async () => (await link.innerText()).includes('My own name') && !(await link.innerText()).includes('Synthetic Fixture Title'), 'A desktop rename wins');
   checks.push('A desktop rename is shown instead of the native title');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'claude-name.png') }); }
+  // Skip all confirmations, chosen at creation for this one session (unchecked by default).
+  await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
+  assert.equal(await page.locator('#skip-permissions').isChecked(), false);
+  await page.locator('#skip-permissions').check(); await page.locator('#create-permission-note').getByText('不再问你', { exact: false }).waitFor();
+  if (process.env.NAW_EVIDENCE_DIR) await page.locator('#create-dialog').screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'create-skip-permissions.png') });
+  await page.locator('#initial-view').selectOption('terminal'); await page.locator('#session-name').fill('Bypass'); await page.locator('#confirm-create').click();
+  await until(async () => (await snapshot()).sessions.some(s => s.name === 'Bypass' && s.pid), 'Bypass row started', 60000);
+  const bypass = (await snapshot()).sessions.find(s => s.name === 'Bypass'); assert.equal(bypass.skipPermissions, true);
+  const bypassArgv = testScratch.childProcess.execFileSync('ps', ['-ww', '-o', 'args=', '-p', String(bypass.pid)], { encoding: 'utf8' });
+  assert.ok(bypassArgv.includes('--permission-mode bypassPermissions'), 'The chosen session starts in bypass');
+  // A fresh native profile asks once to accept bypass mode, in the row's own terminal.
+  await until(async () => /Bypass Permissions mode|bypass permissions on/.test(await terminalText()), 'Bypass startup', 60000);
+  if (/Bypass Permissions mode/.test(await terminalText())) {
+    await focusTerminal(); await page.keyboard.press('ArrowDown');
+    await until(async () => (await terminalText()).includes('❯ Yes, I accept'), 'Native bypass choice moved to accept', 5000); await page.keyboard.press('Enter');
+  }
+  await until(async () => /bypass permissions on/.test(await terminalText()), 'The native status line shows bypass for that session', 60000);
+  // SessionStart carries no mode; the launch mode is recorded so recovery keeps it before any tool hook.
+  assert.equal((await snapshot()).sessions.find(s => s.id === bypass.id).nativePermissionMode, 'bypassPermissions');
+  assert.ok(!argv.includes('--permission-mode'), 'The unchosen session kept the native default');
+  checks.push('A session created with skip-all-confirmations starts in bypassPermissions, as the native status line shows, and recovery keeps it; the default stays unchecked');
   assert.equal(mains, 1); assert.equal(titles, 1); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, nativeVersion, mainTurns: mains, nativeTitleResponses: titles, localResponses: received.length, paidModelCalls: 0, errors, evidence: base }));
 })().catch(async error => {

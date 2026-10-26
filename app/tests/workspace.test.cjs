@@ -29,6 +29,14 @@ test('only a session created without a name takes the native title, with its pro
   runtime.emit('nativeTitle', 'x'.repeat(80)); assert.equal(unnamed.name.length, 60);
   assert.equal(w.get(b).autoName, undefined);
 });
+test('a creation-time choice to skip confirmations is recorded for that session only', async t => {
+  const { workspace: w, ids: [a] } = await fixture(t);
+  const id = await w.create('claude', w.get(a).cwd, 'owner', 'Bypass', 'chat', { skipPermissions: true });
+  assert.equal(w.get(id).skipPermissions, true); assert.equal(w.get(a).skipPermissions, undefined);
+  // Known from the launch itself, so a crash before the first tool hook still recovers in bypass.
+  assert.equal(w.get(id).nativePermissionMode, 'bypassPermissions'); assert.equal(w.get(a).nativePermissionMode, undefined);
+  await assert.rejects(w.create('claude', w.get(a).cwd, 'owner', 'Bad', 'chat', { skipPermissions: 'yes' }), /无效的权限选项/);
+});
 test('a completed failed request permits only an explicit new task, never an automatic run or queue', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   const s = w.get(id); s.state = 'error'; r.failedTurnInputId = 'failed-turn'; r.failedTurnInputMatches = id => id === 'failed-turn';

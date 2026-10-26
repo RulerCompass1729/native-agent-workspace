@@ -167,7 +167,9 @@ class Claude extends EventEmitter {
     // Native --resume restores the saved model and every permission mode except
     // bypassPermissions, but resolves effort from settings again. Re-pass only
     // those two, as this session's own last native reports had them.
-    const posture = !record.recovering ? [] : [
+    // A new session starts in bypass only when the person chose it at creation;
+    // later launches follow what the session last reported.
+    const posture = !record.recovering ? (record.skipPermissions ? ['--permission-mode', 'bypassPermissions'] : []) : [
       ...(record.nativePermissionMode === 'bypassPermissions' ? ['--permission-mode', 'bypassPermissions'] : []),
       ...(EFFORT_LEVELS.includes(record.nativeEffort) ? ['--effort', record.nativeEffort] : [])];
     // A picker branch opens the native session picker once and forks the chosen
@@ -823,8 +825,10 @@ class Codex extends EventEmitter {
     }
     await this.host.createCodex(async () => {
     if (!current()) throw new Error('原生后台已变化，没有继续旧的启动请求。');
-    // Let native configuration/requirements choose permissions for this cwd.
-    const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false, dynamicTools: [require('./addressed-handoffs.cjs').codexTool] });
+    // Native configuration/requirements choose permissions unless the person
+    // chose to skip confirmations for this session when creating it.
+    const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false, dynamicTools: [require('./addressed-handoffs.cjs').codexTool],
+      ...(this.record.skipPermissions ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : {}) });
     if (!current()) throw new Error('原生后台已变化，没有接管旧的启动结果。');
     this.record.addressedToolVersion = 1; this.addressedSendAvailable = true;
     this.record.nativeId = r.thread.id;
@@ -862,7 +866,7 @@ class Codex extends EventEmitter {
       this.host.pendingCodexRuntime = this;
       this.initialTerminalThread = started;
       try {
-        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
+        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', ...(this.record.skipPermissions ? ['-a', 'never', '-s', 'danger-full-access'] : []), '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
       } catch (error) { cleanup(); reject(error); }
     });
   }

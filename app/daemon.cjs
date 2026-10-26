@@ -43,7 +43,7 @@ async function main() {
   const dispatch = async (owner, method, args, client) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'createSkipPermissions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'peerRun': return peerRunner.start(owner, args[0]);
       case 'peerPrepare': return workspace.peerLeases.prepare(client, owner, args[0]);
       case 'peerTake': return workspace.peerLeases.take(client, args[0]);
@@ -53,7 +53,7 @@ async function main() {
       case 'nativeHistory': return workspace.nativeHistory.list(args[0]);
       case 'importHistory': return workspace.importHistory(args[0], owner);
       case 'observe': return workspace.observe(args[0]);
-      case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view, { fork: args[0].fork });
+      case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view, { fork: args[0].fork, skipPermissions: args[0].skipPermissions });
       case 'join': if (typeof args[1] !== 'boolean') throw new Error('无效成员操作。'); return workspace.join(...args);
       case 'claim': return workspace.claim(args[0], owner, args[1]);
       case 'send': {
