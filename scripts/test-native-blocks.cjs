@@ -164,6 +164,7 @@ async function cleanup() {
     const rows = () => page.locator('#terminal-area .xterm-rows').innerText();
     await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('Run the local check.'); await page.locator('#send-button').click();
     const form = page.locator('#approval .question-form'); await form.getByText(nativeQuestion.question, { exact: true }).waitFor({ timeout: 60000 });
+    await until(async () => (await page.locator('#native-phase').innerText()).includes('等待回答'), 'The composer status identifies the held native question');
     assert.equal((await snapshot()).sessions[0].nativeApproval, null, 'Native has not opened its dialog');
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'question-held-' + answerMode + '.png') }); }
     if (answerMode === 'interrupt') {
