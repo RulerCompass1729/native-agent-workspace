@@ -25,7 +25,7 @@ const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_M
 // Permission case: manual mode asks before a Bash command that writes a file
 // (read-only commands such as echo run without asking).
 const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
-assert.ok(!imageTrial || !questionTrial && !planTrial && !permissionTrial, 'Image entry is one separate bounded task');
+assert.ok([imageTrial, questionTrial, planTrial, permissionTrial].filter(Boolean).length <= 1, 'One bounded case per run');
 let planFile = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
@@ -252,9 +252,12 @@ async function cleanup() {
     await until(async () => { const text = await page.locator('#approval').innerText(); return text.includes('Bash') && text.includes('touch native-permission-marker'); }, 'The panel shows the tool and its input', 10000);
     fs.writeFileSync(path.join(base, 'permission-panel.txt'), await page.locator('#approval').innerText());
     assert.equal(await page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }).count(), 0, 'NAW offers no decision of its own');
-    assert.equal(calls, 1, 'Nothing ran before the decision');
+    assert.equal(calls, 1, 'No model request before the decision');
+    assert.ok(!fs.existsSync(path.join(cwd, 'native-permission-marker')), 'The command did not run before the decision');
     await page.locator('#terminal-tab').click();
     await until(async () => (await rows()).includes('touch native-permission-marker') && /Do you want to proceed\?/.test(await rows()), 'The same native TUI asks before running', 30000);
+    // Option 3 would also switch the session to auto mode; Enter only on plain Yes.
+    await until(async () => (await rows()).includes('❯ 1. Yes'), 'Native option Yes selected before Enter', 5000);
     fs.writeFileSync(path.join(base, 'permission-terminal.txt'), await rows());
     await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
     await until(async () => { const s = (await snapshot()).sessions[0]; return calls === 2 && s.state === 'idle' && s.messages.some(m => m.text?.includes('NATIVE_FINAL: the permitted')); }, 'The permitted command runs and the turn continues', 60000);
