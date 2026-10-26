@@ -133,12 +133,28 @@ async function cleanup() {
   const historySearch = /Search prompts/.test(screens['ctrl-r']) && /Filter history/.test(screens['ctrl-r']);
   await reset();
 
+  // CL-I02: a long multi-line paste goes through NAW's paste guard as a bracketed
+  // paste, and native shows its placeholder instead of the lines.
+  const pasted = Array.from({ length: 40 }, (_, i) => `pasted line ${i}`).join('\n');
+  await page.locator('#terminal-area .xterm-helper-textarea >> visible=true').evaluate((el, text) => {
+    const data = new DataTransfer(); data.setData('text/plain', text);
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, pasted);
+  await sleep(800); await record('paste');
+  const pastePlaceholder = /\[Pasted text #\d+/.test(await editLine()) && !/pasted line 39/.test(screens.paste);
+  await reset();
+
+  // CL-S04: Escape twice on an empty line opens native Rewind; one more closes it.
+  await page.keyboard.press('Escape'); await sleep(120); await page.keyboard.press('Escape'); await sleep(700); await record('rewind');
+  const rewindOpens = /Rewind/.test(screens.rewind) && /Esc to cancel/.test(screens.rewind);
+  await page.keyboard.press('Escape'); await until(async () => (await editLine()) === '❯' && !/Rewind/.test(await terminalText()), 'Rewind closed', 5000);
+
   // CL-R05: Ctrl+T shows nothing without tasks, and making a task needs a model
   // turn, so the screen is kept as evidence only and the row stays unverified.
   await page.keyboard.press('Control+t'); await sleep(500); await record('ctrl-t');
   await page.keyboard.press('Control+t'); await sleep(300); await reset();
 
-  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch };
+  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens };
   fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter, modeRestored }, null, 2));
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
