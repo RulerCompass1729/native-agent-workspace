@@ -435,7 +435,7 @@ async function showTrust(options) {
 
 function openCreate(provider = 'claude') {
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
-  $('initial-view').value = preference; $('session-name').value = '';
+  $('initial-view').value = preference; $('session-name').value = ''; $('skip-permissions').checked = false;
   $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
 }
 let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
@@ -476,7 +476,7 @@ $('open-native-history').onclick = () => {
   // Claude has no history API: its own session picker opens in the new row's
   // terminal, and the chosen session is forked while the original stays as is.
   if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
-    const id = await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker' });
+    const id = await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker', skipPermissions: $('skip-permissions').checked || undefined });
     state = await api.initial(); $('create-dialog').close(); await select(id, 'terminal');
   });
   $('create-dialog').close(); historyRows = []; historySelected = null; historyCursor = null; historyLoading = false;
@@ -569,6 +569,12 @@ function createReadiness() {
   const historyProvider = document.querySelector('input[name="provider"]:checked').value;
   $('open-native-history').hidden = !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : '从已有 Claude 会话分支…';
+  // Only a service that applies the choice may offer it; an older one would silently ignore it.
+  $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
+  if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
+  $('create-permission-note').textContent = $('skip-permissions').checked
+    ? '默认是独立的空目录。这个会话里 agent 运行命令、改文件都不再问你；只在信任的文件夹里使用。'
+    : '默认是独立的空目录。原生文件和命令权限仍由原生确认。';
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
     $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';
@@ -1453,7 +1459,7 @@ $('rename-form').onsubmit = async event => {
 $('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; $('chosen-folder').textContent = folder; } });
 $('create-form').onsubmit = event => { event.preventDefault(); attempt(async () => {
   $('confirm-create').disabled = true;
-  try { const view = $('initial-view').value; preference = view; const id = await api.create({ provider: document.querySelector('input[name="provider"]:checked').value, cwd: folder, name: $('session-name').value, view }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
+  try { const view = $('initial-view').value; preference = view; const id = await api.create({ provider: document.querySelector('input[name="provider"]:checked').value, cwd: folder, name: $('session-name').value, view, skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
   finally { $('confirm-create').disabled = false; }
 }); };
 $('room-nav').onclick = () => attempt(() => select('room'));
@@ -1853,6 +1859,7 @@ document.addEventListener('keydown', searchKey);
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
+$('skip-permissions').onchange = createReadiness;
 attempt(async () => {
   state = await api.initial();
   if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
