@@ -185,7 +185,7 @@ function messageList(el, messages, room = false, key = 'room') {
         entry.openRecipient = button('查看会话', () => {
           if (!state.sessions.some(s => s.id === entry.openSessionId)) return toast('这个会话当前不可用，记录仍保留。');
           return select(entry.openSessionId, 'chat');
-        }, 'session-link');
+        }, 'message-session-link');
         actions.append(entry.openRecipient);
         entry.context = button('查看上下文', () => {
           $('room-search').value = ''; $('room-filter').value = ''; renderTimeline();
@@ -294,10 +294,6 @@ function messageList(el, messages, room = false, key = 'room') {
       entry.openSessionId = m.manualReply || m.status === 'reply-private' ? m.recipientId : m.role === 'system' && m.runId ? m.sessionId : null;
       entry.openRecipient.hidden = !entry.openSessionId || !state.sessions.some(s => s.id === entry.openSessionId);
       entry.item.classList.toggle('has-session-link', !entry.openRecipient.hidden);
-      // The only way back to a private result stays visible beside its status;
-      // the other message actions still appear on hover or focus.
-      const place = entry.openRecipient.hidden ? entry.actions : entry.heading;
-      if (entry.openRecipient.parentElement !== place) place.append(entry.openRecipient);
     }
     if (entry.context) entry.context.hidden = !($('room-search').value || $('room-filter').value);
     if (entry.input !== m.input) {

@@ -110,7 +110,11 @@ header h1, header p { overflow-wrap: anywhere; }
 #room-messages .system .message-body { font-size: 12px; }
 #room-messages .system .message-actions { display: none; }
 #room-messages .system.has-session-link .message-actions { display: flex; }
-.message-heading>.session-link{font-size:11px;padding:2px 8px;min-height:22px}
+/* 查看会话 is the only way back to a result kept in its session: that row keeps its
+   actions in flow (as without hover) showing only this one; the rest still appear on hover or focus. */
+.message.has-session-link>.message-actions{position:static;opacity:1;pointer-events:auto;width:fit-content;justify-self:end;grid-row:auto}
+.message.has-session-link:not(:hover):not(:focus-within)>.message-actions>:not(.message-session-link){display:none}
+.message-session-link{order:1}
 #room-messages .system:hover .message-actions, #room-messages .system:focus-within .message-actions { display: flex; }
 #room-composer { padding: 12px 18px 10px; background: var(--surface); border-top: 1px solid var(--border); }
 #shared-input { resize: vertical; min-height: 66px; max-height: min(200px,22vh); padding: 12px; background: var(--raised); }
