@@ -1057,6 +1057,13 @@ const nativeActivityLabels = { requesting: '正在请求', thinking: '思考中'
 const elapsedText = seconds => seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`;
 function renderNativeActivity(s) {
   const el = $('native-activity');
+  const recovery = !disconnected && !s?.transportDisconnected && s?.capacityRecovery;
+  if (recovery && ['scheduled', 'exhausted'].includes(recovery.status)) {
+    el.hidden = false;
+    $('native-phase').textContent = `${s.name} · 模型满载${recovery.status === 'exhausted' ? '，自动继续已达上限，需要你处理' : ''}`;
+    $('native-elapsed').textContent = recovery.status === 'scheduled' ? ` · ${new Date(recovery.due).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 自动继续（第 ${recovery.attempt + 1}/3 次）` : '';
+    return;
+  }
   const question = s?.approval?.method === 'item/tool/requestUserInput';
   const waiting = s?.claudeQuestion || s?.state === 'approval' || s?.nativeApproval || s?.approval && !(question && s.approval.params?.isBlocking === false);
   const live = s && !disconnected && !s.transportDisconnected && (waiting || ['working', 'approval'].includes(s.state) || s.nativeActivity && !nativeStatusFresh(s.nativeActivity));
@@ -1139,7 +1146,8 @@ function render() {
       $('terminal-paste').disabled = !terminalCanInput(s.id) || !alive;
       $('messages').hidden = false; $('terminal-area').hidden = !terminalVisible; $('composer-wrap').hidden = false;
       renderComposer(s); renderNativeActivity(s);
-      $('interrupt').hidden = !own || !['working', 'approval'].includes(s.state);
+      $('interrupt').hidden = !own || !(['working', 'approval'].includes(s.state) || s.capacityRecovery?.status === 'scheduled');
+      $('interrupt').textContent = s.capacityRecovery?.status === 'scheduled' ? '取消自动继续' : '中断回复';
       $('interrupt').disabled = interruptPending(s);
       readLegacyProgress(s);
       const visibleMessages = sessionMessages(s);

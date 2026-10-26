@@ -15,6 +15,7 @@ for(const p of[profile,cwd,home,userHome])fs.mkdirSync(p,{mode:0o700});
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
 let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,releaseGoal,goalRpc,goalCodeMode,budgetError,activeHeld;const errors=[],checks=[];
+const capacityTrial=process.env.NAW_NATIVE_CAPACITY_TRIAL;assert.ok(!capacityTrial||['continue','cancel'].includes(capacityTrial));
 const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIVE_REJECTED_REQUEST: Keep This BODY exactly.';
 // Active-goal recovery: the owned app-server dies while the goal's automatic
 // continuation turn is in flight (T-4); the completed-goal case is NAW_NATIVE_RECOVERY_TRIAL.
@@ -37,12 +38,13 @@ function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify(
 const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
  if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
  const input=JSON.parse(body),title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
- const n=title?0:++calls;if(title)titles++;if(calls>(goalTrial?(activeGoalRecovery?5:4):failureTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
+ const n=title?0:++calls;if(title)titles++;if(calls>(goalTrial?(activeGoalRecovery?5:4):failureTrial||capacityTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
  assert.equal(input.model,'gpt-6-luna');
  fs.writeFileSync(path.join(base,`request-${title?'title-'+titles:n}.json`),JSON.stringify(input,null,2));
  if(failureTrial&&n===1){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:{type:'invalid_request_error',message:failureBody}}));return;}
  const response={id:'context_'+seq,object:'response',created_at:Math.floor(Date.now()/1000),status:'in_progress',model:input.model,output:[],usage:{input_tokens:10,output_tokens:10,total_tokens:20}};
  res.writeHead(200,{'content-type':'text/event-stream'});event(res,'response.created',{response});
+ if(capacityTrial&&n===1){event(res,'response.failed',{response:{...response,status:'failed',error:{code:'server_is_overloaded',message:'Native capacity fixture'}}});res.end();return;}
  if(activeGoalRecovery&&n===3){activeHeld=res;return;}
  if(goalTrial&&!title&&(n===1||n===(activeGoalRecovery?4:3))){
   const name=n===1?'create_goal':'update_goal',args=n===1?{objective:'Verify native goal continuation with the NAW window closed, then mark this bounded fixture complete.'}:{status:'complete'};
@@ -88,7 +90,7 @@ async function nativeCommand(command){
 }
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
- fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n`,{mode:0o600});
+ fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n${capacityTrial?'request_max_retries = 0\nstream_max_retries = 0\n':''}`,{mode:0o600});
  const shim=path.join(base,'codex-local');fs.writeFileSync(shim,'#!/usr/bin/python3\nimport os,sys\n'+`os.environ["CODEX_HOME"]=${JSON.stringify(home)}\nos.environ["HOME"]=${JSON.stringify(userHome)}\n`+'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n'+`os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`,{mode:0o700});
  fs.writeFileSync(path.join(profile,'runtime-locations.json'),JSON.stringify({codex:shim}),{mode:0o600});
  if(!process.env.NAW_APP_EXECUTABLE)execFileSync(process.execPath,[path.join(root,'scripts/build-ui.cjs')]);
@@ -97,9 +99,9 @@ async function nativeCommand(command){
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
  // Search parity reads the real TUI, so settle its owned-folder trust prompt
  // before the GUI task instead of waiting for output behind that prompt.
- const initialTerminal=process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1';
+ const initialTerminal=Boolean(capacityTrial)||process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1';
  await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption(initialTerminal?'terminal':'chat');await page.locator('#session-name').fill(autoName?'':'Native context');if(skipPermissions)await page.locator('#skip-permissions').check();await page.locator('#confirm-create').click();
- if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);await page.locator('#chat-tab').click();}
+ if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);if(capacityTrial)await until(async()=>{const t=await terminalText();return !t.includes('Trust this folder?')&&t.includes('? for shortcuts');},'Owned native editor ready before the capacity task');await page.locator('#chat-tab').click();}
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
  if(process.env.NAW_NATIVE_METADATA_ONLY==='1'){
   assert.equal(before.nativeVersion,nativeVersion);assert.equal(before.nativeVersionStatus,'verified');
@@ -110,6 +112,32 @@ async function nativeCommand(command){
   console.log(JSON.stringify({checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(!activeGoalRecovery){await page.locator('#message-input').fill(goalTrial?'Create the bounded native goal, verify its continuation while this window is closed, then complete it.':'Make one small local check.');await page.locator('#send-button').click();}
+ if(capacityTrial){
+  await until(async()=>calls===1&&(await snapshot()).sessions[0].capacityRecovery?.status==='scheduled','Actual terminal capacity failure schedules recovery',30000);
+  const failed=(await snapshot()).sessions[0];assert.equal(failed.nativeId,before.nativeId);assert.ok(failed.capacityRecovery.due-Date.now()>110000,'Production two-minute delay, not an accelerated test timer');
+  assert.ok(failed.messages.some(m=>m.kind==='notice'&&m.text.includes('Selected model is at capacity')),'Native original error remains readable');
+  await until(async()=>(await page.locator('#native-phase').innerText()).includes('模型满载'),'Recovery status shown');await page.getByRole('button',{name:'取消自动继续',exact:true}).waitFor();
+  if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'capacity-scheduled.png')});
+  if(capacityTrial==='cancel'){
+   await page.getByRole('button',{name:'取消自动继续',exact:true}).click();await until(async()=>!(await snapshot()).sessions[0].capacityRecovery,'Explicit GUI action cancels recovery');await page.locator('#message-input').fill('Human draft after cancelling automatic continuation');await sleep(1500);
+   assert.equal(calls,1);assert.equal((await snapshot()).sessions[0].liveDraft,'Human draft after cancelling automatic continuation');assert.deepEqual(errors,[]);
+   console.log(JSON.stringify({checks:['Actual164 typed overload schedules a visible two-minute continuation; the GUI cancel action cancels it without native interruption or another request, and a later human draft is retained'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  }
+  fs.writeFileSync(path.join(base,'capacity-before.json'),JSON.stringify(await snapshot(),null,2));const observer=await connect(profile,'owned-capacity-observer');
+  try{
+   await app.close();app=null;
+   await until(async()=>calls===2&&(await observer.call('initial')).sessions[0].state==='idle','Continuation runs on the retained service with no Electron window',150000);
+   const completed=(await observer.call('initial')).sessions[0];sameLiveServer(failed,completed);assert.equal(completed.nativeId,failed.nativeId);assert.equal(completed.capacityRecovery,null);
+   const request=JSON.parse(fs.readFileSync(path.join(base,'request-2.json'))),texts=request.input.filter(m=>m.role==='user').flatMap(m=>(m.content||[]).filter(p=>p.type==='input_text').map(p=>p.text));
+   assert.equal(texts.at(-1),'继续','New continuation, not a replay of the original task');assert.equal(texts.filter(x=>x==='Make one small local check.').length,1);
+   assert.equal(completed.messages.filter(m=>m.origin==='capacity-recovery'&&m.text==='继续').length,1);assert.ok(completed.messages.some(m=>m.name==='NAW'&&m.text.includes('因模型满载自动继续（第 1 次）')));
+   fs.writeFileSync(path.join(base,'capacity-completed.json'),JSON.stringify(completed,null,2));
+  }finally{observer.close();}
+  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});page=await app.firstWindow();await page.locator('#new-session').waitFor();
+  await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_2'),'Completed continuation is in the reopened reader');assert.deepEqual(errors,[]);assert.equal(calls,2);
+  if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'capacity-continued.png')});
+  console.log(JSON.stringify({checks:['Actual164 terminal overload preserves native error and two-minute schedule; one new continue runs while the window is closed on the same native server/thread; reader result and explicit NAW provenance survive reopen without original-task replay'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+ }
  if(skipPermissions){
   assert.equal(before.skipPermissions,true);
   // A thread is readable by another client once its first turn (sent above) exists: one local reply.
