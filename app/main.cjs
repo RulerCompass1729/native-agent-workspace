@@ -428,7 +428,7 @@ async function boot() {
   const imageTarget = async (c, id, expectedNativeId) => {
     roomState.assertAvailable(id);
     const snapshot = await c.client.call('initial'), record = snapshot.sessions.find(s => s.id === id);
-    if (!record || record.provider !== 'codex' || record.owner !== c.view.owner || record.nativeId !== expectedNativeId || record.nativeContextPending || !record.terminalState?.alive || !['idle', 'working'].includes(record.state)) throw Error('请先连接并接管原生 Codex 终端；图片没有放入。');
+    if (!record || !['codex', 'claude'].includes(record.provider) || record.owner !== c.view.owner || record.nativeId !== expectedNativeId || record.nativeContextPending || !record.terminalState?.alive || !['idle', 'working'].includes(record.state)) throw Error('请先连接并接管原生终端；图片没有放入。');
     return record;
   };
   register('stageImages', async (c, id, nativeId, files) => {
@@ -436,9 +436,13 @@ async function boot() {
     return require('./local-images.cjs').saveImages(dataDir, id, files, nativeImage);
   });
   register('pasteNativeContent', async (c, id, nativeId) => {
-    await imageTarget(c, id, nativeId);
     const image = clipboard.readImage();
-    if (!image.isEmpty()) return { images: require('./local-images.cjs').saveImages(dataDir, id, [image.toPNG()], nativeImage) };
+    if (!image.isEmpty()) {
+      await imageTarget(c, id, nativeId);
+      return { images: require('./local-images.cjs').saveImages(dataDir, id, [image.toPNG()], nativeImage) };
+    }
+    // Text keeps the original paste path, including native permission/question
+    // prompts. Only importing images requires the stricter idle/working gate.
     const text = clipboard.readText(); if (text.length > 65500) throw Error('粘贴内容过长，请分段粘贴。'); return { text };
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate([

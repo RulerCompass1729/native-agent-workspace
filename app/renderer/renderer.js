@@ -339,7 +339,7 @@ function pasteTerminal(text) {
 const imageFiles = transfer => Array.from(transfer?.files || []).filter(file => file.type.startsWith('image/'));
 async function pasteImages(files, staged) {
   const s = current(), id = s?.id, nativeId = s?.nativeId, revision = selectionRevision;
-  if (!s || s.provider !== 'codex' || s.owner !== owner || !s.terminalState?.alive || !['idle', 'working'].includes(s.state)) throw Error('请先连接并接管原生 Codex 终端；图片没有放入。');
+  if (!s || !['codex', 'claude'].includes(s.provider) || s.owner !== owner || !s.terminalState?.alive || !['idle', 'working'].includes(s.state)) throw Error('请先连接并接管原生终端；图片没有放入。');
   if (!staged && (files.length > 4 || files.reduce((n, file) => n + file.size, 0) > 20 * 1024 * 1024)) throw Error('每次可放入 1–4 张图片，总大小不超过 20 MB。');
   const paths = staged || await api.stageImages(id, nativeId, await Promise.all(files.map(async file => new Uint8Array(await file.arrayBuffer()))));
   if (selectionRevision !== revision || current()?.id !== id || current()?.nativeId !== nativeId || current()?.owner !== owner) throw Error('会话或控制权已变化，图片没有放入终端。');
@@ -1437,7 +1437,6 @@ $('take-control').onclick = () => attempt(() => switchMode(mode, true));
 $('terminal-copy').onclick = () => attempt(async () => { const text = terminals.get(activeSessionId())?.term.getSelection(); if (!text) return toast('先选择文字；原生程序占用鼠标时，按住 ⌥ Option 拖选，再点复制。'); await api.copy(text); focusTerminal(); });
 $('terminal-paste').onclick = () => attempt(async () => {
   const s = current(), id = activeSessionId();
-  if (s?.provider !== 'codex') { const text = await api.pasteText(); if (activeSessionId() === id && mode === 'terminal') pasteTerminal(text); return; }
   const content = await api.pasteNativeContent(id, s.nativeId);
   if (activeSessionId() !== id || current()?.nativeId !== s.nativeId || mode !== 'terminal') return;
   if (content.images) await pasteImages([], content.images); else pasteTerminal(content.text);

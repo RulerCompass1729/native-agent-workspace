@@ -1,6 +1,6 @@
 {
   "name": "native-agent-workspace",
-  "version": "0.1.0-alpha.102",
+  "version": "0.1.0-alpha.104",
   "private": true,
   "description": "A local desktop demo for native agent sessions and bounded collaboration",
   "license": "Apache-2.0",
@@ -14,7 +14,7 @@
     "test:terminal": "npm run build:ui && node scripts/test-terminal-ready.cjs",
     "test:desktop": "npm run build:ui && node scripts/test-desktop.cjs",
     "build:ui": "node scripts/build-ui.cjs",
-    "package:mac": "npm run build:ui && node scripts/package-mac.cjs",
+    "package:mac": "node scripts/package-mac.cjs",
     "test:native-queue": "npm run build:ui && node scripts/test-native-queue.cjs",
     "test:daily": "npm run build:ui && node scripts/test-daily-use.cjs",
     "test:collaboration": "npm run build:ui && node scripts/test-collaboration.cjs",
