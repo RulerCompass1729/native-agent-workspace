@@ -1315,7 +1315,7 @@ class Codex extends EventEmitter {
         break;
       }
       case 'thread/status/changed': this.observeStatus(p.status); break;
-      // The native TUI generates the thread title and sets it as the thread name.
+      // A native rename, or the TUI naming an unnamed thread with its generated title.
       case 'thread/name/updated': if (p.threadId === this.record.nativeId && typeof p.threadName === 'string') this.emit('nativeTitle', p.threadName); break;
       case 'turn/started':
         this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeRetry = null; this.nativeTurnFinished = false;
