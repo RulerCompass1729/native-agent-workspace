@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real Electron + Claude Code 2.1.310 on a loopback fake API, creation choices:
 // a session created without a name is launched without --name, so Claude
 // generates its own title and the row takes it as "Claude · <title>" (a desktop
@@ -95,7 +96,7 @@ async function acceptKeyDialog() {
   client = await connectService(profile, 'native-claude-create-test');
 
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
-  await page.locator('#initial-view').selectOption('terminal'); assert.equal(await page.locator('#session-name').inputValue(), ''); await page.locator('#confirm-create').click();
+  assert.equal(await page.locator('#session-name').inputValue(), ''); await createIn(page, 'terminal');
   await until(async () => /Do you want to use this API key/.test(await terminalText()) || (await snapshot()).sessions[0]?.chatAvailable, 'Startup', 60000);
   await acceptKeyDialog();
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Ready', 60000);
@@ -122,7 +123,7 @@ async function acceptKeyDialog() {
   assert.equal(await page.locator('#skip-permissions').isChecked(), false);
   await page.locator('#skip-permissions').check(); await page.locator('#create-permission-note').getByText('不再问你', { exact: false }).waitFor();
   if (process.env.NAW_EVIDENCE_DIR) await page.locator('#create-dialog').screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'create-skip-permissions.png') });
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('Bypass'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Bypass'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === 'Bypass' && s.pid), 'Bypass row started', 60000);
   const bypass = (await snapshot()).sessions.find(s => s.name === 'Bypass'); assert.equal(bypass.skipPermissions, true);
   const bypassArgv = testScratch.childProcess.execFileSync('ps', ['-ww', '-o', 'args=', '-p', String(bypass.pid)], { encoding: 'utf8' });

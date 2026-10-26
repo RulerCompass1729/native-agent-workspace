@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real Electron + real Claude Code 2.1.310 on a loopback fake API: a native
 // session-scoped `/goal` keeps evaluating its condition and starting the next
 // turn while the NAW window is closed. Two main turns and two evaluator
@@ -273,7 +274,7 @@ async function recover(before) {
   ({ app: application, window: page } = await launch());
   client = await connectService(profile, 'native-claude-goal-test');
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
-  await page.locator('#initial-view').selectOption('terminal'); await page.locator('#session-name').fill('Goal follow'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Goal follow'); await createIn(page, 'terminal');
   const nativeInput = page.locator('#terminal-area .xterm-helper-textarea');
   await until(async () => /Do you want to use this API key|Yes, I trust this folder/.test(await terminalText()) || (await snapshot()).sessions[0]?.chatAvailable, 'Native startup', 60000);
   await stage('first-dialog');

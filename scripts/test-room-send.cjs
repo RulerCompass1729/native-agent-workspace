@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real desktop/IPC/workspace, synthetic delayed replies. No native processes.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -17,7 +18,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
 const messageRow = text => page.locator('#room-messages article').filter({ has: page.locator('.message-body').getByText(text, { exact: true }) });
 async function capture(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') }); } }
 async function create(provider) {
-  await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(provider + ' · 共享测试'); await page.locator('#confirm-create').click();
+  await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#session-name').fill(provider + ' · 共享测试'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Created'); await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); return (await snapshot()).sessions.find(s => s.provider === provider).id;
 }

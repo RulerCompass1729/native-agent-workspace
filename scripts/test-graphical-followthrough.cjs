@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron interface, native adapters/workspace and persisted records.
 // Controlled provider events prove UI behavior, not model reasoning or OS IME.
@@ -39,7 +40,7 @@ async function launch() {
 }
 async function create(provider, name) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.chatAvailable), 'Native attachment ready');
   const s = (await snapshot()).sessions.find(s => s.name === name);
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); return s.id;

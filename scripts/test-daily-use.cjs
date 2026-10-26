@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // One visible app, real shipped adapter/workspace/IPC, synthetic providers.
 // This tests the complete daily-use path, not native login, models or fleets.
@@ -29,7 +30,7 @@ async function launch() {
 }
 async function create(provider) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('terminal'); await page.locator('#session-name').fill(provider + ' · 日用测试'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(provider + ' · 日用测试'); await createIn(page, 'terminal');
   await until(async () => (await snapshot()).sessions.some(s => s.provider === provider && s.chatAvailable && s.terminalAvailable), 'Session ready');
   return (await snapshot()).sessions.find(s => s.provider === provider).id;
 }

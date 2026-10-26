@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Installed native surfaces, never inferred from a transport ACK or source count.
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {execFileSync}=testScratch.childProcess,{_electron}=testScratch.playwright(require('playwright'));
@@ -42,7 +43,7 @@ async function capture(name){fs.writeFileSync(path.join(base,name+'.txt'),await 
  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],...(process.env.NAW_VIDEO_DIR?{recordVideo:{dir:process.env.NAW_VIDEO_DIR,size:{width:1280,height:900}}}:{}),env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});
  await until(async()=>{for(const candidate of app.windows())if(!candidate.isClosed()&&await candidate.locator('#new-session').count().catch(()=>0)){page=candidate;return true;}return false;},'Actual main window');
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
- await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption('terminal');await page.locator('#session-name').fill('Native inventory');await page.locator('#confirm-create').click();
+ await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#session-name').fill('Native inventory');await createIn(page, 'terminal');
  await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);
  if(!stock)await until(async()=>(await state()).sessions[0]?.state==='idle','Native ready');else await until(async()=>(await text()).includes('OpenAI Codex'),'Stock local native screen');
  const before=(await state()).sessions[0];if(!stock){assert.equal(before.nativeVersion,'0.164.0');assert.equal(before.model,'gpt-6-luna');}

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + real Claude CLI; canned responses are served on loopback.
 // No paid inference, user profile edits, global keyboard input, or foregrounding.
@@ -105,7 +106,7 @@ async function cleanup() {
   page = await application.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').waitFor(); client = await connectService(profile, 'native-block-test');
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
-  await page.locator('#initial-view').selectOption('terminal'); await page.locator('#session-name').fill('Native blocks'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Native blocks'); await createIn(page, 'terminal');
   await until(async () => /Yes, I trust this folder|Do you want to use this API key/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions[0]?.chatAvailable, 'Native startup');
   if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
     assert.ok((await page.locator('#terminal-area').innerText()).replace(/\s/g,'').includes(fs.realpathSync(cwd).replace(/\s/g,'')));
