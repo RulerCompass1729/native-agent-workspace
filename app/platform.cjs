@@ -31,6 +31,12 @@ function nativeEnvironment(extra = {}) {
   // a person's own NO_COLOR (no such marker) is kept.
   if (env.CODEX_CI === '1') delete env.NO_COLOR;
   for (const key of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI']) delete env[key];
+  // Native programs run in this app's terminal, not the one NAW was started from.
+  // The launcher terminal's identity would choose their keyboard protocol, clipboard,
+  // colours and Agent Teams pane backend (iTerm2 or tmux) for a terminal they are not in.
+  // __CFBundleIdentifier names the app that launched this process tree (iTerm's when
+  // started there); Claude reads it as a terminal identity too.
+  for (const key of Object.keys(env)) if (/^(__CFBundleIdentifier|TERM_PROGRAM|TERM_PROGRAM_VERSION|TERM_SESSION_ID|TERM_FEATURES|TERMINFO_DIRS|LC_TERMINAL|LC_TERMINAL_VERSION|COLORFGBG|TMUX|TMUX_PANE|STY|WT_SESSION|WT_PROFILE_ID|VTE_VERSION|KONSOLE_VERSION|TERMINAL_EMULATOR|ZED_TERM)$|^(ITERM|KITTY|WEZTERM|GHOSTTY|ALACRITTY|ZELLIJ)_|^ZELLIJ$/.test(key)) delete env[key];
   // The service's own locations: a NAW started from a native terminal must not
   // inherit this service's profile, workspace, runtime configuration or version.
   delete env.NAW_WORKSPACE;

@@ -1435,6 +1435,9 @@ async function ensureTerminal(id, explicit = false) {
     }
     // Claude 2.1.310 also pushes CSI-u and reads Shift+Enter (13;2u) as a newline; a plain CR submits.
     else if (record.provider === 'claude' && enhanced && event.key === 'Enter' && event.shiftKey && !event.ctrlKey) extendedKey = 13;
+    // Claude asks for CSI-u only in terminals it recognises. Elsewhere its own
+    // /terminal-setup binds Shift+Enter to ESC CR, which it reads as a newline.
+    else if (record.provider === 'claude' && !composing && !(entry.keyboardFlags & 1) && event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) nativeKey = '\x1b\r';
     if (extendedKey !== undefined) nativeKey = `\x1b[${extendedKey};${1 + (event.shiftKey ? 1 : 0) + (event.ctrlKey ? 4 : 0)}u`;
     if (nativeKey !== undefined) {
       event.preventDefault();

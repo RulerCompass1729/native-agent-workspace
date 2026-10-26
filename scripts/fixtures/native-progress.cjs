@@ -30,7 +30,15 @@ NativeHost.prototype.create = function (record) {
   r.serializer = new SerializeAddon(); r.screen.loadAddon(r.serializer);
   r.journal = new TerminalJournal(80, 24); r.sequence = 0;
   r.terminal = {
-    alive: true, input() { stats.inputs++; }, resize() { stats.resizes++; },
+    alive: true, input() { stats.inputs++; },
+    // A native program redraws at the size it is given; keep the canonical screen in step.
+    resize(cols, rows) {
+      stats.resizes++;
+      if (!Number.isInteger(cols) || !Number.isInteger(rows) || (cols === r.screen.cols && rows === r.screen.rows)) return;
+      r.screen.resize(cols, rows);
+      const event = r.journal.append('resize', '', cols, rows, () => r.serializer.serialize());
+      r.emit('terminal', { ...event, receivedAt: Date.now(), sequence: ++r.sequence });
+    },
     observe: async () => ({ ...r.journal.snapshot(), alive: true, legacySnapshots: !!r.legacyFrames }),
     snapshot: async () => ({ buffer: r.serializer.serialize(), sequence: r.sequence, cols: r.screen.cols, rows: r.screen.rows }),
   };

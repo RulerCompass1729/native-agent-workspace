@@ -18,25 +18,26 @@ function fixture(method = 'stats', target, value) {
   });
 }
 const snapshot = () => page.evaluate(() => workspace.initial());
-const panel = id => page.locator(`[data-progress-id="${id}"]`);
+// The native terminal beside the chat is the only live screen (the readonly progress panel was removed).
+const nativePane = id => page.locator(`[data-terminal-id="${id}"]`);
 async function create(provider) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
   await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(provider + ' · 实时过程'); await page.locator('#confirm-create').click();
   await until(async () => (await snapshot()).sessions.some(s => s.provider === provider && s.state === 'idle'), 'Created');
   const id = (await snapshot()).sessions.find(s => s.provider === provider).id;
-  await until(() => panel(id).locator('.xterm').count(), 'Readonly screen'); return id;
+  await until(() => nativePane(id).locator('.xterm').count(), 'Native screen'); return id;
 }
 async function screen(id) {
   return page.evaluate(id => {
-    const t = [...window.progressTestTerminals].reverse().find(t => t.element?.closest('[data-progress-id]')?.dataset.progressId === id);
+    const t = [...window.progressTestTerminals].reverse().find(t => t.element?.isConnected && t.element.closest('[data-terminal-id]')?.dataset.terminalId === id);
     if (!t) return null;
     const b = t.buffer.active;
     return { cols: t.cols, rows: t.rows, type: b.type, cursor: [b.cursorX, b.cursorY], lines: Array.from({ length: b.length }, (_, i) => b.getLine(i).translateToString()) };
   }, id);
 }
 async function aligned(id) {
-  const expected = (await fixture('stats', id)).screen;
-  await until(async () => JSON.stringify(await screen(id)) === JSON.stringify(expected), 'Canonical screen alignment');
+  // The canonical screen follows native resizes too, so compare with its latest state.
+  await until(async () => JSON.stringify(await screen(id)) === JSON.stringify((await fixture('stats', id)).screen), 'Canonical screen alignment');
 }
 async function capture(name) {
   if (!process.env.NAW_EVIDENCE_DIR || !page || page.isClosed()) return;
@@ -62,10 +63,10 @@ async function run() {
       const list = document.querySelector(room ? '#room-messages' : '#messages');
       const input = document.querySelector(room ? '#shared-input' : '#message-input');
       const send = document.querySelector(room ? '#forward-button' : '#send-button');
-      const progress = document.querySelector(room ? '#room-progress' : '#solo-progress');
+      const progress = document.querySelector('#native-pane');
       const css = getComputedStyle(list), a = input.getBoundingClientRect(), b = send.getBoundingClientRect();
-      return { label, contentHeight: list.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom),
-        progressHeight: progress.clientHeight, inputBottom: a.bottom, sendBottom: b.bottom, height: innerHeight,
+      return { label, contentHeight: list.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom), contentWidth: list.clientWidth,
+        progressHeight: progress?.clientHeight || 0, inputBottom: a.bottom, sendBottom: b.bottom, height: innerHeight,
         inputVisible: a.top >= 0 && a.bottom <= innerHeight, sendVisible: b.top >= 0 && b.bottom <= innerHeight };
     }, { label, room });
     metrics.push(m); await capture(label);
@@ -81,13 +82,15 @@ async function run() {
   const draft = '保留中文草稿，不发送。\n'.repeat(12);
   await page.locator('#message-input').fill(draft);
   const before = await measure('solo-compact');
-  await panel(a).locator(':scope > summary').click();
+  // Hiding the terminal gives the chat the room; bringing it back keeps the canonical screen.
+  await page.locator('#close-native-terminal').click();
   const collapsed = await measure('solo-collapsed');
-  assert.ok(collapsed.contentHeight > before.contentHeight);
-  await panel(a).locator(':scope > summary').press('Enter');
+  // In the compact side-by-side layout the terminal takes width, not height.
+  assert.ok(collapsed.contentWidth > before.contentWidth && collapsed.contentHeight >= before.contentHeight, JSON.stringify({ before, collapsed }));
+  await page.locator('#terminal-tab').focus(); await page.keyboard.press('Enter'); await page.locator('#chat-tab').click();
   await measure('solo-expanded'); await aligned(a);
   assert.equal(await page.locator('#message-input').inputValue(), draft);
-  checks.push('Minimum window preserves four readable lines, input and send; pointer/keyboard folding keeps canonical output and unsent draft');
+  checks.push('Minimum window preserves four readable lines, input and send; hiding and restoring the terminal by pointer and keyboard keeps canonical output and unsent draft');
 
   await page.getByRole('button', { name: '加入协作', exact: true }).click();
   const b = await create('codex');
@@ -104,7 +107,7 @@ async function run() {
   assert.ok((await page.locator('#shared-input').boundingBox()).height >= await page.evaluate(() => Math.min(190, innerHeight * .22 - 2)), 'Actual resize reaches the responsive input height limit');
   await measure('room-tall-draft', true);
   await page.locator('#room-tabs').getByRole('button', { name: 'claude · 实时过程', exact: true }).click();
-  await page.locator('#terminal-area .xterm').waitFor();
+  await page.locator('#terminal-area .xterm:visible').waitFor();
   assert.ok((await page.locator('#terminal-area').boundingBox()).height >= 200);
   await capture('member-terminal-compact');
   await page.locator(`[data-session-id="${a}"]`).click(); await page.locator('#chat-tab').click();
