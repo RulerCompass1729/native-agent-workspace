@@ -14,7 +14,7 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(307|308|309|310)\b/, 'Verify the updated native contract before sending a test task');
+assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
 let application, page, client, calls = 0, held, releaseFinal, releaseStart;
 const errors = [], checks = [];
 const questionTrial = process.env.NAW_TEST_NATIVE_QUESTION === '1';
@@ -347,6 +347,9 @@ async function cleanup() {
   await sleep(1100);
   assert.ok(fs.readFileSync(path.join(profile, 'workspace.json'), 'utf8').includes('NATIVE_TOOL: 42'));
   checks.push('Stable block order, display-confirmed shared reply, same native process, bounded structured tool history retained locally');
+  // The native session's own usage metadata, read after the turn without another request.
+  await until(async () => (await snapshot()).sessions[0].usage?.source === 'claude-session-usage', 'Native usage reading');
+  assert.ok((await snapshot()).sessions[0].usage.context.window > 0); checks.push('Native usage metadata is read after the turn');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-native-blocks.png') }); }
   await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill('Start the interrupt check.'); await page.locator('#send-button').click();

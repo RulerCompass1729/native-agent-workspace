@@ -17,7 +17,7 @@ const profile = path.join(base, 'profile'), config = path.join(base, 'claude'), 
 for (const dir of [profile, config, userHome]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.310\b/, 'The picker fork is verified against the native contract of 2.1.310 only');
+assert.match(nativeVersion, /^2\.1\.31[01]\b/, 'The picker fork is verified against the native contract of 2.1.310 and 2.1.311 only');
 let application, page, client, mains = 0, titles = 0, budgetError;
 const received = [], errors = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
