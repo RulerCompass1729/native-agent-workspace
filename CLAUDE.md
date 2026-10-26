@@ -39,6 +39,10 @@ or start paid model runs as a side effect of editing documents.
   Clean up only processes owned by that test, preserving native user sessions.
   Finish isolated installed tests before normal-profile quit/reopen checks:
   quitting by bundle ID can target an isolated instance of the same application.
+- Do not quit, restart, hide or attach a debugger to the person's running daily
+  app for tests or installation without their explicit permission for that operation.
+  Use the isolated profile/launcher for diagnosis. After an authorized daily restart,
+  reopen visibly with an ordinary launch; never leave it hidden or a debug port open.
 - Keep one daily launchable installed app in `/Applications`. Build bundles are
   temporary; keep distribution/rollback archives, not extra discoverable `.app`
   copies. Do not leave test/backup bundles registered as ordinary applications.

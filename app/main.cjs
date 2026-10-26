@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, session, shell, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, session, shell, screen } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -425,6 +425,22 @@ async function boot() {
   register('copy', (_c, text) => { if (typeof text !== 'string' || text.length > 100000) throw new Error('复制内容无效。'); return clipboard.writeText(text); });
   // Read only when the person presses Paste; never watch or persist clipboard content.
   register('pasteText', async () => { const text = await clipboard.readText(); if (text.length > 65500) throw new Error('粘贴内容过长，请分段粘贴。'); return text; });
+  const imageTarget = async (c, id, expectedNativeId) => {
+    roomState.assertAvailable(id);
+    const snapshot = await c.client.call('initial'), record = snapshot.sessions.find(s => s.id === id);
+    if (!record || record.provider !== 'codex' || record.owner !== c.view.owner || record.nativeId !== expectedNativeId || record.nativeContextPending || !record.terminalState?.alive || !['idle', 'working'].includes(record.state)) throw Error('请先连接并接管原生 Codex 终端；图片没有放入。');
+    return record;
+  };
+  register('stageImages', async (c, id, nativeId, files) => {
+    await imageTarget(c, id, nativeId);
+    return require('./local-images.cjs').saveImages(dataDir, id, files, nativeImage);
+  });
+  register('pasteNativeContent', async (c, id, nativeId) => {
+    await imageTarget(c, id, nativeId);
+    const image = clipboard.readImage();
+    if (!image.isEmpty()) return { images: require('./local-images.cjs').saveImages(dataDir, id, [image.toPNG()], nativeImage) };
+    const text = clipboard.readText(); if (text.length > 65500) throw Error('粘贴内容过长，请分段粘贴。'); return { text };
+  });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { label: '退出界面（会话继续运行）', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }] },
     { label: '文件', submenu: [{ label: '新窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => openWindow() }, { label: '新会话', accelerator: 'CmdOrCtrl+N', click: () => BrowserWindow.getFocusedWindow()?.webContents.send('workspace:new') }, { role: 'close' }] },

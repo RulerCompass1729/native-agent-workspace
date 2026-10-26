@@ -6,6 +6,7 @@ const { fork, execFileSync } = testScratch.childProcess;
 const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
+const historyCount = process.env.NAW_READING_LONG === '1' ? 2480 : 240;
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-reading-profile-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -48,19 +49,36 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service'); client = await connect(profile, 'reading-observer'); await launch();
   const id = await create('持续阅读'), other = await create('另一个会话');
   await page.locator(`[data-session-id="${id}"]`).click(); await resource('empty');
-  const history = Array.from({ length: 240 }, (_, i) => ({ id: `history-${i}`, type: 'agentMessage', turnId: `history-turn-${i}`, text: `Reading record ${i}. 保留这段历史，不应被新的输出打断。\n\n**已完成的内容**\n\n${'这是一段用于连续阅读测试的合成正文。 '.repeat(12)}\n\n\`\`\`js\nconst record = ${i};\n\`\`\`` }));
+  const history = Array.from({ length: historyCount }, (_, i) => ({ id: `history-${i}`, type: 'agentMessage', turnId: `history-turn-${i}`, text: `Reading record ${i}. 保留这段历史，不应被新的输出打断。\n\n**已完成的内容**\n\n${'这是一段用于连续阅读测试的合成正文。 '.repeat(12)}\n\n\`\`\`js\nconst record = ${i};\n\`\`\`` }));
   const began = Date.now(); await fixture('history', id, history);
-  await page.locator('#messages [data-message-id="history-239"] .message-body p').first().waitFor();
-  await until(() => page.locator('#messages .message-body p').count().then(n => n >= 480), 'Markdown history mounted');
-  const markdownBody = page.locator('#messages [data-message-id="history-239"] .message-body');
+  await page.locator(`#messages [data-message-id="history-${historyCount - 1}"] .message-body p`).first().waitFor();
+  await until(() => page.locator('#messages .message-body p').count().then(n => n >= historyCount * 2), 'Markdown history mounted');
+  const markdownBody = page.locator(`#messages [data-message-id="history-${historyCount - 1}"] .message-body`);
   assert.equal(await markdownBody.evaluate(el => getComputedStyle(el).whiteSpace), 'normal');
   const codeWhitespace = await markdownBody.locator('pre').first().evaluate(el => getComputedStyle(el).whiteSpace);
   assert.ok(['pre', 'pre-wrap', 'break-spaces'].includes(codeWhitespace), 'Code retains its own whitespace semantics');
-  assert.match(await markdownBody.locator('pre').first().innerText(), /const record = 239;/);
+  assert.match(await markdownBody.locator('pre').first().innerText(), new RegExp(`const record = ${historyCount - 1};`));
   observations.push({check:'Markdown paragraphs avoid duplicate whitespace; code formatting stays intact',pass:true});
   await resource('history-loaded');
   const initialLoadMs = Date.now() - began;
   await until(() => page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3), 'Initial history follows latest output');
+  let typedDraft;
+  if (historyCount > 240) {
+    const input = page.locator('#message-input');
+    const text = 'Typing in a long running developer conversation.';
+    const beganTyping = Date.now();
+    await input.pressSequentially(text, { delay: 10 });
+    const elapsedMs = Date.now() - beganTyping;
+    assert.equal(await input.inputValue(), text);
+    assert.ok(elapsedMs < 3500, `Long-history input took ${elapsedMs} ms`);
+    await input.press('ArrowLeft'); await input.press('ArrowLeft'); await input.press('ArrowLeft');
+    await delay(350); await input.pressSequentially('X');
+    typedDraft = text.slice(0, -3) + 'X' + text.slice(-3);
+    assert.equal(await input.inputValue(), typedDraft, 'Middle insertion keeps the GUI caret');
+    await until(async () => (await client.call('initial')).sessions.find(s => s.id === id).liveDraft === typedDraft, 'Immediate draft persistence');
+    observations.push({ check: 'Long-history typing and middle insertion preserve exact saved text', pass: true, historyCount, elapsedMs });
+    console.log(JSON.stringify(observations.at(-1)));
+  }
   const before = await markReading(); assert.ok(before.selection.includes('Reading record 40.'), 'Pointer selects actual paragraph');
   await page.evaluate(() => { window.readingMutations = 0; window.readingObserver = new MutationObserver(changes => { for (const c of changes) window.readingMutations += c.removedNodes.length; }); window.readingObserver.observe(document.getElementById('messages'), { childList: true }); });
   const started = Date.now();
@@ -101,11 +119,12 @@ async function run() {
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true, mode: 0o700 }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'reading.png') }); }
   await app.close(); app = null; await launch(); await delay(300);
   observations.push({ check: 'reopening restores the selected conversation and reading position', pass: (await snapshot()).viewState.selected === id && Math.abs(await page.locator('#messages').evaluate(el => el.scrollTop) - readPosition) < 3 });
-  await page.locator('#message-input').click(); await page.locator('#messages').hover(); await page.mouse.wheel(0, 1000000);
+  if (typedDraft) assert.equal(await page.locator('#message-input').inputValue(), typedDraft, 'Draft survives view/session switching and app reopening');
+  await page.locator('#message-input').click(); await page.locator('#messages').hover(); await page.mouse.wheel(0, await page.locator('#messages').evaluate(el => el.scrollHeight));
   await until(() => page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3), 'Pointer scroll to latest');
   await fixture('delta', id, { id: 'follow-reply', text: 'Follow newest output.\n\n'.repeat(24) }); await delay(150);
   observations.push({ check: 'new output follows when already at the bottom', pass: await page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3) });
-  await page.locator('#messages').hover(); await page.mouse.wheel(0, -1000000);
+  await page.locator('#messages').hover(); await page.mouse.wheel(0, -await page.locator('#messages').evaluate(el => el.scrollHeight));
   await until(() => page.locator('#messages').evaluate(el => el.scrollTop === 0), 'Pointer scroll to oldest');
   await fixture('delta', id, { id: 'follow-reply', text: 'More below the oldest record.\n\n' }); await delay(150);
   observations.push({ check: 'new output never pulls the reader away from the oldest record', pass: await page.locator('#messages').evaluate(el => el.scrollTop === 0) });
@@ -114,7 +133,7 @@ async function run() {
   await fixture('delta', id, { id: 'follow-reply', text: '**Late layout**\n\n'.repeat(120) });
   await page.locator(`[data-session-id="${other}"]`).click(); await delay(150);
   observations.push({ check: 'late output does not populate, scroll or take focus in another conversation', pass: await page.locator('#messages').evaluate(el => el.scrollTop === 0 && el.querySelectorAll('article').length === 0 && document.activeElement === document.getElementById('message-input')) });
-  for (let i = 0; i < 6; i++) { await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#messages [data-message-id="history-239"] .message-body p').first().waitFor(); await page.locator(`[data-session-id="${other}"]`).click(); }
+  for (let i = 0; i < 6; i++) { await page.locator(`[data-session-id="${id}"]`).click(); await page.locator(`#messages [data-message-id="history-${historyCount - 1}"] .message-body p`).first().waitFor(); await page.locator(`[data-session-id="${other}"]`).click(); }
   await resource('after-six-conversation-roundtrips');
   await page.locator(`[data-session-id="${id}"]`).click(); await historical().locator('.message-body p').first().waitFor(); await markReading();
   // Hold only the main-process disk coalescer. Scroll still travels through real

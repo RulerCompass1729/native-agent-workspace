@@ -1,3 +1,6 @@
+// A developer may run this suite from inside NAW. These tests provide their
+// own versions and directories; never inherit the live developer backend.
+for (const key of ['NAW_WORKSPACE', 'NAW_APP_VERSION', 'NAW_RUNTIME_CONFIG']) delete process.env[key];
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');

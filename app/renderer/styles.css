@@ -274,3 +274,7 @@ header h1, header p { overflow-wrap: anywhere; }
 #approval select { max-width: 100%; margin-bottom: 8px; }
 
 #privacy-dialog[data-mode="usage"] .privacy-only { display: none; }
+
+/* Bound layout/paint work to each existing scrolling reader. Keep all original
+   rows in the DOM; no estimated heights, paging or deferred draft writes. */
+.messages { contain: strict; }

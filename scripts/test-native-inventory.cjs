@@ -66,7 +66,7 @@ async function capture(name){fs.writeFileSync(path.join(base,name+'.txt'),await 
   await input.type(value+' ');await until(async()=>new RegExp('› '+value+'\\s*(?:\\n|$)').test(await text()),'Exact native edit line '+value);
   await sleep(200);fs.writeFileSync(path.join(base,'typed-'+value.slice(1)+'.txt'),await text());await input.press('Enter');await sleep(500);
  }
- if(!imageTrial&&!['NAW_INVENTORY_KEYMAP_ONLY','NAW_INVENTORY_MENUS','NAW_INVENTORY_SETTINGS','NAW_INVENTORY_KEYPROBE'].some(key=>process.env[key]==='1'))await popup(stock?'stock-local-idle':'installed-idle');
+ if(!imageTrial&&process.env.NAW_INVENTORY_CURSOR!=='1'&&!['NAW_INVENTORY_KEYMAP_ONLY','NAW_INVENTORY_MENUS','NAW_INVENTORY_SETTINGS','NAW_INVENTORY_KEYPROBE'].some(key=>process.env[key]==='1'))await popup(stock?'stock-local-idle':'installed-idle');
  if(process.env.NAW_INVENTORY_KEYPROBE==='1'){
   assert.ok(!working&&!stock&&!imageTrial,'Inspector input journey has no inference');
   await page.locator('#terminal-maximize').click();await command('/keymap debug');await until(async()=>(await text()).includes('Keypress Inspector'),'Native key inspector');
@@ -97,16 +97,35 @@ async function capture(name){fs.writeFileSync(path.join(base,name+'.txt'),await 
   const pixels=Buffer.from([0,255,0,0,255,0,255,0,255,0,0,0,255,255,255,255,0,255]);
   const png=Buffer.concat([Buffer.from('89504e470d0a1a0a','hex'),chunk('IHDR',header),chunk('IDAT',zlib.deflateSync(pixels)),chunk('IEND',Buffer.alloc(0))]);
   const filename=path.join(cwd,'fixture.png');fs.writeFileSync(filename,png);
-  // The actual renderer's paste handler feeds xterm's bracketed paste. Avoid
-  // changing the person's system clipboard in a hidden test.
-  await input.evaluate((element,value)=>{const data=new DataTransfer();data.setData('text/plain',value);element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}));},filename);
+  let attachmentCount=1;
+  if(process.env.NAW_INVENTORY_IMAGE_GUI==='1'){
+   assert.ok(!stock,'GUI image import uses the installed normal service');
+   await page.locator('#chat-tab').click();
+   await page.locator('#message-input').evaluate((element,data)=>{const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(data)],'screenshot.png',{type:'image/png'}));element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));},Array.from(png));
+   await until(async()=>(await text()).includes('[Image #1]'),'GUI clipboard image reaches native attachment');
+   assert.equal((await state()).sessions[0].liveDraft,'Unsent inventory draft.');
+   await input.evaluate((element,data)=>{const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(data)],'drop.png',{type:'image/png'}));element.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));},Array.from(png));
+   await until(async()=>(await text()).includes('[Image #2]'),'Dropped file becomes native attachment');
+   await app.evaluate(({clipboard,nativeImage},data)=>{clipboard.readImage=()=>nativeImage.createFromBuffer(Buffer.from(data,'base64'));},png.toString('base64'));
+   await page.locator('#terminal-paste').click();
+   await until(async()=>(await text()).includes('[Image #3]'),'Paste button reads an image on demand');
+   assert.equal(tasks,0,'Attaching an image never submits a task');attachmentCount=3;
+  }else{
+   // The actual renderer's paste handler feeds xterm's bracketed paste. Avoid
+   // changing the person's system clipboard in a hidden test.
+   await input.evaluate((element,value)=>{const data=new DataTransfer();data.setData('text/plain',value);element.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}));},filename);
+  }
   await until(async()=>(await text()).includes('[Image #1]'),'Native image path becomes an attachment');await capture('image-attached');
-  await input.type(' Inspect the attached fixture.');await until(async()=>(await text()).includes('Inspect the attached fixture.'),'Image task edit line');await sleep(250);await capture('image-before-submit');await input.press('Enter');
+  await input.type(' Inspect the attached fixture.');await until(async()=>(await text()).replace(/\s/g,'').includes('Inspecttheattachedfixture.'),'Image task edit line');await sleep(250);await capture('image-before-submit');await input.press('Enter');
   await until(async()=>tasks===1&&(await text()).includes('IMAGE_RECEIVED'),'Native image response completes');
   const task=JSON.parse(fs.readFileSync(path.join(base,'task-1.json'),'utf8'));
-  const images=task.input.flatMap(item=>item.content||[]).filter(item=>item.type==='input_image');assert.equal(images.length,1);assert.match(images[0].image_url,/^data:image\/(png|jpeg);base64,/);
+  const images=task.input.flatMap(item=>item.content||[]).filter(item=>item.type==='input_image');assert.equal(images.length,attachmentCount);for(const image of images)assert.match(image.image_url,/^data:image\/(png|jpeg);base64,/);
   const encoded=Buffer.from(images[0].image_url.split(',')[1],'base64');const bitmap=await app.evaluate(({nativeImage},data)=>{const im=nativeImage.createFromBuffer(Buffer.from(data,'base64'));return {size:im.getSize(),bitmap:im.toBitmap().toString('base64')};},encoded.toString('base64'));
-  assert.deepEqual(bitmap.size,{width:2,height:2});assert.ok(encoded.equals(png),'Original tiny PNG bytes reach the native model request unchanged');
+  assert.deepEqual(bitmap.size,{width:2,height:2});
+  if(process.env.NAW_INVENTORY_IMAGE_GUI==='1'){
+   const original=await app.evaluate(({nativeImage},data)=>nativeImage.createFromBuffer(Buffer.from(data,'base64')).toBitmap().toString('base64'),png.toString('base64'));assert.equal(bitmap.bitmap,original,'Imported pixels remain unchanged');
+   for(const image of images){const pixels=await app.evaluate(({nativeImage},data)=>nativeImage.createFromBuffer(Buffer.from(data,'base64')).toBitmap().toString('base64'),image.image_url.split(',')[1]);assert.equal(pixels,original);}
+  }else assert.ok(encoded.equals(png),'Original tiny PNG bytes reach the native model request unchanged');
   captures.image={sourceSHA256:crypto.createHash('sha256').update(png).digest('hex'),modelImageSHA256:crypto.createHash('sha256').update(encoded).digest('hex'),bitmap,attachments:images.length,paste:'actual renderer ClipboardEvent, system clipboard untouched'};
   await capture('image-completed');if(!stock){await until(async()=>(await state()).sessions[0].messages.some(m=>m.text==='IMAGE_RECEIVED'),'Same native image reply reaches GUI');assert.equal((await state()).sessions[0].nativeId,before.nativeId);}
  }
@@ -164,7 +183,19 @@ async function capture(name){fs.writeFileSync(path.join(base,name+'.txt'),await 
   await input.press('F2');await until(async()=>(await text()).includes('Warnings'),'Native warnings view');await capture('native-warnings');await input.press('Escape');assert.ok(fs.readFileSync(path.join(home,'config.toml')).equals(beforeConfig),'Opening and cancelling native settings preserves config');await page.locator('#terminal-maximize').click();captures.keymap={catalog:inventory.keymapUiCatalog.length,pages:pages.length,actionMenu:true,inspectorReceivedF2:true,warnings:true,configUnchanged:true};
  }
 
- if(working){
+ if(working && process.env.NAW_INVENTORY_CURSOR==='1'){
+  assert.ok(!['NAW_INVENTORY_MENUS','NAW_INVENTORY_KEYMAP','NAW_INVENTORY_KEYMAP_ONLY','NAW_INVENTORY_SETTINGS','NAW_INVENTORY_KEYPROBE'].some(key=>process.env[key]==='1'),'Cursor trial excludes unrelated menu/settings journeys');
+  await page.locator('#chat-tab').click();await page.locator('#message-input').fill('Hold one local native cursor task.');await page.locator('#message-input').press('Enter');
+  await until(async()=>tasks===1&&(await text()).includes('INVENTORY_HELD_RESPONSE'),'Held native turn');
+  await page.locator('#message-input').fill('Unsent inventory draft.');await page.locator('#terminal-tab').click();
+  await input.type('abcdef');await input.press('ArrowLeft');await input.press('ArrowLeft');await input.press('ArrowLeft');
+  await sleep(1600);await input.type('X');
+  await until(async()=>(await text()).includes('abcXdef'),'Native cursor remains at edited position after repeated updates');
+  await capture('native-cursor-retained');await input.press('Control+u');await input.press('Escape');release?.();
+  await until(async()=>!['working','approval'].includes((await state()).sessions[0].state),'Held native turn interrupted');
+  captures.cursor={middleInsertion:'abcXdef',waitMs:1600,taskRequests:tasks};
+ }
+ if(working && process.env.NAW_INVENTORY_CURSOR!=='1'){
   await page.locator('#chat-tab').click();await page.locator('#message-input').fill('Hold one local inventory task.');await page.locator('#send-button').click();
   await until(async()=>tasks===1&&(await state()).sessions[0].state==='working'&&release,'One held local native turn');
   await page.locator('#message-input').fill('Unsent inventory draft.');await page.locator('#terminal-tab').click();await until(async()=>(await text()).includes('INVENTORY_HELD_RESPONSE'),'Held native output visible');

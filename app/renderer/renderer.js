@@ -336,6 +336,30 @@ function pasteTerminal(text) {
   if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw new Error('原生程序尚未启用多行粘贴保护，请先分行粘贴。');
   entry.term.paste(text); focusTerminal();
 }
+const imageFiles = transfer => Array.from(transfer?.files || []).filter(file => file.type.startsWith('image/'));
+async function pasteImages(files, staged) {
+  const s = current(), id = s?.id, nativeId = s?.nativeId, revision = selectionRevision;
+  if (!s || s.provider !== 'codex' || s.owner !== owner || !s.terminalState?.alive || !['idle', 'working'].includes(s.state)) throw Error('请先连接并接管原生 Codex 终端；图片没有放入。');
+  if (!staged && (files.length > 4 || files.reduce((n, file) => n + file.size, 0) > 20 * 1024 * 1024)) throw Error('每次可放入 1–4 张图片，总大小不超过 20 MB。');
+  const paths = staged || await api.stageImages(id, nativeId, await Promise.all(files.map(async file => new Uint8Array(await file.arrayBuffer()))));
+  if (selectionRevision !== revision || current()?.id !== id || current()?.nativeId !== nativeId || current()?.owner !== owner) throw Error('会话或控制权已变化，图片没有放入终端。');
+  const switching = switchMode('terminal'), terminalRevision = selectionRevision;
+  await switching;
+  if (selectionRevision !== terminalRevision || current()?.id !== id || current()?.nativeId !== nativeId || !terminalCanInput(id)) throw Error('原生输入已变化，图片没有放入终端。');
+  for (const file of paths) pasteTerminal(JSON.stringify(file));
+  toast('图片已放入原生输入框，确认后发送。对话草稿保留。');
+}
+function bindImageInput(element) {
+  element.addEventListener('paste', event => {
+    const files = imageFiles(event.clipboardData); if (!files.length) return;
+    event.preventDefault(); event.stopPropagation(); attempt(() => pasteImages(files));
+  }, true);
+  element.addEventListener('dragover', event => { if (Array.from(event.dataTransfer?.items || []).some(item => item.kind === 'file' && item.type.startsWith('image/'))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } });
+  element.addEventListener('drop', event => {
+    const files = imageFiles(event.dataTransfer); if (!files.length) return;
+    event.preventDefault(); event.stopPropagation(); attempt(() => pasteImages(files));
+  });
+}
 function nativeVersionText(s) {
   if (s?.provider !== 'codex') return '';
   const status = disconnected && s.nativeVersion ? 'last-known' : s.nativeVersionStatus;
@@ -1201,7 +1225,8 @@ async function ensureTerminal(id, explicit = false) {
   };
   surface.addEventListener('pointerdown', event => { if (event.button === 0) claimTerminalFocus(); }, true);
   surface.addEventListener('focusin', claimTerminalFocus);
-  surface.addEventListener('paste', event => { event.preventDefault(); event.stopPropagation(); attempt(() => { if (activeSessionId() === id) pasteTerminal(event.clipboardData?.getData('text/plain') || ''); }); }, true);
+  bindImageInput(surface);
+  surface.addEventListener('paste', event => { if (imageFiles(event.clipboardData).length) return; event.preventDefault(); event.stopPropagation(); attempt(() => { if (activeSessionId() === id) pasteTerminal(event.clipboardData?.getData('text/plain') || ''); }); }, true);
   term.onData(data => {
     // The service's canonical terminal answers device queries, once. Focus
     // reports belong to this observing view, not to the native input stream:
@@ -1333,12 +1358,25 @@ async function ensureTerminal(id, explicit = false) {
 }
 function fitTerminal(id) {
   const entry = terminals.get(id); const s = state.sessions.find(s => s.id === id);
-  if (!entry?.ready || activeSessionId() !== id || terminalLayout === 'hidden' || s?.owner !== owner) return;
+  if (!entry?.ready) return;
+  if (s?.owner !== owner) { entry.nativeSize = undefined; return; }
+  if (activeSessionId() !== id || terminalLayout === 'hidden') return;
   if (entry.composing || entry.composition) { entry.fitPending = true; return; }
+  if (entry.fitScheduled) return;
+  entry.fitScheduled = true;
   requestAnimationFrame(() => {
-    if (activeSessionId() !== id || terminalLayout === 'hidden' || !entry.element.isConnected || !entry.element.checkVisibility() || state.sessions.find(s => s.id === id)?.owner !== owner) return;
+    entry.fitScheduled = false;
+    const latest = state.sessions.find(s => s.id === id);
+    if (terminals.get(id) !== entry || activeSessionId() !== id || terminalLayout === 'hidden' || !entry.element.isConnected || !entry.element.checkVisibility() || latest?.owner !== owner) return;
     if (entry.composing || entry.composition) { entry.fitPending = true; return; }
-    entry.fit.fit(); attempt(() => api.resize(id, entry.term.cols, entry.term.rows));
+    entry.fit.fit();
+    const size = JSON.stringify([entry.term.cols, entry.term.rows]);
+    if (entry.nativeSize === size) return;
+    entry.nativeSize = size;
+    attempt(async () => {
+      try { await api.resize(id, entry.term.cols, entry.term.rows); }
+      catch (error) { if (entry.nativeSize === size) entry.nativeSize = undefined; throw error; }
+    });
   });
 }
 function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; } }
@@ -1397,7 +1435,13 @@ for (const input of [$('message-input'), $('shared-input')]) input.addEventListe
 });
 $('take-control').onclick = () => attempt(() => switchMode(mode, true));
 $('terminal-copy').onclick = () => attempt(async () => { const text = terminals.get(activeSessionId())?.term.getSelection(); if (!text) return toast('先选择文字；原生程序占用鼠标时，按住 ⌥ Option 拖选，再点复制。'); await api.copy(text); focusTerminal(); });
-$('terminal-paste').onclick = () => attempt(async () => { const id = activeSessionId(); const text = await api.pasteText(); if (activeSessionId() === id && mode === 'terminal') pasteTerminal(text); });
+$('terminal-paste').onclick = () => attempt(async () => {
+  const s = current(), id = activeSessionId();
+  if (s?.provider !== 'codex') { const text = await api.pasteText(); if (activeSessionId() === id && mode === 'terminal') pasteTerminal(text); return; }
+  const content = await api.pasteNativeContent(id, s.nativeId);
+  if (activeSessionId() !== id || current()?.nativeId !== s.nativeId || mode !== 'terminal') return;
+  if (content.images) await pasteImages([], content.images); else pasteTerminal(content.text);
+});
 $('terminal-display').onclick = () => { $('terminal-font-size').value = terminalDisplay.fontSize; $('terminal-palette').value = terminalDisplay.palette; $('terminal-display-dialog').showModal(); };
 const saveTerminalDisplay = () => attempt(async () => {
   const fontSize = Number($('terminal-font-size').value);
@@ -1484,6 +1528,7 @@ $('message-input').oninput = () => {
     renderComposer(s);
   }
 };
+bindImageInput($('message-input'));
 $('message-input').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229 && !$('message-input').readOnly) { event.preventDefault(); if (!$('send-button').disabled) $('composer').requestSubmit(); } };
 $('send-button').onclick = () => attempt(async () => {
   if ($('send-button').disabled) return;
