@@ -20,7 +20,7 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config, userHome]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.310\b/, 'Native /goal continuation is verified against the native contract of 2.1.310 only');
+assert.match(nativeVersion, /^2\.1\.31[01]\b/, 'Native /goal continuation is verified against the native contract of 2.1.310 and 2.1.311 only');
 const discovery = process.env.NAW_GOAL_DISCOVERY === '1', recoveryCase = process.env.NAW_GOAL_CASE === 'recovery';
 // Short enough to stay on one native edit line, and checkable from the transcript alone.
 const condition = 'the assistant has replied GOAL_STEP_TWO';

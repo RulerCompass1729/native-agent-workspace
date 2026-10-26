@@ -30,7 +30,7 @@ if (retained) { assert.ok(process.env.NAW_CLAUDE_302); binaries.claude = process
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => {
   assert.ok(file, `Real ${p} required`); return [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()];
 }));
-if (!emptyTerminal) assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.(308|309|310)\b/);
+if (!emptyTerminal) assert.match(versions.claude, retained ? /^2\.1\.302\b/ : /^2\.1\.(308|309|310|311)\b/);
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 assert.equal(versions.codex, 'codex-cli '+nativeVersion);
 const retainedIds = {};
