@@ -119,6 +119,8 @@ async function run() {
   const stats = (await fixture()).stats;
   // The terminal beside the chat attaches and fits to each window; nothing is typed or sent to native.
   assert.deepEqual({ inputs: stats.inputs, sends: stats.sends }, { inputs: 0, sends: 0 });
+  // A few attaches and fits per window restore (today 4 and 4); a storm would be far above.
+  assert.ok(stats.opens <= 6 && stats.resizes <= 6, 'Bounded terminal attaches and fits: ' + JSON.stringify(stats));
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
   assert.deepEqual(windows, [{ visible: false, focusable: false }, { visible: false, focusable: false }]); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, stats, windows, errors, modelTasks: 0 }, null, 2));
