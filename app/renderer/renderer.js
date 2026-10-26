@@ -1315,11 +1315,14 @@ async function ensureTerminal(id, explicit = false) {
     if (record.provider === 'codex' && !composing && !event.metaKey && event.ctrlKey && event.altKey && !event.shiftKey && /^[a-z]$/i.test(event.key)) {
       nativeKey = '\x1b' + String.fromCharCode(event.key.toLowerCase().charCodeAt(0) - 96);
     }
-    if (record.provider === 'codex' && !composing && (entry.keyboardFlags & 1) && !event.altKey && !event.metaKey) {
+    const enhanced = !composing && (entry.keyboardFlags & 1) && !event.altKey && !event.metaKey;
+    if (record.provider === 'codex' && enhanced) {
       if (event.key === 'Enter' && (event.shiftKey || event.ctrlKey)) extendedKey = 13;
       else if (event.ctrlKey && event.key === '/') extendedKey = 47;
       else if (event.ctrlKey && event.shiftKey && /^[a-z]$/i.test(event.key)) extendedKey = event.key.toLowerCase().charCodeAt(0);
     }
+    // Claude 2.1.310 also pushes CSI-u and reads Shift+Enter (13;2u) as a newline; a plain CR submits.
+    else if (record.provider === 'claude' && enhanced && event.key === 'Enter' && event.shiftKey && !event.ctrlKey) extendedKey = 13;
     if (extendedKey !== undefined) nativeKey = `\x1b[${extendedKey};${1 + (event.shiftKey ? 1 : 0) + (event.ctrlKey ? 4 : 0)}u`;
     if (nativeKey !== undefined) {
       event.preventDefault();
