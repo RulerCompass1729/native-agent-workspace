@@ -24,6 +24,9 @@ const deny = process.env.NAW_TEST_NATIVE_DENY === '1';
 const three = process.env.NAW_TEST_THREE_MEMBERS === '1';
 const peer = process.env.NAW_TEST_PEER_DIRECTED === '1';
 const longFinal = process.env.NAW_TEST_LONG_DIRECTED_FINAL === '1';
+// Manual mode asks before MCP tools unless an allow rule matches: a call that still
+// runs without a prompt shows NAW's --allowedTools rule, not auto mode, allowed it.
+const manual = process.env.NAW_TEST_MANUAL_MODE === '1';
 assert.ok(!(deny && three), 'Choose one native scenario');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, label, timeout = 40000) { const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label); }
@@ -146,7 +149,7 @@ async function start(first, text) {
   for (const p of ['claude', 'codex']) {
     const env = p === 'codex' ? { CODEX_HOME: homes[p] } : { ANTHROPIC_BASE_URL: address, ANTHROPIC_API_KEY: 'local-fixture', CLAUDE_CONFIG_DIR: homes[p], CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' };
     shims[p] = path.join(base, `${p}-local`);
-    fs.writeFileSync(shims[p], '#!/usr/bin/python3\nimport os,sys\nfor key in ["OPENAI_API_KEY","CODEX_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]: os.environ.pop(key,None)\n' + `os.environ.update(${JSON.stringify(env)})\n` + `os.execv(${JSON.stringify(binaries[p])},[${JSON.stringify(p)}]+sys.argv[1:]+${JSON.stringify(p === 'claude' ? ['--model', 'haiku', '--debug-file', path.join(base, 'claude-debug.log')] : [])})\n`, { mode: 0o700 });
+    fs.writeFileSync(shims[p], '#!/usr/bin/python3\nimport os,sys\nfor key in ["OPENAI_API_KEY","CODEX_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]: os.environ.pop(key,None)\n' + `os.environ.update(${JSON.stringify(env)})\n` + `os.execv(${JSON.stringify(binaries[p])},[${JSON.stringify(p)}]+sys.argv[1:]+${JSON.stringify(p === 'claude' ? ['--model', 'haiku', '--debug-file', path.join(base, 'claude-debug.log'), ...(manual ? ['--permission-mode', 'default'] : [])] : [])})\n`, { mode: 0o700 });
   }
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify(shims), { mode: 0o600 });
   if (!process.env.NAW_APP_EXECUTABLE) execFileSync(process.execPath, [path.join(root, 'scripts/build-ui.cjs')]);
@@ -366,6 +369,10 @@ async function start(first, text) {
   assert.deepEqual(counts, { claude: 4, codex: 4 }); assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(base, 'reopened.json'), JSON.stringify(state, null, 2));
   checks.push('Full application reopening preserves IDs/PIDs, room history and draft without replay');
+  if (manual) {
+    assert.equal(state.sessions.find(s => s.provider === 'claude').nativePermissionMode, 'default', 'Claude reported manual mode');
+    checks.push('In manual mode the pre-allowed directed tool ran with no native prompt');
+  }
   console.log(JSON.stringify({ versions, checks, counts, paidModelCalls: 0, evidence: base }, null, 2));
 })().catch(async error => {
   if (page && !page.isClosed()) { fs.writeFileSync(path.join(base, 'failure.txt'), await page.locator('body').innerText().catch(() => '')); fs.writeFileSync(path.join(base, 'failure.json'), JSON.stringify(await snapshot().catch(() => ({})), null, 2)); }
