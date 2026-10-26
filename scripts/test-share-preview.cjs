@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real isolated Electron controls/IPC with deliberately delayed native acceptance.
 // Synthetic transports only; no native agent or model request.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
@@ -35,9 +36,8 @@ async function release(reply, fail = false) {
 async function create(provider) {
   await page.locator('#new-session').click();
   await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat');
   await page.locator('#session-name').fill(provider + ' · 分享测试');
-  await page.locator('#confirm-create').click();
+  await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Session created');
   const id = (await snapshot()).sessions.find(s => s.provider === provider).id;
   await page.getByRole('button', { name: '加入协作', exact: true }).click();
@@ -62,9 +62,11 @@ async function run() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   const seed = client.call('forward', a, 'SYNTHETIC SOURCE');
   await sent(1, a, 'SYNTHETIC SOURCE'); await native('release', 'SOURCE RESULT'); await seed;
-  const source = page.locator('#room-messages article').filter({ has: page.getByText('SOURCE RESULT', { exact: true }) }).getByRole('button', { name: '选择并分享', exact: true });
+  const sourceRow = page.locator('#room-messages article').filter({ has: page.getByText('SOURCE RESULT', { exact: true }) });
+  const source = sourceRow.getByRole('button', { name: '选择并分享', exact: true });
   const edit = page.locator('#share-text'), confirm = page.locator('#confirm-share'), dialog = page.locator('#share-dialog');
-  async function open(id, text) { await source.click(); await page.locator('#share-recipient').selectOption(id); await edit.fill(text); }
+  // Message actions appear while the pointer is over the message, as for a person.
+  async function open(id, text) { await sourceRow.hover(); await source.click(); await page.locator('#share-recipient').selectOption(id); await edit.fill(text); }
 
   await open(b, '   ');
   assert.equal(await confirm.isDisabled(), true);

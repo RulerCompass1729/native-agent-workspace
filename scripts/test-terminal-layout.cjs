@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual Electron layout and IPC; no providers, inference or global clipboard.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
@@ -21,7 +22,7 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Fixture service'); client = await connect(profile, 'layout-observer');
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
-  await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check(); await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('Layout task'); await page.locator('#confirm-create').click();
+  await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check(); await page.locator('#session-name').fill('Layout task'); await createIn(page, 'chat');
   const snap = () => page.evaluate(() => workspace.initial());
   await until(async () => (await snap()).sessions[0]?.state === 'idle', 'Created'); const id = (await snap()).sessions[0].id;
   await fixture('nativeBlock', id, { id: 'reply', role: 'assistant', kind: 'text', text: 'Original native output', status: 'complete' });

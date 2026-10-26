@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Chromium event-path regression. Synthetic native transport; not physical IME.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork, execFileSync } = testScratch.childProcess;
@@ -22,9 +23,9 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service'); client = await connect(profile, 'ime-observer');
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message));
-  await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check(); await page.locator('#initial-view').selectOption('chat'); await page.locator('#confirm-create').click();
+  await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check(); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.length === 1, 'Session'); const id = (await snapshot()).sessions[0].id;
-  await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check(); await page.locator('#initial-view').selectOption('chat'); await page.locator('#confirm-create').click();
+  await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check(); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.length === 2, 'Second session');
   const other = (await snapshot()).sessions.find(s => s.id !== id).id;
   await page.locator(`[data-session-id="${id}"]`).click(); await page.keyboard.type('FIRST-A');

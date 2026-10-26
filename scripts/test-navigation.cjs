@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real hidden Electron navigation with many synthetic histories; no model tasks.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
@@ -47,7 +48,7 @@ async function searchName(name, id) {
 }
 async function create(name) {
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Create synthetic session');
   return (await snapshot()).sessions.find(s => s.name === name).id;
 }
@@ -87,6 +88,31 @@ async function run() {
   for (let i = 0; i < 12; i++) { await fixture('set-state', live, i % 2 ? 'idle' : 'working'); await delay(45); }
   assert.equal(await page.locator('#session-list').evaluate(el => el.scrollTop), scroll);
   checks.push('Native state updates do not pull a manually scrolled sidebar back to the active session');
+  // Submit directly: the generic creation helper may switch tabs afterward and
+  // would hide a regression in the view chosen by the dialog itself.
+  for (const view of ['terminal', 'chat']) {
+    await page.locator(view === 'terminal' ? '#terminal-tab' : '#chat-tab').click();
+    await until(async () => (await snapshot()).viewState.preference === view, 'User tab choice saved');
+    await page.locator('#new-session').click();
+    await page.locator('input[name="provider"][value="codex"]').check();
+    assert.equal(await page.locator('#initial-view').isVisible(), true);
+    assert.equal(await page.locator('#initial-view').inputValue(), view);
+    assert.match(await page.locator('#initial-view').innerText(), /可定向协作.*首条消息后才能开终端/);
+    assert.match(await page.locator('#initial-view').innerText(), /终端立即可用.*不能定向协作/);
+    await page.locator('input[name="provider"][value="claude"]').check();
+    assert.equal(await page.locator('#initial-view').isVisible(), false);
+    assert.equal(await page.locator('#initial-view-label').isVisible(), false);
+    const name = 'View from last tab: ' + view;
+    await page.locator('#session-name').fill(name); await capture('create-' + view);
+    await page.locator('#confirm-create').click();
+    await page.locator('#create-dialog').waitFor({ state: 'hidden' });
+    await until(async () => {
+      const state = await snapshot(), session = state.sessions.find(s => s.name === name);
+      return session?.state === 'idle' && session.view === view && state.viewState.mode === view;
+    }, 'Claude opens in the last-used view without a follow-up tab click');
+    assert.ok(((await page.locator(view === 'chat' ? '#chat-tab' : '#terminal-tab').getAttribute('class')) || '').split(/\s+/).includes('active'));
+  }
+  checks.push('Creating Claude follows actual user tab changes without another choice or corrective click; only Codex offers the two distinct native starts');
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(850, 600)); await delay(250);
   await controls('Minimum-size window'); await searchName('学习项目 58', 'synthetic-session-58'); await capture('narrow-list');
   await page.locator('[data-session-menu="synthetic-session-58"]').focus(); await page.keyboard.press('Enter');

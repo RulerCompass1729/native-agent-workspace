@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual hidden Electron/workspace, synthetic native transport. No provider or model call.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
@@ -21,7 +22,7 @@ async function request(id, nativeId, text) { await event(id,{id:nativeId,method:
 async function resolved(id, nativeId) { await event(id,{method:'serverRequest/resolved',params:{requestId:nativeId}}); }
 async function create(name) {
   await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat');await page.locator('#session-name').fill(name);await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name);await createIn(page, 'chat');
   await until(async()=>(await snapshot()).sessions.some(s=>s.name===name&&s.state==='idle'),'Session ready');
   const s=(await snapshot()).sessions.find(s=>s.name===name);await page.getByRole('button',{name:'加入协作',exact:true}).click();return s.id;
 }

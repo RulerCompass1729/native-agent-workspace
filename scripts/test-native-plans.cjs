@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex Plan mode and Electron; four bounded fixed loopback responses.
 // Private native configuration; no paid inference or normal-profile edits.
@@ -69,7 +70,7 @@ async function launch() {
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ codex: shim }), { mode: 0o600 });
   await launch();
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('Native plans'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Native plans'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
   const before = (await snapshot()).sessions[0]; assert.equal(before.model, 'gpt-6-luna'); assert.equal(before.nativeVersion, nativeVersion);
   await page.locator('#message-input').fill('Prepare to plan this small example.'); await page.locator('#send-button').click();

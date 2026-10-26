@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // A hidden Electron renderer and real persistence chain, with synthetic native transport.
 // Composition uses Chromium's input path, not a physical macOS input method.
@@ -29,7 +30,7 @@ async function launch() {
 }
 async function create(provider) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(provider + ' · 单会话验收'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(provider + ' · 单会话验收'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.provider === provider && s.state === 'idle'), 'Created');
   return (await snapshot()).sessions.find(s => s.provider === provider).id;
 }

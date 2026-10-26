@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual hidden Electron actions; controlled provider acknowledgements only.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -23,7 +24,7 @@ const shot = async name => { if (evidence) await page.screenshot({ path: path.jo
 async function create(provider, name) {
   const previous = (await snapshot()).sessions.map(s => s.id);
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => !previous.includes(s.id) && s.chatAvailable), 'Ready session');
   return (await snapshot()).sessions.find(s => !previous.includes(s.id)).id;
 }

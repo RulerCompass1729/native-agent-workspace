@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual Electron/DSH and service, synthetic provider output; no model calls.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict');
@@ -41,9 +42,8 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').click();
   await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat');
   await page.locator('#session-name').fill('连续工作保存');
-  await page.locator('#confirm-create').click();
+  await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Session ready');
   const before = (await snapshot()).sessions[0], id = before.id;
   const history = Array.from({ length: 400 }, (_, i) => ({

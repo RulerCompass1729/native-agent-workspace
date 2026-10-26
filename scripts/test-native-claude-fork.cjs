@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real Electron + Claude Code 2.1.310 on a loopback fake API: "从已有 Claude 会话分支…"
 // opens the native session picker in a new row's terminal and forks the chosen
 // session into the row's pre-assigned ID; the original transcript is untouched.
@@ -116,7 +117,7 @@ async function openBranch() {
 
   // 1. An existing Claude conversation with one turn, then its writer stops.
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
-  await page.locator('#initial-view').selectOption('terminal'); await page.locator('#session-name').fill('Parent'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Parent'); await createIn(page, 'terminal');
   await until(async () => /Do you want to use this API key/.test(await terminalText()) || (await snapshot()).sessions[0]?.chatAvailable, 'Parent startup', 60000);
   await acceptKeyDialog();
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Parent ready', 60000);

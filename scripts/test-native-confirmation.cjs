@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real Electron controls with synthetic native protocol events; no provider/model.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
@@ -36,8 +37,8 @@ async function run() {
   await page.locator('#new-session').waitFor({ timeout: 60000 });
   await page.locator('#new-session').click();
   await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('原生确认同步');
-  await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('原生确认同步');
+  await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Session ready');
   const id = (await snapshot()).sessions[0].id;
   if (process.env.NAW_NATIVE_CLOSED_TRIAL === '1') {

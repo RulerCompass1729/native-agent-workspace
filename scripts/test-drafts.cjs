@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real headed app, IPC, persistence and workspace; delayed synthetic transport.
 // No provider processes, native sessions, credentials or model requests.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -69,9 +70,8 @@ async function run() {
   for (const provider of ['codex', 'claude']) {
     await page.locator('#new-session').click();
     await page.locator(`input[name="provider"][value="${provider}"]`).check();
-    await page.locator('#initial-view').selectOption('chat');
     await page.locator('#session-name').fill(provider + ' · 草稿测试');
-    await page.locator('#confirm-create').click();
+    await createIn(page, 'chat');
     await until(async () => (await snapshot()).sessions.some(s => s.provider === provider && s.state === 'idle'), 'Synthetic session');
   }
   const sessions = (await snapshot()).sessions;

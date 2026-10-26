@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real Electron + real Claude CLI with one canned loopback reply: after a native
 // /resume to another session the GUI must say the process switched (not that it
 // is exiting), and after /background it must say the work moved to the native
@@ -105,7 +106,7 @@ async function sendFromGui(text, marker) {
   page = await application.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').waitFor(); client = await connectService(profile, 'native-branch-test');
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
-  await page.locator('#initial-view').selectOption('terminal'); await page.locator('#session-name').fill('Branch follow'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Branch follow'); await createIn(page, 'terminal');
   const nativeInput = page.locator('#terminal-area .xterm-helper-textarea');
   const stage = async name => fs.writeFileSync(path.join(base, `startup-${name}.txt`), await terminalText());
   await until(async () => /Do you want to use this API key|Yes, I trust this folder/.test(await terminalText()) || (await snapshot()).sessions[0]?.chatAvailable, 'Native startup', 60000);

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex and Electron with two canned loopback Responses streams.
 // Private native configuration; no paid inference or normal-profile edits.
@@ -86,7 +87,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
     assert.equal(await page.locator('#send-button').textContent(), '接通原会话输入'); await page.locator('#send-button').click();
   } else {
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('Native steering'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Native steering'); await createIn(page, 'chat');
   }
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
   const before = (await snapshot()).sessions[0];
