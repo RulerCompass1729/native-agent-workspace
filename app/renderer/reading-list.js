@@ -185,8 +185,7 @@ function messageList(el, messages, room = false, key = 'room') {
         entry.openRecipient = button('查看会话', () => {
           if (!state.sessions.some(s => s.id === entry.openSessionId)) return toast('这个会话当前不可用，记录仍保留。');
           return select(entry.openSessionId, 'chat');
-        });
-        actions.append(entry.openRecipient);
+        }, 'message-session-link');
         entry.context = button('查看上下文', () => {
           $('room-search').value = ''; $('room-filter').value = ''; renderTimeline();
           const original = view.entries.get(m.id)?.item;
@@ -199,6 +198,8 @@ function messageList(el, messages, room = false, key = 'room') {
           }
           attempt(persistView);
         }); actions.append(entry.context);
+        // Last, so it stays put when the row's other actions appear.
+        actions.append(entry.openRecipient);
       }
     }
     entry.message = m; retained.add(m.id); rows.push(entry.item);
