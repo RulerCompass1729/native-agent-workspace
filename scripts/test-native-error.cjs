@@ -25,8 +25,9 @@ const server = http.createServer((req, res) => {
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
     }
-    // A rejected request is resent at once with up to 8 compatibility variants
-    // (fewer optional betas each; observed on 2.1.311), then fails; one recovery task follows.
+    // A rejected request is resent at once in compatibility variants (2.1.311: the
+    // original and 7 more, varying optional betas and replacing deferred tool search
+    // with the full tool list), then fails; one recovery task follows.
     const number = ++calls; if(number > 10){ res.destroy(); server.close(); return; }
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     if (recovering) {
@@ -92,7 +93,9 @@ async function cleanup() {
   await page.screenshot({path:path.join(base,'error-terminal.png')});
   await page.locator('#chat-tab').click();await page.screenshot({path:path.join(base,'error-reader.png')});
   assert.match(reader,/NATIVE_FAILURE_FIXTURE: selected model is unavailable\./,'Specific native failure is readable in the main conversation');
-  assert.ok(calls >= 1 && calls <= 8, 'One native failure, no repeated task: ' + calls);assert.deepEqual(errors,[]);
+  // Every request so far carries the one task once: variants of it, never a repeat.
+  for (let n = 1; n <= calls; n++) { const sent = JSON.parse(fs.readFileSync(path.join(base, `request-${n}.json`), 'utf8')); assert.equal(sent.messages.length, 2, 'One task per request'); assert.equal(JSON.stringify(sent).split('Explain the local error.').length - 1, 1, 'The task appears once'); }
+  assert.ok(calls >= 1 && calls <= 8, 'One native failure: ' + calls);assert.deepEqual(errors,[]);
   assert.equal(state.sessions[0].nativeId,before.nativeId);assert.equal(state.sessions[0].pid,before.pid);
   assert.equal(state.diagnostics.dispatches,1);
   assert.equal(state.sessions[0].messages.filter(m=>m.kind==='turn'&&m.text.includes('NATIVE_FAILURE_FIXTURE')).length,1);
