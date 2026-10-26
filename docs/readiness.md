@@ -23,9 +23,9 @@ responses. Physical system clipboard/IME coverage is separate.
 | Use the same terminal | Native bytes pass through unchanged; large plugin catalogs stay connected; unchanged geometry sends no resize; current-config middle insertion passes | Original cursor cause remains unassigned; real-use confirmation stays open |
 | Paste/drop screenshots | Three entry paths reach each original native TUI with unchanged pixels, no auto-send, preserved text draft and original identity | Renderer events/stubbed clipboard are tested; physical OS clipboard and other media formats are not claimed |
 | Recover Claude work | Mid-goal native loss retains ID/draft/goal/bypass/effort on a new PID; no task replay; explicit continuation completes the goal | Last-hook timing, native durable-tail/warning and best-effort external-holder limits remain in the [Claude audit](u17-claude310.md) |
-| Work with the window closed | Native goal continuation/completion and reopened identity/draft/output pass for both providers | These bounded fixtures do not count as a real development workday |
+| Work with the window closed | Native goal continuation/completion and reopened identity/draft/output pass for both providers; Codex active-goal process-loss rehearsal also passes | These bounded fixtures do not count as a real development workday |
 | Inspect questions, Plan and model state | Native originals remain visible; actual questions/multiple selection, Plan approval and model changes pass | [U17](interaction.md) distinguishes GUI facts from native-only interaction; commands/keymaps are an audit, not a per-key execution suite |
-| Keep a build attributable | Dirty-source refusal is tested; source rebuilds the client inside the gate and configures a Git-revision stamp | First clean-build stamp read, payload/signature checks and explicit daily-update permission remain delivery gates |
+| Keep a build attributable | Dirty-source refusal and clean committed build pass; installed104 stamp matches 00705ff, 57 runtime files match, post-native strict signature passes | Future deliveries repeat artifact checks and require explicit daily-update permission |
 
 Still required for this milestone:
 
@@ -34,8 +34,6 @@ Still required for this milestone:
 - Validate window reopening, update during work and controlled native-process
   recovery on the actual author sessions, after owned-fixture rehearsal and a
   durable checkpoint. Never replay a possibly completed task automatically.
-- Finish the Codex active-goal process-loss rehearsal before fault injection on
-  the real author. Existing Codex recovery proof used a completed goal.
 - Keep the first old-backend-to-new-backend recovery transition honest: an old
   record may lack Claude posture fields. Do not overwrite a later native choice
   using only initial launch settings.
