@@ -17,7 +17,7 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const located = executable('claude'), binary = located && fs.realpathSync(located); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(308|309|310)\b/, 'Verify the updated native contract before sending a test task');
+assert.match(nativeVersion, /^2\.1\.(308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
 let application, page, client, calls = 0, held, releaseFinal, pausedNative;
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

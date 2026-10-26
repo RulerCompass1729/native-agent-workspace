@@ -15,7 +15,7 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config, userHome]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.310\b/, 'Switch signals are verified against the native contract of 2.1.310 only');
+assert.match(nativeVersion, /^2\.1\.31[01]\b/, 'Switch signals are verified against the native contract of 2.1.310 and 2.1.311 only');
 const switchCase = process.env.NAW_SWITCH_CASE || 'resume'; if (!['resume', 'background', 'resume-background'].includes(switchCase)) throw Error('Unknown switch case');
 let application, page, client, calls = 0;
 const errors = [], checks = [];

@@ -204,10 +204,14 @@ test('old permission identity cannot replace a new root and expired observer pro
  emit('control:heartbeat',{});assert.equal(r.nativeActivity.turnId,'b');
 });
 
-for (const version of ['2.1.308', '2.1.309', '2.1.310', '2.1.311']) test('native queue/display compatibility remains version scoped: ' + version, async () => {
+for (const version of ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312']) test('native queue/display compatibility remains version scoped: ' + version, async () => {
   const f = await mod({ version });
-  assert.equal(f.r.nativeQueue === true, version !== '2.1.311');
-  assert.equal(f.r.nativeBlocks === true, version !== '2.1.311');
+  assert.equal(f.r.nativeQueue === true, version !== '2.1.312');
+  assert.equal(f.r.nativeBlocks === true, version !== '2.1.312');
+});
+test('the retained compatibility hook keeps native blocks off on 2.1.311, which no retained run has verified', async () => {
+  assert.notEqual((await mod({ version: '2.1.311', legacy: true })).r.nativeBlocks, true);
+  assert.equal((await mod({ version: '2.1.310', legacy: true })).r.nativeBlocks, true);
 });
 
 test('real retained append hook reconciles receipt through reader without a classic prompt ID or sharing grant', async t => {
@@ -673,7 +677,7 @@ test('model metadata rejects invalid payloads and ignores offline replay without
     assert.throws(() => f.r.observeBlock({ ...base, model }), /Invalid/);
   f.r.observeBlock({ ...base, model: 'claude-old', replayed: true });
   assert.deepEqual(models, ['claude-sonnet-test']);
-  const unknown = await mod({ version: '2.1.311' });
+  const unknown = await mod({ version: '2.1.312' });
   unknown.setModelReader(async () => { throw Error('Unknown version must not be queried'); });
   // A valid to_model would publish on a supported version; an unknown one must stay silent.
   await unknown.invoke('classic.PostModelSwitch', { session_id: unknown.r.record.nativeId, to_model: 'claude-sonnet-test' });
@@ -870,7 +874,7 @@ test('usage read is free, root-scoped, metadata-only and version-gated', async (
   f.setUsageReader(() => new Promise(r => { resolve = r; }));
   const pending = f.readUsage(); f.setNativeId(randomUUID()); resolve({ context: { window: 200000, tokens: 999 } }); await pending;
   assert.equal(usage.length, 1, 'Old native identity may not publish a reading');
-  const unknown = await mod({ version: '2.1.311' });
+  const unknown = await mod({ version: '2.1.312' });
   let unknownReads = 0; unknown.setUsageReader(() => { unknownReads++; throw Error('Unknown version must not read'); }); await unknown.readUsage();
   assert.equal(unknownReads, 0, 'An unknown native version is never asked for usage');
 });
