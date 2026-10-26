@@ -185,15 +185,24 @@ async function cleanup() {
   const modelPicker = /Haiku ✔/.test(await openNative('model')) && /Sonnet/.test(screens.model);
   const configDialog = /Type to filter/.test(await openNative('config')) && /Show tips/.test(screens.config);
   const memoryDialog = /Auto-memory/.test(await openNative('memory')) && /Esc to cancel/.test(screens.memory);
-  // Only the menu's top level is read; its event lists are not opened.
   const hooksMenu = /This menu is read-only/.test(await openNative('hooks'));
+  // NAW's launch settings add PreToolUse hooks, yet the native menu lists none
+  // there: All events, then the first event (PreToolUse).
+  await page.keyboard.type('/hooks', { delay: 20 });
+  await until(async () => (await editLine()) === '❯ /hooks' && (await terminalText()).split('\n').some(l => /^\s+❯ \/hooks\s/.test(l)), 'Edit line and menu show /hooks again', 5000);
+  await page.keyboard.press('Enter'); await until(async () => /❯ All events/.test(await terminalText()), 'Hooks menu open', 5000);
+  await page.keyboard.press('Enter'); await until(async () => /PreToolUse/.test(await terminalText()), 'Hook events listed', 5000);
+  await page.keyboard.press('Enter'); await sleep(800); await record('hooks-pretool');
+  const nawHooksUnlisted = /PreToolUse - Matchers/.test(screens['hooks-pretool']) && /No hooks configured for this event/.test(screens['hooks-pretool']);
+  for (let i = 0; i < 4 && (await editLine()) !== '❯'; i++) { await page.keyboard.press('Escape'); await sleep(600); }
+  await until(async () => (await editLine()) === '❯', 'Hooks menu closed', 5000);
 
   // CL-R05: Ctrl+T shows nothing without tasks, and making a task needs a model
   // turn, so the screen is kept as evidence only and the row stays unverified.
   await page.keyboard.press('Control+t'); await sleep(500); await record('ctrl-t');
   await page.keyboard.press('Control+t'); await sleep(300); await reset();
 
-  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog, modelPicker, configDialog, memoryDialog, hooksMenu };
+  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog, modelPicker, configDialog, memoryDialog, hooksMenu, nawHooksUnlisted };
   fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter, modeRestored }, null, 2));
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
