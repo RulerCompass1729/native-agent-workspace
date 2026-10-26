@@ -71,6 +71,10 @@ async function cleanup() {
     `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku"])\n`, { mode: 0o700 });
   const serviceCwd = path.join(profile, 'workspace'); fs.mkdirSync(serviceCwd, { mode: 0o700 });
   fs.writeFileSync(path.join(serviceCwd, 'keyprobe-notes.txt'), 'synthetic file for the @ mention menu\n');
+  // A committed file with an uncommitted edit, for native /diff (synthetic local identity).
+  const git = (...args) => testScratch.childProcess.execFileSync('git', ['-c', 'user.name=Key Probe', '-c', 'user.email=probe@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: serviceCwd, stdio: 'ignore' });
+  git('init', '-q'); git('add', 'keyprobe-notes.txt'); git('commit', '-q', '-m', 'synthetic');
+  fs.appendFileSync(path.join(serviceCwd, 'keyprobe-notes.txt'), 'an uncommitted synthetic line\n');
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(serviceCwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ awaySummaryEnabled: false }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
@@ -149,12 +153,29 @@ async function cleanup() {
   const rewindOpens = /Rewind/.test(screens.rewind) && /Esc to cancel/.test(screens.rewind);
   await page.keyboard.press('Escape'); await until(async () => (await editLine()) === '❯' && !/Rewind/.test(await terminalText()), 'Rewind closed', 5000);
 
+  // CL-R04: /diff opens native's diff dialog on the folder's uncommitted edit. It is
+  // a local command, not a prompt; Enter only once the menu highlights /diff.
+  await page.keyboard.type('/diff', { delay: 20 });
+  await until(async () => (await editLine()) === '❯ /diff' && (await terminalText()).split('\n').some(l => /^\s+❯ \/diff\b/.test(l)), 'Edit line and menu show /diff', 5000);
+  await page.keyboard.press('Enter'); await sleep(1500); await record('diff-split');
+  // Beside the chat the terminal is narrower than the 110 columns the panel needs.
+  const diffNeedsWidth = /at least 110 columns/.test(screens['diff-split']);
+  await reset();
+  await page.locator('#terminal-maximize').click(); await sleep(800); await focusTerminal();
+  await page.keyboard.type('/diff', { delay: 20 });
+  await until(async () => (await editLine()) === '❯ /diff' && (await terminalText()).split('\n').some(l => /^\s+❯ \/diff\b/.test(l)), 'Edit line and menu show /diff again', 5000);
+  await page.keyboard.press('Enter'); await sleep(1500); await record('diff');
+  const diffDialog = /Diff panel shown/.test(screens.diff) && /1 file edited/.test(screens.diff);
+  // The panel stays beside the session (Escape does not close it); only the edit line must be free.
+  await reset();
+  await page.locator('#terminal-maximize').click(); await sleep(500); await focusTerminal();
+
   // CL-R05: Ctrl+T shows nothing without tasks, and making a task needs a model
   // turn, so the screen is kept as evidence only and the row stays unverified.
   await page.keyboard.press('Control+t'); await sleep(500); await record('ctrl-t');
   await page.keyboard.press('Control+t'); await sleep(300); await reset();
 
-  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens };
+  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog };
   fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter, modeRestored }, null, 2));
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
