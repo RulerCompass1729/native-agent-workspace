@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual hidden Electron, xterm and PTY process; no Claude/Codex model task.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
@@ -33,7 +34,7 @@ async function shot(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(pro
 (async () => {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'pty-observer');
   await open(); await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
-  await page.locator('#initial-view').selectOption('terminal'); await page.locator('#confirm-create').click();
+  await createIn(page, 'terminal');
   await until(async () => (await text()).includes('PTY ECHO READY'), 'Actual child ready');
   await input('/resume synthetic-history-id'); await input('快速输入-中文-🌳');
   const first = (await snapshot()).sessions[0], pid = first.pid;

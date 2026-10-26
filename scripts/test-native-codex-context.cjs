@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual Electron + Codex TUI; fixed loopback inference, isolated credentials/config.
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http');
 const assert=require('node:assert/strict'),{execFileSync}=testScratch.childProcess;
@@ -100,7 +101,7 @@ async function nativeCommand(command){
  // Search parity reads the real TUI, so settle its owned-folder trust prompt
  // before the GUI task instead of waiting for output behind that prompt.
  const initialTerminal=Boolean(capacityTrial)||process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1';
- await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption(initialTerminal?'terminal':'chat');await page.locator('#session-name').fill(autoName?'':'Native context');if(skipPermissions)await page.locator('#skip-permissions').check();await page.locator('#confirm-create').click();
+ await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#session-name').fill(autoName?'':'Native context');if(skipPermissions)await page.locator('#skip-permissions').check();await createIn(page, initialTerminal?'terminal':'chat');
  if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);if(capacityTrial)await until(async()=>{const t=await terminalText();return !t.includes('Trust this folder?')&&t.includes('? for shortcuts');},'Owned native editor ready before the capacity task');await page.locator('#chat-tab').click();}
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
  if(process.env.NAW_NATIVE_METADATA_ONLY==='1'){

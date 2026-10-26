@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual Electron keyboard controls during synthetic native updates; no model.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
@@ -24,7 +25,7 @@ function fixture(method = 'stats', target, value) {
 const snapshot = () => page.evaluate(() => workspace.initial());
 async function create(provider) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(provider + ' · 键盘操作'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(provider + ' · 键盘操作'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.provider === provider && s.state === 'idle'), 'Session ready');
   return (await snapshot()).sessions.find(s => s.provider === provider).id;
 }

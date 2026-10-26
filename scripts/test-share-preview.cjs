@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real isolated Electron controls/IPC with deliberately delayed native acceptance.
 // Synthetic transports only; no native agent or model request.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
@@ -35,9 +36,8 @@ async function release(reply, fail = false) {
 async function create(provider) {
   await page.locator('#new-session').click();
   await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat');
   await page.locator('#session-name').fill(provider + ' · 分享测试');
-  await page.locator('#confirm-create').click();
+  await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Session created');
   const id = (await snapshot()).sessions.find(s => s.provider === provider).id;
   await page.getByRole('button', { name: '加入协作', exact: true }).click();

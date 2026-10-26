@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + native Claude/Codex; fixed loopback responses exercise tool
 // calls and transport, not model judgement. No paid inference or global settings.
@@ -100,8 +101,7 @@ async function create(provider, key = provider) {
   const previous = new Set((await snapshot()).sessions.map(s => s.id));
   const created = async () => (await snapshot()).sessions.find(s => s.provider === provider && !previous.has(s.id));
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption(provider === 'claude' ? 'terminal' : 'chat');
-  await page.locator('#session-name').fill(three ? '核查员' : provider === 'claude' ? '预算方案' : '预算核查'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(three ? '核查员' : provider === 'claude' ? '预算方案' : '预算核查'); await createIn(page, provider === 'claude' ? 'terminal' : 'chat');
   if (provider === 'claude') {
     await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await created())?.chatAvailable, 'Native Claude startup');
     if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {

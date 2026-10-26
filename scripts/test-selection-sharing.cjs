@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Real pointer selection in the actual Electron/xterm interface; synthetic output only.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
@@ -23,7 +24,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
 const nativePane = id => page.locator(`[data-terminal-id="${id}"]`);
 async function create(provider) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(provider + ' · 实时过程'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(provider + ' · 实时过程'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.provider === provider && s.state === 'idle'), 'Created');
   const id = (await snapshot()).sessions.find(s => s.provider === provider).id;
   await until(() => nativePane(id).locator('.xterm').count(), 'Native screen'); return id;

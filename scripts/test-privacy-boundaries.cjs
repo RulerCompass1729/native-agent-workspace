@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual rendered model content and network boundary, entirely on loopback.
 // The local receiver contains no credentials or real user data.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -61,9 +62,8 @@ async function run() {
   });
   await page.locator('#new-session').click();
   await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat');
   await page.locator('#session-name').fill('隐私边界验证');
-  await page.locator('#confirm-create').click();
+  await createIn(page, 'chat');
   await until(async () => (await client.call('initial')).sessions[0]?.state === 'idle', 'Session ready');
   const id = (await client.call('initial')).sessions[0].id;
   const text = [

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron navigation with controlled native events; no model calls.
 // This replaces the retired terminal-camera/replay reading test.
@@ -20,7 +21,7 @@ function fixture(method, target, value) { const id = ++sequence; return new Prom
 const snapshot = () => page.evaluate(() => workspace.initial());
 async function create(name, provider = 'claude') {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name), 'Session created');
   return (await snapshot()).sessions.find(s => s.name === name).id;
 }
