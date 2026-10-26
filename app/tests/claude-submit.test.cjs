@@ -21,8 +21,20 @@ test('native queued receipt outlives the normal deadline only after authorizatio
   await assert.rejects(unapproved, /未确认/);
   assert.equal(channel.authorize(second.value), false);
   const third = poll(channel), closing = channel.request('waiting', 'closed', () => true, true);
-  channel.authorize(third.value); channel.close(); await assert.rejects(closing, /关闭/);
+  channel.authorize(third.value); channel.close(); await assert.rejects(closing, error => /关闭/.test(error.message) && error.notSent === false);
   assert.equal(poll(channel).value, undefined);
+});
+test('only a failure before native authorization is reported as not sent', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  await assert.rejects(channel.request('offline', 'zero', () => true, true), error => error.notSent === true);
+  const first = poll(channel), draft = channel.request('blocked', 'one', () => true, true);
+  channel.result({ id: 'one', status: 'draft' }); await assert.rejects(draft, error => /草稿/.test(error.message) && error.notSent === true);
+  const second = poll(channel), late = channel.request('late', 'two', () => true, true);
+  await assert.rejects(late, error => /未确认/.test(error.message) && error.notSent === true);
+  assert.equal(channel.authorize(second.value), false);
+  const third = poll(channel), unauthorized = channel.request('odd', 'three', () => true, true);
+  channel.result({ id: 'three', status: 'accepted' }); await assert.rejects(unauthorized, error => error.notSent === false);
+  assert.equal(third.value.id, 'three');
 });
 test('native listener returning after an uncertain queued submit/result retires its wait without replay', async t => {
   const channel = new SubmissionChannel(20); t.after(() => channel.close());
@@ -33,6 +45,14 @@ test('native listener returning after an uncertain queued submit/result retires 
   assert.equal(again.value, undefined); assert.equal(channel.pending, null);
   assert.equal(channel.result({ id: 'one', status: 'accepted' }), false);
 });
+test('an unknown native result after authorization remains uncertain', async t => {
+  const channel = new SubmissionChannel(20); t.after(() => channel.close());
+  const response = poll(channel), pending = channel.request('queued once', 'unknown', () => true, true);
+  assert.equal(channel.authorize(response.value), true);
+  channel.result({ id: 'unknown', status: 'unexpected-status' });
+  await assert.rejects(pending, error => /结果未确认/.test(error.message) && error.notSent === false);
+  assert.equal(channel.pending, null);
+});
 test('native acceptance needs fresh authorization; canceled and timed-out sends never replay', async t => {
   const channel = new SubmissionChannel(30); t.after(() => channel.close());
   let allowed = true;
@@ -42,7 +62,7 @@ test('native acceptance needs fresh authorization; canceled and timed-out sends 
   allowed = false;
   assert.equal(channel.authorize(first.value), false);
   channel.result({ id: 'one', status: 'accepted' });
-  await assert.rejects(pending, /未接受/);
+  await assert.rejects(pending, error => /结果未确认/.test(error.message) && error.notSent === false);
   const second = poll(channel), expired = channel.request('later', 'two', () => true);
   await assert.rejects(expired, /未确认/);
   assert.equal(channel.authorize(second.value), false);
