@@ -369,6 +369,7 @@ async function boot() {
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
     if (next.terminalLayout !== undefined && !['hidden', 'split', 'maximized'].includes(next.terminalLayout)) throw new Error('无效终端布局。');
+    if (next.terminalSplit !== undefined && !(Number.isFinite(next.terminalSplit) && next.terminalSplit >= 0.2 && next.terminalSplit <= 0.8)) throw new Error('无效分栏宽度。');
     if (next.roomSession !== undefined && (typeof next.roomSession !== 'string' || next.roomSession.length > 100)) throw new Error('无效协作视图。');
     if (next.roomRecipient !== undefined && (typeof next.roomRecipient !== 'string' || next.roomRecipient.length > 100)) throw new Error('无效协作接收方。');
     if (next.roomFilter !== undefined && (typeof next.roomFilter !== 'string' || next.roomFilter.length > 100)) throw new Error('无效成员筛选。');
@@ -380,6 +381,7 @@ async function boot() {
     const positions = next.readingPositions === undefined ? undefined : readingState(next.readingPositions);
     Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference });
     if (next.terminalLayout !== undefined) c.view.terminalLayout = next.terminalLayout;
+    if (next.terminalSplit !== undefined) c.view.terminalSplit = next.terminalSplit;
     if (positions !== undefined) c.view.readingPositions = positions;
     if (next.sharedDraft !== undefined) c.view.sharedDraft = next.sharedDraft;
     if (next.roomSession !== undefined) c.view.roomSession = next.roomSession;
