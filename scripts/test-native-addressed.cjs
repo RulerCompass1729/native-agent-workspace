@@ -16,7 +16,7 @@ const binaries = Object.fromEntries(['claude', 'codex'].map(p => [p, fs.realpath
 const versions = Object.fromEntries(Object.entries(binaries).map(([p, file]) => [p, execFileSync(file, ['--version'], { encoding: 'utf8' }).trim()]));
 const nativeVersion = process.env.NAW_CODEX_VERSION || '0.163.0';
 assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
-assert.match(versions.claude, /^2\.1\.(309|310)\b/); assert.equal(versions.codex, 'codex-cli ' + nativeVersion);
+assert.match(versions.claude, /^2\.1\.(309|310|311)\b/); assert.equal(versions.codex, 'codex-cli ' + nativeVersion);
 let app, page, ids = {}, held, release, sequence = 0;
 const counts = { claude: 0, codex: 0 }, errors = [], checks = [];
 let tokenCountRequests = 0;
