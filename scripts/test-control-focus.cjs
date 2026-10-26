@@ -131,6 +131,35 @@ async function run() {
   assert.equal((await snapshot()).sessions.find(s => s.id === b).roomId, 'shared');
   await shot('header-focus');
   checks.push('Reused header controls follow later selections and membership changes without duplicate buttons or affecting the other member');
+  // The chat/terminal divider drags freely, snaps to the centre within 16 px, resizes the
+  // native terminal once on release, and is remembered; the chat can take the full width.
+  await page.locator(`[data-session-id="${a}"]`).click(); await page.locator('#terminal-tab').click();
+  await page.locator('#terminal-area .xterm-screen:visible').waitFor();
+  const layout = page.locator('#session-layout'), divider = layout.locator('.split-divider');
+  const area = await layout.boundingBox(), centre = area.x + area.width / 2, y = area.y + 120;
+  const split = () => layout.evaluate(el => el.style.getPropertyValue('--split-left'));
+  const drag = async (to, steps) => { const d = await divider.boundingBox(); await page.mouse.move(d.x + d.width / 2, y); await page.mouse.down(); for (const x of steps) await page.mouse.move(x, y); await page.mouse.move(to, y); await page.mouse.up(); };
+  const resizes = (await fixture()).stats.resizes, terminalWidth = (await page.locator('#terminal-area').boundingBox()).width;
+  await page.mouse.move((await divider.boundingBox()).x + 5, y); await page.mouse.down();
+  for (const dx of [40, 80, 120, 160]) await page.mouse.move(centre + dx, y);
+  await delay(150); assert.equal((await fixture()).stats.resizes, resizes, 'No native resize while dragging');
+  await page.mouse.move(centre + 200, y); await page.mouse.up();
+  await until(async () => (await fixture()).stats.resizes === resizes + 1, 'One native resize after the drag'); await delay(150);
+  assert.equal((await fixture()).stats.resizes, resizes + 1);
+  assert.ok((await page.locator('#terminal-area').boundingBox()).width < terminalWidth - 150, 'The terminal got narrower');
+  await drag(centre + 10, [centre + 60]); assert.equal(await split(), '50.00%', 'Within 16 px of the centre it snaps to half');
+  await drag(centre + 30, [centre + 60]); assert.notEqual(await split(), '50.00%', 'Beyond the snap range it stays where dropped');
+  await until(async () => Math.abs((await page.evaluate(() => workspace.initial())).viewState.terminalSplit - Number.parseFloat(await split()) / 100) < 0.001, 'Split width saved');
+  await shot('split-dragged');
+  // On a narrow window a 2% key step is under the 16 px snap; keys still move it.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(950, 760)); await delay(300);
+  await divider.focus(); await page.keyboard.press('Home'); assert.equal(await split(), '50.00%');
+  await page.keyboard.press('ArrowRight'); assert.equal(await split(), '52.00%', 'A key step moves the split even when narrower than the snap');
+  assert.equal(await divider.getAttribute('aria-valuenow'), '52');
+  await page.keyboard.press('ArrowLeft'); assert.equal(await split(), '50.00%');
+  await page.getByRole('button', { name: '放大对话', exact: true }).click(); await until(() => page.locator('#native-pane').isHidden(), 'Chat takes the full width');
+  await page.getByRole('button', { name: '恢复并排', exact: true }).first().click(); await until(() => page.locator('#native-pane').isVisible(), 'Side by side again');
+  checks.push('The chat/terminal divider drags freely, snaps to the centre within 16 px, resizes the native terminal once per drag and is saved; the chat has its own full-width toggle');
   const stats = (await fixture()).stats;
   assert.equal(stats.sends, 0); assert.equal(stats.inputs, 0); assert.deepEqual(errors, []);
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));

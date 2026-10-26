@@ -62,6 +62,16 @@ async function run() {
   await resource('history-loaded');
   const initialLoadMs = Date.now() - began;
   await until(() => page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3), 'Initial history follows latest output');
+  // "Jump to latest" appears only after leaving the newest output and returns there.
+  const jump = page.locator('#messages').getByRole('button', { name: '↓ 跳到最新', exact: true });
+  assert.equal(await jump.isVisible(), false);
+  await page.locator('#messages').evaluate(el => { el.scrollTop = 0; });
+  await jump.waitFor({ state: 'visible' });
+  if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'jump-latest.png') });
+  await jump.click();
+  await until(() => page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3), 'Jump returns to the latest output');
+  await jump.waitFor({ state: 'hidden' });
+  observations.push({ check: 'jump to latest appears after scrolling up and returns to the newest output', pass: true });
   let typedDraft;
   if (historyCount > 240) {
     const input = page.locator('#message-input');

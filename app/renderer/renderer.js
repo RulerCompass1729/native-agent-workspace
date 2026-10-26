@@ -11,6 +11,8 @@ let state, owner, selected = '', mode = 'terminal', preference = 'terminal', fol
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let terminalLayout = 'split';
+// Chat share of a side-by-side split; dragging the divider near the centre snaps to half.
+let terminalSplit = 0.5, splitDragging = false;
 const chatInput = () => selected === 'room' ? $('shared-input') : $('message-input');
 const nativeStatusFresh = value => value?.stale !== true && (!Number.isFinite(value?.observedAt) || Date.now() - value.observedAt <= 5000);
 let roomSubmitting = null;
@@ -272,7 +274,7 @@ function renderComposer(s) {
 function toast(text) { $('toast-text').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
 $('toast-close').onclick = () => { clearTimeout(toastTimer); $('toast').hidden = true; };
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
-function persistView() { normalizeRoomMention(); captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalLayout, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
+function persistView() { normalizeRoomMention(); captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession) {
   captureReadingViews();
@@ -1074,6 +1076,7 @@ function render() {
       $('native-pane-title').textContent = participantLabel(s, state.sessions) + ' · 原生终端';
       $('terminal-maximize').setAttribute('aria-label', terminalLayout === 'maximized' ? '恢复并排' : '放大终端');
       $('terminal-maximize').title = terminalLayout === 'maximized' ? '恢复并排' : '放大终端';
+      $('chat-maximize').setAttribute('aria-label', terminalLayout === 'hidden' ? '恢复并排' : '放大对话'); $('chat-maximize').title = $('chat-maximize').getAttribute('aria-label');
       $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? ` · Codex ${s.nativeVersion || '版本未确认'} 尚未验证` : ''}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
       $('session-status').title = nativeVersionText(s);
       $('take-control').hidden = own || !alive;
@@ -1452,7 +1455,32 @@ const disposers = [
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
   api.onNew(() => openCreate()),
 ];
-const observer = new ResizeObserver(() => { if (activeSessionId()) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
+// A drag resizes the native terminal once, on release, not on every move.
+const observer = new ResizeObserver(() => { if (activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
+function applySplit() {
+  for (const id of ['session-layout', 'room-layout']) $(id).style.setProperty('--split-left', `${(terminalSplit * 100).toFixed(2)}%`);
+  for (const divider of document.querySelectorAll('.split-divider')) { divider.setAttribute('aria-valuenow', String(Math.round(terminalSplit * 100))); divider.setAttribute('aria-valuemin', '20'); divider.setAttribute('aria-valuemax', '80'); }
+}
+const SPLIT_SNAP_PX = 16;
+function setSplit(x, width) { terminalSplit = Math.abs(x - width / 2) <= SPLIT_SNAP_PX ? 0.5 : Math.min(0.8, Math.max(0.2, x / width)); applySplit(); }
+for (const divider of document.querySelectorAll('.split-divider')) {
+  divider.addEventListener('pointerdown', event => {
+    const box = divider.parentElement.getBoundingClientRect();
+    event.preventDefault(); divider.setPointerCapture(event.pointerId); splitDragging = true;
+    const move = e => setSplit(e.clientX - box.left, box.width);
+    const end = () => { divider.removeEventListener('pointermove', move); splitDragging = false; fitTerminal(activeSessionId()); attempt(persistView); };
+    divider.addEventListener('pointermove', move); divider.addEventListener('lostpointercapture', end, { once: true });
+  });
+  divider.addEventListener('dblclick', () => { terminalSplit = 0.5; applySplit(); attempt(persistView); });
+  divider.addEventListener('keydown', event => {
+    const step = { ArrowLeft: -0.02, ArrowRight: 0.02 }[event.key];
+    if (step === undefined && event.key !== 'Home') return;
+    // Keys step without the drag snap, which would undo a 2% step on a narrow window.
+    event.preventDefault();
+    terminalSplit = event.key === 'Home' ? 0.5 : Math.min(0.8, Math.max(0.2, Math.round((terminalSplit + step) * 100) / 100)); applySplit();
+    attempt(persistView);
+  });
+}
 $('new-session').onclick = () => openCreate(); $('start-claude').onclick = () => openCreate('claude'); $('start-codex').onclick = () => openCreate('codex');
 $('cancel-create').onclick = () => $('create-dialog').close();
 $('cancel-rename').onclick = () => $('rename-dialog').close();
@@ -1485,6 +1513,8 @@ $('close-members').onclick = () => { $('members-dialog').close(); focusTerminal(
 dropTarget($('room-nav'), true); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
 $('chat-tab').onclick = () => attempt(() => switchMode('chat')); $('terminal-tab').onclick = () => attempt(() => switchMode('terminal'));
 $('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = terminalLayout === 'maximized' ? 'split' : 'maximized'; await switchMode('terminal'); });
+// The chat's own full-width toggle: hide the terminal, or bring it back beside the chat.
+$('chat-maximize').onclick = () => attempt(async () => { if (terminalLayout === 'hidden') await switchMode('terminal'); else { terminalLayout = 'hidden'; await switchMode('chat'); } });
 $('close-native-terminal').onclick = () => attempt(async () => {
   if (selected === 'room') return selectRoom('');
   terminalLayout = 'hidden'; await switchMode('chat');
@@ -1875,6 +1905,7 @@ attempt(async () => {
   if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
   owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;
   terminalLayout = ['hidden', 'split', 'maximized'].includes(state.viewState.terminalLayout) ? state.viewState.terminalLayout : 'split';
+  terminalSplit = Number.isFinite(state.viewState.terminalSplit) && state.viewState.terminalSplit >= 0.2 && state.viewState.terminalSplit <= 0.8 ? state.viewState.terminalSplit : 0.5; applySplit();
   readingPositions = state.viewState.readingPositions || {};
   roomSession = typeof state.viewState.roomSession === 'string' ? state.viewState.roomSession : '';
   const display = state.viewState.terminalDisplay;
