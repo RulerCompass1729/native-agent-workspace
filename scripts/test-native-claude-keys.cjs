@@ -90,7 +90,8 @@ async function cleanup() {
   await focusTerminal(); await until(async () => (await editLine()) === '❯', 'Native edit line', 15000); await record('start');
 
   // CL-I01: word and line editing with modifiers whose synthetic and physical
-  // events match (Option adds ESC to Backspace and arrows in xterm).
+  // events match (xterm sends ESC DEL for Option+Backspace and CSI 1;3D for
+  // Option+Left from the key code, not from the macOS layout).
   await page.keyboard.type('alpha beta', { delay: 20 }); await until(async () => (await editLine()) === '❯ alpha beta', 'Typed text');
   await page.keyboard.press('Alt+Backspace'); await sleep(300); await record('alt-backspace');
   const wordDeleted = (await editLine()) === '❯ alpha';
@@ -102,20 +103,24 @@ async function cleanup() {
   const killToStart = (await editLine()) === '❯ beta';
   await reset();
 
-  // CL-A05: Shift+Tab cycles the native permission mode (footer text changes).
-  const footer = text => text.split('\n').slice(-3).join('\n');
-  const modeBefore = footer(await terminalText());
+  // CL-A05: Shift+Tab cycles the native permission mode named in the footer,
+  // and further presses come back to the starting mode.
+  const mode = text => text.split('\n').slice(-3).join('\n').match(/(\w+) mode on/)?.[1];
+  const modeBefore = mode(await terminalText());
   await page.keyboard.press('Shift+Tab'); await sleep(500); await record('shift-tab');
-  const modeAfter = footer(screens['shift-tab']); const modeChanged = modeAfter !== modeBefore;
-  for (let i = 0; i < 6 && footer(await terminalText()) !== modeBefore; i++) { await page.keyboard.press('Shift+Tab'); await sleep(400); }
+  const modeAfter = mode(screens['shift-tab']);
+  for (let i = 0; i < 6 && mode(await terminalText()) !== modeBefore; i++) { await page.keyboard.press('Shift+Tab'); await sleep(400); }
+  const modeRestored = mode(await terminalText());
+  const modeChanged = modeBefore === 'auto' && modeAfter === 'manual' && modeRestored === 'auto';
   await reset();
 
   // CL-I05: the / command menu and the @ file mention menu.
   await page.keyboard.type('/'); await sleep(600); await record('slash');
-  const slashMenu = /\/(add-dir|agents|clear|compact|help)\b/.test(screens.slash.split('\n').filter(l => !/^❯/.test(l)).join('\n'));
+  const menuLines = text => text.split('\n').filter(l => !/^❯/.test(l)).join('\n');
+  const slashMenu = /\/add-dir\b/.test(menuLines(screens.slash)) && !/\/add-dir\b/.test(screens.start);
   await reset();
   await page.keyboard.type('@keyprobe', { delay: 20 }); await sleep(800); await record('at');
-  const atMenu = /keyprobe-notes\.txt/.test(screens.at);
+  const atMenu = /keyprobe-notes\.txt/.test(screens.at) && !/keyprobe-notes\.txt/.test(screens.start);
   await reset();
 
   // CL-I07: ! enters shell mode.
@@ -134,14 +139,14 @@ async function cleanup() {
   await page.keyboard.press('Control+t'); await sleep(300); await reset();
 
   const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch };
-  fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter }, null, 2));
+  fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter, modeRestored }, null, 2));
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
     for (const [name, text] of Object.entries(screens)) fs.writeFileSync(path.join(process.env.NAW_EVIDENCE_DIR, `screen-${name}.txt`), text);
   }
   assert.equal(requests, 0, 'No key submitted a model request'); assert.deepEqual(errors, []);
   for (const [name, ok] of Object.entries(results)) if (ok) checks.push(name);
-  console.log(JSON.stringify({ nativeVersion, results, checks, modelRequests: requests, paidModelCalls: 0, errors, evidence: base }, null, 2));
+  console.log(JSON.stringify({ nativeVersion, results, modes: [modeBefore, modeAfter, modeRestored], checks, modelRequests: requests, paidModelCalls: 0, errors, evidence: base }, null, 2));
   const failed = Object.entries(results).filter(([, ok]) => !ok).map(([name]) => name);
   assert.deepEqual(failed, [], 'Native keys that did not work in NAW\'s terminal');
 })().catch(async error => {
