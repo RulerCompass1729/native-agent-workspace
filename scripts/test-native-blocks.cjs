@@ -22,7 +22,10 @@ const imageTrial = process.env.NAW_TEST_NATIVE_IMAGE === '1';
 // Plan case: the session starts in native plan mode; the model writes its plan
 // file, then ExitPlanMode opens the native approval with that plan.
 const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_MARKER\n1. Read the local file.\n2. Report the result.\n';
-assert.ok(!imageTrial || !questionTrial && !planTrial, 'Image entry is one separate bounded task');
+// Permission case: manual mode asks before a Bash command that writes a file
+// (read-only commands such as echo run without asking).
+const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
+assert.ok(!imageTrial || !questionTrial && !planTrial && !permissionTrial, 'Image entry is one separate bounded task');
 let planFile = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
@@ -46,7 +49,7 @@ const server = http.createServer((req, res) => {
     }
     const number = ++calls;
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
-    if (number > (imageTrial ? 1 : questionTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
+    if (number > (imageTrial ? 1 : questionTrial || permissionTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -67,6 +70,12 @@ const server = http.createServer((req, res) => {
       else if (step === 'exit') block(res, 0, { type: 'tool_use', id: 'toolu_local_plan_exit', name: 'ExitPlanMode', input: {} });
       else block(res, 0, { type: 'text', text: 'NATIVE_FINAL: the plan was approved.\n' });
       event(res, 'message_delta', { delta: { stop_reason: step === 'final' ? 'end_turn' : 'tool_use', stop_sequence: null }, usage: { output_tokens: 10 } });
+      event(res, 'message_stop', {}); res.end(); return;
+    }
+    if (permissionTrial) {
+      if (number === 1) block(res, 0, { type: 'tool_use', id: 'toolu_local_permission', name: 'Bash', input: { command: 'touch native-permission-marker && echo NATIVE_PERMISSION_DONE', description: 'Create a marker file' } });
+      else block(res, 0, { type: 'text', text: 'NATIVE_FINAL: the permitted command ran.\n' });
+      event(res, 'message_delta', { delta: { stop_reason: number === 1 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
       event(res, 'message_stop', {}); res.end(); return;
     }
     if (number === 1) {
@@ -98,7 +107,7 @@ async function cleanup() {
   // production adapter methods are replaced by this test.
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
     `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")\n` +
-    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"${planTrial ? ',"--permission-mode","plan"' : ''}])\n`, { mode: 0o700 });
+    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"${planTrial ? ',"--permission-mode","plan"' : permissionTrial ? ',"--permission-mode","default"' : ''}])\n`, { mode: 0o700 });
   if (planTrial) fs.writeFileSync(path.join(cwd, 'notes.txt'), 'local notes\n');
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
@@ -233,6 +242,28 @@ async function cleanup() {
     assert.deepEqual(errors, []); fs.writeFileSync(path.join(base, 'plan-finished.json'), JSON.stringify(after, null, 2));
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-plan.png') }); }
     console.log(JSON.stringify({ planSteps, checks: ['Native plan: the panel shows the ExitPlanMode request with the plan text and file native put in it, approval happens in the same TUI, the turn continues with the same identity and the recorded mode leaves plan'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+  }
+  if (permissionTrial) {
+    const rows = () => page.locator('#terminal-area .xterm-rows').innerText();
+    await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
+    await until(async () => (await snapshot()).sessions[0].nativeApproval?.requests.some(r => r.title === 'Bash'), 'Native permission request reaches the private panel', 60000);
+    const request = (await snapshot()).sessions[0].nativeApproval.requests.find(r => r.title === 'Bash');
+    assert.match(request.input, /touch native-permission-marker && echo NATIVE_PERMISSION_DONE/, 'The request carries native\'s tool input as is');
+    await until(async () => { const text = await page.locator('#approval').innerText(); return text.includes('Bash') && text.includes('touch native-permission-marker'); }, 'The panel shows the tool and its input', 10000);
+    fs.writeFileSync(path.join(base, 'permission-panel.txt'), await page.locator('#approval').innerText());
+    assert.equal(await page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }).count(), 0, 'NAW offers no decision of its own');
+    assert.equal(calls, 1, 'Nothing ran before the decision');
+    await page.locator('#terminal-tab').click();
+    await until(async () => (await rows()).includes('touch native-permission-marker') && /Do you want to proceed\?/.test(await rows()), 'The same native TUI asks before running', 30000);
+    fs.writeFileSync(path.join(base, 'permission-terminal.txt'), await rows());
+    await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
+    await until(async () => { const s = (await snapshot()).sessions[0]; return calls === 2 && s.state === 'idle' && s.messages.some(m => m.text?.includes('NATIVE_FINAL: the permitted')); }, 'The permitted command runs and the turn continues', 60000);
+    assert.match(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8'), /NATIVE_PERMISSION_DONE/, 'Native ran the command after the decision');
+    assert.ok(fs.existsSync(path.join(cwd, 'native-permission-marker')), 'The permitted command changed the folder');
+    const after = (await snapshot()).sessions[0]; assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid);
+    await page.locator('#chat-tab').click(); await until(() => page.locator('#approval').isHidden(), 'The decided request clears the panel');
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ checks: ['A native tool permission request shows the tool and its input as is in the private panel; NAW offers no decision of its own; the same native TUI asks, and the decision there runs the command and continues the turn'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
   }
   if (questionTrial) {
     await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
