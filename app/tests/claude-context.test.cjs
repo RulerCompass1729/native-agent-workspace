@@ -331,3 +331,40 @@ test('native processes do not inherit the service locations',()=>{
   assert.equal(env.NAW_HOOK_TOKEN,'token','Per-session values are still passed');
  }finally{for(const key of ['NAW_WORKSPACE','NAW_RUNTIME_CONFIG','NAW_APP_VERSION','NAW_DATA_DIR']) if(key in saved) process.env[key]=saved[key]; else delete process.env[key];}
 });
+test('a picker branch launches the native picker once, then always resumes its own ID',async t=>{
+ const { Claude: Adapter } = require('../adapters.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-fork-argv-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const argvFile=path.join(dir,'argv.txt'),binary=path.join(dir,'claude');
+ fs.writeFileSync(binary,`#!/bin/sh\nprintf '%s\\n' "$@" > '${argvFile}'\n`,{mode:0o700});
+ const launch=async record=>{
+  fs.rmSync(argvFile,{force:true});
+  const host={binaries:{claude:binary},privateDir:dir,hookTargets:new Map(),hookSocket:path.join(dir,'hook.sock'),submitSocket:path.join(dir,'submit.sock')};
+  const r=new Adapter({id:randomUUID(),name:'Branch',cwd:dir,...record},host);
+  await new Promise(resolve=>r.terminal.once('closed',resolve));r.submission.close();
+  return fs.readFileSync(argvFile,'utf8').trim().split('\n');
+ };
+ const id=randomUUID();
+ assert.deepEqual((await launch({nativeId:id,forkPicker:true})).slice(0,4),['--resume','--fork-session','--session-id',id],'First launch: native picker, branch into the pre-assigned ID');
+ assert.deepEqual((await launch({nativeId:id,forkPicker:true,recovering:true})).slice(0,2),['--resume',id],'Recovery resumes the branch ID, never the picker');
+ assert.deepEqual((await launch({nativeId:id})).slice(0,2),['--session-id',id],'A fresh session is unchanged');
+});
+test('the branch marker clears on its own session start; a cancelled picker says no branch was made',async t=>{
+ const f=await fixture(t),{s,r}=f;
+ s.forkPicker=true;
+ r.hook({hook_event_name:'SessionStart',session_id:randomUUID(),source:'resume'});assert.equal(s.forkPicker,true,'Another session cannot clear it');
+ r.hook({hook_event_name:'SessionStart',session_id:s.nativeId,source:'resume',agent_id:'child'});assert.equal(s.forkPicker,true,'A child cannot clear it');
+ r.hook({hook_event_name:'SessionStart',session_id:s.nativeId,source:'resume'});assert.equal(s.forkPicker,false);
+ const g=await fixture(t);g.s.forkPicker=true;g.r.host={hookTargets:new Map()};g.r.token='t';
+ g.r.finishClose();assert.equal(g.s.state,'ended');assert.equal(g.s.activity,'未选择会话，没有创建分支。');
+});
+test('a Claude picker branch is created in terminal view; other branch requests are refused',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-fork-create-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ let created;
+ const host={binaries:{},close(){},create(record){created={...record};const r=new EventEmitter();r.start=async()=>r.emit('state','idle');return r;}};
+ const w=new Workspace(host,dir);t.after(()=>w.close());
+ const id=await w.create('claude',dir,'owner','Branch','chat',{fork:'picker'});
+ assert.equal(created.forkPicker,true);assert.equal(created.view,'terminal');assert.equal(w.get(id).view,'terminal');
+ await assert.rejects(w.create('codex',dir,'owner','X','chat',{fork:'picker'}),/无效的分支请求/);
+ await assert.rejects(w.create('claude',dir,'owner','X','chat',{fork:'other'}),/无效的分支请求/);
+ assert.equal(w.sessions.size,1,'Refused requests add no row');
+});

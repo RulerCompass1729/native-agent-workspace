@@ -443,6 +443,12 @@ async function loadNativeHistory(more = false) {
   finally { if (generation === historyGeneration) { historyLoading = false; renderNativeHistory(); } }
 }
 $('open-native-history').onclick = () => {
+  // Claude has no history API: its own session picker opens in the new row's
+  // terminal, and the chosen session is forked while the original stays as is.
+  if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
+    const id = await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker' });
+    state = await api.initial(); $('create-dialog').close(); await select(id, 'terminal');
+  });
   $('create-dialog').close(); historyRows = []; historySelected = null; historyCursor = null; historyLoading = false;
   $('native-history-search').value = ''; $('native-history-dialog').showModal(); loadNativeHistory();
 };
@@ -529,7 +535,9 @@ function renderSessions() {
   });
 }
 function createReadiness() {
-  $('open-native-history').hidden = document.querySelector('input[name="provider"]:checked').value !== 'codex' || !state.capabilities?.includes('nativeHistory');
+  const historyProvider = document.querySelector('input[name="provider"]:checked').value;
+  $('open-native-history').hidden = !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
+  $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : '从已有 Claude 会话分支…';
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
     $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';
