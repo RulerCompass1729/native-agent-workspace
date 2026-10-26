@@ -170,12 +170,29 @@ async function cleanup() {
   await reset();
   await page.locator('#terminal-maximize').click(); await sleep(500); await focusTerminal();
 
+  // CL-S02/CL-S03: local native dialogs open in NAW's terminal. Enter only once
+  // the edit line and the highlighted menu entry are the command.
+  async function openNative(command) {
+    await page.keyboard.type('/' + command, { delay: 20 });
+    await until(async () => (await editLine()) === '❯ /' + command && (await terminalText()).split('\n').some(l => new RegExp('^\\s+❯ /' + command + '\\s').test(l)), 'Edit line and menu show /' + command, 5000);
+    await page.keyboard.press('Enter'); await sleep(1200); await record(command);
+    await page.keyboard.press('Escape'); await sleep(500);
+    if ((await editLine()) !== '❯') await page.keyboard.press('Escape');
+    await until(async () => (await editLine()) === '❯', '/' + command + ' closed', 5000);
+    return screens[command];
+  }
+  const modelPicker = /Haiku ✔/.test(await openNative('model')) && /Sonnet/.test(screens.model);
+  const configDialog = /Type to filter/.test(await openNative('config')) && /Show tips/.test(screens.config);
+  const memoryDialog = /Auto-memory/.test(await openNative('memory')) && /Esc to cancel/.test(screens.memory);
+  // NAW's own hooks (launch settings and the bridge plugin) are not listed in this read-only menu.
+  const hooksMenu = /This menu is read-only/.test(await openNative('hooks'));
+
   // CL-R05: Ctrl+T shows nothing without tasks, and making a task needs a model
   // turn, so the screen is kept as evidence only and the row stays unverified.
   await page.keyboard.press('Control+t'); await sleep(500); await record('ctrl-t');
   await page.keyboard.press('Control+t'); await sleep(300); await reset();
 
-  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog };
+  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog, modelPicker, configDialog, memoryDialog, hooksMenu };
   fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter, modeRestored }, null, 2));
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
