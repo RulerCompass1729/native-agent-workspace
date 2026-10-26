@@ -33,7 +33,7 @@ class Workspace extends EventEmitter {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
-      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
+      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
       }

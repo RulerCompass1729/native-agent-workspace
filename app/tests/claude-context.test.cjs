@@ -368,3 +368,12 @@ test('a Claude picker branch is created in terminal view; other branch requests 
  await assert.rejects(w.create('claude',dir,'owner','X','chat',{fork:'other'}),/无效的分支请求/);
  assert.equal(w.sessions.size,1,'Refused requests add no row');
 });
+test('a picker branch still waiting when the service stops is restored as unconfirmed, not interrupted work',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-fork-restore-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const host={binaries:{},close(){},create(record){const r=new EventEmitter();r.start=async()=>r.emit('state','idle');return r;}};
+ const w=new Workspace(host,dir);const id=await w.create('claude',dir,'owner','Branch','terminal',{fork:'picker'});const plain=await w.create('claude',dir,'owner','Plain','terminal');
+ w.persist();w.close();
+ const restored=new Workspace({binaries:{},close(){}},dir);t.after(()=>restored.close());
+ assert.equal(restored.get(id).state,'ended');assert.equal(restored.get(id).activity,'没有确认创建分支。');
+ assert.equal(restored.get(plain).state,'recoverable','Ordinary rows keep the interrupted-work restore');
+});
