@@ -33,7 +33,11 @@ const memberRows = new Map();
 let headerControls, advancedControls;
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
 const terminalThemes = {
-  dark: { background: '#191b1e', foreground: '#e6e8eb', cursor: '#e6e8eb', selectionBackground: '#53677b88' },
+  // The maintainer's iTerm2 default profile, dark-mode colours (user request, T-14).
+  // Native programs' own truecolour output is drawn as sent, never remapped.
+  dark: { background: '#15191f', foreground: '#dcdcdc', cursor: '#ffffff', cursorAccent: '#000000', selectionBackground: '#b3d7ff', selectionForeground: '#000000',
+    black: '#14191e', red: '#b43c2a', green: '#00c200', yellow: '#c7c400', blue: '#2744c7', magenta: '#c040be', cyan: '#00c5c7', white: '#c7c7c7',
+    brightBlack: '#686868', brightRed: '#dd7975', brightGreen: '#58e790', brightYellow: '#ece100', brightBlue: '#a7abf2', brightMagenta: '#e17ee1', brightCyan: '#60fdff', brightWhite: '#ffffff' },
   green: { background: '#20261f', foreground: '#eef2e8', cursor: '#e0edc9', selectionBackground: '#637a5988' },
 };
 let toastTimer, lastMessages = '', lastRoomMessages = '', rendering = false;
@@ -435,7 +439,7 @@ async function showTrust(options) {
 
 function openCreate(provider = 'claude') {
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
-  $('initial-view').value = preference; $('session-name').value = '';
+  $('initial-view').value = preference; $('session-name').value = ''; $('skip-permissions').checked = false;
   $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
 }
 let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
@@ -476,7 +480,7 @@ $('open-native-history').onclick = () => {
   // Claude has no history API: its own session picker opens in the new row's
   // terminal, and the chosen session is forked while the original stays as is.
   if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
-    const id = await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker' });
+    const id = await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker', skipPermissions: $('skip-permissions').checked || undefined });
     state = await api.initial(); $('create-dialog').close(); await select(id, 'terminal');
   });
   $('create-dialog').close(); historyRows = []; historySelected = null; historyCursor = null; historyLoading = false;
@@ -569,6 +573,12 @@ function createReadiness() {
   const historyProvider = document.querySelector('input[name="provider"]:checked').value;
   $('open-native-history').hidden = !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : '从已有 Claude 会话分支…';
+  // Only a service that applies the choice may offer it; an older one would silently ignore it.
+  $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
+  if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
+  $('create-permission-note').textContent = $('skip-permissions').checked
+    ? '默认是独立的空目录。这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
+    : '默认是独立的空目录。原生文件和命令权限仍由原生确认。';
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
     $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';
@@ -1242,7 +1252,7 @@ async function ensureTerminal(id, explicit = false) {
   $('terminal-area').style.backgroundColor = theme.background;
   const loading = node('p', '正在连接原生终端…', 'terminal-loading'); loading.setAttribute('role', 'status');
   const surface = node('div', undefined, 'terminal-surface'); surface.hidden = true; surface.inert = true; element.append(loading, surface);
-  const term = new Terminal({ fontFamily: 'Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
+  const term = new Terminal({ fontFamily: '"MesloLGS NF", Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
   const intent = selectionRevision;
   const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: record?.messages.some(message => message.role === 'assistant') }; terminals.set(id, entry);
@@ -1453,7 +1463,7 @@ $('rename-form').onsubmit = async event => {
 $('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; $('chosen-folder').textContent = folder; } });
 $('create-form').onsubmit = event => { event.preventDefault(); attempt(async () => {
   $('confirm-create').disabled = true;
-  try { const view = $('initial-view').value; preference = view; const id = await api.create({ provider: document.querySelector('input[name="provider"]:checked').value, cwd: folder, name: $('session-name').value, view }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
+  try { const view = $('initial-view').value; preference = view; const id = await api.create({ provider: document.querySelector('input[name="provider"]:checked').value, cwd: folder, name: $('session-name').value, view, skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
   finally { $('confirm-create').disabled = false; }
 }); };
 $('room-nav').onclick = () => attempt(() => select('room'));
@@ -1853,6 +1863,7 @@ document.addEventListener('keydown', searchKey);
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
+$('skip-permissions').onchange = createReadiness;
 attempt(async () => {
   state = await api.initial();
   if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
