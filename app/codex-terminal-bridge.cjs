@@ -3,6 +3,11 @@ const http = require('node:http');
 const net = require('node:net');
 const WebSocket = require('ws');
 
+// Match Codex 0.164 app-server-client's bounded native websocket limit.
+// Plugin catalogs can legitimately exceed 16 MiB; rejecting one disconnects
+// the TUI and restarts its bootstrap/clear cycle on every reconnect.
+const CODEX_WEBSOCKET_MAX_PAYLOAD = 128 * 1024 * 1024;
+
 // Reuse the native websocket protocol. Only this display's client requests can
 // establish a context change; global thread/started notifications cannot.
 // Frames and native decisions pass through unchanged. No task is synthesized.
@@ -11,7 +16,7 @@ class CodexTerminalBridge {
     this.endpoint = endpoint; this.upstream = upstream; this.observe = observe;
     this.connections = new Set(); this.closed = false; this.sequence = 0;
     this.server = http.createServer();
-    this.websocket = new WebSocket.Server({ server: this.server, maxPayload: 16 * 1024 * 1024 });
+    this.websocket = new WebSocket.Server({ server: this.server, maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD });
     this.websocket.on('connection', client => this.attach(client));
   }
   async start() {
@@ -23,7 +28,7 @@ class CodexTerminalBridge {
   attach(client) {
     if (this.closed || this.connections.size) { client.close(); return; }
     const upstream = new WebSocket('ws://localhost', {
-      createConnection: () => net.connect(this.upstream), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000,
+      createConnection: () => net.connect(this.upstream), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 10000,
     });
     const state = { client, upstream, pending: new Map(), queue: [], queuedBytes: 0 };
     const rpc = { reply(id, result) {
@@ -82,4 +87,4 @@ class CodexTerminalBridge {
     try { fs.unlinkSync(this.endpoint); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
 }
-module.exports = { CodexTerminalBridge };
+module.exports = { CodexTerminalBridge, CODEX_WEBSOCKET_MAX_PAYLOAD };

@@ -1,3 +1,13 @@
+**2026-10-25 — dogfood repair candidate102 (not yet installed in the daily profile):**
+The iTerm-verified native bridge fix is retained; the temporary clear/redraw buffer
+has been removed. All 1012 units pass. A separately unpacked signed candidate passes
+long-reader typing (2,480 rows, 48 keys in 1.31s), selection/copy/streaming, draft and
+reading-position reopening. Native164 middle insertion with the current config and
+three image entry paths pass; one fixed local image task plus one title, zero paid
+inference. Scoped headless Fable source/artifact review passes. Daily activation and the Claude READY integration remain open.
+The person's running daily app has not been quit, updated or observed by this repair.
+The shared real-workday/lifecycle goal remains open.
+
 # Readiness and next gates
 
 As of 2026-10-24. Version 0.1.0-alpha.97 is a **local macOS technical-trial alpha**.

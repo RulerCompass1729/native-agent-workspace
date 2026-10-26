@@ -7,6 +7,7 @@ const net = require('node:net');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const WebSocket = require('ws');
+const { CODEX_WEBSOCKET_MAX_PAYLOAD } = require('./codex-terminal-bridge.cjs');
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
@@ -1670,7 +1671,7 @@ class NativeHost {
       try {
         if (!owned()) throw new Error('原生后台身份已变化；没有新建后台。');
         sameEndpoint();
-        ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000 });
+        ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 10000 });
         await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
         const rpc = new Rpc(ws);
         watcher = this.watchCodexConnection(rpc, child);
@@ -1723,7 +1724,7 @@ class NativeHost {
         await delay(100);
       }
       const endpoint = this.readCodexEndpoint();
-      ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 10000 });
+      ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 10000 });
       await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
       rpc = new Rpc(ws);
       watcher = this.watchCodexConnection(rpc, child);

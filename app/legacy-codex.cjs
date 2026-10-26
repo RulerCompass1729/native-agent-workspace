@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const WebSocket = require('ws');
+const { CODEX_WEBSOCKET_MAX_PAYLOAD } = require('./codex-terminal-bridge.cjs');
 const { Codex, Rpc } = require('./adapters.cjs');
 const { nativeTextItemId } = require('./codex-tool-content.cjs');
 const { ProgressJournal } = require('./observation.cjs');
@@ -65,7 +66,7 @@ class LegacyCodex extends EventEmitter {
   get turnId() { return this.adapter?.turnId || null; }
   async connect(socket) {
     const ws = this.ws = new WebSocket('ws://localhost', {
-      createConnection: () => net.connect(socket), maxPayload: 16 * 1024 * 1024, handshakeTimeout: 5000,
+      createConnection: () => net.connect(socket), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 5000,
     });
     ws.on('error', () => {});
     await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); ws.once('close', () => reject(Error('原生连接已关闭。'))); });
