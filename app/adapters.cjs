@@ -636,7 +636,7 @@ class Claude extends EventEmitter {
   }
   get queueAvailable() { return Boolean(!this.nativeAbortRequest && !this.nativeInputRequired && this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
   async queue(text, tag, guard) {
-    if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Error('原生等待输入暂不可用；草稿保留。');
+    if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Object.assign(Error('原生等待输入暂不可用；草稿保留。'), { notSent: true });
     const pending = this.queued = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
     try { return await this.deliver(pending, true); }
     finally { if (this.queued === pending) this.queued = null; }

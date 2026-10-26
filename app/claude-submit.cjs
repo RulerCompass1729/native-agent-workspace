@@ -19,8 +19,8 @@ class SubmissionChannel extends EventEmitter {
     this.flush();
   }
   request(text, tag, guard, waitForNativeTurn = false) {
-    if (!this.connected) return Promise.reject(new Error('安全发送连接尚未就绪；请在原生终端继续，草稿已保留。'));
-    if (this.pending) return Promise.reject(new Error('上一条发送仍待原生确认。'));
+    if (!this.connected) return Promise.reject(Object.assign(new Error('安全发送连接尚未就绪；请在原生终端继续，草稿已保留。'), { notSent: true }));
+    if (this.pending) return Promise.reject(Object.assign(new Error('上一条发送仍待原生确认。'), { notSent: true }));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.finish(new Error('原生提交未确认；不会自动重发，请检查原生会话。')), this.timeout);
       this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, deadline: Date.now() + this.timeout };
@@ -51,11 +51,14 @@ class SubmissionChannel extends EventEmitter {
       turnId: typeof message.turnId === 'string' && /^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId) ? message.turnId : null,
       promptId: typeof message.promptId === 'string' && /^[a-f0-9-]{36}$/i.test(message.promptId) ? message.promptId : null,
     });
-    else this.finish(new Error(message.status === 'draft' ? '原生终端里还有未发送的草稿。请先在那里处理；两边草稿均已保留。' : '原生未接受这次发送；草稿已保留，请查看原生会话。'));
+    else this.finish(Object.assign(new Error(message.status === 'draft' ? '原生终端里还有未发送的草稿。请先在那里处理；两边草稿均已保留。' : '原生未接受这次发送；草稿已保留，请查看原生会话。'), { notSent: message.status !== 'accepted' }));
     return true;
   }
   finish(error, receipt) {
     const p = this.pending; if (!p) return;
+    // The mod authorizes right before its native submit: until then native
+    // cannot hold this prompt. After it, a failure leaves the outcome uncertain.
+    if (error) error.notSent ??= !p.authorized;
     this.pending = null; clearTimeout(p.timer); error ? p.reject(error) : p.resolve(receipt);
   }
   close() { this.status(false); this.finish(new Error('安全发送连接已关闭；不会自动重发。')); this.poll?.end(JSON.stringify({ closed: true })); this.poll = null; }
