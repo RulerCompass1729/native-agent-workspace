@@ -17,9 +17,11 @@ assert.match(nativeVersion, /^2\.1\.(307|308|309|310)\b/, 'Verify the updated na
 let application, page, client, calls = 0, held, releaseFinal, releaseStart;
 const errors = [], checks = [];
 const questionTrial = process.env.NAW_TEST_NATIVE_QUESTION === '1';
+const imageTrial = process.env.NAW_TEST_NATIVE_IMAGE === '1';
 // Plan case: the session starts in native plan mode; the model writes its plan
 // file, then ExitPlanMode opens the native approval with that plan.
 const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_MARKER\n1. Read the local file.\n2. Report the result.\n';
+assert.ok(!imageTrial || !questionTrial && !planTrial, 'Image entry is one separate bounded task');
 let planFile = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
@@ -43,11 +45,16 @@ const server = http.createServer((req, res) => {
     }
     const number = ++calls;
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
-    if (number > (questionTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
+    if (number > (imageTrial ? 1 : questionTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'message_start', { message: { id: `msg_local_${number}`, type: 'message', role: 'assistant', model: request.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
+    if (imageTrial) {
+      block(res, 0, { type: 'text', text: 'NATIVE_IMAGE_FINAL' });
+      event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } });
+      event(res, 'message_stop', {}); res.end(); return;
+    }
     if (planTrial) {
       // Native names the plan file in plan mode's instructions to the model; for a
       // bridge-submitted first prompt they arrive with the next request, so look first.
@@ -110,6 +117,48 @@ async function cleanup() {
   }
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Native submission bridge', 60000);
   const before = (await snapshot()).sessions[0];
+  if (imageTrial) {
+    const original = Buffer.from([0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 255, 255]);
+    const png = await application.evaluate(({ nativeImage }, data) => nativeImage.createFromBitmap(Buffer.from(data), { width: 2, height: 2 }).toPNG().toString('base64'), Array.from(original));
+    const bytes = Array.from(Buffer.from(png, 'base64')), draft = 'Unsent screenshot task draft';
+    await page.locator('#chat-tab').click(); await page.locator('#message-input').fill(draft);
+    await page.locator('#message-input').evaluate((el, data) => {
+      const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(data)], 'paste.png', { type: 'image/png' }));
+      el.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
+    }, bytes);
+    const rows = () => page.locator('#terminal-area .xterm-rows').innerText();
+    await until(async () => (await rows()).includes('[Image #1]'), 'Composer image reaches the original Claude input');
+    const nativeInput = page.locator('#terminal-area .xterm-helper-textarea');
+    await nativeInput.evaluate((el, data) => {
+      const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(data)], 'drop.png', { type: 'image/png' }));
+      el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    }, bytes);
+    await until(async () => (await rows()).includes('[Image #2]'), 'Dropped image reaches the same Claude input');
+    await application.evaluate(({ clipboard, nativeImage }, data) => { clipboard.readImage = () => nativeImage.createFromBuffer(Buffer.from(data, 'base64')); }, png);
+    await page.locator('#terminal-paste').click();
+    await until(async () => (await rows()).includes('[Image #3]'), 'Paste button reads a screenshot on demand');
+    assert.equal(calls, 0, 'None of the image entry paths automatically sends');
+    assert.equal((await snapshot()).sessions[0].liveDraft, draft);
+    await nativeInput.press('Enter');
+    await until(async () => calls === 1 && (await snapshot()).sessions[0].messages.some(m => m.text?.includes('NATIVE_IMAGE_FINAL')), 'One explicit native send receives the fixed reply');
+    const completionObservedAt = Date.now();
+    await until(async () => (await snapshot()).sessions[0].state === 'idle' && (await page.locator('#session-status').innerText()).includes('就绪'), 'Native completion settles to idle in the GUI');
+    const completionLagMs = Date.now() - completionObservedAt;
+    assert.ok(completionLagMs < 1000, `GUI completion took ${completionLagMs} ms after the reply appeared`);
+    const request = JSON.parse(fs.readFileSync(path.join(base, 'request-1.json'), 'utf8'));
+    const images = request.messages.filter(m => m.role === 'user').flatMap(m => Array.isArray(m.content) ? m.content : []).filter(c => c.type === 'image');
+    assert.equal(images.length, 3);
+    for (const image of images) {
+      assert.equal(image.source.type, 'base64');
+      const pixels = await application.evaluate(({ nativeImage }, data) => nativeImage.createFromBuffer(Buffer.from(data, 'base64')).toBitmap().toString('base64'), image.source.data);
+      assert.equal(pixels, original.toString('base64'), 'Original screenshot pixels reach Claude');
+    }
+    const after = (await snapshot()).sessions[0];
+    assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid); assert.equal(after.liveDraft, draft);
+    assert.equal(calls, 1); assert.deepEqual(errors, []);
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-images.png') }); }
+    console.log(JSON.stringify({ checks: ['Three image entry paths keep the GUI draft, never auto-send, deliver unchanged pixels to the same native Claude session and settle to GUI idle'], nativeVersion, attachments: images.length, completionLagMs, localResponses: calls, paidModelCalls: 0, physicalClipboard: 'not exercised; renderer events and readImage stub', evidence: base })); return;
+  }
   await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
@@ -188,7 +237,10 @@ async function cleanup() {
       assert.ok((await page.locator('#terminal-area .xterm-rows').innerText()).includes('3. Type something.'));
       await nativeInput.press('ArrowDown');await nativeInput.press('ArrowDown');
       await until(async()=>(await page.locator('#terminal-area .xterm-rows').innerText()).includes('❯ 3. Type something.'),'Actual native free-answer field selected');
-      await nativeInput.type(expectedAnswer);
+      if(process.env.NAW_NATIVE_QUESTION_PASTE==='1') {
+        await application.evaluate(({clipboard,nativeImage},text)=>{clipboard.readImage=()=>nativeImage.createEmpty();clipboard.readText=()=>text;},expectedAnswer);
+        await page.locator('#terminal-paste').click();
+      } else await nativeInput.type(expectedAnswer);
       await until(async()=>(await page.locator('#terminal-area .xterm-rows').innerText()).includes(expectedAnswer)&&Boolean((await snapshot()).sessions[0].nativeApproval),'Free answer is visible in the still-open native question before submitting');
       fs.writeFileSync(path.join(base,'question-free-draft.txt'),await page.locator('#terminal-area .xterm-rows').innerText());
     }

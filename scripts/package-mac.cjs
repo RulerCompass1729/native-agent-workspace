@@ -8,8 +8,16 @@ const { createHash } = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const manifest = require('../package.json');
 const run = (bin, args, cwd) => execFileSync(bin, args, { cwd, stdio: 'inherit' });
+function sourceRevision(directory = root) {
+  const git = args => execFileSync('git', args, { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  if (git(['status', '--porcelain', '--untracked-files=normal'])) throw new Error('Commit source changes before packaging; no bundle was published.');
+  return git(['rev-parse', '--verify', 'HEAD']);
+}
 async function build() {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('This alpha is verified only on Apple Silicon macOS.');
+  const revision = sourceRevision();
+  // Generate the ignored client only after checking its committed inputs.
+  run(process.execPath, [path.join(root, 'scripts/build-ui.cjs')], root);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-package-'));
   // Keep executable staging bundles out of application search. Only the
   // installable archives survive the build; /Applications is the daily entry.
@@ -64,12 +72,14 @@ async function build() {
     const output = await packager({ dir: stage, name: 'Native Agent Workspace',
       appBundleId: 'io.github.rulercompass1729.native-agent-workspace',
       appVersion: manifest.version, buildVersion: '1', platform: 'darwin', arch: 'arm64',
+      extendInfo: { NAWSourceRevision: revision },
       electronVersion: manifest.devDependencies.electron,
       out: path.join(scratch, 'bundles.noindex'), overwrite: true, asar: false, prune: false,
       // Ad-hoc signatures are for local alpha testing, not notarized distribution.
       osxSign: { identity: '-', identityValidation: false, preAutoEntitlements: false, optionsForFile: () => ({ hardenedRuntime: false }) },
     });
     const app = path.join(output[0], 'Native Agent Workspace.app');
+    if (sourceRevision() !== revision) throw new Error('Source revision changed during packaging; no bundle was published.');
     run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
     fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
     const archive = path.join(root, 'dist', `native-agent-workspace-${manifest.version}-mac-arm64.zip`);
@@ -78,7 +88,8 @@ async function build() {
     const digest = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
     fs.writeFileSync(`${archive}.sha256`, `${digest}  ${path.basename(archive)}\n`);
     require('./package-dmg.cjs').buildDmg(app);
-    console.log(`Built ${path.basename(archive)}; ${inventory.length} production packages. Not notarized; publication requires artifact review.`);
+    console.log(`Built ${path.basename(archive)} from ${revision}; ${inventory.length} production packages. Not notarized; publication requires artifact review.`);
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }
-build().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (require.main === module) build().catch(error => { console.error(error.message); process.exitCode = 1; });
+module.exports = { sourceRevision };

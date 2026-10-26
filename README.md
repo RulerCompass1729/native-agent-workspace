@@ -10,252 +10,16 @@ Initial target: macOS, Claude Code + Codex + a human. Windows, Linux, and additi
 
 ## Status
 
-This is a **macOS source alpha** for a small technical trial. It supports native Claude Code and Codex sessions, conversation/terminal views, joining and leaving a shared room, and bounded handoffs. Real native replies and UI restart checks have passed; this is not yet a signed installer or a production compatibility guarantee. See [tested behavior and limits](demo.md).
+This is a local macOS technical-trial alpha for native Claude Code and Codex,
+with individual sessions, same-screen conversation/TUI views and bounded shared work.
+The current milestone is reliable daily development inside the product, including
+window reopening, updates and native-process recovery. It is not yet complete.
 
-Alpha.96 repairs measured native Codex keyboard losses, including Shift+Enter
-and Ctrl+/; the same-screen terminal keeps the native program's keyboard modes
-across reader reload. U17 now audits which facts the GUI presents and which
-interactions remain in the same-screen native TUI; full GUI-fact acceptance remains
-open. See [current acceptance](docs/readiness.md).
-
-Alpha.97 integrates the Claude lane's native `/branch` follow-up: retain the
-session row, process, history and draft while subsequent GUI input reaches the
-new native branch. This is one scoped integration, not full Claude acceptance.
-
-Alpha.95 makes newly allocated standalone test profiles disposable and keeps
-explicitly exported native-history fixtures reusable. The reused `test:desktop`
-dogfood profile is intentionally excluded. Installed checks and independent
-headless Claude review pass for this bounded resource task; this
-resource repair does not close full GUI/native parity. See [current scope](docs/readiness.md).
-
-Alpha.93 restores the same terminal after explicit cold session recovery, keeping
-history and the unsent draft. A real native-history task verifies the first new
-reply in both reader and TUI; see [tested scope](docs/testing.md).
-
-Alpha.92 identifies unverified or last-known Codex versions in existing status
-and session details, using the actual running connection. It does not change
-permissions or existing capability gates. See [compatibility scope](docs/readiness.md).
-
-Alpha.91 keeps multiple native confirmations independently actionable and shows
-which room member is waiting. A header usage action reuses native readings for
-the current session or room. Supported core Codex 0.164 interfaces and current
-cross-provider handoffs are verified without replacing existing native sessions.
-See [tested behavior and limits](docs/readiness.md).
-
-Alpha.90 lets supported new Claude 2.1.310 sessions continue in the conversation
-after the GUI interrupt action. It uses the native exact-turn abort API;
-API acknowledgement, actual interrupted boundary and original submission
-settlement remain separate. Native keyboard Escape keeps its original behavior.
-See [acceptance scope](docs/readiness.md).
-
-Alpha.89 repairs native state and input continuity: live Claude phases and
-permissions, Codex retry/question/Plan state, native handling focus, and supported
-new connections' native context switches. Questions and non-secret terminal
-submissions stay in private history; submission is separate from model acceptance.
-Actual installed native-task/control checks pass; full TUI semantic parity remains
-open. See the [native feature inventory](docs/interaction.md).
-
-Alpha.88 places the conversation and its actual native terminal in one workspace.
-The shared reader stays beside the selected member's terminal; that member does
-not change the message's explicit `@` recipient. Native search/reasoning records
-default to compact disclosures, commands show a three-line tail, and full originals
-remain expandable/copyable. New failures open automatically; deliberate choices
-survive reopening. Complete parity and visual acceptance remain open.
-See [acceptance scope](docs/readiness.md).
-
-Alpha.85 extends agent-selected addressed handoffs across supported local
-services without replacing native sessions. Alpha.84 services retain fixed-order
-cooperation through an update; services without the peer protocol remain manual.
-Human pause, private departure, closed-UI continuation and exact message receipts
-are verified through native/application journeys. See [current scope](docs/readiness.md).
-
-Alpha.83 adds native usage readings to the existing privacy/usage view, with
-unknowns, context, cumulative tokens and native cost clearly separated. Alpha.82
-verifies three native participants, including same-name agents and continuation
-while the UI is closed. See [current evidence and limits](docs/readiness.md).
-
-Alpha.81 adds bounded **agent-selected addressed handoffs** in the same shared
-reader, alongside human-selected order. With supported new sessions, choose the
-first recipient with `@`, open `… → 一起核查`, select `由 agent 选择接收者`,
-and approve participants and reply limit. A native tool chooses one recipient;
-plain mentions never send anything. Delivery details show the exact task and
-receipt. Real Haiku/Luna cooperation and installed control/recovery checks pass.
-Embedded native TUI remains the independent-work surface; complete solo 1:1 chat
-mapping is deferred. Existing connections without the tool keep their original
-session and supported manual/fixed-order workflow. See [readiness](docs/readiness.md).
-
-Alpha.80 permits an explicit new human message after a confirmed native Claude
-request failure, in a solo conversation or to a chosen shared recipient. The old
-error stays visible; no automatic retry or resumed handoff. Source and installed
-native checks pass; full native parity and post-Stop GUI input remain open.
-
-Alpha.77 retains already-displayed native tool input/results in the existing local
-conversation and shared histories through reopening, with bounded storage and no
-restored sharing grant or task replay. Source and installed native journeys pass;
-full native display/input parity remains open.
-
-Alpha.76 preserves interrupted Codex reply text against late events and restored
-history. Retained sessions can send the next GUI task using the same confirmed
-native state. Source and installed current/retained workflows pass; full native
-parity and Claude's post-Stop GUI limitation remain open.
-
-Alpha.75 restores native Codex proposed plans in the same conversation and shared
-reader, with streaming, interruption and retained receipts. Displaying a plan
-does not approve implementation or start a handoff. Source and installed native
-checks pass; full native display/input parity remains open.
-
-Alpha.74 restores Codex's native readable process summaries in the existing main
-conversation and shared reader, with native interruption boundaries. It does not
-request extra summaries or expose raw reasoning. Full native display/input parity
-remains open; see [current evidence](docs/readiness.md).
-
-Alpha.73 synchronizes the existing Claude model label with native selection and
-reconnection. It adds no controls or model calls. Full native display/input parity
-remains open; see [current evidence](docs/readiness.md).
-
-Alpha.72 repairs first-task Codex terminal attachment and verifies the existing
-Claude queue/display integration against native 2.1.309. An empty Codex history
-now explains the first-message step without creating a seed task or new thread.
-The application remains a technical trial; full native display parity is open.
-
-Alpha.71 preserves interrupted native output across both private and shared
-readers and full app reopening. Claude's native Stop currently requires new
-terminal input before plugin submissions resume; the GUI keeps the draft and
-exposes that requirement. This is a remaining continuity limitation, not a
-completed seamless-input feature. See [current evidence](docs/readiness.md).
-
-Alpha.70 repairs retained Claude output recovery when the whole app closes with
-input queued. The same native process keeps working; reopening restores buffered
-input and output without resending the task or restoring expired sharing grants.
-Source and installed native verification pass, including upgrading the previous
-released hook while preserving customized copies. Exact recovered input confirms
-its shared receipt; replies with expired sharing remain reachable in the original
-session through the existing session link.
-
-Alpha.69 extends the same retained Claude native waiting queue to its shared
-composer. The room distinguishes waiting from native acceptance; only the queued
-instruction's verified reply is shared, preserving prior private work and drafts.
-Shared waiting now preserves the already-public running reply until its native
-boundary. Moving one member no longer freezes another member’s stream. Source
-checks pass for both new and retained connections, and the installed retained
-workflow passes. Force-send and full native parity remain open.
-
-Alpha.68 repairs working-turn input for retained Codex connections and extends
-its existing native steering path to the shared composer. Only newly attributed
-native items enter the room; old private items do not. Late native acknowledgements
-and saved-draft cleanup have explicit regressions. Source and installed native
-checks pass independent review; this is not forced interruption or a second native turn.
-
-Alpha.67 applies the same explicitly addressed shared-reader behavior to retained
-Codex 0.163.0 connections. It preserves the loaded native thread, history, settings
-and process; permission/private-input boundaries stop further sharing. A completed
-tool keeps its completion status while explaining a later sharing stop. Source
-and installed native checks pass; full native parity remains open.
-
-Alpha.66 brings explicitly addressed replies from inspected retained Claude
-2.1.302 sessions into the shared main reader. Native text, tools and completion
-update in attributed blocks; original private history is not automatically shared.
-Permission waits, private input and departure stop further sharing. No extra
-model call or terminal panel is added. Source and installed evidence pass independent review. Full native parity remains open.
-
-Alpha.65 adds solo waiting input to those retained Claude sessions, preserving the
-current task and newer drafts. Native and installed checks verify the queued text
-only enters the next request once. It does not add force-send or retained room
-waiting.
-
-Alpha.64 connects inspected retained Claude 2.1.302 sessions to the main reader:
-accepted input, display batches and tool text use the original native process.
-Dual-window, reopen and ended-history native checks pass in source and installed
-builds. Alpha.59–63 also add Claude waiting input, Codex shared steering and
-independent recipient sending. Complete native transient-state parity and Claude
-force-send remain open; see the current [readiness](docs/readiness.md) and
-[testing boundaries](docs/testing.md).
-
-Alpha.58 adds working-turn input for Codex 0.163.0 when its native turn identity
-is known. It steers that existing turn, preserves drafts, and stops prior room
-sharing before private instructions. Actual native/Electron and installed retained
-checks pass; Claude queue/force-send and shared working input remain open.
-
-Alpha.57 adds reply threads inside that same shared reader, with member trajectory
-filtering and preserved discussion drafts. Source and installed interaction checks
-pass. It also fixes a blank page after repeated startup, verified against the
-original retained profile without restarting native sessions. Working-turn input
-and complete native-state mapping remain open.
-
-Alpha.56 replaces terminal-camera panels with native content in the
-main reader. Authorized shared replies stream as attributed message blocks;
-expand a sent message to inspect its recipients and exact payload. Retained
-Codex history and live text/tool updates reuse the original connection. Source
-checks and installed reader/quiet-reopen checks pass. This does not yet cover every
-native transient state or working-turn input. See [evidence](docs/testing.md).
-
-Alpha.55 preserves expanded running results and their reading position when
-switching sessions, GUI/TUI views or collaboration membership. A newer reading
-gesture wins over a delayed restore. This adds no agent request or sharing;
-temporary process records remain bounded and are not a persistent archive.
-
-Alpha.54 adds Claude's stored intermediate response text and textual tool results
-to the existing private **运行记录**, alongside its live native terminal. It does
-not share that content or call another model. Observation remains bounded and
-volatile; see [coverage and limits](docs/live-progress.md#alpha54-native-claude-message-observation).
-
-Alpha.51 shows when shared input is awaiting confirmation and lets you cancel a
-waiting exchange without losing its draft. It does not claim to cancel tasks
-already accepted by an agent. See [waiting and cancellation checks](docs/testing.md#visible-waiting-and-cancellation--alpha51).
-
-Alpha.50 keeps automatic events from unrelated sessions from interrupting a
-selected collaboration. Late send failures apply to their original exchange;
-explicit human controls retain priority. See [six-session checks](docs/testing.md#six-session-independence--alpha50).
-
-Alpha.49 adds **新会话 → Codex → 继续已有 Codex 会话…** for explicitly
-selected, stopped native history. It retains the original ID and settings;
-selecting a known or locally archived session opens its existing record. This
-path currently supports the verified Codex 0.163.0 server, not live outside
-attachment or external Claude history. See [entry evidence and limits](docs/native-session-entry.md).
-
-Alpha.47 enforces the finite exchange deadline before native delivery and reply
-sharing. Closing the window preserves an explicitly authorized exchange; expiry
-stops further handoffs while retaining late results privately. This does not
-cancel accepted native work. See [bounded-away evidence](docs/acceptance/bounded-away.md).
-
-Alpha.46 improves the path from a paused collaboration to its original session:
-use **查看会话**, inspect the private result and choose what to share. Shared
-notes and local search keep decisions available without another model call.
-See [graphical workflow evidence and limits](docs/acceptance/everyday-workflow.md).
-
-Alpha.44 adds **文件…** in conversation and shared views: preview a local UTF-8
-text material, explicitly add it to a draft, or save an exact result copy. **一起核查…**
-lets you select and order 2–6 independent sessions on a capable shared backend,
-with at most six replies. Joining does not share private history or start work.
-An installed three-session calculation/check/file task passed; native permissions
-can still pause automatic sharing. See the [workflow evidence and boundaries](docs/acceptance/desktop-workflow.md).
-
-Alpha.22 passes the controlled local daily single-conversation acceptance,
-including visible macOS System Pinyin/WeChat input, terminal controls and reopen
-continuity. See [evidence and limits](docs/alpha.md#alpha22-single-conversation-os-acceptance).
-Alpha.23 adds a tested core workflow: `@` recipient selection, explicit bounded
-reply exchange, shared notes, detach/continue and archive/reopen. The local DMG
-also passed Safari download, app-specific Gatekeeper approval and prerequisite
-setup in an isolated macOS guest. See the [core acceptance and boundaries](docs/core-milestone.md).
-
-Alpha.24 adds private live native output and bounded tool/rewind records in both
-solo and collaboration views. Viewing does not open another agent or send context.
-Old live backends retain their existing capabilities; this is not seamless active
-backend migration. See [native visibility and its limits](docs/live-progress.md).
-
-Alpha.26 adds explicit input connections for inspected retained Claude/Codex
-sessions, preserving their native identities. Both can receive a selected shared
-message; replies from these older backends require human selection before sharing.
-Codex conversation/room previews reuse its existing terminal instead of launching
-another agent. See [retained-session evidence](docs/testing.md#retained-session-continuity--alpha26).
-
-Claude conversation/room sends now use its native structured submission API,
-with a draft check and no terminal paste/Enter injection. This requires Claude
-Code 2.1.302+ and enabled session-local mods. An older retained backend keeps its
-native sessions available, while the new UI gates sends by each backend’s actual
-capabilities. Alpha.11 also preserves Codex terminal steering messages and prevents
-a human takeover reply from being returned automatically to an old shared task.
-See [verified behavior and remaining limits](docs/alpha.md#structured-claude-submission).
+See [current readiness](docs/readiness.md) for accepted scopes and open work,
+[product requirements](docs/product.md) for purpose, and
+[testing records](docs/testing.md) / [earlier alpha records](docs/alpha.md) for
+historical evidence. Native compatibility and physical-input claims remain bounded
+by those actual checks; there is no production or notarized-distribution guarantee.
 
 The interface runs on a pinned, UI-only DeepSeek Harness composition, with this project's client plugin inside Electron. Persistent native processes belong to a separate local service. There is no intermediate DeepSeek model call. This is an independent project, not an official DeepSeek distribution.
 
@@ -396,6 +160,8 @@ interrupted task.
 and zip in `dist/`, using
 Electron Packager and a clean production dependency tree. The app itself does not
 need a separate Node/npm installation; native CLI and Python prerequisites remain.
+Packaging requires a clean Git checkout and records its commit in `Info.plist`
+as `NAWSourceRevision`. Source development with `npm start` remains separate.
 The `.app` is staged temporarily and included inside those archives; it is not
 left as a second launchable copy in `dist/`. Keep the daily app in `/Applications`.
 Test and rollback copies stay outside application search, with tests hidden by default.
@@ -419,7 +185,7 @@ not a prerequisite for building this DMG. No public binary is published yet.
 | [Competitors](docs/competitors.md) | Relevant overlap and focused reference products |
 | [Licensing](docs/licensing.md) | Apache-2.0, attribution, commercial use, and upstream boundaries |
 | [Naming](docs/naming.md) | Naming directions; no brand selected or cleared |
-| [Preparation and next steps](docs/readiness.md) | Current deliverables and the first technical proof |
+| [Preparation and next steps](docs/readiness.md) | Current deliverables, evidence and open boundaries |
 | [Native continuity experiment](experiments/native-continuity/README.md) | Runnable diagnostic and the limits of the first runtime evidence |
 | [Source register](docs/sources.json) | Dated evidence and pinned source references |
 | [Publication safeguards](docs/publication.md) | Local commit/push checks and contributor setup |

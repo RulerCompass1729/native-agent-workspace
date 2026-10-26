@@ -1,5 +1,7 @@
 # Bounded testing
 
+Historical validation records. For the current delivery scope, see [readiness](readiness.md).
+
 ## Single-agent native goal preflight — 2026-10-25
 
 `NAW_NATIVE_GOAL_TRIAL=1 NAW_CODEX_VERSION=0.164.0` with native-first startup
