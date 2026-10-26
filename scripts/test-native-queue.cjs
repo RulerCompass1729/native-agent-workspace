@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connectService } = require(path.join(code, 'app/service-client.cjs'));
-const { executable } = require(path.join(code, 'app/platform.cjs'));
+const { executable, processIdentity } = require(path.join(code, 'app/platform.cjs'));
 const shared = process.env.NAW_QUEUE_SHARED === '1';
 const modelOnly = process.env.NAW_MODEL_ONLY === '1';
 const input = shared ? '#shared-input' : '#message-input', send = shared ? '#forward-button' : '#send-button';
@@ -17,7 +17,7 @@ for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const located = executable('claude'), binary = located && fs.realpathSync(located); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 assert.match(nativeVersion, /^2\.1\.(308|309|310)\b/, 'Verify the updated native contract before sending a test task');
-let application, page, client, calls = 0, held, releaseFinal;
+let application, page, client, calls = 0, held, releaseFinal, pausedNative;
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
@@ -50,7 +50,21 @@ const server = http.createServer((req, res) => {
   });
 });
 const snapshot = () => client.call('initial');
+function resumeNative() {
+  if (!pausedNative) return;
+  const stopped = pausedNative; pausedNative = null;
+  if (processIdentity(stopped.pid)?.started === stopped.started) process.kill(stopped.pid, 'SIGCONT');
+}
+const terminalText = async () => (await page.locator('#terminal-area .xterm-rows').evaluateAll(rows => rows.filter(el => el.checkVisibility()).map(el => el.innerText).join('\n'))).replace(/\u00a0/g, ' ');
+// One key into the native prompt itself, through the row's own terminal view.
+async function nativeKey(key, expected) {
+  await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen >> visible=true').click();
+  await page.keyboard.press(key);
+  await until(async () => expected.test((await terminalText()).split('\n').filter(l => /^❯/.test(l.trim())).at(-1) || ''), 'Native prompt shows ' + expected);
+  await page.locator('#chat-tab').click();
+}
 async function cleanup() {
+  resumeNative();
   releaseFinal?.(); held?.destroy();
   if (application) await application.close().catch(() => {});
   if (client) { try { for (const s of (await snapshot()).sessions) await client.call('stop', s.id); await client.call('shutdown'); } finally { client.close(); } }
@@ -93,6 +107,8 @@ async function cleanup() {
   await until(() => calls === 1 && held, 'Native original task');
   await until(async () => (await snapshot()).sessions[0].state === 'working', 'Working native state');
   await until(async () => (await page.locator('#send-button').innerText()) === '等本轮结束后发送 ↑', 'Working composer receives state');
+  // A draft in the native prompt makes native refuse a queued send before holding it.
+  await nativeKey('x', /❯\s*x\s*$/);
   if (shared) {
     await page.locator('#message-input').fill('Private solo draft.');
     await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
@@ -100,6 +116,34 @@ async function cleanup() {
     await inlineRecipient(page, before.id);
     await until(async () => (await page.locator(send).innerText()) === '等本轮结束后发送 ↑', 'Shared native waiting action');
   }
+  const blocked = 'Blocked by a native draft.';
+  if (shared) await fillRoomMessage(page, blocked); else await page.locator(input).fill(blocked);
+  // Hold only this isolated row's CLI so the recorded/cleared state is visible
+  // before native reads its existing draft and refuses the prompt. No provider
+  // or product methods are replaced; always unpause before cleanup can stop it.
+  const owned = (await snapshot()).sessions.find(s => s.id === before.id);
+  assert.equal(owned.nativeId, before.nativeId); assert.equal(owned.pid, before.pid);
+  pausedNative = processIdentity(owned.pid); assert.ok(pausedNative);
+  process.kill(pausedNative.pid, 'SIGSTOP');
+  try {
+    await page.locator(send).click();
+    await until(async () => (shared ? await roomBody(page) : await page.locator(input).inputValue()) === '', 'The recorded message clears before native refusal', 5000);
+    assert.equal((await snapshot()).sessions[0].messages.find(m => m.text === blocked).status, 'awaiting-native');
+    await page.screenshot({ path: path.join(base, 'refusal-cleared.png') });
+    fs.writeFileSync(path.join(base, 'refusal-cleared.json'), JSON.stringify(await snapshot(), null, 2));
+  } finally { resumeNative(); }
+  await until(async () => (await snapshot()).sessions[0].messages.some(m => m.text === blocked && m.status === 'not-sent'), 'Native draft refuses the queued send');
+  await until(async () => (shared ? await roomBody(page) : await page.locator(input).inputValue()) === blocked, 'A proven non-send returns to the untouched composer');
+  await until(async () => (await page.locator('body').innerText()).includes('没有发出'), 'The record says it was not sent');
+  await until(async () => (await page.locator('#toast').innerText()).includes('原生终端里还有未发送的草稿'), 'Native draft refusal, not a submission timeout');
+  if (shared) assert.equal((await snapshot()).room.messages.find(m => m.text === blocked).deliveries[0].status, 'not-sent');
+  else assert.equal((await snapshot()).sessions[0].liveDraft, blocked);
+  await page.screenshot({ path: path.join(base, 'refusal-restored.png') });
+  assert.equal(calls, 1);
+  if (shared) await page.locator(`[data-session-id="${before.id}"]`).click();
+  await nativeKey('Backspace', /❯\s*$/);
+  if (shared) { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
+  checks.push('A recorded queued input visibly clears, then a native draft refusal marks 没有发出 and restores the untouched composer');
   // The room picks its recipient with an inline mention; a plain fill would drop it.
   if (shared) await fillRoomMessage(page, 'Do the next local task.'); else await page.locator(input).fill('Do the next local task.');
   assert.equal(await page.locator(send).innerText(), '等本轮结束后发送 ↑');
@@ -108,7 +152,9 @@ async function cleanup() {
   const pending = (await snapshot()).sessions[0];
   assert.equal(pending.messages.filter(m => m.text === 'Do the next local task.').length, 1);
   assert.equal(pending.messages.at(-1).status, 'awaiting-native');
-  assert.equal(shared ? await roomBody(page) : await page.locator(input).inputValue(), 'Do the next local task.');
+  // Like a native TUI queue, the recorded message leaves the composer at once.
+  await until(async () => (shared ? await roomBody(page) : await page.locator(input).inputValue()) === '', 'Queued message leaves the composer');
+  if (!shared) assert.equal(pending.liveDraft, '');
   await until(() => page.locator(send).isDisabled(), 'Pending queue reaches composer');
   assert.equal(await page.locator(send).isDisabled(), true);
   // Covers both the former 15 s submission and 40 s RPC deadlines with one

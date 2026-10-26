@@ -33,6 +33,7 @@ test('private queued input retains native work, rejects duplicates and preserves
   r.queue = () => new Promise(resolve => { accept = resolve; });
   const sending = w.queue(id, 'next task', 'owner');
   assert.equal(s.pendingTag, 'original'); assert.equal(s.state, 'working');
+  assert.equal(w.snapshot().sessions[0].liveDraft, '');
   assert.equal(w.snapshot().sessions[0].pendingQueue, s.messages.at(-1).id);
   assert.equal(s.messages.at(-1).status, 'awaiting-native');
   await assert.rejects(w.queue(id, 'duplicate', 'owner'), /不能接收/);
@@ -41,14 +42,28 @@ test('private queued input retains native work, rejects duplicates and preserves
   assert.equal(w.snapshot().sessions[0].liveDraft, 'new draft');
   assert.equal(s.messages.at(-1).status, 'submitted'); assert.equal(r.pendingQueue, null);
 });
-test('uncertain queued input preserves draft and exact message without automatic retry', async t => {
+test('uncertain queued input stays only in the record, without automatic retry', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   const s = w.get(id); s.state = 'working'; r.queueAvailable = true;
   w.setDraft(id, 'next task', 'owner'); let calls = 0;
   r.queue = async () => { calls++; throw Error('native disconnected'); };
   await assert.rejects(w.queue(id, 'next task', 'owner'), /disconnected/);
-  assert.equal(calls, 1); assert.equal(s.messages.at(-1).status, 'unconfirmed');
-  assert.equal(w.snapshot().sessions[0].liveDraft, 'next task'); assert.equal(s.state, 'working');
+  assert.equal(calls, 1); assert.equal(s.messages.at(-1).status, 'unconfirmed'); assert.equal(s.messages.at(-1).text, 'next task');
+  assert.equal(w.snapshot().sessions[0].liveDraft, ''); assert.equal(s.state, 'working');
+});
+test('a queued input proven not sent returns to an untouched draft only', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); s.state = 'working'; r.queueAvailable = true;
+  w.setDraft(id, 'next task', 'owner'); let reject;
+  r.queue = () => new Promise((_resolve, fail) => { reject = fail; });
+  const refused = w.queue(id, 'next task', 'owner');
+  assert.equal(w.snapshot().sessions[0].liveDraft, '');
+  reject(Object.assign(Error('native draft'), { notSent: true })); await assert.rejects(refused, /native draft/);
+  assert.equal(s.messages.at(-1).status, 'not-sent'); assert.equal(w.snapshot().sessions[0].liveDraft, 'next task');
+  const edited = w.queue(id, 'next task', 'owner');
+  w.setDraft(id, 'newer words', 'owner');
+  reject(Object.assign(Error('native draft'), { notSent: true })); await assert.rejects(edited, /native draft/);
+  assert.equal(s.messages.at(-1).status, 'not-sent'); assert.equal(w.snapshot().sessions[0].liveDraft, 'newer words');
 });
 test('shared waiting input binds only its next native prompt and preserves the solo draft', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);

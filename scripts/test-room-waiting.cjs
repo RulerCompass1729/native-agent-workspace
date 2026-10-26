@@ -57,6 +57,15 @@ async function run() {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(950, 700));
   const a = await create('claude', '核查者'), b = await create('codex', '复核者');
   for (const id of [a, b]) { await page.locator(`[data-session-id="${id}"]`).click(); await page.getByRole('button', { name: '加入协作', exact: true }).click(); }
+  // The sidebar marks exactly one current place, visibly (bar + frame) and with aria-current.
+  const current = () => page.evaluate(() => [...document.querySelectorAll('[aria-current="page"]')].map(el => el.id || el.dataset.sessionId));
+  const marked = selector => page.locator(selector).evaluate(el => getComputedStyle(el.closest('.session-row') || el).boxShadow.includes('inset'));
+  await page.locator('#room-nav').click(); await until(async () => JSON.stringify(await current()) === '["room-nav"]', 'Room marked current');
+  assert.equal(await marked('#room-nav'), true); assert.equal(await marked(`[data-session-id="${a}"]`), false);
+  await page.locator(`[data-session-id="${a}"]`).click(); await until(async () => JSON.stringify(await current()) === JSON.stringify([a]), 'Session marked current');
+  assert.equal(await marked(`[data-session-id="${a}"]`), true); assert.equal(await marked(`[data-session-id="${b}"]`), false); assert.equal(await marked('#room-nav'), false);
+  await shot('sidebar-current');
+  checks.push('The sidebar marks exactly one current place, visibly and with aria-current, for a room and a session');
   const c = await create('claude', '私人学习');
   await pendingPrivate(c, '私人问题一，不进入共同任务'); await authorize(a, '旧授权任务：每天35分钟');
   await delay(250); assert.equal((await fixture()).sends.length, 1); await shot('waiting-before-action');
