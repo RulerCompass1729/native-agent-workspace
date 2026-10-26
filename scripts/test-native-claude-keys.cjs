@@ -93,6 +93,18 @@ async function cleanup() {
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Native ready', 60000);
   await focusTerminal(); await until(async () => (await editLine()) === '❯', 'Native edit line', 15000); await record('start');
 
+  // CL-X04/X06/X07: what the running native process actually received from NAW
+  // (its argv and environment as ps reports them, and its settings file).
+  const nativeLine = testScratch.childProcess.execFileSync('ps', ['-axE', '-ww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    .split('\n').find(line => line.includes(path.basename(base)) && /^\s*\d+\s+claude /.test(line)) || '';
+  const settingsFile = (nativeLine.match(/--settings (\S+\.settings\.json)/) || [])[1];
+  const launchFacts = {
+    allowedTool: /--allowedTools mcp__native_workspace__workspace_message\b/.test(nativeLine),
+    agentTeams: /\bCLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1\b/.test(nativeLine),
+    noMarketplaceInstall: /\bCLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1\b/.test(nativeLine),
+    inProcessTeammates: Boolean(settingsFile) && JSON.parse(fs.readFileSync(settingsFile, 'utf8')).teammateMode === 'in-process',
+  };
+
   // CL-I01: word and line editing with modifiers whose synthetic and physical
   // events match (xterm sends ESC DEL for Option+Backspace and CSI 1;3D for
   // Option+Left from the key code, not from the macOS layout).
@@ -204,7 +216,7 @@ async function cleanup() {
   await page.keyboard.press('Control+t'); await sleep(500); await record('ctrl-t');
   await page.keyboard.press('Control+t'); await sleep(300); await reset();
 
-  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog, modelPicker, configDialog, memoryDialog, mcpListed, hooksMenu, nawHooksUnlisted };
+  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog, modelPicker, configDialog, memoryDialog, mcpListed, hooksMenu, nawHooksUnlisted, launchFacts: Object.values(launchFacts).every(Boolean) };
   fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter, modeRestored }, null, 2));
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
@@ -212,7 +224,7 @@ async function cleanup() {
   }
   assert.equal(requests, 0, 'No key submitted a model request'); assert.deepEqual(errors, []);
   for (const [name, ok] of Object.entries(results)) if (ok) checks.push(name);
-  console.log(JSON.stringify({ nativeVersion, results, modes: [modeBefore, modeAfter, modeRestored], checks, modelRequests: requests, paidModelCalls: 0, errors, evidence: base }, null, 2));
+  console.log(JSON.stringify({ nativeVersion, results, launchFacts, modes: [modeBefore, modeAfter, modeRestored], checks, modelRequests: requests, paidModelCalls: 0, errors, evidence: base }, null, 2));
   const failed = Object.entries(results).filter(([, ok]) => !ok).map(([name]) => name);
   assert.deepEqual(failed, [], 'Native keys that did not work in NAW\'s terminal');
 })().catch(async error => {
