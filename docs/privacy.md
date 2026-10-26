@@ -79,7 +79,10 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   that session's own transcript (on session start, prompt submit and stop) and
   keeps the title as the row name; nothing else in the transcript is read or
   stored. Codex rows use their first request, then a native thread name if one
-  is set. A desktop rename stays in session-labels.json and always wins.
+  is set, including the title the Codex TUI generates for an unnamed thread.
+  An automatic name comes from a private first request or summary and, like any
+  row name, becomes the participant label in shared records and handoff
+  previews. A desktop rename stays in session-labels.json and always wins.
 - room-state.json contains the room name, human-written shared notes and their
   saved versions, confirmed membership events, archive indexes and the original
   member IDs for explicit restoration. Its file is owner-only. These are local

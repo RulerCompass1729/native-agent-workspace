@@ -101,9 +101,11 @@ async function nativeCommand(command){
  if(!activeGoalRecovery){await page.locator('#message-input').fill(goalTrial?'Create the bounded native goal, verify its continuation while this window is closed, then complete it.':'Make one small local check.');await page.locator('#send-button').click();}
  if(autoName){
   await until(()=>calls===1,'First native task');assert.equal(before.autoName,true);
-  await until(async()=>(await snapshot()).sessions[0].name==='Codex · Make one small local check.','Before a native name the row shows its first request');
-  // The TUI's generated "task title" is a terminal title, not the thread name. A native
-  // rename (another app-server client, as the TUI's /rename) is the native name source.
+  // The native TUI names an unnamed thread with its generated title (codex-rs/tui/src/app/
+  // event_dispatch.rs, GeneratedThreadTitle -> Automatic -> thread_set_name when thread.name is none).
+  if(initialTerminal){await until(async()=>titles===1&&(await snapshot()).sessions[0].name==='Codex · Native context check','The TUI-generated thread title names the row',45000);checks.push('An unnamed Codex row takes the thread title its native TUI generates');}
+  else await until(async()=>(await snapshot()).sessions[0].name==='Codex · Make one small local check.','Before a native name the row shows its first request');
+  // A later native rename (another app-server client, as the TUI's /rename) replaces it.
   const net=require('node:net'),WebSocket=require('ws'),{Rpc}=require('../app/adapters.cjs');
   const entries=require('../app/service-layout.cjs').readLayout(profile).entries;assert.equal(entries.length,1);
   const endpoint=path.join(path.dirname(JSON.parse(fs.readFileSync(path.join(profile,entries[0],'connection.json'))).endpoint),'codex.sock');
@@ -115,7 +117,8 @@ async function nativeCommand(command){
   await until(async()=>(await page.locator(`[data-session-id="${before.id}"]`).innerText()).includes('Codex · Native renamed thread'),'The sidebar shows it');
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'codex-name.png')});
   assert.equal(calls,1);assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({checks:['An unnamed Codex row shows its first request, then the native thread name, with the provider name'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  checks.push(initialTerminal?'A later native rename replaces the generated title':'An unnamed Codex row shows its first request, then the native thread name, with the provider name');
+  console.log(JSON.stringify({checks,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(activeGoalRecovery){
   const net=require('node:net'),WebSocket=require('ws'),{Rpc}=require('../app/adapters.cjs');
