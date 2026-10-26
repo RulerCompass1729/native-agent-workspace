@@ -287,3 +287,5 @@ header h1, header p { overflow-wrap: anywhere; }
 /* Bound layout/paint work to each existing scrolling reader. Keep all original
    rows in the DOM; no estimated heights, paging or deferred draft writes. */
 .messages { contain: strict; }
+.jump-bar{position:sticky;bottom:12px;height:0;z-index:2}
+.jump-latest{position:absolute;bottom:0;left:50%;transform:translateX(-50%);white-space:nowrap;padding:4px 14px;border:1px solid var(--border);border-radius:999px;background:var(--raised);font-size:12px;box-shadow:0 2px 10px #0002}
