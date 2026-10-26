@@ -107,6 +107,19 @@ async function run() {
   const chunks = (await fixture()).inputs.slice(base);
   assert.equal(chunks.filter(x => x.id === id).map(x => x.data).join(''), 'FAST-A');
   assert.equal(chunks.filter(x => x.id === other).map(x => x.data).join(''), 'FAST-B');
+  // Claude pushes CSI-u flags 5 and reads 13;2u as a newline; a plain CR would submit the draft.
+  await page.locator(`[data-session-id="${id}"]`).click();
+  await until(() => input.evaluate(el => document.activeElement === el), 'Claude native input for Shift+Enter');
+  await fixture('terminal', id, { data: '', sequence: 1, keyboardFlags: 5 }); await delay(100);
+  const claudeBase = (await fixture()).inputs.length;
+  await input.press('Shift+Enter');
+  await until(async () => (await fixture()).inputs.slice(claudeBase).map(x => x.data).join('') === '\x1b[13;2u', 'Claude Shift+Enter is a native newline');
+  await fixture('terminal', id, { data: '', sequence: 2, keyboardFlags: 0 }); await delay(100);
+  const claudeLegacy = (await fixture()).inputs.length; await input.press('Shift+Enter');
+  await until(async () => (await fixture()).inputs.slice(claudeLegacy).map(x => x.data).join('') === '\r', 'Claude legacy keyboard mode keeps the plain Enter');
+  passed.push('Claude native Shift+Enter inserts a newline under its CSI-u request and stays legacy otherwise');
+  await page.locator(`[data-session-id="${other}"]`).click();
+  await until(() => otherInput.evaluate(el => document.activeElement === el), 'Codex native input after the Claude key check');
   const compositionBase = (await fixture()).inputs.length;
   await otherInput.evaluate(el => { window.syntheticTrace = []; for (const name of ['compositionstart', 'compositionend', 'beforeinput', 'input', 'blur', 'focus']) el.addEventListener(name, event => window.syntheticTrace.push({ type: event.type, data: event.data, value: el.value, active: document.activeElement === el }), true); });
   await cdp.send('Input.imeSetComposition', { text: '离开前', selectionStart: 3, selectionEnd: 3 });

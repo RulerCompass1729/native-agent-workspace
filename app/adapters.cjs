@@ -151,7 +151,11 @@ class Claude extends EventEmitter {
     const posture = !record.recovering ? [] : [
       ...(record.nativePermissionMode === 'bypassPermissions' ? ['--permission-mode', 'bypassPermissions'] : []),
       ...(EFFORT_LEVELS.includes(record.nativeEffort) ? ['--effort', record.nativeEffort] : [])];
-    this.terminal = new Terminal([host.binaries.claude, record.recovering ? '--resume' : '--session-id', record.nativeId, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
+    // A picker branch opens the native session picker once and forks the chosen
+    // session into this row's pre-assigned ID; recovery always resumes that ID.
+    const identity = record.recovering ? ['--resume', record.nativeId]
+      : record.forkPicker ? ['--resume', '--fork-session', '--session-id', record.nativeId] : ['--session-id', record.nativeId];
+    this.terminal = new Terminal([host.binaries.claude, ...identity, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
@@ -180,6 +184,7 @@ class Claude extends EventEmitter {
       this.emit('state', 'background');
     } else {
       if (this.switchedTo) this.emit('activity', `原生终端已退出；它切换到的会话 ${this.switchedTo.slice(0, 8)} 是否在别处继续无法确认。`);
+      else if (this.record.forkPicker) this.emit('activity', '未选择会话，没有创建分支。');
       this.emit('state', 'ended');
     }
   }
@@ -501,6 +506,8 @@ class Claude extends EventEmitter {
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
     });
     if (isChild) return;
+    // The branch exists once its own session starts; later launches resume it.
+    if (this.record.forkPicker && event.hook_event_name === 'SessionStart') { this.record.forkPicker = false; this.emit('capability'); }
     const mode = PERMISSION_MODES.includes(event.permission_mode) ? event.permission_mode : this.record.nativePermissionMode;
     const effort = EFFORT_LEVELS.includes(event.effort?.level) ? event.effort.level : this.record.nativeEffort;
     if (mode !== this.record.nativePermissionMode || effort !== this.record.nativeEffort) {

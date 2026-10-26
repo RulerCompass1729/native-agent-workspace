@@ -100,14 +100,15 @@ async function cleanup() {
     await inlineRecipient(page, before.id);
     await until(async () => (await page.locator(send).innerText()) === '等本轮结束后发送 ↑', 'Shared native waiting action');
   }
-  await page.locator(input).fill('Do the next local task.');
+  // The room picks its recipient with an inline mention; a plain fill would drop it.
+  if (shared) await fillRoomMessage(page, 'Do the next local task.'); else await page.locator(input).fill('Do the next local task.');
   assert.equal(await page.locator(send).innerText(), '等本轮结束后发送 ↑');
   await page.locator(send).click();
   await until(async () => (await snapshot()).sessions[0].pendingQueue, 'Waiting native input');
   const pending = (await snapshot()).sessions[0];
   assert.equal(pending.messages.filter(m => m.text === 'Do the next local task.').length, 1);
   assert.equal(pending.messages.at(-1).status, 'awaiting-native');
-  assert.equal(await page.locator(input).inputValue(), 'Do the next local task.');
+  assert.equal(shared ? await roomBody(page) : await page.locator(input).inputValue(), 'Do the next local task.');
   await until(() => page.locator(send).isDisabled(), 'Pending queue reaches composer');
   assert.equal(await page.locator(send).isDisabled(), true);
   // Covers both the former 15 s submission and 40 s RPC deadlines with one
@@ -117,6 +118,10 @@ async function cleanup() {
   assert.equal(waiting.pendingQueue, pending.pendingQueue); assert.equal(waiting.state, 'working');
   assert.equal(calls, 1); assert.equal(waiting.nativeId, before.nativeId); assert.equal(waiting.pid, before.pid);
   assert.equal(waiting.messages.find(m => m.id === pending.pendingQueue).status, 'awaiting-native');
+  // The GUI says why it waits (native runs a plugin's queued prompt only once idle) and where to interject.
+  const visible = await page.locator('body').innerText();
+  assert.ok(visible.includes('排队中，等空闲后发送'), 'The queued message is labelled as waiting for idle');
+  assert.ok(shared ? (await page.locator('#run-status').innerText()).includes('想中途插话，请在它的原生终端输入') : (await page.locator('#compose-hint').innerText()).includes('想中途插话，请在原生终端输入'), 'The GUI points to the native terminal for mid-turn input');
   assert.ok(!(await page.locator('#toast').innerText()).includes('超时'));
   fs.writeFileSync(path.join(base, 'waiting.json'), JSON.stringify(await snapshot(), null, 2));
   if (shared) {
