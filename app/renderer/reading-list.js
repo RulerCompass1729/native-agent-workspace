@@ -135,7 +135,8 @@ function messageList(el, messages, room = false, key = 'room') {
       if (m.role === 'tool' || m.kind === 'summary') {
         const disclosure = node('details', undefined, 'process-details'), summary = node('summary'), content = node('div', undefined, 'process-content');
         entry.disclosure = disclosure; entry.preview = node('span', undefined, 'process-label'); entry.tail = node('pre', undefined, 'process-tail'); entry.content = content;
-        summary.append(heading); content.append(body); disclosure.append(summary, content); item.replaceChildren(disclosure, entry.tail, actions);
+        entry.more = node('button', undefined, 'process-more'); entry.more.type = 'button';
+        summary.append(heading); content.append(body); disclosure.append(summary, content); item.replaceChildren(disclosure, entry.tail, entry.more, actions);
         const rememberFold = () => {
           const message = entry.message, error = message?.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted'].includes(message?.status) ? message.status : '';
           const previous = view.folds[m.id];
@@ -149,6 +150,7 @@ function messageList(el, messages, room = false, key = 'room') {
           if (event.target.closest('button,a,input')) return;
           event.preventDefault(); entry.expectedOpen = undefined; disclosure.open = !disclosure.open; rememberFold();
         });
+        entry.more.onclick = () => { entry.expectedOpen = undefined; disclosure.open = true; rememberFold(); };
         disclosure.addEventListener('toggle', () => {
           if (entry.expectedOpen === disclosure.open) { entry.expectedOpen = undefined; return; }
           entry.expectedOpen = undefined; rememberFold();
@@ -225,8 +227,12 @@ function messageList(el, messages, room = false, key = 'room') {
       }
       const preview = (m.toolKind === 'webSearch' ? '' : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
       if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
-      const tail = m.toolKind === 'commandExecution' && !open && m.text ? m.text.split('\n').slice(-3).join('\n') : '';
+      // Like the native TUIs: a folded command keeps two one-line rows of output (the
+      // newest while it runs, the first once done) and says how many more there are.
+      const lines = (m.toolKind === 'commandExecution' || (!m.toolKind && m.title === 'Bash')) && !open && m.text ? m.text.replace(/\n+$/, '').split('\n') : [];
+      const shown = ['running', 'streaming'].includes(m.status) ? lines.slice(-2) : lines.slice(0, 2), more = lines.length - shown.length, tail = shown.join('\n');
       entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
+      entry.more.hidden = !more; const moreText = `+${more} 行`; if (entry.more.textContent !== moreText) entry.more.textContent = moreText;
     }
     entry.share.hidden = m.role === 'system';
     if (entry.reply) {
