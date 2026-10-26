@@ -1008,7 +1008,7 @@ function renderNativeActivity(s) {
   const status = s.nativeActivity;
   const matched = status && nativeStatusFresh(status) && status.nativeId === s.nativeId && status.turnId === s.activeTurnId;
   const seconds = matched && Number.isFinite(status.startedAt) && status.startedAt <= Date.now() ? Math.floor((Date.now() - status.startedAt) / 1000) : null;
-  const label = status && !nativeStatusFresh(status) ? '原生状态待同步' : matched && status.label ? nativeActivityLabels[status.label] || status.label : waiting ? question ? '等待回答' : '等待原生确认' : '正在处理';
+  const label = status && !nativeStatusFresh(status) ? '原生状态待同步' : matched && status.label ? (Object.hasOwn(nativeActivityLabels, status.label) ? nativeActivityLabels[status.label] : status.label) : waiting ? question ? '等待回答' : '等待原生确认' : '正在处理';
   const text = (s.name || 'Codex') + ' · ' + label;
   if ($('native-phase').textContent !== text) $('native-phase').textContent = text;
   const elapsed = seconds === null ? '' : ' · 已用 ' + elapsedText(seconds);
