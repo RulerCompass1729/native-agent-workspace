@@ -116,8 +116,8 @@ async function run() {
   await until(async () => (await fixture()).inputs.slice(claudeBase).map(x => x.data).join('') === '\x1b[13;2u', 'Claude Shift+Enter is a native newline');
   await fixture('terminal', id, { data: '', sequence: 2, keyboardFlags: 0 }); await delay(100);
   const claudeLegacy = (await fixture()).inputs.length; await input.press('Shift+Enter');
-  await until(async () => (await fixture()).inputs.slice(claudeLegacy).map(x => x.data).join('') === '\r', 'Claude legacy keyboard mode keeps the plain Enter');
-  passed.push('Claude native Shift+Enter inserts a newline under its CSI-u request and stays legacy otherwise');
+  await until(async () => (await fixture()).inputs.slice(claudeLegacy).map(x => x.data).join('') === '\x1b\r', 'Claude legacy keyboard mode gets its own terminal-setup newline');
+  passed.push('Claude native Shift+Enter inserts a newline under its CSI-u request and as ESC CR otherwise');
   await page.locator(`[data-session-id="${other}"]`).click();
   await until(() => otherInput.evaluate(el => document.activeElement === el), 'Codex native input after the Claude key check');
   const compositionBase = (await fixture()).inputs.length;
