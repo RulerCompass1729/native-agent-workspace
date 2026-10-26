@@ -43,7 +43,7 @@ async function main() {
   const dispatch = async (owner, method, args, client) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'createSkipPermissions'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'createSkipPermissions', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'peerRun': return peerRunner.start(owner, args[0]);
       case 'peerPrepare': return workspace.peerLeases.prepare(client, owner, args[0]);
       case 'peerTake': return workspace.peerLeases.take(client, args[0]);
@@ -102,6 +102,7 @@ async function main() {
         return { contextChanged: current.nativeId !== nativeId || Boolean(current.nativeContextPending) };
       }
       case 'approve': return workspace.approve(args[0], args[1], args[2], owner);
+      case 'answer': return workspace.answer(args[0], args[1], args[2], owner);
       case 'stop': return workspace.stop(args[0]);
       case 'resume': return workspace.resume(args[0], owner);
       case 'clearSharedHistory': return workspace.clearSharedHistory();

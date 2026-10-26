@@ -23,11 +23,11 @@ const imageTrial = process.env.NAW_TEST_NATIVE_IMAGE === '1';
 const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_MARKER\n1. Read the local file.\n2. Report the result.\n';
 assert.ok(!imageTrial || !questionTrial && !planTrial, 'Image entry is one separate bounded task');
 let planFile = null; const planSteps = [];
-const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi'].includes(answerMode))throw Error('Unknown bounded native answer case');
+const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
 // The multi case asks two questions at once, the second multi-select.
 const checksQuestion = { question: 'Which checks should run?', header: 'Checks', multiSelect: true, options: [{ label: 'Unit tests', description: 'Run the local unit tests.' }, { label: 'Lint', description: 'Check style.' }, { label: 'Build', description: 'Build the bundle.' }] };
-const nativeQuestions = answerMode === 'multi' ? [nativeQuestion, checksQuestion] : [nativeQuestion];
+const nativeQuestions = ['multi', 'gui'].includes(answerMode) ? [nativeQuestion, checksQuestion] : [nativeQuestion];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
   const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
@@ -158,6 +158,46 @@ async function cleanup() {
     assert.equal(calls, 1); assert.deepEqual(errors, []);
     if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-images.png') }); }
     console.log(JSON.stringify({ checks: ['Three image entry paths keep the GUI draft, never auto-send, deliver unchanged pixels to the same native Claude session and settle to GUI idle'], nativeVersion, attachments: images.length, completionLagMs, localResponses: calls, paidModelCalls: 0, physicalClipboard: 'not exercised; renderer events and readImage stub', evidence: base })); return;
+  }
+  if (questionTrial && ['gui', 'handback', 'interrupt'].includes(answerMode)) {
+    // A solo row in the chat view: native's question is held for the chat view (T-18).
+    const rows = () => page.locator('#terminal-area .xterm-rows').innerText();
+    await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('Run the local check.'); await page.locator('#send-button').click();
+    const form = page.locator('#approval .question-form'); await form.getByText(nativeQuestion.question, { exact: true }).waitFor({ timeout: 60000 });
+    assert.equal((await snapshot()).sessions[0].nativeApproval, null, 'Native has not opened its dialog');
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'question-held-' + answerMode + '.png') }); }
+    if (answerMode === 'interrupt') {
+      // Stopping the turn releases the held hook first, so native can end the turn.
+      const stopped = Date.now(); await page.locator('#interrupt').click();
+      await until(async () => (await snapshot()).sessions[0].state === 'idle' && !(await snapshot()).sessions[0].claudeQuestion, 'The turn stops while a question was held', 30000);
+      assert.ok(Date.now() - stopped < 20000, 'Stopping does not wait for the hook timeout'); await sleep(1500); assert.equal(calls, 1, 'No answer was sent to the model');
+      await until(() => page.locator('#approval').isHidden(), 'The question card clears');
+      const after = (await snapshot()).sessions[0]; assert.equal(after.nativeId, before.nativeId); assert.deepEqual(errors, []);
+      console.log(JSON.stringify({ checks: ['Stopping a turn while its native question is held for the chat view ends the turn promptly; nothing is answered'], nativeVersion, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
+      return;
+    }
+    let expected;
+    if (answerMode === 'gui') {
+      await form.locator('label', { hasText: 'Read only' }).locator('input').check();
+      await form.locator('label', { hasText: 'Unit tests' }).locator('input').check(); await form.locator('label', { hasText: 'Build' }).locator('input').check();
+      await form.getByRole('button', { name: '提交回答', exact: true }).click();
+      expected = ['"Which method should this check use?"="Read only"', '"Which checks should run?"="Unit tests, Build"'];
+    } else {
+      await page.locator('#approval').getByRole('button', { name: '去终端回答', exact: true }).click();
+      await until(async () => (await rows()).includes(nativeQuestion.question) && (await rows()).includes('Enter to select'), 'Handed back, the native dialog asks in the terminal');
+      await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
+      expected = ['"Which method should this check use?"="Keep original"'];
+    }
+    await until(async () => calls === 2 && (await snapshot()).sessions[0].messages.some(m => m.text?.includes('NATIVE_FINAL:')), 'The answer continues the same native turn', 60000);
+    const request = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json')));
+    const result = request.messages.flatMap(m => m.content || []).find(p => p.type === 'tool_result' && p.tool_use_id === 'toolu_local_question');
+    for (const text of expected) assert.ok(result && JSON.stringify(result).includes(text.replace(/"/g, '\\"')), `Native tool result carries ${text}`);
+    if (answerMode === 'gui') assert.ok(!(await rows()).includes('Enter to select'), 'The native dialog never opened');
+    await until(() => page.locator('#approval').isHidden(), 'The question card clears');
+    const after = (await snapshot()).sessions[0]; assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid); assert.equal(calls, 2); assert.deepEqual(errors, []);
+    fs.writeFileSync(path.join(base, 'question-' + answerMode + '.json'), JSON.stringify(await snapshot(), null, 2));
+    console.log(JSON.stringify({ checks: [answerMode === 'gui' ? 'A held native question (single and multi-select) is answered in the chat view; native\'s own tool result carries the answers and its dialog never opens' : 'A held native question handed back opens the native dialog in the terminal, which answers it'], nativeVersion, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
+    return;
   }
   await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();

@@ -29,6 +29,21 @@ test('only a session created without a name takes the native title, with its pro
   runtime.emit('nativeTitle', 'x'.repeat(80)); assert.equal(unnamed.name.length, 60);
   assert.equal(w.get(b).autoName, undefined);
 });
+test('a session records when it was created and when it was last active, not a restart', async t => {
+  const { workspace: w, ids: [id] } = await fixture(t);
+  const s = w.get(id); assert.ok(Number.isFinite(s.createdAt)); assert.equal(s.lastActivityAt, s.createdAt);
+  w.changed(); s.lastActivityAt = 1; w.changed(); assert.equal(s.lastActivityAt, 1, 'No new activity, no new time');
+  s.messages.push({ id: 'm1', role: 'user', text: 'hello', status: 'awaiting-native' }); w.changed(); assert.ok(s.lastActivityAt > 1);
+  s.lastActivityAt = 2; s.messages.at(-1).status = 'submitted'; w.changed(); assert.ok(s.lastActivityAt > 2, 'The newest message changing state is activity');
+  s.lastActivityAt = 3; s.messages.push({ id: 'v1', role: 'tool', volatile: true, text: 'progress', status: 'running' }); w.changed(); assert.equal(s.lastActivityAt, 3, 'A volatile display row is not saved activity');
+  w.persist(); const saved = JSON.parse(require('node:fs').readFileSync(require('node:path').join(w.dataDir, 'workspace.json'), 'utf8'));
+  assert.equal(saved.sessions[0].createdAt, s.createdAt);
+  // After a restart, loading is no activity, but the first real change is.
+  const { Workspace } = require('../workspace.cjs');
+  const reopened = new Workspace({ binaries: {}, close() {}, create() { return new EventEmitter(); } }, w.dataDir); t.after(() => reopened.close());
+  const r = reopened.get(id); r.lastActivityAt = 3; reopened.changed(); assert.equal(r.lastActivityAt, 3);
+  r.messages.push({ id: 'm2', role: 'assistant', text: 'reply', status: 'complete' }); reopened.changed(); assert.ok(r.lastActivityAt > 3, 'The first change after loading counts');
+});
 test('a creation-time choice to skip confirmations is recorded for that session only', async t => {
   const { workspace: w, ids: [a] } = await fixture(t);
   const id = await w.create('claude', w.get(a).cwd, 'owner', 'Bypass', 'chat', { skipPermissions: true });

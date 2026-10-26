@@ -14,11 +14,15 @@ const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error(`请输入有效文字；一次最多 ${max.toLocaleString('en-US')} 个字符。`);
   return value.trim();
 };
+// The newest kept message and its status. Volatile rows (native observations,
+// tool progress) are display only and must not change saved state.
+const activityMark = s => { const last = (s.messages || []).findLast(m => !m.volatile); return `${last?.id}:${last?.status}`; };
 const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data);
 
 class Workspace extends EventEmitter {
   constructor(host, dataDir) {
     super(); this.host = host; this.dataDir = dataDir; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
+    this.claudeAsks = new Map();
     this.room = { id: 'shared', name: '共同工作', revision: 0, run: null, messages: [] };
     this.versions = { shellModelCalls: 0, dispatches: 0 };
     this.saveTimer = null;
@@ -33,7 +37,7 @@ class Workspace extends EventEmitter {
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
-      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
+      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, claudeQuestion: null, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
       }
@@ -48,15 +52,24 @@ class Workspace extends EventEmitter {
     } catch (error) {
       if (error.code !== 'ENOENT') { this.storageFailure = 'read'; this.storageWarning = '本地记录未能读取，原文件已保留；请检查后再保存。'; }
     }
+    // Loading is not activity: start from each saved session's current mark.
+    this.activityMarks = new Map([...this.sessions.values()].map(s => [s.id, activityMark(s)]));
   }
   snapshot() {
     return { peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
-    // An unnamed row shows its first request until a native title arrives.
-    for (const s of this.sessions.values()) if (s.autoName && !s.nameSource) {
-      const first = s.messages.find(m => m.role === 'user' && typeof m.text === 'string' && m.text.trim());
-      if (first) { s.name = `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${first.text.replace(/[\x00-\x1f\x7f\s]+/g, ' ').trim()}`.slice(0, 60); s.nameSource = 'preview'; }
+    for (const s of this.sessions.values()) {
+      // An unnamed row shows its first request until a native title arrives.
+      if (s.autoName && !s.nameSource) {
+        const first = s.messages.find(m => m.role === 'user' && typeof m.text === 'string' && m.text.trim());
+        if (first) { s.name = `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${first.text.replace(/[\x00-\x1f\x7f\s]+/g, ' ').trim()}`.slice(0, 60); s.nameSource = 'preview'; }
+      }
+      // Last activity: a new message or a change of the newest one's status. A
+      // session created here starts from its creation time.
+      const mark = activityMark(s);
+      if (this.activityMarks.has(s.id) && this.activityMarks.get(s.id) !== mark) s.lastActivityAt = Date.now();
+      this.activityMarks.set(s.id, mark);
     }
     this.sharedReplies.refresh();
     this.emit('change');
@@ -106,7 +119,8 @@ class Workspace extends EventEmitter {
     if (!['claude', 'codex'].includes(provider) || !path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error('请选择可用 agent 和工作目录。');
     if ([...this.sessions.values()].filter(s => s.state !== 'ended').length >= 6) throw new Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
     const id = randomUUID();
-    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
+    const now = Date.now();
+    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
     if (fork) record.forkPicker = true;
     this.sessions.set(id, record); this.changed();
     let runtime;
@@ -195,6 +209,7 @@ class Workspace extends EventEmitter {
     on('inputRequired', () => this.changed());
     on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
     on('model', model => { s.model = model; this.changed(); });
+    on('askQuestion', ask => this.holdQuestion(s, runtime, ask));
     // Only a session nobody named takes the native title; a rename is a desktop label and always wins.
     on('nativeTitle', title => { const clean = String(title).replace(/[\x00-\x1f\x7f]/g, ' ').trim(); const name = clean && `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${clean}`.slice(0, 60); if (s.autoName && name && (name !== s.name || s.nameSource !== 'native')) { s.name = name; s.nameSource = 'native'; this.changed(); } });
     on('state', state => {
@@ -203,6 +218,7 @@ class Workspace extends EventEmitter {
       if (['ended', 'background', 'recoverable', 'error', 'disconnected'].includes(state)) for (const m of s.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
       if (runtime.transportDisconnected || ['disconnected', 'ended', 'background', 'recoverable'].includes(state)) s.fleet = (s.fleet || []).map(item => ({ ...item, stale: true }));
       if (state !== 'approval') s.approvalResolved = false;
+      if (['ended', 'background', 'recoverable', 'error', 'disconnected'].includes(state)) this.releaseQuestion(s, null);
       if (runtime.transportDisconnected) { s.approval = null; s.approvals = []; s.approvalOverflow = false; this.approvalRoutes.delete(s.id); }
       if (state !== 'starting' && s.activity === '正在连接原生历史') s.activity = '';
       if (['ended', 'background', 'recoverable'].includes(state)) {
@@ -368,6 +384,8 @@ class Workspace extends EventEmitter {
       // still invalidates queued work; taking control from another view does too.
       s.owner = owner; s.view = view; this.changed();
     }
+    // A question held for the chat view goes back to the native dialog in the terminal.
+    if (view === 'terminal') this.releaseQuestion(s, null);
   }
   release(owner) {
     // A disconnected view is not a stop instruction. Its stable owner ID may
@@ -573,6 +591,9 @@ class Workspace extends EventEmitter {
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }
   async interrupt(id, owner) {
     const s = this.get(id); this.claim(id, owner, s.view); const runtime = this.runtime(id);
+    // A held question is declined, like Esc on the native dialog, so native
+    // neither waits on the hook nor opens the dialog; then the turn is aborted.
+    if (this.claudeAsks.get(id)) this.releaseQuestion(s, null, { stop: true });
     if (runtime.nativeAbortRequest && runtime.nativeAbortCurrent?.(runtime.nativeAbortRequest)) return runtime.nativeAbortRequest.done;
     s.controlRevision++; this.pause('真人中断当前回复'); const result = await runtime.interrupt();
     s.activity = result?.interrupted ? '' : '已请求原生中断；团队任务请在原生终端确认。'; this.changed();
@@ -691,6 +712,60 @@ class Workspace extends EventEmitter {
     if (!['accept', 'decline', 'cancel'].includes(decision)) throw new Error('未知权限决定。');
     if (!nativeApprovalPolicy(route.approval).decisions.includes(decision)) throw new Error('请在原生终端核对；此界面不支持这项权限决定。');
     route.rpc.reply(route.nativeRequestId, { decision });
+    if (this.approvalRoutes.get(id)?.get(requestId) === route) { route.approval = { ...route.approval, pending: true }; Object.assign(s, queue.snapshot()); }
+    this.changed();
+  }
+  // A native Claude AskUserQuestion is held for a solo row in the chat view, the
+  // only place its card shows. In a room, in the terminal view, or for a second
+  // question, native asks at once in its own dialog.
+  holdQuestion(s, runtime, ask) {
+    if (this.runtimes.get(s.id) !== runtime || s.view !== 'chat' || s.roomId || this.claudeAsks.has(s.id)) return ask.reply({});
+    const requestId = randomUUID();
+    this.claudeAsks.set(s.id, { requestId, reply: ask.reply, open: ask.open, questions: ask.questions });
+    s.claudeQuestion = { requestId, questions: ask.questions }; this.changed();
+    // Native ended the hook (timeout, interrupt, exit): the question is no longer answerable here.
+    ask.onClose?.(() => { if (this.claudeAsks.get(s.id)?.requestId === requestId) { this.claudeAsks.delete(s.id); s.claudeQuestion = null; this.changed(); } });
+  }
+  releaseQuestion(s, answers, { stop = false } = {}) {
+    const held = this.claudeAsks.get(s.id); if (!held) return;
+    this.claudeAsks.delete(s.id); s.claudeQuestion = null;
+    held.reply(answers ? { answers } : stop ? { stop: true } : {}); this.changed();
+  }
+  // Answers by question text; several choices are joined with commas, as native
+  // reads them. null hands the question back to the native dialog.
+  answerClaude(s, requestId, answers, owner) {
+    const held = this.claudeAsks.get(s.id);
+    if (!held || held.requestId !== requestId || s.owner !== owner || !held.open()) throw new Error('问题已变化，请重新查看。');
+    if (answers === null) return this.releaseQuestion(s, null);
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new Error('请回答每个问题。');
+    const reply = {};
+    for (const q of held.questions) {
+      const given = answers[q.question];
+      if (!Array.isArray(given) || !given.length || (!q.multiSelect && given.length !== 1) || given.length > q.options.length + 1 ||
+        !given.every(a => typeof a === 'string' && a.trim() && a.length <= 16000)) throw new Error('请回答每个问题。');
+      reply[q.question] = given.map(a => a.trim()).join(', ');
+    }
+    this.releaseQuestion(s, reply);
+  }
+  // A native Codex question answered here, with the reply native defines. The
+  // terminal may answer the same request; native resolves it once, first wins.
+  answer(id, requestId, answers, owner) {
+    if (this.get(id).provider === 'claude') return this.answerClaude(this.get(id), requestId, answers, owner);
+    const s = this.get(id), queue = this.approvalRoutes.get(id), route = queue?.get(requestId);
+    if (!route || queue.overflow || route.approval.pending || s.state !== 'approval' || s.owner !== owner ||
+      route.runtime !== this.runtimes.get(id) || !(route.rpc === this.host.rpc || route.runtime.currentRpc?.(route.rpc)) || route.runtime.transportDisconnected ||
+      route.runtime.backendExitConfirmed) throw new Error('问题已变化，请重新查看。');
+    const questions = nativeApprovalPolicy(route.approval).questions;
+    if (s.provider !== 'codex' || !questions || questions.some(q => q.isSecret)) throw new Error('请在原生终端回答这个问题。');
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new Error('请回答每个问题。');
+    const reply = {};
+    for (const q of questions) {
+      const given = answers[q.id], labels = (q.options || []).map(o => o.label);
+      if (!Array.isArray(given) || given.length !== 1 || typeof given[0] !== 'string' || !given[0].trim() || given[0].length > 16000) throw new Error('请回答每个问题。');
+      if (labels.length && !q.isOther && !labels.includes(given[0])) throw new Error('只能从给出的选项中选择。');
+      reply[q.id] = { answers: given };
+    }
+    route.rpc.reply(route.nativeRequestId, { answers: reply });
     if (this.approvalRoutes.get(id)?.get(requestId) === route) { route.approval = { ...route.approval, pending: true }; Object.assign(s, queue.snapshot()); }
     this.changed();
   }

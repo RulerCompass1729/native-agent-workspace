@@ -336,6 +336,18 @@ async function nativeCommand(command){
   fs.writeFileSync(path.join(base,'native-question.txt'),await terminalText());fs.writeFileSync(path.join(base,'gui-question.json'),JSON.stringify(await snapshot(),null,2));
   if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-question.png')});}
   if(process.env.NAW_VIDEO_DIR)await sleep(1200);
+  if(process.env.NAW_NATIVE_GUI_ANSWER==='1'){
+   // Answer in the chat view (T-18): native receives its structured reply on this connection.
+   assert.equal(calls,2);const form=page.locator('#approval .question-form');
+   await form.locator('label',{hasText:'Build a replacement'}).locator('input').check();await form.getByRole('button',{name:'提交回答',exact:true}).click();
+   await until(async()=>calls===3&&(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_3'),'GUI answer reaches the original native request');
+   assert.match(fs.readFileSync(path.join(base,'request-3.json'),'utf8'),/Build a replacement/);assert.doesNotMatch(fs.readFileSync(path.join(base,'request-3.json'),'utf8'),/Use existing primitives\\"\]/);
+   await page.locator('#approval').waitFor({state:'hidden'});assert.equal((await snapshot()).sessions[0].nativeId,before.nativeId);
+   await until(async()=>!(await terminalText()).includes('Which small implementation should be used?')||(await terminalText()).includes('Build a replacement'),'Native terminal leaves the question');
+   fs.writeFileSync(path.join(base,'question-gui-answered.json'),JSON.stringify(await snapshot(),null,2));
+   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'native-question-gui-answered.png')});
+   assert.deepEqual(errors,[]);console.log(JSON.stringify({checks:['An actual native Codex question is answered in the chat view; native receives the structured answer once on its own request'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  }
   assert.equal(calls,2);await page.locator('#approval').getByRole('button',{name:'在 Native context 的原生终端处理',exact:true}).click();
   fs.writeFileSync(path.join(base,'question-control-before-enter.json'),JSON.stringify({ready:!(await page.locator('#terminal-paste').isDisabled()),focused:await page.locator('#terminal-area .xterm-helper-textarea').evaluate(el=>el===document.activeElement)}));
   if(process.env.NAW_NATIVE_FAST_ANSWER!=='1'){await page.locator('#terminal-area .xterm-screen').click();await until(async()=>!(await page.locator('#terminal-paste').isDisabled()),'Actual native input control ready');}

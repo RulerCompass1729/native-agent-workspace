@@ -22,7 +22,7 @@ GUI 事实按下列用户任务验收，每项需要安装版、零付费推理�
 | 状态 | running/idle/ended/等待审批/等待回答/已中断；终端退出不冒充模型结束，enqueue 不冒充接受 | `C164-TOOLS-01` 审批→执行→idle、alpha.94 问题等待状态经 review08 通过；`C164-PLAN-01` 原生 Escape 的 interrupted 与复开经 review09 通过；原生断流/retry→idle 经 Fable review10 通过。`C164-END-01` 安装 alpha.97 受控 thread/closed 事件验证已结束、身份/草稿保留且零派发；不冒充实际 CLI 关闭证据；Fable review13 按 runtime→GUI 范围通过 |
 | 用户输入、助手正文 | 正文与来源不改写，不跨线程拼接；真实流式边界才结束消息块 | 复用 alpha.91 上下文任务、alpha.94 原文任务，经 Fable review08 核证；alpha.96 输入回归经 review07、原生 Plan 正文与截断经 review09 通过 |
 | 工具调用与结果 | 原生公开字段、正文和终态；缺失或截断不伪装完整 | `C164-TOOLS-01` 安装 alpha.96 / Codex164：实际文件审批、写入与读取；原生 add/diff 和输出正文、重载与同线程恢复通过；Fable review08 通过。alpha.94 搜索只证明原文标题和 query，不当作搜索结果正文证据 |
-| 问题与选项 | 原文及对应等待状态；交互由同屏 TUI 处理 | alpha.94 Codex164 Plan 问题/回答安装版证据；Fable review08 通过原文和等待状态范围，不据此覆盖所有问题变体 |
+| 问题与选项 | 原文及对应等待状态；可在对话里作答（Codex 按原生协议回复，Claude 在原生弹框前补答案），也可在同屏 TUI 作答 | alpha.94 Codex164 Plan 问题/回答安装版证据；Fable review08 通过原文和等待状态范围，不据此覆盖所有问题变体 |
 | Plan | GUI 原样呈现 proposed plan 正文与当前模式；update_plan 步骤进度、接受/修改在同屏 TUI，不补写模型计划 | `C164-PLAN-01` 安装 alpha.96 / Codex164：原生 Plan 模式、流式正文、同块完成、共享范围、原生截断与复开通过；四个固定任务和一个标题响应，零付费；Fable review09/10 通过。步骤进度没有 GUI 投影，不据此宣称已实现 |
 | 错误 | 原生公开错误正文原样显示；可重试不等于失败结束；TUI 自身排版仍由 TUI 保留 | `C164-RETRY-01` 安装 alpha.96 / Codex164：实际断流、原生 willRetry、GUI 原文、TUI 重连、同线程恢复及计时隐藏通过，Fable review10 通过。`C164-FAIL-01` 安装 alpha.97 / Codex164：不可重试的拒绝保留原文和 failed 边界，无虚构助手回复/自动重发；下一条显式 GUI 任务在同线程完成。两次本地任务请求和一个标题响应，零付费；Fable review13 通过 |
 | 模型与 effort | 只显示当前原生报告，线程改变后不沿用旧线程字段 | `C164-SET-01` 安装 alpha.95 的三次原生 model/effort 切换，GUI 标题一致；零推理；Fable review08 核证复用通过 |
@@ -329,7 +329,7 @@ Claude 310 的能力归属与启动差异见 [Claude lane 审计表](u17-claude3
 | C-R10 Recap/Next and recap loading | `history_cell/notices.rs ThreadRecapHistoryCell` | 同屏原生 TUI；在同屏原生 TUI 里用; native generates via own flow, no extra summary model | GUI 事实按上方任务验收；其他交互保留原生能力 |
 | C-R11 Quota/context/token use, rates/reset/statusline | `status; token_usage.rs; bottom_pane/status_line_setup.rs` | 同屏原生 TUI；GUI public usage scope; full original statusline/reset 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
 | C-A01 Exec/patch/network/filesystem approvals, deny/amend/session grant | `bottom_pane/approval_overlay.rs; app_command.rs` | GUI 原样；GUI exact request; native policy actions 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
-| C-A02 Questions/options/free text/multi question/skip/native auto-resolution | `bottom_pane/request_user_input/mod.rs` | GUI 原样；GUI exact question/options; native answer controls 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
+| C-A02 Questions/options/free text/multi question/skip/native auto-resolution | `bottom_pane/request_user_input/mod.rs` | GUI 原样；GUI exact question/options；对话里可选项/填“其他”作答（原生结构化回复，先到先得），secret 问题与其他原生控件在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
 | C-A03 MCP form/URL elicitation and verification, secrets | `bottom_pane/mcp_server_elicitation.rs; user_verification.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; avoid exporting secret/form semantics | GUI 事实按上方任务验收；其他交互保留原生能力 |
 | C-A04 Background and subagent approval queue/source navigation | `bottom_pane/pending_thread_approvals.rs; approval_overlay.rs` | 同屏原生 TUI；在同屏原生 TUI 里用; native source routing retained | GUI 事实按上方任务验收；其他交互保留原生能力 |
 | C-S01 New/resume/fork/cwd context, archive/delete and native session checkout | `chatwidget/slash_dispatch.rs; resume_picker.rs` | GUI 原样；GUI follows verified root context; native session commands 在同屏原生 TUI 里用 | GUI 事实按上方任务验收；其他交互保留原生能力 |
@@ -363,7 +363,7 @@ Codex 完成后再补 Claude 310。当前不新增状态面板、TTY 解析器�
 | 正文、公开思考摘要、计划、命令、文件差异、MCP／动态工具 | 既有消息块随原生开始／增量／结束更新；原文可展开。隐藏推理和非文本内容不伪造成普通正文 |
 | 完成时间、耗时、usage | 使用原生字段；缺少时保持未知，不拿接收时间或估算速率替代 |
 | 发起请求、思考、工具、输出、等待、重试 | 同一输入区的既有状态行更新。Claude 观察心跳过期明确待同步；Codex 重试保持工作而非失败。原生独有 spinner 文案／瞬时 token 读数仍在同屏 TUI |
-| 权限、问题与选择 | 对话区保留原生问题／选项和可核的权限正文；复杂／未确认决定在同屏原生终端处理。处理按钮实际申请该视图输入控制，立即输入走既有 ACK 屏障；迟到导航不能抢回焦点 |
+| 权限、问题与选择 | 对话区保留原生问题／选项和可核的权限正文，并可直接作答（2026-10-26 用户要求；Codex 回原生结构化答案，Claude 单人对话视图里的问题在原生弹框前等对话作答、可交回终端）；复杂／未确认决定在同屏原生终端处理。处理按钮实际申请该视图输入控制，立即输入走既有 ACK 屏障；迟到导航不能抢回焦点 |
 | 问答轨迹 | 保留问题和原生终端实际提交的非私密回答；只白名单当前问题 ID 的字符串答案。提交不等于模型采用，`resolved` 只表示请求已处理。正式历史接口实测不返回该工具结果，不能伪称已补齐答案历史。secret 回答不通过通用工具历史旁路显示 |
 | Plan／模型／effort | 观察正式 `thread/settings/updated` 的有效字段；不复制 developer instructions。原生 Plan 后 GUI 发出的任务与原生选择已实测一致 |
 | `/new`、`/resume`、`/fork` | 跟随该显示连接的实际 RPC 结果，保留历史边界、草稿和原始消息归属；新上下文不承接旧共享授权。失败／存储未确认时禁发，不重试任务 |

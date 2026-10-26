@@ -107,6 +107,19 @@ async function run() {
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b).approval, 'Native resolution clears the current approval');
   assert.deepEqual((await fixture('stats', b)).approvalReplies, [{ requestId: 17, result: { decision: 'accept' } }], 'Only the fresh authorized decision reaches the exact native request once');
   checks.push('Unrelated updates retain permission-button focus; changed scope replaces the GUI credential without implicit focus; stale and non-owner decisions cannot reply; fresh acceptance resolves the exact native request once');
+  // A Codex question is answered here with native's structured reply (T-18): an option, or "other" text.
+  const ask = (requestId, question) => fixture('approval', b, { requestId, method: 'item/tool/requestUserInput', params: { threadId: 'synthetic-thread', turnId: 'synthetic-turn', itemId: `ask-${requestId}`, isBlocking: true, autoResolutionMs: null, questions: [question] } });
+  await ask(31, { id: 'approach', header: '方案', question: '用哪种做法？', isOther: true, isSecret: false, options: [{ label: '复用现有', description: '沿用原生机制' }, { label: '另起炉灶', description: '' }] });
+  let form = page.locator('#approval .question-form'); await form.getByText('用哪种做法？', { exact: true }).waitFor();
+  assert.equal(await form.getByRole('button', { name: '提交回答', exact: true }).isDisabled(), true, 'Nothing is sent before every question has an answer');
+  await form.locator('label', { hasText: '复用现有' }).locator('input').check(); await form.getByRole('button', { name: '提交回答', exact: true }).click();
+  await until(async () => JSON.stringify((await fixture('stats', b)).approvalReplies.at(-1)) === JSON.stringify({ requestId: 31, result: { answers: { approach: { answers: ['复用现有'] } } } }), 'Chosen option reaches the exact native request');
+  await ask(32, { id: 'detail', header: '补充', question: '还有什么要求？', isOther: true, isSecret: false, options: [{ label: '没有', description: '' }] });
+  form = page.locator('#approval .question-form'); await form.getByText('还有什么要求？', { exact: true }).waitFor();
+  await form.getByRole('textbox').fill('保持原生行为'); await form.getByRole('button', { name: '提交回答', exact: true }).click();
+  await until(async () => JSON.stringify((await fixture('stats', b)).approvalReplies.at(-1)) === JSON.stringify({ requestId: 32, result: { answers: { detail: { answers: ['保持原生行为'] } } } }), 'Other text reaches the native request');
+  await shot('question-answered');
+  checks.push('A Codex question is answered in the chat view with the native structured reply, an option or other text, never before every question is answered');
 
   await page.locator(`[data-session-id="${a}"]`).click();
   const join = header.getByRole('button', { name: '加入协作', exact: true });

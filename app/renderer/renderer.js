@@ -6,7 +6,7 @@ const button = (text, action, cls) => { const el = node('button', text, cls); el
 const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', background: '已转到后台运行', error: '需要检查' };
 // An unfollowed native /resume leaves the process running in another session.
 const switchedAway = record => record.state === 'stopping' && record.nativeContextPending?.reason === 'resume';
-const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : states[record.state], !disconnected);
+const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
@@ -174,6 +174,14 @@ function followQueuedRoomInput(id, mark) {
   if (row.status === 'not-sent' && mark.cleared === roomDraftRevision) { $('shared-input').value = mark.raw; roomMention = mark.address; roomDraftRevision++; attempt(persistView); }
   queuedRoomInputs.delete(id);
 }
+// Session times, never guessed: older rows without a record say so.
+function sessionTime(value) {
+  if (!Number.isFinite(value)) return '';
+  const date = new Date(value), now = new Date();
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return date.toDateString() === now.toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()}${date.getFullYear() === now.getFullYear() ? '' : `/${date.getFullYear()}`} ${time}`;
+}
+const sessionTimes = s => `创建 ${sessionTime(s.createdAt) || '未记录'} · 最后活动 ${sessionTime(s.lastActivityAt) || '未记录'}`;
 function renderDraftRecovery(id) {
   const copies = draftRecoveries.get(id) || [], list = $('draft-recovery-list');
   $('draft-recovery').hidden = !copies.length;
@@ -562,11 +570,11 @@ function renderSessions() {
     const identity = participantLabel(record, state.sessions);
     const duplicate = identity !== record.name;
     const label = `${identity}${duplicate ? '' : record.provider === 'claude' ? ' · Claude' : ' · Codex'} · ${sessionStatus(record)}`;
-    row.link.setAttribute('aria-label', label); row.link.title = label;
+    row.link.setAttribute('aria-label', `${label} · ${sessionTimes(record)}`); row.link.title = `${label}\n${sessionTimes(record)}`;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
     row.more.setAttribute('aria-label', `会话操作：${identity}`); row.more.title = `会话操作：${identity}`; row.more.disabled = disconnected;
-    row.name.textContent = record.name; row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}${duplicate ? ` · ${record.id.slice(0, 6)}` : ''}`; row.dot.className = `state-dot ${record.state}`;
+    row.name.textContent = record.name; row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}${duplicate ? ` · ${record.id.slice(0, 6)}` : ''}${sessionTime(record.lastActivityAt) ? ` · ${sessionTime(record.lastActivityAt)}` : ''}`; row.dot.className = `state-dot ${record.state}`;
     // Keep existing DOM nodes: native state updates must not remove a focused
     // row or its open menu anchor every 35 ms.
     const slot = $('session-list').children[index]; if (slot !== row.element) $('session-list').insertBefore(row.element, slot || null);
@@ -606,7 +614,7 @@ function renderArchives() {
   }
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
-    row.append(node('strong', participantLabel(s, state.sessions)), node('small', `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[s.state]}${['ended', 'recoverable'].includes(s.state) ? ' · 需继续原生历史' : ' · 归档未结束原生进程'}`), button('恢复会话', () => restoreArchivedSession(s.id))); list.append(row);
+    row.append(node('strong', participantLabel(s, state.sessions)), node('small', `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[s.state]}${['ended', 'recoverable'].includes(s.state) ? ' · 需继续原生历史' : ' · 归档未结束原生进程'} · ${sessionTimes(s)}`), button('恢复会话', () => restoreArchivedSession(s.id))); list.append(row);
   }
   if (!count) list.append(node('p', '还没有归档内容。使用会话或工作区旁的 ⋯ 菜单归档。'));
 }
@@ -901,19 +909,62 @@ function appendNativeQuestions(parent, questions) {
   }
   return true;
 }
+// A native question answered here: one choice per question (several for a
+// multi-select), or the native "other" text. Codex keys answers by question id,
+// Claude by the question text.
+function appendQuestionForm(parent, questions, disabled, submit) {
+  const form = node('form', undefined, 'question-form'), chosen = new Map(), typed = new Map(), key = q => q.id ?? q.question;
+  const values = q => [...(chosen.get(key(q)) || []), ...(typed.get(key(q))?.trim() ? [typed.get(key(q)).trim()] : [])];
+  const ready = () => questions.every(q => values(q).length);
+  const send = button('提交回答', () => submit(Object.fromEntries(questions.map(q => [key(q), values(q)]))));
+  const update = () => { send.disabled = disabled || !ready(); };
+  questions.forEach((q, index) => {
+    const group = node('fieldset', undefined, 'native-question'), name = `native-question-${index}`;
+    group.append(node('legend', q.header || `问题 ${index + 1}`), node('p', q.question));
+    let other = null;
+    for (const option of q.options || []) {
+      const label = node('label'), input = document.createElement('input');
+      input.type = q.multiSelect ? 'checkbox' : 'radio'; input.name = name; input.value = option.label; input.disabled = disabled;
+      input.onchange = () => {
+        const set = q.multiSelect ? new Set(chosen.get(key(q))) : new Set();
+        if (input.checked) set.add(option.label); else set.delete(option.label);
+        chosen.set(key(q), set); if (!q.multiSelect && other) { other.value = ''; typed.delete(key(q)); } update();
+      };
+      label.append(input, node('span', option.label)); if (option.description) label.append(node('small', option.description));
+      group.append(label);
+    }
+    if (q.isOther || !(q.options || []).length) {
+      other = document.createElement('input'); other.type = 'text'; other.disabled = disabled;
+      other.placeholder = (q.options || []).length ? '其他…' : '你的回答'; other.setAttribute('aria-label', `${q.header || q.question}：${other.placeholder}`);
+      other.oninput = () => { if (!q.multiSelect) { for (const input of group.querySelectorAll('input[type="radio"]')) input.checked = false; chosen.delete(key(q)); } typed.set(key(q), other.value); update(); };
+      group.append(other);
+    }
+    form.append(group);
+  });
+  form.onsubmit = event => { event.preventDefault(); if (!send.disabled) send.click(); };
+  form.append(send); update(); parent.append(form);
+}
 function renderApproval(s, own) {
   const el = $('approval');
   const requests = s?.approvals?.length ? s.approvals : s?.approval ? [s.approval] : [];
   const requested = approvalViews.get(s?.id), chosen = requests.find(a => requested && a.requestId === requested);
   if (requested && !chosen) approvalViews.delete(s.id);
   if (chosen) s = { ...s, approval: chosen, approvalDecisions: chosen.decisions || s.approvalDecisions };
-  el.hidden = !s || (s.state !== 'approval' && !s.nativeApproval && !s.approval);
+  el.hidden = !s || (s.state !== 'approval' && !s.nativeApproval && !s.approval && !s.claudeQuestion);
   const stale = !nativeStatusFresh(s?.nativeApproval);
   const { observedAt, ...nativeApprovalContent } = s?.nativeApproval || {};
-  const signature = JSON.stringify([s?.id, s?.state, own, s?.approval, requests, s?.approvalOverflow, s?.approvalNotice, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
+  const signature = JSON.stringify([s?.id, s?.state, own, s?.claudeQuestion, s?.approval, requests, s?.approvalOverflow, s?.approvalNotice, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
   if (el.dataset.signature === signature) return;
   el.dataset.signature = signature; el.replaceChildren();
   if (el.hidden) return;
+  if (s.claudeQuestion) {
+    // Held before the native dialog opens: answer here, or let the terminal ask it.
+    const { requestId, questions } = s.claudeQuestion;
+    el.append(node('strong', `${s.name} · 等待你回答`));
+    appendQuestionForm(el, questions.map(q => ({ ...q, isOther: true })), !own, answers => api.answer(s.id, requestId, answers));
+    el.append(button('去终端回答', async () => { await api.answer(s.id, requestId, null); await switchMode('terminal'); }));
+    return;
+  }
   if (s.nativeApproval?.nativeOnly) {
     el.append(node('strong', s.name));
     if (stale) el.append(node('p', '原生状态待核验'));
@@ -948,7 +999,10 @@ function renderApproval(s, own) {
     const policy = window.nativeWorkspaceApproval.nativeApprovalPolicy(s.approval);
     if (policy.questions) {
       heading.textContent = `${s.name} · ${s.approval.params.isBlocking === false ? '问题 · 不阻塞本轮' : '等待你回答'}`;
-      appendNativeQuestions(el, policy.questions);
+      const requestId = s.approval.requestId;
+      if (s.provider === 'codex' && (s.serviceCapabilities || state.capabilities || []).includes('nativeQuestionAnswer') && !policy.questions.some(q => q.isSecret)) {
+        appendQuestionForm(el, policy.questions, !own || Boolean(s.approval.pending) || s.state !== 'approval' || Boolean(s.approvalOverflow), answers => api.answer(s.id, requestId, answers));
+      } else appendNativeQuestions(el, policy.questions);
     } else if (policy.notice) el.append(node('p', policy.notice));
     if (policy.command) el.append(node('pre', policy.command, 'approval-command'));
     if (policy.cwd) el.append(node('p', '工作目录：' + policy.cwd));
