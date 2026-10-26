@@ -134,7 +134,8 @@ async function run() {
   assert.equal((await native()).sends.length, 1); await shot('private-result-found');
   checks.push('Directed budget task → native confirmation → terminal intervention → private result is reachable from its shared record; same identity/draft, no automatic re-sharing');
   // Reuse the existing preview, selecting only what this next recipient needs.
-  await answer.getByRole('button', { name: '选择并分享', exact: true }).click();
+  // Message actions appear while the pointer is over the message, as for a person.
+  await answer.hover(); await answer.getByRole('button', { name: '选择并分享', exact: true }).click();
   const selected = '已核查：合计 75 元，人均 25 元。请整理成一句可发给同行人的结论。';
   await page.locator('#share-text').fill(selected); await page.locator('#share-recipient').selectOption(a);
   assert.equal((await native()).sends.length, 1); await page.locator('#confirm-share').click();
@@ -172,7 +173,7 @@ async function run() {
   const paused = (await snapshot()).room.messages.findLast(m => m.role === 'system' && m.runId);
   assert.equal(paused.sessionId, b);
   const pauseRow = page.locator(`#room-messages [data-message-id="${paused.id}"]`);
-  assert.equal(await pauseRow.locator('.message-heading strong').innerText(), '协作');
+  assert.equal(await pauseRow.locator('.message-heading .message-author').innerText(), '协作');
   const pauseAction = pauseRow.getByRole('button', { name: '查看会话', exact: true });
   await readableAction(pauseAction, 'paused-result-action');
   for (let tabs = 0; tabs < 80 && !(await pauseAction.evaluate(el => el === document.activeElement)); tabs++) await page.keyboard.press('Tab');
@@ -180,7 +181,8 @@ async function run() {
   await page.keyboard.press('Enter');
   await page.locator('#approval').getByText(command, { exact: true }).waitFor();
   await page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }).click();
-  await page.locator('#approval').getByText('等待原生确认结果', { exact: true }).waitFor();
+  // The heading names the session: "<name> · 等待原生确认结果".
+  await page.locator('#approval').getByText(/ · 等待原生确认结果$/).waitFor();
   assert.deepEqual((await native()).decisions, [{ id: 12, result: { decision: 'accept' } }]);
   await native('event', { target: b, value: { method: 'serverRequest/resolved', params: { requestId: 12 } } });
   const checked = '二次核验完成：75 元和人均 25 元都正确，未增加预算项目。';
@@ -196,13 +198,13 @@ async function run() {
   // Preview/cancel is observation only; confirmation delivers only this selection.
   const checkedMessage = (await snapshot()).sessions.find(s => s.id === b).messages.find(m => m.text === checked);
   const checkedRow = page.locator(`#messages [data-message-id="${checkedMessage.id}"]`);
-  await checkedRow.getByRole('button', { name: '选择并分享', exact: true }).click();
+  await checkedRow.hover(); await checkedRow.getByRole('button', { name: '选择并分享', exact: true }).click();
   await page.locator('#share-text').fill('核验结果：合计 75 元，人均 25 元。');
   await page.locator('#share-recipient').selectOption(a);
   await page.locator('#cancel-share').click();
   assert.equal((await native()).sends.length, 4);
   assert.equal((await snapshot()).room.run.status, 'paused');
-  await checkedRow.getByRole('button', { name: '选择并分享', exact: true }).click();
+  await checkedRow.hover(); await checkedRow.getByRole('button', { name: '选择并分享', exact: true }).click();
   const selectedCheck = '核验结果：合计 75 元，人均 25 元。请确认这一结论。';
   await page.locator('#share-text').fill(selectedCheck);
   await page.locator('#share-recipient').selectOption(a);
