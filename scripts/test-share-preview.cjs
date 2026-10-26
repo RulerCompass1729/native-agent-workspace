@@ -62,9 +62,11 @@ async function run() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   const seed = client.call('forward', a, 'SYNTHETIC SOURCE');
   await sent(1, a, 'SYNTHETIC SOURCE'); await native('release', 'SOURCE RESULT'); await seed;
-  const source = page.locator('#room-messages article').filter({ has: page.getByText('SOURCE RESULT', { exact: true }) }).getByRole('button', { name: '选择并分享', exact: true });
+  const sourceRow = page.locator('#room-messages article').filter({ has: page.getByText('SOURCE RESULT', { exact: true }) });
+  const source = sourceRow.getByRole('button', { name: '选择并分享', exact: true });
   const edit = page.locator('#share-text'), confirm = page.locator('#confirm-share'), dialog = page.locator('#share-dialog');
-  async function open(id, text) { await source.click(); await page.locator('#share-recipient').selectOption(id); await edit.fill(text); }
+  // Message actions appear while the pointer is over the message, as for a person.
+  async function open(id, text) { await sourceRow.hover(); await source.click(); await page.locator('#share-recipient').selectOption(id); await edit.fill(text); }
 
   await open(b, '   ');
   assert.equal(await confirm.isDisabled(), true);

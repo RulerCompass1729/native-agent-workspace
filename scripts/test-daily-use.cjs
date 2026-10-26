@@ -47,9 +47,11 @@ async function run() {
   await require('./check-theme.cjs').checkTheme(page); await page.locator('#close-setup').click();
   passed.push('Fresh app profile renders setup and light/dark controls; native environment installation is not simulated');
   const codex = await create('codex');
-  await until(async () => (await snapshot()).sessions.find(s => s.id === codex).messages.length === 105, 'All native history pages imported');
+  // History items, not the native turn record that closes the imported turn.
+  const history = state => state.sessions.find(s => s.id === codex).messages.filter(m => m.kind !== 'turn');
+  await until(async () => history(await snapshot()).length === 105, 'All native history pages imported');
   let codexState = (await snapshot()).sessions.find(s => s.id === codex);
-  assert.equal(new Set(codexState.messages.map(m => m.id)).size, 105); assert.equal(codexState.controlRevision, 1);
+  assert.equal(new Set(history({ sessions: [codexState] }).map(m => m.id)).size, 105); assert.equal(codexState.controlRevision, 1);
   await page.locator('#chat-tab').click(); assert.equal(await page.locator('#messages article').count(), 105);
   await page.locator('#messages').getByText('PRIVATE-HISTORY-104', { exact: true }).scrollIntoViewIfNeeded(); await capture('history-complete');
   await page.locator('#message-input').fill('私有中文草稿\n不分享');
@@ -71,19 +73,19 @@ async function run() {
   await chooseRecipient(claude); await fillRoomMessage(page, 'SHARED-MATERIAL'); await page.locator('#forward-button').click();
   await until(async () => (await fixture()).sends.length === 2, 'Directed Claude send'); await reply('REVIEW-MATERIAL');
   const shared = page.locator('#room-messages article.assistant').filter({ has: page.getByText('REVIEW-MATERIAL', { exact: true }) });
-  await shared.getByRole('button', { name: '选择并分享', exact: true }).click(); await page.locator('#share-recipient').selectOption(codex);
+  await shared.hover(); await shared.getByRole('button', { name: '选择并分享', exact: true }).click(); await page.locator('#share-recipient').selectOption(codex);
   assert.equal(await page.locator('#share-text').inputValue(), 'REVIEW-MATERIAL'); await page.locator('#confirm-share').click();
   await until(async () => (await fixture()).sends.length === 3, 'Selected review to Codex'); await reply('VERIFIED-MATERIAL');
   await page.locator('#room-messages').getByText('VERIFIED-MATERIAL', { exact: true }).waitFor();
   const requestArticle = page.locator('#room-messages article').filter({ has: page.getByText('SHARED-MATERIAL', { exact: true }) });
-  assert.equal(await requestArticle.locator('.message-heading strong').innerText(), '你 → 一起核查');
-  assert.equal(await shared.locator('.message-heading strong').innerText(), '一起核查');
+  assert.equal(await requestArticle.locator('.message-heading .message-author').innerText(), '你 → 一起核查');
+  assert.equal(await shared.locator('.message-heading .message-author').innerText(), '一起核查');
   assert.deepEqual((await fixture()).sends, [{ id: codex, text: 'SOLO-QUESTION' }, { id: claude, text: 'SHARED-MATERIAL' }, { id: codex, text: 'REVIEW-MATERIAL' }]);
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('PRIVATE-HISTORY'));
   await page.locator(`[data-session-menu="${claude}"]`).click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
   await page.locator('#rename-name').fill('复核伙伴'); await page.locator('#confirm-rename').click();
-  await until(async () => await shared.locator('.message-heading strong').innerText() === '复核伙伴', 'Room authors follow renaming');
-  assert.equal(await requestArticle.locator('.message-heading strong').innerText(), '你 → 复核伙伴');
+  await until(async () => await shared.locator('.message-heading .message-author').innerText() === '复核伙伴', 'Room authors follow renaming');
+  assert.equal(await requestArticle.locator('.message-heading .message-author').innerText(), '你 → 复核伙伴');
   await page.locator('#room-messages').getByText('VERIFIED-MATERIAL', { exact: true }).scrollIntoViewIfNeeded();
   await capture('shared-review'); passed.push('Two-agent directed verification shares only selected material; current author/recipient names follow renaming without changing saved messages');
   await page.locator(`[data-room-session="${codex}"]`).click(); await until(() => input(codex).evaluate(el => document.activeElement === el), 'Room terminal focus');
@@ -107,7 +109,7 @@ async function run() {
   assert.equal((await fixture()).sends.length, 3); assert.equal((await fixture()).calls.filter(x => x === 'thread/items/list').length, 2, 'UI reopen does not reload the agent');
   passed.push('Detach continues the same terminal; deliberate duplicate launch and reopen retain names, history, membership, both drafts and recipient with no replay');
   await page.locator('#privacy-button').click(); const trust = await page.locator('#trust-status').innerText();
-  assert.match(trust, /不是账单/); assert.match(trust, /未报告；不能据此判断为零/); await capture('privacy-usage'); await page.locator('#close-privacy').click();
+  assert.match(trust, /不是总用量或账单/); assert.match(trust, /未报告；不能据此判断为零/); await capture('privacy-usage'); await page.locator('#close-privacy').click();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(880, 660));
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   assert.equal(await roomBody(page), '下一次核查草稿'); assert.equal(await page.locator('#recipient').inputValue(), claude);
