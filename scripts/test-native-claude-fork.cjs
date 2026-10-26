@@ -43,7 +43,7 @@ const server = http.createServer((req, res) => {
     received.push({ main, at: Date.now() });
     fs.writeFileSync(path.join(base, `request-${received.length}.json`), JSON.stringify(request, null, 2));
     const refuse = message => { budgetError ||= Error(message); res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message } })); };
-    if (!main) { if (++titles > 2) return refuse('fork test budget: at most two native titles'); return reply(res, request.model, 'Native fork check'); }
+    if (!main) { if (++titles > 2) return refuse('fork test budget: at most two native titles'); return reply(res, request.model, JSON.stringify({ title: 'Native fork check' })); }
     if (++mains > 2) return refuse('fork test budget: at most two main turns');
     // The branch turn must carry the parent's history: the fork copied it.
     if (mains === 1) assert.ok(userText(request).includes('PARENT_PROMPT\nSECOND_LINE'), 'Shift+Enter put a newline inside the one parent prompt');

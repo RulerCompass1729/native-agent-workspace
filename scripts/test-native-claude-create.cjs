@@ -137,6 +137,15 @@ async function acceptKeyDialog() {
   // A fresh native profile asks once to accept bypass mode, in the row's own terminal.
   await until(async () => /Bypass Permissions mode|bypass permissions on/.test(await terminalText()), 'Bypass startup', 60000);
   assert.match(await terminalText(), /Bypass Permissions mode/, 'The fresh fixture actually shows the native warning');
+  // Observe chat while the warning actually exists, not just an earlier
+  // starting frame before the CLI has printed anything.
+  await page.locator('#chat-tab').click();
+  await until(async () => (await page.locator('#send-button').innerText()) === '打开原生终端', 'Chat remains gated while the native warning is visible');
+  assert.equal(await page.locator('#send-button').getAttribute('type'), 'button');
+  assert.notEqual((await snapshot()).sessions.find(s => s.id === bypass.id).state, 'idle');
+  if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'bypass-warning-chat.png') });
+  await page.locator('#send-button').click();
+  await until(async () => /Bypass Permissions mode/.test(await terminalText()), 'Returning to native retains the unanswered warning');
   if (/Bypass Permissions mode/.test(await terminalText())) {
     await focusTerminal(); await page.keyboard.press('ArrowDown');
     await until(async () => (await terminalText()).includes('❯ Yes, I accept'), 'Native bypass choice moved to accept', 5000); await page.keyboard.press('Enter');
@@ -145,7 +154,7 @@ async function acceptKeyDialog() {
   // SessionStart carries no mode; the launch mode is recorded so recovery keeps it before any tool hook.
   assert.equal((await snapshot()).sessions.find(s => s.id === bypass.id).nativePermissionMode, 'bypassPermissions');
   assert.ok(!argv.includes('--permission-mode'), 'The unchosen session kept the native default');
-  checks.push('A session created with skip-all-confirmations starts in bypassPermissions, as the native status line shows, and recovery keeps it; the default stays unchecked');
+  checks.push('A session created with skip-all-confirmations starts in bypassPermissions, as the native status line shows, and its launch mode is recorded for recovery; the default stays unchecked');
   checks.push('The chat entry points to the native bypass confirmation before it can send');
   assert.equal(mains, 1); assert.equal(titles, 1); assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks, nativeVersion, mainTurns: mains, nativeTitleResponses: titles, localResponses: received.length, paidModelCalls: 0, errors, evidence: base }));
