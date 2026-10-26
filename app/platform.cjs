@@ -30,7 +30,7 @@ function nativeEnvironment(extra = {}) {
   // and sets NO_COLOR=1 there, which would leave every native terminal colourless;
   // a person's own NO_COLOR (no such marker) is kept.
   if (env.CODEX_CI === '1') delete env.NO_COLOR;
-  for (const key of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI']) delete env[key];
+  for (const key of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_CHILD_SESSION', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_TOOL_CALL_ID', 'CODEX_CI']) delete env[key];
   // The service's own locations: a NAW started from a native terminal must not
   // inherit this service's profile, workspace, runtime configuration or version.
   delete env.NAW_WORKSPACE;
