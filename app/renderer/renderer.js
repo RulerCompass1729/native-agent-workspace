@@ -1457,7 +1457,10 @@ const disposers = [
 ];
 // A drag resizes the native terminal once, on release, not on every move.
 const observer = new ResizeObserver(() => { if (activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
-function applySplit() { for (const id of ['session-layout', 'room-layout']) $(id).style.setProperty('--split-left', `${(terminalSplit * 100).toFixed(2)}%`); }
+function applySplit() {
+  for (const id of ['session-layout', 'room-layout']) $(id).style.setProperty('--split-left', `${(terminalSplit * 100).toFixed(2)}%`);
+  for (const divider of document.querySelectorAll('.split-divider')) { divider.setAttribute('aria-valuenow', String(Math.round(terminalSplit * 100))); divider.setAttribute('aria-valuemin', '20'); divider.setAttribute('aria-valuemax', '80'); }
+}
 const SPLIT_SNAP_PX = 16;
 function setSplit(x, width) { terminalSplit = Math.abs(x - width / 2) <= SPLIT_SNAP_PX ? 0.5 : Math.min(0.8, Math.max(0.2, x / width)); applySplit(); }
 for (const divider of document.querySelectorAll('.split-divider')) {
@@ -1472,8 +1475,9 @@ for (const divider of document.querySelectorAll('.split-divider')) {
   divider.addEventListener('keydown', event => {
     const step = { ArrowLeft: -0.02, ArrowRight: 0.02 }[event.key];
     if (step === undefined && event.key !== 'Home') return;
-    event.preventDefault(); const width = divider.parentElement.getBoundingClientRect().width;
-    if (event.key === 'Home') { terminalSplit = 0.5; applySplit(); } else setSplit((terminalSplit + step) * width, width);
+    // Keys step without the drag snap, which would undo a 2% step on a narrow window.
+    event.preventDefault();
+    terminalSplit = event.key === 'Home' ? 0.5 : Math.min(0.8, Math.max(0.2, Math.round((terminalSplit + step) * 100) / 100)); applySplit();
     attempt(persistView);
   });
 }

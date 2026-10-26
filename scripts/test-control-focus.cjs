@@ -151,6 +151,12 @@ async function run() {
   await drag(centre + 30, [centre + 60]); assert.notEqual(await split(), '50.00%', 'Beyond the snap range it stays where dropped');
   await until(async () => Math.abs((await page.evaluate(() => workspace.initial())).viewState.terminalSplit - Number.parseFloat(await split()) / 100) < 0.001, 'Split width saved');
   await shot('split-dragged');
+  // On a narrow window a 2% key step is under the 16 px snap; keys still move it.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(950, 760)); await delay(300);
+  await divider.focus(); await page.keyboard.press('Home'); assert.equal(await split(), '50.00%');
+  await page.keyboard.press('ArrowRight'); assert.equal(await split(), '52.00%', 'A key step moves the split even when narrower than the snap');
+  assert.equal(await divider.getAttribute('aria-valuenow'), '52');
+  await page.keyboard.press('ArrowLeft'); assert.equal(await split(), '50.00%');
   await page.getByRole('button', { name: '放大对话', exact: true }).click(); await until(() => page.locator('#native-pane').isHidden(), 'Chat takes the full width');
   await page.getByRole('button', { name: '恢复并排', exact: true }).first().click(); await until(() => page.locator('#native-pane').isVisible(), 'Side by side again');
   checks.push('The chat/terminal divider drags freely, snaps to the centre within 16 px, resizes the native terminal once per drag and is saved; the chat has its own full-width toggle');
