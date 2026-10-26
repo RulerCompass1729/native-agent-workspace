@@ -573,7 +573,7 @@ function createReadiness() {
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
   if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
   $('create-permission-note').textContent = $('skip-permissions').checked
-    ? '默认是独立的空目录。这个会话里 agent 运行命令、改文件都不再问你；只在信任的文件夹里使用。'
+    ? '默认是独立的空目录。这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
     : '默认是独立的空目录。原生文件和命令权限仍由原生确认。';
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
