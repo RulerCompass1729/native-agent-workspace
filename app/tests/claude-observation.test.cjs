@@ -763,7 +763,8 @@ test(`native API failure uses only processed same-turn text: ${legacy ? 'retaine
   f.r.lastPromptId = prompt; f.r.submission.status(true);
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: prompt });
   await f.invoke('turn.start', { turnId: turn });
-  const append = () => f.append(response('API Error: PRIVATE RAW', { origin: { kind: 'model', model: '<synthetic>' } }), async e =>
+  const nativeErrorId = randomUUID();
+  const append = () => f.append(response('API Error: PRIVATE RAW', { uuid: nativeErrorId, origin: { kind: 'model', model: '<synthetic>' } }), async e =>
     ({ uuid: e.uuid, message: { type: 'assistant', content: [{ type: 'text', text: 'SAFE ERROR' }] } }));
   const failure = () => f.invoke('classic.StopFailure', { session_id: f.r.record.nativeId, prompt_id: prompt,
     error_details: 'PRIVATE DETAIL', last_assistant_message: 'PRIVATE LAST ANSWER' });
@@ -772,6 +773,7 @@ test(`native API failure uses only processed same-turn text: ${legacy ? 'retaine
   while (f.clock.length) await f.clock.shift()();
   const failures = rows.filter(row => row.kind === 'turn');
   assert.match(failures.at(-1).text, /SAFE ERROR/); assert.equal(failures.at(-1).status, 'failed');
+  assert.equal(f.requests.filter(row => row.kind === 'turn').at(-1).errorMessageId, nativeErrorId, 'Every native event order retains the exact saved error UUID');
   assert.ok(failures.every(row => row.id === `turn:${turn}` && !row.finalDisplayId));
   assert.ok(!JSON.stringify(rows).includes('PRIVATE')); assert.equal(rows.filter(row => row.kind === 'response').length, 0);
   const session = { nativeId: f.r.record.nativeId, messages: [] };
@@ -906,4 +908,133 @@ test('held usage metadata never blocks binding/input and coalesces reads', async
   f.setUsageReader(async () => { reads++; return { context: { window: 200000 } }; });
   release({ context: { window: 200000, tokens: 123 } }); await new Promise(r => setImmediate(r));
   assert.equal(reads, 2, 'Repeated observation requests coalesce to one fresh read');
+});
+
+// The final HTTP error is typed only in the saved native row. The bridge and
+// StopFailure must independently identify that same live root turn first.
+function capacityFailure(t, rowChange = {}) {
+  const r = adapter(), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-capacity-'));
+  t.after(() => { r.submission.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  r.nativeBlocks = true; r.nativeAbortAvailable = true; r.submission.status(true);
+  const prompt = r.lastPromptId = randomUUID(), turnId = randomUUID(), messageId = randomUUID();
+  const file = path.join(dir, r.record.nativeId + '.jsonl');
+  const row = { uuid: messageId, sessionId: r.record.nativeId, type: 'assistant', isSidechain: false,
+    isApiErrorMessage: true, message: { model: '<synthetic>' }, apiErrorStatus: 529, ...rowChange };
+  fs.writeFileSync(file, JSON.stringify(row) + '\n');
+  let sequence = 0;
+  const block = extra => r.observeBlock({ sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: ++sequence, ...extra });
+  block({ id: 'control:turn-start', kind: 'control', status: 'running', promptId: prompt, turnId });
+  const events = []; r.on('nativeTurnEnd', e => events.push(e));
+  const fail = (extra = {}) => block({ id: 'turn:' + turnId, kind: 'turn', turnId, status: 'failed', failedRequest: true, errorMessageId: messageId, ...extra });
+  const stop = (extra = {}) => r.hook({ hook_event_name: 'StopFailure', session_id: r.record.nativeId, prompt_id: prompt, transcript_path: file, ...extra });
+  return { r, dir, file, row, block, fail, stop, events, prompt, turnId, messageId };
+}
+for (const order of ['frame-first', 'hook-first']) test('Claude capacity needs native UUID, typed529 and both live boundaries: ' + order, t => {
+  const f = capacityFailure(t);
+  if (order === 'frame-first') { f.fail(); assert.equal(f.events.length, 0); f.stop(); }
+  else { f.stop(); assert.equal(f.events.length, 0); f.fail(); }
+  assert.deepEqual(f.events, [{ nativeId: f.r.record.nativeId, turnId: f.turnId, status: 'failed', errorInfo: 'serverOverloaded' }]);
+  f.stop(); f.fail(); assert.equal(f.events.length, 1, 'Duplicate hooks or updates cannot schedule another attempt');
+});
+for (const change of [{ apiErrorStatus: 500 }, { apiErrorStatus: 429 }, { apiErrorStatus: 401 }, { apiErrorStatus: '529' },
+  { apiErrorStatus: null }, { isApiErrorMessage: false }, { isSidechain: true }, { sessionId: randomUUID() },
+  { uuid: randomUUID() }, { message: { model: 'ordinary-model' } }, { type: 'user' }])
+test('Claude capacity rejects non-overload or unrelated native metadata: ' + JSON.stringify(change), t => {
+  const f = capacityFailure(t, change); f.fail(); f.stop(); assert.deepEqual(f.events.filter(e => e.errorInfo === 'serverOverloaded'), []);
+});
+for (const boundary of ['replayed', 'gap', 'incomplete', 'child-hook', 'old-hook', 'retained', 'unqualified', 'new-prompt', 'rebind', 'used-input', 'dead', 'torn', 'missing', 'symlink', 'outside-tail', 'already-complete', 'fifo'])
+test('Claude capacity cannot infer a fresh failure through ' + boundary, t => {
+  const f = capacityFailure(t);
+  if (boundary === 'retained') f.r.retainedReader = true;
+  if (boundary === 'unqualified') f.r.nativeAbortAvailable = false;
+  if (boundary === 'torn') fs.writeFileSync(f.file, JSON.stringify(f.row).slice(0, -2));
+  if (boundary === 'missing') fs.unlinkSync(f.file);
+  if (boundary === 'fifo') { fs.unlinkSync(f.file); require('node:child_process').execFileSync('mkfifo', [f.file]); }
+  if (boundary === 'symlink') { fs.renameSync(f.file, f.file + '.saved'); fs.symlinkSync(f.file + '.saved', f.file); }
+  if (boundary === 'outside-tail') fs.appendFileSync(f.file, ' '.repeat(270000));
+  if (boundary === 'already-complete') f.fail({ status: 'complete', failedRequest: false, errorMessageId: undefined });
+  f.fail(['replayed', 'gap', 'incomplete'].includes(boundary) ? { [boundary]: true } : {});
+  if (boundary === 'new-prompt') f.r.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.r.record.nativeId, prompt_id: randomUUID(), prompt: 'New human task' });
+  if (boundary === 'rebind') f.r.bindRoot({ sessionId: f.r.record.nativeId, nativeBlocks: true, nativeAbort: true });
+  if (boundary === 'used-input') f.r.claimFailedTurnInput();
+  if (boundary === 'dead') f.r.terminal.alive = false;
+  f.stop(boundary === 'child-hook' ? { agent_id: 'child' } : boundary === 'old-hook' ? { prompt_id: randomUUID() } : {});
+  assert.deepEqual(f.events.filter(e => e.errorInfo === 'serverOverloaded'), []);
+});
+
+function capacityWorkspace(t) {
+  const f = capacityFailure(t), host = { binaries: {}, close() {} }, w = new Workspace(host, f.dir);
+  const s = Object.assign(f.r.record, { id: 'capacity-root', provider: 'claude', cwd: f.dir, messages: [], state: 'idle', owner: 'window', controlRevision: 0, memberRevision: 0 });
+  f.r.host = host; f.r.ready = f.r.chatAvailable = true;
+  w.sessions.set(s.id, s); w.runtimes.set(s.id, f.r); w.bind(s, f.r);
+  const sent = []; f.r.send = async (text, tag, guard) => { assert.ok(guard()); f.r.claimFailedTurnInput(); sent.push(text); f.r.emit('submitted', tag); };
+  t.after(() => w.close()); return { ...f, w, s, sent };
+}
+test('Claude overload uses the shared two-minute timer and a new continuation without a Codex RPC', async t => {
+  const f = capacityWorkspace(t); f.fail(); f.stop();
+  const scheduled = f.w.capacityStatus(f.s.id); assert.ok(scheduled.due - Date.now() > 119000);
+  f.w.tickCapacity(scheduled.due - 1); assert.deepEqual(f.sent, []);
+  f.w.tickCapacity(scheduled.due); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.sent, ['继续']); assert.equal(f.s.messages.filter(m => m.origin === 'capacity-recovery').length, 1);
+  assert.ok(f.s.messages.some(m => m.name === 'NAW' && m.text.includes('第 1 次')));
+  f.r.emit('interrupted', {}); assert.equal(f.w.capacityStatus(f.s.id), null);
+});
+for (const boundary of ['human-draft', 'input', 'rebind', 'gap', 'ambiguous', 'changed-transcript'])
+test('Claude scheduled continuation yields to ' + boundary, async t => {
+  const f = capacityWorkspace(t); f.fail(); f.stop(); const due = f.w.capacityStatus(f.s.id).due;
+  if (boundary === 'human-draft') f.w.setDraft(f.s.id, 'My unsent task', 'window');
+  if (boundary === 'input') f.r.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.s.nativeId, prompt_id: randomUUID(), prompt: 'Different task' });
+  if (boundary === 'rebind') f.r.bindRoot({ sessionId: f.s.nativeId, nativeBlocks: true, nativeAbort: true });
+  if (boundary === 'gap') f.r.observeRootGap({ sessionId: f.s.nativeId, lease: f.r.rootLease, epoch: f.r.observationEpoch });
+  if (boundary === 'ambiguous') f.fail({ incomplete: true, errorMessageId: undefined });
+  if (boundary === 'changed-transcript') f.r.rootTurn.failedTranscript = f.file + '.different';
+  f.w.tickCapacity(due); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.sent, []); assert.equal(f.w.capacityStatus(f.s.id), null);
+});
+
+test('repeated Claude overloads retain the shared 2/5/10-minute budget; another error cancels it', async t => {
+  const f = capacityWorkspace(t); f.fail(); f.stop();
+  const nextFailure = status => {
+    const promptId = f.r.lastPromptId = randomUUID(), turnId = randomUUID(), errorMessageId = randomUUID();
+    fs.writeFileSync(f.file, JSON.stringify({ ...f.row, uuid: errorMessageId, apiErrorStatus: status }) + '\n');
+    f.block({ id: 'control:turn-start', kind: 'control', status: 'running', promptId, turnId });
+    f.block({ id: 'turn:' + turnId, kind: 'turn', status: 'failed', turnId, failedRequest: true, errorMessageId });
+    f.stop({ prompt_id: promptId });
+  };
+  for (let n = 0; n < 3; n++) {
+    const r = f.w.capacityStatus(f.s.id); assert.equal(r.attempt, n);
+    assert.ok(r.due - Date.now() > [120000, 300000, 600000][n] - 1000);
+    f.w.tickCapacity(r.due); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.sent.length, n + 1); nextFailure(529);
+  }
+  assert.equal(f.w.capacityStatus(f.s.id).status, 'exhausted'); f.w.tickCapacity(Date.now() + 86400000); assert.equal(f.sent.length, 3);
+  nextFailure(500); assert.equal(f.w.capacityStatus(f.s.id), null, 'A generic server error is not an overload');
+});
+
+test('native file persistence may follow failure events; the existing clock reads the same UUID then arms once', t => {
+  const f = capacityWorkspace(t); fs.unlinkSync(f.file); f.fail(); f.stop();
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.equal(f.r.rootTurn.pendingFailure, true);
+  f.fail(); f.stop(); assert.equal(f.r.rootTurn.failureReads, 1, 'Duplicate events do not add reads');
+  f.w.tickCapacity(); fs.writeFileSync(f.file, JSON.stringify(f.row) + '\n'); f.w.tickCapacity();
+  assert.equal(f.w.capacityStatus(f.s.id).status, 'scheduled');
+  assert.equal(f.r.rootTurn.pendingFailure, false); const due = f.w.capacityStatus(f.s.id).due;
+  f.w.tickCapacity(); assert.equal(f.w.capacityStatus(f.s.id).due, due, 'No second schedule');
+});
+for (const boundary of ['draft-then-clear', 'claim', 'member-change', 'native-input', 'rebind'])
+test('pending native error metadata cannot outlive ' + boundary, t => {
+  const f = capacityWorkspace(t); fs.unlinkSync(f.file); f.fail(); f.stop();
+  if (boundary === 'draft-then-clear') { f.w.setDraft(f.s.id, 'My text', 'window'); f.w.setDraft(f.s.id, '', 'window'); }
+  if (boundary === 'claim') f.w.claim(f.s.id, 'other-window');
+  if (boundary === 'member-change') f.w.join(f.s.id, true);
+  if (boundary === 'native-input') f.r.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.s.nativeId, prompt_id: randomUUID(), prompt: 'New task' });
+  if (boundary === 'rebind') f.r.bindRoot({ sessionId: f.s.nativeId, nativeBlocks: true, nativeAbort: true });
+  fs.writeFileSync(f.file, JSON.stringify(f.row) + '\n'); f.w.tickCapacity();
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.equal(f.sent.length, 0);
+});
+test('missing native row gets at most five bounded reads, no delayed surprise rearming', t => {
+  const f = capacityWorkspace(t); fs.unlinkSync(f.file); f.fail(); f.stop();
+  for (let n = 0; n < 8; n++) f.w.tickCapacity();
+  assert.equal(f.r.rootTurn.failureReads, 5); assert.equal(f.r.rootTurn.pendingFailure, false);
+  fs.writeFileSync(f.file, JSON.stringify(f.row) + '\n'); f.w.tickCapacity(); f.stop(); f.fail();
+  assert.equal(f.w.capacityStatus(f.s.id), null); assert.equal(f.sent.length, 0);
 });

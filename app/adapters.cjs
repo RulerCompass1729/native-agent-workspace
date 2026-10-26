@@ -115,6 +115,30 @@ function claudeGeneratedTitle(file, nativeId) {
   } catch { /* no transcript yet */ } finally { if (fd !== undefined) fs.closeSync(fd); }
   return null;
 }
+// Correlate the ordered failure UUID with native's typed HTTP status, never
+// the error prose. Reuse the bounded journal read used for native titles.
+function claudeOverloaded(file, nativeId, messageId) {
+  if (!/^[a-f0-9-]{36}$/i.test(messageId || '') || typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${nativeId}.jsonl`) return false;
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid()) return false;
+    const length = Math.min(stat.size, 262144), buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, stat.size - length);
+    for (const line of buffer.toString('utf8').split('\n').reverse()) {
+      if (!line.includes(messageId)) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row.uuid !== messageId) continue;
+        return row.type === 'assistant' && row.sessionId === nativeId && row.isSidechain === false &&
+          row.isApiErrorMessage === true && row.message?.model === '<synthetic>' && row.apiErrorStatus === 529;
+      } catch { /* torn line: no authority to retry */ }
+    }
+  } catch (error) { return error.code === 'ENOENT' ? null : false; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+  return null; // Native may flush the identified row just after its hooks.
+}
 // A running claude process whose arguments name this native session ID.
 function claudeHolder(nativeId) {
   if (!/^[a-f0-9-]{36}$/i.test(nativeId || '')) return null;
@@ -356,9 +380,12 @@ class Claude extends EventEmitter {
       if (status === 'complete' && !turn.incomplete && block?.final) { turn.safeText = block.text; turn.messageId = `native:${this.record.nativeId}:${message.finalDisplayId}`; }
     }
     this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag });
-    if (kind === 'turn' && this.rootTurn?.id === turnId && ['working', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
+    if (kind === 'turn' && this.rootTurn?.id === turnId && !this.rootTurn.completed && ['working', 'error', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
       this.rootTurn.status = status === 'interrupted' ? 'idle' : status === 'failed' && message.failedRequest === true ? 'error' : null;
       this.rootTurn.completed = status === 'complete';
+      if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && /^[a-f0-9-]{36}$/i.test(message.errorMessageId || '')) this.rootTurn.errorMessageId = message.errorMessageId;
+      if (incomplete || turn.incomplete) this.rootTurn.errorMessageId = null;
+      this.reportCapacityFailure();
       if (status === 'interrupted') this.finishInterrupted(turnId);
       this.emit('capability');
     }
@@ -375,6 +402,19 @@ class Claude extends EventEmitter {
     }
     if (kind === 'turn' && this.pending?.turnId === turnId && this.pending.stopEvent) this.finishReply(this.pending, this.pending.stopEvent);
     return { observed: true };
+  }
+  reportCapacityFailure(retry = false) {
+    const turn = this.rootTurn;
+    if (!this.nativeAbortAvailable || this.retainedReader || !turn || turn.endReported || turn.completed || turn.inputUsed || turn.failureCancelled ||
+      !turn.failedTranscript || !turn.errorMessageId || !this.failedTurnInputMatches(turn.id) || turn.failureReads && !retry) return;
+    turn.failurePosture ||= { owner: this.record.owner, control: this.record.controlRevision, member: this.record.memberRevision };
+    const same = turn.failurePosture.owner === this.record.owner && turn.failurePosture.control === this.record.controlRevision && turn.failurePosture.member === this.record.memberRevision;
+    const overloaded = same ? claudeOverloaded(turn.failedTranscript, this.record.nativeId, turn.errorMessageId) : false;
+    turn.failureReads = (turn.failureReads || 0) + 1;
+    turn.pendingFailure = overloaded === null && turn.failureReads < 5;
+    if (turn.pendingFailure) return;
+    turn.endReported = true;
+    this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: turn.id, status: 'failed', errorInfo: overloaded === true ? 'serverOverloaded' : null });
   }
   finishInterrupted(turnId) {
     if (this.rootTurn?.id !== turnId || this.rootTurn.status !== 'idle' || this.rootEnding ||
@@ -615,7 +655,9 @@ class Claude extends EventEmitter {
         if (this.liveTurn) this.liveTurn.question = false;
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
         clearTimeout(this.pending?.displayTimer); this.pending = null;
-        this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请查看失败记录。'); break;
+        this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请查看失败记录。');
+        if (this.rootTurn) this.rootTurn.failedTranscript = event.transcript_path;
+        this.reportCapacityFailure(); break;
       case 'SessionEnd': this.contextEnding(event.reason); break;
     }
   }

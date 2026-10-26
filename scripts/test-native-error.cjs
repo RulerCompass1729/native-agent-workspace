@@ -14,6 +14,7 @@ for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
 assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
+const capacityTrial = process.env.NAW_ERROR_CAPACITY === '1';
 let application, page, client, calls = 0, recovering = false, recoveryCalls = 0;
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -28,8 +29,16 @@ const server = http.createServer((req, res) => {
     // A rejected request is resent at once in compatibility variants (2.1.311: the
     // original and 7 more, varying optional betas and replacing deferred tool search
     // with the full tool list), then fails; one recovery task follows.
-    const number = ++calls; if(number > 10){ res.destroy(); server.close(); return; }
+    const number = ++calls; if(number > (capacityTrial ? 12 : 10)){ res.destroy(); server.close(); return; }
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
+    if (capacityTrial && number === 12) {
+      const sent = JSON.parse(body);
+      assert.match(sent.model, /haiku/, 'Fixture model remains the selected cheap model');
+      const last = sent.messages.at(-1).content;
+      assert.equal(typeof last === 'string' ? last : last.filter(b => b.type === 'text').map(b => b.text).join('\n'), '继续');
+      assert.equal(body.split('Explain the local error.').length - 1, 1, 'Original task occurs once in history, not replayed');
+      recovering = true;
+    }
     if (recovering) {
       assert.equal(++recoveryCalls, 1, 'One explicit new task, no portal retry');
       const request = JSON.parse(body);
@@ -42,8 +51,8 @@ const server = http.createServer((req, res) => {
       event('message_delta', {delta:{stop_reason:'end_turn',stop_sequence:null},usage:{output_tokens:10}});
       event('message_stop', {}); res.end(); return;
     }
-    res.writeHead(400, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'NATIVE_FAILURE_FIXTURE: selected model is unavailable.' } }));
+    res.writeHead(capacityTrial ? 529 : 400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ type: 'error', error: { type: capacityTrial ? 'overloaded_error' : 'invalid_request_error', message: capacityTrial ? 'NATIVE_FAILURE_FIXTURE: capacity is temporarily unavailable.' : 'NATIVE_FAILURE_FIXTURE: selected model is unavailable.' } }));
 
   });
 });
@@ -82,7 +91,7 @@ async function cleanup() {
   await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill('Explain the local error.'); await page.locator('#send-button').click();
   await until(() => calls >= 1, 'Native request');
-  await until(async () => (await snapshot()).sessions[0].state === 'error' || (await snapshot()).sessions[0].messages.some(m=>m.kind==='turn'&&m.status==='failed'), 'Native failure boundary');
+  await until(async () => (await snapshot()).sessions[0].state === 'error' || (await snapshot()).sessions[0].messages.some(m=>m.kind==='turn'&&m.status==='failed'), 'Native failure boundary', capacityTrial ? 210000 : 30000);
   await sleep(1000);
   const state = await snapshot(); fs.writeFileSync(path.join(base,'error-state.json'),JSON.stringify(state,null,2));
   assert.match(await page.locator('#compose-hint').innerText(), /原生请求未完成|上次请求失败/);
@@ -92,14 +101,37 @@ async function cleanup() {
   fs.writeFileSync(path.join(base,'error-terminal.txt'),await page.locator('#terminal-area').innerText());
   await page.screenshot({path:path.join(base,'error-terminal.png')});
   await page.locator('#chat-tab').click();await page.screenshot({path:path.join(base,'error-reader.png')});
-  assert.match(reader,/NATIVE_FAILURE_FIXTURE: selected model is unavailable\./,'Specific native failure is readable in the main conversation');
+  assert.match(reader, capacityTrial ? /NATIVE_FAILURE_FIXTURE: capacity is temporarily unavailable\./ : /NATIVE_FAILURE_FIXTURE: selected model is unavailable\./, 'Specific native failure is readable in the main conversation');
   // Every request so far carries the one task once: variants of it, never a repeat.
   for (let n = 1; n <= calls; n++) { const sent = JSON.parse(fs.readFileSync(path.join(base, `request-${n}.json`), 'utf8')); assert.equal(sent.messages.length, 2, 'One task per request'); assert.equal(JSON.stringify(sent).split('Explain the local error.').length - 1, 1, 'The task appears once'); }
-  assert.ok(calls >= 1 && calls <= 8, 'One native failure: ' + calls);assert.deepEqual(errors,[]);
+  assert.ok(capacityTrial ? calls === 11 : calls >= 1 && calls <= 8, 'One native failure (including native retries): ' + calls);assert.deepEqual(errors,[]);
   assert.equal(state.sessions[0].nativeId,before.nativeId);assert.equal(state.sessions[0].pid,before.pid);
   assert.equal(state.diagnostics.dispatches,1);
   assert.equal(state.sessions[0].messages.filter(m=>m.kind==='turn'&&m.text.includes('NATIVE_FAILURE_FIXTURE')).length,1);
   assert.ok(!state.room.messages.some(m=>m.finalReply));
+  if (capacityTrial) {
+    await until(async () => (await snapshot()).sessions[0].capacityRecovery?.status === 'scheduled', 'Typed529 schedules a new continuation');
+    const failed = (await snapshot()).sessions[0];
+    assert.ok(failed.capacityRecovery.due - Date.now() > 110000, 'Production two-minute delay');
+    await page.getByRole('button', { name: '取消自动继续', exact: true }).waitFor();
+    fs.writeFileSync(path.join(base, 'capacity-before.json'), JSON.stringify(failed, null, 2));
+    await application.close(); application = null;
+    await until(async () => calls === 12 && (await snapshot()).sessions[0].state === 'idle', 'Continuation completes with no Electron window', 150000);
+    const after = (await snapshot()).sessions[0];
+    assert.equal(recoveryCalls, 1); assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid);
+    assert.equal(after.capacityRecovery, null); assert.equal((await snapshot()).diagnostics.dispatches, 2);
+    assert.equal(after.messages.filter(m => m.origin === 'capacity-recovery' && m.text === '继续').length, 1);
+    assert.ok(after.messages.some(m => m.name === 'NAW' && m.text.includes('因模型满载自动继续（第 1 次）')));
+    assert.ok(after.messages.some(m => m.text.includes('NATIVE_FAILURE_FIXTURE')));
+    fs.writeFileSync(path.join(base, 'capacity-completed.json'), JSON.stringify(after, null, 2));
+    application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root],
+      ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+    page = await application.firstWindow(); await page.locator('#new-session').waitFor();
+    await until(async () => (await page.locator('#messages').innerText()).includes('NATIVE_RECOVERY'), 'Reopened reader has the continued result');
+    await page.screenshot({ path: path.join(base, 'capacity-continued.png') });
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ checks: ['Actual native529 exhausts its own retries; current failed turn and typed saved metadata arm a visible two-minute delay; one new continuation completes while the window is closed, same native identity/PID, original error and NAW provenance retained after reopen'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+  }
   if (process.env.NAW_ERROR_RECOVERY === '1') {
     assert.equal(await page.locator('#message-input').getAttribute('readonly'), null, 'Explicit new human input is available after a confirmed request failure');
     assert.equal(state.sessions[0].failedTurnInputAvailable, true);

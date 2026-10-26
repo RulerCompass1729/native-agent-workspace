@@ -179,12 +179,15 @@ class Workspace extends EventEmitter {
     return r ? { status: r.status, attempt: r.attempt, due: r.due } : null;
   }
   cancelCapacity(id) {
+    const turn = this.runtimes.get(id)?.rootTurn;
+    if (turn?.pendingFailure) { turn.pendingFailure = false; turn.failureCancelled = true; }
     if (this.capacityRecoveries.delete(id)) this.changed();
   }
   capacityValid(s, r) {
     const runtime = this.runtimes.get(s.id);
     return !this.closed && !this.storageWarning && this.capacityRecoveries.get(s.id) === r && runtime === r.runtime &&
-      s.nativeId === r.nativeId && runtime.host?.rpc === r.rpc && runtime.lifecycleRevision === r.lifecycle &&
+      s.nativeId === r.nativeId && runtime.host?.rpc === r.rpc && runtime.lifecycleRevision === r.lifecycle && runtime.rootLease === r.lease && runtime.observationEpoch === r.epoch &&
+      (s.provider !== 'claude' || runtime.rootTurn?.id === r.turnId && r.errorMessageId && runtime.rootTurn.errorMessageId === r.errorMessageId && runtime.rootTurn.failedTranscript === r.transcript && runtime.failedTurnInputMatches(r.turnId)) &&
       s.owner === r.owner && s.controlRevision === r.control && s.memberRevision === r.member &&
       this.draftRevisions.get(s.id) === r.draft && !this.drafts.get(s.id) && !s.archived && !s.nativeContextPending &&
       ['idle', 'error'].includes(s.state) && (!s.pendingTag || s.pendingTag === r.tag) && !s.approval && !s.approvalOverflow && !s.claudeQuestion &&
@@ -194,7 +197,7 @@ class Workspace extends EventEmitter {
   scheduleCapacity(s, runtime, turnId) {
     const previous = this.capacityRecoveries.get(s.id);
     if (previous?.turnId === turnId) return;
-    const r = { runtime, rpc: runtime.host?.rpc, lifecycle: runtime.lifecycleRevision, nativeId: s.nativeId, turnId, owner: s.owner, control: s.controlRevision, member: s.memberRevision,
+    const r = { runtime, rpc: runtime.host?.rpc, lease: runtime.rootLease, epoch: runtime.observationEpoch, errorMessageId: runtime.rootTurn?.errorMessageId, transcript: runtime.rootTurn?.failedTranscript, lifecycle: runtime.lifecycleRevision, nativeId: s.nativeId, turnId, owner: s.owner, control: s.controlRevision, member: s.memberRevision,
       draft: this.draftRevisions.get(s.id), attempt: previous?.attempt || 0, status: 'scheduled', due: 0 };
     this.capacityRecoveries.set(s.id, r);
     if (!this.capacityValid(s, r)) { this.capacityRecoveries.delete(s.id); return; }
@@ -206,6 +209,9 @@ class Workspace extends EventEmitter {
     this.changed();
   }
   tickCapacity(now = Date.now()) {
+    // Native failure hooks can precede the journal flush. This existing clock
+    // allows at most five bounded reads of that exact current error UUID.
+    for (const runtime of this.runtimes.values()) if (runtime.rootTurn?.pendingFailure) runtime.reportCapacityFailure?.(true);
     for (const [id, r] of this.capacityRecoveries) {
       if (r.status !== 'scheduled' || r.checking) continue;
       const s = this.sessions.get(id);
@@ -225,13 +231,15 @@ class Workspace extends EventEmitter {
     };
     let goal;
     try {
-      const result = await r.rpc.call('thread/goal/get', { threadId: r.nativeId }).catch(error => {
-        if (error?.nativeGoalsDisabled === true) return { goal: null };
-        throw error;
-      });
-      if (!result || !Object.hasOwn(result, 'goal') || (result.goal !== null &&
-          (result.goal?.threadId !== r.nativeId || !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(result.goal?.status)))) throw Error('Unknown goal state');
-      goal = result.goal;
+      if (s.provider === 'codex') {
+        const result = await r.rpc.call('thread/goal/get', { threadId: r.nativeId }).catch(error => {
+          if (error?.nativeGoalsDisabled === true) return { goal: null };
+          throw error;
+        });
+        if (!result || !Object.hasOwn(result, 'goal') || (result.goal !== null &&
+            (result.goal?.threadId !== r.nativeId || !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(result.goal?.status)))) throw Error('Unknown goal state');
+        goal = result.goal;
+      }
     } catch {
       if (this.capacityRecoveries.get(s.id) === r && !this.capacityValid(s, r)) { this.cancelCapacity(s.id); return; }
       stop('自动继续前无法核对原生 goal；已停止自动发送，请核对同屏终端。'); return;
@@ -286,7 +294,7 @@ class Workspace extends EventEmitter {
     on('nativeControlBoundary', reason => { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id); });
     on('capability', () => this.changed());
     on('nativeTurnEnd', info => {
-      if (s.provider === 'codex' && runtime.host?.rpc?.nativeVersion === '0.164.0' && info.nativeId === s.nativeId && info.status === 'failed' && info.errorInfo === 'serverOverloaded') this.scheduleCapacity(s, runtime, info.turnId);
+      if ((s.provider === 'codex' && runtime.host?.rpc?.nativeVersion === '0.164.0' || s.provider === 'claude' && runtime.nativeAbortAvailable && !runtime.retainedReader) && info.nativeId === s.nativeId && info.status === 'failed' && info.errorInfo === 'serverOverloaded') this.scheduleCapacity(s, runtime, info.turnId);
       else this.cancelCapacity(s.id);
     });
     on('inputRequired', () => this.changed());
@@ -364,6 +372,7 @@ class Workspace extends EventEmitter {
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
     on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
     on('interrupted', ({ tag }) => {
+      this.cancelCapacity(s.id);
       if (tag) {
         if (s.pendingTag === tag) s.pendingTag = null;
         this.forwards.delete(tag); this.sharedReplies.close(tag, '原生已中断本轮');
