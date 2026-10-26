@@ -111,10 +111,9 @@ header h1, header p { overflow-wrap: anywhere; }
 #room-messages .system .message-actions { display: none; }
 #room-messages .system.has-session-link .message-actions { display: flex; }
 /* 查看会话 is the only way back to a result kept in its session: that row keeps its
-   actions in flow (as without hover) showing only this one; the rest still appear on hover or focus. */
+   actions in flow (as without hover) showing only this one; the rest still appear on hover or focus, before it. */
 .message.has-session-link>.message-actions{position:static;opacity:1;pointer-events:auto;width:fit-content;justify-self:end;grid-row:auto}
 .message.has-session-link:not(:hover):not(:focus-within)>.message-actions>:not(.message-session-link){display:none}
-.message-session-link{order:1}
 #room-messages .system:hover .message-actions, #room-messages .system:focus-within .message-actions { display: flex; }
 #room-composer { padding: 12px 18px 10px; background: var(--surface); border-top: 1px solid var(--border); }
 #shared-input { resize: vertical; min-height: 66px; max-height: min(200px,22vh); padding: 12px; background: var(--raised); }
