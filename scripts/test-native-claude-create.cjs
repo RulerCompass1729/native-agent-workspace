@@ -88,7 +88,8 @@ async function acceptKeyDialog() {
   fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ awaySummaryEnabled: false }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root],
-    env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: serviceCwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 60000 });
+    // As when an agent's command tool starts NAW: Codex marks that shell CODEX_CI=1 with NO_COLOR=1.
+    env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: serviceCwd, NAW_TEST_PARENT_PID: String(process.pid), CODEX_CI: '1', NO_COLOR: '1', CODEX_THREAD_ID: 'launcher-thread' }, timeout: 60000 });
   await until(async () => { for (const p of application.windows()) if (!p.isClosed() && await p.locator('#new-session').count().catch(() => 0)) { page = p; return true; } return false; }, 'Main window', 60000);
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   client = await connectService(profile, 'native-claude-create-test');
@@ -101,6 +102,10 @@ async function acceptKeyDialog() {
   const row = (await snapshot()).sessions[0]; assert.equal(row.autoName, true); assert.equal(row.name, 'Claude 1');
   const argv = testScratch.childProcess.execFileSync('ps', ['-ww', '-o', 'args=', '-p', String(row.pid)], { encoding: 'utf8' });
   assert.ok(argv.includes(row.nativeId) && !argv.includes('--name'), 'An unnamed session is launched without --name');
+  const nativeEnv = testScratch.childProcess.execFileSync('ps', ['-E', '-ww', '-o', 'command=', '-p', String(row.pid)], { encoding: 'utf8' }).split(' ');
+  assert.ok(!nativeEnv.some(item => /^(NO_COLOR|CODEX_CI|CODEX_THREAD_ID)=/.test(item)), 'The launching agent\'s tool settings and identity do not reach the native session');
+  await until(() => page.locator('#terminal-area .xterm-rows').evaluateAll(rows => rows.some(row => row.checkVisibility() && row.querySelector('span[class*="xterm-fg-"], span[style*="color"]'))), 'The native terminal draws colour');
+  checks.push('A NAW started from an agent tool shell still gives the native terminal colour and no launcher identity');
   await focusTerminal(); await page.keyboard.type('NAME_PROMPT', { delay: 20 });
   await until(async () => (await editLine()) === '❯ NAME_PROMPT', 'Prompt on the edit line'); await page.keyboard.press('Enter');
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.role === 'assistant' && m.text?.includes('NAME_REPLY')) && (await snapshot()).sessions[0].state === 'idle', 'Reply', 60000);
