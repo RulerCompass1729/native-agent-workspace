@@ -78,6 +78,21 @@ test('fork history retains original item provenance, context order and distinct 
  applyCodexHistory(s,[{id:'same-item',type:'agentMessage',turnId:'same-turn',text:'Native B update plus'}],{});
  assert.deepEqual(s.messages.map(m=>m.text),['Original A','Native fork boundary','Native B update plus']);
 });
+test('a native question is answered with its structured reply on its source connection, and only within its options',async t=>{
+ const {r,s,w,host,replies}=fixture(t),nativeReplies=[];
+ const rpc=r.terminalRpc={connected:true,reply:(...args)=>nativeReplies.push(args)};r.terminalNotificationSource=true;
+ const ask=(id,question)=>{r.event({id,method:'item/tool/requestUserInput',params:{threadId:s.nativeId,turnId:'t',itemId:'i'+id,isBlocking:true,questions:[question]}},rpc);r.emit('state','approval');return s.approval.requestId;};
+ let requestId=ask(8,{id:'q',header:'H',question:'Which?',isOther:false,isSecret:false,options:[{label:'A',description:''},{label:'B',description:''}]});
+ assert.throws(()=>w.answer(s.id,requestId,{q:['C']},'window'),/只能从给出的选项中选择/);
+ assert.throws(()=>w.answer(s.id,requestId,{},'window'),/请回答每个问题/);
+ assert.throws(()=>w.answer(s.id,requestId,{q:['A','B']},'window'),/请回答每个问题/);
+ assert.throws(()=>w.answer(s.id,requestId,{q:['A']},'other-window'),/问题已变化/);
+ w.answer(s.id,requestId,{q:['B']},'window');assert.deepEqual(nativeReplies,[[8,{answers:{q:{answers:['B']}}}]]);assert.deepEqual(replies,[]);
+ assert.throws(()=>w.answer(s.id,requestId,{q:['A']},'window'),/问题已变化/,'One answer per request');
+ r.event({method:'serverRequest/resolved',params:{threadId:s.nativeId,requestId:8}},rpc);
+ requestId=ask(9,{id:'secret',header:'Key',question:'Token?',isOther:true,isSecret:true,options:null});
+ assert.throws(()=>w.answer(s.id,requestId,{secret:['x']},'window'),/请在原生终端回答/);assert.equal(nativeReplies.length,1);
+});
 test('native decisions and resolution stay on the exact source connection, including colliding numeric request IDs',async t=>{
  const {r,s,w,host,replies}=fixture(t),nativeReplies=[];
  const rpc=r.terminalRpc={connected:true,reply:(...args)=>nativeReplies.push(args)};r.terminalNotificationSource=true;

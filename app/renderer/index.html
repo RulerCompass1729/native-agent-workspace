@@ -45,9 +45,9 @@
     </section>
     <div id="solo-session" class="session-slot">
     <section id="session-view" hidden>
-      <div class="session-toolbar"><div class="reading-controls"><button id="chat-tab">对话</button><button id="terminal-tab" class="active">原生终端</button></div><button id="session-files" type="button">文件…</button><span id="session-status" aria-live="polite"></span><button id="take-control" hidden>接管此窗口</button></div>
+      <div class="session-toolbar"><div class="reading-controls"><button id="chat-tab">对话</button><button id="terminal-tab" class="active">原生终端</button></div><button id="session-files" type="button">文件…</button><button id="chat-maximize" class="pane-maximize" type="button" aria-label="放大对话" title="放大对话">⛶</button><span id="session-status" aria-live="polite"></span><button id="take-control" hidden>接管此窗口</button></div>
       <div id="session-layout" class="split-workspace">
-      <div id="conversation-pane" class="conversation-pane"><button id="chat-maximize" class="pane-maximize" type="button" aria-label="放大对话" title="放大对话">⛶</button>
+      <div id="conversation-pane" class="conversation-pane">
       <div id="approval" hidden></div>
       <div id="messages" class="messages" aria-label="会话内容" aria-live="polite"></div>
       <div id="native-activity" class="native-activity" aria-label="原生运行状态" hidden><span id="native-phase" role="status"></span><span id="native-elapsed" aria-live="off"></span></div>

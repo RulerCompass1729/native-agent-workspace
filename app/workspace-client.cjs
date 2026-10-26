@@ -528,7 +528,7 @@ class WorkspaceClient extends EventEmitter {
       this.control.armed.set(targets[0].key, arm);
       return arm.entry.client.call(method, ...args);
     }
-    if (!['prepareInput', 'observe', 'unobserve', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'forward', 'approve', 'stop', 'resume', 'forget'].includes(method)) throw new Error('不支持的本地操作。');
+    if (!['prepareInput', 'observe', 'unobserve', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'forward', 'approve', 'answer', 'stop', 'resume', 'forget'].includes(method)) throw new Error('不支持的本地操作。');
     const target = this.route(args[0]);
     const guard = this.operationGuard(target); guard();
     const legacy = target.state.runtimeVersion === '0.1.0-alpha.2';
@@ -564,6 +564,7 @@ class WorkspaceClient extends EventEmitter {
       if (!native) throw Error('原生确认连接已变化，没有将确认交给其他连接。');
       return native.approve(args[1], args[2]);
     }
+    if (method === 'answer' && !target.state.capabilities?.includes('nativeQuestionAnswer')) throw Error('这个后台不能在对话里回答原生问题，请在原生终端回答；没有发送回答。');
     if (method === 'approve' && !target.state.capabilities?.includes('nativeApprovalSync')) {
       throw Error('旧连接无法核实这项确认的最新状态，请在原生终端核对；没有发送决定。');
     }

@@ -283,6 +283,28 @@ test('the root hook-reported permission mode and effort are kept on the row; chi
  assert.equal(s.nativeEffort,'xhigh','Only a valid root effort report counts');
  tool({effort:{level:'max'}});assert.equal(s.nativeEffort,'max');
 });
+test('a native question is held for the chat view and answered there, or handed back to the native dialog',async t=>{
+ const f=await fixture(t),{w,s,r}=f,replies=[];let open=true;
+ const ask=(questions,extra={})=>r.ask({ask:true,session_id:s.nativeId,questions,...extra},reply=>replies.push(reply),()=>open);
+ const one=[{question:'Which?',header:'H',multiSelect:false,options:[{label:'A',description:''},{label:'B',description:''}]}];
+ s.owner='owner';s.view='terminal';ask(one);assert.deepEqual(replies.pop(),{},'A terminal view lets native ask at once');
+ s.view='chat';ask(one,{agent_id:'child'});assert.deepEqual(replies.pop(),{},'A child question is not held');
+ s.roomId='shared';ask(one);assert.deepEqual(replies.pop(),{},'A row in a room keeps the native dialog');s.roomId=null;
+ ask(one);assert.equal(replies.length,0);const {requestId}=s.claudeQuestion;assert.equal(s.claudeQuestion.questions[0].question,'Which?');
+ ask(one);assert.deepEqual(replies.pop(),{},'One held question at a time');
+ assert.throws(()=>w.answer(s.id,requestId,{'Which?':['A']},'other'),/问题已变化/);
+ assert.throws(()=>w.answer(s.id,requestId,{'Which?':['A','B']},'owner'),/请回答每个问题/);
+ w.answer(s.id,requestId,{'Which?':['B']},'owner');assert.deepEqual(replies.pop(),{answers:{'Which?':'B'}});assert.equal(s.claudeQuestion,null);
+ ask([{question:'Pick',header:'',multiSelect:true,options:[{label:'X',description:''},{label:'Y',description:''}]}]);
+ w.answer(s.id,s.claudeQuestion.requestId,{Pick:['X','typed']},'owner');assert.deepEqual(replies.pop(),{answers:{Pick:'X, typed'}},'Several choices join with commas, as native reads them');
+ ask(one);w.answer(s.id,s.claudeQuestion.requestId,null,'owner');assert.deepEqual(replies.pop(),{},'Hand back to the native dialog');
+ ask(one);w.claim(s.id,'owner','terminal');assert.deepEqual(replies.pop(),{},'Switching to the terminal lets native ask');assert.equal(s.claudeQuestion,null);
+ s.view='chat';ask(one);assert.ok(s.claudeQuestion,'Held before the interrupt');assert.equal(replies.length,0);r.interrupt=async()=>({interrupted:true});await w.interrupt(s.id,'owner');assert.deepEqual(replies.pop(),{stop:true},'Stopping the turn declines a held question first');assert.equal(s.claudeQuestion,null);
+ s.view='chat';ask(one);open=false;assert.throws(()=>w.answer(s.id,s.claudeQuestion.requestId,{'Which?':['A']},'owner'),/问题已变化/,'A closed hook is not answered');
+ w.releaseQuestion(s,null);replies.length=0;open=true;let closed;
+ r.ask({ask:true,session_id:s.nativeId,questions:one},reply=>replies.push(reply),()=>open,fn=>{closed=fn;});assert.ok(s.claudeQuestion);
+ open=false;closed();assert.equal(s.claudeQuestion,null,'A hook native ended clears the question card');assert.equal(replies.length,0);
+});
 test('a recovery relaunch passes bypass and effort again only as the session last reported them',async t=>{
  const { Claude: Adapter } = require('../adapters.cjs');
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-posture-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));

@@ -132,6 +132,16 @@ class Claude extends EventEmitter {
     if (!this.liveTurn || this.rootEnding || this.disposed || !this.terminal?.alive) return null;
     return { nativeId: this.record.nativeId, turnId: this.liveTurn.id, label: this.livePermissions?.size ? [...this.livePermissions.values()].map(r => r.title).join(', ') : this.liveTurn.label, phase: this.livePermissions?.size ? 'approval' : this.liveTurn.phase, observedAt: this.observationSeenAt };
   }
+  // A native AskUserQuestion held for the chat view (see the --ask hook). Only the
+  // root's own questions; the workspace decides, and any doubt lets native ask.
+  ask(event, reply, open, onClose = () => {}) {
+    const questions = event.questions;
+    const valid = Array.isArray(questions) && questions.length >= 1 && questions.length <= 4 && questions.every(q => q && typeof q.question === 'string' && q.question.length <= 16000 &&
+      Array.isArray(q.options) && q.options.length >= 1 && q.options.length <= 10 && q.options.every(o => o && typeof o.label === 'string' && o.label.length <= 16000));
+    if (!valid || event.agent_id || event.session_id !== this.record.nativeId || this.rootEnding || this.disposed || !this.terminal?.alive || !this.listenerCount('askQuestion')) return reply({});
+    this.emit('askQuestion', { questions: questions.map(q => ({ question: q.question, header: typeof q.header === 'string' ? q.header : '', multiSelect: q.multiSelect === true,
+      options: q.options.map(o => ({ label: o.label, description: typeof o.description === 'string' ? o.description : '' })) })), reply, open, onClose });
+  }
   get nativeApproval() {
     if (this.rootEnding || this.disposed || !this.terminal?.alive || !this.livePermissions?.size) return null;
     return { nativeOnly: true, observedAt: this.observationSeenAt, requests: [...this.livePermissions.values()].map(request => ({ ...request })) };
@@ -158,6 +168,9 @@ class Claude extends EventEmitter {
     for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'Notification', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted', 'SessionEnd']) {
       hooks[event] = [{ hooks: [{ type: 'command', command, timeout: 2 }] }];
     }
+    // A question may be answered in the chat view before the native dialog opens.
+    // The hook waits for that answer; anything else lets native ask as usual.
+    hooks.PreToolUse.push({ matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: `${command} --ask`, timeout: 3600 }] });
     const settings = path.join(host.privateDir, `${record.id}.settings.json`);
     // Automatic session recap and prompt suggestions are background model requests
     // the person did not ask for; /recap stays available on request.
@@ -1652,7 +1665,16 @@ class NativeHost {
       socket.on('data', chunk => {
         data += chunk.toString(); if (data.length > 2 * 1024 * 1024) return socket.destroy();
         const end = data.indexOf('\n'); if (end < 0) return;
-        try { const event = JSON.parse(data.slice(0, end)); this.hookTargets.get(event.token)?.hook(event); } catch {}
+        let event;
+        try { event = JSON.parse(data.slice(0, end)); } catch { return socket.end(); }
+        const target = this.hookTargets.get(event.token);
+        if (event.ask && target?.ask) {
+          // Hold only this connection until the person answers or hands it back.
+          socket.setTimeout(0); let open = true; const closers = [];
+          socket.on('close', () => { open = false; for (const closed of closers) closed(); });
+          return target.ask(event, reply => { if (open) socket.end(JSON.stringify(reply) + '\n'); }, () => open, closed => closers.push(closed));
+        }
+        try { target?.hook(event); } catch {}
         socket.end();
       });
     });

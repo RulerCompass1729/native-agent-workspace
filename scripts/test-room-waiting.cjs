@@ -66,6 +66,13 @@ async function run() {
   assert.equal(await marked(`[data-session-id="${a}"]`), true); assert.equal(await marked(`[data-session-id="${b}"]`), false); assert.equal(await marked('#room-nav'), false);
   await shot('sidebar-current');
   checks.push('The sidebar marks exactly one current place, visibly and with aria-current, for a room and a session');
+  // Rows show when they were last active, and say when they were created.
+  const rowLink = page.locator(`[data-session-id="${a}"]`);
+  // Same locale clock as the shared record's message times.
+  const clock = '\\d{1,2}:\\d{2}(?: [AP]M)?';
+  assert.match(await rowLink.locator('small').innerText(), new RegExp(`· ${clock}$`));
+  assert.match(await rowLink.getAttribute('title'), new RegExp(`\\n创建 ${clock} · 最后活动 ${clock}$`));
+  checks.push('Session rows show the last activity time and, on hover, the creation and last activity times');
   const c = await create('claude', '私人学习');
   await pendingPrivate(c, '私人问题一，不进入共同任务'); await authorize(a, '旧授权任务：每天35分钟');
   await delay(250); assert.equal((await fixture()).sends.length, 1); await shot('waiting-before-action');
