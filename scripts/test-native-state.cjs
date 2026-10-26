@@ -46,10 +46,10 @@ async function run(){
  await page.getByRole('button',{name:'加入协作',exact:true}).click();
  const b=await create('codex','Other member');
  await fixture('native-activity',b,{turnId:'codex-clock',label:'inProgress'});
- await page.locator('#native-phase').getByText('Other member · inProgress',{exact:true}).waitFor();
+ await page.locator('#native-phase').getByText('Other member · 工作中',{exact:true}).waitFor();
  assert.equal(await page.locator('#native-elapsed').innerText(),'','Unknown native start time does not become an enqueue clock');
  await fixture('native-activity',b,{turnId:'codex-clock',label:'inProgress',startedAt:Date.now()-2000});
- await until(async()=>/本轮已运行 \d+ 秒/.test(await page.locator('#native-elapsed').innerText()),'Known native start time permits elapsed display');
+ await until(async()=>/已用 \d+ 秒/.test(await page.locator('#native-elapsed').innerText()),'Known native start time permits elapsed display');
  await fixture('native-activity',b,{turnId:'codex-clock',label:'inProgress'});
  await until(async()=>(await page.locator('#native-elapsed').innerText())==='','Losing native time removes the clock rather than retaining an earlier value');
  await fixture('native-activity',b,null);await page.locator('#native-activity').waitFor({state:'hidden'});

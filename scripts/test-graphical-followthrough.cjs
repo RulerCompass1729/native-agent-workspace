@@ -113,7 +113,7 @@ async function run() {
   const draft = '明天再讨论行程安排，先不发送。'; await page.locator('#message-input').fill(draft);
   await shot('permission-and-draft');
   // The person chooses the existing native surface for this confirmation.
-  await page.locator('#terminal-tab').click(); const input = page.locator('#terminal-area .xterm-helper-textarea');
+  await page.locator('#terminal-tab').click(); const input = page.locator(`[data-terminal-id="${b}"] .xterm-helper-textarea`);
   await input.waitFor({ state: 'attached' }); await input.focus(); await input.press('Enter');
   await until(async () => (await native()).inputs.some(i => i.id === b && i.data === '\r'), 'One native confirmation key');
   await native('event', { target: b, value: { method: 'serverRequest/resolved', params: { requestId: 11 } } });
