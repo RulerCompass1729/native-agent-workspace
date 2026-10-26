@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron, Claude and Codex. Four task responses (five for native interruption),
 // plus at most one native title response; all fixed loopback data, no paid inference.
@@ -119,8 +120,7 @@ async function create(provider) {
     const takeover = page.getByRole('button', { name: '接管此窗口', exact: true }); if (await takeover.isVisible()) await takeover.click();
   } else {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption(provider === 'claude' ? 'terminal' : 'chat');
-  await page.locator('#session-name').fill(provider === 'claude' ? 'Claude review' : 'Codex build'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(provider === 'claude' ? 'Claude review' : 'Codex build'); await createIn(page, provider === 'claude' ? 'terminal' : 'chat');
   }
   if (provider === 'claude') {
     await until(async () => /Yes, I trust this folder|Do you want to use this API key|Claude Code v2/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions.find(s => s.provider === provider)?.chatAvailable, 'Claude startup');

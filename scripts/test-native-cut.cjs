@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron/native Codex interruption and next-turn continuation.
 // Two fixed loopback task responses and at most one native title; no paid inference.
@@ -84,7 +85,7 @@ async function save(name){const state=await snapshot();fs.writeFileSync(path.joi
     assert.equal(await page.locator('#send-button').textContent(), '接通原会话输入'); await page.locator('#send-button').click();
   } else {
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('Native interruption'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Native interruption'); await createIn(page, 'chat');
   }
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
   const before = (await snapshot()).sessions[0];

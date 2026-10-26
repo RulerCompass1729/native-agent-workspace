@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex tool execution and Electron with two canned loopback Responses streams.
 // Private native configuration; no paid inference or normal-profile edits.
@@ -77,7 +78,7 @@ async function revealTools(selector) {
   await until(async () => { for (const candidate of application.windows()) if (!candidate.isClosed() && await candidate.locator('#new-session').count().catch(() => 0)) { page = candidate; return true; } return false; }, 'Main workspace');
   page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('Native tools'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('Native tools'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Native Codex ready');
   const before = (await snapshot()).sessions[0]; assert.equal(before.model, 'gpt-6-luna');
   assert.equal(before.nativeVersion, nativeVersion);

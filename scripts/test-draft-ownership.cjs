@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Hidden real Electron windows/IPC/service; synthetic transport, no model tasks.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
@@ -27,7 +28,7 @@ async function run() {
   client = await connect(profile, 'draft-owner-observer');
   const a = await launch();
   await a.locator('#new-session').click(); await a.locator('input[name="provider"][value="codex"]').check();
-  await a.locator('#initial-view').selectOption('chat'); await a.locator('#session-name').fill('草稿连续性'); await a.locator('#confirm-create').click();
+  await a.locator('#session-name').fill('草稿连续性'); await createIn(a, 'chat');
   await until(async () => (await snapshot(a)).sessions[0]?.state === 'idle', 'Created');
   const id = (await snapshot(a)).sessions[0].id;
   const input = page => page.locator('#message-input');

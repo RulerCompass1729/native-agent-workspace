@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Headed app/IPC/workspace with controlled snapshot and claim timing.
 // No native provider processes or model tasks are started.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -29,7 +30,7 @@ async function run() {
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   for (const provider of ['claude', 'codex']) {
-    await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(provider + ' · 焦点测试'); await page.locator('#confirm-create').click();
+    await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#session-name').fill(provider + ' · 焦点测试'); await createIn(page, 'chat');
     await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Created'); await page.getByRole('button', { name: '加入协作', exact: true }).click();
   }
   const [a, b] = (await snapshot()).sessions;

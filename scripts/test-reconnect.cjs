@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -21,7 +22,7 @@ async function run() {
   await page.locator('#new-session').waitFor();
   await app.evaluate(({ dialog }) => { globalThis.dialogs = []; globalThis.choice = 0; dialog.showMessageBox = async (_w, options) => { globalThis.dialogs.push(options); return { response: globalThis.choice }; }; });
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('恢复原会话'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('恢复原会话'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Ready');
   const original = (await snapshot()).sessions[0], id = original.id;
   await fixture('history', id); await page.locator('#messages').getByText('保留的原生历史', { exact: true }).waitFor();

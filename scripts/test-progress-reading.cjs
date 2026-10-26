@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron navigation with controlled native events; no model calls.
 // This replaces the retired terminal-camera/replay reading test.
@@ -20,7 +21,7 @@ function fixture(method, target, value) { const id = ++sequence; return new Prom
 const snapshot = () => page.evaluate(() => workspace.initial());
 async function create(name, provider = 'claude') {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name), 'Session created');
   return (await snapshot()).sessions.find(s => s.name === name).id;
 }
@@ -33,7 +34,10 @@ async function run() {
   await fixture('nativeBlock', a, { id: 'tool:read', kind: 'tool', turnId: 'a', title: 'Read', input: 'fixture.txt', text, status: 'complete' });
   await fixture('nativeBlock', b, { id: 'tool:read', kind: 'tool', turnId: 'b', title: 'Read', text: 'Other session result', status: 'complete' });
   await page.locator(`[data-session-id="${a}"]`).click();
-  const result = page.locator('#messages .message.tool'); await result.locator('.message-body').waitFor();
+  // Tool records are folded process rows in the reader; open one to read its whole body.
+  const result = page.locator('#messages .message.tool'), details = result.locator('.process-details').first(); await details.waitFor();
+  if (!(await details.evaluate(el => el.open))) await details.locator(':scope > summary').click();
+  await result.locator('.message-body').waitFor();
   assert.match(await result.innerText(), /Result line 0/); assert.equal(await page.locator('.native-progress').count(), 0);
   await page.locator('#messages').hover(); await page.mouse.wheel(0, -1000000); await delay(100); await page.mouse.wheel(0, 260); await delay(200);
   const position = await page.locator('#messages').evaluate(el => el.scrollTop); assert.ok(position > 100);
@@ -52,20 +56,22 @@ async function run() {
   checks.push('GUI/TUI switching and joining/leaving preserve private original content without sharing it');
   await fixture('legacyService', b); await fixture('progress', b, { id: 'legacy-read', source: 'claude-native-message', kind: 'tool-output', title: 'Legacy Read', status: 'observed', text: 'Retained backend output' });
   await page.locator(`[data-session-id="${b}"]`).click();
-  await page.locator('#messages').getByText('Retained backend output', { exact: true }).waitFor();
+  // The folded row shows the latest text as its label; its body holds the same text.
+  const legacyRow = page.locator('#messages [data-message-id="legacy-observation:legacy-read"]');
+  await legacyRow.filter({ hasText: 'Retained backend output' }).waitFor();
   await fixture('progress', b, { id: 'legacy-read', source: 'claude-native-message', kind: 'tool-output', text: 'Retained backend live update' });
-  await page.locator('#messages').getByText('Retained backend live update', { exact: true }).waitFor();
+  await legacyRow.filter({ hasText: 'Retained backend live update' }).waitFor();
   assert.equal(await page.locator('#messages [data-message-id="legacy-observation:legacy-read"]').count(), 1);
   checks.push('Retained service progress snapshot and live updates remain readable inline without a camera panel');
   await fixture('progress', b, { id: 'legacy-read', source: 'claude-native-message', kind: 'tool-output', status: 'running', text: 'Last received running output' });
-  await page.locator('#messages').getByText('Last received running output', { exact: true }).waitFor();
+  await legacyRow.filter({ hasText: 'Last received running output' }).waitFor();
   await fixture('state', b, 'disconnected');
   await page.locator('#messages').getByText('连接状态尚未确认。保留最后收到的过程记录，当前运行情况未知。', { exact: true }).waitFor();
   await fixture('progress', b, { id: 'legacy-read', source: 'claude-native-message', kind: 'tool-output', status: 'running', text: 'Late disconnected event' });
   assert.match(await page.locator('#messages').innerText(), /Last received running output/);
   assert.ok(!(await page.locator('#messages').innerText()).includes('Late disconnected event'));
   await fixture('state', b, 'idle');
-  await page.locator('#messages').getByText('Late disconnected event', { exact: true }).waitFor();
+  await legacyRow.filter({ hasText: 'Late disconnected event' }).waitFor();
   checks.push('Retained connection loss freezes last records and ignores late live output; reconnection reloads native observations');
   assert.equal((await fixture('stats')).stats.sends, 0);
   for (const id of [a, b]) {
@@ -119,7 +125,8 @@ async function run() {
   checks.push('Leaving freezes the already shared prefix while later native content remains private');
   await fillRoomMessage(page, '');
   const originalParent = (await snapshot()).room.messages.find(m => m.text === 'Shared task for A');
-  await arow.getByRole('button', { name: '回复 · 2 条讨论记录', exact: true }).click();
+  // Message actions appear while the pointer is over the message, as for a person.
+  await arow.hover(); await arow.getByRole('button', { name: '回复 · 2 条讨论记录', exact: true }).click();
   assert.equal(await page.locator('#thread-heading').isVisible(), true);
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('Beta shared output'));
   await inlineRecipient(page, a);
@@ -171,7 +178,7 @@ async function run() {
   await fixture('complete', b, { text: 'Private end' });
   await page.locator(`[data-session-id="${b}"]`).click(); await page.getByRole('button', { name: '加入协作', exact: true }).click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.locator(`[data-reply-to="${originalParent.id}"]`).click();
+  await page.locator(`[data-message-id="${originalParent.id}"]`).hover(); await page.locator(`[data-reply-to="${originalParent.id}"]`).click();
   await inlineRecipient(page, a);
   await fillRoomMessage(page, 'New finite check only');
   await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();

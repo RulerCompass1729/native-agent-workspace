@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Upper-bound daily workflow through the actual app. Provider replies are
 // controlled, not model reasoning; process samples exclude the person's apps.
@@ -38,7 +39,7 @@ async function launch() {
 async function create(provider) {
   const previous = (await snapshot()).sessions.map(s => s.id);
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill('学习伙伴'); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill('学习伙伴'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => !previous.includes(s.id) && s.chatAvailable), 'Distinct session ready');
   const id = (await snapshot()).sessions.find(s => !previous.includes(s.id)).id;
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;

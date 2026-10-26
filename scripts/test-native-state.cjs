@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual Electron, IPC and workspace with controlled native observations.
 // Model/runtime integration is checked separately; this runner uses no provider.
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
@@ -12,7 +13,7 @@ async function until(fn,label){for(let i=0;i<160;i++){if(await fn())return;await
 function fixture(method,target,value){const id=++sequence;return new Promise((resolve,reject)=>{const cb=m=>{if(m.requestId===id){clearTimeout(timer);child.off('message',cb);resolve(m);}};const timer=setTimeout(()=>{child.off('message',cb);reject(Error('Fixture timeout'));},8000);child.on('message',cb);child.send({id,method,target,value});});}
 const snapshot=()=>page.evaluate(()=>workspace.initial());
 async function launch(){app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],env:{...process.env,NAW_DATA_DIR:profile,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});page=await app.firstWindow();page.setDefaultTimeout(12000);page.on('pageerror',e=>errors.push(e.message));await page.locator('#new-session').waitFor();}
-async function create(provider,name){await page.locator('#new-session').click();await page.locator(`input[name="provider"][value="${provider}"]`).check();await page.locator('#initial-view').selectOption('chat');await page.locator('#session-name').fill(name);await page.locator('#confirm-create').click();await until(async()=>(await snapshot()).sessions.some(s=>s.name===name&&s.state==='idle'),'Created');return (await snapshot()).sessions.find(s=>s.name===name).id;}
+async function create(provider,name){await page.locator('#new-session').click();await page.locator(`input[name="provider"][value="${provider}"]`).check();await page.locator('#session-name').fill(name);await createIn(page, 'chat');await until(async()=>(await snapshot()).sessions.some(s=>s.name===name&&s.state==='idle'),'Created');return (await snapshot()).sessions.find(s=>s.name===name).id;}
 async function capture(name){if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,name+'.png')});}}
 async function run(){
  await until(()=>fs.existsSync(path.join(profile,'connection.json')),'Service');client=await connect(profile,'state-observer');await launch();
@@ -45,10 +46,10 @@ async function run(){
  await page.getByRole('button',{name:'加入协作',exact:true}).click();
  const b=await create('codex','Other member');
  await fixture('native-activity',b,{turnId:'codex-clock',label:'inProgress'});
- await page.locator('#native-phase').getByText('Other member · inProgress',{exact:true}).waitFor();
+ await page.locator('#native-phase').getByText('Other member · 工作中',{exact:true}).waitFor();
  assert.equal(await page.locator('#native-elapsed').innerText(),'','Unknown native start time does not become an enqueue clock');
  await fixture('native-activity',b,{turnId:'codex-clock',label:'inProgress',startedAt:Date.now()-2000});
- await until(async()=>/本轮已运行 \d+ 秒/.test(await page.locator('#native-elapsed').innerText()),'Known native start time permits elapsed display');
+ await until(async()=>/已用 \d+ 秒/.test(await page.locator('#native-elapsed').innerText()),'Known native start time permits elapsed display');
  await fixture('native-activity',b,{turnId:'codex-clock',label:'inProgress'});
  await until(async()=>(await page.locator('#native-elapsed').innerText())==='','Losing native time removes the clock rather than retaining an earlier value');
  await fixture('native-activity',b,null);await page.locator('#native-activity').waitFor({state:'hidden'});

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
 const {fork}=testScratch.childProcess,{_electron}=testScratch.playwright(require('playwright'));
@@ -13,7 +14,7 @@ const snapshot=()=>client.call('initial'),shot=async name=>{if(evidence)await pa
 async function launch(){app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],env:{...process.env,NAW_DATA_DIR:profile,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});page=await app.firstWindow();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));await page.locator('#new-session').waitFor();assert.deepEqual(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows().map(w=>({visible:w.isVisible(),focusable:w.isFocusable()}))),[{visible:false,focusable:false}]);}
 (async()=>{
  console.log('Profile:',profile);await until(()=>fs.existsSync(path.join(profile,'connection.json')),'Daemon');client=await connect(profile,'context-observer');await launch();
- await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#initial-view').selectOption('chat');await page.locator('#session-name').fill('学习助手');await page.locator('#confirm-create').click();
+ await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#session-name').fill('学习助手');await createIn(page, 'chat');
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Ready');const original=(await snapshot()).sessions[0],id=original.id;
  await fixture('reply',{target:id,text:'清空前保留的私人结果。'});await page.locator('#messages').getByText('清空前保留的私人结果。',{exact:true}).waitFor();
  await page.locator('#message-input').fill('尚未发送的中文材料');await page.getByRole('button',{name:'加入协作',exact:true}).click();
@@ -31,7 +32,7 @@ async function launch(){app=await _electron.launch({executablePath:process.env.N
   assert.equal(await page.locator('#message-input').inputValue(),text);assert.equal((await snapshot()).sessions[0].liveDraft,text);assert.equal(await page.locator('#send-button').isEnabled(),true);await shot('late-'+outcome);
   checks.push('Pending draft survives clear and late native '+outcome+' without automatic replay');
  }
- await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#initial-view').selectOption('chat');await page.locator('#session-name').fill('复核助手');await page.locator('#confirm-create').click();
+ await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#session-name').fill('复核助手');await createIn(page, 'chat');
  await page.getByRole('button',{name:'加入协作',exact:true}).click();await page.locator('#room-nav').click();await page.locator('#room-record').click();
  await inlineRecipient(page, id);const material='保留共同核查材料';await fillRoomMessage(page, material);
  await fixture('hold');await page.locator('#room-advanced summary').click();await page.locator('#run-button').click();await page.locator('#run-limit').selectOption('2');await page.locator('#run-consent').check();await page.locator('#confirm-run').click();

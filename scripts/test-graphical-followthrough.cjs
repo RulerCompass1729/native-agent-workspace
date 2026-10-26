@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron interface, native adapters/workspace and persisted records.
 // Controlled provider events prove UI behavior, not model reasoning or OS IME.
@@ -39,7 +40,7 @@ async function launch() {
 }
 async function create(provider, name) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.chatAvailable), 'Native attachment ready');
   const s = (await snapshot()).sessions.find(s => s.name === name);
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); return s.id;
@@ -112,7 +113,7 @@ async function run() {
   const draft = '明天再讨论行程安排，先不发送。'; await page.locator('#message-input').fill(draft);
   await shot('permission-and-draft');
   // The person chooses the existing native surface for this confirmation.
-  await page.locator('#terminal-tab').click(); const input = page.locator('#terminal-area .xterm-helper-textarea');
+  await page.locator('#terminal-tab').click(); const input = page.locator(`[data-terminal-id="${b}"] .xterm-helper-textarea`);
   await input.waitFor({ state: 'attached' }); await input.focus(); await input.press('Enter');
   await until(async () => (await native()).inputs.some(i => i.id === b && i.data === '\r'), 'One native confirmation key');
   await native('event', { target: b, value: { method: 'serverRequest/resolved', params: { requestId: 11 } } });

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Bounded API probe; NAW_ABORT_PRODUCT=1 tests the real product interrupt button.
 // Actual Electron/Claude; two loopback responses, no paid inference.
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),http=require('node:http');
@@ -31,7 +32,7 @@ const snapshot=()=>page.evaluate(()=>workspace.initial());
  if(!process.env.NAW_APP_EXECUTABLE)execFileSync(process.execPath,[path.join(root,'scripts/build-ui.cjs')]);
  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],...(process.env.NAW_VIDEO_DIR?{recordVideo:{dir:process.env.NAW_VIDEO_DIR,size:{width:1280,height:900}}}:{}),env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});
  await until(async()=>{for(const p of app.windows())if(!p.isClosed()&&await p.locator('#new-session').count().catch(()=>0)){page=p;return true;}return false;},'Real product starts');page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
- await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#initial-view').selectOption('terminal');await page.locator('#session-name').fill('Native abort probe');await page.locator('#confirm-create').click();
+ await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#session-name').fill('Native abort probe');await createIn(page, 'terminal');
  await until(async()=>/Do you want to use this API key/.test(await page.locator('#terminal-area').innerText())||(await snapshot()).sessions[0]?.chatAvailable,'Native startup');
  if((await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key')){await page.locator('#terminal-area .xterm-screen').click();await page.keyboard.press('ArrowUp');await sleep(150);await page.keyboard.press('Enter');}
  await until(async()=>(await snapshot()).sessions[0]?.chatAvailable,'Native bridge ready');const before=(await snapshot()).sessions[0];

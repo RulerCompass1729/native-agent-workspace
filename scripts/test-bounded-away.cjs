@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual application and persistent service, controlled provider events only.
 // --real-deadline waits the full ten minutes with the UI closed, no clock change.
@@ -36,7 +37,7 @@ async function close() { await app.close(); app = null; page = null; }
 async function room() { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
 async function create(provider, name) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.chatAvailable), 'Session ready');
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;

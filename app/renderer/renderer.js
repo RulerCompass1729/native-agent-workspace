@@ -584,6 +584,9 @@ function createReadiness() {
   const historyProvider = document.querySelector('input[name="provider"]:checked').value;
   $('open-native-history').hidden = !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : '从已有 Claude 会话分支…';
+  // Only Codex starts differently: either this app or its TUI creates the native thread.
+  // A Claude session opens in the last-used tab; both views stay available.
+  $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
   if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
@@ -1562,7 +1565,7 @@ $('rename-form').onsubmit = async event => {
 $('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; $('chosen-folder').textContent = folder; } });
 $('create-form').onsubmit = event => { event.preventDefault(); attempt(async () => {
   $('confirm-create').disabled = true;
-  try { const view = $('initial-view').value; preference = view; const id = await api.create({ provider: document.querySelector('input[name="provider"]:checked').value, cwd: folder, name: $('session-name').value, view, skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
+  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
   finally { $('confirm-create').disabled = false; }
 }); };
 $('room-nav').onclick = () => attempt(() => select('room'));

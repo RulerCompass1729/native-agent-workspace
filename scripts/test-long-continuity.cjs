@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 // Actual hidden Electron/DSH and daemon. Synthetic long histories isolate local
 // continuity from model latency/cost; all user actions use the rendered UI.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -30,7 +31,7 @@ async function launch() {
 }
 async function create(name) {
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await page.evaluate(() => workspace.initial())).sessions.some(s => s.name === name && s.state === 'idle'), 'Session ready');
   return (await page.evaluate(() => workspace.initial())).sessions.find(s => s.name === name).id;
 }

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual hidden desktop, two independent local services and shipped routing.
 // Controlled provider transports; no native process or model inference.
@@ -36,7 +37,7 @@ async function launch() {
 async function create(provider, name) {
   const before = new Set((await snapshot()).sessions.map(s => s.id));
   await page.locator('#new-session').click(); await page.locator(`input[value="${provider}"][name="provider"]`).check();
-  await page.locator('#initial-view').selectOption('chat'); await page.locator('#session-name').fill(name); await page.locator('#confirm-create').click();
+  await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   let record; await until(async () => { record = (await snapshot()).sessions.find(s => !before.has(s.id)); return record?.chatAvailable && record.state === 'idle'; }, 'Session created');
   await page.getByRole('button', { name: '加入协作', exact: true }).click(); return record;
 }
