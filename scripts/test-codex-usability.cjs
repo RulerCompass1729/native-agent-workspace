@@ -181,15 +181,20 @@ async function run() {
   assert.equal((await fixture('stats')).sends.at(-1).id,b);
   await fixture('replyBound',b,{turnId:'check-b'});
   await page.locator('#run-status').getByText('Codex B · 正在处理',{exact:false}).waitFor();
-  await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14),status:'running'});
+  const runningOutput = 'FIRST NATIVE LINE\n' + '逐项核对\n'.repeat(12) + 'LATEST ONE\nLATEST TWO';
+  await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',toolKind:'commandExecution',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:runningOutput,status:'running'});
   let process = page.locator('#room-messages .process').filter({hasText:'核对数字'});
   assert.equal(await process.locator('.process-details').evaluate(el=>el.open),false);
   assert.equal(await process.getAttribute('data-running'),'true');
+  assert.equal(await process.locator('.process-tail').innerText(),'LATEST ONE\nLATEST TWO','A running folded command shows the newest output, not the first lines');
+  assert.equal(await process.locator('.process-more').innerText(),'+13 行');
   await process.locator('.process-details > summary').click();
-  await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14)+'完整的追加结果',status:'running'});
+  await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:runningOutput+'\n完整的追加结果',status:'running'});
   assert.equal(await process.locator('.process-details').evaluate(el=>el.open),true);
   await process.getByText('完整的追加结果',{exact:false}).waitFor();
+  assert.ok((await process.locator('.message-body').innerText()).includes('FIRST NATIVE LINE'),'Expanding retains the earlier native original');
   await process.locator('.process-details > summary').click();
+  assert.equal(await process.locator('.process-tail').innerText(),'LATEST TWO\n完整的追加结果','Folding again follows the updated live output');
   await page.locator('#room-filter').selectOption(a);
   await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14)+'原生失败信息',status:'failed'});
   await page.locator('#room-filter').selectOption('');
@@ -248,7 +253,7 @@ async function run() {
   assert.ok(!(await snapshot()).room.messages.some(m=>m.text.includes('PRIVATE AFTER INTERVENTION')));
   await fixture('complete',a,{messageId:'native:synthetic-'+a+':response:control',text:'PRIVATE AFTER INTERVENTION'});
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({geometry,checks:['Content-width human messages in light/dark; exact Markdown and native timing Copy','Native search/reasoning collapse by default; commands preview three lines; full original Copy and keyboard expansion','Same-window native/reader focus, layout hide/maximize and actual DOM selected-share source','Fold choices persist during streaming; off-page failure opens; acknowledged error collapse and changed error survive full reopen','Inline mentions/Undo/Redo/composition guard; roster changes and reopen retain drafts','Two attributed agents check a document while displayed A and addressed B remain independent','Member trajectory filter, private departure and whole-app reopening preserve records/identity/draft','Same-turn private intervention hides native phase and freezes shared content'],dispatches:3,providerCalls:0,errors,profile},null,2));
+  console.log(JSON.stringify({geometry,checks:['Content-width human messages in light/dark; exact Markdown and native timing Copy','Native search/reasoning collapse by default; commands preview two lines with full expansion; full original Copy and keyboard expansion','Same-window native/reader focus, layout hide/maximize and actual DOM selected-share source','Fold choices persist during streaming; off-page failure opens; acknowledged error collapse and changed error survive full reopen','Inline mentions/Undo/Redo/composition guard; roster changes and reopen retain drafts','Two attributed agents check a document while displayed A and addressed B remain independent','Member trajectory filter, private departure and whole-app reopening preserve records/identity/draft','Same-turn private intervention hides native phase and freezes shared content'],dispatches:3,providerCalls:0,errors,profile},null,2));
 }
 async function capture(name){if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,name+'.png')});}}
 run().catch(async error=>{console.error(error.stack);if(page&&!page.isClosed())await capture('usability-failed');process.exitCode=1}).finally(testScratch.cleanup(async()=>{try{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close()}}finally{if(child.connected)child.disconnect();if(child.exitCode===null)child.kill('SIGTERM')}}));

@@ -111,6 +111,15 @@ function nativeCompletionText(message) {
   const text = (message.text || '').replace(/^原生(?:本轮已结束|已中断本轮|本轮未正常完成)(?: · [^\n]*)?(?:\n|$)/, '');
   return text.trim() ? text : ['interrupted', 'failed'].includes(message.status) ? message.status : '';
 }
+function updateProcessTail(entry) {
+  const m = entry.message, open = entry.disclosure.open;
+  // Like the native TUIs: a folded command keeps two one-line rows of output (the
+  // newest while it runs, the first once done) and says how many more there are.
+  const lines = (m.toolKind === 'commandExecution' || (!m.toolKind && m.title === 'Bash')) && !open && m.text ? m.text.replace(/\n+$/, '').split('\n') : [];
+  const shown = ['running', 'streaming'].includes(m.status) ? lines.slice(-2) : lines.slice(0, 2), more = lines.length - shown.length, tail = shown.join('\n');
+  entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
+  entry.more.hidden = !more; const moreText = `+${more} 行`; if (entry.more.textContent !== moreText) entry.more.textContent = moreText;
+}
 function messageList(el, messages, room = false, key = 'room') {
   const view = readingView(el, key);
   captureReading(view);
@@ -138,6 +147,7 @@ function messageList(el, messages, room = false, key = 'room') {
         entry.more = node('button', undefined, 'process-more'); entry.more.type = 'button';
         summary.append(heading); content.append(body); disclosure.append(summary, content); item.replaceChildren(disclosure, entry.tail, entry.more, actions);
         const rememberFold = () => {
+          updateProcessTail(entry);
           const message = entry.message, error = message?.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted'].includes(message?.status) ? message.status : '';
           const previous = view.folds[m.id];
           if (view.key !== key || previous?.open === disclosure.open && previous.error === error) return;
@@ -227,12 +237,7 @@ function messageList(el, messages, room = false, key = 'room') {
       }
       const preview = (m.toolKind === 'webSearch' ? '' : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
       if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
-      // Like the native TUIs: a folded command keeps two one-line rows of output (the
-      // newest while it runs, the first once done) and says how many more there are.
-      const lines = (m.toolKind === 'commandExecution' || (!m.toolKind && m.title === 'Bash')) && !open && m.text ? m.text.replace(/\n+$/, '').split('\n') : [];
-      const shown = ['running', 'streaming'].includes(m.status) ? lines.slice(-2) : lines.slice(0, 2), more = lines.length - shown.length, tail = shown.join('\n');
-      entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
-      entry.more.hidden = !more; const moreText = `+${more} 行`; if (entry.more.textContent !== moreText) entry.more.textContent = moreText;
+      updateProcessTail(entry);
     }
     entry.share.hidden = m.role === 'system';
     if (entry.reply) {
