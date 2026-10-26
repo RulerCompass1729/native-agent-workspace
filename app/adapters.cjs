@@ -96,6 +96,25 @@ class Terminal extends EventEmitter {
 const PERMISSION_MODES = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'];
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
+// Claude's generated title is native metadata with no API: read only the
+// newest ai-title row near the end of this session's own transcript.
+function claudeGeneratedTitle(file, nativeId) {
+  if (typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${nativeId}.jsonl`) return null;
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size, length = Math.min(size, 262144), buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, size - length);
+    for (const line of buffer.toString('utf8').split('\n').reverse()) {
+      if (!line.includes('"ai-title"')) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row.type === 'ai-title' && row.sessionId === nativeId && typeof row.aiTitle === 'string') return row.aiTitle.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 60) || null;
+      } catch { /* a torn first line */ }
+    }
+  } catch { /* no transcript yet */ } finally { if (fd !== undefined) fs.closeSync(fd); }
+  return null;
+}
 // A running claude process whose arguments name this native session ID.
 function claudeHolder(nativeId) {
   if (!/^[a-f0-9-]{36}$/i.test(nativeId || '')) return null;
@@ -155,7 +174,7 @@ class Claude extends EventEmitter {
     // session into this row's pre-assigned ID; recovery always resumes that ID.
     const identity = record.recovering ? ['--resume', record.nativeId]
       : record.forkPicker ? ['--resume', '--fork-session', '--session-id', record.nativeId] : ['--session-id', record.nativeId];
-    this.terminal = new Terminal([host.binaries.claude, ...identity, '--name', record.name, '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
+    this.terminal = new Terminal([host.binaries.claude, ...identity, ...(record.autoName ? [] : ['--name', record.name]), '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
@@ -512,6 +531,11 @@ class Claude extends EventEmitter {
     const effort = EFFORT_LEVELS.includes(event.effort?.level) ? event.effort.level : this.record.nativeEffort;
     if (mode !== this.record.nativePermissionMode || effort !== this.record.nativeEffort) {
       this.record.nativePermissionMode = mode; this.record.nativeEffort = effort; this.emit('capability');
+    }
+    // An unnamed session gets Claude's own generated title (no --name was passed).
+    if (this.record.autoName && event.session_id === this.record.nativeId && ['SessionStart', 'UserPromptSubmit', 'Stop'].includes(event.hook_event_name)) {
+      const title = claudeGeneratedTitle(event.transcript_path, this.record.nativeId);
+      if (title && title !== this.generatedTitle) { this.generatedTitle = title; this.emit('nativeTitle', title); }
     }
     if (event.hook_event_name === 'StopFailure') {
       // Settings hooks may arrive after ordered native events, or after a
@@ -1071,6 +1095,7 @@ class Codex extends EventEmitter {
     this.record.addressedToolVersion = null; this.addressedSendAvailable = false;
     this.hasHistory = Array.isArray(thread.turns) && thread.turns.length > 0;
     this.chatAvailable = false; this.observeStatus(thread.status);
+    if (typeof thread.name === 'string') this.emit('nativeTitle', thread.name);
     const revision = this.lifecycleRevision;
     this.observing = (event.method === 'thread/start' && Array.isArray(thread.turns) && thread.turns.length === 0 ? Promise.resolve(true) : this.hydrateHistory(thread.id, revision, true)).then(ok => {
       if (ok && revision === this.lifecycleRevision && !this.stopped && !this.transportDisconnected) {
@@ -1290,6 +1315,8 @@ class Codex extends EventEmitter {
         break;
       }
       case 'thread/status/changed': this.observeStatus(p.status); break;
+      // A native rename, or the TUI naming an unnamed thread with its generated title.
+      case 'thread/name/updated': if (p.threadId === this.record.nativeId && typeof p.threadName === 'string') this.emit('nativeTitle', p.threadName); break;
       case 'turn/started':
         this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeRetry = null; this.nativeTurnFinished = false;
         this.nativeStartedAt = Number.isFinite(p.turn.startedAt) && p.turn.startedAt > 0 ? p.turn.startedAt * 1000 : null;
@@ -1800,4 +1827,4 @@ class NativeHost {
   close() { this.closed = true; for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
-module.exports = { NativeHost, Terminal, Claude, Codex, Rpc, executable, delay };
+module.exports = { NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle };
