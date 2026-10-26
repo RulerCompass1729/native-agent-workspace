@@ -113,6 +113,7 @@ function updateLegacyProgress(event) {
 const inputRecoveries = new Map();
 const draftRevisions = new Map();
 const pendingDrafts = new Map();
+const queuedInputs = new Map(), queuedRoomInputs = new Map();
 const draftRecoveries = new Map();
 const draftRecoveryQueues = new Map();
 const viewClaims = new Map();
@@ -138,6 +139,34 @@ function updateState(next) {
     // an owner's in-progress input on routine service broadcasts.
     $('message-input').value = after.liveDraft || '';
   }
+  for (const [queuedId, mark] of queuedInputs) followQueuedInput(queuedId, mark);
+  for (const [queuedId, mark] of queuedRoomInputs) followQueuedRoomInput(queuedId, mark);
+}
+// Like a native TUI queue, a queued Claude message leaves the composer once
+// the service records it. Only a proven non-send comes back, and only into an
+// untouched composer; an uncertain one stays in the record so it is not resent.
+function followQueuedInput(id, mark) {
+  const s = state.sessions?.find(x => x.id === id);
+  const row = s?.messages.find(m => mark.tag ? m.id === mark.tag : m.inputMode === 'queue' && !mark.before.has(m.id));
+  if (!row) { if (!s) queuedInputs.delete(id); return; }
+  mark.tag = row.id;
+  const untouched = activeSessionId() === id && draftRevisions.get(id) === mark.revision;
+  if (!mark.cleared && row.status === 'awaiting-native' && !s.liveDraft && untouched && $('message-input').value === mark.text) { $('message-input').value = ''; mark.cleared = true; }
+  if (row.status === 'awaiting-native') return;
+  if (row.status === 'not-sent' && mark.cleared && untouched && !$('message-input').value && s.liveDraft) $('message-input').value = s.liveDraft;
+  queuedInputs.delete(id);
+}
+function followQueuedRoomInput(id, mark) {
+  const row = state.room?.messages.find(m => mark.tag ? m.id === mark.tag : m.inputMode === 'queue' && m.recipientId === id && !mark.before.has(m.id));
+  if (!row) return;
+  mark.tag = row.id;
+  if (!mark.cleared && row.status === 'awaiting-native' && mark.revision === roomDraftRevision && $('shared-input').value === mark.raw && roomRecipient() === id && roomMention?.text === mark.address?.text) {
+    $('shared-input').value = roomMention.text + ' '; roomMention = { ...roomMention, start: 0, end: roomMention.text.length }; mark.cleared = ++roomDraftRevision; attempt(persistView);
+  }
+  if (row.status === 'awaiting-native') return;
+  // The room draft lives in this view; after a reload the text stays in the record.
+  if (row.status === 'not-sent' && mark.cleared === roomDraftRevision) { $('shared-input').value = mark.raw; roomMention = mark.address; roomDraftRevision++; attempt(persistView); }
+  queuedRoomInputs.delete(id);
 }
 function renderDraftRecovery(id) {
   const copies = draftRecoveries.get(id) || [], list = $('draft-recovery-list');
@@ -1571,9 +1600,14 @@ $('composer').onsubmit = event => {
   attempt(async () => {
     const id = activeSessionId(), nativeId = current()?.nativeId, text = $('message-input').value, revision = draftRevisions.get(id);
     const s = current();
-    const receipt = s?.state === 'working' && s.queueAvailable
-      ? await api.queue(id, text, nativeId) : s?.state === 'working' && s.steerAvailable && s.activeTurnId
-      ? await api.steer(id, text, nativeId, s.activeTurnId) : await api.send(id, text, nativeId);
+    const mark = s?.state === 'working' && s.queueAvailable && { text, revision, before: new Set(s.messages.map(m => m.id)) };
+    if (mark) queuedInputs.set(id, mark);
+    let receipt;
+    try {
+      receipt = mark
+        ? await api.queue(id, text, nativeId) : s?.state === 'working' && s.steerAvailable && s.activeTurnId
+        ? await api.steer(id, text, nativeId, s.activeTurnId) : await api.send(id, text, nativeId);
+    } finally { if (mark && !mark.tag && queuedInputs.get(id) === mark) queuedInputs.delete(id); }
     if (!receipt?.contextChanged && current()?.nativeId === nativeId && !current()?.nativeContextPending && activeSessionId() === id && draftRevisions.get(id) === revision && $('message-input').value === text) $('message-input').value = '';
   });
 };
@@ -1613,6 +1647,8 @@ async function submitRoom(automatic) {
   const submission = { automatic: Boolean(automatic), recipientName: participantLabel(recipient), queued: !automatic && roomQueueAvailable(recipient), cancelling: false, cancelRequested: false };
   if (automatic) roomSubmitting = submission;
   else roomPendingRecipients.set(first, submission);
+  const queuedMark = submission.queued && { raw, address, revision, before: new Set(state.room.messages.map(m => m.id)) };
+  if (queuedMark) queuedRoomInputs.set(first, queuedMark);
   render();
   try {
     const receipt = await (automatic ? api.run(ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
@@ -1621,6 +1657,7 @@ async function submitRoom(automatic) {
   }
   catch (error) { if (!submission.cancelRequested) throw error; }
   finally {
+    if (queuedMark && !queuedMark.tag && queuedRoomInputs.get(first) === queuedMark) queuedRoomInputs.delete(first);
     submission.settled = true;
     if (roomSubmitting === submission && !submission.cancelling) roomSubmitting = null;
     if (roomPendingRecipients.get(first) === submission) roomPendingRecipients.delete(first);

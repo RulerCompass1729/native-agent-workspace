@@ -381,3 +381,12 @@ No old session, background process, research schedule or foundation was changed.
 | F11 | Search-removal premise does not hold: A28-1 records the user’s long solo-conversation find task; `local-search`, `search-view` and the installed search witness implement it without model calls. Preserve it. Unreferenced prototype files remain candidates, not deletions. |
 | F12 | Read the private watcher and launchd calendar: five-minute ticks, one daily Codex search attempt, 720-second limit. The maintainer did not invoke, stop or reconfigure the job; quota policy remains a user decision. |
 | F13 | Historical finding holds, already addressed by lane: the visible-test switch was withdrawn and is absent from the merged six-commit series. Daily-app consent remains the existing rule; no new UI switch. |
+
+**Claude lane dogfood feedback, 2026-10-25** (user reports from real use of the
+installed app; details and evidence in the [Claude lane audit](u17-claude310.md)):
+
+| ID | Feedback | Fix | Evidence |
+| :- | :- | :- | :- |
+| CL-DF1 | A chat message to a Claude row busy with a native goal waited ~24 min and looked lost | Plugin prompts run only once native is idle; the GUI says so and points to the native terminal for mid-turn input | Real 310 queue test, solo and shared |
+| CL-DF2 | Shift+Enter in a Claude terminal row sent the prompt | Claude pushes CSI-u; Shift+Enter is encoded as 13;2u while it is on (was Codex-only) | Fixture IME test; real 310 two-line prompt, fails on old renderer |
+| CL-DF3 | A queued message stayed in the input after it appeared in the record | It leaves the composer once recorded; only a proven non-send returns, an uncertain one stays in the record | Unit tests; real 310 native-draft refusal and empty composer, fails on old code |

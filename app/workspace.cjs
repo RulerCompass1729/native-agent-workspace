@@ -464,6 +464,8 @@ class Workspace extends EventEmitter {
       s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
       (!shared || (s.roomId === 'shared' && s.memberRevision === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed));
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
+    // Like a native TUI queue, the recorded message leaves the composer at once.
+    const clearedDraft = !shared && typeof draft === 'string' && draft.trim() === text;
     runtime.pendingQueue = tag;
     const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'queue' };
     if (shared) {
@@ -474,19 +476,22 @@ class Workspace extends EventEmitter {
       // exact receipt can bind this grant; existing output stays private.
       this.sharedReplies.authorize(s, runtime, tag, source);
     }
-    s.messages.push(message); this.versions.dispatches++; this.changed();
+    s.messages.push(message); if (clearedDraft) this.drafts.set(id, ''); this.versions.dispatches++; this.changed();
     try {
       await runtime.queue(text, tag, valid);
       message.status = 'submitted';
       this.deliveryStatus(tag, 'submitted');
-      if (!shared && s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
       return tag;
     } catch (error) {
-      if (message.status !== 'submitted') message.status = 'unconfirmed';
+      // Only a proven non-send returns the text to an untouched draft. An
+      // uncertain outcome stays in the record so it is not sent twice.
+      const status = error.notSent === true ? 'not-sent' : 'unconfirmed';
+      if (message.status !== 'submitted') message.status = status;
+      if (status === 'not-sent' && clearedDraft && this.draftRevisions.get(id) === draftRevision && !this.drafts.get(id)) this.drafts.set(id, draft);
       if (shared) {
-        this.forwards.delete(tag); this.sharedReplies.close(tag, '接收结果未确认'); this.deliveryStatus(tag, 'unconfirmed');
+        this.forwards.delete(tag); this.sharedReplies.close(tag, status === 'not-sent' ? '没有发出' : '接收结果未确认'); this.deliveryStatus(tag, status);
         const source = this.room.messages.find(row => row.id === tag);
-        if (source?.status === 'awaiting-native') source.status = 'unconfirmed';
+        if (source?.status === 'awaiting-native') source.status = status;
       }
       throw error;
     } finally { if (runtime.pendingQueue === tag) runtime.pendingQueue = null; this.changed(); }

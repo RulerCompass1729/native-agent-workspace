@@ -50,6 +50,14 @@ const server = http.createServer((req, res) => {
   });
 });
 const snapshot = () => client.call('initial');
+const terminalText = async () => (await page.locator('#terminal-area .xterm-rows').evaluateAll(rows => rows.filter(el => el.checkVisibility()).map(el => el.innerText).join('\n'))).replace(/\u00a0/g, ' ');
+// One key into the native prompt itself, through the row's own terminal view.
+async function nativeKey(key, expected) {
+  await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen >> visible=true').click();
+  await page.keyboard.press(key);
+  await until(async () => expected.test((await terminalText()).split('\n').filter(l => /^❯/.test(l.trim())).at(-1) || ''), 'Native prompt shows ' + expected);
+  await page.locator('#chat-tab').click();
+}
 async function cleanup() {
   releaseFinal?.(); held?.destroy();
   if (application) await application.close().catch(() => {});
@@ -93,6 +101,8 @@ async function cleanup() {
   await until(() => calls === 1 && held, 'Native original task');
   await until(async () => (await snapshot()).sessions[0].state === 'working', 'Working native state');
   await until(async () => (await page.locator('#send-button').innerText()) === '等本轮结束后发送 ↑', 'Working composer receives state');
+  // A draft in the native prompt makes native refuse a queued send before holding it.
+  await nativeKey('x', /❯\s*x\s*$/);
   if (shared) {
     await page.locator('#message-input').fill('Private solo draft.');
     await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
@@ -100,6 +110,19 @@ async function cleanup() {
     await inlineRecipient(page, before.id);
     await until(async () => (await page.locator(send).innerText()) === '等本轮结束后发送 ↑', 'Shared native waiting action');
   }
+  const blocked = 'Blocked by a native draft.';
+  if (shared) await fillRoomMessage(page, blocked); else await page.locator(input).fill(blocked);
+  await page.locator(send).click();
+  await until(async () => (await snapshot()).sessions[0].messages.some(m => m.text === blocked && m.status === 'not-sent'), 'Native draft refuses the queued send');
+  await until(async () => (shared ? await roomBody(page) : await page.locator(input).inputValue()) === blocked, 'A proven non-send returns to the untouched composer');
+  await until(async () => (await page.locator('body').innerText()).includes('没有发出'), 'The record says it was not sent');
+  if (shared) assert.equal((await snapshot()).room.messages.find(m => m.text === blocked).deliveries[0].status, 'not-sent');
+  else assert.equal((await snapshot()).sessions[0].liveDraft, blocked);
+  assert.equal(calls, 1);
+  if (shared) await page.locator(`[data-session-id="${before.id}"]`).click();
+  await nativeKey('Backspace', /❯\s*$/);
+  if (shared) { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
+  checks.push('A queued send refused before native holds it is marked 没有发出 and returns to the untouched composer');
   // The room picks its recipient with an inline mention; a plain fill would drop it.
   if (shared) await fillRoomMessage(page, 'Do the next local task.'); else await page.locator(input).fill('Do the next local task.');
   assert.equal(await page.locator(send).innerText(), '等本轮结束后发送 ↑');
@@ -108,7 +131,9 @@ async function cleanup() {
   const pending = (await snapshot()).sessions[0];
   assert.equal(pending.messages.filter(m => m.text === 'Do the next local task.').length, 1);
   assert.equal(pending.messages.at(-1).status, 'awaiting-native');
-  assert.equal(shared ? await roomBody(page) : await page.locator(input).inputValue(), 'Do the next local task.');
+  // Like a native TUI queue, the recorded message leaves the composer at once.
+  await until(async () => (shared ? await roomBody(page) : await page.locator(input).inputValue()) === '', 'Queued message leaves the composer');
+  if (!shared) assert.equal(pending.liveDraft, '');
   await until(() => page.locator(send).isDisabled(), 'Pending queue reaches composer');
   assert.equal(await page.locator(send).isDisabled(), true);
   // Covers both the former 15 s submission and 40 s RPC deadlines with one
