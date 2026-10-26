@@ -146,8 +146,8 @@ test('source catch-up cannot append an unknown suffix to an old partial before a
 });
 
 function capacityFixture(t) {
- const f=fixture(t);f.s.roomId=null;f.s.view='chat';f.r.chatAvailable=true;f.host.rpc.nativeVersion='0.164.0';f.calls=[];
- f.host.rpc.call=async(method,params)=>{f.calls.push({method,params});return {turn:{id:'automatic-'+f.calls.length}};};
+ const f=fixture(t);f.s.roomId=null;f.s.view='chat';f.r.chatAvailable=true;f.host.rpc.nativeVersion='0.164.0';f.calls=[];f.goalReads=[];
+ f.host.rpc.call=async(method,params)=>{if(method==='thread/goal/get'){f.goalReads.push(params);return {goal:f.goal??null};}f.calls.push({method,params});return {turn:{id:'automatic-'+f.calls.length}};};
  f.start=id=>f.r.event({method:'turn/started',params:{threadId:f.s.nativeId,turn:{id}}});
  f.end=(id,code='serverOverloaded',status='failed')=>f.r.event({method:'turn/completed',params:{threadId:f.s.nativeId,turn:{id,status,error:status==='failed'?{message:'NATIVE ORIGINAL',codexErrorInfo:code}:null}}});
  f.fail=(id='original',code='serverOverloaded')=>{f.start(id);f.end(id,code);};return f;
@@ -198,7 +198,7 @@ test('explicit cancel stops a scheduled recovery without sending a native interr
 test('successful continuation clears the retry chain and preserves model/settings; uncertain receipt never retries',async t=>{
  const f=capacityFixture(t);f.s.model='unchanged-model';f.r.nativeSettings={model:'unchanged-model',effort:'ultra'};f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();
  f.start('automatic-1');f.end('automatic-1',null,'completed');assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.s.model,'unchanged-model');assert.equal(f.r.nativeSettings.effort,'ultra');
- f.fail('later');assert.equal(f.w.capacityStatus(f.s.id).attempt,0);f.host.rpc.call=async()=>{throw Error('ACK lost');};f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();
+ f.fail('later');assert.equal(f.w.capacityStatus(f.s.id).attempt,0);f.host.rpc.call=async method=>{if(method==='thread/goal/get')return {goal:null};throw Error('ACK lost');};f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();
  assert.equal(f.w.capacityStatus(f.s.id),null);assert.ok(f.s.messages.some(m=>m.text.includes('接收结果未确认')));f.w.tickCapacity(Date.now()+86400000);assert.equal(f.calls.length,1);
 });
 test('pending recovery is not restored by service restart or inferred from an old failure',t=>{
@@ -209,4 +209,42 @@ test('a non-owner send rejection does not cancel the owner capacity schedule',as
  const f=capacityFixture(t);f.fail();const scheduled=f.w.capacityStatus(f.s.id);
  await assert.rejects(f.w.send(f.s.id,'not mine','another-window'),/接管/);
  assert.deepEqual(f.w.capacityStatus(f.s.id),scheduled);assert.equal(f.calls.length,0);
+});
+for(const status of ['blocked','paused','usageLimited','budgetLimited'])test('capacity recovery preserves a stopped native goal: '+status,async t=>{
+ const f=capacityFixture(t);f.goal={threadId:f.s.nativeId,status,objective:'Keep this native objective',tokenBudget:123,tokensUsed:42};const before={...f.goal};
+ f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();
+ assert.deepEqual(f.goal,before);assert.equal(f.goalReads.length,1);assert.equal(f.calls.length,0,'No turn/start or goal mutation');assert.equal(f.w.capacityStatus(f.s.id),null);
+ assert.ok(f.s.messages.some(m=>m.name==='NAW'&&m.text.includes('goal 为 '+status)));assert.equal(f.s.messages.filter(m=>m.origin==='capacity-recovery').length,0);
+ if(status==='blocked')assert.ok(f.s.messages.some(m=>m.text.includes('/goal resume')));
+});
+for(const status of ['active','complete'])test('capacity metadata read never changes an existing goal: '+status,async t=>{
+ const f=capacityFixture(t);f.goal={threadId:f.s.nativeId,status,objective:'Unchanged',tokenBudget:null};const before={...f.goal};f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();
+ assert.deepEqual(f.goal,before);assert.equal(f.goalReads.length,1);assert.deepEqual(f.calls.map(c=>c.method),['turn/start']);
+});
+for(const result of [{}, {goal:{threadId:'another-thread',status:'blocked'}}, {goal:{status:'new-unknown-state'}}])test('unverified native goal prevents an automatic write: '+JSON.stringify(result),async t=>{
+ const f=capacityFixture(t),methods=[];f.host.rpc.call=async method=>{methods.push(method);return result;};f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();assert.deepEqual(methods,['thread/goal/get']);
+ assert.equal(f.calls.length,0);assert.equal(f.w.capacityStatus(f.s.id),null);assert.ok(f.s.messages.some(m=>m.name==='NAW'&&m.text.includes('无法核对原生 goal')));
+});
+test('goal metadata failure stops recovery without exposing the internal error',async t=>{
+ const f=capacityFixture(t);let calls=0;f.host.rpc.call=async()=>{calls++;throw Error('Private transport detail');};f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();
+ assert.equal(calls,1);assert.equal(f.w.capacityStatus(f.s.id),null);assert.ok(!f.s.messages.some(m=>m.text.includes('Private transport detail')));
+});
+for(const action of ['draft','cancel'])test('human '+action+' wins during a held goal metadata read',async t=>{
+ const f=capacityFixture(t),methods=[];let release;f.host.rpc.call=async method=>{methods.push(method);return new Promise(resolve=>release=resolve);};f.fail();
+ const due=f.w.capacityStatus(f.s.id).due;f.w.tickCapacity(due);f.w.tickCapacity(due+1);assert.equal(f.w.capacityStatus(f.s.id).status,'scheduled','Cancel remains available');
+ if(action==='draft')f.w.setDraft(f.s.id,'Human input wins','window');else await f.w.interrupt(f.s.id,'window');
+ release({goal:null});await capacityTick();assert.deepEqual(methods,['thread/goal/get']);assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.calls.length,0);assert.equal(f.s.messages.filter(m=>m.origin==='capacity-recovery').length,0);
+});
+test('a late metadata failure cannot append an old notice into a new native context',async t=>{
+ const f=capacityFixture(t);let reject;f.host.rpc.call=async()=>new Promise((_,no)=>reject=no);f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);
+ f.s.nativeId=randomUUID();const count=f.s.messages.length;reject(Error('Old context'));await capacityTick();assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.s.messages.length,count);
+});
+test('a plain capacity turn still continues when native goals are explicitly disabled',async t=>{
+ const f=capacityFixture(t),call=f.host.rpc.call;f.host.rpc.call=async(method,params)=>{if(method==='thread/goal/get')throw Object.assign(Error('Native interface rejected request'),{nativeGoalsDisabled:true});return call(method,params);};
+ f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();assert.deepEqual(f.calls.map(c=>c.method),['turn/start']);assert.ok(!f.s.messages.some(m=>m.text.includes('无法核对')));
+});
+for(const [code,message,disabled] of [[-32600,'goals feature is disabled',true],[-32603,'goals feature is disabled',false],[-32600,'goals feature is disabled: unverified suffix',false]])test('only the exact native goals-disabled protocol rejection is classified: '+code+' '+message,async()=>{
+ const {EventEmitter}=require('node:events'),{Rpc}=require('../adapters.cjs'),ws=new EventEmitter();ws.readyState=1;ws.send=()=>{};const rpc=new Rpc(ws);
+ const pending=rpc.call('thread/goal/get',{threadId:'owned'});ws.emit('message',JSON.stringify({id:1,error:{code,message}}));
+ await assert.rejects(pending,error=>error.nativeGoalsDisabled===disabled&&!error.message.includes('goals feature is disabled'));ws.emit('close');
 });

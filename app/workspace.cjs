@@ -207,22 +207,48 @@ class Workspace extends EventEmitter {
   }
   tickCapacity(now = Date.now()) {
     for (const [id, r] of this.capacityRecoveries) {
-      if (r.status !== 'scheduled') continue;
+      if (r.status !== 'scheduled' || r.checking) continue;
       const s = this.sessions.get(id);
       if (!s || !this.capacityValid(s, r)) { this.cancelCapacity(id); continue; }
       if (now < r.due) continue;
-      r.attempt++; r.status = 'sending';
-      const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: `${time} 因模型满载自动继续（第 ${r.attempt} 次）`, status: 'complete', time: now });
-      // send() and the adapter recheck the same identity/control before writing.
-      // An uncertain receipt stops recovery rather than sending again.
-      this.send(id, '继续', r.owner, null, null, null, r).catch(() => {
-        if (this.capacityRecoveries.get(id) !== r) return;
-        this.capacityRecoveries.delete(id);
-        s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: '自动继续的接收结果未确认；已停止自动发送，请核对原生终端。', status: 'complete', time: Date.now() });
-        this.changed();
-      });
+      // Keep the existing cancel action available during this metadata read.
+      r.checking = true;
+      this.continueCapacity(s, r, now);
     }
+  }
+  async continueCapacity(s, r, now) {
+    const stop = text => {
+      if (this.capacityRecoveries.get(s.id) !== r) return;
+      this.capacityRecoveries.delete(s.id);
+      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text, status: 'complete', time: Date.now() });
+      this.changed();
+    };
+    let goal;
+    try {
+      const result = await r.rpc.call('thread/goal/get', { threadId: r.nativeId }).catch(error => {
+        if (error?.nativeGoalsDisabled === true) return { goal: null };
+        throw error;
+      });
+      if (!result || !Object.hasOwn(result, 'goal') || (result.goal !== null &&
+          (result.goal?.threadId !== r.nativeId || !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(result.goal?.status)))) throw Error('Unknown goal state');
+      goal = result.goal;
+    } catch {
+      if (this.capacityRecoveries.get(s.id) === r && !this.capacityValid(s, r)) { this.cancelCapacity(s.id); return; }
+      stop('自动继续前无法核对原生 goal；已停止自动发送，请核对同屏终端。'); return;
+    }
+    if (this.capacityRecoveries.get(s.id) !== r) return;
+    if (!this.capacityValid(s, r)) { this.cancelCapacity(s.id); return; }
+    // A new ordinary input does not reactivate a blocked native goal. Do not
+    // overwrite a concurrent native pause through an unconditional goal/set.
+    if (goal && !['active', 'complete'].includes(goal.status)) {
+      stop(`原生 goal 为 ${goal.status}；未自动发送继续。请在同屏终端${goal.status === 'blocked' ? '使用 /goal resume' : '核对目标状态'}。`); return;
+    }
+    r.attempt++; r.status = 'sending';
+    const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: `${time} 因模型满载自动继续（第 ${r.attempt} 次）`, status: 'complete', time: now });
+    // send() and the adapter recheck the same identity/control before writing.
+    try { await this.send(s.id, '继续', r.owner, null, null, null, r); }
+    catch { stop('自动继续的接收结果未确认；已停止自动发送，请核对原生终端。'); }
   }
   bind(s, runtime) {
     runtime.addressedCall = (identity, args) => addressed.accept(this, s, runtime, identity, args);

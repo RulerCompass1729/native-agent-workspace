@@ -748,6 +748,7 @@ class Rpc extends EventEmitter {
           error.nativeMissingHistory = message.error.code === -32600 && /^no rollout found for thread id /.test(message.error.message || '');
           if (error.nativeMissingHistory) error.nativeMissingHistoryThread = /^no rollout found for thread id ([^\s]+)$/.exec(message.error.message || '')?.[1];
           error.nativeUnsupportedTurns = message.error.code === -32601 && message.error.message === 'list_turns is not supported yet';
+          error.nativeGoalsDisabled = message.error.code === -32600 && message.error.message === 'goals feature is disabled';
           if (message.error.code === -32600) error.nativeUnmaterializedThread =
             /^thread ([\da-f-]{36}) is not materialized yet; thread\/turns\/list is unavailable before first user message$/i.exec(message.error.message || '')?.[1];
           if (message.error.code === -32600 && /already has an active writer/.test(message.error.message || '')) {
