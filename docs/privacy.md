@@ -73,6 +73,13 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   This is a local display copy, not an edit to provider history or a crash-proof
   backup. Removing an ended application record removes its projection and connection
   metadata; native-provider history and separately shared room records remain.
+- Session names: a Claude session created without a name is launched without
+  `--name`, so Claude makes its own small title request, as it does in a
+  terminal. NAW reads only the newest `ai-title` row from the last 256 KiB of
+  that session's own transcript (on session start, prompt submit and stop) and
+  keeps the title as the row name; nothing else in the transcript is read or
+  stored. Codex rows use their first request, then a native thread name if one
+  is set. A desktop rename stays in session-labels.json and always wins.
 - room-state.json contains the room name, human-written shared notes and their
   saved versions, confirmed membership events, archive indexes and the original
   member IDs for explicit restoration. Its file is owner-only. These are local

@@ -20,6 +20,8 @@ const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIV
 // continuation turn is in flight (T-4); the completed-goal case is NAW_NATIVE_RECOVERY_TRIAL.
 const activeGoalRecovery=process.env.NAW_NATIVE_ACTIVE_GOAL_RECOVERY==='1';
 const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1'||activeGoalRecovery;
+// An unnamed row takes the thread name the native TUI generates (T-12).
+const autoName=process.env.NAW_NATIVE_AUTO_NAME==='1';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(budgetError)throw budgetError;if(await fn())return;await sleep(80);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++seq,...body})}\n\n`);}
@@ -85,7 +87,7 @@ async function nativeCommand(command){
  await until(async()=>{for(const p of app.windows())if(!p.isClosed()&&await p.locator('#new-session').count().catch(()=>0)){page=p;return true;}return false;},'Main window');
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
  const initialTerminal=process.env.NAW_NATIVE_INITIAL_TERMINAL==='1';
- await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption(initialTerminal?'terminal':'chat');await page.locator('#session-name').fill('Native context');await page.locator('#confirm-create').click();
+ await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#initial-view').selectOption(initialTerminal?'terminal':'chat');await page.locator('#session-name').fill(autoName?'':'Native context');await page.locator('#confirm-create').click();
  if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);await page.locator('#chat-tab').click();}
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
  if(process.env.NAW_NATIVE_METADATA_ONLY==='1'){
@@ -97,6 +99,24 @@ async function nativeCommand(command){
   console.log(JSON.stringify({checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(!activeGoalRecovery){await page.locator('#message-input').fill(goalTrial?'Create the bounded native goal, verify its continuation while this window is closed, then complete it.':'Make one small local check.');await page.locator('#send-button').click();}
+ if(autoName){
+  await until(()=>calls===1,'First native task');assert.equal(before.autoName,true);
+  await until(async()=>(await snapshot()).sessions[0].name==='Codex · Make one small local check.','Before a native name the row shows its first request');
+  // The TUI's generated "task title" is a terminal title, not the thread name. A native
+  // rename (another app-server client, as the TUI's /rename) is the native name source.
+  const net=require('node:net'),WebSocket=require('ws'),{Rpc}=require('../app/adapters.cjs');
+  const entries=require('../app/service-layout.cjs').readLayout(profile).entries;assert.equal(entries.length,1);
+  const endpoint=path.join(path.dirname(JSON.parse(fs.readFileSync(path.join(profile,entries[0],'connection.json'))).endpoint),'codex.sock');
+  const ws=new WebSocket('ws://localhost',{createConnection:()=>net.connect(endpoint),handshakeTimeout:10000});
+  await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject);});const rpc=new Rpc(ws);
+  await rpc.call('initialize',{clientInfo:{name:'naw_owned_name_witness',version:'1'},capabilities:{experimentalApi:true}});ws.send(JSON.stringify({method:'initialized',params:{}}));
+  await rpc.call('thread/name/set',{threadId:before.nativeId,name:'Native renamed thread'});ws.close();
+  await until(async()=>(await snapshot()).sessions[0].name==='Codex · Native renamed thread','A native thread name replaces the first request');
+  await until(async()=>(await page.locator(`[data-session-id="${before.id}"]`).innerText()).includes('Codex · Native renamed thread'),'The sidebar shows it');
+  if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'codex-name.png')});
+  assert.equal(calls,1);assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({checks:['An unnamed Codex row shows its first request, then the native thread name, with the provider name'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+ }
  if(activeGoalRecovery){
   const net=require('node:net'),WebSocket=require('ws'),{Rpc}=require('../app/adapters.cjs');
   const entries=require('../app/service-layout.cjs').readLayout(profile).entries;assert.equal(entries.length,1);
