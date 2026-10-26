@@ -302,6 +302,23 @@ test('a recovery relaunch passes bypass and effort again only as the session las
  for(const record of [{recovering:true,nativePermissionMode:'auto'},{recovering:true,nativeEffort:'turbo'},{recovering:false,nativePermissionMode:'bypassPermissions',nativeEffort:'xhigh'}]){
   const argv=await launch(record);assert.ok(!argv.includes('--permission-mode')&&!argv.includes('--effort'),`No posture flag for ${JSON.stringify(record)}`);
  }
+ const named=await launch({});assert.equal(named[named.indexOf('--name')+1],'Posture','A named session keeps its native name');
+ assert.ok(!(await launch({autoName:true})).includes('--name'),'An unnamed session lets Claude generate its title');
+});
+test('an unnamed row takes Claude\'s generated title from its own transcript; named rows and other files never do',async t=>{
+ const { claudeGeneratedTitle } = require('../adapters.cjs');
+ const f=await fixture(t),{w,s,r,dir}=f;const file=path.join(dir,`${s.nativeId}.jsonl`);
+ const row=(title,sessionId=s.nativeId)=>JSON.stringify({type:'ai-title',aiTitle:title,sessionId})+'\n';
+ fs.writeFileSync(file,'{"type":"user"}\n'+row('First title')+row('Other session',randomUUID())+'{"type":"assistant"}\n');
+ assert.equal(claudeGeneratedTitle(file,s.nativeId),'First title');
+ assert.equal(claudeGeneratedTitle(path.join(dir,'elsewhere.jsonl'),s.nativeId),null,'Only this session\'s own transcript');
+ assert.equal(claudeGeneratedTitle('relative.jsonl',s.nativeId),null);
+ const stop=(fields={})=>r.hook({hook_event_name:'Stop',session_id:s.nativeId,transcript_path:file,...fields});
+ stop();assert.equal(s.name,'Study','A row named at creation keeps its name');
+ s.autoName=true;stop({agent_id:'child'});assert.equal(s.name,'Study','A child event cannot name the row');
+ stop();assert.equal(s.name,'Claude · First title');
+ fs.appendFileSync(file,row('Plan title\u0007'));stop();assert.equal(s.name,'Claude · Plan title','A later native title replaces it, control characters dropped');
+ w.persist();assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'workspace.json'))).sessions[0].name,'Claude · Plan title');
 });
 test('a recovery refuses while another claude process holds the same native ID',async t=>{
  const { Claude: Adapter } = require('../adapters.cjs');

@@ -14,6 +14,21 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('only a session created without a name takes the native title, with its provider', async t => {
+  const { workspace: w, runtimes: [claude, codex], ids: [a, b] } = await fixture(t, 2);
+  assert.equal(w.get(a).name, 'Test 0'); claude.emit('nativeTitle', 'Ignored'); assert.equal(w.get(a).name, 'Test 0');
+  const c = await w.create('codex', w.get(a).cwd, 'owner'), unnamed = w.get(c), runtime = w.runtimes.get(c);
+  assert.equal(unnamed.autoName, true); assert.equal(unnamed.name, 'Codex 2');
+  runtime.emit('nativeTitle', '  '); assert.equal(unnamed.name, 'Codex 2', 'An empty native name changes nothing');
+  unnamed.messages.push({ id: 'first', role: 'user', text: 'Make the\nqueue test stable', status: 'submitted' }); w.changed();
+  assert.equal(unnamed.name, 'Codex · Make the queue test stable', 'The first request stands in until a native title');
+  unnamed.messages.push({ id: 'second', role: 'user', text: 'Later words', status: 'submitted' }); w.changed();
+  assert.equal(unnamed.name, 'Codex · Make the queue test stable');
+  runtime.emit('nativeTitle', 'Fix the queue'); assert.equal(unnamed.name, 'Codex · Fix the queue');
+  w.changed(); assert.equal(unnamed.name, 'Codex · Fix the queue', 'A native title is not replaced by the preview');
+  runtime.emit('nativeTitle', 'x'.repeat(80)); assert.equal(unnamed.name.length, 60);
+  assert.equal(w.get(b).autoName, undefined);
+});
 test('a completed failed request permits only an explicit new task, never an automatic run or queue', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   const s = w.get(id); s.state = 'error'; r.failedTurnInputId = 'failed-turn'; r.failedTurnInputMatches = id => id === 'failed-turn';
