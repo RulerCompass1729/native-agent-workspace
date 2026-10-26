@@ -75,14 +75,16 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   metadata; native-provider history and separately shared room records remain.
 - Session names: a Claude session created without a name is launched without
   `--name`, so Claude makes its own small title request, as it does in a
-  terminal. NAW reads only the newest `ai-title` row from the last 256 KiB of
-  that session's own transcript (on session start, prompt submit and stop) and
-  keeps the title as the row name; nothing else in the transcript is read or
-  stored. Codex rows use their first request, then a native thread name if one
+  terminal. NAW scans at most the last 256 KiB of that session's own transcript
+  (on session start, prompt submit and stop) and extracts the newest matching
+  `ai-title` row as the name. This naming path imports no other transcript
+  content. Codex rows use their first request, then a native thread name if one
   is set, including the title the Codex TUI generates for an unnamed thread.
   An automatic name comes from a private first request or summary and, like any
   row name, becomes the participant label in shared records and handoff
-  previews. A desktop rename stays in session-labels.json and always wins.
+  previews. A desktop rename stays in session-labels.json and takes precedence
+  for display; it does not rewrite prior name snapshots in locally stored
+  shared records.
 - room-state.json contains the room name, human-written shared notes and their
   saved versions, confirmed membership events, archive indexes and the original
   member IDs for explicit restoration. Its file is owner-only. These are local
