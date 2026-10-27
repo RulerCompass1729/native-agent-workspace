@@ -309,12 +309,30 @@ test('disconnect never retries input or removes the retained records; live sessi
   assert.equal(old.calls.some(x => x[0] === 'input'), false);
   c.close();
 });
-test('creation limit spans versions and concurrent requests; duplicate session ownership fails closed', async () => {
+test('importing native history is not blocked by six retained cross-version sessions', async () => {
+  const { old, next, c } = fixture();
+  next.real.capabilities.push('nativeHistory');
+  for (let n = 0; n < 3; n++) next.real.sessions.push({ id: 'retained-' + n, provider: 'claude', state: 'idle' });
+  const nativeId = '00000000-0000-4000-8000-000000000007', call = next.client.call;
+  next.client.call = async (method, ...args) => {
+    if (method !== 'importHistory') return call(method, ...args);
+    next.calls.push([method, ...args]);
+    next.real.sessions.push({ id: 'imported', nativeId: args[0], provider: 'codex', state: 'idle' });
+    return 'imported';
+  };
+  assert.equal(await c.call('importHistory', nativeId), 'imported');
+  assert.equal(c.snapshot().sessions.length, 7);
+  assert.equal(next.calls.filter(([method]) => method === 'importHistory').length, 1);
+  assert.equal(old.calls.some(([method]) => method === 'importHistory'), false); c.close();
+});
+test('cross-version sessions allow new creation while concurrent identity ownership stays safe', async () => {
   const { old, next, c } = fixture();
   next.real.sessions.push({ id: 'four', state: 'idle' }, { id: 'five', state: 'idle' });
   const results = await Promise.allSettled([c.call('create', {}), c.call('create', {})]);
-  assert.equal(results.filter(x => x.status === 'fulfilled').length, 1);
-  assert.equal(c.snapshot().sessions.length, 6);
+  assert.equal(results.filter(x => x.status === 'fulfilled').length, 2);
+  assert.equal(new Set(results.map(x => x.value)).size, 2);
+  assert.equal(c.snapshot().sessions.length, 7);
+  assert.equal(next.calls.filter(([method]) => method === 'create').length, 2);
   next.real.sessions.push({ ...old.real.sessions[0] });
   await assert.rejects(c.call('initial'), /归属冲突/);
   assert.throws(() => c.snapshot(), /归属冲突/);
