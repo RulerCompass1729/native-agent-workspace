@@ -179,12 +179,15 @@ class Workspace extends EventEmitter {
     return r ? { status: r.status, attempt: r.attempt, due: r.due } : null;
   }
   cancelCapacity(id) {
+    const turn = this.runtimes.get(id)?.rootTurn;
+    if (turn?.pendingFailure) { turn.pendingFailure = false; turn.failureCancelled = true; }
     if (this.capacityRecoveries.delete(id)) this.changed();
   }
   capacityValid(s, r) {
     const runtime = this.runtimes.get(s.id);
     return !this.closed && !this.storageWarning && this.capacityRecoveries.get(s.id) === r && runtime === r.runtime &&
-      s.nativeId === r.nativeId && runtime.host?.rpc === r.rpc && runtime.lifecycleRevision === r.lifecycle &&
+      s.nativeId === r.nativeId && runtime.host?.rpc === r.rpc && runtime.lifecycleRevision === r.lifecycle && runtime.rootLease === r.lease && runtime.observationEpoch === r.epoch &&
+      (s.provider !== 'claude' || runtime.rootTurn?.id === r.turnId && r.errorMessageId && runtime.rootTurn.errorMessageId === r.errorMessageId && runtime.rootTurn.failedTranscript === r.transcript && runtime.failedTurnInputMatches(r.turnId)) &&
       s.owner === r.owner && s.controlRevision === r.control && s.memberRevision === r.member &&
       this.draftRevisions.get(s.id) === r.draft && !this.drafts.get(s.id) && !s.archived && !s.nativeContextPending &&
       ['idle', 'error'].includes(s.state) && (!s.pendingTag || s.pendingTag === r.tag) && !s.approval && !s.approvalOverflow && !s.claudeQuestion &&
@@ -194,7 +197,7 @@ class Workspace extends EventEmitter {
   scheduleCapacity(s, runtime, turnId) {
     const previous = this.capacityRecoveries.get(s.id);
     if (previous?.turnId === turnId) return;
-    const r = { runtime, rpc: runtime.host?.rpc, lifecycle: runtime.lifecycleRevision, nativeId: s.nativeId, turnId, owner: s.owner, control: s.controlRevision, member: s.memberRevision,
+    const r = { runtime, rpc: runtime.host?.rpc, lease: runtime.rootLease, epoch: runtime.observationEpoch, errorMessageId: runtime.rootTurn?.errorMessageId, transcript: runtime.rootTurn?.failedTranscript, lifecycle: runtime.lifecycleRevision, nativeId: s.nativeId, turnId, owner: s.owner, control: s.controlRevision, member: s.memberRevision,
       draft: this.draftRevisions.get(s.id), attempt: previous?.attempt || 0, status: 'scheduled', due: 0 };
     this.capacityRecoveries.set(s.id, r);
     if (!this.capacityValid(s, r)) { this.capacityRecoveries.delete(s.id); return; }
@@ -206,23 +209,54 @@ class Workspace extends EventEmitter {
     this.changed();
   }
   tickCapacity(now = Date.now()) {
+    // Native failure hooks can precede the journal flush. This existing clock
+    // allows at most five bounded reads of that exact current error UUID.
+    for (const runtime of this.runtimes.values()) if (runtime.rootTurn?.pendingFailure) runtime.reportCapacityFailure?.(true);
     for (const [id, r] of this.capacityRecoveries) {
-      if (r.status !== 'scheduled') continue;
+      if (r.status !== 'scheduled' || r.checking) continue;
       const s = this.sessions.get(id);
       if (!s || !this.capacityValid(s, r)) { this.cancelCapacity(id); continue; }
       if (now < r.due) continue;
-      r.attempt++; r.status = 'sending';
-      const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: `${time} 因模型满载自动继续（第 ${r.attempt} 次）`, status: 'complete', time: now });
-      // send() and the adapter recheck the same identity/control before writing.
-      // An uncertain receipt stops recovery rather than sending again.
-      this.send(id, '继续', r.owner, null, null, null, r).catch(() => {
-        if (this.capacityRecoveries.get(id) !== r) return;
-        this.capacityRecoveries.delete(id);
-        s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: '自动继续的接收结果未确认；已停止自动发送，请核对原生终端。', status: 'complete', time: Date.now() });
-        this.changed();
-      });
+      // Keep the existing cancel action available during this metadata read.
+      r.checking = true;
+      this.continueCapacity(s, r, now);
     }
+  }
+  async continueCapacity(s, r, now) {
+    const stop = text => {
+      if (this.capacityRecoveries.get(s.id) !== r) return;
+      this.capacityRecoveries.delete(s.id);
+      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text, status: 'complete', time: Date.now() });
+      this.changed();
+    };
+    let goal;
+    try {
+      if (s.provider === 'codex') {
+        const result = await r.rpc.call('thread/goal/get', { threadId: r.nativeId }).catch(error => {
+          if (error?.nativeGoalsDisabled === true) return { goal: null };
+          throw error;
+        });
+        if (!result || !Object.hasOwn(result, 'goal') || (result.goal !== null &&
+            (result.goal?.threadId !== r.nativeId || !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(result.goal?.status)))) throw Error('Unknown goal state');
+        goal = result.goal;
+      }
+    } catch {
+      if (this.capacityRecoveries.get(s.id) === r && !this.capacityValid(s, r)) { this.cancelCapacity(s.id); return; }
+      stop('自动继续前无法核对原生 goal；已停止自动发送，请核对同屏终端。'); return;
+    }
+    if (this.capacityRecoveries.get(s.id) !== r) return;
+    if (!this.capacityValid(s, r)) { this.cancelCapacity(s.id); return; }
+    // A new ordinary input does not reactivate a blocked native goal. Do not
+    // overwrite a concurrent native pause through an unconditional goal/set.
+    if (goal && !['active', 'complete'].includes(goal.status)) {
+      stop(`原生 goal 为 ${goal.status}；未自动发送继续。请在同屏终端${goal.status === 'blocked' ? '使用 /goal resume' : '核对目标状态'}。`); return;
+    }
+    r.attempt++; r.status = 'sending';
+    const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: `${time} 因模型满载自动继续（第 ${r.attempt} 次）`, status: 'complete', time: now });
+    // send() and the adapter recheck the same identity/control before writing.
+    try { await this.send(s.id, '继续', r.owner, null, null, null, r); }
+    catch { stop('自动继续的接收结果未确认；已停止自动发送，请核对原生终端。'); }
   }
   bind(s, runtime) {
     runtime.addressedCall = (identity, args) => addressed.accept(this, s, runtime, identity, args);
@@ -260,7 +294,7 @@ class Workspace extends EventEmitter {
     on('nativeControlBoundary', reason => { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id); });
     on('capability', () => this.changed());
     on('nativeTurnEnd', info => {
-      if (s.provider === 'codex' && runtime.host?.rpc?.nativeVersion === '0.164.0' && info.nativeId === s.nativeId && info.status === 'failed' && info.errorInfo === 'serverOverloaded') this.scheduleCapacity(s, runtime, info.turnId);
+      if ((s.provider === 'codex' && runtime.host?.rpc?.nativeVersion === '0.164.0' || s.provider === 'claude' && runtime.nativeAbortAvailable && !runtime.retainedReader) && info.nativeId === s.nativeId && info.status === 'failed' && info.errorInfo === 'serverOverloaded') this.scheduleCapacity(s, runtime, info.turnId);
       else this.cancelCapacity(s.id);
     });
     on('inputRequired', () => this.changed());
@@ -338,6 +372,7 @@ class Workspace extends EventEmitter {
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
     on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
     on('interrupted', ({ tag }) => {
+      this.cancelCapacity(s.id);
       if (tag) {
         if (s.pendingTag === tag) s.pendingTag = null;
         this.forwards.delete(tag); this.sharedReplies.close(tag, '原生已中断本轮');
