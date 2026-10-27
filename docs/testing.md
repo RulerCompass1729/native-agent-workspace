@@ -2,6 +2,24 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Ordinary Claude tool approval - 2026-10-26
+
+The existing permission case in `test-native-blocks.cjs` passes on signed105
+`c7b4ada` with actual Claude2.1.310, manual permission mode and two fixed loopback
+responses (zero paid inference). GUI preserves the Bash name and input JSON;
+there is no separate NAW approval decision. Before the original TUI decision,
+the marker file is absent and the second request has not run. After selecting
+native Yes, the command runs, the turn completes with the same native ID/PID and
+the GUI request clears. GUI/TUI raw text and a real recording remain private.
+
+The owned launcher records the running executable and app paths, both inside
+the signed candidate. All57 payload files match; strict signature passes after
+native use; the owned profile is removed, temporary sets stay571+1056 and only
+the daily app appears in application search. No runtime change, package rebuild
+or daily-app action. Existing source evidence for311 is reused without claiming
+a new installed311 or denial test. This does not prove real-author recovery or
+a full workday.
+
 ## Ended conversation and compact reading — 2026-10-26
 
 Signed candidate105 from clean committed `c7b4ada` passes the existing compact
