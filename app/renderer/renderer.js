@@ -1159,6 +1159,9 @@ function render() {
       renderAdvanced(s);
       for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)); }
       $('terminal-empty').hidden = terminals.has(s.id);
+      // Without a terminal in this window, say why: not started yet, ended, or not connected.
+      const emptyText = alive ? '发送第一条消息后，这里会显示同一会话的原生终端。' : s.state === 'ended' ? '会话已结束，本窗口没有保留它的原生终端画面。' : '原生终端尚未连接。';
+      if ($('terminal-empty').textContent !== emptyText) $('terminal-empty').textContent = emptyText;
       if (terminalVisible && alive && (mode === 'terminal' || s.terminalState?.alive || s.activeTurnId || s.messages.some(m => m.role === 'assistant'))) {
         // Mounting the same native display is passive; input still requires its
         // own focus/control claim. Never steal focus when the snapshot arrives.

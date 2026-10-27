@@ -131,9 +131,9 @@ async function run() {
   assert.ok(await page.locator('#approval').evaluate(el => el.scrollTop > 0));
   await decision.click({ trial: true });
   await capture('permission-actions-reachable');
-  // The workaround: only windows at most 900 px wide and 720 px tall stack this way;
-  // a window just wider (1000×600) keeps four conversation lines beside the confirmation.
-  // (Hiding the terminal does not help: the space is short vertically.)
+  // The workaround: a window wider than 900 px. Narrower windows tested from 650 to
+  // 850 px tall all fall short (taller ones stack the terminal below), and hiding the
+  // terminal does not help; at 1000×600 four conversation lines stay beside it.
   const compact = await screen(b);
   await size(1000, 600); await measure('permission-wider-window');
   // Back to the compact window: wait for the terminal to refit, then for native to follow.
@@ -160,6 +160,9 @@ async function run() {
     for (let i = 1; i <= 3; i++) await workspace.retainDraftRecovery(id, `合成待恢复副本 ${i}\n` + '保留副本正文。\n'.repeat(12));
   }, a);
   await page.reload(); await page.locator('#new-session').waitFor();
+  // After reloading, this window holds no terminal for the ended session; the pane says so.
+  await until(async () => (await page.locator('#terminal-empty').isVisible()) && (await page.locator('#terminal-empty').innerText()) === '会话已结束，本窗口没有保留它的原生终端画面。', 'Ended session without a kept screen says so');
+  checks.push('An ended session whose screen this window never kept says it ended, not that a first message will show it');
   await page.locator('#draft-recovery > summary').click();
   await page.getByRole('textbox', { name: '草稿副本 3', exact: true }).focus();
   await capture('recovery-copy-reachable');
