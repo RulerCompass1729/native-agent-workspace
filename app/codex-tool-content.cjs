@@ -54,6 +54,20 @@ function webSearchTitle(action, query, completed) {
     : !completed && !detail && (!type || type === 'other') ? 'Browsing the web' : completed ? 'Searched the web' : 'Searching the web';
   return header + (detail ? (type === 'openPage' || type === 'findInPage' ? ' ' : ' for ') + detail : '');
 }
+// Command semantics come only from native commandActions. Unknown/new or malformed
+// actions remain ordinary commands; private/extension metadata is never projected.
+function commandActions(value) {
+  if (!Array.isArray(value)) return undefined;
+  const fields = { read: ['command', 'name', 'path'], listFiles: ['command', 'path'], search: ['command', 'query', 'path'], unknown: ['command'] };
+  const result = [];
+  for (const action of value) {
+    const keys = typeof action?.type === 'string' && Object.hasOwn(fields, action.type) ? fields[action.type] : null;
+    if (!keys || typeof action.command !== 'string') return undefined;
+    if (keys.some(key => !(typeof action[key] === 'string' || action.type !== 'read' && ['path', 'query'].includes(key) && action[key] === null))) return undefined;
+    result.push(Object.fromEntries(['type', ...keys].map(key => [key, action[key]])));
+  }
+  return result;
+}
 function toolContent(item, completed = item?.status === 'completed') {
   if (!item || !toolTypes.has(item.type)) return null;
   // Question history does not carry isSecret. Only the live request-aware
@@ -62,6 +76,11 @@ function toolContent(item, completed = item?.status === 'completed') {
   const result = {};
   if (item.type === 'commandExecution') {
     result.title = item.command || '';
+    if (typeof item.command === 'string') result.input = item.command;
+    const actions = commandActions(item.commandActions);
+    if (Object.hasOwn(item, 'commandActions')) result.commandActions = actions;
+    if (typeof item.source === 'string') result.commandSource = item.source;
+    if (Number.isSafeInteger(item.exitCode)) result.exitCode = item.exitCode;
     if (typeof item.aggregatedOutput === 'string') result.text = item.aggregatedOutput;
   } else if (item.type === 'webSearch') {
     const action = item.action;
@@ -93,4 +112,4 @@ function toolStatus(item, completed) {
   if (item.status === 'interrupted') return 'interrupted';
   return completed ? 'completed' : 'running';
 }
-module.exports = { webSearchTitle, contentText, fileChanges, toolContent, toolStatus, toolTypes, summaryText, nativeTextContent, nativeTextItemId };
+module.exports = { commandActions, webSearchTitle, contentText, fileChanges, toolContent, toolStatus, toolTypes, summaryText, nativeTextContent, nativeTextItemId };

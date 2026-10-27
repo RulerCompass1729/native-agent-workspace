@@ -102,7 +102,7 @@ class SharedReplies {
           turnId: g.turnId, ...(g.run ? { runId: g.run.id } : {}), sharedStream: true, deliveryTracked: true };
         g.rows.set(message.id, row); this.workspace.room.messages.push(row);
       }
-      for (const field of ['text', 'input', 'title', 'kind', 'toolKind', 'status', 'incomplete', 'volatile', 'displayTurnId', 'nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) row[field] = message[field];
+      for (const field of ['text', 'input', 'title', 'kind', 'toolKind', 'commandActions', 'commandSource', 'exitCode', 'status', 'incomplete', 'volatile', 'displayTurnId', 'nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) row[field] = message[field];
       row.nativeStatus = message.status;
       this.boundary(g, message);
     }
