@@ -2,6 +2,27 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Ended conversation and compact reading — 2026-10-26
+
+Signed candidate105 from clean committed `c7b4ada` passes the existing compact
+reading runner through the installed Electron binary and bundled runtime, using
+synthetic local transport and zero model calls. An ended conversation keeps its
+received terminal frame, saved history and draft; after window reload, an ended
+conversation without a held frame explicitly says no screen was retained instead
+of promising that a first message will show it. Recovery copies and input remain
+reachable. Source checks pass 1121 tests without skips.
+
+The same run retains the measured compact-layout limitation: a long confirmation
+at 850×600 leaves zero conversation height, while its decision stays reachable and
+the input visible; at 1000×600 it leaves at least four lines. This is a tested
+wider-window workaround, not a four-line pass at minimum size. No layout changed.
+All 57 runtime payload files match, strict signature passes after the installed
+UI test, application search contains one daily app, and the temporary-directory
+sets are unchanged (571 OS-temp and 1056 /tmp directories). The owned profile is
+removed. Native-only lane audit evidence stays source-only; this UI fixture does
+not prove provider commands, physical input, a real workday or author recovery.
+The person's daily104 installation remains unchanged.
+
 ## Single-agent native goal preflight — 2026-10-25
 
 `NAW_NATIVE_GOAL_TRIAL=1 NAW_CODEX_VERSION=0.164.0` with native-first startup
