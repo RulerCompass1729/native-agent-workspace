@@ -62,7 +62,7 @@ or start paid model runs as a side effect of editing documents.
   `claude --bg`), with the brief on stdin and output in private files:
 
   ```sh
-  claude -p --resume "$(cat .local/reviewer-session-id)" --model claude-opus-5-5 \
+  claude -p --resume "$(cat .local/reviewer-session-id)" --model fable \
     --permission-mode bypassPermissions --output-format json \
     --disallowedTools Edit Write NotebookEdit "Bash(git commit *)" "Bash(git push *)" \
     < "$BRIEF" > "$OUT" 2> "$OUT.err"

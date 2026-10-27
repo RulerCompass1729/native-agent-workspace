@@ -34,8 +34,8 @@ const server = http.createServer((req, res) => {
     if (capacityTrial && number === 12) {
       const sent = JSON.parse(body);
       assert.match(sent.model, /haiku/, 'Fixture model remains the selected cheap model');
-      const last = sent.messages.at(-1).content;
-      assert.equal(typeof last === 'string' ? last : last.filter(b => b.type === 'text').map(b => b.text).join('\n'), '继续');
+      const userText = sent.messages.filter(m => m.role === 'user').flatMap(m => typeof m.content === 'string' ? [m.content] : m.content.filter(b => b.type === 'text').map(b => b.text));
+      assert.equal(userText.filter(text => text === '继续').length, 1, 'One exact new user continuation; native system context may follow it');
       assert.equal(body.split('Explain the local error.').length - 1, 1, 'Original task occurs once in history, not replayed');
       recovering = true;
     }
