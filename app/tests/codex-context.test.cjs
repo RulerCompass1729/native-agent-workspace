@@ -153,6 +153,50 @@ function capacityFixture(t) {
  f.fail=(id='original',code='serverOverloaded')=>{f.start(id);f.end(id,code);};return f;
 }
 const capacityTick=()=>new Promise(resolve=>setImmediate(resolve));
+for(const member of [false,true])test('automatic capacity continuation only pauses collaboration containing its session: '+member,async t=>{
+ const f=capacityFixture(t),{w,s}=f;f.fail();
+ const ids=member?[s.id,'other']:['other','peer'];
+ const run=w.room.run={id:'existing-run',ids,status:'running',deadline:Date.now()+600000};
+ const {PeerLeases}=require('../peer-handoffs.cjs');w.peerLeases=new PeerLeases(w);
+ const grant={id:'existing-grant',ids,status:'running',client:{}};w.peerLeases.leases.set(grant.id,grant);
+ w.tickCapacity(w.capacityStatus(s.id).due);await capacityTick();
+ assert.equal(f.calls.length,1);assert.equal(f.calls[0].method,'turn/start');
+ assert.deepEqual(f.calls[0].params.input,[{type:'text',text:'继续',text_elements:[]}]);
+ assert.equal(run.status,member?'paused':'running');assert.equal(grant.status,member?'paused':'running');
+ assert.equal(w.room.messages.some(m=>m.text.includes('模型满载自动继续')),member);
+});
+test('human input in an independent session still pauses all collaboration',async t=>{
+ const f=capacityFixture(t),{w,s}=f;
+ const run=w.room.run={id:'existing-run',ids:['other','peer'],status:'running',deadline:Date.now()+600000};
+ const {PeerLeases}=require('../peer-handoffs.cjs');w.peerLeases=new PeerLeases(w);
+ const grant={id:'existing-grant',ids:['other','peer'],status:'running',client:{}};w.peerLeases.leases.set(grant.id,grant);
+ await w.send(s.id,'New human instruction','window');
+ assert.equal(run.status,'paused');assert.equal(run.reason,'真人输入优先');assert.equal(grant.status,'paused');
+ assert.equal(f.calls.length,1);
+});
+for(const human of [false,true])test('a prepared peer-only authorization remains usable after independent recovery, but human input revokes it: '+human,async t=>{
+ const f=capacityFixture(t),{w,s}=f;f.fail();
+ const {PeerLeases,identity}=require('../peer-handoffs.cjs'),{EventEmitter}=require('node:events');
+ w.peerLeases=new PeerLeases(w);
+ const peer={id:'local-peer',nativeId:randomUUID(),provider:'codex',owner:'window',roomId:'shared',state:'idle',messages:[],controlRevision:0,memberRevision:0};
+ const runtime=new EventEmitter();runtime.chatAvailable=true;runtime.send=async(text,tag,guard)=>{assert.ok(guard());runtime.emit('submitted',tag);};
+ w.sessions.set(peer.id,peer);w.runtimes.set(peer.id,runtime);w.bind(peer,runtime);
+ const client={},runId=randomUUID();
+ w.peerLeases.prepare(client,'window',{id:runId,ids:[peer.id,'remote-peer'],expected:{[peer.id]:identity(peer)},names:{[peer.id]:'B','remote-peer':'C'},deadline:Date.now()+600000,maxSteps:2});
+ const grant=w.peerLeases.leases.get(runId);assert.equal(w.peerLeases.valid(grant),true);
+ if(human)await w.send(s.id,'Human priority','window');else {w.tickCapacity(w.capacityStatus(s.id).due);await capacityTick();}
+ assert.equal(grant.status,human?'paused':'running');assert.equal(w.peerLeases.valid(grant),!human);
+ const step={runId,step:1,sessionId:peer.id,text:'Authorized handoff',displayText:'Selected material',sourceId:randomUUID(),senderId:null};
+ if(human)await assert.rejects(w.peerLeases.send(client,'window',step),/失效/);else assert.ok((await w.peerLeases.send(client,'window',step)).tag);
+ assert.equal(f.calls.length,1);
+});
+test('capacity failure and continuation never reactivate an actual prepared member lease',async t=>{
+ const f=capacityFixture(t),{w,s}=f;s.roomId='shared';
+ const {PeerLeases,identity}=require('../peer-handoffs.cjs');w.peerLeases=new PeerLeases(w);
+ const client={},id=randomUUID();w.peerLeases.prepare(client,'window',{id,ids:[s.id,'remote-peer'],expected:{[s.id]:identity(s)},names:{[s.id]:'A','remote-peer':'B'},deadline:Date.now()+600000,maxSteps:2});
+ const grant=w.peerLeases.leases.get(id);assert.equal(w.peerLeases.valid(grant),true);f.fail();assert.equal(grant.status,'paused');
+ w.tickCapacity(w.capacityStatus(s.id).due);await capacityTick();assert.equal(f.calls.length,1);assert.equal(grant.status,'paused');assert.equal(w.peerLeases.valid(grant),false);
+});
 test('live terminal overload alone schedules a delayed new continuation; three attempts then stop without task replay',async t=>{
  const f=capacityFixture(t),{w,r,s,calls}=f;s.messages.push({id:'original-input',role:'user',text:'Original task with side effects',status:'submitted'});
  f.start('original');r.event({method:'error',params:{threadId:s.nativeId,turnId:'original',willRetry:true,error:{message:'NATIVE ORIGINAL',codexErrorInfo:'serverOverloaded'}}});
