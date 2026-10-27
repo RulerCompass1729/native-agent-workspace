@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-25. This is a local Apple Silicon macOS technical trial.
+As of 2026-10-26. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
@@ -14,7 +14,7 @@ the same-screen native TUI. Do not rebuild the entire TUI in a second interface.
 The current candidate includes the reviewed native large-frame repair, compact
 reader layout work, unchanged-size terminal fitting, shared screenshot entry and
 the Claude lane's recovery posture. Functional witnesses use actual native
-Codex 0.164 / Claude 2.1.310 and signed application bundles with fixed local
+Codex 0.164 / Claude 2.1.310/311 and signed application bundles with fixed local
 responses. Physical system clipboard/IME coverage is separate.
 
 | User task | Accepted scoped evidence | Remaining boundary |
@@ -27,6 +27,7 @@ responses. Physical system clipboard/IME coverage is separate.
 | Inspect questions, Plan and model state | Native originals remain visible; actual questions/multiple selection, Plan approval and model changes pass | [U17](interaction.md) distinguishes GUI facts from native-only interaction; commands/keymaps are an audit, not a per-key execution suite |
 | Branch an existing Claude conversation and type multiline input | Signed candidate105 uses the native picker, preserves the parent transcript and child history/ID, and cancels without creating a transcript; native Shift+Enter keeps two unsent lines | Direct takeover is separate; inherited history remains in the same-screen TUI |
 | Queue a message during work | Signed candidate105 solo/shared paths wait through the old deadlines, reload without replay and preserve newer drafts | Claude GUI submission waits for native idle; use the same-screen TUI for mid-turn interjection |
+| Continue after a live native overload | Signed105 ccea1a6 actual310/311: original529 survives, a new continuation runs once after2minutes with the window closed, same nativeID/PID/result after reopen; each12 local responses,0paid. Codex164 ordinary recovery evidence is reused; structured non-overload and control/input guard regressions pass | Daily104 unchanged; Codex stopped goals require native /goal resume, and Claude goal reactivation is not claimed. This does not prove an unattended full workday |
 | Keep a build attributable | Dirty-source refusal and clean committed build pass; installed104 stamp matches 00705ff, 57 runtime files match, post-native strict signature passes | Future deliveries repeat artifact checks and require explicit daily-update permission |
 
 Still required for this milestone:
