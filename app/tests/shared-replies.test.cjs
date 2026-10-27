@@ -239,3 +239,14 @@ test('native failure details require the exact live grant and never advance an e
   assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE'));
   assert.equal(sent.length, 1); assert.equal(w.room.run.steps, 0);
 });
+
+test('authorized command actions retain exact metadata/output through sharing and save without granting private commands', async t => {
+  const { w, directory, ids, bind, block } = await fixture(t);
+  await w.forward(ids[1], 'Inspect shared file', 'owner'); bind(1);
+  const command = { id: 'tool:read', kind: 'tool', toolKind: 'commandExecution', input: "/bin/zsh -lc 'cat shared.txt'", commandSource: 'agent', commandActions: [{ type: 'read', command: 'cat shared.txt', name: 'shared.txt', path: '/synthetic/shared.txt' }], text: 'Full shared result\n', status: 'complete', exitCode: 0 };
+  block(1, command); block(1, { ...command, id: 'tool:private', turnId: 'private', input: 'PRIVATE COMMAND', text: 'PRIVATE RESULT' });
+  const row = w.room.messages.find(m => m.toolKind === 'commandExecution'); assert.deepEqual(row.commandActions, command.commandActions); assert.equal(row.input, command.input); assert.equal(row.exitCode, 0); assert.equal(row.commandSource, 'agent');
+  assert.ok(!JSON.stringify(w.room.messages).includes('PRIVATE')); w.persist();
+  const reopened = new Workspace({ binaries: {}, close() {} }, directory); t.after(() => reopened.close());
+  assert.deepEqual(reopened.room.messages.find(m => m.id === row.id).commandActions, command.commandActions); assert.equal(reopened.sharedReplies.grants.size, 0);
+});

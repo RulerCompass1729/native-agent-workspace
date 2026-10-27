@@ -37,9 +37,16 @@ function applyNativeBlock(session, event) {
     if (Number.isFinite(event[field]) && (field === 'nativeDurationMs' ? Number.isSafeInteger(event[field]) && event[field] >= 0 : Math.abs(event[field]) <= 8640000000000000)) row[field] = event[field];
   }
   if (typeof event.input === 'string') row.input = event.input;
+  if (event.toolKind === 'commandExecution') {
+    if (Object.hasOwn(event, 'commandActions')) row.commandActions = require('./codex-tool-content.cjs').commandActions(event.commandActions);
+    if (typeof event.commandSource === 'string') row.commandSource = event.commandSource;
+    if (Number.isSafeInteger(event.exitCode)) row.exitCode = event.exitCode;
+    if (boundary && ['interrupted', 'failed'].includes(boundary.status) && ['running', 'complete'].includes(row.status)) row.status = boundary.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
+  }
   if (event.incomplete) row.incomplete = true;
   if (['response', 'summary', 'plan'].includes(event.kind) && boundary && row.status === 'streaming') row.status = boundary.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
   if (event.kind === 'turn') {
+    for (const other of session.messages) if (other.toolKind === 'commandExecution' && other.nativeId === event.nativeId && other.turnId === event.turnId && other.status === 'running') other.status = event.status === 'interrupted' ? 'interrupted' : 'unconfirmed';
     // Only a native boundary ends a streamed response. A completed text block
     // does not finish its turn, and a finished turn does not finish its fleet.
     for (const other of session.messages) if (other.role === 'assistant' && other.nativeId === event.nativeId &&
