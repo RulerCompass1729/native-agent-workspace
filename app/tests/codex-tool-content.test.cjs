@@ -62,3 +62,43 @@ for (const cut of [null,'interrupted','failed']) test('history web search uses i
   if(!cut)assert.equal(row.title,'Searched the web for Seattle');
   assert.equal(other.status,'running');
 });
+
+test('native command actions survive live adapter deltas and history with exact command/output and no extension metadata', () => {
+  const { applyCodexHistory, persistedMessages } = require('../native-blocks.cjs');
+  const host = new NativeHost('/tmp'), s = { provider: 'codex', nativeId: 'commands-native', messages: [] }, r = host.create(s);
+  r.on('progress', item => applyCodexProgress(s, item));
+  const actions = [{ type: 'read', command: 'cat file.txt', name: 'file.txt', path: '/synthetic/file.txt', privateMetadata: 'PRIVATE' }];
+  const item = { type: 'commandExecution', id: 'read', source: 'agent', command: "/bin/zsh -lc 'cat file.txt'", commandActions: actions, status: 'inProgress' };
+  const emit = (method, params) => r.event({ method, params: { threadId: s.nativeId, turnId: 'T', ...params } });
+  emit('turn/started', { turn: { id: 'T' } }); emit('item/started', { item });
+  emit('item/commandExecution/outputDelta', { itemId: 'read', delta: 'partial' });
+  assert.deepEqual(s.messages[0].commandActions, [{ type: 'read', command: 'cat file.txt', name: 'file.txt', path: '/synthetic/file.txt' }]);
+  emit('item/completed', { item: { ...item, aggregatedOutput: 'complete\n', status: 'completed', exitCode: 0 } });
+  const row = s.messages[0]; assert.equal(row.input, item.command); assert.equal(row.text, 'complete\n'); assert.equal(row.exitCode, 0); assert.equal(row.commandSource, 'agent');
+  assert.ok(!JSON.stringify(row).includes('PRIVATE'));
+  const history = { provider: 'codex', nativeId: s.nativeId, messages: [] };
+  applyCodexHistory(history, [{ ...item, turnId: 'T', status: 'completed', exitCode: 0, aggregatedOutput: 'complete\n' }], {});
+  assert.deepEqual(history.messages[0].commandActions, row.commandActions);
+  const saved = JSON.parse(JSON.stringify(persistedMessages(history.messages)));
+  assert.deepEqual(saved[0].commandActions, row.commandActions); assert.equal(saved[0].input, item.command); assert.equal(saved[0].text, row.text);
+});
+test('missing, future or malformed native actions remain ordinary commands without shell-semantic inference', () => {
+  const { commandActions } = require('../codex-tool-content.cjs');
+  for (const actions of [undefined, [{ type: '__proto__', command: 'cat file' }], [{ type: 'constructor', command: 'cat file' }], [{ type: 'future', command: 'cat file' }], [{ type: 'read', command: 'cat file', name: 'file', path: null }], [{ type: 'search', command: 'rg x' }]]) {
+    assert.equal(commandActions(actions), undefined);
+    assert.equal(toolContent({ type: 'commandExecution', command: 'cat file', commandActions: actions }).commandActions, undefined);
+  }
+  assert.deepEqual(commandActions([{ type: 'unknown', command: 'cat file' }]), [{ type: 'unknown', command: 'cat file' }]);
+  assert.deepEqual(commandActions([{ type: 'search', command: 'rg x', query: null, path: null }]), [{ type: 'search', command: 'rg x', query: null, path: null }]);
+});
+
+test('explicit unknown or invalid replacement actions clear earlier classification, while output-only deltas retain it', () => {
+  const s = { nativeId: 'N', messages: [] }, base = { id: 'cmd', source: 'codex-native', kind: 'commandExecution', turnId: 'T' };
+  const known = { type: 'commandExecution', command: 'cat file', commandActions: [{ type: 'read', command: 'cat file', name: 'file', path: '/file' }] };
+  for (const replacement of [[{ type: 'future', command: 'future command' }], [{ type: 'read', command: 'missing required fields' }]]) {
+    applyCodexProgress(s, { ...base, ...toolContent(known), status: 'running' });
+    applyCodexProgress(s, { ...base, delta: 'output delta' }); assert.equal(s.messages[0].commandActions[0].type, 'read');
+    applyCodexProgress(s, { ...base, ...toolContent({ ...known, command: 'future command', commandActions: replacement }), status: 'completed' });
+    assert.equal(s.messages[0].commandActions, undefined); assert.equal(s.messages[0].input, 'future command');
+  }
+});

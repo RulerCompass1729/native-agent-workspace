@@ -55,6 +55,12 @@ function readingMatch(body, query) {
   range.setStart(start.node, match.index - start.start); range.setEnd(end.node, endIndex - end.start);
   return range;
 }
+function revealProcessAncestors(view, entry) {
+  for (let parent = entry.item.parentElement?.closest('details.process-details'); parent && view.el.contains(parent); parent = parent.parentElement?.closest('details.process-details')) {
+    const enclosing = view.entries.get(parent.closest('[data-message-id]')?.dataset.messageId);
+    if (enclosing) enclosing.expectedOpen = true; parent.open = true;
+  }
+}
 function scheduleReading(view, intent = view.intent) {
   if (!intent || view.intent !== intent || view.frame) return;
   view.frame = requestAnimationFrame(() => {
@@ -62,6 +68,10 @@ function scheduleReading(view, intent = view.intent) {
     if (!view.intent || !view.el.clientHeight || !view.el.getClientRects().length) return;
     const el = view.el, p = view.intent.position;
     const anchor = view.entries.get(p.anchor)?.item;
+    if (anchor) {
+      const entry = view.entries.get(p.anchor);
+      revealProcessAncestors(view, entry);
+    }
     if (anchor && view.intent.searchQuery) {
       const entry = view.entries.get(p.anchor);
       if (entry.disclosure && !entry.disclosure.open) { entry.expectedOpen = true; entry.disclosure.open = true; }
@@ -119,8 +129,54 @@ function nativeCompletionText(message) {
   const text = (message.text || '').replace(/^原生(?:本轮已结束|已中断本轮|本轮未正常完成)(?: · [^\n]*)?(?:\n|$)/, '');
   return text.trim() ? text : ['interrupted', 'failed'].includes(message.status) ? message.status : '';
 }
+// Native 0.164 exploration semantics; never classify the shell command string.
+function commandExplorations(messages, room = false, originals = messages) {
+  const indices = new Map(originals.map((m, index) => [m.id, index]));
+  const groups = new Map(); let group, previousKey, previousIndex;
+  for (const message of messages) {
+    const actions = message.commandActions;
+    const eligible = message.toolKind === 'commandExecution' && message.nativeId && message.turnId && !message.incomplete &&
+      message.commandSource !== 'userShell' && Array.isArray(actions) && actions.length && actions.every(a => a && ['read', 'listFiles', 'search'].includes(a.type) && typeof a.command === 'string');
+    const key = JSON.stringify([message.nativeId, message.turnId, message.displayTurnId, message.sessionId, message.inputTag, message.promptId, message.sourceTag, message.replyTo, message.sharingStopped,
+      room ? Number.isFinite(message.time) ? new Date(message.time).toLocaleDateString() : '' : '']);
+    if (!eligible) { group = null; previousKey = null; continue; }
+    if (!group || key !== previousKey || indices.get(message.id) !== previousIndex + 1) { group = { messages: [] }; groups.set(message.id, group); }
+    group.messages.push(message); previousKey = key; previousIndex = indices.get(message.id);
+    if (message.status === 'interrupted') { group = null; previousKey = null; }
+  }
+  for (const group of groups.values()) {
+    const lines = []; let reads = [];
+    const flush = () => { if (reads.length) lines.push('Read ' + [...new Set(reads)].join(', ')); reads = []; };
+    for (const message of group.messages) {
+      const actions = message.commandActions, nativeExit = Number.isSafeInteger(message.exitCode) && message.exitCode !== 0;
+      // Native marks all nonzero exits failed. Exploration keeps its native exit
+      // annotation compact; a search exit1 can simply mean no matches.
+      const error = ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(message.status) && !(message.status === 'failed' && nativeExit) ? message.status : '';
+      group.error ||= error;
+      if (!error && !message.exitCode && actions.every(a => a.type === 'read')) { reads.push(...actions.map(a => a.name)); continue; }
+      flush();
+      for (const action of actions) lines.push(action.type === 'read' ? 'Read ' + action.name : action.type === 'listFiles' ? 'List ' + (action.path ?? action.command)
+        : 'Search ' + (action.query === null ? action.command : action.query + (action.path === null ? '' : ' in ' + action.path)));
+      if (message.exitCode) lines[lines.length - 1] += ` (${actions.length > 1 ? 'command exit' : 'exit'} ${message.exitCode})`;
+      if (error) lines[lines.length - 1] += ' (' + error + ')';
+    }
+    flush(); group.summary = lines.join('\n'); group.active = group.messages.some(m => ['running', 'streaming'].includes(m.status));
+  }
+  return groups;
+}
+function nativeCommandPreview(message) {
+  const actions = message.commandActions, original = message.input || message.title || '';
+  if (Array.isArray(actions) && actions.length === 1) return actions[0].command;
+  // A simple literal shlex launch wrapper can be removed without reconstructing
+  // compound operators from actions. Ambiguous quoting remains verbatim.
+  const literal = /^\/bin\/(?:zsh|bash) -lc '([^']*)'$/.exec(original);
+  return literal ? literal[1] : original;
+}
 function updateProcessTail(entry) {
   const m = entry.message, open = entry.disclosure.open;
+  if (entry.exploration) {
+    entry.tail.hidden = open; entry.tail.textContent = entry.exploration.summary; entry.more.hidden = true; return;
+  }
   // Like the native TUIs: a folded command keeps two one-line rows of output (the
   // newest while it runs, the first once done) and says how many more there are.
   const lines = (m.toolKind === 'commandExecution' || (!m.toolKind && m.title === 'Bash')) && !open && m.text ? m.text.replace(/\n+$/, '').split('\n') : [];
@@ -133,7 +189,7 @@ function messageList(el, messages, room = false, key = 'room') {
   captureReading(view);
   const intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
   view.intent = intent;
-  const rows = [], retained = new Set(), days = new Set(); let lastDay = '';
+  const rows = [], retained = new Set(), days = new Set(), explorations = commandExplorations(messages, room, room ? state.room.messages : current()?.messages || messages); let lastDay = '';
   for (const m of messages) {
     if (m.kind === 'turn' && !nativeCompletionText(m)?.trim()) continue;
     if (m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)) continue;
@@ -156,7 +212,7 @@ function messageList(el, messages, room = false, key = 'room') {
         summary.append(heading); content.append(body); disclosure.append(summary, content); item.replaceChildren(disclosure, entry.tail, entry.more, actions);
         const rememberFold = () => {
           updateProcessTail(entry);
-          const message = entry.message, error = message?.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted'].includes(message?.status) ? message.status : '';
+          const error = entry.error || '';
           const previous = view.folds[m.id];
           if (view.key !== key || previous?.open === disclosure.open && previous.error === error) return;
           view.intent = null; delete view.folds[m.id]; view.folds[m.id] = { open: disclosure.open, error };
@@ -194,6 +250,7 @@ function messageList(el, messages, room = false, key = 'room') {
             // Keep the explicit target anchored until the reader interacts.
             const position = { top: el.scrollTop, follow: false, anchor: m.id, offset: 16 };
             view.intent = { position }; saveReading(view, position); scheduleReading(view);
+            revealProcessAncestors(view, view.entries.get(m.id));
             original.tabIndex = -1; original.focus({ preventScroll: true });
           }
           attempt(persistView);
@@ -202,15 +259,15 @@ function messageList(el, messages, room = false, key = 'room') {
         actions.append(entry.openRecipient);
       }
     }
-    entry.message = m; retained.add(m.id); rows.push(entry.item);
+    entry.message = m; entry.exploration = explorations.get(m.id); retained.add(m.id); rows.push(entry.item);
     entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
     entry.item.classList.toggle('native-notice', m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && current()?.nativeContexts?.some(c => c.boundaryId === m.id)));
-    const nativeTitle = m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
+    const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
     let name = room ? roomMessageLabel(m) : m.name;
     name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
     if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
     const messageTime = room && m.kind !== 'turn' ? m.time : undefined;
-    const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, nativeTitle, m.incomplete, m.volatile, m.sharingStopped]);
+    const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped]);
     if (entry.headingKey !== headingKey) {
       const authorId = room && (m.sessionId || m.recipientId);
       const author = authorId ? button(name, () => { $('room-filter').value = authorId; renderTimeline(); attempt(persistView); }, 'message-author') : node('strong', name);
@@ -225,26 +282,29 @@ function messageList(el, messages, room = false, key = 'room') {
       // Current activity lives in the session/progress status, not this record.
       // Only Claude rows take queued input; native sends it once the agent is idle.
       const status = { 'awaiting-native': m.inputMode === 'queue' ? '排队中，等空闲后发送' : '等待原生确认', unconfirmed: '结果未确认', 'not-sent': '没有发出', streaming: '正在输出', running: !room && current()?.provider === 'claude' && m.role === 'tool' ? '已请求工具' : '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
-      if (status && !m.nativeBlock && !m.sharedStream) entry.heading.append(node('span', status));
+      if (entry.exploration) { if (entry.exploration.error) entry.heading.append(node('span', entry.exploration.error)); }
+      else if (status && !m.nativeBlock && !m.sharedStream) entry.heading.append(node('span', status));
       else if ((m.nativeBlock || m.sharedStream) && ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status)) entry.heading.append(node('span', m.status));
       else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
+      if (m.toolKind === 'commandExecution' && !entry.exploration && m.exitCode) entry.heading.append(node('span', 'exit ' + m.exitCode));
       if (entry.preview) entry.heading.append(entry.preview);
     }
     if (entry.disclosure) {
-      const error = m.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted'].includes(m.status) ? m.status : '';
+      const error = entry.exploration ? entry.exploration.error : m.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status) ? m.status : '';
+      entry.error = error;
       const query = room ? $('room-search').value.trim() : '';
       const reveal = query && [m.text, m.input].some(value => value?.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
       const choice = view.folds[m.id];
       const savedOpen = typeof choice === 'boolean' ? (error ? undefined : choice) : choice?.error === error ? choice.open : undefined;
       const open = Boolean(reveal || (savedOpen !== undefined ? savedOpen : error));
       if (entry.disclosure.open !== open) { entry.expectedOpen = open; entry.disclosure.open = open; }
-      entry.item.dataset.running = String(['running', 'streaming'].includes(m.status));
+      entry.item.dataset.running = String(entry.exploration ? entry.exploration.active : ['running', 'streaming'].includes(m.status));
       let inputPreview = m.input;
       if (inputPreview?.trim().startsWith('{')) {
         try { const value = JSON.parse(inputPreview); inputPreview = [value.command, value.description, value.file_path, value.path, value.query].find(field => typeof field === 'string' && field.trim()) || inputPreview; }
         catch { /* The expandable original remains authoritative. */ }
       }
-      const preview = (m.toolKind === 'webSearch' ? '' : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
+      const preview = (entry.exploration || m.toolKind === 'webSearch' ? '' : m.toolKind === 'commandExecution' ? nativeCommandPreview(m) : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
       if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
       updateProcessTail(entry);
     }
@@ -311,6 +371,16 @@ function messageList(el, messages, room = false, key = 'room') {
       else entry.body.textContent = displayText;
     }
   }
+  const nested = new Set();
+  for (const [id, group] of explorations) {
+    const first = view.entries.get(id); if (!first?.content) continue;
+    let cursor = first.body.nextSibling;
+    for (const message of group.messages.slice(1)) {
+      const entry = view.entries.get(message.id); nested.add(entry.item);
+      if (entry.item === cursor) cursor = cursor.nextSibling; else first.content.insertBefore(entry.item, cursor);
+    }
+  }
+  for (let i = rows.length - 1; i >= 0; i--) if (nested.has(rows[i])) rows.splice(i, 1);
   for (const [id, entry] of view.entries) if (!retained.has(id)) { ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
   for (const [day, divider] of view.days) if (!days.has(day)) { divider.remove(); view.days.delete(day); }
   if (!messages.length) {

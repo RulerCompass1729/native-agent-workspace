@@ -64,3 +64,12 @@ test('durable trajectory retains only bounded structured native tools and its ov
   assert.equal(saved.at(-2).id, 'native:native:tool:219'); assert.equal(saved[0].id, 'chat');
   assert.deepEqual(persistedMessages(saved), saved, 'Saving again neither grows nor drops the overflow marker');
 });
+
+test('native command interruption stops the displayed activity without losing command/actions or partial output', () => {
+  const s = { nativeId: 'N', messages: [] };
+  applyNativeBlock(s, { nativeId: 'N', id: 'tool:cmd', kind: 'tool', toolKind: 'commandExecution', turnId: 'T', status: 'running', input: 'cat file', commandActions: [{ type: 'read', command: 'cat file', name: 'file', path: '/file' }], text: 'partial' });
+  applyNativeBlock(s, { nativeId: 'N', id: 'turn:T', kind: 'turn', turnId: 'T', status: 'interrupted' });
+  assert.equal(s.messages[0].status, 'interrupted'); assert.equal(s.messages[0].text, 'partial'); assert.equal(s.messages[0].commandActions[0].name, 'file');
+  applyNativeBlock(s, { nativeId: 'N', id: 'tool:cmd', kind: 'tool', toolKind: 'commandExecution', turnId: 'T', status: 'complete', text: 'late full output' });
+  assert.equal(s.messages[0].status, 'interrupted'); assert.equal(s.messages[0].text, 'late full output');
+});
