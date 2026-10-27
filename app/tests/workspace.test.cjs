@@ -14,6 +14,19 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('creating a seventh session keeps existing sessions and their drafts', async t => {
+  const { workspace: w, runtimes, ids, directory } = await fixture(t, 6);
+  w.setDraft(ids[0], 'Unsent work stays here', 'owner');
+  const before = ids.map(id => ({ id, nativeId: w.get(id).nativeId, state: w.get(id).state, runtime: w.runtimes.get(id) }));
+  const seventh = await w.create('codex', directory, 'owner', 'Second developer');
+  assert.equal(w.sessions.size, 7); assert.equal(runtimes.length, 7);
+  assert.ok(!ids.includes(seventh)); assert.equal(w.get(seventh).skipPermissions, undefined);
+  assert.equal(w.drafts.get(ids[0]), 'Unsent work stays here');
+  for (const old of before) {
+    assert.equal(w.get(old.id).nativeId, old.nativeId); assert.equal(w.get(old.id).state, old.state);
+    assert.equal(w.runtimes.get(old.id), old.runtime);
+  }
+});
 test('only a session created without a name takes the native title, with its provider', async t => {
   const { workspace: w, runtimes: [claude, codex], ids: [a, b] } = await fixture(t, 2);
   assert.equal(w.get(a).name, 'Test 0'); claude.emit('nativeTitle', 'Ignored'); assert.equal(w.get(a).name, 'Test 0');

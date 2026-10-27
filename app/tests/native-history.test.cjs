@@ -132,13 +132,15 @@ test('definite active-writer rejection leaves no local copy and never retries au
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.directory, 'workspace.json'))).sessions.length, 0);
 });
 
-test('capacity changes during metadata read cannot reserve a seventh active record', async t => {
+test('new sessions during a history read do not block the selected native identity', async t => {
   const f = fixture(t); let release;
   f.w.nativeHistory.read = () => new Promise(resolve => { release = resolve; });
   const pending = f.w.importHistory(id, 'owner'); await new Promise(resolve => setImmediate(resolve));
-  for (let n = 0; n < 6; n++) f.w.sessions.set('existing-' + n, { id: 'existing-' + n, provider: 'claude', state: 'idle' });
-  release(nativeRecord(f.directory)); await assert.rejects(pending, /数量已变化/);
-  assert.equal(f.w.sessions.size, 6); assert.equal(f.calls.length, 0);
+  for (let n = 0; n < 6; n++) f.w.sessions.set('existing-' + n, { id: 'existing-' + n, nativeId: 'retained-' + n, provider: 'claude', state: 'idle', messages: [], model: 'retained', cwd: f.directory, owner: 'owner' });
+  release(nativeRecord(f.directory)); const selected = await pending;
+  assert.equal(f.w.sessions.size, 7); assert.equal(f.w.get(selected).nativeId, id);
+  assert.equal(f.calls.filter(c => c.method === 'thread/resume').length, 1);
+  for (let n = 0; n < 6; n++) assert.equal(f.w.get('existing-' + n).state, 'idle');
 });
 
 test('unnamed history reuses a bounded native preview instead of a generated title', () => {

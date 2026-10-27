@@ -118,7 +118,6 @@ class Workspace extends EventEmitter {
     // The native session picker that chooses what to branch needs the terminal.
     if (fork) view = 'terminal';
     if (!['claude', 'codex'].includes(provider) || !path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error('请选择可用 agent 和工作目录。');
-    if ([...this.sessions.values()].filter(s => s.state !== 'ended').length >= 6) throw new Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
     const id = randomUUID();
     const now = Date.now();
     const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
@@ -144,11 +143,9 @@ class Workspace extends EventEmitter {
       if (existing.length > 1) throw Error('已有记录归属冲突；没有恢复第二个连接。');
       if (existing.length) return existing[0].id;
       if (this.storageWarning) throw Error('本地记录尚未安全保存，请先处理保存问题。');
-      if ([...this.sessions.values()].filter(s => s.state !== 'ended').length >= 6) throw Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
       const info = await this.nativeHistory.read(id);
       if (this.closed) throw Error('后台已关闭，没有接入会话。');
       if (this.storageWarning) throw Error('本地保存状态已变化，没有恢复原生会话。');
-      if ([...this.sessions.values()].filter(s => s.state !== 'ended').length >= 6) throw Error('会话数量已变化，请先结束不需要的会话。');
       if (!fs.statSync(info.cwd).isDirectory()) throw Error('原工作目录不可用，请先恢复该目录。');
       const localId = randomUUID();
       const record = { id: localId, nativeId: id, externalHistory: true, name: info.name || 'Codex 历史会话', provider: 'codex', cwd: info.cwd,

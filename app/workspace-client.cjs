@@ -438,7 +438,6 @@ class WorkspaceClient extends EventEmitter {
         if (existing.length) return existing[0].id;
         assertNativeCreation(snapshot);
         if (!snapshot.capabilities.includes('nativeHistory')) throw Error('当前后台尚不支持原生历史接入。');
-        if (snapshot.sessions.filter(s => s.state !== 'ended').length >= 6) throw Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
         const id = await this.active.client.call(method, ...args);
         await this.refresh(); return id;
       });
@@ -471,7 +470,6 @@ class WorkspaceClient extends EventEmitter {
       const operation = creationQueue.then(async () => {
         guard();
         const state = await this.refresh(); assertNativeCreation(state);
-        if (state.sessions.filter(s => s.state !== 'ended').length >= 6) throw new Error('Demo 最多同时运行 6 个会话，请先结束不需要的会话。');
         guard();
         const id = await this.active.client.call(method, ...args); await this.refresh(); return id;
       });

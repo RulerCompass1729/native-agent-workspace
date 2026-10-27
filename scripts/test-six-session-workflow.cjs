@@ -10,9 +10,10 @@ const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-six-workflow-'));
 const evidence = process.env.NAW_EVIDENCE_DIR;
+const creationOnly = process.env.NAW_TEST_SESSION_CREATION === '1';
 if (evidence) fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
-  execArgv: ['--require', path.join(__dirname, 'fixtures/daily-native.cjs')],
+  execArgv: ['--require', path.join(__dirname, creationOnly ? 'fixtures/native-progress.cjs' : 'fixtures/daily-native.cjs')],
   env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
@@ -36,13 +37,13 @@ async function launch() {
   await page.locator('#new-session').waitFor();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(850, 600));
 }
-async function create(provider) {
+async function create(provider, join = true, name) {
   const previous = (await snapshot()).sessions.map(s => s.id);
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
-  await page.locator('#session-name').fill('学习伙伴'); await createIn(page, 'chat');
+  await page.locator('#session-name').fill(name || '学习伙伴'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => !previous.includes(s.id) && s.chatAvailable), 'Distinct session ready');
   const id = (await snapshot()).sessions.find(s => !previous.includes(s.id)).id;
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;
+  if (join) await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;
 }
 async function room() { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
 async function authorize(ids, goal) {
@@ -71,6 +72,37 @@ function resources() {
 async function run() {
   console.log('Profile:', profile); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Fixture ready');
   client = await connect(profile, 'six-session-observer'); await launch();
+  if (creationOnly) {
+    const launchProof = await app.evaluate(({ app }) => ({ executable: process.execPath, appPath: app.getAppPath(), version: app.getVersion() }));
+    console.log(JSON.stringify({ launchProof }));
+    const ids = [];
+    for (let i = 0; i < 6; i++) ids.push(await create(i % 2 ? 'codex' : 'claude', false, 'Existing ' + (i + 1)));
+    const before = (await snapshot()).sessions.map(s => [s.id, s.nativeId, s.state]);
+    const selected = ids[0], draft = 'Keep this unsent development task';
+    await page.locator('[data-session-id="' + selected + '"]').click(); await page.locator('#chat-tab').click();
+    await page.locator('#message-input').fill(draft);
+    await page.locator('[data-session-id="' + selected + '"]').click({ button: 'right' });
+    // The real archive action only hides the entry; it must keep its native task.
+    await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
+    await until(() => page.locator('[data-session-id="' + selected + '"]').count().then(n => n === 0), 'Archived entry leaves the active list');
+    assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId, s.state]), before);
+    const seventh = await create('codex', false, 'Second Codex developer');
+    const after = (await snapshot()).sessions;
+    assert.equal(after.length, 7); assert.ok(!ids.includes(seventh));
+    assert.deepEqual(after.filter(s => ids.includes(s.id)).map(s => [s.id, s.nativeId, s.state]), before);
+    await shot('seventh-session-created');
+    await app.close(); app = null; await launch();
+    await page.locator('#archive-button').click();
+    await page.locator(`[data-archived-session="${selected}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
+    await page.locator('[data-session-id="' + selected + '"]').click(); await page.locator('#chat-tab').click();
+    assert.equal(await page.locator('#message-input').inputValue(), draft);
+    assert.equal((await snapshot()).sessions.length, 7);
+    assert.deepEqual((await snapshot()).sessions.filter(s => ids.includes(s.id)).map(s => [s.id, s.nativeId, s.state]), before);
+    const stats = (await native()).stats; assert.equal(stats.sends, 0); assert.equal(stats.inputs, 0);
+    assert.deepEqual(errors, []); await shot('archived-work-restored');
+    console.log(JSON.stringify({ checks: ['Archive keeps six original native identities and work; seventh Codex creation succeeds; reload and archive restore preserve the original draft without sending'], sessions: 7, models: 0, stats, errors }, null, 2));
+    return;
+  }
   const ids = []; for (const provider of ['claude', 'codex', 'claude', 'codex', 'claude', 'codex']) ids.push(await create(provider));
   const identities = (await snapshot()).sessions.map(s => [s.id, s.nativeId]);
   assert.equal(await page.locator('[data-session-id]').count(), 6);
