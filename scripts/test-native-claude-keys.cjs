@@ -71,6 +71,10 @@ async function cleanup() {
     `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku"])\n`, { mode: 0o700 });
   const serviceCwd = path.join(profile, 'workspace'); fs.mkdirSync(serviceCwd, { mode: 0o700 });
   fs.writeFileSync(path.join(serviceCwd, 'keyprobe-notes.txt'), 'synthetic file for the @ mention menu\n');
+  // A committed file with an uncommitted edit, for native /diff (synthetic local identity).
+  const git = (...args) => testScratch.childProcess.execFileSync('git', ['-c', 'user.name=Key Probe', '-c', 'user.email=probe@example.com', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: serviceCwd, stdio: 'ignore' });
+  git('init', '-q'); git('add', 'keyprobe-notes.txt'); git('commit', '-q', '-m', 'synthetic');
+  fs.appendFileSync(path.join(serviceCwd, 'keyprobe-notes.txt'), 'an uncommitted synthetic line\n');
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(serviceCwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ awaySummaryEnabled: false }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
@@ -88,6 +92,18 @@ async function cleanup() {
   }
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Native ready', 60000);
   await focusTerminal(); await until(async () => (await editLine()) === '❯', 'Native edit line', 15000); await record('start');
+
+  // CL-X04/X06/X07: what the running native process actually received from NAW
+  // (its argv and environment as ps reports them, and its settings file).
+  const nativeLine = testScratch.childProcess.execFileSync('ps', ['-axE', '-ww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    .split('\n').find(line => line.includes(path.basename(base)) && /^\s*\d+\s+claude /.test(line)) || '';
+  const settingsFile = (nativeLine.match(/--settings (\S+\.settings\.json)/) || [])[1];
+  const launchFacts = {
+    allowedTool: /--allowedTools mcp__native_workspace__workspace_message\b/.test(nativeLine),
+    agentTeams: /\bCLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1\b/.test(nativeLine),
+    noMarketplaceInstall: /\bCLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1\b/.test(nativeLine),
+    inProcessTeammates: Boolean(settingsFile) && JSON.parse(fs.readFileSync(settingsFile, 'utf8')).teammateMode === 'in-process',
+  };
 
   // CL-I01: word and line editing with modifiers whose synthetic and physical
   // events match (xterm sends ESC DEL for Option+Backspace and CSI 1;3D for
@@ -149,12 +165,58 @@ async function cleanup() {
   const rewindOpens = /Rewind/.test(screens.rewind) && /Esc to cancel/.test(screens.rewind);
   await page.keyboard.press('Escape'); await until(async () => (await editLine()) === '❯' && !/Rewind/.test(await terminalText()), 'Rewind closed', 5000);
 
+  // CL-R04: /diff opens native's diff dialog on the folder's uncommitted edit. It is
+  // a local command, not a prompt; Enter only once the menu highlights /diff.
+  await page.keyboard.type('/diff', { delay: 20 });
+  await until(async () => (await editLine()) === '❯ /diff' && (await terminalText()).split('\n').some(l => /^\s+❯ \/diff\s/.test(l)), 'Edit line and menu show /diff', 5000);
+  await page.keyboard.press('Enter'); await sleep(1500); await record('diff-split');
+  // Beside the chat the terminal is narrower than the 110 columns the panel needs.
+  const diffNeedsWidth = /at least 110 columns/.test(screens['diff-split']);
+  await reset();
+  await page.locator('#terminal-maximize').click(); await sleep(800); await focusTerminal();
+  await page.keyboard.type('/diff', { delay: 20 });
+  await until(async () => (await editLine()) === '❯ /diff' && (await terminalText()).split('\n').some(l => /^\s+❯ \/diff\s/.test(l)), 'Edit line and menu show /diff again', 5000);
+  await page.keyboard.press('Enter'); await sleep(1500); await record('diff');
+  const diffDialog = /Diff panel shown/.test(screens.diff) && /1 file edited/.test(screens.diff);
+  // The panel stays beside the session (Escape does not close it); only the edit line must be free.
+  await reset();
+  await page.locator('#terminal-maximize').click(); await sleep(500); await focusTerminal();
+
+  // CL-S02/CL-S03: local native dialogs open in NAW's terminal. Enter only once
+  // the edit line and the highlighted menu entry are the command.
+  async function openNative(command) {
+    await page.keyboard.type('/' + command, { delay: 20 });
+    await until(async () => (await editLine()) === '❯ /' + command && (await terminalText()).split('\n').some(l => new RegExp('^\\s+❯ /' + command + '\\s').test(l)), 'Edit line and menu show /' + command, 5000);
+    await page.keyboard.press('Enter'); await sleep(1200); await record(command);
+    // One Escape may only clear a filter (/config); press again only if still open.
+    await page.keyboard.press('Escape');
+    if (!await until(async () => (await editLine()) === '❯', '', 1000).then(() => true, () => false)) await page.keyboard.press('Escape');
+    await until(async () => (await editLine()) === '❯', '/' + command + ' closed', 5000);
+    return screens[command];
+  }
+  const modelPicker = /Haiku ✔/.test(await openNative('model')) && /Sonnet/.test(screens.model);
+  const configDialog = /Type to filter/.test(await openNative('config')) && /Show tips/.test(screens.config);
+  const memoryDialog = /Auto-memory/.test(await openNative('memory')) && /Esc to cancel/.test(screens.memory);
+  // CL-X05: NAW's directed-message MCP server is connected with its one tool.
+  const mcpListed = /✔ native_workspace\s+1 tool/.test(await openNative('mcp'));
+  const hooksMenu = /This menu is read-only/.test(await openNative('hooks'));
+  // NAW's launch settings add PreToolUse hooks, yet the native menu lists none
+  // there: All events, then the first event (PreToolUse).
+  await page.keyboard.type('/hooks', { delay: 20 });
+  await until(async () => (await editLine()) === '❯ /hooks' && (await terminalText()).split('\n').some(l => /^\s+❯ \/hooks\s/.test(l)), 'Edit line and menu show /hooks again', 5000);
+  await page.keyboard.press('Enter'); await until(async () => /❯ All events/.test(await terminalText()), 'Hooks menu open', 5000);
+  await page.keyboard.press('Enter'); await until(async () => /PreToolUse/.test(await terminalText()), 'Hook events listed', 5000); await record('hooks-events');
+  await page.keyboard.press('Enter'); await sleep(800); await record('hooks-pretool');
+  const nawHooksUnlisted = /0 with hooks/.test(screens['hooks-events']) && /PreToolUse - Matchers/.test(screens['hooks-pretool']) && /No hooks configured for this event/.test(screens['hooks-pretool']);
+  for (let i = 0; i < 4 && (await editLine()) !== '❯'; i++) { await page.keyboard.press('Escape'); await sleep(600); }
+  await until(async () => (await editLine()) === '❯', 'Hooks menu closed', 5000);
+
   // CL-R05: Ctrl+T shows nothing without tasks, and making a task needs a model
   // turn, so the screen is kept as evidence only and the row stays unverified.
   await page.keyboard.press('Control+t'); await sleep(500); await record('ctrl-t');
   await page.keyboard.press('Control+t'); await sleep(300); await reset();
 
-  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens };
+  const results = { wordDeleted, wordLeft, killToStart, modeChanged, slashMenu, atMenu, shellMode, historySearch, pastePlaceholder, rewindOpens, diffNeedsWidth, diffDialog, modelPicker, configDialog, memoryDialog, mcpListed, hooksMenu, nawHooksUnlisted, launchFacts: Object.values(launchFacts).every(Boolean) };
   fs.writeFileSync(path.join(base, 'results.json'), JSON.stringify({ results, modeBefore, modeAfter, modeRestored }, null, 2));
   if (process.env.NAW_EVIDENCE_DIR) {
     fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true });
@@ -162,7 +224,7 @@ async function cleanup() {
   }
   assert.equal(requests, 0, 'No key submitted a model request'); assert.deepEqual(errors, []);
   for (const [name, ok] of Object.entries(results)) if (ok) checks.push(name);
-  console.log(JSON.stringify({ nativeVersion, results, modes: [modeBefore, modeAfter, modeRestored], checks, modelRequests: requests, paidModelCalls: 0, errors, evidence: base }, null, 2));
+  console.log(JSON.stringify({ nativeVersion, results, launchFacts, modes: [modeBefore, modeAfter, modeRestored], checks, modelRequests: requests, paidModelCalls: 0, errors, evidence: base }, null, 2));
   const failed = Object.entries(results).filter(([, ok]) => !ok).map(([name]) => name);
   assert.deepEqual(failed, [], 'Native keys that did not work in NAW\'s terminal');
 })().catch(async error => {
