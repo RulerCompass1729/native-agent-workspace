@@ -508,7 +508,12 @@ class Workspace extends EventEmitter {
   async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null) {
     text = cleanText(text); const s = this.get(id); const runtime = this.runtime(id);
     if (runtime.nativeAbortRequest) throw Error('正在等待原生中断确认；草稿保留。');
-    if (!route) { if (s.owner !== owner) throw new Error('请先接管这个会话。'); s.peerRevision = (s.peerRevision || 0) + 1; this.pause(recovery ? '模型满载自动继续；原协作交接保持暂停' : '真人输入优先'); }
+    if (!route) {
+      if (s.owner !== owner) throw new Error('请先接管这个会话。');
+      s.peerRevision = (s.peerRevision || 0) + 1;
+      if (recovery) this.pauseParticipant(id, '模型满载自动继续；原协作交接保持暂停');
+      else this.pause('真人输入优先');
+    }
     const failedTurn = !route && s.state === 'error' ? runtime.failedTurnInputId : null;
     if ((s.state !== 'idle' && !failedTurn && !(recovery && s.state === 'error')) || s.pendingTag || runtime.pendingQueue || s.approval || runtime.nativeInputRequired) throw new Error('会话尚未就绪，请查看原生终端或等待当前回复。');
     if (runtime.chatAvailable === false) throw new Error(s.provider === 'claude' ? '安全发送接口尚未连接；请在原生终端继续，草稿已保留。' : '请先在原生终端完成第一条消息；草稿已保留。');
