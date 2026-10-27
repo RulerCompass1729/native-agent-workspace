@@ -58,7 +58,7 @@ async function run() {
   });
 
   const metrics = [];
-  async function measure(label, room = false) {
+  async function measure(label, room = false, { content = true } = {}) {
     await delay(150);
     const m = await page.evaluate(({ label, room }) => {
       const list = document.querySelector(room ? '#room-messages' : '#messages');
@@ -71,7 +71,7 @@ async function run() {
         inputVisible: a.top >= 0 && a.bottom <= innerHeight, sendVisible: b.top >= 0 && b.bottom <= innerHeight };
     }, { label, room });
     metrics.push(m); await capture(label);
-    assert.ok(m.contentHeight >= 96, label + ': four lines of readable body: ' + JSON.stringify(m));
+    if (content) assert.ok(m.contentHeight >= 96, label + ': four lines of readable body: ' + JSON.stringify(m));
     assert.ok(m.inputVisible && m.sendVisible, label + ': input and send stay in the window: ' + JSON.stringify(m));
     return m;
   }
@@ -123,28 +123,37 @@ async function run() {
   await size(850, 600); await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
   await fixture('approval', b, { requestId: 17, method: 'item/commandExecution/requestApproval', params: { command: 'echo synthetic\n'.repeat(30), cwd: '/synthetic', reason: '不执行命令，仅核对紧凑窗口' } });
   await page.locator('#approval').waitFor();
-  await measure('permission-compact');
+  // Beside the terminal at 850×600 the confirmation leaves no conversation lines
+  // (T-36, kept as designed); its decision stays keyboard-reachable and the input visible.
+  await measure('permission-compact', false, { content: false });
   const decision = page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true });
   await decision.focus();
   assert.ok(await page.locator('#approval').evaluate(el => el.scrollTop > 0));
   await decision.click({ trial: true });
   await capture('permission-actions-reachable');
+  // The workaround: only windows at most 900 px wide and 720 px tall stack this way;
+  // a window just wider (1000×600) keeps four conversation lines beside the confirmation.
+  // (Hiding the terminal does not help: the space is short vertically.)
+  const compact = await screen(b);
+  await size(1000, 600); await measure('permission-wider-window');
+  // Back to the compact window: wait for the terminal to refit, then for native to follow.
+  await size(850, 600); await until(async () => { const now = await screen(b); return now.cols === compact.cols && now.rows === compact.rows; }, 'Terminal refits to the compact window');
+  await aligned(b);
   assert.equal((await fixture()).stats.sends, 0);
-  checks.push('Long confirmation scope does not consume the conversation or move the input beyond the window; no decision or task sent');
+  checks.push('A long confirmation at 850×600 keeps its decision reachable and the input visible; a 1000×600 window keeps four conversation lines beside it; no decision or task sent');
 
   await fixture('stop');
   await until(async () => (await snapshot()).sessions.every(s => s.state === 'ended'), 'Ended');
-  await until(async () => /最后收到/.test(await panel(b).locator(':scope > summary').textContent()), 'Last frame visible after state broadcast');
+  // An ended session keeps its last received native screen beside the chat.
+  await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
+  await until(async () => (await nativePane(b).innerText()).includes('另一个原生会话的过程'), 'Last frame kept after ending');
   await aligned(b); await capture('ended-retained-frame');
   await page.locator(`[data-session-id="${a}"]`).click(); await page.locator('#chat-tab').click();
-  await until(async () => (await panel(a).locator('.progress-notice').textContent()).includes('当前没有保留'), 'Fresh ended panel has no frame');
-  assert.equal(await panel(a).locator('.progress-viewport').isHidden(), true);
-  assert.equal(await panel(a).locator('.progress-controls').isHidden(), true);
-  assert.equal(await panel(a).locator('.progress-trace').isHidden(), true);
-  await measure('ended-no-frame');
+  await until(async () => (await nativePane(a).innerText()).includes('原生实时输出'), 'Ended session keeps its last frame');
+  await measure('ended-session');
   assert.equal(await page.locator('#message-input').inputValue(), draft);
   assert.match(await page.locator('#messages').textContent(), /这是需要完整阅读的回答/);
-  checks.push('Disconnect keeps a received last frame; selecting an ended session without a held frame shows an honest compact empty state and saved history');
+  checks.push('Ended sessions keep their last native screen beside the chat; saved history and the draft stay readable in the compact window');
   // Seed real persisted recovery copies; the UI must handle their geometry
   // independently of the separate ownership-conflict acceptance test.
   await page.evaluate(async id => {
@@ -161,7 +170,8 @@ async function run() {
   assert.equal(await page.locator('.draft-recovery-text').count(), 3);
   checks.push('Expanded persisted recovery copies and original draft remain keyboard/mouse reachable without pushing controls outside the compact window');
   const stats = (await fixture()).stats;
-  assert.equal(stats.opens, 1); assert.equal(stats.inputs, 0); assert.equal(stats.sends, 0);
+  // One terminal attach per session beside the chat (two sessions); nothing typed or sent.
+  assert.ok(stats.opens <= 2, 'Bounded terminal attaches: ' + stats.opens); assert.equal(stats.inputs, 0); assert.equal(stats.sends, 0);
   assert.deepEqual(errors, []);
   const windows = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
