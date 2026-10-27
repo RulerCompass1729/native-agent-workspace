@@ -112,7 +112,8 @@ function publishFailure($, turnId, turn, binding) {
   if (turn.ended && turn.endReason === 'error' && turn.failedPrompt && turn.failure) {
     const detail = failureText(turn);
     enqueueBlock($, { id: `turn:${turnId}`, turnId, kind: 'turn', status: 'failed',
-      text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous), failedRequest: true }, binding);
+      text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous), failedRequest: true,
+      ...(!turn.failureAmbiguous ? { errorMessageId: turn.failure.uuid } : {}) }, binding);
   }
 }
 const observations = [];
@@ -682,7 +683,8 @@ export function register(on) {
         enqueueBlock($, { id: `turn:${e.turnId}`, turnId: e.turnId, kind: 'turn', finalDisplayId,
           text: turn.endingText + (e.reason === 'error' && failureText(turn) ? `\n${failureText(turn)}` : ''),
           status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed',
-          failedRequest: e.reason === 'error' && turn.failedPrompt === true }, binding);
+          failedRequest: e.reason === 'error' && turn.failedPrompt === true,
+          ...(e.reason === 'error' && turn.failedPrompt && turn.failure && !turn.failureAmbiguous ? { errorMessageId: turn.failure.uuid } : {}) }, binding);
       }
     } catch { markObservationGap(binding); }
     return result;

@@ -16,12 +16,14 @@ for(const p of[profile,cwd,home,userHome])fs.mkdirSync(p,{mode:0o700});
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
 let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,releaseGoal,goalRpc,goalCodeMode,budgetError,activeHeld;const errors=[],checks=[];
-const capacityTrial=process.env.NAW_NATIVE_CAPACITY_TRIAL;assert.ok(!capacityTrial||['continue','cancel'].includes(capacityTrial));
+const capacityTrial=process.env.NAW_NATIVE_CAPACITY_TRIAL;assert.ok(!capacityTrial||['continue','cancel','goal'].includes(capacityTrial));
+const capacityGoal=capacityTrial==='goal';
 const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIVE_REJECTED_REQUEST: Keep This BODY exactly.';
 // Active-goal recovery: the owned app-server dies while the goal's automatic
 // continuation turn is in flight (T-4); the completed-goal case is NAW_NATIVE_RECOVERY_TRIAL.
 const activeGoalRecovery=process.env.NAW_NATIVE_ACTIVE_GOAL_RECOVERY==='1';
-const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1'||activeGoalRecovery;
+const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1'||activeGoalRecovery||capacityGoal;
+const goalsDisabled=process.env.NAW_NATIVE_GOALS_DISABLED==='1';assert.ok(!goalsDisabled||!goalTrial);
 // An unnamed row takes the thread name the native TUI generates (T-12).
 const autoName=process.env.NAW_NATIVE_AUTO_NAME==='1';
 // A row created with skip-all-confirmations gets never + full access (T-13); no model call.
@@ -39,15 +41,15 @@ function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify(
 const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
  if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
  const input=JSON.parse(body),title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
- const n=title?0:++calls;if(title)titles++;if(calls>(goalTrial?(activeGoalRecovery?5:4):failureTrial||capacityTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
+ const n=title?0:++calls;if(title)titles++;if(calls>(goalTrial?(capacityGoal?3:activeGoalRecovery?5:4):failureTrial||capacityTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
  assert.equal(input.model,'gpt-6-luna');
  fs.writeFileSync(path.join(base,`request-${title?'title-'+titles:n}.json`),JSON.stringify(input,null,2));
  if(failureTrial&&n===1){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:{type:'invalid_request_error',message:failureBody}}));return;}
  const response={id:'context_'+seq,object:'response',created_at:Math.floor(Date.now()/1000),status:'in_progress',model:input.model,output:[],usage:{input_tokens:10,output_tokens:10,total_tokens:20}};
  res.writeHead(200,{'content-type':'text/event-stream'});event(res,'response.created',{response});
- if(capacityTrial&&n===1){event(res,'response.failed',{response:{...response,status:'failed',error:{code:'server_is_overloaded',message:'Native capacity fixture'}}});res.end();return;}
+ if(capacityTrial&&n===(capacityGoal?3:1)){event(res,'response.failed',{response:{...response,status:'failed',error:{code:'server_is_overloaded',message:'Native capacity fixture'}}});res.end();return;}
  if(activeGoalRecovery&&n===3){activeHeld=res;return;}
- if(goalTrial&&!title&&(n===1||n===(activeGoalRecovery?4:3))){
+ if(goalTrial&&!title&&(n===1||n===(capacityGoal?5:activeGoalRecovery?4:3))){
   const name=n===1?'create_goal':'update_goal',args=n===1?{objective:'Verify native goal continuation with the NAW window closed, then mark this bounded fixture complete.'}:{status:'complete'};
   if(n===1)goalCodeMode=input.input?.some(m=>m.tools?.some(t=>t.type==='namespace'&&t.name==='functions'&&t.tools?.some(f=>f.name==='exec')));
   if(goalCodeMode){
@@ -91,7 +93,7 @@ async function nativeCommand(command){
 }
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
- fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n${capacityTrial?'request_max_retries = 0\nstream_max_retries = 0\n':''}`,{mode:0o600});
+ fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n${goalsDisabled?'goals = false\n':''}[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n${capacityTrial?'request_max_retries = 0\nstream_max_retries = 0\n':''}`,{mode:0o600});
  const shim=path.join(base,'codex-local');fs.writeFileSync(shim,'#!/usr/bin/python3\nimport os,sys\n'+`os.environ["CODEX_HOME"]=${JSON.stringify(home)}\nos.environ["HOME"]=${JSON.stringify(userHome)}\n`+'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n'+`os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`,{mode:0o700});
  fs.writeFileSync(path.join(profile,'runtime-locations.json'),JSON.stringify({codex:shim}),{mode:0o600});
  if(!process.env.NAW_APP_EXECUTABLE)execFileSync(process.execPath,[path.join(root,'scripts/build-ui.cjs')]);
@@ -113,6 +115,34 @@ async function nativeCommand(command){
   console.log(JSON.stringify({checks:['Actual native running handshake reaches the original graphical session without inference or a task'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(!activeGoalRecovery){await page.locator('#message-input').fill(goalTrial?'Create the bounded native goal, verify its continuation while this window is closed, then complete it.':'Make one small local check.');await page.locator('#send-button').click();}
+ if(capacityGoal){
+  await until(()=>releaseGoal,'Native goal created before the initial turn ends');
+  const net=require('node:net'),WebSocket=require('ws'),{Rpc}=require('../app/adapters.cjs');
+  const entries=require('../app/service-layout.cjs').readLayout(profile).entries;assert.equal(entries.length,1);
+  const endpoint=path.join(path.dirname(JSON.parse(fs.readFileSync(path.join(profile,entries[0],'connection.json'))).endpoint),'codex.sock');
+  const ws=new WebSocket('ws://localhost',{createConnection:()=>net.connect(endpoint),handshakeTimeout:10000});
+  await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject);});goalRpc=new Rpc(ws);
+  await goalRpc.call('initialize',{clientInfo:{name:'naw_owned_capacity_goal_witness',version:'1'},capabilities:{experimentalApi:true}});ws.send(JSON.stringify({method:'initialized',params:{}}));
+  const active=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});assert.equal(active.goal.status,'active');assert.equal(active.goal.tokenBudget,null);
+  fs.writeFileSync(path.join(base,'capacity-goal-active.json'),JSON.stringify(active,null,2));
+  const observer=await connect(profile,'owned-capacity-goal-observer');
+  try{
+   await app.close();app=null;releaseGoal();releaseGoal=null;
+   await until(async()=>calls===3&&(await observer.call('initial')).sessions[0].capacityRecovery?.status==='scheduled','Automatic goal turn overload schedules recovery while the window is closed');
+   fs.writeFileSync(path.join(base,'capacity-goal-failed.json'),JSON.stringify({goal:await goalRpc.call('thread/goal/get',{threadId:before.nativeId}),state:await observer.call('initial')},null,2));
+   await until(async()=>{const state=await observer.call('initial');return !state.sessions[0].capacityRecovery&&state.sessions[0].messages.some(m=>m.name==='NAW'&&m.text.includes('goal 为 blocked')&&m.text.includes('/goal resume'));},'The metadata-only preflight reports the blocked goal without sending a new task',150000);
+   const finalGoal=await goalRpc.call('thread/goal/get',{threadId:before.nativeId}),state=await observer.call('initial');
+   fs.writeFileSync(path.join(base,'capacity-goal-final.json'),JSON.stringify({goal:finalGoal,state,calls,titles},null,2));
+   assert.equal(finalGoal.goal.status,'blocked');assert.equal(finalGoal.goal.objective,active.goal.objective);assert.equal(finalGoal.goal.tokenBudget,active.goal.tokenBudget);assert.equal(finalGoal.goal.createdAt,active.goal.createdAt);
+   sameLiveServer(before,state.sessions[0]);assert.equal(state.sessions[0].nativeId,before.nativeId);assert.equal(calls,3);assert.equal(state.sessions[0].messages.filter(m=>m.origin==='capacity-recovery').length,0);
+   assert.ok(state.sessions[0].messages.some(m=>m.kind==='notice'&&m.text.includes('Selected model is at capacity')),'Original error is not replaced');
+  }finally{observer.close();}
+  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});page=await app.firstWindow();await page.locator('#new-session').waitFor();
+  await until(async()=>(await page.locator('#messages').innerText()).includes('/goal resume'),'The reopened reader shows the exact recovery limitation');
+  if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'capacity-goal-reopened.png')});
+  assert.equal(calls,3);assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({checks:['Native overload blocks its goal; metadata-only preflight preserves that goal and budget, sends no ineffective continue, and reports same-screen native resume guidance after reopening'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+ }
  if(capacityTrial){
   await until(async()=>calls===1&&(await snapshot()).sessions[0].capacityRecovery?.status==='scheduled','Actual terminal capacity failure schedules recovery',30000);
   const failed=(await snapshot()).sessions[0];assert.equal(failed.nativeId,before.nativeId);assert.ok(failed.capacityRecovery.due-Date.now()>110000,'Production two-minute delay, not an accelerated test timer');
