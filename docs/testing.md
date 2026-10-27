@@ -2,6 +2,32 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Creating another session with retained work - 2026-10-26
+
+`NAW_TEST_SESSION_CREATION=1 node scripts/test-six-session-workflow.cjs`
+uses the existing synthetic native-progress transport through real Electron.
+Six independent records stay alive when one is archived. Creating a seventh
+Codex session then reopening and restoring the archived entry preserves the
+original identities, states and unsent draft, with zero model calls, sends or
+terminal input. Source and signed106 `bda7ee0` paths pass; the installed launcher
+records its executable and app paths. This is not seven real provider processes.
+
+Three related regressions fail before removing the fixed cap and pass after:
+backend creation, cross-service concurrent creation, and a history read that
+finishes after six other records exist. Additional client history-routing
+coverage keeps one import on the active service. All1123 checks pass. The first
+GUI baseline opened the archive list before new-session creation and failed on
+that modal; it is retained as a harness error. After moving that archive-list
+step to restoration, the original cap leaves the seventh create dialog open;
+the fixed runtime passes the complete task. Archive still retains native work.
+
+The five limit checks are removed without changing the creation/history queues,
+identity/storage checks or native permission defaults. Candidate106 gives the
+new runtime a version boundary because service selection first reuses a matching
+version; it does not hot-patch an older running service. The person's daily104
+app is unchanged. Historical six-session measurements remain scoped evidence,
+not an overall resource-capacity claim.
+
 ## Ordinary Claude tool approval - 2026-10-26
 
 The existing permission case in `test-native-blocks.cjs` passes on signed105
