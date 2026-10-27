@@ -425,3 +425,20 @@ installed app; details and evidence in the [Claude lane audit](u17-claude310.md)
 ### DF-106: retained-session daily update and session creation
 
 A daily installation still enforced the retired six-session demo limit, including archived live sessions. The accepted alpha106 bundle was installed after explicit one-time authorization and reopened normally. All seven existing rows, native IDs and live process start identities survived; twelve saved view drafts matched. New creation routes to the current106 backend while older native sessions remain on their original backends. Bundle source attribution, strict signature and a single application-search entry passed independent review. The exact signed106 seven-record creation/archive/reopen UI evidence is reused from the prior acceptance; the daily create button was not clicked during this deployment. Empty session-level live-draft fields are not used to prove draft preservation. No native task, process migration, debug launch or model call was introduced.
+
+
+### T49 — independent capacity continuation and collaboration scope
+
+| Issue | Trigger and severity | Change and verification | Status |
+| --- | --- | --- | --- |
+| T49-1 | An independent session's automatic overload continuation called the global pause and interrupted an unrelated bounded exchange. High: authorized work stopped without human intervention. Owner: Codex 2. | Reuse `pauseParticipant` for automatic continuation; retain global human-input pause and the sender's peer revision change. The old source fails both the unrelated-room and peer-only lease regressions. Related Codex-context, peer-handoff and shared-reply checks pass (106/106), including a prepared peer-only authorization that can still send, human revocation, and a recovering member's revoked lease. The source Electron task in `scripts/test-capacity-room.cjs` observes B to C to B handoffs through A's continuation, keeps native identities and solo/shared drafts, then the client's pre-send global pause stops handoffs and keeps a late reply private. The separate unit test verifies the human `send()` branch. | Independent Fable source and wording checkpoints PASS. Installed acceptance belongs to the integrator. |
+
+The GUI test uses the actual Codex adapter with synthetic provider events, zero
+model calls and zero provider processes. Native identities are synthetic and the
+fixture labels the protocol version as Codex 0.164. Its wrapper advances the scheduled
+delay and returns an empty native goal; it does not verify the real two-minute delay,
+provider overload behavior, physical input, live PID preservation or the Claude
+capacity path. Existing native recovery evidence is reused for unchanged scheduling;
+this checkpoint adds the affected pause-scope task. Fable's three low-severity
+wording findings (pause layer, synthetic identity/version and peer-only counterexample)
+are addressed here; no runtime change was requested.
