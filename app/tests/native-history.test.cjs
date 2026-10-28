@@ -182,3 +182,36 @@ test('workspace native version metadata follows its actual runtime RPC and never
   assert.equal(workspace.snapshot().sessions[0].nativeVersion, null);
   assert.equal(workspace.snapshot().sessions[0].nativeVersionStatus, 'unreported');
 });
+
+function claudeImportFixture(t, refusal) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-import-')), calls = [];
+  const host = { binaries: {}, close() {}, create(record) {
+    calls.push({ ...record });
+    const saved = JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'))); assert.equal(saved.sessions.find(s => s.id === record.id).state, 'recoverable');
+    if (refusal) { const error = Error('Controlled refusal'); error[refusal] = true; throw error; }
+    const r = new EventEmitter(); r.start = async () => r.emit('state', 'idle'); return r;
+  } };
+  const w = new Workspace(host, directory); w.nativeHistory.read = w.nativeHistory.ready = async () => { throw Error('Claude must not query Codex'); };
+  t.after(() => { w.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  return { w, calls, directory };
+}
+test('explicit Claude import reuses recovery, persists before launch, never queries Codex and deduplicates UUID/provider', async t => {
+  const { w, calls, directory } = claudeImportFixture(t);
+  w.sessions.set('codex-same-id', { id: 'codex-same-id', provider: 'codex', nativeId: id, messages: [], state: 'ended' });
+  const options = { provider: 'claude', cwd: directory };
+  const ids = await Promise.all([w.importHistory(id, 'owner', options), w.importHistory(id.toUpperCase(), 'owner', options)]);
+  assert.equal(ids[0], ids[1]); assert.equal(calls.length, 1); assert.equal(w.sessions.size, 2);
+  const row = w.get(ids[0]); assert.equal(row.nativeId, id); assert.equal(row.provider, 'claude'); assert.equal(row.externalHistory, true); assert.equal(row.view, 'terminal'); assert.equal(row.autoName, true); assert.equal(row.nativePermissionMode, undefined); assert.equal(w.versions.dispatches, 0);
+});
+for (const marker of ['nativeActiveWriter', 'nativeImportRefused']) test('Claude import refuses before native effects and removes reserved session and disk entry: ' + marker, async t => {
+  const { w, calls, directory } = claudeImportFixture(t, marker);
+  await assert.rejects(w.importHistory(id, 'owner', { provider: 'claude', cwd: directory }), e => e[marker]);
+  assert.equal(calls.length, 1); assert.equal(w.sessions.size, 0); assert.equal(w.runtimes.size, 0); assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'workspace.json'))).sessions.length, 0); assert.equal(w.versions.dispatches, 0);
+});
+test('Claude import validates input and applies only the current explicit permission checkbox', async t => {
+  const { w, calls, directory } = claudeImportFixture(t);
+  for (const options of [{ provider: 'other', cwd: directory }, { provider: 'claude', cwd: 'relative' }, { provider: 'claude', cwd: directory, skipPermissions: 'yes' }, { provider: 'claude', cwd: directory, name: 'bad\nname' }]) assert.throws(() => w.importHistory(id, 'owner', options));
+  assert.throws(() => w.importHistory('invalid-id', 'owner', { provider: 'claude', cwd: directory })); assert.equal(calls.length, 0);
+  const local = await w.importHistory(id, 'owner', { provider: 'claude', cwd: directory, name: 'Own label', skipPermissions: true });
+  assert.equal(w.get(local).nativePermissionMode, 'bypassPermissions'); assert.equal(w.get(local).autoName, false);
+});

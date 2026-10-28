@@ -430,15 +430,20 @@ class WorkspaceClient extends EventEmitter {
       return { ...result, data: result.data.map(row => ({ ...row, existingIds: snapshot.sessions.filter(s => s.provider === 'codex' && s.nativeId === row.nativeId).map(s => s.id) })) };
     }
     if (method === 'importHistory') {
+      if (args[1] != null && (typeof args[1] !== 'object' || Array.isArray(args[1]))) throw Error('无效的历史接入请求。');
+      const options = args[1] == null ? undefined : { ...args[1] };
+      const provider = options?.provider ?? 'codex';
+      if (!['codex', 'claude'].includes(provider)) throw Error('无效的原生会话类型。');
+      const native = provider === 'claude' && typeof args[0] === 'string' ? args[0].toLowerCase() : args[0];
       const guard = this.operationGuard(this.active);
       const operation = creationQueue.then(async () => {
         guard(); const snapshot = await this.refresh(); guard();
-        const existing = snapshot.sessions.filter(s => s.provider === 'codex' && s.nativeId === args[0]);
+        const existing = snapshot.sessions.filter(s => s.provider === provider && s.nativeId === native);
         if (existing.length > 1) throw Error('已有记录归属冲突；没有恢复第二个连接。');
         if (existing.length) return existing[0].id;
         assertNativeCreation(snapshot);
-        if (!snapshot.capabilities.includes('nativeHistory')) throw Error('当前后台尚不支持原生历史接入。');
-        const id = await this.active.client.call(method, ...args);
+        if (!snapshot.capabilities.includes(provider === 'claude' ? 'claudeHistory' : 'nativeHistory')) throw Error('当前后台尚不支持这类原生历史接入。');
+        const id = await this.active.client.call(method, native, ...(options ? [options] : []));
         await this.refresh(); return id;
       });
       creationQueue = operation.catch(() => {}); return operation;

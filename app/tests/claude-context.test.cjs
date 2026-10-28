@@ -417,3 +417,19 @@ test('a picker branch still waiting when the service stops is restored as unconf
  assert.equal(restored.get(id).state,'ended');assert.equal(restored.get(id).activity,'没有确认创建分支。');
  assert.equal(restored.get(plain).state,'recoverable','Ordinary rows keep the interrupted-work restore');
 });
+
+test('external Claude import checks native live/background UUIDs and unknown reports without launching or registering hooks', t => {
+ const {claudeImportAvailable,Claude:Adapter}=require('../adapters.cjs'); const dir=fs.mkdtempSync(path.join(os.tmpdir(),'naw-import-guard-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const id=randomUUID(),catalog=path.join(dir,'agents.json'),binary=path.join(dir,'probe-native');fs.writeFileSync(binary,`#!/bin/sh\ncat '${catalog}'\n`,{mode:0o700});
+ const host={binaries:{claude:binary},privateDir:dir,hookTargets:new Map(),hookSocket:path.join(dir,'hook.sock'),submitSocket:path.join(dir,'submit.sock')};
+ const record={id:randomUUID(),nativeId:id,name:'Import',cwd:dir,recovering:true,externalHistory:true};
+ for(const kind of ['interactive','background']) {fs.writeFileSync(catalog,JSON.stringify([{kind,sessionId:id,pid:123}])); assert.throws(()=>new Adapter(record,host),e=>e.nativeActiveWriter);assert.equal(host.hookTargets.size,0);assert.equal(fs.existsSync(path.join(dir,record.id+'.settings.json')),false);}
+ for(const report of [{not:'array'},[{kind:'background',sessionId:null}],[{kind:'interactive',sessionId:'invalid'}],[{kind:'unknown',sessionId:id}]]) {fs.writeFileSync(catalog,JSON.stringify(report));assert.throws(()=>claudeImportAvailable(record,host),e=>e.nativeImportRefused);}
+ for(const kind of ['interactive','background']) {fs.writeFileSync(catalog,JSON.stringify([{kind}]));assert.doesNotThrow(()=>claudeImportAvailable(record,host));}
+ fs.writeFileSync(catalog,JSON.stringify([{kind:'background',sessionId:randomUUID()}]));assert.doesNotThrow(()=>claudeImportAvailable(record,host));fs.writeFileSync(catalog,'[]');assert.doesNotThrow(()=>claudeImportAvailable(record,host));
+});
+test('strict external inspection refuses a failed process query; existing recovery keeps its prior fallback', () => {
+ const Module=require('node:module'),file=require.resolve('../adapters.cjs'),isolated=new Module(file,module),original=isolated.require.bind(isolated);isolated.filename=file;isolated.paths=Module._nodeModulePaths(path.dirname(file));
+ isolated.require=name=>name==='node:child_process'?{...require('node:child_process'),execFileSync(){throw Error('Controlled unavailable process query');}}:original(name);
+ isolated._compile(fs.readFileSync(file,'utf8'),file);const {claudeHolder}=isolated.exports,id=randomUUID();assert.equal(claudeHolder(id),null);assert.throws(()=>claudeHolder(id,true),e=>e.nativeImportRefused);
+});
