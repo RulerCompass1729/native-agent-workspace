@@ -442,3 +442,20 @@ capacity path. Existing native recovery evidence is reused for unchanged schedul
 this checkpoint adds the affected pause-scope task. Fable's three low-severity
 wording findings (pause layer, synthetic identity/version and peer-only counterexample)
 are addressed here; no runtime change was requested.
+
+
+### T29 — native command actions
+
+Codex command reading uses native commandExecution.commandActions for exploration. Adjacent native read/list/search actions share the existing expandable process row; Read names combine as in Codex 0.164, Search/List retain native fields and exit codes. Shell-looking unknown actions and user-shell commands remain ordinary Running/Ran records. Single-action compact previews use native action command text; compound previews retain the full command and unwrap only an unambiguous literal launch wrapper; original launch command and complete received output remain expandable. Missing/future action metadata keeps the original command and is not inferred from shell text.
+
+Grouping preserves native/session/turn/input/shared-source boundaries and does not bridge assistant text, interruptions, observation gaps or filtered-out intervening records. The existing reader's message IDs, folds and search targeting remain available for nested source records. Native command actions, command source and exit code survive live events, history hydration, authorized sharing and local persistence. Shared displays do not authorize additional delivery.
+
+Source validation: affected unit checks plus actual source Electron UI using the existing synthetic Codex transport; read/search/list, original full commands/results, ordinary command failure, native-confirmed interruption, authorized shared grouping, reload/save, identity/draft retention and nested-result search. Zero provider processes and zero model calls in that GUI test. Native TUI remains on screen. Live provider/physical-input and signed installed acceptance are separate. Source independent review result and final counts are supplied in the private READY receipt.
+
+Upstream reference: official openai/codex rust-v0.164.0, commit 6aaac694803004a63c6f393d153c96d22521a6b9, app-server-protocol CommandAction/ThreadItem and tui exec_cell model/render (Apache-2.0). No upstream code or dependency is imported; native labels and field semantics guide the existing reader. Full exact URLs, downloaded source and license are retained privately.
+
+Routine native failed statuses with nonzero exits stay in compact exploration as native exit annotations, while original statuses and output remain saved. Declined/interrupted/unconfirmed cases retain their disclosure/error treatment. Shared context jumps and local search reveal enclosing process rows before targeting the original record. Explicit unknown replacement actions clear an older semantic classification.
+
+Validation after review fixes:58/58 affected checks and actual source GUI gui8 PASS; independent Fable delta review PASS after source CHANGES. The earlier source checkpoint requested changes because the first fixture used completed for a nonzero exit. No installed acceptance or live-provider proof is claimed here.
+
+Main integration: source b576bee, signed candidate108. The exact committed bundle passes the complete command-actions GUI task and 2,480-row reading/input/selection/streaming/reopen regression, zero model/provider calls. All57 runtime files and the post-UI strict signature match; both owned profiles are removed and only one daily app is searchable. Main1154 checks pass. Older retained backends that omitted action metadata keep the original content; fields are not reconstructed. Daily rollout awaits the separate newly observed Claude312 qualification. Main combined source and signed-installed Fable review PASS; reviewed HEAD, index and working diff are unchanged. This is the T29 scope, not completion of the dogfood milestone.
