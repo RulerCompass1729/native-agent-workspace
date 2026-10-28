@@ -82,8 +82,13 @@ async function run() {
   const hint = page.locator('#terminal-selection-hint'); await hint.waitFor(); assert.equal(await hint.isVisible(), true); assert.match(await hint.innerText(), /Option/);
   const win = await app.browserWindow(page); await win.evaluate(w => w.setSize(1250, 850));
   await until(() => page.evaluate(() => innerWidth === 1250 && document.querySelector('#session-layout').getBoundingClientRect().width > 900), 'Large window settled before narrowing the pane');
-  const divider = await page.locator('#session-layout > .split-divider').boundingBox(), split = await page.locator('#session-layout').boundingBox();
-  await page.mouse.move(divider.x + divider.width / 2, divider.y + 10); await page.mouse.down(); await page.mouse.move(split.x + split.width * 0.8, divider.y + 10, { steps: 8 }); await page.mouse.up(); await delay(200);
+  const dividerElement = page.locator('#session-layout > .split-divider');
+  // Window resize can still move the divider after the viewport width settles.
+  // Playwright's hover waits for stable geometry; verify the actual hit target.
+  await dividerElement.hover({ position: { x: 5, y: 10 } });
+  const divider = await dividerElement.boundingBox(), split = await page.locator('#session-layout').boundingBox();
+  assert.equal(await page.evaluate(({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('#session-layout > .split-divider')), { x: divider.x + 5, y: divider.y + 10 }), true, 'Pointer hits the actual divider after window resize');
+  await page.mouse.down(); await page.mouse.move(split.x + split.width * 0.8, divider.y + 10, { steps: 8 }); await page.mouse.up(); await delay(200);
   assert.equal(await page.locator('#session-layout > .split-divider').getAttribute('aria-valuenow'), '80', 'Narrow-pane drag actually applied');
   const narrow = await page.locator('.native-pane-toolbar').evaluate(bar => {
     const bounds = bar.getBoundingClientRect();
