@@ -97,7 +97,7 @@ async function run() {
   await selectText(body); await page.evaluate(() => document.activeElement?.blur()); assert.equal(await page.evaluate(() => document.activeElement === document.body), true);
   await page.keyboard.press('Shift+F10'); await item('复制').click(); await until(async () => await copied() === originalText, 'Keyboard menu uses the selected reading text when body has focus');
   const link = body.getByRole('link', { name: 'Local guide', exact: true }); await link.click({ button: 'right' }); await item('复制链接').click(); await until(async () => await copied() === 'https://example.invalid/guide', 'Link copied without opening a browser');
-  await page.locator('#room-nav').click(); const shared = page.locator('#room-messages [data-message-id="shared-context"] .message-body'); await shared.waitFor(); const sharedText = await selectText(shared);
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click(); const shared = page.locator('#room-messages [data-message-id="shared-context"] .message-body'); await shared.waitFor(); const sharedText = await selectText(shared);
   await open(shared); await item('复制').click(); await until(async () => await copied() === sharedText, 'Shared reader selection');
   await page.locator('#room-nav').click({ button: 'right' }); await item('重命名…').waitFor(); assert.equal(await item('剪切').count(), 0); await page.keyboard.press('Escape');
   await page.locator(`[data-session-id="${id}"]`).click(); await page.locator(`[data-session-row="${id}"]`).click({ button: 'right' }); await item('复制完整 NAW ID').waitFor(); await page.keyboard.press('Escape');
