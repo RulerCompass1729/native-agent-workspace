@@ -509,3 +509,16 @@ Two original unchanged-baseline failures are retained; their old temporary scree
 One actual source GUI retry workflow passed every original assertion on the existing0.164runtime/adapter:2local task attempts and1local title response,0paid inference,0teammates, no goal operations. The source script hash matches before and after the run. Owned processes and the temporary application profile were cleaned; the reusable synthetic fixture is retained offline as evidence. Independent Fable source/evidence review passed.
 
 This is a test setup correction. It changes no product code or runtime and does not require a separate package, native-provider rerun or daily app restart. It verifies a live paired GUI/TUI; it does not add replay of a retry event to a terminal that joins later.
+
+
+### Same-screen reconnect regression coverage
+
+The remaining reconnect UI test now uses the current same-screen terminal and empty-frame state instead of the removed read-only progress panel. It explicitly hides the pane before history arrives to establish a real never-seen-frame case. Resume uses the existing explicit action without a second confirmation; destructive disconnect cancellation remains covered. Loading and resume controls are scoped to the current session and composer, while the global no-resume check during unconfirmed exit remains.
+
+The unchanged test reproduced the old-panel timeout. The repaired complete seven-check source GUI workflow passed with the actual Codex/workspace classes and existing deterministic transport: identity/history/draft retention; explicit reconnect failure and retry; no duplicate thread, task or settings override; exited-display read-only and confirmed retry; snapshot-only focus and old-epoch rejection; retained terminal on graphical transport loss; stale permission refusal; and backend/display exit ordering.0model tasks,0real provider processes,0dispatches. All owned application/service profiles were cleaned.
+
+Independent Fable source/evidence review passed. Only test-reconnect.cjs changes; the fixture and product implementation stay unchanged. Raw baseline and intermediate failures, final output with source hash, screenshots and cleanup evidence are retained. Point-in-time failure state capture aids diagnosis.
+
+This verifies controlled lifecycle events, not real provider process loss or a new signed product. Other T34 native-script ports and the T36 compact-layout decision remain separate. No standalone package or daily restart is needed.
+
+Main integration reuses this independently reviewed source GUI result: the merged script is byte-identical to the recorded passing script hash, with no product or fixture change. No additional model run or package was made.
