@@ -537,3 +537,16 @@ Limits: synthetic provider transport; physical input and screen readers are not 
 Main integration0bb78aa verifies all nine reviewed files match the independent source checkpoint;15 affected checks pass in the main checkout. The signed111 application passes the exact committed five-part task in two hidden restored windows, with0models,0provider processes,0sends/inputs/dispatches. Actual dragging, keyboard ordering/collapse, collision IDs, full-ID clipboard interception, membership boundaries, failed-write/retry, reload and whole-app reopen preserve native identity/owner and the unsent draft.57 shipped files match and strict signature passes after testing. Both temporary-root counts remain unchanged and the owned profile/GUI processes are removed.
 
 The authorized ordinary visible daily110-to-111 update preserves9 original session records, live process start identities, owners and12 flushed view drafts. One searchable app remains, with no background/debug arguments. Retained native services keep their existing code. Source Fable review and the main combined source/signed-installed/actual-deployment Fable checkpoint PASS; the main review leaves HEAD/index/status/diff unchanged. Narrow rail and historical departed captions retain the source review limits; no new provider qualification, physical input, full workday or native-loss recovery claim is made.
+
+
+### Compact local search
+
+Local search now opens a compact picker with input and results first. Scope and archived-record controls remain available in a native disclosure. Enter opens the first result; arrow keys navigate, and Escape or an outside click closes the picker and returns focus to its opener. Dragging text outside does not dismiss it, and dismissal does not click through to underlying actions. Opened results retain destination focus.
+
+The existing local search engine and reader remain unchanged. Original text, current/shared/archive scopes, read-only archived previews, exact copying, pagination, return-to-reading filters and position, private drafts and app-reopening identity remain covered. Queries are temporary, loaded records only; no native history scan or hidden model request is added. Result excerpts alone are visually shortened.
+
+Three related index checks pass. The actual source application passes all seven user-flow groups using synthetic transport, zero model/provider processes, sends, native input or interrupts. Default picker size is about560x248 for two sessions and one room. Clipboard writes are intercepted. Owned profile and captured host processes are removed. Independent Fable source and complete-evidence review passes, with no requested fix.
+
+Limits: synthetic transport, Playwright keyboard/composition event; physical IME, screen reader and signed installed acceptance are separate. The old660px width is a source comparison, not a new runtime baseline. Other-dialog redesign and collaboration proposals remain separate.
+
+Main integration verifies all five reviewed files match. Signed112 acceptance is pending.
