@@ -450,7 +450,7 @@ async function showTrust(options) {
 
 function openCreate(provider = 'claude') {
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
-  $('initial-view').value = preference; $('session-name').value = ''; $('skip-permissions').checked = false;
+  $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false;
   $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
 }
 let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
@@ -491,7 +491,10 @@ $('open-native-history').onclick = () => {
   // Claude has no history API: its own session picker opens in the new row's
   // terminal, and the chosen session is forked while the original stays as is.
   if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
-    const id = await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker', skipPermissions: $('skip-permissions').checked || undefined });
+    const nativeId = $('claude-history-id').value.trim();
+    if (nativeId && !state.capabilities?.includes('claudeHistory')) throw Error('当前后台尚不支持 Claude 接管；保留输入，请先连接新版后台。');
+    const id = nativeId ? await api.importHistory(nativeId, { provider: 'claude', cwd: folder, name: $('session-name').value, skipPermissions: $('skip-permissions').checked })
+      : await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker', skipPermissions: $('skip-permissions').checked || undefined });
     state = await api.initial(); $('create-dialog').close(); await select(id, 'terminal');
   });
   $('create-dialog').close(); historyRows = []; historySelected = null; historyCursor = null; historyLoading = false;
@@ -583,7 +586,10 @@ function renderSessions() {
 function createReadiness() {
   const historyProvider = document.querySelector('input[name="provider"]:checked').value;
   $('open-native-history').hidden = !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
-  $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : '从已有 Claude 会话分支…';
+  $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
+  if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
+  const takeover = historyProvider === 'claude' && $('claude-history-id').value.trim();
+  $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : takeover ? '接管此 Claude 会话' : '从已有 Claude 会话分支…';
   // Only Codex starts differently: either this app or its TUI creates the native thread.
   // A Claude session opens in the last-used tab; both views stay available.
   $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
@@ -1567,7 +1573,9 @@ $('rename-form').onsubmit = async event => {
   finally { renaming = false; $('confirm-rename').disabled = false; $('cancel-rename').disabled = false; }
 };
 $('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; $('chosen-folder').textContent = folder; } });
-$('create-form').onsubmit = event => { event.preventDefault(); attempt(async () => {
+$('create-form').onsubmit = event => { event.preventDefault();
+  if (document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim()) { $('open-native-history').click(); return; }
+  attempt(async () => {
   $('confirm-create').disabled = true;
   try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
   finally { $('confirm-create').disabled = false; }
@@ -1971,6 +1979,10 @@ document.addEventListener('keydown', searchKey);
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
+$('claude-history-id').oninput = createReadiness;
+$('claude-history-id').onkeydown = event => {
+  if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('open-native-history').click(); }
+};
 $('skip-permissions').onchange = createReadiness;
 attempt(async () => {
   state = await api.initial();

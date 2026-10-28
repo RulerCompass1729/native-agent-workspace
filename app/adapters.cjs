@@ -140,15 +140,30 @@ function claudeOverloaded(file, nativeId, messageId) {
   return null; // Native may flush the identified row just after its hooks.
 }
 // A running claude process whose arguments name this native session ID.
-function claudeHolder(nativeId) {
+function claudeHolder(nativeId, strict = false) {
   if (!/^[a-f0-9-]{36}$/i.test(nativeId || '')) return null;
   // Without ps the check cannot run; recovery then proceeds as it did before.
-  let lines; try { lines = execFileSync('/bin/ps', ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024 * 1024 }).split('\n'); } catch { return null; }
+  let lines; try { lines = execFileSync('/bin/ps', ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024 * 1024 }).split('\n'); } catch {
+    if (strict) { const error = Error('无法核对原生进程，没有接管。请稍后重试。'); error.nativeImportRefused = true; throw error; }
+    return null;
+  }
   for (const line of lines) {
     const [pid, ...args] = line.trim().split(/\s+/);
-    if (Number(pid) !== process.pid && args.some(arg => path.basename(arg) === 'claude') && args.includes(nativeId)) return Number(pid);
+    if (Number(pid) !== process.pid && args.some(arg => path.basename(arg) === 'claude') && args.some(arg => [nativeId.toLowerCase(), '--resume=' + nativeId.toLowerCase(), '--session-id=' + nativeId.toLowerCase(), '-r' + nativeId.toLowerCase()].includes(arg.toLowerCase()))) return Number(pid);
   }
   return null;
+}
+function claudeImportAvailable(record, host) {
+  let rows;
+  try {
+    rows = JSON.parse(execFileSync(host.binaries.claude, ['agents', '--json'], { env: nativeEnvironment(), encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
+    if (!Array.isArray(rows) || rows.length > 1000 || rows.some(row => !row || !['interactive', 'background'].includes(row.kind) || (row.sessionId !== undefined && (typeof row.sessionId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(row.sessionId))))) throw Error('Unknown native identity');
+  } catch {
+    const error = Error('无法核对 Claude 后台会话，没有接管。请先在原生界面确认并退出原连接。'); error.nativeImportRefused = true; throw error;
+  }
+  if (rows.some(row => row.sessionId?.toLowerCase() === record.nativeId.toLowerCase())) {
+    const error = Error('Claude 仍报告这个会话有活动连接或后台工作。请先在那里退出；这里不会自动 attach 或停止它。'); error.nativeActiveWriter = true; throw error;
+  }
 }
 class Claude extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
@@ -184,8 +199,9 @@ class Claude extends EventEmitter {
     if (attachOnly) return;
     // Native has no lock: a second --resume writes the same transcript. Refuse
     // while another claude process (e.g. an external terminal) names this ID.
-    const holder = record.recovering && claudeHolder(record.nativeId);
-    if (holder) throw new Error(`另一个 claude 进程（PID ${holder}）引用了这个原生会话，可能正在写入。请先在那里退出，避免两个程序同时写同一会话。`);
+    const holder = record.recovering && claudeHolder(record.nativeId, record.externalHistory === true);
+    if (holder) { const error = Error(`另一个 claude 进程（PID ${holder}）引用了这个原生会话，可能正在写入。请先在那里退出，避免两个程序同时写同一会话。`); error.nativeActiveWriter = true; throw error; }
+    if (record.recovering && record.externalHistory) claudeImportAvailable(record, host);
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};
@@ -1899,4 +1915,4 @@ class NativeHost {
   close() { this.closed = true; for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
-module.exports = { NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle };
+module.exports = { claudeHolder, claudeImportAvailable, NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle };
