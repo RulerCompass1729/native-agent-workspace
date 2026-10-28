@@ -216,7 +216,7 @@ async function boot() {
   register('restoreRoom', async c => { try { await roomState.restoreRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('create', async (c, ...args) => { assertNativeCreation(await c.client.call('initial')); return c.client.call('create', ...args); });
   register('nativeHistory', (c, options) => c.client.call('nativeHistory', options));
-  register('importHistory', (c, nativeId) => c.client.call('importHistory', nativeId));
+  register('importHistory', (c, nativeId, options) => c.client.call('importHistory', nativeId, options));
   register('rename', async (c, id, name) => {
     const snapshot = await c.client.call('initial');
     if (!snapshot.sessions.some(s => s.id === id)) throw new Error('找不到这个会话，名称未更改。');
