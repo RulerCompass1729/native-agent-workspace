@@ -60,13 +60,20 @@ silently turn off this guard's secret scan.
 
 At this preparation stage, database/export/log files, credentials, screenshots,
 archives, external symlinks, submodules, and non-UTF-8/binary content are blocked.
-The current finite limits are 2 MiB per scanned item and 128 MiB per scan;
+The current finite limits are 2 MiB per scanned item and 192 MiB per scan;
 exceeding either blocks rather than skips. On 2026-10-24, complete history reached
 67,690,301 bytes across 110 commits and 1,860 unique blobs, exceeding the old
-64 MiB total. The reviewed increase changes only that aggregate bound; every
+64 MiB total. On 2026-10-28, 301 reachable commits contained 2,691 unique
+blobs totaling 116,967,098 bytes; paths, historical patches and metadata added
+enough scan input to exceed the subsequent 128 MiB aggregate bound. The new
+192 MiB limit changes only that aggregate bound; every
 ref, tree, historical patch, message, identity and secret check remains required.
-Tests beyond the old bound cover clean input and late private/secret matches;
+Tests beyond 128 MiB cover clean input and late private/secret matches;
 the new total bound, per-item bound and tool error/timeout remain fail-closed.
+The measured full scan was 134,559,842 bytes (128.33 MiB), and gitleaks took
+40.2 seconds on that machine. Its independent 60-second deadline remains; a
+192 MiB capacity bound is not proof that a scan near that size finishes in time.
+Timeouts continue to block publication.
 A future asset or larger repository requires another reviewed handling decision,
 not an unbounded scan, skipped history or publication bypass.
 

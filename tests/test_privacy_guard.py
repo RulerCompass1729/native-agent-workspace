@@ -236,7 +236,7 @@ from scripts.privacy_guard import Scanner, Blocked, MAX_BLOB, MAX_SCAN
 scan = Scanner()
 part = b'safe fixture line\\n' * ((MAX_BLOB - 1) // 18)
 try:
-    while scan.size <= 64 * 1024 * 1024:
+    while scan.size <= 128 * 1024 * 1024:
         scan.add(part, 'synthetic history')
 """ + ending + """
 except Blocked as error:
