@@ -29,9 +29,25 @@ window.__ModuleLoader__.load({
         let mounted = 0, cleanup;
         const markdownRoots = new Map();
         function MessageMarkdown({ text, streaming, onLayout }) {
+          const pendingCopy = React.useRef(new WeakSet());
           React.useLayoutEffect(() => { onLayout?.(); });
-          return React.createElement(MarkdownDelegateProvider, { openExternalLink: href => window.workspace.openExternal(href) },
-            React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' } }));
+          const copy = event => {
+            const button = event.target instanceof Element ? event.target.closest('[data-code-block-banner] button') : null;
+            const block = button?.closest('.md-code-block'), banner = button?.closest('[data-code-block-banner]');
+            const code = block?.querySelector('[data-code-block-content] pre');
+            // The pinned Markdown component exposes no clipboard delegate.
+            // Adapt only its single Copy action, preserving the native renderer.
+            if (!code || !event.currentTarget.contains(block) || banner.querySelectorAll('button').length !== 1) return;
+            event.preventDefault(); event.stopPropagation();
+            if (pendingCopy.current.has(button)) return;
+            pendingCopy.current.add(button); button.setAttribute('aria-busy', 'true');
+            ui.copyCode(code.textContent).catch(() => {}).finally(() => {
+              pendingCopy.current.delete(button); button.removeAttribute('aria-busy');
+            });
+          };
+          return React.createElement('div', { className: 'naw-markdown', onClickCapture: copy },
+            React.createElement(MarkdownDelegateProvider, { openExternalLink: href => window.workspace.openExternal(href) },
+              React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' } })));
         }
         const ui = {
           // Reuse the pinned DSH menu's positioning, theme and arrow navigation.
