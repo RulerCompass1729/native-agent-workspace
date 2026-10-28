@@ -55,7 +55,8 @@ async function create(name, provider) {
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Synthetic session ready');
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;
+  await page.locator('#session-header-more').click();
+  await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); return id;
 }
 async function emit(id, itemId, status = 'failed', text = originalError) {
   await fixture('nativeBlock', id, { id: `tool:${itemId}`, kind: 'tool', title: 'Edit', toolKind: 'fileChange', turnId: 'failure-turn', input: originalInput, text, status });
