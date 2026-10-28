@@ -552,3 +552,18 @@ Limits: synthetic transport, Playwright keyboard/composition event; physical IME
 Main integrationbc65c0f verifies all five independently reviewed files match; the3 related index checks pass. The exact committed script passes all7 groups on signed112, with0models/providers/sends/inputs/interrupts. Two actual installed launches, original-text preview/copy, scope/archive/shared/return-to-reading behavior, draft/identity retention and the compact560×248 default are verified.57 runtime files match, post-test strict signature passes and the owned profile/GUI processes are removed; both temporary-root counts stay unchanged.
 
 The authorized ordinary visible111-to-112 daily update preserves9 session records, live process start identities/owners and12 flushed view drafts; one searchable app remains without background/debug arguments. Older native services retain their code. A shared test-slot race was recorded; the same exact installed flow passed all7 groups again while holding an atomic shared GUI slot. The original evidence is retained, and the normal daily GUI process stayed alive. Main combined source/signed-installed/actual-deployment Fable review and the same-session coordination/evidence delta both PASS, with HEAD/index/status/diff unchanged; physical IME, screen readers and unrelated dialogs remain outside this acceptance.
+
+
+### Native-program wheel input beside the conversation
+
+A native terminal shown beside the conversation could consume a wheel gesture while graphical-view input guards discarded its native mouse or alternate-screen scroll event. Native-program scrolling now uses the existing terminal focus/control preparation, preserving the first event across its acknowledgement. Ordinary normal-buffer history and click-only X10 scrolling remain local reading actions. Existing owner, display generation, pending-control and input guards remain; no scroll-rate or terminal-protocol rewrite is added.
+
+The actual source application reproduces the missing native-wheel event before the fix and passes six synthetic-transport groups after the final fix, with zero models, real provider processes, sends or interrupts. Both provider-shaped sessions cover normal/X10 history wheel and real scrollbar dragging, native SGR wheel, held control acknowledgement, alternate-buffer fallback, ownership refusal, identity and drafts. Fifty related checks pass. Startup-only failed runner evidence is retained separately. Independent Fable source/VT/static-entry review passes.
+
+Reusable installed-native modes in the existing two drivers require one fixed local reply per CLI, plus at most one native Codex title. They must visibly reveal earlier original CLI content and return to the latest content in the actual native viewport; receiving wheel bytes alone cannot pass. These native modes were syntax/static reviewed, not run by the source author. The integrator owns signed Claude/Codex acceptance.
+
+Known coupling: native-program wheel follows existing human-terminal-operation rules, moving focus and pausing collaboration/automatic continuation with drafts retained. Local history reading has no such input effect. No intervention-policy exemption is included.
+
+T59 remains open pending actual installed CLI content proof; physical trackpad and same-gesture iTerm comparison are untested. Synthetic render updates are not native CLI proof. No complete speed/fidelity claim is made.
+
+Main merge verifies exact reviewed source; signed113 and actual native content acceptance are pending.
