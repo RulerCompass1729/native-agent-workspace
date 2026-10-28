@@ -10,10 +10,14 @@ const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, 
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
+let roomSurface = 'overview', roomOverview;
+const focusedRoomMember = () => selected === 'room' && roomSurface === 'overview' && Boolean(roomSession);
+const sharedSurface = () => selected === 'room' && !focusedRoomMember();
+const focusedReadingKey = id => focusedRoomMember() ? `collaboration-focus:${id}` : id;
 let terminalLayout = 'split';
 // Chat share of a side-by-side split; dragging the divider near the centre snaps to half.
 let terminalSplit = 0.5, splitDragging = false;
-const chatInput = () => selected === 'room' ? $('shared-input') : $('message-input');
+const chatInput = () => sharedSurface() ? $('shared-input') : $('message-input');
 const nativeStatusFresh = value => value?.stale !== true && (!Number.isFinite(value?.observedAt) || Date.now() - value.observedAt <= 5000);
 let roomSubmitting = null;
 const roomPendingRecipients = new Map();
@@ -113,7 +117,7 @@ function updateLegacyProgress(event) {
     while (cache.pending.length > 200 || cache.pendingBytes > 1024 * 1024) { cache.pendingBytes -= JSON.stringify(cache.pending.shift()).length; cache.truncated = true; }
   }
   applyLegacyProgress(cache, event);
-  if (activeSessionId() === s.id && mode === 'chat') render();
+  if (activeSessionId() === s.id && mode === 'chat' || selected === 'room' && members().some(member => member.id === s.id)) render();
 }
 
 const inputRecoveries = new Map();
@@ -126,6 +130,47 @@ const viewClaims = new Map();
 const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = () => state?.room.archived ? [] : state?.sessions.filter(s => s.roomId === 'shared' && !s.archived) || [];
+function focusRoomMember(id, previous, originKey) {
+  if (selected !== 'room' || id && !members().some(s => s.id === id)) return;
+  const leaving = terminals.get(activeSessionId()); cancelViewInput(leaving);
+  if (leaving?.composing) leaving.term.blur();
+  selectionRevision++;
+  if (id && id !== previous && readingPositions[originKey]) readingPositions[`collaboration-focus:${id}`] = structuredClone(readingPositions[originKey]);
+  roomSurface = 'overview'; roomSession = id; mode = 'chat';
+  $('message-input').value = state.sessions.find(s => s.id === id)?.liveDraft || '';
+  lastMessages = ''; render(); attempt(persistView);
+}
+function restoreOverviewReading() {
+  for (const view of messageViews.values()) {
+    if (!view.key.startsWith('collaboration:') || !view.el.clientHeight) continue;
+    view.intent = { position: readingPositions[view.key] || { top: 0, follow: true, anchor: '', offset: 0 } }; scheduleReading(view);
+  }
+}
+function renderRoomOverview() {
+  if (!roomOverview) roomOverview = window.nativeWorkspaceCollaboration.create({
+    host: $('collaboration-overview'), roomId: state.room.id,
+    label: s => participantLabel(s, state.sessions), messages: s => sessionMessages(s),
+    renderMessages: (el, s, rows, key) => messageList(el, rows, false, key, { session: s, passive: true }),
+    disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
+    beforeLayout: captureReadingViews, onLayout: restoreOverviewReading, onFocus: focusRoomMember,
+    decorateHeader: (handle, record) => draggableSession(handle, record.id),
+    onSource: (el, key, source) => {
+      if (!pointToMessage(el, key, source.messageId)) toast('这段原文已不在当前保留的记录中；没有改为打开其他消息。');
+      attempt(persistView);
+    },
+  });
+  const focused = focusedRoomMember(), records = roomSurface === 'records';
+  $('collaboration-overview').hidden = false;
+  for (const person of members()) readLegacyProgress(person);
+  roomOverview.update(members(), !disconnected, !records, focused ? roomSession : '');
+  $('room-overview').setAttribute('aria-pressed', String(!records)); $('room-record').setAttribute('aria-pressed', String(records));
+  $('room-member-tabs').hidden = true;
+  $('room-record-view').querySelector('.timeline-tools').hidden = !records;
+  $('room-messages').hidden = !records;
+  if (!records) $('thread-heading').hidden = true;
+  $('room-composer').hidden = focused;
+  $('room-layout').classList.toggle('collaboration-focus', focused);
+}
 const nativeUsable = s => s && !s.archived && !s.backendUnavailable && (['starting', 'idle', 'working', 'approval'].includes(s.state) || ((s.state === 'error' || s.nativeContextPending) && s.terminalAvailable));
 const canResume = s => s?.nativeId && !s.nativeContextPending && !s.backendUnavailable &&
   ((s.provider === 'codex' && s.transportDisconnected && ['error', 'disconnected'].includes(s.state) && (s.serviceCapabilities || state.capabilities || []).includes('transportReconnect')) ||
@@ -257,6 +302,7 @@ function soloAction(s) {
     ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
     : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
   if (s.chatAvailable === false || s.state === 'starting') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
+  if (focusedRoomMember() && mode === 'chat' && s.view !== 'chat') return { kind: 'chat', label: '启用对话输入', hint: '正在查看原会话；明确启用后可在这里输入，草稿保留。' };
   if (s.legacyReaderPending && s.state === 'idle') return { kind: 'send', label: '发送 ↑', hint: '输入已接通；实时过程尚待更新。在原生终端运行 /reload-plugins 后生效，无需重启。' };
   // Native runs a plugin's queued prompt only once idle; text typed in the TUI reaches the running turn.
   if (s.pendingQueue) return { kind: 'send', label: '等待原生接收', hint: '要等 Claude 空闲后才发送；想中途插话，请在原生终端输入。可先编辑后续草稿。' };
@@ -297,7 +343,7 @@ async function select(id, requestedMode, member = roomSession) {
   if (revision !== selectionRevision) return;
   if (id === 'room') roomSession = member;
   selected = id; const s = current();
-  if (selected === 'room') mode = s ? 'terminal' : 'chat'; else if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
+  if (selected === 'room') mode = roomSurface === 'overview' ? 'chat' : s ? 'terminal' : 'chat'; else if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
   if (mode === 'terminal' && terminalLayout === 'hidden') terminalLayout = 'split';
   $('message-input').value = s?.liveDraft || '';
   clearFailedTerminal(s?.id);
@@ -312,7 +358,7 @@ async function select(id, requestedMode, member = roomSession) {
   }
   if (mode === 'chat' && !chatInput().readOnly && inputFocusAllowed()) chatInput().focus();
   if (s && mode === 'terminal' && (switchedAway(s) || !['ended', 'background', 'stopping', 'disconnected', 'recoverable'].includes(s.state))) attempt(async () => { await ensureTerminal(s.id, true); focusTerminal(s.id); });
-  if (selected === 'room' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {
+  if (selected === 'room' && mode === 'terminal' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {
     const revision = selectionRevision;
     const stillSelected = () => revision === selectionRevision && selected === 'room' && roomSession === s.id && mode === 'terminal';
     if (!await claimView(s.id, 'terminal', revision) || !stillSelected()) return;
@@ -321,7 +367,7 @@ async function select(id, requestedMode, member = roomSession) {
     if (stillSelected()) focusTerminal(s.id);
   });
 }
-function selectRoom(id = '') { return select('room', undefined, id); }
+function selectRoom(id = '') { if (id) roomSurface = 'overview'; return select('room', undefined, id); }
 async function operateNative(id) {
   if (activeSessionId() !== id) {
     const selection = selected === 'room' ? selectRoom(id) : select(id, 'terminal');
@@ -798,7 +844,7 @@ function openNotes() {
   $('room-notes-text').value = state.room.notes || ''; $('notes-error').hidden = true; $('notes-dialog').showModal();
 }
 function openContext() {
-  const s = selected === 'room' ? null : current();
+  const s = sharedSurface() ? null : current();
   contextTarget = s ? { id: s.id, mode } : { room: true };
   const roster = members().map(m => `${m.name} (${m.provider}, ${sessionShortId(m.id)})`).join('、') || '暂无成员';
   $('context-text').value = `协作背景：${state.room.name}\n当前参与会话：${roster}\n${s ? (s.roomId ? `本会话仍参与该工作区。` : '本会话已独立使用，不再接收该工作区的新任务。') : '本条消息仅交给界面选定的接收者；其他成员不会自动收到。'}\n以真人当前指示为准，成员变化不代表新的执行指令。${state.room.notes ? `\n\n共享笔记：\n${state.room.notes}` : ''}`;
@@ -927,8 +973,8 @@ function renderHeader(s, inRoom) {
     });
     const usage = button('用量', () => {
       const target = current();
-      if (selected !== 'room' && !target) return;
-      return showTrust({ usageScope: selected === 'room' ? { kind: 'room', roomId: state.room.id, name: state.room.name }
+      if (!sharedSurface() && !target) return;
+      return showTrust({ usageScope: sharedSurface() ? { kind: 'room', roomId: state.room.id, name: state.room.name }
         : { kind: 'session', id: target.id, nativeId: target.nativeId, name: target.name } });
     });
     usage.id = 'usage-button'; usage.setAttribute('aria-label', '查看原生用量');
@@ -1103,7 +1149,7 @@ function renderMembers() {
       const element = node('div', undefined, 'member-card'), heading = node('div', undefined, 'member-name');
       const name = node('strong'), status = node('p'), actions = node('div', undefined, 'actions');
       element.dataset.memberId = record.id; heading.append(icon(record.provider), name);
-      actions.append(button('查看终端', () => { $('members-dialog').close(); selectRoom(record.id); }), button('脱出', async () => { await detach(record.id); $('members-dialog').close(); }));
+      actions.append(button('查看会话', () => { $('members-dialog').close(); selectRoom(record.id); }), button('脱出', async () => { await detach(record.id); $('members-dialog').close(); }));
       element.append(heading, status, actions); row = { element, name, status }; memberRows.set(record.id, row);
     }
     row.name.textContent = participantLabel(record, state.sessions); row.status.textContent = sessionStatus(record);
@@ -1141,6 +1187,7 @@ function renderNativeActivity(s) {
 const nativeActivityClock = setInterval(() => {
   if (!state) return;
   renderNativeActivity(current());
+  if (selected === 'room') roomOverview?.refresh();
   if (state.sessions.some(s => s.sharedActivity && !nativeStatusFresh(s.sharedActivity) || s.nativeApproval && !nativeStatusFresh(s.nativeApproval))) render();
 }, 1000);
 function render() {
@@ -1154,23 +1201,23 @@ function render() {
       selected = state.sessions.some(s => s.id === roomSession) ? roomSession : 'room';
       roomSession = ''; attempt(persistView);
     }
-    const s = current(); const inRoom = selected === 'room';
+    const s = current(); const inRoom = selected === 'room', memberFocus = focusedRoomMember();
     const slot = inRoom ? $('room-session') : $('solo-session');
     if ($('session-view').parentElement !== slot) slot.append($('session-view'));
     $('solo-session').hidden = inRoom || !s;
     $('room-session').hidden = !s;
     $('room-record-view').hidden = false;
     $('room-scope').hidden = !inRoom || !s;
-    const terminalVisible = Boolean(s && terminalLayout !== 'hidden');
+    const terminalVisible = Boolean(s && terminalLayout !== 'hidden' && (!memberFocus || mode === 'terminal'));
     $('native-pane').hidden = !terminalVisible;
     $('room-layout').classList.toggle('has-terminal', inRoom && terminalVisible);
     $('room-layout').classList.toggle('terminal-maximized', inRoom && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('has-terminal', !inRoom && terminalVisible);
     $('session-layout').classList.toggle('terminal-maximized', !inRoom && terminalVisible && terminalLayout === 'maximized');
-    $('session-layout').classList.toggle('native-only', inRoom);
-    $('conversation-pane').hidden = inRoom;
-    $('chat-tab').parentElement.hidden = inRoom;
-    $('session-files').hidden = inRoom;
+    $('session-layout').classList.toggle('native-only', inRoom && !memberFocus);
+    $('conversation-pane').hidden = inRoom && !memberFocus;
+    $('chat-tab').parentElement.hidden = inRoom && !memberFocus;
+    $('session-files').hidden = inRoom && !memberFocus;
     document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
@@ -1212,7 +1259,8 @@ function render() {
       readLegacyProgress(s);
       const visibleMessages = sessionMessages(s);
       const signature = JSON.stringify(visibleMessages);
-      if (signature !== lastMessages || messageViews.get($('messages'))?.key !== s.id) { messageList($('messages'), visibleMessages, false, s.id); lastMessages = signature; }
+      const readingKey = focusedReadingKey(s.id);
+      if (signature !== lastMessages || messageViews.get($('messages'))?.key !== readingKey) { messageList($('messages'), visibleMessages, false, readingKey); lastMessages = signature; }
       renderAdvanced(s);
       for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)); }
       $('terminal-empty').hidden = terminals.has(s.id);
@@ -1238,7 +1286,7 @@ function render() {
         }));
         tabs.dataset.signature = tabSignature;
       }
-      $('room-record').setAttribute('aria-pressed', String(!roomSession));
+      $('room-record').setAttribute('aria-pressed', String(roomSurface === 'records'));
       for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.roomSession === roomSession));
       for (const tab of tabs.children) {
         const member = people.find(m => m.id === tab.dataset.roomSession);
@@ -1302,10 +1350,11 @@ function render() {
       $('pause-button').textContent = run?.pauseUnconfirmed ? '重新核对暂停' : pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
       $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || Boolean(run?.pausePending) || (!pendingRun && run?.status !== 'running' && !run?.pauseUnconfirmed);
       if (!$('mention-list').hidden && mentionRoster !== mentionRosterKey()) showMentions();
+      renderRoomOverview();
     }
     for (const [id, entry] of terminals) entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id));
-    const approvalTarget = selected === 'room' ? (s?.nativeApproval || s?.approval || s?.state === 'approval' ? s : members().find(person => person.id === roomRecipient())) : s;
-    const approvalParent = selected === 'room' ? $('room-record-view') : $('conversation-pane');
+    const approvalTarget = sharedSurface() ? (s?.nativeApproval || s?.approval || s?.state === 'approval' ? s : members().find(person => person.id === roomRecipient())) : s;
+    const approvalParent = sharedSurface() ? $('room-record-view') : $('conversation-pane');
     if ($('approval').parentElement !== approvalParent) approvalParent.prepend($('approval'));
     renderApproval(approvalTarget, approvalTarget?.owner === owner);
     updateSelectedSharing();
@@ -1652,7 +1701,8 @@ $('room-more').onclick = () => openRoomMenu();
 $('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
 $('room-nav').oncontextmenu = event => { event.preventDefault(); openRoomMenu({ x: event.clientX, y: event.clientY }); };
 $('room-nav').onkeydown = event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openRoomMenu(); } };
-$('room-record').onclick = () => attempt(() => selectRoom());
+$('room-overview').onclick = () => attempt(() => { roomSurface = 'overview'; return selectRoom(); });
+$('room-record').onclick = () => attempt(() => { roomSurface = 'records'; return selectRoom(); });
 $('manage-members').onclick = () => $('members-dialog').showModal();
 $('close-members').onclick = () => { $('members-dialog').close(); focusTerminal(); };
 dropTarget($('room-nav'), true); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
@@ -1696,7 +1746,7 @@ $('close-terminal-display').onclick = () => { $('terminal-display-dialog').close
 let filePreview = null, fileTarget = null, fileChoosing = false;
 function fileTargetMatches() {
   return fileTarget && fileTarget.revision === selectionRevision && fileTarget.mode === mode &&
-    (fileTarget.room ? selected === 'room' && fileTarget.id === roomRecipient() : selected !== 'room' && fileTarget.id === activeSessionId());
+    (fileTarget.room ? sharedSurface() && fileTarget.id === roomRecipient() : !sharedSurface() && fileTarget.id === activeSessionId());
 }
 function fileDraftInput() { return fileTarget?.room ? $('shared-input') : $('message-input'); }
 async function openLocalFile(room = false) {
@@ -1776,6 +1826,7 @@ $('send-button').onclick = () => attempt(async () => {
   if ($('send-button').disabled) return;
   const s = current(), action = soloAction(s);
   if (action.kind === 'terminal') await switchMode('terminal');
+  else if (action.kind === 'chat') await switchMode('chat');
   else if (action.kind === 'connect') {
     const revision = selectionRevision;
     await api.prepareInput(s.id);
@@ -1871,7 +1922,7 @@ $('forward-button').onclick = () => {
   if ($('forward-button').disabled || $('forward-button').type !== 'button') return;
   const recipient = members().find(s => s.id === $('recipient').value);
   if (!recipient) return;
-  if (nativeUsable(recipient)) selectRoom(recipient.id); else select(recipient.id, 'chat');
+  if (nativeUsable(recipient)) attempt(() => operateNative(recipient.id)); else select(recipient.id, 'chat');
 };
 function roomSteerAvailable(s) {
   return Boolean(!interruptPending(s) && s?.state === 'working' && s.steerAvailable && s.activeTurnId && !s.pendingSteer && !s.approval && (s.legacySharedSteer || s.serviceCapabilities?.includes('nativeSharedSteer')));
@@ -2089,4 +2140,4 @@ attempt(async () => {
   }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { clearInterval(nativeActivityClock); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+return () => { clearInterval(nativeActivityClock); roomOverview?.dispose(); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

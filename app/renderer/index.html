@@ -7,6 +7,7 @@
   <title>Native Agent Workspace</title>
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="collaboration-overview.css">
 </head>
 <body>
   <aside class="sidebar">
@@ -66,9 +67,10 @@
     </div>
     <section id="room-view" hidden>
       <div class="room-status-bar"><div id="run-status" class="run-status" role="status"></div><button id="pause-button" type="button" title="暂停后续交接；当前原生任务仍可能继续">暂停交接</button></div>
-      <nav id="room-tabs" aria-label="共同工作视图"><button id="room-record" aria-pressed="true">共享记录</button><div id="room-member-tabs"></div><button id="manage-members">参与者…</button></nav>
+      <nav id="room-tabs" aria-label="共同工作视图"><button id="room-overview" aria-pressed="true">成员概览</button><button id="room-record" aria-pressed="false">共享记录</button><div id="room-member-tabs" hidden></div><button id="manage-members">参与者…</button></nav>
       <div id="room-layout" class="split-workspace">
       <div id="room-record-view" class="room-main">
+        <section id="collaboration-overview" aria-label="协作成员的会话与状态"></section>
         <div class="timeline-tools"><input id="room-search" type="search" aria-label="搜索共享记录" placeholder="搜索共享记录"><select id="room-filter" aria-label="按成员筛选"><option value="">全部成员</option></select><span id="timeline-count" role="status"></span><button id="copy-timeline" class="small">复制筛选结果</button><button id="room-files" type="button" class="small">文件…</button><button id="room-notes" class="small">共享笔记</button></div>
         <div id="thread-heading" class="thread-heading" hidden><strong id="thread-title"></strong><button id="thread-back" type="button" class="small">全部讨论</button></div>
         <div id="room-messages" class="messages" aria-label="共同工作记录"></div>
@@ -112,6 +114,7 @@
   <script src="reading-list.js"></script>
   <script src="local-search.js"></script>
   <script src="search-view.js"></script>
+  <script src="collaboration-overview.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
