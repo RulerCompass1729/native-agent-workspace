@@ -22,12 +22,14 @@ const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIV
 // Active-goal recovery: the owned app-server dies while the goal's automatic
 // continuation turn is in flight (T-4); the completed-goal case is NAW_NATIVE_RECOVERY_TRIAL.
 const activeGoalRecovery=process.env.NAW_NATIVE_ACTIVE_GOAL_RECOVERY==='1';
+const scrollTrial=process.env.NAW_NATIVE_SCROLL_TRIAL==='1';
 const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1'||activeGoalRecovery||capacityGoal;
 const goalsDisabled=process.env.NAW_NATIVE_GOALS_DISABLED==='1';assert.ok(!goalsDisabled||!goalTrial);
 // An unnamed row takes the thread name the native TUI generates (T-12).
 const autoName=process.env.NAW_NATIVE_AUTO_NAME==='1';
 // A row created with skip-all-confirmations gets never + full access (T-13); no model call.
 const skipPermissions=process.env.NAW_NATIVE_SKIP_PERMISSIONS==='1';
+assert.ok(!scrollTrial||(!goalTrial&&!capacityTrial&&!failureTrial&&!skipPermissions&&!autoName&&!process.env.NAW_NATIVE_RETRY_TRIAL&&!process.env.NAW_NATIVE_WEB_SEARCH_TRIAL),'Scroll is one separate bounded native case');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function sameLiveServer(before, after) {
  assert.deepEqual(after.serverIdentity,before.serverIdentity,'Window reopening preserves the native server');
@@ -41,7 +43,7 @@ function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify(
 const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
  if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
  const input=JSON.parse(body),title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
- const n=title?0:++calls;if(title)titles++;if(calls>(goalTrial?(capacityGoal?3:activeGoalRecovery?5:4):failureTrial||capacityTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
+ const n=title?0:++calls;if(title)titles++;if(calls>(scrollTrial?1:goalTrial?(capacityGoal?3:activeGoalRecovery?5:4):failureTrial||capacityTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
  assert.equal(input.model,'gpt-6-luna');
  fs.writeFileSync(path.join(base,`request-${title?'title-'+titles:n}.json`),JSON.stringify(input,null,2));
  if(failureTrial&&n===1){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:{type:'invalid_request_error',message:failureBody}}));return;}
@@ -76,7 +78,7 @@ const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b)
   const item={id:'native_question',type:'function_call',call_id:'native_question_call',name:'request_user_input',arguments:JSON.stringify(args),status:'completed'};
   event(res,'response.output_item.added',{output_index:0,item:{...item,arguments:'',status:'in_progress'}});event(res,'response.function_call_arguments.delta',{output_index:0,item_id:item.id,delta:item.arguments});event(res,'response.function_call_arguments.done',{output_index:0,item_id:item.id,arguments:item.arguments});event(res,'response.output_item.done',{output_index:0,item});event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();return;
  }
- const item={id:'answer_'+seq,type:'message',role:'assistant',status:'completed',phase:'final_answer',content:[{type:'output_text',text:title?JSON.stringify({title:'Native context check'}):`CONTEXT_TASK_${n}`,annotations:[]}]};
+ const item={id:'answer_'+seq,type:'message',role:'assistant',status:'completed',phase:'final_answer',content:[{type:'output_text',text:title?JSON.stringify({title:'Native context check'}):scrollTrial?require('./native-scroll-check.cjs').reply('codex'):`CONTEXT_TASK_${n}`,annotations:[]}]};
  event(res,'response.output_item.added',{output_index:0,item:{...item,status:'in_progress',content:[]}});
  event(res,'response.output_text.delta',{output_index:0,item_id:item.id,content_index:0,delta:item.content[0].text});
  event(res,'response.output_item.done',{output_index:0,item});event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();
@@ -102,10 +104,16 @@ async function nativeCommand(command){
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
  // Search/retry parity needs a trusted, live TUI before the GUI task.
  // Native 0.164 resume deliberately skips replayed willRetry notifications.
- const initialTerminal=Boolean(capacityTrial)||process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'||(nativeVersion==='0.164.0'&&process.env.NAW_NATIVE_RETRY_TRIAL==='1');
+ const initialTerminal=scrollTrial||Boolean(capacityTrial)||process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'||(nativeVersion==='0.164.0'&&process.env.NAW_NATIVE_RETRY_TRIAL==='1');
  await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#session-name').fill(autoName?'':'Native context');if(skipPermissions)await page.locator('#skip-permissions').check();await createIn(page, initialTerminal?'terminal':'chat');
  if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);if(capacityTrial)await until(async()=>{const t=await terminalText();return !t.includes('Trust this folder?')&&t.includes('? for shortcuts');},'Owned native editor ready before the capacity task');await page.locator('#chat-tab').click();}
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
+ if(scrollTrial){
+  await page.locator('#message-input').fill('Show the numbered local fixture without changing files.');await page.locator('#send-button').click();
+  await until(async()=>calls===1&&(await snapshot()).sessions[0].state==='idle','One local native reply completes');
+  checks.push(await require('./native-scroll-check.cjs').check({page,snapshot,base,provider:'codex',localCalls:()=>calls}));assert.equal(calls,1);assert.ok(titles<=1);assert.deepEqual(errors,[]);
+  console.log(JSON.stringify({checks,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,physicalTrackpad:'not tested',iTermComparison:'not tested',evidence:base}));return;
+ }
  if(process.env.NAW_NATIVE_METADATA_ONLY==='1'){
   assert.equal(before.nativeVersion,nativeVersion);assert.equal(before.nativeVersionStatus,'verified');
   await until(async()=>(await page.locator('#session-status').getAttribute('title')).includes('Codex '+nativeVersion+' · 核心接口已验证'),'Actual running handshake is rendered');
