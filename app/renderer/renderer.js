@@ -131,7 +131,7 @@ const canResume = s => s?.nativeId && !s.nativeContextPending && !s.backendUnava
   ((s.provider === 'codex' && s.transportDisconnected && ['error', 'disconnected'].includes(s.state) && (s.serviceCapabilities || state.capabilities || []).includes('transportReconnect')) ||
   (!s.terminalAvailable && (['ended', 'recoverable', 'error'].includes(s.state) || (s.provider === 'codex' && s.state === 'disconnected' && (s.serviceCapabilities || state.capabilities || []).includes('resubscribe'))))) &&
   ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
-const inputFocusAllowed = () => !sessionMenu && !roomMenu && !document.querySelector('dialog[open]');
+const inputFocusAllowed = () => !sessionMenu && !roomMenu && !contentMenu && !document.querySelector('dialog[open]');
 function updateState(next) {
   const before = current(), id = activeSessionId();
   state = { ...state, ...next };
@@ -528,6 +528,7 @@ function openRename(id) {
 }
 function focusSessionAction(id) { if (id === 'room') $('room-more').focus(); else sessionRows.get(id)?.more.focus(); }
 function openRoomMenu(point) {
+  contentMenu?.close();
   if (disconnected) return;
   if (!point && roomMenu) { roomMenu(); return; }
   roomMenu?.(); sessionMenu?.close(); $('room-more').focus(); $('room-more').setAttribute('aria-expanded', 'true');
@@ -539,6 +540,7 @@ function openRoomMenu(point) {
   });
 }
 function openSessionMenu(id, point) {
+  contentMenu?.close();
   if (disconnected || !state.sessions.some(s => s.id === id)) return;
   if (!point && sessionMenu?.id === id) { sessionMenu.close(); return; }
   sessionMenu?.close(); roomMenu?.();
@@ -1677,13 +1679,8 @@ for (const input of [$('message-input'), $('shared-input')]) input.addEventListe
   if (mode !== 'chat' && current() && inputFocusAllowed()) attempt(() => switchMode('chat'));
 });
 $('take-control').onclick = () => attempt(() => switchMode(mode, true));
-$('terminal-copy').onclick = () => attempt(async () => { const text = terminals.get(activeSessionId())?.term.getSelection(); if (!text) return toast('先选择文字；原生程序占用鼠标时，按住 ⌥ Option 拖选，再点复制。'); await api.copy(text); focusTerminal(); });
-$('terminal-paste').onclick = () => attempt(async () => {
-  const s = current(), id = activeSessionId();
-  const content = await api.pasteNativeContent(id, s.nativeId);
-  if (activeSessionId() !== id || current()?.nativeId !== s.nativeId || mode !== 'terminal') return;
-  if (content.images) await pasteImages([], content.images); else pasteTerminal(content.text);
-});
+$('terminal-copy').onclick = () => attempt(() => copyTerminalContext());
+$('terminal-paste').onclick = () => attempt(() => pasteTerminalContext());
 $('terminal-display').onclick = () => { $('terminal-font-size').value = terminalDisplay.fontSize; $('terminal-palette').value = terminalDisplay.palette; $('terminal-display-dialog').showModal(); };
 const saveTerminalDisplay = () => attempt(async () => {
   const fontSize = Number($('terminal-font-size').value);
@@ -2089,4 +2086,5 @@ attempt(async () => {
   }
   await select(state.viewState.selected || '', mode); await api.uiReady();
 });
-return () => { clearInterval(nativeActivityClock); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };
+const disposeContentMenus = bindContentMenus();
+return () => { clearInterval(nativeActivityClock); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); disposeContentMenus(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

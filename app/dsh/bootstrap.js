@@ -51,31 +51,48 @@ window.__ModuleLoader__.load({
         }
         const ui = {
           // Reuse the pinned DSH menu's positioning, theme and arrow navigation.
-          menu({ items, getAnchorRect, onSelect, onClose }) {
+          menu({ items, getAnchorRect, onSelect, onClose, contextElement }) {
             const opener = document.activeElement;
-            const host = document.createElement('div'); document.body.append(host);
+            const modal = contextElement?.closest('dialog[open]') || opener?.closest('dialog[open]');
+            const host = document.createElement('div'); (modal || document.body).append(host);
+            // A body portal is inert beneath a modal dialog. Keep the same DSH
+            // menu inline in that dialog; no second menu implementation.
+            if (modal) Object.assign(host.style, { position: 'fixed', left: '0px', top: '0px', width: '0px', height: '0px', zIndex: '1000' });
             const root = ReactDOM.createRoot(host); let closed = false;
+            const position = () => {
+              const menu = modal && host.querySelector('[role="menu"]');
+              if (!menu || closed) return;
+              const anchor = getAnchorRect(), bounds = modal.getBoundingClientRect(), rect = menu.getBoundingClientRect();
+              const left = Math.max(bounds.left + 8, Math.min(anchor.left, bounds.right - rect.width - 8));
+              const below = anchor.bottom + 4;
+              const top = Math.max(bounds.top + 8, Math.min(below + rect.height <= bounds.bottom - 8 ? below : anchor.top - rect.height - 4, bounds.bottom - rect.height - 8));
+              host.style.left = `${parseFloat(host.style.left) + left - rect.left}px`;
+              host.style.top = `${parseFloat(host.style.top) + top - rect.top}px`;
+            };
             const close = () => {
               if (closed) return; closed = true;
               document.removeEventListener('keydown', tab, true);
+              if (modal) { modal.removeEventListener('close', close); window.removeEventListener('resize', position); document.removeEventListener('scroll', position, true); }
               root.unmount(); host.remove(); onClose();
             };
             // DSH currently activates the focused item on Tab. In a session
             // menu Tab should leave without renaming or opening a window.
             const tab = event => { if (event.key === 'Tab') { event.stopPropagation(); close(); } };
             document.addEventListener('keydown', tab, true);
+            if (modal) { modal.addEventListener('close', close); window.addEventListener('resize', position); document.addEventListener('scroll', position, true); }
             function SessionMenu() {
               React.useEffect(() => {
                 // A newly mounted portal starts hidden until DSH positions it.
                 // Its first autofocus can run too early; retry after layout,
                 // only if the person has not already moved focus elsewhere.
                 const frame = requestAnimationFrame(() => {
-                  if (!closed && document.activeElement === opener) document.querySelector('.naw-session-menu [role="menuitem"]')?.focus();
+                  position();
+                  if (!closed && document.activeElement === opener) (modal ? host : document).querySelector('.naw-session-menu [role="menuitem"]:not(:disabled)')?.focus();
                 });
                 return () => cancelAnimationFrame(frame);
               }, []);
               return React.createElement(Menu, {
-                open: true, portal: true, autoFocus: true, items, getAnchorRect,
+                open: true, portal: !modal, autoFocus: true, items, getAnchorRect,
                 listClassName: 'naw-session-menu', onClose: close,
                 onSelect: action => { close(); onSelect(action); },
               });
