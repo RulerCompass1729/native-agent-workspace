@@ -280,6 +280,10 @@ function renderComposer(s) {
   $('compose-hint').textContent = inputRecoveries.get(s?.id)?.text.value ? '上一段原生输入未确认。草稿可继续编辑；请在原生终端查看保留的文字。' : pendingMode?.id === s?.id ? '正在切换输入方式，可以先编辑草稿。' : action.hint;
 }
 function toast(text) { $('toast-text').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
+ui.copyCode = async text => {
+  try { await api.copy(text); toast('已复制'); }
+  catch (error) { toast('复制失败，请重试。'); throw error; }
+};
 $('toast-close').onclick = () => { clearTimeout(toastTimer); $('toast').hidden = true; };
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
 function persistView() { normalizeRoomMention(); captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
