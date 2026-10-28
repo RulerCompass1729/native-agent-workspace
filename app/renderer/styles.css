@@ -10,6 +10,38 @@ header { min-height: 74px; padding: 14px 24px; }
 #terminal-selection-hint { font-size: 11px; color: var(--muted); }
 #terminal-controls button { padding: 6px 9px; font-size: 12px; }
 #session-status { flex: 1; min-width: 120px; text-align: right; overflow-wrap: anywhere; }
+/* One session bar; existing pane actions stay beside their own content. Critical
+   status and recovery controls wrap visibly instead of going into a menu. */
+#header.compact-session { min-height: 46px; padding: 7px 12px; gap: 8px; flex-wrap: wrap; }
+.compact-session .header-identity { display: flex; align-items: center; gap: 8px; flex: 1 1 330px; min-width: 0; }
+.compact-session h1 { font-size: 14px; flex: 0 1 auto; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-session #subtitle { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; margin: 0; font-size: 11px; }
+.compact-session .identity-value { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.compact-session .identity-model { flex: 0 1 auto; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compact-session h1:focus, .compact-session .identity-value:focus { max-width: none; overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+.compact-session h1:focus-visible, .compact-session .identity-value:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.compact-session .header-identity:focus-within { flex-wrap: wrap; }
+.compact-session #subtitle:focus-within { flex-wrap: wrap; }
+.compact-session #session-toolbar { padding: 0; border: 0; gap: 8px; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.compact-session #session-status { min-width: 0; text-align: left; font-size: 11px; }
+.compact-session #take-control { padding: 4px 7px; }
+.compact-session #header-actions { flex: none; gap: 5px; }
+.compact-session #header-actions button { padding: 4px 7px; min-height: 28px; }
+.compact-session #header-actions > .header-secondary { display: none; }
+.conversation-pane-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 3px 8px; min-height: 32px; }
+.conversation-pane-toolbar button { padding: 3px 6px; min-height: 26px; font-size: 11px; }
+.compact-session-surface .native-pane-toolbar { padding: 3px 8px; min-height: 32px; gap: 5px; }
+.compact-session-surface #terminal-controls { gap: 4px; }
+.compact-session-surface #terminal-controls button, .compact-session-surface .native-pane-toolbar > button { padding: 3px 6px; min-height: 26px; font-size: 11px; }
+.compact-session-surface #terminal-display { display: none; }
+.compact-session-surface #terminal-selection-hint { font-size: 10px; line-height: 1.4; }
+.compact-session-surface .native-pane-toolbar strong { font-size: 11px; }
+@media(max-width:1050px) {
+  .compact-session .header-identity { flex-basis: 100%; }
+  .compact-session #session-toolbar { flex: 1; }
+  .compact-session h1 { max-width: 145px; }
+  .compact-session .identity-model { max-width: 140px; }
+}
 #terminal-area { margin: 0; padding: 12px 16px; border-radius: 0; }
 .terminal-surface { height: 100%; width: 100%; overflow: auto; }
 .terminal-loading { color: #e6e8eb; padding: 8px; }
