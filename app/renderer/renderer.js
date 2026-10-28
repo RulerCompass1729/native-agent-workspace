@@ -588,7 +588,7 @@ function openRoomMenu(point) {
 function openSessionMenu(id, point) {
   contentMenu?.close();
   if (disconnected || !state.sessions.some(s => s.id === id)) return;
-  if (!point && sessionMenu?.id === id) { sessionMenu.close(); return; }
+  if (!point && sessionMenu?.id === id && !sessionMenu.anchor) { sessionMenu.close(); return; }
   sessionMenu?.close(); roomMenu?.();
   const row = sessionRows.get(id); if (!row) return;
   row.more.focus(); row.more.setAttribute('aria-expanded', 'true');
@@ -633,7 +633,7 @@ function renderSessions() {
   renderSidebarGroups();
   const visible = sidebarSessions();
   const ids = new Set(visible.map(s => s.id));
-  if (sessionMenu && (!ids.has(sessionMenu.id) || disconnected)) sessionMenu.close();
+  if (sessionMenu && !sessionMenu.anchor && (!ids.has(sessionMenu.id) || disconnected)) sessionMenu.close();
   for (const [id, row] of sessionRows) if (!ids.has(id)) { row.element.remove(); sessionRows.delete(id); }
   visible.forEach((record, index) => {
     let row = sessionRows.get(record.id);
@@ -964,6 +964,57 @@ function documentSelectionChanged() {
 }
 document.addEventListener('selectionchange', documentSelectionChanged);
 document.addEventListener('toggle', updateSelectedSharing, true);
+const headerMenuKey = () => JSON.stringify([selectionRevision, selected, current()?.id, current()?.nativeId, current()?.roomId, current()?.archived, current()?.owner, disconnected]);
+function openHeaderMenu(anchor, terminal = false) {
+  if (!current()) return;
+  if (sessionMenu?.anchor === anchor) return sessionMenu.close();
+  contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
+  const key = headerMenuKey(), h = headerControls;
+  const actions = terminal ? [{ id: 'display', label: '显示…', control: $('terminal-display') }]
+    : [{ id: 'membership', label: h.membership.textContent, control: h.membership }, { id: 'share', label: '分享选中内容', control: h.selectedText }, { id: 'usage', label: '用量', control: h.usage }];
+  const items = actions.filter(item => terminal || !current().archived || item.id === 'usage');
+  anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
+  const close = ui.menu({
+    items: items.map(({ control, ...item }) => ({ ...item, disabled: control.disabled })),
+    getAnchorRect: () => anchor.getBoundingClientRect(),
+    onClose: () => {
+      if (sessionMenu?.close === close) sessionMenu = null;
+      anchor.setAttribute('aria-expanded', 'false');
+      if (key === headerMenuKey() && anchor.isConnected) anchor.focus({ preventScroll: true });
+    },
+    onSelect: action => { if (key === headerMenuKey()) items.find(item => item.id === action)?.control.click(); },
+  });
+  sessionMenu = { id: current().id, anchor, key, close };
+}
+function renderHeaderLayout(s, inRoom) {
+  const compact = Boolean(s && !inRoom), toolbar = $('session-toolbar');
+  $('header').classList.toggle('compact-session', compact);
+  $('session-view').classList.toggle('compact-session-surface', compact);
+  if (compact) {
+    if (toolbar.parentElement !== $('header')) $('header').insertBefore(toolbar, $('header-actions'));
+    if ($('session-files').parentElement !== $('conversation-pane-toolbar')) $('conversation-pane-toolbar').append($('session-files'), $('chat-maximize'));
+  } else {
+    if (toolbar.parentElement !== $('session-view')) $('session-view').prepend(toolbar);
+    if ($('session-files').parentElement !== toolbar) toolbar.insertBefore($('session-files'), $('session-status'));
+    if ($('chat-maximize').parentElement !== toolbar) toolbar.insertBefore($('chat-maximize'), $('session-status'));
+  }
+  $('conversation-pane-toolbar').hidden = !compact;
+  $('terminal-more').hidden = !compact;
+  $('title').tabIndex = compact ? 0 : -1;
+  $('title').title = compact ? s.name : '';
+  const settings = s?.nativeSettings?.nativeId === s?.nativeId ? [s?.nativeSettings?.mode === 'plan' ? 'Plan' : '', s?.nativeSettings?.effort].filter(Boolean) : [];
+  const values = s ? [s.provider === 'claude' ? 'Claude Code' : 'Codex', sessionShortId(s.id), s.model, ...settings, s.roomId ? '协作中，也可单独操作' : '独立会话'] : [];
+  const subtitle = $('subtitle'), signature = JSON.stringify([compact, inRoom, values]);
+  if (subtitle.dataset.identity !== signature) {
+    if (compact) subtitle.replaceChildren(...values.map((value, index) => {
+      const field = node('span', value, `identity-value${index === 2 ? ' identity-model' : ''}`);
+      field.tabIndex = 0; field.title = value; field.setAttribute('aria-label', value); return field;
+    }));
+    else subtitle.textContent = s ? values.join(' · ') : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
+    subtitle.dataset.identity = signature;
+  }
+  if (sessionMenu?.anchor && sessionMenu.key !== headerMenuKey()) sessionMenu.close();
+}
 function renderHeader(s, inRoom) {
   if (!headerControls) {
     const resume = button('继续原生会话', () => { const s = current(); if (s && canResume(s)) return api.resume(s.id); }, 'primary');
@@ -982,8 +1033,12 @@ function renderHeader(s, inRoom) {
     usage.id = 'usage-button'; usage.setAttribute('aria-label', '查看原生用量');
     const restore = button('恢复会话', () => { const s = current(); if (s?.archived) return restoreArchivedSession(s.id); }, 'primary');
     const more = button('⋯', () => openRoomMenu()); more.setAttribute('aria-label', '工作区菜单');
-    headerControls = { resume, membership, selectedText, restore, more, usage };
-    $('header-actions').append(resume, membership, selectedText, usage, restore, more);
+    const compactMore = button('⋯', () => openHeaderMenu(compactMore));
+    compactMore.id = 'session-header-more'; compactMore.setAttribute('aria-label', '会话更多操作'); compactMore.setAttribute('aria-haspopup', 'menu'); compactMore.setAttribute('aria-expanded', 'false');
+    compactMore.onpointerdown = event => { if (sessionMenu?.anchor === compactMore) event.stopPropagation(); };
+    for (const control of [membership, selectedText, usage]) control.classList.add('header-secondary');
+    headerControls = { resume, membership, selectedText, restore, more, usage, compactMore };
+    $('header-actions').append(resume, membership, selectedText, usage, restore, more, compactMore);
   }
   const h = headerControls;
   const membershipAction = JSON.stringify([s?.id, !!s?.roomId, !!s?.archived]);
@@ -997,6 +1052,8 @@ function renderHeader(s, inRoom) {
   h.membership.textContent = s?.roomId ? '脱出协作' : '加入协作';
   h.restore.hidden = !s?.archived;
   h.more.hidden = !inRoom || !!s;
+  h.compactMore.hidden = !s || inRoom;
+  renderHeaderLayout(s, inRoom);
 }
 function appendNativeQuestions(parent, questions) {
   if (!Array.isArray(questions) || !questions.length || questions.length > 20) return false;
@@ -1223,7 +1280,6 @@ function render() {
     document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
-    $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${sessionShortId(s.id)} · ${s.model}${s.nativeSettings?.nativeId === s.nativeId ? [s.nativeSettings.mode === 'plan' ? 'Plan' : '', s.nativeSettings.effort].filter(Boolean).map(value => ' · ' + value).join('') : ''} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
     const warning = [disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' '), state.viewStorageWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
@@ -1243,7 +1299,8 @@ function render() {
     if (!s) renderNativeActivity(null);
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
-      $('native-pane-title').textContent = participantLabel(s, state.sessions) + ' · 原生终端';
+      $('native-pane-title').textContent = inRoom ? participantLabel(s, state.sessions) + ' · 原生终端' : '原生终端';
+      $('native-pane-title').title = participantLabel(s, state.sessions) + ' · 原生终端';
       $('terminal-maximize').setAttribute('aria-label', terminalLayout === 'maximized' ? '恢复并排' : '放大终端');
       $('terminal-maximize').title = terminalLayout === 'maximized' ? '恢复并排' : '放大终端';
       $('chat-maximize').setAttribute('aria-label', terminalLayout === 'hidden' ? '恢复并排' : '放大对话'); $('chat-maximize').title = $('chat-maximize').getAttribute('aria-label');
@@ -1732,6 +1789,8 @@ $('take-control').onclick = () => attempt(() => switchMode(mode, true));
 $('terminal-copy').onclick = () => attempt(() => copyTerminalContext());
 $('terminal-paste').onclick = () => attempt(() => pasteTerminalContext());
 $('terminal-display').onclick = () => { $('terminal-font-size').value = terminalDisplay.fontSize; $('terminal-palette').value = terminalDisplay.palette; $('terminal-display-dialog').showModal(); };
+$('terminal-more').onclick = () => openHeaderMenu($('terminal-more'), true);
+$('terminal-more').onpointerdown = event => { if (sessionMenu?.anchor === $('terminal-more')) event.stopPropagation(); };
 const saveTerminalDisplay = () => attempt(async () => {
   const fontSize = Number($('terminal-font-size').value);
   if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 24) throw new Error('字号请设为 10–24。');
