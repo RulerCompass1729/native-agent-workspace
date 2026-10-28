@@ -476,3 +476,8 @@ Main integration e1b10b1, signed candidate109: the actual installed application 
 Independent design review also caught an omitted existing addressed-message tool. Actual adapters, bridge and addressed-handoff authorization were inspected; the proposal now starts from workspace_message and distinguishes its turn-scoped staged handoff from arbitrary daily UI control. Same-session delta review passed; no new control capability or permission was implemented.
 
 Main combined source, signed-installed and planned-operator Fable checkpoint PASS; HEAD/index/status/diff unchanged. Actual visible daily rollout remains pending.
+
+
+### Daily deployment of the reviewed batch
+
+Daily alpha109 now installs source e1b10b1, including the previously accepted independent-capacity and native-command-reading increments. The authorized ordinary visible update preserves all8 original native identities, owners and live process start identities;12 view drafts match the flushed before/after hashes. Only the GUI is replaced. The installed57-file payload, post-update strict signature, single searchable app and absence of debug/background arguments pass. Same-session independent Fable post-operation review PASS reads the raw snapshots and live system. Retained106 sessions keep their original backend/code; new sessions use109. Session-level empty draft fields are not counted as draft evidence. This is update continuity, not a full workday, window-only close, native-process recovery, no-replay or external-escape proof.
