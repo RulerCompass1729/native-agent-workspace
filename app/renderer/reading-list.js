@@ -184,12 +184,15 @@ function updateProcessTail(entry) {
   entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
   entry.more.hidden = !more; const moreText = `+${more} 行`; if (entry.more.textContent !== moreText) entry.more.textContent = moreText;
 }
-function messageList(el, messages, room = false, key = 'room') {
+function messageList(el, messages, room = false, key = 'room', context = {}) {
+  // A member reader observes its own session without selecting it or claiming
+  // its input. Existing solo/shared callers retain their original context.
+  const session = context.session || (room ? null : current());
   const view = readingView(el, key);
   captureReading(view);
   const intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
   view.intent = intent;
-  const rows = [], retained = new Set(), days = new Set(), explorations = commandExplorations(messages, room, room ? state.room.messages : current()?.messages || messages); let lastDay = '';
+  const rows = [], retained = new Set(), days = new Set(), explorations = commandExplorations(messages, room, room ? state.room.messages : session?.messages || messages); let lastDay = '';
   for (const m of messages) {
     if (m.kind === 'turn' && !nativeCompletionText(m)?.trim()) continue;
     if (m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)) continue;
@@ -261,10 +264,10 @@ function messageList(el, messages, room = false, key = 'room') {
     }
     entry.message = m; entry.exploration = explorations.get(m.id); retained.add(m.id); rows.push(entry.item);
     entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
-    entry.item.classList.toggle('native-notice', m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && current()?.nativeContexts?.some(c => c.boundaryId === m.id)));
+    entry.item.classList.toggle('native-notice', m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id)));
     const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
     let name = room ? roomMessageLabel(m) : m.name;
-    name ||= m.role === 'user' ? '你' : current()?.provider === 'claude' ? 'Claude' : 'Codex';
+    name ||= m.role === 'user' ? '你' : session?.provider === 'claude' ? 'Claude' : 'Codex';
     if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
     const messageTime = room && m.kind !== 'turn' ? m.time : undefined;
     const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped]);
@@ -281,7 +284,7 @@ function messageList(el, messages, room = false, key = 'room') {
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
       // Only Claude rows take queued input; native sends it once the agent is idle.
-      const status = { 'awaiting-native': m.inputMode === 'queue' ? '排队中，等空闲后发送' : '等待原生确认', unconfirmed: '结果未确认', 'not-sent': '没有发出', streaming: '正在输出', running: !room && current()?.provider === 'claude' && m.role === 'tool' ? '已请求工具' : '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
+      const status = { 'awaiting-native': m.inputMode === 'queue' ? '排队中，等空闲后发送' : '等待原生确认', unconfirmed: '结果未确认', 'not-sent': '没有发出', streaming: '正在输出', running: !room && session?.provider === 'claude' && m.role === 'tool' ? '已请求工具' : '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
       if (entry.exploration) { if (entry.exploration.error) entry.heading.append(node('span', entry.exploration.error)); }
       else if (status && !m.nativeBlock && !m.sharedStream) entry.heading.append(node('span', status));
       else if ((m.nativeBlock || m.sharedStream) && ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status)) entry.heading.append(node('span', m.status));
@@ -308,7 +311,7 @@ function messageList(el, messages, room = false, key = 'room') {
       if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
       updateProcessTail(entry);
     }
-    entry.share.hidden = m.role === 'system';
+    entry.share.hidden = context.passive === true || m.role === 'system';
     if (entry.reply) {
       entry.reply.dataset.replyTo = m.id;
       const root = roomThreads.roots.get(m.id), count = roomThreads.groups.get(root)?.length || 1;
@@ -384,7 +387,7 @@ function messageList(el, messages, room = false, key = 'room') {
   for (const [id, entry] of view.entries) if (!retained.has(id)) { ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
   for (const [day, divider] of view.days) if (!days.has(day)) { divider.remove(); view.days.delete(day); }
   if (!messages.length) {
-    const s = room ? null : current();
+    const s = session;
     const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对上方请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
     rows.push(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : empty, 'message empty'));
   }
