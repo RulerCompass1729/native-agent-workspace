@@ -2,6 +2,10 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Exact code copying and long commands - 2026-10-27
+
+`node scripts/test-markdown-copy.cjs` uses the existing synthetic transport and actual Electron/DSH reader. Signed114 e69cc05 passes four complete-task groups: pending acknowledgement and deduplication, truthful failure/retry, exact Unicode/tab/newline payload, narrow-window horizontal scrolling, private/shared records and reload preserving drafts/identity. Zero models/providers/native dispatch; the owned main-process writer is intercepted so all system clipboard formats remain intact. Existing native copy backend proof is reused.57 runtime files and strict post-test signature match; owned processes/profile are removed and temporary inventories stay unchanged. Ordinary visible daily114 preserves9 original sessions and12 flushed view drafts. Physical clipboard/device/screen-reader proof is not claimed.
+
 ## Creating another session with retained work - 2026-10-26
 
 `NAW_TEST_SESSION_CREATION=1 node scripts/test-six-session-workflow.cjs`
