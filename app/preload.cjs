@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const api = {};
-for (const name of ['stageImages', 'pasteNativeContent', 'nativeHistory', 'importHistory', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'prepareInput', 'observe', 'unobserve', 'continueConnection', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'retainDraftRecovery', 'discardDraftRecovery', 'readingState', 'runtimeLocation', 'retrySave']) {
+for (const name of ['sidebar', 'stageImages', 'pasteNativeContent', 'nativeHistory', 'importHistory', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'prepareInput', 'observe', 'unobserve', 'continueConnection', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'retainDraftRecovery', 'discardDraftRecovery', 'readingState', 'runtimeLocation', 'retrySave']) {
   api[name] = async (...args) => { const result = await ipcRenderer.invoke(`workspace:${name}`, ...args); if (!result.ok) throw new Error(result.error); return result.value; };
 }
 for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create', 'rename', 'roomRename', 'roomNotes', 'join', 'claim', 'send', 'queue', 'queueShared', 'steerShared', 'steer', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'forward', 'approve', 'answer', 'stop', 'resume', 'forget', 'reconnect', 'preflight', 'dataDirectory', 'quitService', 'clearSharedHistory', 'newWindow', 'copy', 'pasteText', 'openExternal']) {

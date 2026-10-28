@@ -522,3 +522,16 @@ Independent Fable source/evidence review passed. Only test-reconnect.cjs changes
 This verifies controlled lifecycle events, not real provider process loss or a new signed product. Other T34 native-script ports and the T36 compact-layout decision remain separate. No standalone package or daily restart is needed.
 
 Main integration reuses this independently reviewed source GUI result: the merged script is byte-identical to the recorded passing script hash, with no product or fixture change. No additional model run or package was made.
+
+
+### Persistent sidebar organization
+
+Sidebar sessions now support persistent drag sorting and keyboard menu move up/down. Sorting preserves collaboration membership; dropping on the room or the session heading retains the existing join/detach actions. Section headings collapse with mouse or keyboard, show an overview and persist across windows and app reopening. Existing NAW IDs are always visible in the sidebar, conversation heading and member tabs, with longer prefixes on collision; the existing menu copies the complete NAW ID or a reported native ID.
+
+The existing private desktop display metadata file stores these preferences atomically alongside local names. No native runtime, session identity, task routing, dependency or model behavior changes. Failed metadata writes preserve the prior file and UI.
+
+36 affected local checks pass. The actual source application passes a five-part task using synthetic native transport, two restored hidden windows and zero model/provider processes, sends or native inputs. Coverage includes same-prefix duplicate names, keyboard and actual mouse dragging, room membership boundaries, live collapsed overview, rename, clipboard interception, disk-write failure/retry, renderer reload and whole-app reopening with identity/owner/draft preserved. Initial member-tab label overwrite was reproduced and fixed. Independent Fable source and complete-evidence review passes; scans pass before commit.
+
+Limits: synthetic provider transport; physical input and screen readers are not certified. Narrow-rail presentation was source-reviewed; archive move refusal has unit evidence. Signed installed acceptance belongs to the integrator. Historical departed-member captions retain their previous six-character form. The heading remains a detach target when dropping an existing member there.
+
+Main merge verifies all nine reviewed files match the source checkpoint. Signed installed acceptance remains pending.

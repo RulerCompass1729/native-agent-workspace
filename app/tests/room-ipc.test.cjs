@@ -63,3 +63,19 @@ test('desktop native-history import forwards provider, original folder and expli
   assert.equal(calls.length, 1); assert.equal(calls[0].method, 'importHistory');
   assert.deepEqual(calls[0].args, [id, options]);
 });
+
+test('sidebar IPC changes only desktop presentation and broadcasts across windows', async t => {
+  const d = await desktop(t), events = [], calls = [];
+  d.state.sessions = [{ id: 'a', nativeId: 'native-a', pid: 123, owner: 'owner', roomId: 'shared', liveDraft: 'unsent' }, { id: 'b', nativeId: 'native-b', pid: 456 }];
+  const before = structuredClone(d.state.sessions);
+  const read = d.client.call; d.client.call = async (method, ...args) => { calls.push(method); return read(method, ...args); };
+  d.sandbox.peer = { client: d.client, win: { isDestroyed: () => false, webContents: { send: (channel, snapshot) => events.push({ channel, sidebar: structuredClone(snapshot.sidebar) }) } } };
+  vm.runInContext('windows.set(2, peer)', d.sandbox);
+  assert.equal((await d.invoke('sidebar', { type: 'move', id: 'b', target: 'a', after: false })).ok, true);
+  assert.deepEqual(events.at(-1).sidebar.order, ['b', 'a']);
+  assert.equal((await d.invoke('sidebar', { type: 'collapse', section: 'sessions', collapsed: true })).ok, true);
+  assert.equal(events.at(-1).sidebar.sessionsCollapsed, true);
+  assert.equal(events.at(-1).channel, 'workspace:state'); assert.deepEqual(d.state.sessions, before);
+  assert.equal(calls.every(method => method === 'initial'), true);
+  assert.equal((await d.invoke('sidebar', { type: 'move', id: 'unknown', target: 'a', after: false })).ok, false);
+});
