@@ -9,7 +9,7 @@ Read this repository's docs/product.md, the newest section of docs/interaction.m
 and the current status at the top of docs/readiness.md. Distinguish our implemented
 and tested behavior from intended capabilities. The product is a local human-first
 GUI/TUI workspace for native Claude/Codex sessions and their native fleets, usable
-solo or in controlled collaboration without implicit model calls or history sharing.
+solo or in controlled collaboration without implicit model calls or history sharing. Evaluate it as a tool for people to manage agents: seeing state, finding work, directing it, recovering control and staying oriented as the group grows. A specialized orchestration algorithm is not the product goal.
 
 Keep context acquisition small: cap initial repository excerpts at 12,000
 characters total, taking only current sections, not entire historical documents.
@@ -49,6 +49,26 @@ still missing, and which claimed differentiator weakened or strengthened today.
 Turn this into ONE priority implication for already authorized work. New features
 remain proposals; no-change and removal/simplification are valid outcomes. Never
 use stars, a feature checklist, or an empty intersection as proof of demand.
+
+Always include two compact sections, 差距 and 可融合, within this SAME run and
+existing word/search/read/time budgets. Replace repeated narration to make room;
+do not add a research team, schedule, provider trial or extra model loop.
+
+- 差距: give only the 1–3 most decision-relevant changes. For each, name the user's
+  job, competitor capability and dated primary evidence/evidence level, then our
+  accepted, incomplete or proposed equivalent. Missing evidence is unknown, not
+  an absent feature. Compare management at small and larger group sizes: member
+  overview, persistent needs-human state, finding original context, reversible
+  focus/zoom and recovery. Treat unfinished lane work as unfinished; reuse the
+  current source/readiness evidence rather than rerunning our product tests.
+- 可融合: link those gaps to interaction lessons or specific code candidates,
+  clearly distinguishing the two. Give the smallest fit with our current UI and
+  existing authorized task, or explain why to defer/do nothing. A code candidate
+  needs exact-file provenance, applicable license, dependency/telemetry and native
+  compatibility review before import; a README license badge is insufficient.
+  Preserve the native session, privacy and visible delivery/cost boundaries.
+  Refer to existing T53 overview/focus and other scoped-collaboration research
+  when supplied; do not turn those proposals into implementation authorization.
 
 Every run must include both open discovery and existing-competitor follow-up:
 
@@ -92,7 +112,7 @@ When positioning context was supplied, the second line must be one of:
 交叉格：仍空 / 交叉格：有人进入——<product> / 交叉格：证据不足
 (Choose one; explain the inspected scope and evidence limits in the body.)
 
-Use these section labels: 发现与变化, 重合与价值, 下一步, 未知与审查, 跟踪名单.
+Use these section labels: 发现与变化, 重合与价值, 差距, 可融合, 下一步, 未知与审查, 跟踪名单.
 Include at least two primary HTTPS links for an actionable decision. Then give:
 today's material changes and new candidates; evidence of overlap and
 remaining user value; whether extending/contributing to an existing project would
