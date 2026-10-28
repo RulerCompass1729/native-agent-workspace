@@ -540,16 +540,46 @@ function openSessionMenu(id, point) {
   sessionMenu?.close(); roomMenu?.();
   const row = sessionRows.get(id); if (!row) return;
   row.more.focus(); row.more.setAttribute('aria-expanded', 'true');
+  const record = state.sessions.find(s => s.id === id), visible = sidebarSessions(), index = visible.findIndex(s => s.id === id);
   const close = ui.menu({
-    items: [{ id: 'rename', label: '重命名…' }, { id: 'membership', label: state.sessions.find(s => s.id === id).roomId ? '脱出协作' : '加入协作' }, { id: 'window', label: '在独立窗口打开' }, ...((state.sessions.find(s => s.id === id).serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }],
+    items: [{ id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), { id: 'membership', label: record.roomId ? '脱出协作' : '加入协作' }, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : row.more.getBoundingClientRect(),
     onClose: () => { sessionMenu = null; row.more.setAttribute('aria-expanded', 'false'); focusSessionAction(id); },
-    onSelect: action => { if (action === 'rename') openRename(id); else if (action === 'continue') attempt(() => api.continueConnection(id)); else if (action === 'window') attempt(() => api.newWindow(id)); else if (action === 'membership') attempt(() => state.sessions.find(s => s.id === id)?.roomId ? detach(id) : api.join(id, true)); else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
+    onSelect: action => { if (action === 'up' || action === 'down') attempt(() => moveSidebarSession(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down')); else if (action === 'copy-id' || action === 'copy-native-id') attempt(() => api.copy(action === 'copy-id' ? id : state.sessions.find(s => s.id === id)?.nativeId)); else if (action === 'rename') openRename(id); else if (action === 'continue') attempt(() => api.continueConnection(id)); else if (action === 'window') attempt(() => api.newWindow(id)); else if (action === 'membership') attempt(() => state.sessions.find(s => s.id === id)?.roomId ? detach(id) : api.join(id, true)); else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
   });
   sessionMenu = { id, close };
 }
-function renderSessions() {
+function sidebarSessions() {
+  const ranks = new Map((state.sidebar?.order || []).map((id, index) => [id, index]));
+  return state.sessions.filter(s => !s.archived).sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity));
+}
+function sessionShortId(id) {
+  let length = Math.min(6, id.length);
+  while (length < id.length && state.sessions.some(s => s.id !== id && s.id.startsWith(id.slice(0, length)))) length++;
+  return id.slice(0, length);
+}
+async function moveSidebarSession(id, target, after) {
+  if (!target || id === target) return;
+  await api.sidebar({ type: 'move', id, target, after });
+}
+function renderSidebarGroups() {
   const visible = state.sessions.filter(s => !s.archived);
+  const working = visible.filter(s => s.state === 'working').length;
+  $('session-group-summary').textContent = `${visible.length}${working ? ` · ${working} 工作中` : ''}`;
+  $('workspace-group-summary').textContent = state.room.archived ? '0' : `${members().length} 成员`;
+  for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body']]) {
+    const collapsed = Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
+    toggle.setAttribute('aria-label', `${section === 'sessions' ? '会话' : '协作空间'} · ${$(section === 'sessions' ? 'session-group-summary' : 'workspace-group-summary').textContent}`);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.querySelector('.group-chevron').textContent = collapsed ? '▸' : '▾';
+    if (collapsed && $(body).contains(document.activeElement)) { sessionMenu?.close(); roomMenu?.(); toggle.focus(); }
+    $(body).hidden = collapsed;
+    toggle.title = `${collapsed ? '展开' : '折叠'}${section === 'sessions' ? '会话；把协作成员拖到这里独立使用' : '协作空间'}`;
+  }
+}
+function renderSessions() {
+  renderSidebarGroups();
+  const visible = sidebarSessions();
   const ids = new Set(visible.map(s => s.id));
   if (sessionMenu && (!ids.has(sessionMenu.id) || disconnected)) sessionMenu.close();
   for (const [id, row] of sessionRows) if (!ids.has(id)) { row.element.remove(); sessionRows.delete(id); }
@@ -558,9 +588,9 @@ function renderSessions() {
     if (!row) {
       const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id;
       const link = button('', () => select(record.id), 'session-link'); link.dataset.sessionId = record.id; link.draggable = true;
-      draggableSession(link, record.id);
-      const label = node('span', undefined, 'label'), name = node('span'), status = node('small'), dot = node('span');
-      label.append(name, status); link.append(icon(record.provider), label, dot);
+      draggableSession(link, record.id, true); sidebarDropRow(element, record.id);
+      const label = node('span', undefined, 'label'), name = node('span'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), dot = node('span');
+      label.append(name, shortId, status); link.append(icon(record.provider), label, dot);
       const more = button('⋯', () => openSessionMenu(record.id), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       // Treat the external trigger as part of DSH's menu: let its click toggle
@@ -568,16 +598,14 @@ function renderSessions() {
       more.addEventListener('pointerdown', event => { if (sessionMenu?.id === record.id) event.stopPropagation(); });
       element.addEventListener('contextmenu', event => { event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }); });
       element.addEventListener('keydown', event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openSessionMenu(record.id); } });
-      element.append(link, more); row = { element, link, more, name, status, dot }; sessionRows.set(record.id, row);
+      element.append(link, more); row = { element, link, more, name, shortId, status, dot }; sessionRows.set(record.id, row);
     }
-    const identity = participantLabel(record, state.sessions);
-    const duplicate = identity !== record.name;
-    const label = `${identity}${duplicate ? '' : record.provider === 'claude' ? ' · Claude' : ' · Codex'} · ${sessionStatus(record)}`;
+    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sessionStatus(record)}`;
     row.link.setAttribute('aria-label', `${label} · ${sessionTimes(record)}`); row.link.title = `${label}\n${sessionTimes(record)}`;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
-    row.more.setAttribute('aria-label', `会话操作：${identity}`); row.more.title = `会话操作：${identity}`; row.more.disabled = disconnected;
-    row.name.textContent = record.name; row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}${duplicate ? ` · ${record.id.slice(0, 6)}` : ''}${sessionTime(record.lastActivityAt) ? ` · ${sessionTime(record.lastActivityAt)}` : ''}`; row.dot.className = `state-dot ${record.state}`;
+    row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}`); row.more.title = `会话操作：${record.name} · ${sessionShortId(record.id)}`; row.more.disabled = disconnected;
+    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}${sessionTime(record.lastActivityAt) ? ` · ${sessionTime(record.lastActivityAt)}` : ''}`; row.dot.className = `state-dot ${record.state}`;
     // Keep existing DOM nodes: native state updates must not remove a focused
     // row or its open menu anchor every 35 ms.
     const slot = $('session-list').children[index]; if (slot !== row.element) $('session-list').insertBefore(row.element, slot || null);
@@ -667,7 +695,7 @@ function populateSelect(el, items) {
   el.title = el.selectedOptions[0]?.textContent || '';
 }
 function participantLabel(session, people = members()) {
-  return people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${session.id.slice(0, 6)}` : session.name;
+  return people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(session.id)}` : session.name;
 }
 function historicalParticipantLabel(name, id) {
   return `${name || '历史成员'}${typeof id === 'string' && id ? ` · ${id.slice(0, 6)}` : ' · 身份未记录'}`;
@@ -725,13 +753,29 @@ function renderTimeline() {
   if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true, roomReadingKey()); lastRoomMessages = signature; }
   $('timeline-count').textContent = `${messages.length} 条`; $('copy-timeline').disabled = !messages.length;
 }
-function draggableSession(element, id) {
+function draggableSession(element, id, reorder = false) {
   element.draggable = true;
   element.addEventListener('dragstart', event => {
     event.dataTransfer.setData('application/x-native-session', id); event.dataTransfer.effectAllowed = 'move';
+    if (reorder) event.dataTransfer.setData('application/x-native-session-order', id);
     document.querySelector('.sidebar').classList.add('dragging-session');
   });
-  element.addEventListener('dragend', () => { document.querySelector('.sidebar').classList.remove('dragging-session'); document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over')); });
+  element.addEventListener('dragend', () => { document.querySelector('.sidebar').classList.remove('dragging-session'); document.querySelectorAll('.drag-over, .drop-before, .drop-after').forEach(el => el.classList.remove('drag-over', 'drop-before', 'drop-after')); });
+}
+function sidebarDropRow(element, target) {
+  const accepts = event => !disconnected && event.dataTransfer.types.includes('application/x-native-session-order');
+  const after = event => event.clientY >= element.getBoundingClientRect().top + element.offsetHeight / 2;
+  element.addEventListener('dragover', event => {
+    if (!accepts(event)) return;
+    event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move';
+    element.classList.toggle('drop-before', !after(event)); element.classList.toggle('drop-after', after(event));
+  });
+  element.addEventListener('dragleave', event => { if (!element.contains(event.relatedTarget)) element.classList.remove('drop-before', 'drop-after'); });
+  element.addEventListener('drop', event => {
+    if (!accepts(event)) return;
+    event.preventDefault(); event.stopPropagation(); element.classList.remove('drop-before', 'drop-after');
+    attempt(() => moveSidebarSession(event.dataTransfer.getData('application/x-native-session-order'), target, after(event)));
+  });
 }
 function dropTarget(element, join) {
   element.addEventListener('dragover', event => { if (event.dataTransfer.types.includes('application/x-native-session')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; element.classList.add('drag-over'); } });
@@ -739,6 +783,9 @@ function dropTarget(element, join) {
   element.addEventListener('drop', event => {
     event.preventDefault(); element.classList.remove('drag-over');
     const id = event.dataTransfer.getData('application/x-native-session');
+    if (!join && element.id === 'session-list' && event.dataTransfer.types.includes('application/x-native-session-order')) {
+      attempt(() => moveSidebarSession(id, sidebarSessions().at(-1)?.id, true)); return;
+    }
     if (state.sessions.some(s => s.id === id)) attempt(() => join ? api.join(id, true) : detach(id));
   });
 }
@@ -749,7 +796,7 @@ function openNotes() {
 function openContext() {
   const s = selected === 'room' ? null : current();
   contextTarget = s ? { id: s.id, mode } : { room: true };
-  const roster = members().map(m => `${m.name} (${m.provider}, ${m.id.slice(0, 6)})`).join('、') || '暂无成员';
+  const roster = members().map(m => `${m.name} (${m.provider}, ${sessionShortId(m.id)})`).join('、') || '暂无成员';
   $('context-text').value = `协作背景：${state.room.name}\n当前参与会话：${roster}\n${s ? (s.roomId ? `本会话仍参与该工作区。` : '本会话已独立使用，不再接收该工作区的新任务。') : '本条消息仅交给界面选定的接收者；其他成员不会自动收到。'}\n以真人当前指示为准，成员变化不代表新的执行指令。${state.room.notes ? `\n\n共享笔记：\n${state.room.notes}` : ''}`;
   // Solo drafts are owned by the native session's active window. Copying lets
   // the person paste into that window without racing a concurrent takeover.
@@ -771,7 +818,7 @@ function showMentions(force = false) {
   const query = match ? match[1].toLocaleLowerCase() : '';
   mentionOptions = members().filter(s => `${s.name} ${s.provider}`.toLocaleLowerCase().includes(query)); mentionIndex = 0;
   $('mention-list').replaceChildren(...mentionOptions.map((s, i) => {
-    const entry = button(`${s.name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${s.id.slice(0, 6)}`, () => chooseMention(s.id), 'mention-option');
+    const entry = button(`${s.name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(s.id)}`, () => chooseMention(s.id), 'mention-option');
     entry.id = `mention-${i}`; entry.setAttribute('role', 'option'); entry.dataset.mentionId = s.id;
     entry.addEventListener('mousedown', event => event.preventDefault()); return entry;
   }));
@@ -1123,7 +1170,7 @@ function render() {
     document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
     $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
-    $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${s.model}${s.nativeSettings?.nativeId === s.nativeId ? [s.nativeSettings.mode === 'plan' ? 'Plan' : '', s.nativeSettings.effort].filter(Boolean).map(value => ' · ' + value).join('') : ''} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
+    $('subtitle').textContent = s ? `${s.provider === 'claude' ? 'Claude Code' : 'Codex'} · ${sessionShortId(s.id)} · ${s.model}${s.nativeSettings?.nativeId === s.nativeId ? [s.nativeSettings.mode === 'plan' ? 'Plan' : '', s.nativeSettings.effort].filter(Boolean).map(value => ' · ' + value).join('') : ''} · ${s.roomId ? '协作中，也可单独操作' : '独立会话'}` : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
     const warning = [disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' '), state.viewStorageWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
@@ -1182,7 +1229,8 @@ function render() {
       const tabSignature = JSON.stringify(people.map(m => [m.id, m.name]));
       if (tabs.dataset.signature !== tabSignature) {
         tabs.replaceChildren(...people.map(m => {
-          const tab = button(participantLabel(m, people), () => selectRoom(m.id)); tab.dataset.roomSession = m.id; tab.title = `${participantLabel(m, people)} · 拖回左侧独立使用`; draggableSession(tab, m.id); return tab;
+          const label = `${m.name} · ${sessionShortId(m.id)}`;
+          const tab = button(label, () => selectRoom(m.id)); tab.dataset.roomSession = m.id; tab.title = `${label} · 拖回左侧独立使用`; draggableSession(tab, m.id); return tab;
         }));
         tabs.dataset.signature = tabSignature;
       }
@@ -1191,8 +1239,9 @@ function render() {
       for (const tab of tabs.children) {
         const member = people.find(m => m.id === tab.dataset.roomSession);
         const count = member.nativeApproval?.requests?.length || member.approvals?.length || (member.approval || member.approvalOverflow ? 1 : 0);
-        const text = participantLabel(member, people) + (count ? ` · ${count} 待处理` : '');
+        const text = `${member.name} · ${sessionShortId(member.id)}` + (count ? ` · ${count} 待处理` : '');
         if (tab.textContent !== text) tab.textContent = text;
+        tab.title = `${member.name} · ${sessionShortId(member.id)} · 拖回左侧独立使用`;
         tab.classList.toggle('needs-attention', Boolean(count));
       }
       let runText = run ? `${run.pausePending ? '正在撤销后续授权' : run.pauseUnconfirmed ? '部分后台未确认暂停' : { running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
@@ -1591,6 +1640,15 @@ $('room-record').onclick = () => attempt(() => selectRoom());
 $('manage-members').onclick = () => $('members-dialog').showModal();
 $('close-members').onclick = () => { $('members-dialog').close(); focusTerminal(); };
 dropTarget($('room-nav'), true); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
+for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace-toggle']]) {
+  const toggle = $(id);
+  const collapse = collapsed => api.sidebar({ type: 'collapse', section, collapsed });
+  toggle.onclick = () => attempt(() => collapse(toggle.getAttribute('aria-expanded') === 'true'));
+  toggle.onkeydown = event => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || event.isComposing) return;
+    event.preventDefault(); attempt(() => collapse(event.key === 'ArrowLeft'));
+  };
+}
 $('chat-tab').onclick = () => attempt(() => switchMode('chat')); $('terminal-tab').onclick = () => attempt(() => switchMode('terminal'));
 $('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = terminalLayout === 'maximized' ? 'split' : 'maximized'; await switchMode('terminal'); });
 // The chat's own full-width toggle: hide the terminal, or bring it back beside the chat.
@@ -1832,7 +1890,7 @@ function renderRunChoices() {
     const label = node('label'), check = document.createElement('input'); check.type = 'checkbox';
     check.dataset.runMember = s.id; check.checked = ids.includes(s.id);
     check.disabled = s.id === runPreview.recipient || !eligible.some(m => m.id === s.id) || (!check.checked && !multi && ids.length >= 2);
-    label.append(check, document.createTextNode(`${s.name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${s.id.slice(0, 6)}`));
+    label.append(check, document.createTextNode(`${s.name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(s.id)}`));
     check.onchange = () => {
       runPreview.ids = check.checked ? [...ids, s.id] : ids.filter(id => id !== s.id);
       $('run-consent').checked = false; renderRunChoices();
@@ -1842,7 +1900,7 @@ function renderRunChoices() {
     const position = ids.indexOf(s.id);
     if (position > 1) {
       const up = button('↑', () => { [ids[position - 1], ids[position]] = [ids[position], ids[position - 1]]; $('run-consent').checked = false; renderRunChoices(); });
-      up.setAttribute('aria-label', `提前 ${s.name} · ${s.id.slice(0, 6)}`); row.append(up);
+      up.setAttribute('aria-label', `提前 ${s.name} · ${sessionShortId(s.id)}`); row.append(up);
     }
     $('run-participants').append(row);
   }
@@ -1850,7 +1908,7 @@ function renderRunChoices() {
   if (Number($('run-limit').value) < ids.length) $('run-limit').value = String(ids.length);
   const sequence = Array.from({ length: Number($('run-limit').value) }, (_, i) => {
     const s = members().find(s => s.id === ids[i % ids.length]);
-    return s ? `${s.name} (${s.id.slice(0, 6)})` : '未选择';
+    return s ? `${s.name} (${sessionShortId(s.id)})` : '未选择';
   });
   $('run-order').textContent = directed ? `由第一位开始，在所选成员中明确选择下一位；上限 ${$('run-limit').value} 次回复，不广播私人历史。` : `转交顺序：${sequence.join(' → ')}。只转交任务与上一份回复，不附加私人历史。`;
   $('confirm-run').disabled = !$('run-consent').checked || ids.length < 2 || (directed && !capable);

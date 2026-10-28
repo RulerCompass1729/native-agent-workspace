@@ -224,6 +224,11 @@ async function boot() {
     broadcastName(id, saved);
     return saved;
   });
+  register('sidebar', async (c, change) => {
+    const snapshot = roomState.apply(await c.client.call('initial'));
+    sessionLabels.updateSidebar(change, snapshot.sessions);
+    await broadcastRoom();
+  });
   // The workspace router registers human/run intent before its first await and
   // applies the same capability gates for one or several retained services.
   const submit = (c, method, ...args) => {
