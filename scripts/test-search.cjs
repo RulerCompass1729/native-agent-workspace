@@ -32,10 +32,43 @@ async function search(query) {
   await page.locator('#search-input').fill(query);
   await delay(160);
 }
+async function searchOptions() { if (!(await page.locator('#search-options').evaluate(el => el.open))) await page.locator('#search-options-summary').click(); }
 async function capture(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') }); } }
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'search-observer'); await launch();
   const first = await create('学习记录'), second = await create('已归档笔记');
+  await page.locator('#search-button').click();
+  await capture('quick-picker');
+  const picker = await page.locator('#search-dialog').boundingBox();
+  assert.ok(picker.width <= 600 && picker.height < 400, 'Compact input/results picker for two sessions');
+  assert.equal(await page.locator('#search-options').evaluate(el => el.open), false);
+  assert.equal(await page.locator('#search-input').evaluate(el => el === document.activeElement), true);
+  assert.equal(await page.locator('#search-results button').count(), 3);
+  await page.locator('#search-input').evaluate(el => el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })));
+  assert.equal(await page.locator('#search-dialog').evaluate(el => el.open), true, 'IME confirmation cannot open a result');
+  await page.locator('#search-input').press('Enter');
+  await until(async () => (await snapshot()).viewState.selected === first && !(await page.locator('#search-dialog').evaluate(el => el.open)), 'Enter opens first of multiple results');
+  await until(() => page.locator('#message-input').evaluate(el => el === document.activeElement), 'Result navigation keeps destination focus');
+  await page.locator('#message-input').press('Meta+f'); await page.locator('#search-input').press('Escape');
+  await until(() => page.locator('#message-input').evaluate(el => el === document.activeElement), 'Escape restores shortcut opener');
+  await page.locator('#search-button').click();
+  await page.locator('#search-input').press('ArrowDown');
+  assert.equal(await page.locator('#search-results button').first().evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.locator('#search-results button').nth(1).evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press('Home'); await page.keyboard.press('ArrowUp');
+  assert.equal(await page.locator('#search-input').evaluate(el => el === document.activeElement), true);
+  const inputBox = await page.locator('#search-input').boundingBox();
+  await page.mouse.move(inputBox.x + 15, inputBox.y + 15); await page.mouse.down(); await page.mouse.move(5, 5); await page.mouse.up();
+  assert.equal(await page.locator('#search-dialog').evaluate(el => el.open), true, 'Dragging text outside must not dismiss search');
+  // Outside click falls over a real underlying action. Dismiss only, without
+  // clicking through to create a session.
+  const createBox = await page.locator('#new-session').boundingBox();
+  await page.mouse.click(createBox.x + createBox.width / 2, createBox.y + createBox.height / 2);
+  await page.locator('#search-dialog').waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#create-dialog').isVisible(), false);
+  await until(() => page.locator('#search-button').evaluate(el => el === document.activeElement), 'Outside close restores button opener');
+  checks.push('Compact picker opens first result on Enter, preserves IME confirmation, supports arrow navigation and restores opener on Escape/outside click without click-through or drag dismissal');
   await fixture('history', first, Array.from({ length: 160 }, (_, i) => ({ id: `record-${i}`, type: 'agentMessage', text: `记录 ${i}：学习材料。\n\n${i === 45 ? '很长的前文。\n\n'.repeat(100) + '唯一中文关键词 代码核验 <script>不能执行</script>' : '今天的练习'}\n\n\`\`\`js\nconst record = ${i};\n\`\`\`\n\n${'连续阅读的内容。'.repeat(20)}` })));
   await fixture('history', second, [{ id: 'archive-match', type: 'agentMessage', text: '唯一中文关键词：归档中的结论' }]);
   await page.locator(`[data-session-menu="${second}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
@@ -60,7 +93,7 @@ async function run() {
   checks.push('Current-session search locates exact historical context and returns to the original reading position; new output and private draft remain intact');
   await page.locator('#search-button').click(); await search('唯一中文关键词');
   assert.equal(await page.locator('#search-results button').count(), 1);
-  await page.locator('#search-archived').check(); assert.equal(await page.locator('#search-results button').count(), 2);
+  await searchOptions(); await page.locator('#search-archived').check(); assert.equal(await page.locator('#search-results button').count(), 2);
   await page.locator(`[data-search-key="message:${second}:archive-match"]`).click();
   await page.locator('#messages [data-message-id="archive-match"]').waitFor();
   assert.equal((await snapshot()).sessions.find(s => s.id === second).archived, true);
@@ -95,7 +128,7 @@ async function run() {
   checks.push('Returning from a shared result restores both the original member and keyword filters');
   await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '归档工作区', exact: true }).click();
   await until(async () => (await snapshot()).room.archived, 'Room archived');
-  await page.locator('#search-button').click(); await page.locator('#search-archived').check(); await search('加入');
+  await page.locator('#search-button').click(); await searchOptions(); await page.locator('#search-archived').check(); await search('加入');
   await page.locator(`[data-search-key="shared:${eventId}"]`).click(); await page.locator('#search-preview').waitFor();
   assert.equal((await snapshot()).room.archived, true);
   assert.equal((await snapshot()).sessions.some(s => s.roomId === 'shared'), false);
@@ -114,7 +147,7 @@ async function run() {
   const stats = await fixture('stats'); assert.deepEqual(stats.sends, []); assert.deepEqual(stats.inputs, []); assert.deepEqual(stats.interruptions, []);
   checks.push('Close/reopen preserves histories, identities and drafts; search persists no query and triggers zero native input, model sends or interrupts');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ checks, errors, modelTasks: 0, nativeProcesses: 0, profile }, null, 2));
+  console.log(JSON.stringify({ checks, errors, modelTasks: 0, nativeProcesses: 0, profile, picker, scriptSha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(__filename)).digest('hex') }, null, 2));
 }
 run().catch(async error => { console.error(error.stack); if (page && !page.isClosed()) await capture('failed'); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
   try { if (app) await app.close(); if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } }

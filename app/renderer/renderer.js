@@ -2021,15 +2021,13 @@ $('retry-save').onclick = () => attempt(async () => {
 $('search-button').onclick = () => openSearch();
 $('close-search').onclick = () => $('search-dialog').close();
 $('search-preview-back').onclick = renderSearch;
-$('search-dialog').addEventListener('close', () => { clearTimeout(searchTimer); ui.clearMarkdown($('search-preview-body')); $('search-preview-body').textContent = ''; });
+$('search-dialog').addEventListener('close', finishSearch);
+$('search-dialog').onpointerdown = event => { searchOutsidePointer = searchOutside(event); };
+$('search-dialog').onclick = event => { const outside = searchOutsidePointer && searchOutside(event); searchOutsidePointer = false; if (outside) { event.preventDefault(); event.stopPropagation(); $('search-dialog').close(); } };
 $('search-input').oninput = event => { clearTimeout(searchTimer); if (!event.isComposing) searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
 $('search-input').oncompositionend = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
-$('search-input').onkeydown = event => {
-  if (event.isComposing || event.keyCode === 229) return;
-  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); $('search-dialog').close(); return; }
-  if (event.key === 'ArrowDown') { event.preventDefault(); renderSearch(); $('search-results').querySelector('button')?.focus(); }
-  if (event.key === 'Enter') { event.preventDefault(); renderSearch(); if ($('search-results').querySelectorAll('button').length === 1) $('search-results').querySelector('button').click(); else $('search-results').querySelector('button')?.focus(); }
-};
+$('search-input').onkeydown = searchInputKey;
+$('search-results').onkeydown = searchResultKey;
 $('search-scope').onchange = $('search-archived').onchange = () => { searchLimit = 60; renderSearch(); };
 $('search-more').onclick = () => { searchLimit += 60; renderSearch(); };
 $('return-reading').onclick = () => attempt(returnToReading);
