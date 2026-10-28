@@ -215,10 +215,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         summary.append(heading); content.append(body); disclosure.append(summary, content); item.replaceChildren(disclosure, entry.tail, entry.more, actions);
         const rememberFold = () => {
           updateProcessTail(entry);
-          const error = entry.error || '';
           const previous = view.folds[m.id];
-          if (view.key !== key || previous?.open === disclosure.open && previous.error === error) return;
-          view.intent = null; delete view.folds[m.id]; view.folds[m.id] = { open: disclosure.open, error };
+          const previousOpen = typeof previous === 'boolean' ? previous : previous?.open;
+          if (view.key !== key || previousOpen === disclosure.open) return;
+          // A manual choice belongs to this source record, not its latest status.
+          view.intent = null; delete view.folds[m.id]; view.folds[m.id] = disclosure.open;
           for (const id of Object.keys(view.folds).slice(0, Math.max(0, Object.keys(view.folds).length - 200))) delete view.folds[id];
           captureReading(view); saveReading(view, { ...(readingPositions[key] || { top: el.scrollTop, anchor: m.id, offset: 0 }), follow: false });
           attempt(() => api.readingState(readingPositions));
@@ -298,8 +299,9 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       const query = room ? $('room-search').value.trim() : '';
       const reveal = query && [m.text, m.input].some(value => value?.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
       const choice = view.folds[m.id];
-      const savedOpen = typeof choice === 'boolean' ? (error ? undefined : choice) : choice?.error === error ? choice.open : undefined;
-      const open = Boolean(reveal || (savedOpen !== undefined ? savedOpen : error));
+      const savedOpen = typeof choice === 'boolean' ? choice : choice?.open;
+      const failedTool = m.role === 'tool' && (m.status === 'failed' || entry.exploration?.error === 'failed');
+      const open = Boolean(savedOpen !== undefined ? savedOpen : reveal || error && !failedTool);
       if (entry.disclosure.open !== open) { entry.expectedOpen = open; entry.disclosure.open = open; }
       entry.item.dataset.running = String(entry.exploration ? entry.exploration.active : ['running', 'streaming'].includes(m.status));
       let inputPreview = m.input;
@@ -307,7 +309,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         try { const value = JSON.parse(inputPreview); inputPreview = [value.command, value.description, value.file_path, value.path, value.query].find(field => typeof field === 'string' && field.trim()) || inputPreview; }
         catch { /* The expandable original remains authoritative. */ }
       }
-      const preview = (entry.exploration || m.toolKind === 'webSearch' ? '' : m.toolKind === 'commandExecution' ? nativeCommandPreview(m) : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
+      const preview = (failedTool && !entry.exploration && m.toolKind !== 'commandExecution' && m.title !== 'Bash' && m.text?.trim() ? m.text : entry.exploration || m.toolKind === 'webSearch' ? '' : m.toolKind === 'commandExecution' ? nativeCommandPreview(m) : inputPreview || m.text || '').split(/\r?\n/).find(line => line.trim()) || '';
       if (entry.preview.textContent !== preview) entry.preview.textContent = preview;
       updateProcessTail(entry);
     }
