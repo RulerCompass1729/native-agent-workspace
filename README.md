@@ -86,6 +86,12 @@ to change its local display name. The same menu offers **在独立窗口打开**
 The sidebar, room tabs and other windows update together. The name
 is saved on this Mac; renaming does not call a model or change native history.
 
+For existing Claude history, leave the optional ID empty to fork through its native
+picker. To continue the same UUID, first exit its other native connection, enter
+that UUID and select its original directory. The app checks for active writers;
+this is a preflight check rather than a native lock. Inherited history stays in
+the same-screen TUI, and joining does not replay the old task.
+
 Use **查找会话与记录** to find loaded conversations or shared records on this Mac.
 **⌘F** scopes the search to the current conversation or shared timeline; optionally
 include archived records. Opening a result does not restore an archive or send its
