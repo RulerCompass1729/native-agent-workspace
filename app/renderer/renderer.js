@@ -1413,6 +1413,9 @@ async function ensureTerminal(id, explicit = false) {
   surface.addEventListener('pointerdown', event => { if (event.button === 0) claimTerminalFocus(); }, true);
   surface.addEventListener('focusin', claimTerminalFocus);
   surface.addEventListener('wheel', event => {
+    // Keep horizontal reading of an oversized native frame local. xterm's
+    // mouse-mode wheel listener otherwise prevents the browser's default scroll.
+    if (Math.abs(event.deltaX) > Math.abs(event.deltaY) && surface.scrollWidth > surface.clientWidth) { event.stopPropagation(); return; }
     // These paths scroll inside the native program. Prepare the same guarded
     // view as a click; ordinary local scrollback needs no native input/control.
     if (event.deltaY && (['vt200', 'drag', 'any'].includes(term.modes.mouseTrackingMode) || term.buffer.active.type === 'alternate')) claimTerminalFocus();
@@ -1567,7 +1570,11 @@ function fitTerminal(id) {
     const latest = state.sessions.find(s => s.id === id);
     if (terminals.get(id) !== entry || activeSessionId() !== id || terminalLayout === 'hidden' || !entry.element.isConnected || !entry.element.checkVisibility() || latest?.owner !== owner) return;
     if (entry.composing || entry.composition) { entry.fitPending = true; return; }
-    entry.fit.fit();
+    const dimensions = entry.fit.proposeDimensions();
+    if (!dimensions || !Number.isFinite(dimensions.cols) || !Number.isFinite(dimensions.rows)) return;
+    // Keep the display and native PTY on the same bounded grid. An undersized
+    // pane reads that original grid through the surface's local overflow.
+    entry.term.resize(Math.max(20, Math.min(400, dimensions.cols)), Math.max(5, Math.min(200, dimensions.rows)));
     const size = JSON.stringify([entry.term.cols, entry.term.rows]);
     if (entry.nativeSize === size) return;
     entry.nativeSize = size;
