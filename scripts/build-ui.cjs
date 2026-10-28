@@ -17,7 +17,24 @@ css = `.naw{${palette};font-size:14px;height:100%;min-height:0;overflow:hidden;$
 const bootstrap = read('app/dsh/bootstrap.js');
 const renderer = read('app/room-mention.js') + '\n' + read('app/native-usage.js') + '\n' + read('app/room-threads.js') + '\n' + read('app/approval-policy.js') + '\n' + ['fleet-observation.js', 'local-search.js', 'reading-list.js', 'search-view.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
 const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\n*/\n${read(`node_modules/${name}/${entry}`)}`;
-const terminal = licensed('@xterm/xterm', 'lib/xterm.js') + '\n' + licensed('@xterm/addon-fit', 'lib/addon-fit.js');
+// xterm 6.0 keeps wider alternate-screen backing cells when columns shrink.
+// DomRendererRowFactory must stop at the active grid, including link-hover
+// redraws. Keep those backing cells intact; only bound the bundled DOM painter.
+// A retained double-width cell straddling the edge cannot be drawn completely.
+let xterm = licensed('@xterm/xterm', 'lib/xterm.js');
+if (JSON.parse(read('node_modules/@xterm/xterm/package.json')).version !== '6.0.0') throw Error('Requalify the terminal DOM column fix for this xterm version.');
+const columnFix = [
+  ['createRow(e,t,i,s,r,a,l,c,u,f,g){', 'createRow(e,t,i,s,r,a,l,c,u,f,g,nawColumns=Infinity){'],
+  ['let b,C=e.getNoBgTrimmedLength();', 'let b,C=Math.min(e.getNoBgTrimmedLength(),nawColumns);'],
+  ['const W=this._isCellInSelection(x,t),H=i&&x===a,K=P&&x>=f&&x<=g;', 'if(x+C>nawColumns)continue;const W=this._isCellInSelection(x,t),H=i&&x===a,K=P&&x>=f&&x<=g;'],
+  ['this._rowFactory.createRow(h,e,e===s,o,a,r,n,this.dimensions.css.cell.width,this._widthCache,-1,-1)', 'this._rowFactory.createRow(h,e,e===s,o,a,r,n,this.dimensions.css.cell.width,this._widthCache,-1,-1,this._bufferService.cols)'],
+  ['this._rowFactory.createRow(p,_,_===l,d,u,h,c,this.dimensions.css.cell.width,this._widthCache,n?o===i?e:0:-1,n?(o===s?t:r)-1:-1)', 'this._rowFactory.createRow(p,_,_===l,d,u,h,c,this.dimensions.css.cell.width,this._widthCache,n?o===i?e:0:-1,n?(o===s?t:r)-1:-1,this._bufferService.cols)'],
+];
+for (const [before, after] of columnFix) {
+  if (xterm.split(before).length !== 2) throw Error('Pinned terminal DOM source changed; requalify the column fix.');
+  xterm = xterm.replace(before, after);
+}
+const terminal = xterm + '\n' + licensed('@xterm/addon-fit', 'lib/addon-fit.js');
 const source = bootstrap
   .replace('/* SIDEBAR_TEMPLATE */', () => JSON.stringify(sidebar))
   .replace('/* MAIN_TEMPLATE */', () => JSON.stringify(main))
