@@ -210,6 +210,13 @@ header h1, header p { overflow-wrap: anywhere; }
 [data-search-target] { outline: 2px solid var(--accent, #527564); outline-offset: 7px; border-radius: 4px; }
 #retry-save { align-self: flex-start; margin: 0 20px 10px; }
 .reading-return { align-self: flex-start; margin: 5px 20px; font-size: 12px; padding: 4px 8px; }
+.naw-markdown .md-code-block { display: flex; align-items: flex-start; }
+.naw-markdown .md-code-block > :has(> [data-code-block-banner]) { order: 2; position: sticky; top: 0; flex: none; max-width: 45%; padding: 8px; background: transparent; }
+.naw-markdown [data-code-block-banner] { padding: 0; gap: 8px; background: transparent; }
+.naw-markdown [data-code-block-banner] > :first-child:empty { display: none; }
+.naw-markdown .md-code-block > [data-code-block-content] { order: 1; display: block; flex: 1; min-width: 0; }
+.naw-markdown .md-code-block pre { white-space: pre; word-break: normal; overflow-wrap: normal; overflow-x: auto; padding: 12px 14px; }
+.naw-markdown .md-code-block code { white-space: inherit; word-break: normal; overflow-wrap: normal; }
 &[data-native-surface="sidebar"][data-collapsed="true"] #search-button { width: 38px; height: 38px; padding: 5px; }
 
 #draft-recovery{margin-bottom:10px;padding:10px;border:1px solid var(--border);border-radius:8px}#draft-recovery summary{cursor:pointer;font-size:12px;color:var(--muted)}.draft-recovery-text{display:block;width:100%;margin-bottom:8px}.draft-recovery-copy+.draft-recovery-copy{margin-top:12px}.draft-recovery-copy button+button{margin-left:8px}
