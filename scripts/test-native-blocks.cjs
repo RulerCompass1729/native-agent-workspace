@@ -18,6 +18,7 @@ assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311|312)\b/, 'Verify the up
 let application, page, client, calls = 0, held, releaseFinal, releaseStart, unexpectedRequest;
 const errors = [], checks = [];
 const compatibilityTrial = process.env.NAW_TEST_NATIVE_COMPAT === '1';
+const scrollTrial = process.env.NAW_TEST_NATIVE_SCROLL === '1';
 const questionTrial = process.env.NAW_TEST_NATIVE_QUESTION === '1';
 const imageTrial = process.env.NAW_TEST_NATIVE_IMAGE === '1';
 // Plan case: the session starts in native plan mode; the model writes its plan
@@ -26,8 +27,8 @@ const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_M
 // Permission case: manual mode asks before a Bash command that writes a file
 // (read-only commands such as echo run without asking).
 const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
-assert.ok([compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial].filter(Boolean).length <= 1, 'One bounded case per run');
-assert.ok(!/^2\.1\.312\b/.test(nativeVersion) || compatibilityTrial, 'Only the combined compatibility case is qualified on 2.1.312');
+assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial].filter(Boolean).length <= 1, 'One bounded case per run');
+assert.ok(!/^2\.1\.312\b/.test(nativeVersion) || compatibilityTrial || scrollTrial, '312 requires a bounded qualified compatibility or basic-text scroll witness');
 let planFile = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
@@ -50,6 +51,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
     }
     const number = ++calls;
+    if (scrollTrial && number > 1) { unexpectedRequest = Error('Scroll budget exceeded: one local response only'); res.writeHead(429); res.end(); return; }
     if (compatibilityTrial && number > 3) { unexpectedRequest = Error('Compatibility budget exceeded: at most three local responses'); res.writeHead(429); res.end(); return; }
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
     if (number > (imageTrial ? 1 : questionTrial || permissionTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
@@ -57,6 +59,12 @@ const server = http.createServer((req, res) => {
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'message_start', { message: { id: `msg_local_${number}`, type: 'message', role: 'assistant', model: request.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
+    if (scrollTrial) {
+      assert.match(request.model, /haiku/i);
+      block(res, 0, { type: 'text', text: require('./native-scroll-check.cjs').reply('claude') });
+      event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 2000 } });
+      event(res, 'message_stop', {}); res.end(); return;
+    }
     if (imageTrial) {
       block(res, 0, { type: 'text', text: 'NATIVE_IMAGE_FINAL' });
       event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } });
@@ -130,6 +138,13 @@ async function cleanup() {
   }
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Native submission bridge', 60000);
   const before = (await snapshot()).sessions[0];
+  if (scrollTrial) {
+    await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('Show the numbered local fixture without changing files.'); await page.locator('#send-button').click();
+    await until(async () => calls === 1 && (await snapshot()).sessions[0].state === 'idle', 'One local native reply completes');
+    checks.push(await require('./native-scroll-check.cjs').check({ page, snapshot, base, provider: 'claude', localCalls: () => calls }));
+    assert.equal(calls, 1); assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ checks, nativeVersion, localResponses: calls, paidModelCalls: 0, physicalTrackpad: 'not tested', iTermComparison: 'not tested', evidence: base })); return;
+  }
   if (compatibilityTrial) {
     fs.writeFileSync(path.join(base, 'compat-start.json'), JSON.stringify(before, null, 2));
     assert.equal(before.queueAvailable, true, 'Qualified native queue is bound at startup');

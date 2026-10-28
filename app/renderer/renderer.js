@@ -1408,6 +1408,11 @@ async function ensureTerminal(id, explicit = false) {
   };
   surface.addEventListener('pointerdown', event => { if (event.button === 0) claimTerminalFocus(); }, true);
   surface.addEventListener('focusin', claimTerminalFocus);
+  surface.addEventListener('wheel', event => {
+    // These paths scroll inside the native program. Prepare the same guarded
+    // view as a click; ordinary local scrollback needs no native input/control.
+    if (event.deltaY && (['vt200', 'drag', 'any'].includes(term.modes.mouseTrackingMode) || term.buffer.active.type === 'alternate')) claimTerminalFocus();
+  }, { capture: true, passive: true });
   bindImageInput(surface);
   surface.addEventListener('paste', event => { if (imageFiles(event.clipboardData).length) return; event.preventDefault(); event.stopPropagation(); attempt(() => { if (activeSessionId() === id) pasteTerminal(event.clipboardData?.getData('text/plain') || ''); }); }, true);
   term.onData(data => {
