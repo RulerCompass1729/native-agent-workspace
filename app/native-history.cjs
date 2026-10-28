@@ -22,6 +22,13 @@ function metadata(thread) {
     cwd: thread.cwd, updatedAt: Number.isFinite(thread.updatedAt) ? thread.updatedAt : null,
     model: typeof thread.model === 'string' ? thread.model.slice(0, 200) : '原生默认' };
 }
+function claudeMetadata(id, options) {
+  nativeId(id);
+  if (!options || typeof options !== 'object' || Array.isArray(options) || typeof options.cwd !== 'string' || !path.isAbsolute(options.cwd) || options.cwd.length > 4096 || options.cwd.includes('\0')) throw Error('请选择原会话的工作目录。');
+  if (options.name != null && (typeof options.name !== 'string' || options.name.length > 60 || /[\x00-\x1f\x7f]/.test(options.name))) throw Error('无效的会话名称。');
+  if (options.skipPermissions != null && typeof options.skipPermissions !== 'boolean') throw Error('无效的权限选择。');
+  return { nativeId: id.toLowerCase(), cwd: options.cwd, name: options.name?.trim() || 'Claude 历史会话', autoName: !options.name?.trim(), model: '原生默认', skipPermissions: options.skipPermissions === true };
+}
 class NativeHistory {
   constructor(host) { this.host = host; }
   async ready() {
@@ -54,4 +61,4 @@ class NativeHistory {
     return metadata(result.thread);
   }
 }
-module.exports = { NativeHistory, nativeId, metadata, serverVersion, verifiedCodexProtocol, codexVersionInfo };
+module.exports = { claudeMetadata, NativeHistory, nativeId, metadata, serverVersion, verifiedCodexProtocol, codexVersionInfo };

@@ -53,3 +53,13 @@ test('forgetting a saved session still requires a cancellable confirmation', asy
   d.dialog.showMessageBox=async(_win,value)=>{options=value;return{response:0};};
   assert.equal((await d.invoke('forget','saved')).ok,true);assert.equal(forgotten,0);assert.equal(options.defaultId,0);assert.equal(options.cancelId,0);
 });
+
+test('desktop native-history import forwards provider, original folder and explicit permission choice', async t => {
+  const d = await desktop(t), calls = [], id = '00000000-0000-4000-8000-000000000001';
+  d.client.call = async (method, ...args) => { calls.push({ method, args }); return 'imported'; };
+  const options = { provider: 'claude', cwd: os.tmpdir(), name: 'Existing session', skipPermissions: false };
+  const result = await d.invoke('importHistory', id, options);
+  assert.equal(result.ok, true); assert.equal(result.value, 'imported');
+  assert.equal(calls.length, 1); assert.equal(calls[0].method, 'importHistory');
+  assert.deepEqual(calls[0].args, [id, options]);
+});

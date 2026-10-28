@@ -8,7 +8,7 @@ const { applyNativeBlock, applyCodexHistory, applyCodexTurnHistory, applyCodexDe
 const { SharedReplies } = require('./shared-replies.cjs');
 const addressed = require('./addressed-handoffs.cjs');
 const { nativeApprovalPolicy, ApprovalQueue } = require('./approval-policy.js');
-const { NativeHistory, nativeId, codexVersionInfo } = require('./native-history.cjs');
+const { NativeHistory, claudeMetadata, nativeId, codexVersionInfo } = require('./native-history.cjs');
 
 const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error(`请输入有效文字；一次最多 ${max.toLocaleString('en-US')} 个字符。`);
@@ -133,23 +133,29 @@ class Workspace extends EventEmitter {
       throw error;
     }
   }
-  importHistory(id, owner) {
+  importHistory(id, owner, options = {}) {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) throw Error('无效的历史接入请求。');
+    const provider = options.provider ?? 'codex';
+    if (!['codex', 'claude'].includes(provider)) throw Error('无效的原生会话类型。');
     nativeId(id);
+    const claude = provider === 'claude' ? claudeMetadata(id, options) : null;
+    if (claude) id = claude.nativeId;
     if (this.closed) throw Error('后台已关闭，没有接入会话。');
     this.pendingNativeImports++;
     const operation = this.historyQueue.then(async () => {
       if (this.closed) throw Error('后台已关闭，没有接入会话。');
-      const existing = [...this.sessions.values()].filter(s => s.provider === 'codex' && s.nativeId === id);
+      const existing = [...this.sessions.values()].filter(s => s.provider === provider && s.nativeId === id);
       if (existing.length > 1) throw Error('已有记录归属冲突；没有恢复第二个连接。');
       if (existing.length) return existing[0].id;
       if (this.storageWarning) throw Error('本地记录尚未安全保存，请先处理保存问题。');
-      const info = await this.nativeHistory.read(id);
+      const info = claude || await this.nativeHistory.read(id);
       if (this.closed) throw Error('后台已关闭，没有接入会话。');
       if (this.storageWarning) throw Error('本地保存状态已变化，没有恢复原生会话。');
       if (!fs.statSync(info.cwd).isDirectory()) throw Error('原工作目录不可用，请先恢复该目录。');
       const localId = randomUUID();
-      const record = { id: localId, nativeId: id, externalHistory: true, name: info.name || 'Codex 历史会话', provider: 'codex', cwd: info.cwd,
-        roomId: null, memberRevision: 0, controlRevision: 0, owner, view: 'chat', state: 'recoverable', messages: [], fleet: [], background: null,
+      const record = { id: localId, nativeId: id, externalHistory: true, name: info.name || 'Codex 历史会话', provider, cwd: info.cwd,
+        ...(claude ? { autoName: claude.autoName, nativePermissionMode: claude.skipPermissions ? 'bypassPermissions' : undefined } : {}),
+        roomId: null, memberRevision: 0, controlRevision: 0, owner, view: claude ? 'terminal' : 'chat', state: 'recoverable', messages: [], fleet: [], background: null,
         scheduled: null, model: info.model, usage: null, pendingTag: null, activity: '', approval: null, pid: null };
       // Reserve and locally persist the identity before crossing the native side
       // effect boundary. An uncertain ACK is never retried or turned into a fork.
@@ -157,7 +163,7 @@ class Workspace extends EventEmitter {
       if (this.storageWarning) { record.state = 'error'; record.activity = '历史接入尚未开始：请先重试本地保存。'; this.changed(); return localId; }
       try { await this.resume(localId, owner); }
       catch (error) {
-        if (error.nativeActiveWriter && this.sessions.get(localId) === record && !this.runtimes.has(localId)) {
+        if ((error.nativeActiveWriter || error.nativeImportRefused) && this.sessions.get(localId) === record && !this.runtimes.has(localId)) {
           // A definite refusal never acquired the native thread. Keep the
           // person's selection in the picker instead of adding a failed copy.
           this.sessions.delete(localId); this.progress.delete(localId); this.changed(); this.persist(); throw error;
@@ -932,7 +938,7 @@ class Workspace extends EventEmitter {
     const generation = s.connectionRevision;
     try {
       if (s.externalHistory) {
-        await this.nativeHistory.ready();
+        if (s.provider === 'codex') await this.nativeHistory.ready();
         if (this.closed || this.storageWarning || this.sessions.get(id) !== s || generation !== s.connectionRevision || s.state !== 'starting' || this.runtimes.has(id) || this.stops.has(id)) throw Error('会话状态已变化，没有继续旧的恢复请求。');
       }
       runtime = this.host.create(s); this.runtimes.set(id, runtime); this.bind(s, runtime);

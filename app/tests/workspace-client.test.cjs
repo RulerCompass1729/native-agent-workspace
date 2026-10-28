@@ -728,3 +728,18 @@ for (const method of ['queueShared', 'steerShared']) for (const intervention of 
   assert.equal(second.next.calls.filter(([m, id]) => m === 'steerShared' && id === 'peer').length, intervention === 'other-session' ? 1 : 0);
   first.c.close(); second.c.close();
 });
+
+test('Claude history capability refuses old active backend and deduplicates existing records across backends without launch', async () => {
+  const { old, next, c } = fixture(), id = '00000000-0000-4000-8000-000000000021';
+  await assert.rejects(c.call('importHistory', id, { provider: 'claude', cwd: '/synthetic' }), /尚不支持/);
+  assert.equal(next.calls.some(([method]) => method === 'importHistory'), false);
+  old.real.sessions.push({ id: 'existing-claude', nativeId: id, provider: 'claude', state: 'idle' });
+  assert.equal(await c.call('importHistory', id.toUpperCase(), { provider: 'claude', cwd: '/synthetic' }), 'existing-claude'); assert.equal(next.calls.some(([method]) => method === 'importHistory'), false); c.close();
+});
+test('Claude history routes canonical provider/options to the active backend once without matching Codex UUID', async () => {
+  const { old, next, c } = fixture(), id = '00000000-0000-4000-8000-000000000022'; next.real.capabilities.push('claudeHistory');
+  old.real.sessions.push({ id: 'same-codex', nativeId: id, provider: 'codex', state: 'idle' }); const call = next.client.call;
+  next.client.call = async (method, ...args) => { if (method !== 'importHistory') return call(method, ...args); next.calls.push([method, ...args]); next.real.sessions.push({ id: 'new-claude', nativeId: args[0], provider: 'claude', state: 'idle' }); return 'new-claude'; };
+  const options = { provider: 'claude', cwd: '/synthetic', skipPermissions: false };
+  assert.equal(await c.call('importHistory', id, options), 'new-claude'); assert.equal(next.calls.filter(([m]) => m === 'importHistory').length, 1); assert.deepEqual(next.calls.find(([m]) => m === 'importHistory'), ['importHistory', id, options]); assert.equal(old.calls.some(([m]) => m === 'importHistory'), false); c.close();
+});
