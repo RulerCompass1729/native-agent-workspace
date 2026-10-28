@@ -15,6 +15,7 @@ function fixture(method, target, value) { const id = ++sequence; return new Prom
   child.on('message', callback); child.send({ id, method, target, value });
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
+const resumeButton = () => page.locator('#composer').getByRole('button', { name: '继续原生会话', exact: true });
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'test-observer');
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
@@ -25,38 +26,42 @@ async function run() {
   await page.locator('#session-name').fill('恢复原会话'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Ready');
   const original = (await snapshot()).sessions[0], id = original.id;
+  // Same-screen history normally mounts a display passively. Explicitly hide
+  // it before history arrives to exercise a window that has never had a frame.
+  await page.locator('#close-native-terminal').click();
+  await until(() => page.locator('#native-pane').isHidden(), 'Terminal pane hidden before history');
   await fixture('history', id); await page.locator('#messages').getByText('保留的原生历史', { exact: true }).waitFor();
   await page.locator('#message-input').fill('私有草稿：断开后保留');
   await page.locator('#advanced > summary').click(); await page.getByRole('button', { name: '断开本应用连接…', exact: true }).click();
   assert.equal((await snapshot()).sessions[0].state, 'idle');
   await app.evaluate(() => { globalThis.choice = 1; });
   await page.getByRole('button', { name: '断开本应用连接…', exact: true }).click();
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
+  await resumeButton().waitFor();
   assert.equal((await snapshot()).sessions[0].state, 'disconnected');
   // This GUI-first fixture has never produced a native screen. A disconnected
   // observer must retain history without inventing a frozen terminal frame.
-  const progress = page.locator(`[data-progress-id="${id}"]`);
-  await progress.locator('.progress-notice').getByText('当前没有保留的临时画面。', { exact: false }).waitFor();
-  assert.match(await progress.locator(':scope > summary').textContent(), /已断开/);
-  assert.equal(await progress.locator('.progress-viewport').isVisible(), false);
-  assert.equal(await progress.locator('.progress-controls').isVisible(), false);
+  assert.equal((await fixture('inspect')).terminalCreations, 0, 'Hidden pane never created a display');
+  await until(async () => (await page.locator('#terminal-empty').textContent()) === '本窗口没有这个会话的原生终端画面。', 'Disconnected empty-frame text');
+  assert.match(await page.locator('#session-status').innerText(), /已断开/);
+  assert.equal(await page.locator('#native-pane').isVisible(), false, 'Hidden terminal pane stays hidden after disconnect');
+  assert.equal(await page.locator('#terminal-area .xterm-screen').count(), 0);
+  assert.equal((await fixture('inspect')).terminalCreations, 0, 'Disconnecting without a frame cannot invent a display');
   assert.equal(await page.locator('#messages').getByText('保留的原生历史', { exact: true }).isVisible(), true);
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'disconnected-without-frame.png') }); }
   assert.equal(await page.locator('#message-input').inputValue(), '私有草稿：断开后保留');
   checks.push('Cancel disconnect preserves live session; confirmed disconnect exposes continuation and preserves draft');
-  await app.evaluate(() => { globalThis.choice = 0; });
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).click();
-  assert.equal((await snapshot()).sessions[0].state, 'disconnected');
-  await app.evaluate(() => { globalThis.choice = 1; }); await fixture('fail', id, true);
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).click();
+  const dialogsBeforeResume = await app.evaluate(() => globalThis.dialogs.length);
+  await fixture('fail', id, true);
+  await resumeButton().click();
   await page.locator('#toast').getByText('Synthetic connection interruption', { exact: true }).waitFor();
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
-  await fixture('fail', id, false); await page.getByRole('button', { name: '继续原生会话', exact: true }).click();
+  await resumeButton().waitFor();
+  await fixture('fail', id, false); await resumeButton().click();
   await until(async () => (await snapshot()).sessions[0].state === 'idle', 'Reconnected');
   const current = (await snapshot()).sessions[0];
   assert.equal(current.id, id); assert.equal(current.nativeId, original.nativeId); assert.equal(current.messages.length, 1);
   assert.equal(current.messages[0].text, '保留的原生历史'); assert.equal(await page.locator('#message-input').inputValue(), '私有草稿：断开后保留');
-  checks.push('Cancel reconnect is inert; failed reconnect remains retryable; successful retry preserves exact identity/history/draft');
+  assert.equal(await app.evaluate(() => globalThis.dialogs.length), dialogsBeforeResume, 'Explicit continuation needs no second confirmation');
+  checks.push('Explicit continuation has no second confirmation; failed reconnect remains retryable; success preserves exact identity/history/draft');
   await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen').waitFor();
   await page.locator('#chat-tab').click(); assert.equal(await page.locator('#message-input').inputValue(), '私有草稿：断开后保留');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'reconnect-retry.png') }); }
@@ -86,7 +91,7 @@ async function run() {
   await fixture('accept-input', id, true);
   await page.locator('#terminal-tab').click();
   await until(async () => (await fixture('inspect')).terminalCreations === beforeDisplayRetry + 1, 'Explicit display retry');
-  await until(async () => await page.locator('#terminal-area .terminal-loading').count() === 0, 'Snapshot painted without a started/state event');
+  await until(async () => await page.locator(`#terminal-area [data-terminal-id="${id}"] .terminal-loading`).count() === 0, 'Snapshot painted without a started/state event');
   assert.equal(await page.locator('#terminal-area .xterm-helper-textarea').evaluate(el => document.activeElement === el), true, 'Explicit retry focuses the confirmed display');
   await page.keyboard.press('x');
   await until(async () => (await fixture('inspect')).inputs === 1, 'First keyboard input reaches reopened display');
@@ -109,28 +114,26 @@ async function run() {
   await page.locator('#approval').getByText('Old synthetic permission', { exact: true }).waitFor();
   const oldPermission = await page.getByRole('button', { name: '允许这一次', exact: true }).elementHandle();
   await fixture('transport-close', id);
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
+  await resumeButton().waitFor();
   assert.equal((await snapshot()).sessions[0].terminalAvailable, true);
   assert.equal(await page.locator('#message-input').inputValue(), '私有草稿：断开后保留');
   await page.locator('#terminal-tab').click();
   await page.locator('#terminal-area .xterm-screen').waitFor();
   await page.locator('#chat-tab').click();
-  await app.evaluate(() => { globalThis.choice = 0; });
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).click();
-  assert.equal((await snapshot()).sessions[0].transportDisconnected, true);
-  await app.evaluate(() => { globalThis.choice = 1; }); await fixture('fail', id, true);
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).click();
+  await fixture('fail', id, true);
+  await resumeButton().click();
   await page.locator('#toast').getByText('Synthetic connection interruption', { exact: true }).waitFor();
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
+  await resumeButton().waitFor();
   assert.equal((await snapshot()).sessions[0].terminalAvailable, true);
   await fixture('fail', id, false);
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).click();
+  await resumeButton().click();
   await until(async () => (await snapshot()).sessions[0].state === 'idle', 'Same-backend observer restored');
   assert.equal((await fixture('inspect')).terminalCreations, terminalsBefore);
   assert.equal((await snapshot()).sessions[0].nativeId, original.nativeId);
   assert.equal(await page.locator('#message-input').inputValue(), '私有草稿：断开后保留');
   assert.equal((await snapshot()).diagnostics.dispatches, 0);
-  checks.push('Lost graphical transport offers cancel/failure/retry while retaining the existing terminal, draft and native identity');
+  assert.equal(await app.evaluate(() => globalThis.dialogs.length), dialogsBeforeResume, 'Graphical transport recovery also uses the explicit action without another dialog');
+  checks.push('Lost graphical transport offers explicit failure/retry while retaining the existing terminal, draft and native identity');
   await fixture('approval', id, 'New synthetic permission');
   await page.locator('#approval').getByText('New synthetic permission', { exact: true }).waitFor();
   // A queued click on a removed old control must not decide the new request.
@@ -153,14 +156,22 @@ async function run() {
   assert.equal(await page.getByRole('button', { name: '继续原生会话', exact: true }).count(), 0);
   assert.equal((await fixture('inspect')).inputs, 0);
   await fixture('display-exit', id);
-  await page.getByRole('button', { name: '继续原生会话', exact: true }).click();
+  await resumeButton().click();
   await until(async () => (await snapshot()).sessions[0].state === 'idle', 'Explicit continuation after confirmed display exit');
   assert.equal(await page.locator('#message-input').inputValue(), '私有草稿：断开后保留');
   assert.equal((await snapshot()).sessions[0].nativeId, original.nativeId);
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.deepEqual(errors, []);
   checks.push('Backend exit immediately makes the old terminal read-only; continuation waits for display exit and retains the same draft and identity');
-  console.log(JSON.stringify({ checks, errors, modelTasks: 0, nativeProcesses: 0, profile }, null, 2));
+  console.log(JSON.stringify({ checks, errors, modelTasks: 0, nativeProcesses: 0, sourceSha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(__filename)).digest('hex'), profile }, null, 2));
 }
-run().catch(async e => { console.error(e.stack); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
+run().catch(async e => {
+  console.error(e.stack); process.exitCode = 1;
+  if (page && !page.isClosed() && process.env.NAW_EVIDENCE_DIR) {
+    fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true, mode: 0o700 });
+    await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'failure.png') }).catch(() => {});
+    fs.writeFileSync(path.join(process.env.NAW_EVIDENCE_DIR, 'failure.txt'), await page.locator('body').innerText().catch(() => ''));
+    fs.writeFileSync(path.join(process.env.NAW_EVIDENCE_DIR, 'failure-state.json'), JSON.stringify(await snapshot().catch(() => null), null, 2));
+  }
+}).finally(testScratch.cleanup(async () => {
   if (app) await app.close(); client?.close(); if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
 }));
