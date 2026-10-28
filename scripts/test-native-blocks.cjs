@@ -14,9 +14,10 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const binary = process.env.NAW_CLAUDE_BIN || executable('claude'); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
-let application, page, client, calls = 0, held, releaseFinal, releaseStart;
+assert.match(nativeVersion, /^2\.1\.(307|308|309|310|311|312)\b/, 'Verify the updated native contract before sending a test task');
+let application, page, client, calls = 0, held, releaseFinal, releaseStart, unexpectedRequest;
 const errors = [], checks = [];
+const compatibilityTrial = process.env.NAW_TEST_NATIVE_COMPAT === '1';
 const questionTrial = process.env.NAW_TEST_NATIVE_QUESTION === '1';
 const imageTrial = process.env.NAW_TEST_NATIVE_IMAGE === '1';
 // Plan case: the session starts in native plan mode; the model writes its plan
@@ -25,7 +26,8 @@ const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_M
 // Permission case: manual mode asks before a Bash command that writes a file
 // (read-only commands such as echo run without asking).
 const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
-assert.ok([imageTrial, questionTrial, planTrial, permissionTrial].filter(Boolean).length <= 1, 'One bounded case per run');
+assert.ok([compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial].filter(Boolean).length <= 1, 'One bounded case per run');
+assert.ok(!/^2\.1\.312\b/.test(nativeVersion) || compatibilityTrial, 'Only the combined compatibility case is qualified on 2.1.312');
 let planFile = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
@@ -34,7 +36,7 @@ const checksQuestion = { question: 'Which checks should run?', header: 'Checks',
 const nativeQuestions = ['multi', 'gui'].includes(answerMode) ? [nativeQuestion, checksQuestion] : [nativeQuestion];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
-  const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
+  const start = Date.now(); while (Date.now() - start < timeout) { if (unexpectedRequest) throw unexpectedRequest; if (await fn()) return; await sleep(75); } throw Error(label);
 }
 function event(res, type, body) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...body })}\n\n`); }
 function block(res, index, content) {
@@ -48,6 +50,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
     }
     const number = ++calls;
+    if (compatibilityTrial && number > 3) { unexpectedRequest = Error('Compatibility budget exceeded: at most three local responses'); res.writeHead(429); res.end(); return; }
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
     if (number > (imageTrial ? 1 : questionTrial || permissionTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
@@ -127,6 +130,13 @@ async function cleanup() {
   }
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Native submission bridge', 60000);
   const before = (await snapshot()).sessions[0];
+  if (compatibilityTrial) {
+    fs.writeFileSync(path.join(base, 'compat-start.json'), JSON.stringify(before, null, 2));
+    assert.equal(before.queueAvailable, true, 'Qualified native queue is bound at startup');
+    await require('./native-model-check.cjs')({ page, snapshot, base, aliases: ['sonnet', 'haiku'] });
+    assert.equal(calls, 0, 'Native model commands make no model request');
+    checks.push('Actual native model changes reach the GUI header and survive reload with the same ID/PID/draft; task model returns to haiku');
+  }
   if (imageTrial) {
     const original = Buffer.from([0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 255, 255]);
     const png = await application.evaluate(({ nativeImage }, data) => nativeImage.createFromBitmap(Buffer.from(data), { width: 2, height: 2 }).toPNG().toString('base64'), Array.from(original));
@@ -354,6 +364,11 @@ async function cleanup() {
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.text.includes('NATIVE_TOOL: 42')), 'Tool content before final reply');
   const live = (await snapshot()).sessions[0];
   assert.equal(live.state, 'working');
+  if (compatibilityTrial) {
+    assert.equal(live.queueAvailable, true, 'Native waiting queue remains available while working');
+    fs.writeFileSync(path.join(base, 'compat-working.json'), JSON.stringify(live, null, 2));
+    checks.push('Native queue capability is available while working on this qualified version');
+  }
   await page.locator('#messages').getByText('NATIVE_FIRST: checking locally.', { exact: true }).waitFor();
   await page.locator('#messages .process-details').filter({hasText:'NATIVE_TOOL: 42'}).locator(':scope > summary').click();
   assert.match(await page.locator('#messages').innerText(), /NATIVE_TOOL: 42/);
@@ -389,8 +404,17 @@ async function cleanup() {
   await page.locator('#message-input').fill('Start the interrupt check.'); await page.locator('#send-button').click();
   await until(() => calls === 3 && held, 'Held native stream');
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.text.includes('NATIVE_PARTIAL:')), 'Partial native display');
+  if (compatibilityTrial) await page.locator('#message-input').fill('Unsent compatibility draft.');
   await page.locator('#interrupt').click();
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.kind === 'turn' && m.status === 'interrupted'), 'Native interruption boundary');
+  if (compatibilityTrial) {
+    // Only the native API result + exact boundary + settled submission clear
+    // this flag. Escape fallback leaves nativeInputRequired true.
+    await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && !s.nativeInputRequired && !s.interruptPending; }, 'Native API abort settles and graphical input recovers');
+    assert.equal(await page.locator('#message-input').inputValue(), 'Unsent compatibility draft.');
+    fs.writeFileSync(path.join(base, 'compat-aborted.json'), JSON.stringify(await snapshot(), null, 2));
+    checks.push('Native API abort confirms its result/boundary/submission settlement and preserves the next unsent draft');
+  }
   const after = (await snapshot()).sessions[0];
   assert.ok(after.messages.some(m => m.text.includes('NATIVE_PARTIAL:')));
   assert.equal(calls, 3); assert.deepEqual(errors, []);
@@ -398,11 +422,19 @@ async function cleanup() {
   const nativeId = after.nativeId, nativePid = after.pid;
   await page.locator('#terminal-tab').click();
   await page.locator('#terminal-area .xterm-screen').click();
-  await page.keyboard.type('/clear'); await page.keyboard.press('Enter');
+  await page.keyboard.type('/clear'); await sleep(500);
+  const clearEdit = await page.locator('#terminal-area').innerText();
+  fs.writeFileSync(path.join(base, 'clear-before-enter.txt'), clearEdit);
+  assert.equal(clearEdit.split('\n').filter(line => line.startsWith('❯')).at(-1)?.slice(1).trim(), '/clear');
+  await page.keyboard.press('Enter');
   await until(async () => { const s = (await snapshot()).sessions[0]; return s.nativeId !== nativeId && !s.nativeContextPending && s.chatAvailable; }, 'Native clear on the verified version');
   const cleared = (await snapshot()).sessions[0];
   assert.equal(cleared.pid, nativePid); assert.ok(cleared.messages.some(m => m.text.includes('NATIVE_PARTIAL:'))); assert.equal(calls, 3);
   await page.locator('#chat-tab').click();
+  if (compatibilityTrial) {
+    assert.equal(await page.locator('#message-input').inputValue(), 'Unsent compatibility draft.');
+    fs.writeFileSync(path.join(base, 'compat-cleared.json'), JSON.stringify(await snapshot(), null, 2));
+  }
   checks.push('Native clear changes context identity without replacing the process, discarding local history or making another model call');
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-blocks.png') }); }
   console.log(JSON.stringify({ checks, nativeVersion, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
