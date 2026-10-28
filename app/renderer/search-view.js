@@ -10,7 +10,7 @@ function openSearch(scope = 'all') {
   if (!state || document.querySelector('dialog[open]')) return;
   searchOpener = document.activeElement; searchNavigating = false; searchOutsidePointer = false;
   captureReadingViews();
-  searchOrigin = { selected, roomSession, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
+  searchOrigin = { selected, roomSession, roomSurface, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
     roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread };
   const currentOption = $('search-scope').querySelector('[value="current"]');
   currentOption.disabled = !current();
@@ -103,8 +103,13 @@ async function openSearchResult(result) {
   $('search-dialog').close();
   if (result.kind === 'shared' || result.kind === 'room') {
     $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
+    roomSurface = 'records';
     await selectRoom();
     if (result.messageId) pointToMessage($('room-messages'), 'room', result.messageId, query);
+  } else if (origin.selected === 'room' && members().some(s => s.id === result.sessionId)) {
+    roomSurface = 'overview';
+    await select('room', 'chat', result.sessionId);
+    if (result.messageId) pointToMessage($('messages'), focusedReadingKey(result.sessionId), result.messageId, query);
   } else {
     await select(result.sessionId, 'chat');
     if (result.messageId) pointToMessage($('messages'), result.sessionId, result.messageId, query);
@@ -122,14 +127,20 @@ async function returnToReading() {
   $('room-search').value = target.roomSearch;
   roomThread = target.roomThread || '';
   $('room-filter').value = target.roomFilter; pendingRoomFilter = target.roomFilter;
+  roomSurface = target.roomSurface || 'overview';
   await select(target.selected, target.mode, target.roomSession);
   // select() captures the outgoing view. Restore the original geometry only
   // after that capture, and only for the destination of this explicit action.
   const inRoom = target.selected === 'room' && !target.roomSession;
-  const key = inRoom ? roomReadingKey() : target.sessionId;
+  const key = inRoom ? roomReadingKey() : focusedReadingKey(target.sessionId);
   const view = messageViews.get(inRoom ? $('room-messages') : $('messages'));
   if (target.reading[key] && view?.key === key) {
     saveReading(view, target.reading[key]); view.intent = { position: target.reading[key] }; scheduleReading(view);
+  }
+  if (target.selected === 'room' && roomSurface === 'overview' && !target.roomSession) {
+    for (const pane of messageViews.values()) if (pane.key.startsWith('collaboration:') && target.reading[pane.key]) {
+      saveReading(pane, target.reading[pane.key]); pane.intent = { position: target.reading[pane.key] }; scheduleReading(pane);
+    }
   }
   await persistView();
 }
