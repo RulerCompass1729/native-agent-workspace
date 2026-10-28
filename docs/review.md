@@ -459,3 +459,20 @@ Routine native failed statuses with nonzero exits stay in compact exploration as
 Validation after review fixes:58/58 affected checks and actual source GUI gui8 PASS; independent Fable delta review PASS after source CHANGES. The earlier source checkpoint requested changes because the first fixture used completed for a nonzero exit. No installed acceptance or live-provider proof is claimed here.
 
 Main integration: source b576bee, signed candidate108. The exact committed bundle passes the complete command-actions GUI task and 2,480-row reading/input/selection/streaming/reopen regression, zero model/provider calls. All57 runtime files and the post-UI strict signature match; both owned profiles are removed and only one daily app is searchable. Main1154 checks pass. Older retained backends that omitted action metadata keep the original content; fields are not reconstructed. Daily rollout awaits the separate newly observed Claude312 qualification. Main combined source and signed-installed Fable review PASS; reviewed HEAD, index and working diff are unchanged. This is the T29 scope, not completion of the dogfood milestone.
+
+
+### Claude native version drift
+
+New Claude Code2.1.312 sessions lost qualified GUI queue, abort, model/usage, structured-block and context-transition support because the bridge lists ended at311. The bridge now includes312 in those six explicit lists. Unknown313 and the unverified retained compatibility path stay off. No provider installation or settings change is included.
+
+The actual locally installed311/312 coreSDK declarations differ only in an effort-field comment; testing declarations and parsed hook/API registration metadata match. Source regression was reproduced on312 before the fix.145affected checks pass, including next-version and retained-path negative cases.
+
+One actual source-app312 baseline failed at the missing queue binding with zero model requests. One repaired combination passed model switches and GUI reload with preserved identity/draft, working queue capability, intermediate/tool/shared-final reading, native usage, API-confirmed interruption with graphical input restored, and native clear with the samePID and retained history/draft. Exactly3fixed loopback responses; zero paid inference. Both owned profiles were removed. Existing queue-delivery evidence is reused; this run checks312queue capability.
+
+Independent Fable source review passed; the test-only version-format guard was tightened and the same reviewer gave delta PASS. Source acceptance is separate from signed installed acceptance. Retained312, image/question/permission/plan cases and full native feature parity are not claimed.
+
+Main integration e1b10b1, signed candidate109: the actual installed application passes the same bounded native312 combination with exactly3 fixed local responses and zero paid inference.193 affected checks pass. All57 shipped runtime files match, post-native strict signature passes, one daily app is searchable, and the owned native profile/process is removed. The recorded /tmp naw-root count stays1055; the native OS temporary-directory global before-count was not captured and is not claimed. Queue delivery, native goals, other312 interaction cases and full workdays are not certified by this run.
+
+Independent design review also caught an omitted existing addressed-message tool. Actual adapters, bridge and addressed-handoff authorization were inspected; the proposal now starts from workspace_message and distinguishes its turn-scoped staged handoff from arbitrary daily UI control. Same-session delta review passed; no new control capability or permission was implemented.
+
+Main combined source, signed-installed and planned-operator Fable checkpoint PASS; HEAD/index/status/diff unchanged. Actual visible daily rollout remains pending.

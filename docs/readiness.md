@@ -1,6 +1,6 @@
 # Readiness and next gates
 
-As of 2026-10-26. This is a local Apple Silicon macOS technical trial.
+As of 2026-10-27. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
@@ -14,7 +14,7 @@ the same-screen native TUI. Do not rebuild the entire TUI in a second interface.
 The current candidate includes the reviewed native large-frame repair, compact
 reader layout work, unchanged-size terminal fitting, shared screenshot entry and
 the Claude lane's recovery posture. Functional witnesses use actual native
-Codex 0.164 / Claude 2.1.310/311 and signed application bundles with fixed local
+Codex 0.164 / Claude 2.1.310/311/312 and signed application bundles with fixed local
 responses. Physical system clipboard/IME coverage is separate.
 
 | User task | Accepted scoped evidence | Remaining boundary |
@@ -29,7 +29,8 @@ responses. Physical system clipboard/IME coverage is separate.
 | Queue a message during work | Signed candidate105 solo/shared paths wait through the old deadlines, reload without replay and preserve newer drafts | Claude GUI submission waits for native idle; use the same-screen TUI for mid-turn interjection |
 | Continue after a live native overload | Signed105 ccea1a6 actual310/311: original529 survives, a new continuation runs once after2minutes with the window closed, same nativeID/PID/result after reopen; each12 local responses,0paid. Codex164 ordinary recovery evidence is reused; structured non-overload and control/input guard regressions pass | Daily106 supplies the path for new sessions; retained older sessions keep their original backend. Codex stopped goals require native /goal resume, and Claude goal reactivation is not claimed. This does not prove an unattended full workday |
 | Continue independent work alongside collaboration | Signed107 f736444: A capacity continuation leaves the unrelated B/C run authorized; B to C to B handoffs, identity and drafts survive; human input still pauses and late output stays private. Main1129 checks and the actual candidate GUI pass, zero models | Synthetic transport/identities, accelerated timer and empty native goal; unchanged native delay evidence is reused. Daily106 and retained older sessions keep their existing code |
-| Read native command exploration | Signed108 b576bee groups original read/search/list actions in the existing process disclosure; full commands/results, interruption, shared context, nested search and reload/draft survive; 2,480-row reading regression also passes | Synthetic transport, zero model/provider processes; older backends that omitted metadata retain ordinary original rows. Newly observed Claude312 compatibility is qualified separately |
+| Read native command exploration | Signed108 b576bee groups original read/search/list actions in the existing process disclosure; full commands/results, interruption, shared context, nested search and reload/draft survive; 2,480-row reading regression also passes | Synthetic transport, zero model/provider processes; older backends that omitted metadata retain ordinary original rows. Claude312 compatibility is covered separately below |
+| Use a newly updated native Claude runtime | Signed109 e1b10b1 on actual312 passes model changes/reload, native blocks/tool/shared-final reading, usage, API-confirmed abort with input restored and native clear preserving process/history/draft;193 affected checks pass | Three fixed local responses, zero paid inference; queue capability is checked, prior queue-delivery evidence reused. Unknown313 and unverified retained312 stay unqualified; image/question/permission/Plan cases are not newly certified on312. Daily rollout is separate |
 | Reopen an ended conversation | Signed105 c7b4ada: saved history/draft and a received terminal frame survive; reload without a held frame reports that state truthfully; six compact-reading paths pass with synthetic transport and zero model calls | At 850×600 a long confirmation can consume the reading area; the decision/input remain reachable and a 1000×600 window restores four lines. Native-only audit rows retain their evidence limits |
 | Add a development session while archived work remains | Signed106 bda7ee0 removes the fixed demo-six cap in creation/history paths. Seven synthetic live records pass archive, seventh creation, reopen and draft restore; original identities and work remain | This is bounded GUI/transport evidence, not seven real native processes or a scalability guarantee. Daily106 is now installed and new sessions use its backend; older live sessions retain their existing processes and code |
 | Keep a build attributable | Dirty-source refusal and clean committed build pass; installed106 stamp matches bda7ee0, 57 runtime files match, post-native strict signature passes | Future deliveries repeat artifact checks and require explicit daily-update permission |
