@@ -1,12 +1,14 @@
 // Search is a local reading action. Opening a result never restores, sends,
 // changes membership or takes control of another window's native session.
 let searchLimit = 60, searchTimer, searchOrigin, searchReturn;
+let searchOpener, searchNavigating = false, searchOutsidePointer = false;
 const searchOptions = () => ({
   scope: $('search-scope').value, sessionId: searchOrigin?.sessionId || '',
   archived: $('search-archived').checked, limit: searchLimit,
 });
 function openSearch(scope = 'all') {
   if (!state || document.querySelector('dialog[open]')) return;
+  searchOpener = document.activeElement; searchNavigating = false; searchOutsidePointer = false;
   captureReadingViews();
   searchOrigin = { selected, roomSession, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
     roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread };
@@ -15,6 +17,7 @@ function openSearch(scope = 'all') {
   currentOption.textContent = current() ? `当前会话：${current().name}` : '当前会话';
   $('search-scope').value = scope === 'current' && !current() ? 'room' : scope;
   $('search-input').value = ''; $('search-archived').checked = Boolean(current()?.archived);
+  $('search-options').open = false;
   searchLimit = 60; renderSearch(); $('search-dialog').showModal(); $('search-input').focus();
 }
 function renderSearch() {
@@ -27,16 +30,45 @@ function renderSearch() {
   for (const result of results) {
     const row = button('', () => openSearchResult(result), 'search-result');
     row.dataset.searchKey = result.key;
-    const source = result.provider ? `${result.provider === 'claude' ? 'Claude' : 'Codex'} · ${result.sessionId.slice(0, 6)}` : '协作空间';
+    const source = result.provider ? `${result.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(result.sessionId)}` : '协作空间';
     row.append(node('strong', result.name), node('small', `${source}${result.archived ? ' · 已归档' : ''}${result.role ? ` · ${result.role === 'user' || result.role === 'human' ? '你' : result.role === 'system' ? '事件' : 'Agent'}` : ''}`));
     if (result.kind === 'message' || result.kind === 'shared') row.append(node('span', result.text));
     list.append(row);
   }
   $('search-count').textContent = total ? `${Math.min(total, searchLimit)} / ${total} 条结果` : '没有匹配记录';
+  $('search-options-summary').textContent = `${{ all: '全部记录', current: '当前会话', room: '共享记录' }[$('search-scope').value]}${$('search-archived').checked ? ' · 含归档' : ''}`;
   $('search-more').hidden = total <= searchLimit;
   $('search-more').disabled = searchLimit >= 600;
   $('search-more').textContent = searchLimit >= 600 ? '请缩小搜索范围' : '显示更多';
   if (!total) list.append(node('p', '试试会话名称或正文中的关键词。归档内容可在上方勾选。', 'quiet'));
+}
+function searchInputKey(event) {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); $('search-dialog').close(); return; }
+  if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) return;
+  event.preventDefault(); renderSearch();
+  const rows = $('search-results').querySelectorAll('button');
+  if (event.key === 'Enter') rows[0]?.click();
+  else (event.key === 'ArrowUp' ? rows[rows.length - 1] : rows[0])?.focus();
+}
+function searchResultKey(event) {
+  if (event.isComposing || event.keyCode === 229 || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  const rows = [...$('search-results').querySelectorAll('button')], index = rows.indexOf(document.activeElement);
+  if (index < 0) return;
+  event.preventDefault();
+  if (event.key === 'ArrowUp' && index === 0) { $('search-input').focus(); return; }
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1)) % rows.length;
+  rows[next]?.focus();
+}
+function searchOutside(event) {
+  const rect = $('search-dialog').getBoundingClientRect();
+  return event.target === $('search-dialog') && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
+}
+function finishSearch() {
+  if ($('search-dialog').open) return;
+  clearTimeout(searchTimer); ui.clearMarkdown($('search-preview-body')); $('search-preview-body').textContent = '';
+  if (!searchNavigating) (searchOpener?.isConnected && searchOpener.getClientRects().length ? searchOpener : $('search-button')).focus();
+  searchOutsidePointer = false;
 }
 function pointToMessage(element, key, id, query = '') {
   const view = messageViews.get(element), entry = view?.entries.get(id);
@@ -67,6 +99,7 @@ async function openSearchResult(result) {
     if (!s || (result.messageId && !s.messages.some(m => m.id === result.messageId))) { renderSearch(); toast('记录已变化，搜索结果已更新。'); return; }
   }
   const origin = searchOrigin, query = $('search-input').value;
+  searchNavigating = true;
   $('search-dialog').close();
   if (result.kind === 'shared' || result.kind === 'room') {
     $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
