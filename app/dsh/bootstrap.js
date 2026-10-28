@@ -50,6 +50,9 @@ window.__ModuleLoader__.load({
               React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' } })));
         }
         const ui = {
+          revealSidebar() {
+            if (document.querySelector('.naw[data-native-surface="sidebar"]')?.dataset.collapsed === 'true') ctx.layout.toggleSidebar();
+          },
           // Reuse the pinned DSH menu's positioning, theme and arrow navigation.
           menu({ items, getAnchorRect, onSelect, onClose, contextElement }) {
             const opener = document.activeElement;

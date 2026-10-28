@@ -81,6 +81,13 @@ header > div:first-child { min-width: 0; }
 .session-more { flex: none; width: 28px; height: 32px; padding: 0; margin-right: 4px; border: 0; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; }
 .session-more:hover, .session-more[aria-expanded="true"] { color: var(--ink); background: var(--hover); }
 #rename-error { color: var(--dsw-alias-state-danger-label, #a03525); }
+.session-row.is-renaming, .room-row.is-renaming { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px; }
+.inline-rename { grid-column: 1 / -1; grid-row: 1; min-width: 0; width: 100%; padding: 4px; }
+.inline-rename-controls { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.inline-rename-controls input { min-width: 0; flex: 1; width: 100%; padding: 5px 6px; font-size: 12px; }
+.inline-rename-controls button { flex: none; padding: 3px 5px; min-height: 28px; font-size: 14px; }
+.inline-rename p { margin: 4px 0 0; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.inline-rename #rename-error { font-size: 11px; }
 header h1, header p { overflow-wrap: anywhere; }
 @media(max-width:1050px) { #header-actions { flex-wrap: wrap; justify-content: flex-end; } #room-composer { padding: 12px 20px; } }
 

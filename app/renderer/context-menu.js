@@ -26,7 +26,7 @@ async function pasteTerminalContext(target = terminalMenuTarget()) {
   if (content.images) await pasteImages([], content.images); else pasteTerminal(content.text);
 }
 function showContentMenu(element, point, keyboard = false, event) {
-  if (!(element instanceof Element) || !element.closest('.naw') || element.closest('[data-session-row], #room-nav')) return false;
+  if (!(element instanceof Element) || !element.closest('.naw') || element.closest('[data-session-row], #room-nav') && !element.closest('#rename-editor')) return false;
   const origin = contentMenuOrigin(), opener = document.activeElement;
   const terminal = element.closest('[data-terminal-id]');
   let field, fieldState, actions = [], restore = () => { if (contentMenuCurrent(origin) && opener?.isConnected) opener.focus({ preventScroll: true }); };
@@ -45,7 +45,7 @@ function showContentMenu(element, point, keyboard = false, event) {
   } else {
     field = element.closest('input, textarea');
     if (field && !field.disabled && typeof field.selectionStart === 'number') {
-      const draftRevision = () => field.id === 'message-input' ? draftRevisions.get(origin.id) : field.id === 'shared-input' ? roomDraftRevision : undefined;
+      const draftRevision = () => field.id === 'message-input' ? draftRevisions.get(origin.id) : field.id === 'shared-input' ? roomDraftRevision : field.id === 'rename-name' ? renameRevision : undefined;
       fieldState = { value: field.value, start: field.selectionStart, end: field.selectionEnd, direction: field.selectionDirection, revision: draftRevision() };
       const selectedText = fieldState.value.slice(fieldState.start, fieldState.end);
       const validField = () => contentMenuCurrent(origin) && field.isConnected && !field.disabled && field.value === fieldState.value && draftRevision() === fieldState.revision;
