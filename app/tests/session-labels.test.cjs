@@ -86,3 +86,55 @@ test('metadata symlinks and overly open files are refused without touching their
   fs.unlinkSync(file); fs.writeFileSync(file, contents, { mode: 0o644 });
   assert.match(new SessionLabels(dir).warning, /无法读取/);
 });
+
+test('sidebar migrates existing labels and persists profile presentation without touching native records', t => {
+  const { dir, file } = fixture(t);
+  fs.writeFileSync(file, JSON.stringify({ version: 1, labels: { a: 'Original label' } }), { mode: 0o600 });
+  const labels = new SessionLabels(dir), records = [{ id: 'a', nativeId: 'original', pid: 123, owner: 'owner', roomId: 'shared', liveDraft: 'unsent' }, { id: 'b' }, { id: 'c', archived: true }];
+  const before = structuredClone(records);
+  assert.deepEqual(labels.sidebar, { order: [], sessionsCollapsed: false, workspaceCollapsed: false });
+  labels.updateSidebar({ type: 'move', id: 'b', target: 'a', after: false }, records);
+  labels.updateSidebar({ type: 'collapse', section: 'sessions', collapsed: true }, records);
+  labels.set('b', 'Renamed');
+  const reopened = new SessionLabels(dir), snapshot = reopened.apply({ sessions: records });
+  assert.deepEqual(reopened.sidebar, { order: ['b', 'a', 'c'], sessionsCollapsed: true, workspaceCollapsed: false });
+  assert.deepEqual(records, before);
+  assert.deepEqual(snapshot.sessions[0], { ...records[0], name: 'Original label' });
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+test('sidebar moves preserve archived positions, append new sessions and prune forgotten IDs', t => {
+  const { labels } = fixture(t);
+  const records = [{ id: 'a' }, { id: 'b' }, { id: 'c', archived: true }];
+  labels.updateSidebar({ type: 'move', id: 'b', target: 'a', after: false }, records);
+  labels.updateSidebar({ type: 'move', id: 'a', target: 'b', after: false }, [...records, { id: 'd' }]);
+  assert.deepEqual(labels.sidebar.order, ['a', 'b', 'c', 'd']);
+  labels.updateSidebar({ type: 'move', id: 'd', target: 'b', after: true }, records.filter(s => s.id !== 'a').concat({ id: 'd' }));
+  assert.deepEqual(labels.sidebar.order, ['b', 'd', 'c']);
+  const before = structuredClone(labels.sidebar);
+  for (const change of [null, [], {}, { type: 'move', id: 'missing', target: 'b', after: true }, { type: 'move', id: 'c', target: 'b', after: true }, { type: 'move', id: 'b', target: 'd', after: 'false' }, { type: 'collapse', section: '__proto__', collapsed: true }, { type: 'collapse', section: 'workspace', collapsed: 1 }]) assert.throws(() => labels.updateSidebar(change, records));
+  assert.deepEqual(labels.sidebar, before);
+});
+
+test('sidebar failed replacement leaves old order/collapse and labels intact for retry', t => {
+  const { labels, file, dir } = fixture(t), records = [{ id: 'a' }, { id: 'b' }];
+  labels.set('a', 'Original');
+  const before = fs.readFileSync(file, 'utf8'), sidebar = structuredClone(labels.sidebar);
+  const stub = t.mock.method(fs, 'renameSync', () => { throw Error('Synthetic disk failure'); });
+  assert.throws(() => labels.updateSidebar({ type: 'move', id: 'b', target: 'a', after: false }, records), /未能保存/);
+  assert.throws(() => labels.updateSidebar({ type: 'collapse', section: 'workspace', collapsed: true }, records), /未能保存/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before); assert.deepEqual(labels.sidebar, sidebar);
+  assert.deepEqual(fs.readdirSync(dir), ['session-labels.json']); stub.mock.restore();
+  labels.updateSidebar({ type: 'move', id: 'b', target: 'a', after: false }, records);
+  assert.deepEqual(new SessionLabels(dir).sidebar.order, ['b', 'a']);
+});
+
+test('malformed sidebar metadata cannot erase existing names or permit overwrite', t => {
+  const { file, dir } = fixture(t);
+  for (const sidebar of [null, [], { order: ['a', 'a'], sessionsCollapsed: false, workspaceCollapsed: false }, { order: [], sessionsCollapsed: 'false', workspaceCollapsed: false }]) {
+    const content = JSON.stringify({ version: 1, labels: { a: 'Original' }, sidebar }); fs.writeFileSync(file, content, { mode: 0o600 });
+    const labels = new SessionLabels(dir); assert.match(labels.warning, /无法读取/);
+    assert.throws(() => labels.updateSidebar({ type: 'collapse', section: 'sessions', collapsed: true }, []), /未覆盖/);
+    assert.equal(fs.readFileSync(file, 'utf8'), content);
+  }
+});
