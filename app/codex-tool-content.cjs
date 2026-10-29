@@ -1,6 +1,6 @@
 // Public native item fields only: no metadata, raw reasoning, media fetches or
 // parsing of terminal text. Item IDs and lifecycle stay with the native adapter.
-const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'functionCallOutput', 'webSearch']);
+const toolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'functionCallOutput', 'webSearch', 'imageView']);
 const json = value => value === undefined || value === null ? '' : JSON.stringify(value, null, 2);
 // The native protocol separates user-readable summaries from raw reasoning.
 // Never fall back to `content`, `text`, encrypted content or metadata here.
@@ -74,7 +74,11 @@ function toolContent(item, completed = item?.status === 'completed') {
   // private answer reader may project its result; generic hydration must not.
   if (item.type === 'functionCallOutput' && ['request_user_input', 'request_user_input_async'].includes(item.name)) return null;
   const result = {};
-  if (item.type === 'commandExecution') {
+  if (item.type === 'imageView') {
+    result.title = ''; result.text = '';
+    result.images = require('./native-images.cjs').userImageReferences([{ type: 'localImage', path: item.path }]);
+    if (result.images[0]?.path) result.input = result.images[0].path;
+  } else if (item.type === 'commandExecution') {
     result.title = item.command || '';
     if (typeof item.command === 'string') result.input = item.command;
     const actions = commandActions(item.commandActions);

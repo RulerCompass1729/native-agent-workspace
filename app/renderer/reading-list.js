@@ -208,10 +208,11 @@ function readingView(el, key) {
     };
     el.addEventListener('pointerdown', interact); el.addEventListener('wheel', wheel, { passive: true }); el.addEventListener('keydown', keydown); el.addEventListener('scroll', scroll, { passive: true });
     view.observer = new ResizeObserver(() => scheduleReading(view)); view.observer.observe(el);
-    view.dispose = () => { view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', interact); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
+    view.dispose = () => { for (const entry of view.entries.values()) entry.images?.dispose(); view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', interact); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
     messageViews.set(el, view);
   }
   if (view.key !== key) {
+    for (const entry of view.entries.values()) entry.images?.dispose();
     captureReading(view); ui.clearMarkdown(el); el.replaceChildren();
     view.entries.clear(); view.groups.clear(); view.days.clear(); view.key = key; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
     view.pageRange = null; view.pageRequest = null; view.pageChanging = false; view.autoPages = 4; view.reload = null; view.loadMessage = null;
@@ -278,7 +279,7 @@ function nativeProcessGroups(messages, room = false, originals = messages, sessi
   const eligible = m => typeof m.id === 'string' && `process:${m.id}`.length <= 100 && !duplicates.has(m.id) && indices.has(m.id) &&
       (m.nativeBlock === true || m.sharedStream === true) && typeof m.nativeId === 'string' && m.nativeId && typeof m.turnId === 'string' && m.turnId &&
       (m.role === 'tool' && m.kind === 'tool' || m.role === 'assistant' && m.kind === 'summary' && typeof m.text === 'string' && m.text.trim()) &&
-      !m.incomplete && !m.sharingStopped && m.commandSource !== 'userShell' && m.status !== 'unconfirmed' &&
+      !m.incomplete && !m.sharingStopped && !(Array.isArray(m.images) && m.images.length) && m.commandSource !== 'userShell' && m.status !== 'unconfirmed' &&
       ['running', 'streaming', 'complete', 'failed', 'declined', 'interrupted'].includes(m.status) &&
       (!room || m.sharedStream === true && typeof m.nativeMessageId === 'string' && m.nativeMessageId &&
         typeof m.sourceTag === 'string' && m.sourceTag && m.sessionId && Number.isFinite(m.time) && Math.abs(m.time) <= 8640000000000000);
@@ -455,7 +456,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       const item = node('article'), heading = node('div', undefined, 'message-heading'), body = node('div', undefined, 'message-body'), actions = node('div', undefined, 'message-actions');
       item.dataset.messageId = m.id; item.append(heading, body, actions);
       entry = { item, heading, body, actions }; view.entries.set(m.id, entry);
-      if (m.role === 'tool' || m.kind === 'summary') {
+      if ((m.role === 'tool' || m.kind === 'summary') && !(Array.isArray(m.images) && m.images.length)) {
         const disclosure = node('details', undefined, 'process-details'), summary = node('summary'), content = node('div', undefined, 'process-content');
         entry.disclosure = disclosure; entry.preview = node('span', undefined, 'process-label'); entry.tail = node('pre', undefined, 'process-tail'); entry.content = content;
         entry.more = node('button', undefined, 'process-more'); entry.more.type = 'button';
@@ -479,7 +480,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
           entry.expectedOpen = undefined; rememberFold();
         });
       }
-      actions.append(button('复制', () => api.copy(entry.displayText ?? entry.message.text)));
+      entry.copyText = button('复制', () => api.copy(entry.displayText ?? entry.message.text)); actions.append(entry.copyText);
       entry.share = button('选择并分享', () => share(entry.message.text)); actions.append(entry.share);
       if (room) {
         entry.reply = button('回复', () => openThread(entry.message.id)); actions.append(entry.reply);
@@ -621,6 +622,35 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (m.role === 'assistant') ui.markdown(entry.body, m.text, entry.streaming, () => { if (view.key === key) scheduleReading(view); });
       else entry.body.textContent = displayText;
     }
+    const hasImages = Array.isArray(m.images) && m.images.length > 0;
+    if (hasImages && entry.disclosure) {
+      // A late image reference is explicit native content. Keep its original
+      // nodes while taking it out of the process disclosure.
+      const disclosure = entry.disclosure;
+      for (const child of [entry.heading, entry.inputBody, entry.body, entry.delivery]) if (child && disclosure.contains(child)) disclosure.before(child);
+      disclosure.remove(); entry.tail?.remove(); entry.more?.remove();
+      delete entry.disclosure; delete entry.content; delete entry.preview; delete entry.tail; delete entry.more;
+    }
+    if (hasImages && !entry.images) {
+      const host = node('div', undefined, 'message-images'); entry.body.after(host);
+      entry.images = window.nativeWorkspaceImages.mount(host, api, {
+        beforeLayout: () => { if (el.clientWidth && el.clientHeight) captureReading(view); }, onLayout: () => { if (view.key === key && el.clientWidth && el.clientHeight) scheduleReading(view); },
+        isOpen: imageKey => view.folds[imageKey] === true,
+        onOpen: (imageKey, open) => {
+          if (view.key !== key) return;
+          view.intent = null; delete view.folds[imageKey]; view.folds[imageKey] = open;
+          for (const id of Object.keys(view.folds).slice(0, Math.max(0, Object.keys(view.folds).length - 200))) delete view.folds[id];
+          captureReading(view); saveReading(view, { ...(readingPositions[key] || { top: el.scrollTop, anchor: m.id.length <= 100 ? m.id : '', offset: 0 }), follow: false });
+          attempt(() => api.readingState(readingPositions));
+        },
+      });
+    }
+    entry.images?.update(m.images || [], { kind: room ? 'room' : 'session', sessionId: room ? m.sessionId : session?.id,
+      nativeId: m.nativeId, messageId: m.id }, room ? m.name || name : session?.name || name, m.status);
+    if (entry.inputBody && hasImages && m.toolKind === 'imageView') entry.inputBody.hidden = true;
+    if (entry.copyText) { entry.copyText.hidden = hasImages && !m.text; entry.copyText.textContent = hasImages ? '复制文字' : '复制'; }
+    entry.share.hidden ||= hasImages && !m.text;
+    entry.share.textContent = hasImages ? '选择并分享文字' : '选择并分享';
   }
   const nested = new Set();
   for (const [id, group] of explorations) {
@@ -647,7 +677,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   while (cursor) { const next = cursor.nextSibling; ui.clearMarkdown(cursor); cursor.remove(); cursor = next; }
   // Move every retained original out of obsolete wrappers before disposing
   // their old parents, including filtered T29 descendants with live Markdown.
-  for (const [id, entry] of view.entries) if (!retained.has(id)) { ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
+  for (const [id, entry] of view.entries) if (!retained.has(id)) { entry.images?.dispose(); ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
   for (const [day, divider] of view.days) if (!days.has(day)) { divider.remove(); view.days.delete(day); }
   if (selected?.anchor.isConnected && selected.focus?.isConnected &&
       selected.anchorOffset <= (selected.anchor.nodeType === 3 ? selected.anchor.length : selected.anchor.childNodes.length) &&

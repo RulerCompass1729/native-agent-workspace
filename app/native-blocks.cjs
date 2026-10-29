@@ -34,6 +34,7 @@ function applyNativeBlock(session, event) {
   if (typeof event.delta === 'string') row.text += event.delta;
   for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag', 'toolKind']) if (typeof event[field] === 'string') row[field] = event[field];
   if (event.kind === 'input' && ['native-inline', 'native-prompt'].includes(event.inputMode)) row.inputMode = event.inputMode;
+  if (Object.hasOwn(event, 'images')) row.images = require('./native-images.cjs').imageReferences(event.images, event.imageCwd || session.cwd, row.images);
   if (event.kind === 'turn') for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) {
     if (Number.isFinite(event[field]) && (field === 'nativeDurationMs' ? Number.isSafeInteger(event[field]) && event[field] >= 0 : Math.abs(event[field]) <= 8640000000000000)) row[field] = event[field];
   }
@@ -124,8 +125,11 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}, turns, recov
       // live row and never fabricate an inputTag that could authorize sharing.
       const row = (runtime.liveToolItems?.has(item.id) && existing.get(id)) || { id, role: 'tool', nativeId: s.nativeId,
         nativeBlock: true, volatile: true, kind: 'tool', toolKind: item.type, turnId: item.turnId, text: '',
-        ...tool, status: toolStatus(item, item.type === 'functionCallOutput' || item.status === 'completed' || typeof item.success === 'boolean') };
+        // Native imageView is only recorded after the sandbox read and image
+        // decode succeed; its history schema has no separate status field.
+        ...tool, status: toolStatus(item, ['functionCallOutput', 'imageView'].includes(item.type) || item.status === 'completed' || typeof item.success === 'boolean') };
       if (row.status === 'completed') row.status = 'complete';
+      if (tool.images) row.images = require('./native-images.cjs').imageReferences(tool.images, s.cwd, existing.get(id)?.images);
       if (!used.has(id)) { imported.push(row); used.add(id); }
       continue;
     }
@@ -144,6 +148,10 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}, turns, recov
       : { id: item.id, role: 'assistant', text: item.text || '', status: item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
     if (!own && s.messages.some(row => row.id === m.id && row.nativeId && row.nativeId !== s.nativeId)) { m.nativeItemId = item.id; m.id = `native:${s.nativeId}:message:${item.id}`; }
     m.nativeId = s.nativeId;
+    if (item.type === 'userMessage') {
+      const { userImageReferences, imageReferences } = require('./native-images.cjs'), images = userImageReferences(item.content);
+      if (images.length) { m.images = imageReferences(images, s.cwd, m.images); m.nativeItemId ||= item.id; }
+    }
     if (item.turnId && (!m.turnId || m.turnId === item.turnId)) m.turnId = item.turnId;
     // Early backends assigned random display IDs to native user input.
     // One unmatched pure-text history item may replace one pre-recovery
