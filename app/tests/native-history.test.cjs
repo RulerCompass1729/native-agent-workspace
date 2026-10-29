@@ -94,8 +94,8 @@ test('native writer rejection becomes a safe actionable message without raw priv
 
 test('actual server handshake version cannot borrow the client version or allow unknown/prerelease runtimes', () => {
   const { serverVersion, verifiedCodexProtocol } = require('../native-history.cjs');
-  for (const nativeVersion of ['0.163.0','0.164.0']) assert.equal(verifiedCodexProtocol({nativeVersion}), true);
-  for (const nativeVersion of [undefined,'0.165.0','0.164.0-beta','unknown']) assert.equal(verifiedCodexProtocol({nativeVersion}), false);
+  for (const nativeVersion of ['0.163.0','0.164.0','0.165.0']) assert.equal(verifiedCodexProtocol({nativeVersion}), true);
+  for (const nativeVersion of [undefined,'0.166.0','0.165.0-beta','0.164.0-beta','unknown']) assert.equal(verifiedCodexProtocol({nativeVersion}), false);
   assert.equal(serverVersion({ userAgent: 'native_agent_workspace/0.163.0 (Mac OS; arm64) unknown (native_agent_workspace; 0.1.0)' }), '0.163.0');
   assert.equal(serverVersion({ userAgent: 'native_agent_workspace/0.162.0 (Mac OS; arm64) unknown (native_agent_workspace; 0.163.0)' }), '0.162.0');
   assert.equal(serverVersion({ userAgent: 'native_agent_workspace/0.163.0-beta (Mac OS)' }), null);
@@ -155,7 +155,8 @@ test('native version display uses the running handshake and never certifies prer
   const rpc = { nativeVersion: '0.163.0', ws: { readyState: 1 } };
   assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: '0.163.0', nativeVersionStatus: 'verified' });
   rpc.nativeVersion = '0.164.0'; assert.equal(codexVersionInfo(rpc).nativeVersionStatus, 'verified');
-  rpc.nativeVersion = '0.165.0'; assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: '0.165.0', nativeVersionStatus: 'unverified' });
+  rpc.nativeVersion = '0.165.0'; assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: '0.165.0', nativeVersionStatus: 'verified' });
+  rpc.nativeVersion = '0.166.0'; assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: '0.166.0', nativeVersionStatus: 'unverified' });
   for (const nativeVersion of ['0.164.0-beta', '0.164.0 secret', null, 164]) {
     rpc.nativeVersion = nativeVersion;
     assert.deepEqual(codexVersionInfo(rpc), { nativeVersion: null, nativeVersionStatus: 'unverified' });

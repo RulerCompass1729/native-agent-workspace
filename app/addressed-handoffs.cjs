@@ -4,7 +4,7 @@
 const TOOL = 'workspace_message';
 const NAMESPACE = 'workspace';
 const tool = { type: 'function', name: TOOL,
-  description: 'Within a human-authorized workspace discussion, address one message to an exact participant ID supplied with this task. Stages one handoff after your current turn finishes; does not wait for a reply. Without a tool call your answer goes to the human and cooperation stops. Never use for ordinary @ text or file references.',
+  description: 'Address one message to an exact workspace participant ID. A current human-authorized directed discussion keeps its finite grant; otherwise standing human permission permits one wake of an idle peer, subject to its off switch and strict limits. Stages one handoff after your current turn finishes; does not wait for a reply. Without a tool call your answer goes to the human and cooperation stops. Never use for ordinary @ text or file references.',
   inputSchema: { type: 'object', properties: {
     recipient_id: { type: 'string', description: 'Exact workspace participant ID from the current authorized task.' },
     message: { type: 'string', description: 'The complete message to that participant, at most 6000 characters.' },
@@ -33,6 +33,8 @@ function failed(workspace, session, runtime, identity) {
   return { status: 'not-sent' };
 }
 function accept(workspace, session, runtime, identity, args) {
+  const active = workspace.peerLeases?.directed(session.id) || workspace.room.run;
+  if (!(active?.mode === 'directed' && active.status === 'running' && active.ids.includes(session.id))) return require('./session-wake.cjs').stage(workspace, session, runtime, identity, args);
   const { run, awaiting } = authorized(workspace, session, runtime, identity);
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !['recipient_id', 'message'].includes(k)) ||
     typeof args.recipient_id !== 'string' || typeof args.message !== 'string' || !args.message.trim() || args.message.length > 6000 ||

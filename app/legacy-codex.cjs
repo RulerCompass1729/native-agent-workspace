@@ -99,6 +99,9 @@ class LegacyCodex extends EventEmitter {
     adapter.on('nativeInput', (text, item) => {
       if (!item?.id || !this.record.messages.some(m => m.id === item.id)) this.record.messages.push({ id: item?.id || crypto.randomUUID(), role: 'user', origin: 'native', text, status: 'submitted' });
     });
+    adapter.on('nativeInputImages', event => {
+      if (require('./native-images.cjs').applyInputImages(this.record, event)) { this.scheduleSave(); this.emit('change'); }
+    });
     for (const event of ['state', 'nativeInput', 'approval', 'failed', 'fleet', 'background', 'complete', 'submitted']) {
       adapter.on(event, (...args) => {
         if (event === 'state') {

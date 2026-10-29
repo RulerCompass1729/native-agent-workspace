@@ -1,10 +1,12 @@
 // Actual isolated source GUI/service. Only native output is synthetic.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
+const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
-const { _electron } = scratch.playwright(require('playwright'));
+const installed = Boolean(process.env.NAW_APP_EXECUTABLE);
+const { _electron } = scratch.playwright(installed ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
 const evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) {
   const target = path.resolve(evidence); let existing = target;
@@ -18,13 +20,15 @@ const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; nothing started.'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex4', task: 'T89 reading pages', token, pid: process.pid, time: new Date().toISOString() }));
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-reading-pages-'));
+const workspaceRoot = path.join(profile, 'workspace'); fs.mkdirSync(workspaceRoot);
 const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
-  env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
+  env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: workspaceRoot, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
 const checks = [], errors = [], measurements = [];
 let app, page, sequence = 0, failure = null;
+const launches = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let i = 0; i < 200; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
 function fixture(method, target, value) {
@@ -38,9 +42,20 @@ function fixture(method, target, value) {
 const snapshot = () => page.evaluate(() => workspace.initial());
 const check = text => { checks.push(text); console.log('PASS:', text); };
 async function launch() {
-  app = await _electron.launch({ executablePath: require('electron'), args: [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: installed ? [] : [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  if (installed && evidence) {
+    const process = app.process(), contents = path.resolve(code, '../..'), bundle = path.dirname(contents);
+    const signature = require('node:child_process').spawnSync('/usr/bin/codesign', ['--display', '--verbose=4', bundle], { encoding: 'utf8' });
+    assert.equal(signature.status, 0); const cdhash = signature.stderr.match(/^CDHash=(\w+)$/m)?.[1]; assert.ok(cdhash);
+    const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    launches.push({ pid: process.pid, executable: process.spawnfile, argv: process.spawnargs, bundle, cdhash,
+      sourceRevision: execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :NAWSourceRevision', path.join(contents, 'Info.plist')], { encoding: 'utf8' }).trim(),
+      executableSha256: hash(process.spawnfile), clientSha256: hash(path.join(code, 'app/dsh/client.js')),
+      daemon: { pid: child.pid, argv: child.spawnargs, appRoot: code, sourceSha256: hash(path.join(code, 'app/daemon.cjs')) } });
+    fs.writeFileSync(path.join(evidence, 'installed-launches.json'), JSON.stringify(launches, null, 2));
+  }
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
-  await app.evaluate(({ clipboard }) => { globalThis.pageCopies = []; clipboard.writeText = text => globalThis.pageCopies.push(text); });
+  if (!installed) await app.evaluate(({ clipboard }) => { globalThis.pageCopies = []; clipboard.writeText = text => globalThis.pageCopies.push(text); });
 }
 async function create(name) {
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
@@ -68,8 +83,18 @@ async function readingAnchor(host = page.locator('#messages')) {
   });
 }
 async function copyOriginal(host, id, text) {
-  const before = await app.evaluate(() => globalThis.pageCopies.length);
   const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: '复制', exact: true });
+  if (installed) {
+    // Keep the user's OS clipboard untouched. The unchanged source-mode copy
+    // receipt is reused; this installed check covers focus, source and visibility.
+    await copy.focus(); assert.equal(await copy.isEnabled(), true);
+    const data = await snapshot(), original = data.sessions.flatMap(s => s.messages).find(m => m.id === id);
+    assert.equal(original?.text, text);
+    const body = await host.locator(`[data-message-id="${id}"] .message-body`).innerText();
+    assert.ok(text.split(/\n+/).filter(Boolean).every(line => body.includes(line)));
+    return;
+  }
+  const before = await app.evaluate(() => globalThis.pageCopies.length);
   await copy.focus(); await copy.press('Enter');
   await until(async () => await app.evaluate((_, n) => globalThis.pageCopies.length === n + 1 && globalThis.pageCopies.at(-1), before) === text, 'One fresh original copy receipt');
 }
@@ -103,7 +128,7 @@ async function run() {
   await until(() => host.locator('[data-message-id="page-live"]').count().then(n => n === 1), 'Latest-containing range keeps new original output without dropping old rows');
   assert.equal(await page.evaluate(() => getSelection().toString()), before.selection); assert.ok(Math.abs(await offset() - before.offset) < 3);
   await copyOriginal(host, 'page-2430', history[2430].text);
-  check('Older prepend and new output preserve the same original text, anchor, selection and exact keyboard copy');
+  check('Older prepend and new output preserve the same original text, anchor and selection; ' + (installed ? 'copy focus/source retained, source-mode clipboard receipt reused' : 'exact keyboard copy receipt'));
 
   await page.locator('#message-input').fill('Unsent original draft 你好');
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).liveDraft === 'Unsent original draft 你好', 'Original draft persisted');
@@ -220,7 +245,7 @@ async function run() {
   assert.equal((await snapshot()).sessions.find(s => s.id === id).liveDraft, 'Unsent original draft 你好');
   if (evidence) fs.writeFileSync(path.join(evidence, 'member-accessibility.txt'), await member(other).ariaSnapshot());
   await capture('04-native-group-anchor');
-  check('Actual native process groups remain whole with their caption/failure/running state, explicit fold, full tool copy and saved process anchor');
+  check('Actual native process groups remain whole with their caption/failure/running state, explicit fold and saved process anchor; ' + (installed ? 'full source retained, source-mode tool-copy receipt reused' : 'full tool copy receipt'));
 
   // Review regression: following is a real latest-record intent, not a request
   // to centre the obsolete source anchor that happened to be visible earlier.
@@ -279,7 +304,8 @@ run().catch(async error => {
   }
 }).finally(async () => {
   try {
-    if (evidence) fs.writeFileSync(path.join(evidence, 'reading-pages-result.json'), JSON.stringify({ flowPassed: !failure, failure, checks, errors, measurements, profile, token }, null, 2));
+    if (evidence) fs.writeFileSync(path.join(evidence, 'reading-pages-result.json'), JSON.stringify({ flowPassed: !failure, failure, checks, errors, measurements, profile, token,
+      clipboard: installed ? 'Source-mode receipt reused; installed checks focus/full source/visible body only, no clipboard action' : 'Source-mode main-process clipboard stub receipt' }, null, 2));
     await scratch.release(); const owner = JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))); assert.equal(owner.token, token);
     fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
     if (evidence) fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ profile, token, profileExists: fs.existsSync(profile), time: new Date().toISOString() }, null, 2));

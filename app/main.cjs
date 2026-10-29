@@ -10,6 +10,7 @@ const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
 const { readPreview, saveCopy, extensions: textExtensions } = require('./local-files.cjs');
+const { ImagePreviews } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { readingState } = require('./reading-state.cjs');
@@ -157,7 +158,7 @@ async function openWindow(saved) {
       view.active = false;
       try { saveViews(); } catch { view.active = true; }
     }
-    windows.delete(id); context.client.close();
+    windows.delete(id); context.imagePreviews?.close(); context.client.close();
   });
   try { await win.loadURL(entry); await ready; }
   catch (error) { if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error)); }
@@ -191,7 +192,7 @@ async function boot() {
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).host !== new URL(dsh.origin).host }));
   if (!wired) {
   wired = true;
-  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer']) register(name, (c, ...args) => {
+  for (const name of ['prepareInput', 'observe', 'unobserve', 'claim', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'pause', 'approve', 'answer', 'wakePolicy']) register(name, (c, ...args) => {
     if (['prepareInput', 'claim', 'terminal', 'input', 'approve', 'answer'].includes(name)) roomState.assertAvailable(args[0]);
     return c.client.call(name, ...args);
   });
@@ -456,6 +457,12 @@ async function boot() {
     // prompts. Only importing images requires the stricter idle/working gate.
     const text = clipboard.readText(); if (text.length > 65500) throw Error('粘贴内容过长，请分段粘贴。'); return { text };
   });
+  const imagesFor = c => c.imagePreviews ||= new ImagePreviews({ nativeImage,
+    snapshot: async () => roomState.apply(await c.client.call('initial')) });
+  register('previewImage', (c, source) => imagesFor(c).preview(source));
+  register('expandImage', (c, token) => imagesFor(c).expand(token));
+  register('copyImage', (c, token) => imagesFor(c).copy(token, clipboard));
+  register('releaseImage', (c, token) => c.imagePreviews?.release(token));
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { label: '退出界面（会话继续运行）', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }] },
     { label: '文件', submenu: [{ label: '新窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => openWindow() }, { label: '新会话', accelerator: 'CmdOrCtrl+N', click: () => BrowserWindow.getFocusedWindow()?.webContents.send('workspace:new') }, { role: 'close' }] },
