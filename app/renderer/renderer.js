@@ -1302,7 +1302,7 @@ function renderNativeActivity(s) {
   const recovery = !disconnected && !s?.transportDisconnected && s?.capacityRecovery;
   if (recovery && ['scheduled', 'exhausted'].includes(recovery.status)) {
     el.hidden = false;
-    $('native-phase').textContent = `${s.name} · 模型满载${recovery.status === 'exhausted' ? '，自动继续已达上限，需要你处理' : ''}`;
+    $('native-phase').textContent = `${s.name} · ${recovery.reason === 'routing' ? '路由发现超时' : '模型满载'}${recovery.status === 'exhausted' ? '，自动继续已达上限，需要你处理' : ''}`;
     $('native-elapsed').textContent = recovery.status === 'scheduled' ? ` · ${new Date(recovery.due).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 自动继续（第 ${recovery.attempt + 1}/3 次）` : '';
     return;
   }
