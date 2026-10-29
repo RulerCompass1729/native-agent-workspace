@@ -136,13 +136,16 @@ async function run() {
 
   await more(d).click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click();
   await until(async () => !(await snapshot()).sessions.find(s => s.id === d).roomId, 'Exact candidate detached');
-  await until(async () => (await snapshot()).viewState.selected === d, 'Existing detach navigation to original session');
+  assert.equal((await snapshot()).viewState.selected, 'room', 'Detach stays in the room');
   assert.deepEqual(identity(await snapshot()), original);
+  assert.equal(await page.locator('#shared-input').inputValue(), roomDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
+  await page.getByRole('button', { name: '打开 Independent candidate', exact: true }).press('Enter');
+  await until(async () => (await snapshot()).viewState.selected === d, 'Only deliberate Open navigates to the original');
   assert.equal(await page.locator('#message-input').inputValue(), 'UNSENT_PRIVATE_DRAFT_D');
   await page.locator('#room-nav').click(); await until(() => header(d).count().then(n => n === 0), 'Detached status removed');
   assert.equal(await page.locator('#shared-input').inputValue(), roomDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
   assert.equal((await snapshot()).sessions.find(s => s.id === b).owner, owners.find(s => s[0] === b)[1]);
-  check('Deliberate detach uses the exact ID and existing original-session navigation, preserving all native identities/private and shared drafts');
+  check('Detach stays in the room; explicit Open uses the exact original ID, preserving identities and private/shared drafts');
 
   await name(a).click(); await more(b).click(); await visibleStates([a, b, c], true); await page.keyboard.press('Escape');
   await page.locator('#room-record').click(); await more(c).click(); await visibleStates([a, b, c], true); await page.keyboard.press('Escape');

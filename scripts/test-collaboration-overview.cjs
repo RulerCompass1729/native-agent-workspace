@@ -272,9 +272,12 @@ async function run() {
   const sameB = (await snapshot()).sessions.find(s => s.id === b);
   assert.equal(sameB.nativeId, ids.find(x => x[0] === b)[1]);
   assert.equal(sameB.liveDraft, 'Unsent private member B draft');
-  const handle = header(b).locator('.collaboration-member-name'); assert.equal(await handle.getAttribute('draggable'), 'true');
+  const handle = header(b).locator('.collaboration-member-name'), detachedLabel = await handle.innerText(); assert.equal(await handle.getAttribute('draggable'), 'true');
   await handle.dragTo(page.locator('#solo-drop'));
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b).roomId, 'Visible member drag detaches existing native session');
+  assert.equal((await snapshot()).viewState.selected, 'room');
+  assert.equal((await snapshot()).sessions.find(s => s.id === b).liveDraft, 'Unsent private member B draft');
+  await page.getByRole('button', { name: `打开 ${detachedLabel}`, exact: true }).click();
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent private member B draft');
   await page.locator('#room-nav').click(); await until(() => header(b).count().then(n => n === 0), 'Detached member reader removed');
   await allHeadersVisible([a, c]);
