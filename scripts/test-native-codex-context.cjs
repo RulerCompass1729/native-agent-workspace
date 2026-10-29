@@ -16,6 +16,7 @@ for(const p of[profile,cwd,home,userHome])fs.mkdirSync(p,{mode:0o700});
 const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
 let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,releaseGoal,goalRpc,goalCodeMode,budgetError,activeHeld;const errors=[],checks=[];
+const updateStartupTrial=process.env.NAW_NATIVE_UPDATE_STARTUP==='1';
 const capacityTrial=process.env.NAW_NATIVE_CAPACITY_TRIAL;assert.ok(!capacityTrial||['continue','cancel','goal'].includes(capacityTrial));
 const capacityGoal=capacityTrial==='goal';
 const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIVE_REJECTED_REQUEST: Keep This BODY exactly.';
@@ -40,7 +41,7 @@ function sameLiveServer(before, after) {
 }
 async function until(fn,label,timeout=30000){const start=Date.now();while(Date.now()-start<timeout){if(budgetError)throw budgetError;if(await fn())return;await sleep(80);}throw Error(label);}
 function event(res,type,body){res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:++seq,...body})}\n\n`);}
-const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
+const server=http.createServer((req,res)=>{if(updateStartupTrial){errors.push('Unexpected local inference request in startup-only trial');res.writeHead(500);res.end('Startup-only fixture forbids inference');return;}let body='';req.on('data',b=>body+=b);req.on('end',async()=>{
  if(!req.url.endsWith('/responses')){res.writeHead(404);res.end();return;}
  const input=JSON.parse(body),title=input.input?.some(m=>m.role==='user'&&m.content?.some(p=>p.text?.startsWith('Generate a concise, single-line task title')));
  const n=title?0:++calls;if(title)titles++;if(calls>(scrollTrial?1:goalTrial?(capacityGoal?3:activeGoalRecovery?5:4):failureTrial||capacityTrial||process.env.NAW_NATIVE_RETRY_TRIAL==='1'?2:3)||titles>1){budgetError=Error('Native context task/title budget exceeded');res.writeHead(400);res.end(budgetError.message);return;}
@@ -96,7 +97,19 @@ async function nativeCommand(command){
 (async()=>{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  fs.writeFileSync(path.join(home,'config.toml'),`model = "gpt-6-luna"\nmodel_provider = "local_fixture"\nmodel_reasoning_effort = "low"\ncli_auth_credentials_store = "file"\n[features]\ndaemon_auto_start = false\n${goalsDisabled?'goals = false\n':''}[model_providers.local_fixture]\nname = "Local protocol fixture"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n${capacityTrial?'request_max_retries = 0\nstream_max_retries = 0\n':''}`,{mode:0o600});
- const shim=path.join(base,'codex-local');fs.writeFileSync(shim,'#!/usr/bin/python3\nimport os,sys\n'+`os.environ["CODEX_HOME"]=${JSON.stringify(home)}\nos.environ["HOME"]=${JSON.stringify(userHome)}\n`+'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n'+`os.execv(${JSON.stringify(binary)},["codex"]+sys.argv[1:])\n`,{mode:0o700});
+ let runtimeBinary=binary;
+ if(updateStartupTrial){
+  assert.equal(nativeVersion,'0.164.0');
+  // InstallContext classifies standalone updates by the binary's CODEX_HOME
+  // prefix. An isolated home with the external binary silently skips its menu.
+  runtimeBinary=path.join(home,'packages/standalone/releases/0.164.0-test/codex');
+  fs.mkdirSync(path.dirname(runtimeBinary),{recursive:true});fs.copyFileSync(fs.realpathSync(binary),runtimeBinary,fs.constants.COPYFILE_FICLONE);fs.chmodSync(runtimeBinary,0o700);
+  fs.writeFileSync(path.join(home,'version.json'),JSON.stringify({latest_version:'0.165.0',last_checked_at:new Date().toISOString(),dismissed_version:null}),{mode:0o600});
+  // Update startup is exercised in an already trusted owned workspace; folder
+  // onboarding is a separate native interaction, not an updater requirement.
+  fs.appendFileSync(path.join(home,'config.toml'),`\n[projects.${JSON.stringify(cwd)}]\ntrust_level = \"trusted\"\n`);
+ }
+ const shim=path.join(base,'codex-local');fs.writeFileSync(shim,'#!/usr/bin/python3\nimport os,sys\n'+`os.environ["CODEX_HOME"]=${JSON.stringify(home)}\nos.environ["HOME"]=${JSON.stringify(userHome)}\n`+'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n'+`os.execv(${JSON.stringify(runtimeBinary)},["codex"]+sys.argv[1:])\n`,{mode:0o700});
  fs.writeFileSync(path.join(profile,'runtime-locations.json'),JSON.stringify({codex:shim}),{mode:0o600});
  if(!process.env.NAW_APP_EXECUTABLE)execFileSync(process.execPath,[path.join(root,'scripts/build-ui.cjs')]);
  app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],...(process.env.NAW_VIDEO_DIR?{recordVideo:{dir:process.env.NAW_VIDEO_DIR,size:{width:1280,height:900}}}:{}),env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});
@@ -104,8 +117,25 @@ async function nativeCommand(command){
  page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
  // Search/retry parity needs a trusted, live TUI before the GUI task.
  // Native 0.164 resume deliberately skips replayed willRetry notifications.
- const initialTerminal=scrollTrial||Boolean(capacityTrial)||process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'||(nativeVersion==='0.164.0'&&process.env.NAW_NATIVE_RETRY_TRIAL==='1');
+ const initialTerminal=updateStartupTrial||scrollTrial||Boolean(capacityTrial)||process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'||(nativeVersion==='0.164.0'&&process.env.NAW_NATIVE_RETRY_TRIAL==='1');
  await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#session-name').fill(autoName?'':'Native context');if(skipPermissions)await page.locator('#skip-permissions').check();await createIn(page, initialTerminal?'terminal':'chat');
+ if(updateStartupTrial){
+  const versionBefore=fs.readFileSync(path.join(home,'version.json'),'utf8');
+  await until(async()=>{const text=await terminalText();assert.ok(!text.includes('Update available'),'Startup update menu must not cover the native session');return text.includes('Trust this folder?')||text.includes('? for shortcuts');},'Actual native startup reaches folder gate or editor without update popup',60000);
+  assert.ok(!(await terminalText()).includes('Trust this folder?'),'Owned pretrusted-workspace startup needs no permission response');
+  await until(async()=>{const text=await terminalText();assert.ok(!text.includes('Update available'),'No update popup after exact owned-folder trust');return text.includes('? for shortcuts')&&(await snapshot()).sessions[0]?.state==='idle';},'Actual original native editor is ready',60000);
+  const before=(await snapshot()).sessions[0];assert.ok(before.nativeId&&before.pid);
+  await page.locator('#chat-tab').click();await page.locator('#message-input').fill('Unsent startup-update check draft.');
+  await until(async()=>(await snapshot()).sessions[0].liveDraft==='Unsent startup-update check draft.','Original session draft acknowledged');
+  await page.locator('#terminal-tab').click();
+  const after=(await snapshot()).sessions[0];assert.equal(after.nativeId,before.nativeId);assert.equal(after.owner,before.owner);assert.equal(after.pid,before.pid);
+  assert.equal(fs.readFileSync(path.join(home,'version.json'),'utf8'),versionBefore,'No persistent updater dismissal or cache edit');
+  assert.equal(calls,0);assert.equal(titles,0);assert.equal((await snapshot()).diagnostics.dispatches,0);assert.deepEqual(errors,[]);
+  fs.writeFileSync(path.join(base,'startup-update-native.json'),JSON.stringify({before,after,calls,titles,dispatches:0,versionCacheUnchanged:true},null,2));
+  fs.writeFileSync(path.join(base,'startup-update-terminal.txt'),await terminalText());
+  if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'startup-update-editor.png')});
+  console.log(JSON.stringify({checks:['Actual164 new-terminal startup bypasses a fresh165 cached update menu, preserves original identity/owner/draft without persistent dismissal'],nativeVersion,localResponses:0,nativeTitleResponses:0,paidModelCalls:0,dispatches:0,evidence:base}));return;
+ }
  if(initialTerminal){await require('./native-trust.cjs').acceptOwnedFolder(page,cwd,true);if(capacityTrial)await until(async()=>{const t=await terminalText();return !t.includes('Trust this folder?')&&t.includes('? for shortcuts');},'Owned native editor ready before the capacity task');await page.locator('#chat-tab').click();}
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Native ready');const before=(await snapshot()).sessions[0];assert.equal(before.model,'gpt-6-luna');
  if(scrollTrial){
