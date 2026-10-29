@@ -51,15 +51,15 @@ async function run() {
   await app.evaluate(() => { globalThis.menuClipboard.text = 'Paste original 你好'; });
   checks.push('Input pointer/Shift+F10 Copy, acknowledged Cut with failure retry, Paste and native Undo preserve exact text');
 
-  await page.locator(`[data-session-row="${id}"]`).click({ button: 'right' }); await item('重命名…').click();
-  const modalInput = page.locator('#rename-name'); await modalInput.fill('Modal context 你好'); await modalInput.evaluate(el => el.select());
+  await page.locator('#new-session').click();
+  const modalInput = page.locator('#session-name'); await modalInput.fill('Modal context 你好'); await modalInput.evaluate(el => el.select());
   await open(modalInput, 'Shift+F10'); await capture('modal-input-menu'); await item('复制').click(); await until(async () => await copied() === 'Modal context 你好', 'Modal input menu is interactive above its dialog');
-  await open(modalInput, 'Shift+F10'); await page.keyboard.press('Escape'); assert.equal(await page.locator('#rename-dialog').isVisible(), true); assert.equal(await modalInput.inputValue(), 'Modal context 你好', 'Escape dismisses only the menu');
+  await open(modalInput, 'Shift+F10'); await page.keyboard.press('Escape'); assert.equal(await page.locator('#create-dialog').isVisible(), true); assert.equal(await modalInput.inputValue(), 'Modal context 你好', 'Escape dismisses only the menu');
   await open(modalInput); const win = await app.browserWindow(page); await win.evaluate(w => w.setSize(850, 600)); await delay(150);
   const modalBounds = await item('复制').evaluate(el => { const menu = el.closest('[role="menu"]').getBoundingClientRect(), dialog = el.closest('dialog').getBoundingClientRect(); return { left: menu.left, right: menu.right, top: menu.top, bottom: menu.bottom, dialog: { left: dialog.left, right: dialog.right, top: dialog.top, bottom: dialog.bottom } }; });
   assert.ok(modalBounds.left >= modalBounds.dialog.left && modalBounds.right <= modalBounds.dialog.right && modalBounds.top >= modalBounds.dialog.top && modalBounds.bottom <= modalBounds.dialog.bottom, 'Modal menu remains visible inside a resized dialog'); await capture('modal-menu-small'); await page.keyboard.press('Escape');
   await win.evaluate(w => w.setSize(1240, 850));
-  await page.locator('#cancel-rename').click(); checks.push('Existing modal inputs expose an interactive keyboard context menu without closing or changing the form');
+  await page.locator('#cancel-create').click(); checks.push('Existing modal inputs expose an interactive keyboard context menu without closing or changing the form');
 
   await page.locator('#privacy-button').click(); const modalText = page.locator('#privacy-dialog > p').first(); await modalText.waitFor();
   for (const keyboard of [false, true]) {

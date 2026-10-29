@@ -82,7 +82,8 @@ messages you send use your provider's own plan or billing.
 
 New sessions inherit native permission defaults for their working directory.
 Open **⋯** beside a session, or right-click its row, then choose **重命名…**
-to change its local display name. The same menu offers **在独立窗口打开**.
+to edit its local display name in the original sidebar row. Enter saves; Escape
+cancels. The same menu offers **在独立窗口打开**.
 The sidebar, room tabs and other windows update together. The name
 is saved on this Mac; renaming does not call a model or change native history.
 

@@ -26,7 +26,7 @@ const interruptPending = s => Boolean(s && (s.interruptPending || pendingInterru
 const approvalViews = new Map();
 let shareRevision = 0, sharePending = null;
 let runPreview = null;
-let renamingId = '', renaming = false;
+let renameTarget = null, renaming = false, renameRevision = 0, renameComposing = false;
 let sessionMenu;
 let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, mentionRoster = '', roomMention = null, roomMentionEdit = null, notesRevision, contextTarget = null;
 let roomDraftRevision = 0;
@@ -176,7 +176,7 @@ const canResume = s => s?.nativeId && !s.nativeContextPending && !s.backendUnava
   ((s.provider === 'codex' && s.transportDisconnected && ['error', 'disconnected'].includes(s.state) && (s.serviceCapabilities || state.capabilities || []).includes('transportReconnect')) ||
   (!s.terminalAvailable && (['ended', 'recoverable', 'error'].includes(s.state) || (s.provider === 'codex' && s.state === 'disconnected' && (s.serviceCapabilities || state.capabilities || []).includes('resubscribe'))))) &&
   ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
-const inputFocusAllowed = () => !sessionMenu && !roomMenu && !contentMenu && !document.querySelector('dialog[open]');
+const inputFocusAllowed = () => !sessionMenu && !roomMenu && !contentMenu && !renameTarget && !document.querySelector('dialog[open]');
 function updateState(next) {
   const before = current(), id = activeSessionId();
   state = { ...state, ...next };
@@ -567,10 +567,57 @@ $('confirm-native-history').onclick = async () => {
 };
 function openRename(id) {
   const record = id === 'room' ? { id, name: state.room.name } : state.sessions.find(s => s.id === id); if (!record) return;
-  renamingId = record.id; $('rename-name').value = record.name;
-  $('rename-heading').textContent = id === 'room' ? '重命名工作区' : '重命名会话';
+  if (renaming) return toast('名称正在保存，请稍候。');
+  if (renameTarget) {
+    if (renameTarget.id === id || $('rename-name').value !== renameTarget.originalName) {
+      ui.revealSidebar(); $('rename-name').focus(); return toast('请先保存或取消正在编辑的名称。');
+    }
+    closeRename(false);
+  }
+  const row = id === 'room' ? $('room-nav').parentElement : sessionRows.get(id)?.element;
+  if (!row || record.archived || id === 'room' && state.room.archived) return;
+  renameTarget = { id, originalName: record.name, row, label: id === 'room' ? $('room-nav-name') : sessionRows.get(id).name };
+  renameRevision++; renameComposing = false; $('rename-name').value = record.name;
+  $('rename-label').textContent = id === 'room' ? '工作区名称' : '会话名称';
   $('rename-error').hidden = true; $('rename-error').textContent = '';
-  $('rename-dialog').showModal(); $('rename-name').focus(); $('rename-name').select();
+  row.classList.add('is-renaming'); renameTarget.label.hidden = true;
+  row.append($('rename-editor')); $('rename-editor').hidden = false; ui.revealSidebar();
+  render(); $('rename-name').focus(); $('rename-name').select();
+}
+function renameProblem(target = renameTarget) {
+  if (!target) return '';
+  const record = target.id === 'room' ? state.room : state.sessions.find(s => s.id === target.id);
+  if (!record || record.archived) return '原记录已归档或不可用。输入保留，可取消编辑或恢复原记录后重试。';
+  if (record.name !== target.originalName) return '名称已在另一处更改。输入保留，请取消后重新编辑。';
+  if (disconnected) return '本地服务未连接，名称输入已保留。';
+  return '';
+}
+function showRenameError(message, kind = 'save') {
+  if ($('rename-error').textContent !== message) $('rename-error').textContent = message;
+  $('rename-error').dataset.kind = kind; $('rename-error').hidden = false;
+}
+function renderRename() {
+  if (!renameTarget) return;
+  const problem = renaming ? '' : renameProblem();
+  if (problem) showRenameError(problem, 'state');
+  else if ($('rename-error').dataset.kind === 'state') $('rename-error').hidden = true;
+  $('confirm-rename').disabled = renaming || Boolean(problem); $('cancel-rename').disabled = renaming;
+  $('rename-name').readOnly = renaming; $('rename-form').setAttribute('aria-busy', String(renaming));
+  const record = state.sessions.find(s => s.id === renameTarget.id), row = sessionRows.get(renameTarget.id);
+  if (row && (!record || record.archived)) {
+    row.status.textContent = record?.archived ? '已归档 · 名称尚未保存' : '记录不可用 · 名称尚未保存';
+    row.link.disabled = !record; row.more.disabled = true;
+  }
+}
+function closeRename(returnFocus = true) {
+  if (!renameTarget || renaming) return;
+  const target = renameTarget; renameTarget = null; renameRevision++; renameComposing = false;
+  $('rename-editor').hidden = true; $('header').parentElement.append($('rename-editor'));
+  target.row.classList.remove('is-renaming'); target.label.hidden = false; render();
+  if (returnFocus) {
+    const action = target.id === 'room' ? $('room-more') : sessionRows.get(target.id)?.more;
+    (action?.getClientRects().length && !action.disabled ? action : $(target.id === 'room' ? 'workspace-toggle' : 'solo-drop')).focus({ preventScroll: true });
+  }
 }
 function focusSessionAction(id) { if (id === 'room') $('room-more').focus(); else sessionRows.get(id)?.more.focus(); }
 function openRoomMenu(point) {
@@ -634,7 +681,7 @@ function renderSessions() {
   const visible = sidebarSessions();
   const ids = new Set(visible.map(s => s.id));
   if (sessionMenu && !sessionMenu.anchor && (!ids.has(sessionMenu.id) || disconnected)) sessionMenu.close();
-  for (const [id, row] of sessionRows) if (!ids.has(id)) { row.element.remove(); sessionRows.delete(id); }
+  for (const [id, row] of sessionRows) if (!ids.has(id) && renameTarget?.id !== id) { row.element.remove(); sessionRows.delete(id); }
   visible.forEach((record, index) => {
     let row = sessionRows.get(record.id);
     if (!row) {
@@ -648,15 +695,16 @@ function renderSessions() {
       // Treat the external trigger as part of DSH's menu: let its click toggle
       // the menu instead of outside-dismiss followed by an accidental reopen.
       more.addEventListener('pointerdown', event => { if (sessionMenu?.id === record.id) event.stopPropagation(); });
-      element.addEventListener('contextmenu', event => { event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }); });
-      element.addEventListener('keydown', event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openSessionMenu(record.id); } });
+      element.addEventListener('contextmenu', event => { if (event.target.closest('#rename-editor')) return; event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }); });
+      element.addEventListener('keydown', event => { if (event.target.closest('#rename-editor')) return; if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openSessionMenu(record.id); } });
       element.append(link, more); row = { element, link, more, name, shortId, status, dot }; sessionRows.set(record.id, row);
     }
     const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sessionStatus(record)}`;
+    row.link.disabled = false;
     row.link.setAttribute('aria-label', `${label} · ${sessionTimes(record)}`); row.link.title = `${label}\n${sessionTimes(record)}`;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
-    row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}`); row.more.title = `会话操作：${record.name} · ${sessionShortId(record.id)}`; row.more.disabled = disconnected;
+    row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}`); row.more.title = `会话操作：${record.name} · ${sessionShortId(record.id)}`; row.more.disabled = disconnected || renameTarget?.id === record.id;
     row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}${sessionTime(record.lastActivityAt) ? ` · ${sessionTime(record.lastActivityAt)}` : ''}`; row.dot.className = `state-dot ${record.state}`;
     // Keep existing DOM nodes: native state updates must not remove a focused
     // row or its open menu anchor every 35 ms.
@@ -932,7 +980,7 @@ function visibleSelectionTerminal() {
   return terminalLayout !== 'hidden' && entry?.ready && entry.element.checkVisibility() ? entry.term : null;
 }
 function selectedSharingText() {
-  const s = current(); if (!s || s.archived) return '';
+  const s = current(); if (!s || s.archived || renameTarget) return '';
   {
     const selection = window.getSelection(), text = selection?.toString() || '';
     if (text) {
@@ -1285,7 +1333,8 @@ function render() {
     $('reconnect-button').hidden = !disconnected;
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions();
-    renderArchives(); $('room-nav').parentElement.hidden = Boolean(state.room.archived); document.querySelector('.drop-hint').hidden = Boolean(state.room.archived);
+    renderArchives(); $('room-nav').parentElement.hidden = Boolean(state.room.archived) && renameTarget?.id !== 'room'; document.querySelector('.drop-hint').hidden = Boolean(state.room.archived);
+    $('room-nav').disabled = Boolean(state.room.archived); $('room-more').disabled = disconnected || Boolean(state.room.archived) || renameTarget?.id === 'room';
     $('workspace-empty').hidden = !state.room.archived;
     $('room-nav').classList.toggle('active', inRoom); $('member-count').textContent = members().length;
     if (inRoom) $('room-nav').setAttribute('aria-current', 'page'); else $('room-nav').removeAttribute('aria-current');
@@ -1416,7 +1465,7 @@ function render() {
     const approvalParent = sharedSurface() ? $('room-record-view') : $('conversation-pane');
     if ($('approval').parentElement !== approvalParent) approvalParent.prepend($('approval'));
     renderApproval(approvalTarget, approvalTarget?.owner === owner);
-    updateSelectedSharing();
+    renderRename(); updateSelectedSharing();
   } finally { restoreVisibleReading(); rendering = false; }
 }
 async function switchMode(next, takeControl = false) {
@@ -1734,16 +1783,29 @@ for (const divider of document.querySelectorAll('.split-divider')) {
 }
 $('new-session').onclick = () => openCreate(); $('start-claude').onclick = () => openCreate('claude'); $('start-codex').onclick = () => openCreate('codex');
 $('cancel-create').onclick = () => $('create-dialog').close();
-$('cancel-rename').onclick = () => $('rename-dialog').close();
-$('rename-dialog').oncancel = event => { if (renaming) event.preventDefault(); };
-$('rename-dialog').onclose = () => { const id = renamingId; renamingId = ''; focusSessionAction(id); };
-$('rename-name').onkeydown = event => { if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault(); };
+$('cancel-rename').onclick = () => closeRename();
+$('rename-name').oninput = () => { renameRevision++; $('rename-error').hidden = true; };
+$('rename-name').addEventListener('compositionstart', () => { renameComposing = true; });
+$('rename-name').addEventListener('compositionend', () => { renameComposing = false; });
+$('rename-name').onkeydown = event => {
+  if (event.key === 'Enter' && (renameComposing || event.isComposing || event.keyCode === 229 || renaming)) event.preventDefault();
+};
+$('rename-editor').onkeydown = event => {
+  if (event.key !== 'Escape' || renameComposing || event.isComposing || event.keyCode === 229) return;
+  event.preventDefault(); if (!renaming) closeRename();
+};
 $('rename-form').onsubmit = async event => {
-  event.preventDefault(); if (renaming) return;
-  renaming = true; $('confirm-rename').disabled = true; $('cancel-rename').disabled = true;
-  try { await (renamingId === 'room' ? api.roomRename($('rename-name').value) : api.rename(renamingId, $('rename-name').value)); $('rename-dialog').close(); toast('名称已保存。'); }
-  catch (error) { $('rename-error').textContent = error.message || '名称未能保存，请重试。'; $('rename-error').hidden = false; $('rename-name').focus(); }
-  finally { renaming = false; $('confirm-rename').disabled = false; $('cancel-rename').disabled = false; }
+  event.preventDefault(); const target = renameTarget; if (!target || renaming || renameComposing) return;
+  const problem = renameProblem(target); if (problem) return showRenameError(problem, 'state');
+  const hadEditorFocus = $('rename-editor').contains(document.activeElement);
+  const mayRestoreFocus = () => hadEditorFocus && (document.activeElement === document.body || $('rename-editor').contains(document.activeElement));
+  renaming = true; renderRename();
+  try {
+    await (target.id === 'room' ? api.roomRename($('rename-name').value) : api.rename(target.id, $('rename-name').value));
+    if (renameTarget !== target) return;
+    const returnFocus = mayRestoreFocus(); renaming = false; closeRename(returnFocus); toast('名称已保存。');
+  } catch (error) { if (renameTarget === target) { showRenameError(error.message || '名称未能保存，请重试。'); if (mayRestoreFocus()) $('rename-name').focus({ preventScroll: true }); } }
+  finally { renaming = false; if (renameTarget === target) renderRename(); }
 };
 $('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; $('chosen-folder').textContent = folder; } });
 $('create-form').onsubmit = event => { event.preventDefault();
