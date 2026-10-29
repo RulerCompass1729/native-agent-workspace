@@ -19,7 +19,7 @@ try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw e
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: 'T78 Claude native pixels', token, pid: process.pid, at: new Date().toISOString() }));
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-claude-image-gui-'));
 const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/claude-native-images.cjs')],
-  env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+  env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: path.join(profile, 'workspace'), NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 let app, page, sequence = 0; const checks = [], errors = [], delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 function fixture(method, target, value) { const id = ++sequence; return new Promise((resolve, reject) => {
   const callback = packet => { if (packet.requestId === id) { clearTimeout(timer); child.off('message', callback); packet.error ? reject(Error(packet.error)) : resolve(packet); } };
@@ -48,6 +48,9 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Own daemon ready');
   app = await _electron.launch({ executablePath: require('electron'), args: [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', error => errors.push(error.message)); await page.locator('#new-session').waitFor();
+  const workspaceRoot = (await snapshot()).newWorkspaceRoot;
+  assert.equal(typeof workspaceRoot, 'string');
+  assert.equal(fs.realpathSync(path.dirname(workspaceRoot)), fs.realpathSync(profile), 'New session root must stay strictly inside the owned profile');
   const pixels = await app.evaluate(({ nativeImage, clipboard }) => {
     const crypto = process.getBuiltinModule('node:crypto'), hash = image => crypto.createHash('sha256').update(image.toBitmap()).digest('hex');
     globalThis.nativeImageCopies = []; globalThis.nativeTextCopies = [];
@@ -56,6 +59,7 @@ async function run() {
       const image = nativeImage.createFromBitmap(buffer, { width: 640, height: 360, scaleFactor: 1 }); return { data: image.toPNG().toString('base64'), hash: hash(image) }; });
   });
   const a = await create('Claude Image A'), b = await create('Claude Image B'), c = await create('Claude Image C'), originalIdentity = identity(await snapshot());
+  for (const session of (await snapshot()).sessions) assert.ok(fs.realpathSync(session.cwd).startsWith(fs.realpathSync(profile) + path.sep));
   await page.locator(`[data-session-id="${a}"]`).click(); await page.locator('#message-input').fill('UNSENT_NATIVE_IMAGE_PRIVATE_DRAFT');
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).liveDraft === 'UNSENT_NATIVE_IMAGE_PRIVATE_DRAFT', 'Private draft stored');
   const nativeId = (await snapshot()).sessions.find(s => s.id === a).nativeId, sourcePath = path.join(profile, 'native-original.png');
