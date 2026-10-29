@@ -221,6 +221,7 @@ for (const scenario of ['pending', 'empty', 'missing-history', 'missing-disconne
     const results = await Promise.all(scenario === 'concurrent' ? [r.openTerminal(), r.openTerminal()] : [r.openTerminal()]);
     assert.equal(starts, 1); assert.ok(results.every(result => result === r.terminal));
     assert.equal(argv.at(-1), record.nativeId); assert.ok(argv.includes('resume'));
+    assert.deepEqual(argv.slice(1,5), ['-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false']);
     assert.equal(r.hasHistory, true);
   } else {
     await assert.rejects(r.openTerminal(), ['empty', 'missing-history'].includes(scenario) ? /请先在对话中发送第一条消息/ : /原生/);
@@ -290,4 +291,20 @@ test('native tool activity before resume ACK rejects its older idle status', asy
   assert.ok(!f.states.includes('idle'));
   assert.equal(f.r.nativeActivity.label, 'commandExecution');
   assert.equal(f.r.nativeActivity.turnId, 'active-turn');
+});
+
+for (const skipPermissions of [false, true]) test('terminal-first startup keeps updater disabled and original permission choice: ' + skipPermissions, async () => {
+  const { EventEmitter } = require('node:events');
+  const record = { cwd: '/synthetic', view: 'terminal', skipPermissions };
+  const host = { binaries: { codex: 'synthetic' }, codexTargets: new Map(), codexProcess: { pid: 123 }, rpc: {} };
+  const r = new Codex(record, host); let argv, starts = 0;
+  r.terminalEndpoint = async () => '/synthetic/socket';
+  r.makeTerminal = args => { argv = args; starts++; const terminal = new EventEmitter();
+    setImmediate(() => host.pendingCodex({ id: 'new-native' }, 'native-model')); return terminal; };
+  await r.startFromTerminal();
+  assert.equal(starts, 1); assert.equal(record.nativeId, 'new-native');
+  assert.deepEqual(argv.slice(1, 5), ['-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false']);
+  assert.equal(argv.includes('never'), skipPermissions); assert.equal(argv.includes('danger-full-access'), skipPermissions);
+  assert.equal(argv.includes('resume'), false); assert.deepEqual(argv.slice(-4), ['--remote', 'unix:///synthetic/socket', '-C', record.cwd]);
+  assert.equal(host.pendingCodex, null);
 });
