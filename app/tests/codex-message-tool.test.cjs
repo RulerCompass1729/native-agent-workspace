@@ -1,0 +1,52 @@
+const test = require('node:test'), assert = require('node:assert/strict');
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { spawn } = require('node:child_process');
+const { once } = require('node:events');
+const { NativeHost, Codex } = require('../adapters.cjs');
+const { metadataIdentity } = require('../claude-message-tool.cjs');
+const meta = { threadId: 'native-root', sessionId: 'native-session', callId: 'native-call', 'x-codex-turn-metadata': { thread_id: 'native-root', turn_id: 'native-turn' } };
+test('MCP native provenance rejects missing, inconsistent and argument-supplied identity without fallback IDs', () => {
+  assert.deepEqual(metadataIdentity(meta), { nativeId: 'native-root', sessionId: 'native-session', turnId: 'native-turn', callId: 'native-call' });
+  assert.deepEqual(metadataIdentity({ ...meta, 'x-codex-turn-metadata': JSON.stringify(meta['x-codex-turn-metadata']) }), metadataIdentity(meta));
+  for (const value of [{}, { ...meta, callId: '' }, { ...meta, threadId: 'other' }, { ...meta, sessionId: undefined }, { ...meta, 'x-codex-turn-metadata': {} }, { ...meta, 'x-codex-turn-metadata': 'bad' }]) assert.throws(() => metadataIdentity(value), /provenance/);
+});
+test('actual MCP stdio waits for bound root staging via the existing authenticated hook socket', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wake-mcp-'));
+  const host = new NativeHost(dir); await host.start(); host.rpc = { nativeVersion: '0.165.0' };
+  const runtime = new Codex({ nativeId: meta.threadId, messages: [] }, host);
+  runtime.turnId = 'native-turn'; runtime.nativeSessionId = 'native-session'; host.codexTargets.set(meta.threadId, runtime);
+  const args = { recipient_id: 'target-id', message: 'One explicit bounded task.' };
+  const observeProof = () => runtime.observeNativeItem('item/started', { turnId: runtime.turnId, item: { id: meta.callId, type: 'mcpToolCall', server: 'native_workspace', tool: 'workspace_message', arguments: args } });
+  let release, calls = 0;
+  runtime.addressedCall = (identity, body) => { calls++; assert.equal(identity.turnId, runtime.turnId); assert.deepEqual(body, args); return new Promise(resolve => { release = () => resolve({ status: 'staged', id: 'durable-ticket' }); }); };
+  const child = spawn(process.execPath, [path.join(__dirname, '../claude-message-tool.cjs'), '--codex'], { env: { ...process.env, NAW_MESSAGE_SOCKET: host.hookSocket, NAW_MESSAGE_TOKEN: host.codexMessageToken }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const pending = new Map(); let output = '', errors = '';
+  child.stderr.on('data', b => { errors += b; });
+  child.stdout.setEncoding('utf8'); child.stdout.on('data', b => { output += b; for (let i; (i = output.indexOf('\n')) >= 0;) { const row = JSON.parse(output.slice(0, i)); output = output.slice(i + 1); pending.get(row.id)?.(row); pending.delete(row.id); } });
+  t.after(async () => { child.stdin.end(); await once(child, 'exit'); host.rpc = null; host.close(); fs.rmSync(dir, { recursive: true, force: true }); assert.equal(errors, ''); });
+  let sequence = 0;
+  const call = (method, params) => new Promise(resolve => { const id = ++sequence; pending.set(id, resolve); child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'); });
+  assert.equal((await call('initialize', {})).result.serverInfo.name, 'workspace');
+  const listed = await call('tools/list', {}); assert.deepEqual(listed.result.tools[0].annotations, { destructiveHint: false, openWorldHint: false, readOnlyHint: false });
+  const bad = await call('tools/call', { name: 'workspace_message', arguments: args }); assert.ok(bad.error); assert.equal(calls, 0);
+  const connected = once(host.hooks, 'connection');
+  let done = false; const result = call('tools/call', { name: 'workspace_message', arguments: args, _meta: meta }).then(r => { done = true; return r; });
+  await connected; await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(calls, 0); assert.equal(done, false, 'wait for authoritative native item delivery');
+  observeProof();
+  for (let i = 0; i < 100 && !release; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(calls, 1); assert.equal(done, false); release();
+  const received = await result; assert.equal(received.result.isError, false); assert.deepEqual(JSON.parse(received.result.content[0].text), { status: 'staged', id: 'durable-ticket' });
+  const stale = await call('tools/call', { name: 'workspace_message', arguments: args, _meta: { ...meta, 'x-codex-turn-metadata': { thread_id: meta.threadId, turn_id: 'old-turn' } } });
+  assert.equal(JSON.parse(stale.result.content[0].text).status, 'unconfirmed'); assert.equal(calls, 1);
+});
+test('cold receiver recovery retains native client identity for an earlier automatic workspace input', async () => {
+  const nativeId = 'retained-root', rpc = { async call(method) {
+    if (method === 'thread/resume') return { thread: { id: nativeId, sessionId: 'retained-session', status: { type: 'idle' } } };
+    if (['thread/items/list', 'thread/turns/list'].includes(method)) return { data: [], nextCursor: null };
+    throw Error('Unexpected metadata request ' + method);
+  } };
+  const host = { rpc, codexProcess: { pid: null }, codexTargets: new Map(), async startCodex() {} };
+  const r = new Codex({ recovering: true, nativeId, cwd: '/synthetic/workspace', view: 'chat', messages: [{ id: 'wake-native-client-id', role: 'user', origin: 'agent-wake', text: 'An earlier message.' }] }, host);
+  await r.start(); assert.equal(r.ownInputs.has('wake-native-client-id'), true);
+});

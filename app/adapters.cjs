@@ -348,6 +348,7 @@ class Claude extends EventEmitter {
           this.seenRootTurns.add(message.turnId);
           while (this.seenRootTurns.size > 256) this.seenRootTurns.delete(this.seenRootTurns.values().next().value);
           this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
+          if (this.rootTurn) this.emit('nativeTurnStart', { nativeId: this.record.nativeId, turnId: message.turnId });
           this.liveTurn = this.rootTurn ? { id: message.turnId, promptId: message.promptId, phase: 'requesting', label: 'requesting' } : null;
           this.livePermissions.clear();
           if (this.rootTurn) { this.nativeInputRequired = false; this.emit('inputRequired', false); }
@@ -421,6 +422,7 @@ class Claude extends EventEmitter {
     if (kind === 'turn' && this.rootTurn?.id === turnId && !this.rootTurn.completed && ['working', 'error', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
       this.rootTurn.status = status === 'interrupted' ? 'idle' : status === 'failed' && message.failedRequest === true ? 'error' : null;
       this.rootTurn.completed = status === 'complete';
+      if (this.rootTurn.completed && !incomplete && !turn.incomplete) this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'completed' });
       if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && /^[a-f0-9-]{36}$/i.test(message.errorMessageId || '')) this.rootTurn.errorMessageId = message.errorMessageId;
       if (incomplete || turn.incomplete) this.rootTurn.errorMessageId = null;
       this.reportCapacityFailure();
@@ -663,7 +665,7 @@ class Claude extends EventEmitter {
         } else if (!this.pending || event.prompt !== this.pending.text || event.prompt_id !== this.pending.promptId) {
           if (this.queued) this.queued.superseded = true;
           this.pending = null; this.emit('state', 'working');
-          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: `claude-prompt-${event.prompt_id}` } : undefined);
+          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: `claude-prompt-${event.prompt_id}`, ...(this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}) } : undefined);
         }
         break;
       }
@@ -884,7 +886,7 @@ class Codex extends EventEmitter {
       // rather than appending an unknown suffix/prefix to an old partial reply.
       this.rememberHistoryWatermarks();
       for (const message of this.record.messages || []) {
-        if (message.role === 'user' && ['human', 'room'].includes(message.origin)) this.ownInputs.add(message.id);
+        if (message.role === 'user' && ['human', 'room', 'agent-wake'].includes(message.origin)) this.ownInputs.add(message.id);
       }
       this.host.codexTargets.set(this.record.nativeId, this);
       const revision = this.stateRevision;
@@ -894,6 +896,7 @@ class Codex extends EventEmitter {
         if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
         if (!current()) throw new Error('原生后台已变化，没有继续旧的恢复请求。');
         if (result.thread?.id !== this.record.nativeId) throw new Error('原生返回了不同的会话，恢复未确认。');
+        this.nativeSessionId = result.thread.sessionId; this.emit('workspaceMcpProof');
       } catch (error) {
         if (this.host.codexTargets.get(this.record.nativeId) === this) this.host.codexTargets.delete(this.record.nativeId);
         this.finishRecoveryConnection?.(false);
@@ -926,7 +929,7 @@ class Codex extends EventEmitter {
       ...(this.record.skipPermissions ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : {}) });
     if (!current()) throw new Error('原生后台已变化，没有接管旧的启动结果。');
     this.record.addressedToolVersion = 1; this.addressedSendAvailable = true;
-    this.record.nativeId = r.thread.id;
+    this.record.nativeId = r.thread.id; this.nativeSessionId = r.thread.sessionId; this.emit('workspaceMcpProof');
     this.host.codexTargets.set(this.record.nativeId, this);
     this.emit('model', r.model || r.thread.model || '原生默认');
     this.emit('pid', this.host.codexProcess.pid); this.emit('state', 'idle');
@@ -952,7 +955,7 @@ class Codex extends EventEmitter {
         if (this.stopped || rpc !== this.host.rpc || child !== this.host.codexProcess) {
           reject(new Error('原生后台已变化，没有接管旧的启动结果。')); return;
         }
-        this.record.nativeId = thread.id; this.host.codexTargets.set(thread.id, this);
+        this.record.nativeId = thread.id; this.nativeSessionId = thread.sessionId; this.emit('workspaceMcpProof'); this.host.codexTargets.set(thread.id, this);
         if (this.terminalNotificationSource) this.chatAvailable = true;
         this.emit('activity', ''); this.emit('model', model || thread.model || '原生未报告'); this.emit('state', 'idle'); resolve();
         if (!this.chatAvailable) this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', '原生终端可继续；对话连接未确认。'); });
@@ -1185,7 +1188,7 @@ class Codex extends EventEmitter {
     this.pendingTerminalContext = null; this.terminalSwitch = null; ++this.lifecycleRevision;
     this.terminalNotificationSource = true; this.terminalRpc = event.rpc; this.nativeObservationPending = false;
     if (previousId !== thread.id && this.host.codexTargets.get(previousId) === this) this.host.codexTargets.delete(previousId);
-    this.host.codexTargets.set(thread.id, this);
+    this.host.codexTargets.set(thread.id, this); this.nativeSessionId = thread.sessionId; this.emit('workspaceMcpProof');
     this.pending = null; this.turnId = null; this.turns.clear(); this.ownInputs.clear(); this.inputItems.clear();
     this.activeNativeItems.clear(); this.nativeTextParts.clear(); this.liveTextItems.clear();
     this.liveMessageItems.clear(); this.historyMessageItems.clear(); this.liveToolItems.clear(); this.textEndedTurns.clear();
@@ -1229,7 +1232,12 @@ class Codex extends EventEmitter {
     this.stateRevision++; // A delayed resume status predates these native events.
     if (method === 'item/started') {
       if (this.activeNativeItems.size < 200) this.activeNativeItems.set(params.item.id, params.item.type);
-    } else this.activeNativeItems.delete(params.item.id);
+      if (params.item.type === 'mcpToolCall' && params.item.server === 'native_workspace' && params.item.tool === 'workspace_message') {
+        this.workspaceMcpCalls ||= new Map();
+        if (this.workspaceMcpCalls.size < 64) this.workspaceMcpCalls.set(params.item.id, { turnId: params.turnId, arguments: params.item.arguments });
+        this.emit('workspaceMcpProof');
+      }
+    } else { this.activeNativeItems.delete(params.item.id); this.workspaceMcpCalls?.delete(params.item.id); }
     this.publishNativeActivity();
   }
   observeStatus(status) {
@@ -1362,6 +1370,10 @@ class Codex extends EventEmitter {
       try {
         if (!this.addressedSendAvailable || this.transportDisconnected || p.threadId !== this.record.nativeId || p.turnId !== this.turnId || !this.addressedCall) throw Error('当前原生连接不支持定向协作。');
         result = this.addressedCall({ nativeId: p.threadId, turnId: p.turnId, callId: p.callId }, p.arguments); success = true;
+        if (result?.then) {
+          result.then(value => sourceRpc.reply(message.id, { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(value) }] }), error => sourceRpc.reply(message.id, { success: false, contentItems: [{ type: 'inputText', text: JSON.stringify({ status: 'unconfirmed', message: error.message }) }] })).catch(() => {});
+          return;
+        }
       } catch (error) {
         try { this.addressedFailed?.({ nativeId: p.threadId, turnId: p.turnId, callId: p.callId }); } catch { /* Not this authorized root turn. */ }
         result = { status: 'not-sent', message: error.message };
@@ -1417,6 +1429,8 @@ class Codex extends EventEmitter {
       // A native rename, or the TUI naming an unnamed thread with its generated title.
       case 'thread/name/updated': if (p.threadId === this.record.nativeId && typeof p.threadName === 'string') this.emit('nativeTitle', p.threadName); break;
       case 'turn/started':
+        this.workspaceMcpCalls?.clear();
+        this.emit('nativeTurnStart', { nativeId: this.record.nativeId, turnId: p.turn.id });
         this.turnId = p.turn.id; this.activeNativeItems.clear(); this.nativeWait = null; this.nativeRetry = null; this.nativeTurnFinished = false;
         this.turn(p.turn.id).liveStarted = true;
         this.nativeStartedAt = Number.isFinite(p.turn.startedAt) && p.turn.startedAt > 0 ? p.turn.startedAt * 1000 : null;
@@ -1441,7 +1455,7 @@ class Codex extends EventEmitter {
         // our explicitly identified echo is redundant; matching text is not ID.
         if (p.item?.type === 'userMessage' && !this.ownInputs.has(p.item.clientId) && (!p.item.id || !this.inputItems.has(p.item.id))) {
           if (p.item.id) this.inputItems.add(p.item.id);
-          this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), { id: p.item.id });
+          this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), { id: p.item.id, turnId: p.turnId });
         }
         break;
       case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage ? { ...p.tokenUsage, threadId: p.threadId, turnId: p.turnId, reportedAt: Date.now() } : null); break;
@@ -1736,11 +1750,35 @@ class Codex extends EventEmitter {
   }
 }
 
+// Native WS notifications and MCP stdio use different transports. Wait on the
+// existing runtime events, within the socket deadline, rather than guessing a
+// sender when the authoritative item notification has not arrived yet.
+async function workspaceMcpProof(runtime, identity, args, socket) {
+  const check = () => {
+    if (runtime.stopped || runtime.transportDisconnected || socket.destroyed) throw Error('原生连接已变化，未登记自动消息。');
+    const call = runtime.workspaceMcpCalls?.get(identity.callId);
+    if (!call || !runtime.nativeSessionId) return false;
+    if (identity.sessionId !== runtime.nativeSessionId || identity.turnId !== runtime.turnId || call.turnId !== identity.turnId ||
+        !call.arguments || call.arguments.recipient_id !== args?.recipient_id || call.arguments.message !== args?.message) throw Error('本次原生主会话工具来源未能确认。');
+    return call;
+  };
+  const ready = check(); if (ready) return ready;
+  return new Promise((resolve, reject) => {
+    const finish = (error, value) => { runtime.off('workspaceMcpProof', observed); runtime.off('nativeTurnEnd', ended); socket.off('close', closed); error ? reject(error) : resolve(value); };
+    const observed = () => { try { const value = check(); if (value) finish(null, value); } catch (e) { finish(e); } };
+    const ended = info => { if (info.turnId === identity.turnId) finish(Error('原生回合已结束，未登记自动消息。')); };
+    const closed = () => finish(Error('自动消息来源等待已结束；接收结果未确认。'));
+    runtime.on('workspaceMcpProof', observed); runtime.on('nativeTurnEnd', ended); socket.once('close', closed);
+    observed();
+  });
+}
+
 class NativeHost {
   constructor(privateDir) {
     this.privateDir = privateDir; this.hookSocket = path.join(privateDir, 'hooks.sock');
     this.submitSocket = path.join(privateDir, 'submit.sock');
     this.codexSocket = path.join(privateDir, 'codex.sock'); this.hookTargets = new Map(); this.codexTargets = new Map();
+    this.codexMessageToken = crypto.randomBytes(32).toString('hex');
     this.submissions = createSubmissionServer(this.submitSocket, this.hookTargets);
     this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
     this.hooks = net.createServer(socket => {
@@ -1752,6 +1790,19 @@ class NativeHost {
         const end = data.indexOf('\n'); if (end < 0) return;
         let event;
         try { event = JSON.parse(data.slice(0, end)); } catch { return socket.end(); }
+        if (event.workspaceMessage === true) {
+          socket.removeAllListeners('data');
+          socket.setTimeout(0); const deadline = setTimeout(() => socket.destroy(), 10000);
+          socket.once('close', () => clearTimeout(deadline));
+          Promise.resolve().then(async () => {
+            const identity = event.identity, runtime = this.codexTargets.get(identity?.nativeId);
+            const args = event.arguments;
+            if (event.token !== this.codexMessageToken || this.rpc?.nativeVersion !== '0.165.0' || !runtime || !runtime.addressedCall) throw Error('本次原生主会话工具来源未能确认。');
+            const call = await workspaceMcpProof(runtime, identity, args, socket);
+            return runtime.addressedCall({ ...identity, valid: () => !socket.destroyed && runtime.workspaceMcpCalls?.get(identity.callId) === call }, args);
+          }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
+          return;
+        }
         const target = this.hookTargets.get(event.token);
         if (event.ask && target?.ask) {
           // Hold only this connection until the person answers or hands it back.
@@ -1890,7 +1941,12 @@ class NativeHost {
         } catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
       this.codexBinary = this.binaries.codex;
-      child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
+      const mcpArgs = ['--disable-sigusr1', path.join(__dirname, 'claude-message-tool.cjs'), '--codex'];
+      const mcpConfig = [
+        ['command', process.execPath], ['args', mcpArgs], ['env.ELECTRON_RUN_AS_NODE', '1'],
+        ['env.NAW_MESSAGE_SOCKET', this.hookSocket], ['env.NAW_MESSAGE_TOKEN', this.codexMessageToken],
+      ].flatMap(([key, value]) => ['-c', `mcp_servers.native_workspace.${key}=${JSON.stringify(value)}`]);
+      child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', ...mcpConfig, 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
       child.stderr.on('data', () => {});
       child.on('error', error => { spawnError = error; });
       for (let i = 0; i < 100 && !fs.existsSync(this.codexSocket); i++) {
