@@ -214,7 +214,7 @@ function followQueuedRoomInput(id, mark) {
   if (!row) return;
   mark.tag = row.id;
   if (!mark.cleared && row.status === 'awaiting-native' && mark.revision === roomDraftRevision && $('shared-input').value === mark.raw && roomRecipient() === id && roomMention?.text === mark.address?.text) {
-    $('shared-input').value = roomMention.text + ' '; roomMention = { ...roomMention, start: 0, end: roomMention.text.length }; mark.cleared = ++roomDraftRevision; attempt(persistView);
+    $('shared-input').value = ''; roomMention = null; mark.cleared = ++roomDraftRevision; attempt(persistView);
   }
   if (row.status === 'awaiting-native') return;
   // The room draft lives in this view; after a reload the text stays in the record.
@@ -2043,7 +2043,7 @@ async function submitRoom(automatic) {
   try {
     const receipt = await (automatic ? api.run(ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
     if (submission.cancelRequested || receipt?.contextChanged) return;
-    if (revision === roomDraftRevision && $('shared-input').value === raw && roomRecipient() === first && roomMention?.memberRevision === address?.memberRevision && roomMention?.text === address?.text) { $('shared-input').value = roomMention.text + ' '; roomMention = { ...roomMention, start: 0, end: roomMention.text.length }; roomDraftRevision++; await persistView(); }
+    if (revision === roomDraftRevision && $('shared-input').value === raw && roomRecipient() === first && roomMention?.memberRevision === address?.memberRevision && roomMention?.text === address?.text) { $('shared-input').value = ''; roomMention = null; roomDraftRevision++; await persistView(); }
   }
   catch (error) { if (!submission.cancelRequested) throw error; }
   finally {
