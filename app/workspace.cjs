@@ -20,8 +20,8 @@ const activityMark = s => { const last = (s.messages || []).findLast(m => !m.vol
 const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data);
 
 class Workspace extends EventEmitter {
-  constructor(host, dataDir) {
-    super(); this.host = host; this.dataDir = dataDir; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
+  constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces')) {
+    super(); this.host = host; this.dataDir = dataDir; this.newWorkspaceRoot = newWorkspaceRoot; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
     this.claudeAsks = new Map();
     this.capacityRecoveries = new Map();
     this.room = { id: 'shared', name: '共同工作', revision: 0, run: null, messages: [] };
@@ -111,16 +111,37 @@ class Workspace extends EventEmitter {
     return { terminal: terminal?.observe ? await terminal.observe() : null,
       progress: this.progress.get(id)?.snapshot() || { items: [], revision: 0, truncated: false } };
   }
-  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions } = {}) {
+  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory } = {}) {
     if (!['chat', 'terminal'].includes(view)) throw new Error('未知视图。');
     if (skipPermissions != null && skipPermissions !== true) throw new Error('无效的权限选项。');
     if (fork != null && (fork !== 'picker' || provider !== 'claude')) throw new Error('无效的分支请求。');
+    if (newDirectory != null && newDirectory !== true) throw new Error('无效的新建目录选项。');
+    if (fork && newDirectory) throw new Error('从历史会话分支前，请选择原工作目录。');
     // The native session picker that chooses what to branch needs the terminal.
     if (fork) view = 'terminal';
-    if (!['claude', 'codex'].includes(provider) || !path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error('请选择可用 agent 和工作目录。');
+    if (!['claude', 'codex'].includes(provider) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new Error('请选择可用 agent 和工作目录。');
+    const sessionName = name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`;
+    if (newDirectory) {
+      const leaf = path.basename(cwd), root = this.newWorkspaceRoot;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(leaf) || cwd !== path.join(root, leaf)) throw new Error('独立目录路径已变化，请重新打开新建窗口。');
+      try {
+        fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+        if (!fs.lstatSync(root).isDirectory()) throw Error('Invalid root');
+      } catch { throw new Error('独立目录的存放位置不可用，请检查磁盘空间和目录权限；未启动新会话。'); }
+      try {
+        // Never reuse an existing folder, file or symlink as an empty workspace.
+        fs.mkdirSync(cwd, { mode: 0o700 }); fs.chmodSync(cwd, 0o700);
+      } catch (error) {
+        if (error.code === 'EEXIST') throw new Error('独立目录已存在，未启动新会话；请改用新目录或选择已有目录。');
+        throw new Error('无法创建独立目录，请检查磁盘空间和目录权限；未启动新会话。');
+      }
+    } else {
+      try { if (!fs.statSync(cwd).isDirectory()) throw Error('Not a directory'); }
+      catch { throw new Error('工作目录不可用，请选择已有文件夹。'); }
+    }
     const id = randomUUID();
     const now = Date.now();
-    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
+    const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
     if (fork) record.forkPicker = true;
     this.sessions.set(id, record); this.changed();
     let runtime;

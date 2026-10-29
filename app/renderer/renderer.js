@@ -8,6 +8,7 @@ const states = { starting: '正在启动', idle: '就绪', working: '正在工�
 const switchedAway = record => record.state === 'stopping' && record.nativeContextPending?.reason === 'resume';
 const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
+let newDirectory = false, creatingSession = false;
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSurface = 'overview', roomOverview;
@@ -500,9 +501,15 @@ async function showTrust(options) {
 }
 
 function openCreate(provider = 'claude') {
+  if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
   $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false;
-  $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
+  resetCreateDirectory(); $('create-error').textContent = ''; createReadiness(); $('create-dialog').showModal();
+}
+function resetCreateDirectory() {
+  newDirectory = state.capabilities?.includes('newSessionDirectory') && typeof state.newWorkspaceRoot === 'string';
+  folder = newDirectory ? `${state.newWorkspaceRoot}/${crypto.randomUUID()}` : state.defaultWorkspace;
+  $('chosen-folder').textContent = folder;
 }
 let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
 function renderNativeHistory() {
@@ -542,6 +549,7 @@ $('open-native-history').onclick = () => {
   // Claude has no history API: its own session picker opens in the new row's
   // terminal, and the chosen session is forked while the original stays as is.
   if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
+    if (newDirectory) throw Error('从历史会话分支或接管前，请先选择原工作目录。');
     const nativeId = $('claude-history-id').value.trim();
     if (nativeId && !state.capabilities?.includes('claudeHistory')) throw Error('当前后台尚不支持 Claude 接管；保留输入，请先连接新版后台。');
     const id = nativeId ? await api.importHistory(nativeId, { provider: 'claude', cwd: folder, name: $('session-name').value, skipPermissions: $('skip-permissions').checked })
@@ -755,15 +763,20 @@ function createReadiness() {
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
   const takeover = historyProvider === 'claude' && $('claude-history-id').value.trim();
   $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : takeover ? '接管此 Claude 会话' : '从已有 Claude 会话分支…';
+  $('open-native-history').disabled = creatingSession || (historyProvider === 'claude' && newDirectory);
+  if (historyProvider === 'claude' && newDirectory) $('open-native-history').textContent = '选择原目录后分支或接管…';
+  $('new-folder').hidden = !state.capabilities?.includes('newSessionDirectory');
+  $('new-folder').disabled = $('choose-folder').disabled = $('cancel-create').disabled = creatingSession;
   // Only Codex starts differently: either this app or its TUI creates the native thread.
   // A Claude session opens in the last-used tab; both views stay available.
   $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
   if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
-  $('create-permission-note').textContent = $('skip-permissions').checked
-    ? '默认是独立的空目录。这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
-    : '默认是独立的空目录。原生文件和命令权限仍由原生确认。';
+  const directoryNote = newDirectory ? '创建时自动新建此空目录。' : '使用上方已有目录，多个会话可能共用。';
+  $('create-permission-note').textContent = directoryNote + ($('skip-permissions').checked
+    ? '这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
+    : '原生可能要求确认文件夹信任；文件和命令权限仍由原生确认。');
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
     $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';
@@ -771,8 +784,8 @@ function createReadiness() {
   }
   const provider = document.querySelector('input[name="provider"]:checked').value;
   const ready = state.preflight?.python && state.preflight?.[provider];
-  $('confirm-create').disabled = !ready;
-  $('create-readiness').textContent = ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
+  $('confirm-create').disabled = creatingSession || !ready || Boolean(takeover && newDirectory);
+  $('create-readiness').textContent = takeover && newDirectory ? '接管历史会话前，请选择原工作目录。' : ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
 }
 function renderArchives() {
   const records = state.sessions.filter(s => s.archived), count = records.length + Number(Boolean(state.room.archived));
@@ -1824,13 +1837,26 @@ $('rename-form').onsubmit = async event => {
   } catch (error) { if (renameTarget === target) { showRenameError(error.message || '名称未能保存，请重试。'); if (mayRestoreFocus()) $('rename-name').focus({ preventScroll: true }); } }
   finally { renaming = false; if (renameTarget === target) renderRename(); }
 };
-$('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; $('chosen-folder').textContent = folder; } });
+$('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; newDirectory = false; $('chosen-folder').textContent = folder; createReadiness(); } });
+$('new-folder').onclick = () => { if (!creatingSession) { resetCreateDirectory(); createReadiness(); } };
 $('create-form').onsubmit = event => { event.preventDefault();
+  if (creatingSession) return;
   if (document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim()) { $('open-native-history').click(); return; }
   attempt(async () => {
-  $('confirm-create').disabled = true;
-  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
-  finally { $('confirm-create').disabled = false; }
+  creatingSession = true; $('create-error').textContent = ''; createReadiness();
+  const submittedFolder = folder, priorIds = new Set(state.sessions.map(s => s.id));
+  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, ...(newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
+  catch (error) {
+    try { state = await api.initial(); } catch {}
+    const created = state.sessions.find(s => s.cwd === submittedFolder && !priorIds.has(s.id));
+    const message = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。${error.message}` : error.message;
+    $('create-error').textContent = message;
+    if (!$('create-dialog').open) toast(message);
+    // A failed/uncertain start may already own the displayed path. Preserve
+    // that record and any files; a new explicit submit gets a fresh preview.
+    if (newDirectory) resetCreateDirectory();
+  }
+  finally { creatingSession = false; createReadiness(); }
 }); };
 $('room-nav').onclick = () => attempt(() => select('room'));
 $('archive-button').onclick = () => { $('archive-dialog').showModal(); renderArchives(); };
