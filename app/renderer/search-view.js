@@ -71,8 +71,11 @@ function finishSearch() {
   searchOutsidePointer = false;
 }
 function pointToMessage(element, key, id, query = '') {
-  const view = messageViews.get(element), entry = view?.entries.get(id);
-  if (!view || view.key !== key || !entry) return false;
+  const view = messageViews.get(element);
+  if (!view || view.key !== key) return false;
+  if (!readingEntry(view, id)) view.loadMessage?.(id);
+  const entry = readingEntry(view, id);
+  if (!entry) return false;
   const position = { top: element.scrollTop, follow: false, anchor: id, offset: 16 };
   view.intent = { position, searchQuery: query }; saveReading(view, position); scheduleReading(view);
   document.querySelectorAll('[data-search-target]').forEach(el => delete el.dataset.searchTarget);
