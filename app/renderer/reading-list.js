@@ -25,6 +25,7 @@ function captureReading(view) {
 // Its bar has no height, so showing it never moves the scroll position.
 function updateJump(view) { view.jumpBar.hidden = !view.el.clientHeight || view.el.scrollHeight - view.el.scrollTop - view.el.clientHeight < 80; }
 function captureReadingViews() { for (const view of messageViews.values()) captureReading(view); }
+function readingEntry(view, id) { return view.entries.get(id) || view.groups?.get(id); }
 function restoreVisibleReading() {
   for (const view of messageViews.values()) {
     const visible = Boolean(view.el.clientHeight && view.el.getClientRects().length);
@@ -57,25 +58,30 @@ function readingMatch(body, query) {
 }
 function revealProcessAncestors(view, entry) {
   for (let parent = entry.item.parentElement?.closest('details.process-details'); parent && view.el.contains(parent); parent = parent.parentElement?.closest('details.process-details')) {
-    const enclosing = view.entries.get(parent.closest('[data-message-id]')?.dataset.messageId);
+    const enclosing = readingEntry(view, parent.closest('[data-message-id]')?.dataset.messageId);
     if (enclosing) enclosing.expectedOpen = true; parent.open = true;
   }
 }
 function scheduleReading(view, intent = view.intent) {
-  if (!intent || view.intent !== intent || view.frame) return;
+  if (!intent || view.intent !== intent) return;
+  // Search focuses its original row immediately after scheduling. Reveal the
+  // ancestors now, without turning that reveal into a saved manual choice.
+  const target = readingEntry(view, intent.position.anchor);
+  if (target && !intent.position.follow) revealProcessAncestors(view, target);
+  if (view.frame) return;
   view.frame = requestAnimationFrame(() => {
     view.frame = 0;
     if (!view.intent || !view.el.clientHeight || !view.el.getClientRects().length) return;
     const el = view.el, p = view.intent.position;
-    const anchor = view.entries.get(p.anchor)?.item;
-    if (anchor) {
-      const entry = view.entries.get(p.anchor);
+    const anchor = readingEntry(view, p.anchor)?.item;
+    if (anchor && !p.follow) {
+      const entry = readingEntry(view, p.anchor);
       revealProcessAncestors(view, entry);
     }
     if (anchor && view.intent.searchQuery) {
-      const entry = view.entries.get(p.anchor);
+      const entry = readingEntry(view, p.anchor);
       if (entry.disclosure && !entry.disclosure.open) { entry.expectedOpen = true; entry.disclosure.open = true; }
-      const range = readingMatch(entry.body, view.intent.searchQuery);
+      const range = entry.body && readingMatch(entry.body, view.intent.searchQuery);
       if (range) {
         const offset = 16 - (range.getBoundingClientRect().top - anchor.getBoundingClientRect().top);
         if (p.offset !== offset) {
@@ -91,7 +97,7 @@ function scheduleReading(view, intent = view.intent) {
 function readingView(el, key) {
   let view = messageViews.get(el);
   if (!view) {
-    view = { el, key: '', entries: new Map(), days: new Map(), assignedTop: el.scrollTop, frame: 0, intent: null };
+    view = { el, key: '', entries: new Map(), groups: new Map(), days: new Map(), assignedTop: el.scrollTop, frame: 0, intent: null };
     view.jump = button('↓ 跳到最新', () => {
       view.intent = { position: { top: 0, follow: true, anchor: '', offset: 0 } };
       saveReading(view, { ...view.intent.position }); attempt(() => api.readingState(readingPositions)); scheduleReading(view);
@@ -114,7 +120,7 @@ function readingView(el, key) {
   }
   if (view.key !== key) {
     captureReading(view); ui.clearMarkdown(el); el.replaceChildren();
-    view.entries.clear(); view.days.clear(); view.key = key; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
+    view.entries.clear(); view.groups.clear(); view.days.clear(); view.key = key; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
     // The new list is empty until Markdown mounts; never capture that temporary
     // zero as this session's saved reading position.
     view.intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
@@ -130,13 +136,16 @@ function nativeCompletionText(message) {
   return text.trim() ? text : ['interrupted', 'failed'].includes(message.status) ? message.status : '';
 }
 // Native 0.164 exploration semantics; never classify the shell command string.
+function nativeExploration(message) {
+  const actions = message.commandActions;
+  return message.toolKind === 'commandExecution' && message.nativeId && message.turnId && !message.incomplete &&
+    message.commandSource !== 'userShell' && Array.isArray(actions) && actions.length && actions.every(a => a && ['read', 'listFiles', 'search'].includes(a.type) && typeof a.command === 'string');
+}
 function commandExplorations(messages, room = false, originals = messages) {
   const indices = new Map(originals.map((m, index) => [m.id, index]));
   const groups = new Map(); let group, previousKey, previousIndex;
   for (const message of messages) {
-    const actions = message.commandActions;
-    const eligible = message.toolKind === 'commandExecution' && message.nativeId && message.turnId && !message.incomplete &&
-      message.commandSource !== 'userShell' && Array.isArray(actions) && actions.length && actions.every(a => a && ['read', 'listFiles', 'search'].includes(a.type) && typeof a.command === 'string');
+    const eligible = nativeExploration(message);
     const key = JSON.stringify([message.nativeId, message.turnId, message.displayTurnId, message.sessionId, message.inputTag, message.promptId, message.sourceTag, message.replyTo, message.sharingStopped,
       room ? Number.isFinite(message.time) ? new Date(message.time).toLocaleDateString() : '' : '']);
     if (!eligible) { group = null; previousKey = null; continue; }
@@ -164,6 +173,56 @@ function commandExplorations(messages, room = false, originals = messages) {
   }
   return groups;
 }
+// Group only observed native process records, never reconstructed terminal text.
+function nativeProcessGroups(messages, room = false, originals = messages, sessions = [], explorations = commandExplorations(messages, room, originals)) {
+  const indices = new Map(), duplicates = new Set(), ended = new Set();
+  const turnKey = m => JSON.stringify([m.nativeId, m.turnId, room ? m.sessionId : null]);
+  originals.forEach((m, i) => {
+    if (indices.has(m.id)) duplicates.add(m.id); indices.set(m.id, i);
+    if ((m.nativeBlock || m.sharedStream) && m.kind === 'turn' && ['complete', 'failed', 'interrupted'].includes(m.status)) ended.add(turnKey(m));
+  });
+  const eligible = m => typeof m.id === 'string' && `process:${m.id}`.length <= 100 && !duplicates.has(m.id) && indices.has(m.id) &&
+      (m.nativeBlock === true || m.sharedStream === true) && typeof m.nativeId === 'string' && m.nativeId && typeof m.turnId === 'string' && m.turnId &&
+      (m.role === 'tool' && m.kind === 'tool' || m.role === 'assistant' && m.kind === 'summary' && typeof m.text === 'string' && m.text.trim()) &&
+      !m.incomplete && !m.sharingStopped && m.commandSource !== 'userShell' && m.status !== 'unconfirmed' &&
+      ['running', 'streaming', 'complete', 'failed', 'declined', 'interrupted'].includes(m.status) &&
+      (!room || m.sharedStream === true && typeof m.nativeMessageId === 'string' && m.nativeMessageId &&
+        typeof m.sourceTag === 'string' && m.sourceTag && m.sessionId && Number.isFinite(m.time) && Math.abs(m.time) <= 8640000000000000);
+  // T29 nests its original members together. Never wrap just its eligible
+  // prefix: that would hide an uncertain sibling and undercount the contents.
+  const excluded = new Set();
+  for (const exploration of explorations.values()) if (exploration.messages.some(m => !eligible(m))) {
+    for (const m of exploration.messages) excluded.add(m.id);
+  }
+  const groups = new Map(); let group, previousKey, previousIndex;
+  for (const m of messages) {
+    const index = indices.get(m.id), id = `process:${m.id}`, allowed = eligible(m) && !excluded.has(m.id);
+    const key = JSON.stringify([m.nativeId, m.turnId, m.displayTurnId, m.sessionId, m.inputTag, m.promptId, m.sourceTag, m.replyTo, m.sharingStopped,
+      room && allowed ? new Date(m.time).toLocaleDateString() : '']);
+    if (!allowed) { group = null; previousKey = null; continue; }
+    if (!group || key !== previousKey || index !== previousIndex + 1) { group = { id, messages: [] }; groups.set(id, group); }
+    group.messages.push(m); previousKey = key; previousIndex = index;
+    if (m.status === 'interrupted') { group = null; previousKey = null; }
+  }
+  for (const group of groups.values()) {
+    const first = group.messages[0], counts = new Map(), outcomes = new Map(), exits = new Set();
+    const source = sessions.find(s => s.nativeId === first.nativeId && (!room || s.id === first.sessionId));
+    group.active = !ended.has(turnKey(first)) && !group.messages.some(m => m.status === 'interrupted') && Boolean(source &&
+      !source.transportDisconnected && !source.backendUnavailable && source.activeTurnId === first.turnId && ['working', 'approval'].includes(source.state));
+    for (const m of group.messages) {
+      const label = m.kind === 'summary' ? '段思考摘要' : m.toolKind === 'commandExecution' || m.title === 'Bash' ? '个命令'
+        : m.title === 'Read' ? '次读取' : m.toolKind === 'webSearch' || ['Grep', 'Glob'].includes(m.title) ? '次搜索' : '次工具调用';
+      counts.set(label, (counts.get(label) || 0) + 1);
+      // Keep T29's native nonzero exploration annotation, including search exit1.
+      if (m.status === 'failed' && nativeExploration(m) && Number.isSafeInteger(m.exitCode) && m.exitCode !== 0) exits.add(m.exitCode);
+      else if (['failed', 'declined', 'interrupted'].includes(m.status)) outcomes.set(m.status, (outcomes.get(m.status) || 0) + 1);
+    }
+    group.caption = [...counts].map(([label, count]) => `${count} ${label}`).join(' · ');
+    group.outcome = ['failed', 'declined', 'interrupted'].filter(status => outcomes.has(status)).map(status => `${{ failed: '失败', declined: '已拒绝', interrupted: '已中断' }[status]} ${outcomes.get(status)}`)
+      .concat([...exits].map(code => `exit ${code}`)).join(' · ');
+  }
+  return groups;
+}
 function nativeCommandPreview(message) {
   const actions = message.commandActions, original = message.input || message.title || '';
   if (Array.isArray(actions) && actions.length === 1) return actions[0].command;
@@ -174,6 +233,8 @@ function nativeCommandPreview(message) {
 }
 function updateProcessTail(entry) {
   const m = entry.message, open = entry.disclosure.open;
+  // An open outer disclosure must not hide a closed original row's preview.
+  entry.preview.style.display = open ? 'none' : 'inline';
   if (entry.exploration) {
     entry.tail.hidden = open; entry.tail.textContent = entry.exploration.summary; entry.more.hidden = true; return;
   }
@@ -184,15 +245,88 @@ function updateProcessTail(entry) {
   entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
   entry.more.hidden = !more; const moreText = `+${more} 行`; if (entry.more.textContent !== moreText) entry.more.textContent = moreText;
 }
+function processGroupRows(view, rows, plans, explorations, room, key) {
+  const membership = new Map(), members = new Map(), retained = new Set(), output = [];
+  for (const plan of plans.values()) for (const m of plan.messages) membership.set(m.id, plan);
+  for (const row of rows) {
+    const plan = membership.get(row.dataset.messageId);
+    if (!plan) { output.push(row); continue; }
+    let group = view.groups.get(plan.id);
+    if (!group) {
+      const item = node('section'), disclosure = node('details'), summary = node('summary'), heading = node('div', undefined, 'message-heading');
+      const author = node('strong'), caption = node('span'), outcome = node('span'), content = node('div');
+      author.style.cssText = 'flex:0 1 auto;max-width:30%;overflow:hidden;text-overflow:ellipsis';
+      caption.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis';
+      outcome.style.cssText = 'flex:0 1 auto;min-width:0;max-width:65%;overflow:hidden;text-overflow:ellipsis;color:var(--warning,#9a6700)';
+      heading.append(author, caption, outcome); summary.append(heading); disclosure.append(summary, content); item.append(disclosure);
+      item.dataset.messageId = plan.id; item.dataset.processGroup = plan.id;
+      group = { item, disclosure, summary, author, caption, outcome, content }; view.groups.set(plan.id, group);
+      const remember = () => {
+        if (!group.effective || view.key !== key) return;
+        // A manual close after search is still a new reading intent even if
+        // the saved choice was already closed before the automatic reveal.
+        view.intent = null; delete view.folds[plan.id]; view.folds[plan.id] = disclosure.open;
+        for (const id of Object.keys(view.folds).slice(0, Math.max(0, Object.keys(view.folds).length - 200))) delete view.folds[id];
+        captureReading(view); saveReading(view, { ...(readingPositions[key] || { top: view.el.scrollTop, anchor: plan.id, offset: 0 }), follow: false });
+        attempt(() => api.readingState(readingPositions));
+      };
+      summary.addEventListener('click', event => {
+        if (event.target.closest('button,a,input')) return;
+        event.preventDefault(); group.expectedOpen = undefined; disclosure.open = !disclosure.open; remember();
+      });
+      disclosure.addEventListener('toggle', () => {
+        if (group.expectedOpen === disclosure.open) { group.expectedOpen = undefined; return; }
+        group.expectedOpen = undefined; remember();
+      });
+    }
+    if (!retained.has(plan.id)) { retained.add(plan.id); members.set(plan.id, []); output.push(group.item); }
+    members.get(plan.id).push(row);
+  }
+  for (const [id, children] of members) {
+    const group = view.groups.get(id), plan = plans.get(id), first = plan.messages[0];
+    const exploration = explorations.get(first.id);
+    // One original process row, or one existing T29 exploration, already has
+    // its own disclosure. Keep the stable wrapper but add no duplicate title.
+    group.effective = plan.messages.length > 1 && exploration?.messages.length !== plan.messages.length;
+    group.item.className = group.effective ? 'message process' : '';
+    group.disclosure.className = group.effective ? 'process-details' : '';
+    group.content.className = group.effective ? 'process-content' : '';
+    group.summary.hidden = !group.effective;
+    group.item.dataset.running = String(plan.active);
+    const author = room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : 'Codex');
+    if (group.author.textContent !== author) group.author.textContent = author;
+    if (group.caption.textContent !== plan.caption) group.caption.textContent = plan.caption;
+    if (group.outcome.textContent !== plan.outcome) group.outcome.textContent = plan.outcome;
+    group.summary.setAttribute('aria-label', `${author} · ${plan.active ? '进行中 · ' : ''}${plan.caption}${plan.outcome ? ' · ' + plan.outcome : ''}`);
+    group.summary.title = group.summary.getAttribute('aria-label');
+    const position = view.intent?.position, selection = window.getSelection();
+    const reading = group.disclosure.open && (selection && !selection.isCollapsed && group.item.contains(selection.anchorNode) ||
+      position && !position.follow && (position.anchor === id || plan.messages.some(m => m.id === position.anchor)));
+    const query = room ? $('room-search').value.trim().toLocaleLowerCase() : '';
+    const reveal = query && plan.messages.some(m => [m.text, m.input].some(text => text?.toLocaleLowerCase().includes(query)));
+    const choice = view.folds[id], saved = typeof choice === 'boolean' ? choice : choice?.open;
+    const open = !group.effective || Boolean(saved !== undefined ? saved : plan.active || reading || reveal);
+    if (group.disclosure.open !== open) { group.expectedOpen = open; group.disclosure.open = open; }
+    let cursor = group.content.firstChild;
+    for (const child of children) { if (child === cursor) cursor = cursor.nextSibling; else group.content.insertBefore(child, cursor); }
+    while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
+  }
+  for (const [id, group] of view.groups) if (!retained.has(id)) { group.item.remove(); view.groups.delete(id); }
+  return output;
+}
 function messageList(el, messages, room = false, key = 'room', context = {}) {
   // A member reader observes its own session without selecting it or claiming
   // its input. Existing solo/shared callers retain their original context.
   const session = context.session || (room ? null : current());
   const view = readingView(el, key);
+  view.session = session;
+  const selection = window.getSelection(), selected = selection && !selection.isCollapsed && el.contains(selection.anchorNode)
+    ? { anchor: selection.anchorNode, anchorOffset: selection.anchorOffset, focus: selection.focusNode, focusOffset: selection.focusOffset } : null;
   captureReading(view);
   const intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
   view.intent = intent;
-  const rows = [], retained = new Set(), days = new Set(), explorations = commandExplorations(messages, room, room ? state.room.messages : session?.messages || messages); let lastDay = '';
+  let rows = []; const retained = new Set(), days = new Set(), originals = room ? state.room.messages : session?.messages || messages;
+  const explorations = commandExplorations(messages, room, originals), groups = nativeProcessGroups(messages, room, originals, room ? state.sessions : session ? [session] : [], explorations); let lastDay = '';
   for (const m of messages) {
     if (m.kind === 'turn' && !nativeCompletionText(m)?.trim()) continue;
     if (m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)) continue;
@@ -215,9 +349,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         summary.append(heading); content.append(body); disclosure.append(summary, content); item.replaceChildren(disclosure, entry.tail, entry.more, actions);
         const rememberFold = () => {
           updateProcessTail(entry);
-          const previous = view.folds[m.id];
-          const previousOpen = typeof previous === 'boolean' ? previous : previous?.open;
-          if (view.key !== key || previousOpen === disclosure.open) return;
+          if (view.key !== key) return;
           // A manual choice belongs to this source record, not its latest status.
           view.intent = null; delete view.folds[m.id]; view.folds[m.id] = disclosure.open;
           for (const id of Object.keys(view.folds).slice(0, Math.max(0, Object.keys(view.folds).length - 200))) delete view.folds[id];
@@ -386,8 +518,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     }
   }
   for (let i = rows.length - 1; i >= 0; i--) if (nested.has(rows[i])) rows.splice(i, 1);
-  for (const [id, entry] of view.entries) if (!retained.has(id)) { ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
-  for (const [day, divider] of view.days) if (!days.has(day)) { divider.remove(); view.days.delete(day); }
+  rows = processGroupRows(view, rows, groups, explorations, room, key);
   if (!messages.length) {
     const s = session;
     const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对上方请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
@@ -398,6 +529,16 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   let cursor = el.firstChild;
   for (const row of rows) { if (row === cursor) cursor = cursor.nextSibling; else el.insertBefore(row, cursor); }
   while (cursor) { const next = cursor.nextSibling; ui.clearMarkdown(cursor); cursor.remove(); cursor = next; }
+  // Move every retained original out of obsolete wrappers before disposing
+  // their old parents, including filtered T29 descendants with live Markdown.
+  for (const [id, entry] of view.entries) if (!retained.has(id)) { ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
+  for (const [day, divider] of view.days) if (!days.has(day)) { divider.remove(); view.days.delete(day); }
+  if (selected?.anchor.isConnected && selected.focus?.isConnected &&
+      selected.anchorOffset <= (selected.anchor.nodeType === 3 ? selected.anchor.length : selected.anchor.childNodes.length) &&
+      selected.focusOffset <= (selected.focus.nodeType === 3 ? selected.focus.length : selected.focus.childNodes.length) &&
+      (selection.anchorNode !== selected.anchor || selection.anchorOffset !== selected.anchorOffset || selection.focusNode !== selected.focus || selection.focusOffset !== selected.focusOffset)) {
+    selection.setBaseAndExtent(selected.anchor, selected.anchorOffset, selected.focus, selected.focusOffset);
+  }
   updateJump(view); scheduleReading(view, intent);
 }
 function disposeReadingViews() { for (const view of messageViews.values()) view.dispose(); messageViews.clear(); }
