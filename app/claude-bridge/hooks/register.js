@@ -149,6 +149,15 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
   const text = blocks => typeof blocks === 'string' ? blocks : Array.isArray(blocks)
     ? blocks.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
   if (nativeBlocks) {
+    // A queue record is virtual; only the accepted conversation attachment is
+    // a display row. Its UUID and final content come from the native engine.
+    if (binding.nativeInlineInput && e.door === 'attachment' && e.origin?.kind === 'engine' && message.type === 'attachment' &&
+      message.name === 'queued_command' && message.role === 'user') {
+      const inputTurn = typeof turnId === 'string' && turnId && !displayTurns.get(turnId)?.ended ? turnId : undefined;
+      enqueueBlock($, { id: `prompt:${result.uuid}`, kind: 'input', turnId: inputTurn,
+        text: text(message.content), title: '工作中插入', inputMode: 'native-inline',
+        status: 'complete', incomplete: [e.message?.content, message.content].some(blocks => Array.isArray(blocks) && blocks.some(b => b?.type !== 'text')) }, binding);
+    }
     // Retained hosts have no stable GUI user-row ID. Observe the accepted
     // native append instead of guessing a match to a random legacy cache ID.
     if (legacyOnly && e.door === 'prompt' && message.type === 'user') {
@@ -313,7 +322,8 @@ async function refreshLegacyObserver($, ownGeneration) {
     // Preserve native display/prompt links only for this same live root. Command
     // listeners hold a separate connection value: their old receipt/grant must
     // still go to its old credential, never to this new observer.
-    Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 });
+    Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
+      nativeInlineInput: nativeBlocks && result.nativeInlineInput === true });
     for (const entry of observations) if (entry.binding === previous) {
       entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence, replayed: true };
     }
@@ -437,7 +447,8 @@ async function bindRoot($, ownGeneration) {
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
-  rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
+  rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
+    nativeInlineInput: nativeBlocks && result.nativeInlineInput === true };
   heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
   // metadata refresh avoids waiting for the existing /next poll to return.
@@ -475,7 +486,8 @@ async function syncRoot($) {
         source: transition.source, model: transition.model }, rootBinding);
       if (typeof result.lease !== 'string') throw Error('Root lease missing');
       rootEnds.delete(rootBinding.sessionId);
-      rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0 };
+      rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
+        nativeInlineInput: nativeBlocks && result.nativeInlineInput === true };
       observationGap = false; observationGapRevision++;
       rootTransitions.shift();
     }
