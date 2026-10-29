@@ -18,7 +18,7 @@ fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Main', 
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-installed-workspace-'));
 const legacy = path.join(profile, 'workspace'); fs.mkdirSync(legacy);
 const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], {
-  execArgv: ['--require', path.join(__dirname, 'fixtures/process-groups.cjs')],
+  execArgv: ['--require', path.join(__dirname, 'fixtures/process-groups.cjs'), '--require', path.join(__dirname, 'fixtures/collaboration-notices.cjs')],
   env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: legacy },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
@@ -93,6 +93,22 @@ async function run() {
   assert.equal((await state()).sidebar.archiveCollapsed, false); assert.equal(await page.locator('#message-input').inputValue(), 'UNSENT_INSTALLED_DRAFT');
   await until(() => page.locator('#messages [data-process-group]').first().locator(':scope > details').evaluate(el => !el.open), 'Manual close survives reopen');
   check('Normal owned GUI close/reopen preserves native identities, unsent draft, section sizing, archive and manual group choices');
+  for (const s of [a, b]) {
+    await page.locator(`[data-session-id="${s.id}"]`).click();
+    await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+  }
+  await page.locator('#room-nav').click(); await page.locator('#room-overview').click();
+  const noticeText = require('./fixtures/collaboration-notices.cjs').text;
+  for (const width of [900, 1500]) {
+    await page.setViewportSize({ width, height: 850 });
+    const notice = page.locator(`.collaboration-member-reader[data-member-id="${a.id}"] [data-message-id="fixture-notice-${a.id}"]`);
+    await notice.waitFor(); const body = notice.locator('.message-body'); assert.equal(await body.textContent(), noticeText);
+    const size = await body.boundingBox(); assert.ok(size.width > 140, 'Original notice body has readable width');
+    await notice.hover(); const actions = await notice.locator(':scope > .message-actions').boundingBox(); assert.ok(actions && actions.y >= size.y + size.height, 'Copy actions remain below original notice');
+    assert.equal(await notice.locator('.message-heading').evaluate(el => getComputedStyle(el).display), 'flex');
+    await shot('03-installed-member-notice-' + width);
+  }
+  check('Narrow and wide collaboration readers retain exact native notice text, readable width and nonoverlapping copy actions');
   assert.deepEqual(errors, []); const stats = await fixture('stats'); assert.equal(stats.stats.inputs, 0); assert.equal(stats.stats.sends, 0);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, errors, launches, stats, profile, productModelCalls: 0, providers: 0, osClipboardOperations: 0, limits: ['Synthetic native transport', 'No OS picker or physical input', 'Native-provider recovery qualified separately'] }, null, 2));
 }
