@@ -8,6 +8,7 @@ const states = { starting: '正在启动', idle: '就绪', working: '正在工�
 const switchedAway = record => record.state === 'stopping' && record.nativeContextPending?.reason === 'resume';
 const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
+let newDirectory = false, creatingSession = false;
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSurface = 'overview', roomOverview;
@@ -35,6 +36,7 @@ let roomThread = '', roomReplyTo = '';
 let roomThreads = window.nativeWorkspaceThreads.threadIndex([]);
 const roomReadingKey = () => roomThread ? `room:${roomThread}` : 'room';
 const sessionRows = new Map();
+let sidebarLayout;
 let inviteOrigin;
 let headerControls, advancedControls;
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
@@ -500,9 +502,15 @@ async function showTrust(options) {
 }
 
 function openCreate(provider = 'claude') {
+  if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
   $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false;
-  $('chosen-folder').textContent = folder; createReadiness(); $('create-dialog').showModal();
+  resetCreateDirectory(); $('create-error').textContent = ''; createReadiness(); $('create-dialog').showModal();
+}
+function resetCreateDirectory() {
+  newDirectory = state.capabilities?.includes('newSessionDirectory') && typeof state.newWorkspaceRoot === 'string';
+  folder = newDirectory ? `${state.newWorkspaceRoot}/${crypto.randomUUID()}` : state.defaultWorkspace;
+  $('chosen-folder').textContent = folder;
 }
 let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
 function renderNativeHistory() {
@@ -542,6 +550,7 @@ $('open-native-history').onclick = () => {
   // Claude has no history API: its own session picker opens in the new row's
   // terminal, and the chosen session is forked while the original stays as is.
   if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
+    if (newDirectory) throw Error('从历史会话分支或接管前，请先选择原工作目录。');
     const nativeId = $('claude-history-id').value.trim();
     if (nativeId && !state.capabilities?.includes('claudeHistory')) throw Error('当前后台尚不支持 Claude 接管；保留输入，请先连接新版后台。');
     const id = nativeId ? await api.importHistory(nativeId, { provider: 'claude', cwd: folder, name: $('session-name').value, skipPermissions: $('skip-permissions').checked })
@@ -703,15 +712,17 @@ function renderSidebarGroups() {
   const working = visible.filter(s => s.state === 'working').length;
   $('session-group-summary').textContent = `${visible.length}${working ? ` · ${working} 工作中` : ''}`;
   $('workspace-group-summary').textContent = state.room.archived ? '0' : `${members().length} 成员`;
-  for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body']]) {
-    const collapsed = Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
-    toggle.setAttribute('aria-label', `${section === 'sessions' ? '会话' : '协作空间'} · ${$(section === 'sessions' ? 'session-group-summary' : 'workspace-group-summary').textContent}`);
+  for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body'], ['archive', 'archive-button', 'archive-group-body']]) {
+    const collapsed = section === 'archive' ? state.sidebar?.archiveCollapsed !== false : Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
+    const name = { sessions: '会话', workspace: '协作空间', archive: '归档' }[section];
+    toggle.setAttribute('aria-label', section === 'archive' ? `归档 · ${state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived))} 项` : `${name} · ${$(section === 'sessions' ? 'session-group-summary' : 'workspace-group-summary').textContent}`);
     toggle.setAttribute('aria-expanded', String(!collapsed));
     toggle.querySelector('.group-chevron').textContent = collapsed ? '▸' : '▾';
     if (collapsed && $(body).contains(document.activeElement)) { sessionMenu?.close(); roomMenu?.(); toggle.focus(); }
     $(body).hidden = collapsed;
-    toggle.title = `${collapsed ? '展开' : '折叠'}${section === 'sessions' ? '会话；把协作成员拖到这里独立使用' : '协作空间'}`;
+    toggle.title = `${collapsed ? '展开' : '折叠'}${section === 'sessions' ? '会话；把协作成员拖到这里独立使用' : name}`;
   }
+  sidebarLayout?.update(state.sidebar);
 }
 function renderSessions() {
   renderSidebarGroups();
@@ -755,15 +766,20 @@ function createReadiness() {
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
   const takeover = historyProvider === 'claude' && $('claude-history-id').value.trim();
   $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : takeover ? '接管此 Claude 会话' : '从已有 Claude 会话分支…';
+  $('open-native-history').disabled = creatingSession || (historyProvider === 'claude' && newDirectory);
+  if (historyProvider === 'claude' && newDirectory) $('open-native-history').textContent = '选择原目录后分支或接管…';
+  $('new-folder').hidden = !state.capabilities?.includes('newSessionDirectory');
+  $('new-folder').disabled = $('choose-folder').disabled = $('cancel-create').disabled = creatingSession;
   // Only Codex starts differently: either this app or its TUI creates the native thread.
   // A Claude session opens in the last-used tab; both views stay available.
   $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
   if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
-  $('create-permission-note').textContent = $('skip-permissions').checked
-    ? '默认是独立的空目录。这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
-    : '默认是独立的空目录。原生文件和命令权限仍由原生确认。';
+  const directoryNote = newDirectory ? '创建时自动新建此空目录。' : '使用上方已有目录，多个会话可能共用。';
+  $('create-permission-note').textContent = directoryNote + ($('skip-permissions').checked
+    ? '这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
+    : '原生可能要求确认文件夹信任；文件和命令权限仍由原生确认。');
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
     $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';
@@ -771,20 +787,20 @@ function createReadiness() {
   }
   const provider = document.querySelector('input[name="provider"]:checked').value;
   const ready = state.preflight?.python && state.preflight?.[provider];
-  $('confirm-create').disabled = !ready;
-  $('create-readiness').textContent = ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
+  $('confirm-create').disabled = creatingSession || !ready || Boolean(takeover && newDirectory);
+  $('create-readiness').textContent = takeover && newDirectory ? '接管历史会话前，请选择原工作目录。' : ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
 }
 function renderArchives() {
   const records = state.sessions.filter(s => s.archived), count = records.length + Number(Boolean(state.room.archived));
   const running = records.filter(s => ['working', 'approval', 'starting', 'stopping', 'disconnected'].includes(s.state)).length;
   $('archive-label').textContent = `归档${count ? ` · ${count}` : ''}${running ? ` · ${running} 个待查看` : ''}`;
   $('archive-button').title = `归档 ${count} 项${running ? `，${running} 个原生会话仍需查看状态` : ''}`;
-  if (!$('archive-dialog').open) return;
+  if ($('archive-group-body').hidden) return;
   const list = $('archive-list');
   const signature = JSON.stringify([state.room.archived, state.room.name, records.map(s => [s.id, s.name, s.state]), state.sessions.map(s => [s.id, s.name])]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
   if (state.room.archived) {
-    const row = node('div', undefined, 'archive-item'); row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', async () => { await api.restoreRoom(); state = await api.initial(); $('archive-dialog').close(); selectRoom(); })); list.append(row);
+    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = state.room.id; row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', async () => { await api.restoreRoom(); state = await api.initial(); selectRoom(); })); list.append(row);
   }
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
@@ -794,7 +810,7 @@ function renderArchives() {
 }
 async function restoreArchivedSession(id) {
   await api.restoreSession(id); state = await api.initial();
-  $('archive-dialog').close(); await select(id);
+  await select(id);
 }
 async function showSetup() {
   state.preflight = await api.preflight();
@@ -1772,6 +1788,8 @@ const disposers = [
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
   api.onNew(() => openCreate()),
 ];
+sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), onError: error => toast(error.message || '未能保存侧栏高度。') });
+disposers.push(() => sidebarLayout.dispose());
 // A drag resizes the native terminal once, on release, not on every move.
 const observer = new ResizeObserver(() => { if (activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
 function applySplit() {
@@ -1824,17 +1842,28 @@ $('rename-form').onsubmit = async event => {
   } catch (error) { if (renameTarget === target) { showRenameError(error.message || '名称未能保存，请重试。'); if (mayRestoreFocus()) $('rename-name').focus({ preventScroll: true }); } }
   finally { renaming = false; if (renameTarget === target) renderRename(); }
 };
-$('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; $('chosen-folder').textContent = folder; } });
+$('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; newDirectory = false; $('chosen-folder').textContent = folder; createReadiness(); } });
+$('new-folder').onclick = () => { if (!creatingSession) { resetCreateDirectory(); createReadiness(); } };
 $('create-form').onsubmit = event => { event.preventDefault();
+  if (creatingSession) return;
   if (document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim()) { $('open-native-history').click(); return; }
   attempt(async () => {
-  $('confirm-create').disabled = true;
-  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
-  finally { $('confirm-create').disabled = false; }
+  creatingSession = true; $('create-error').textContent = ''; createReadiness();
+  const submittedFolder = folder, priorIds = new Set(state.sessions.map(s => s.id));
+  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, ...(newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
+  catch (error) {
+    try { state = await api.initial(); } catch {}
+    const created = state.sessions.find(s => s.cwd === submittedFolder && !priorIds.has(s.id));
+    const message = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。${error.message}` : error.message;
+    $('create-error').textContent = message;
+    if (!$('create-dialog').open) toast(message);
+    // A failed/uncertain start may already own the displayed path. Preserve
+    // that record and any files; a new explicit submit gets a fresh preview.
+    if (newDirectory) resetCreateDirectory();
+  }
+  finally { creatingSession = false; createReadiness(); }
 }); };
 $('room-nav').onclick = () => attempt(() => select('room'));
-$('archive-button').onclick = () => { $('archive-dialog').showModal(); renderArchives(); };
-$('close-archive').onclick = () => $('archive-dialog').close();
 $('room-more').onclick = () => openRoomMenu();
 $('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
 $('room-nav').oncontextmenu = event => { event.preventDefault(); openRoomMenu({ x: event.clientX, y: event.clientY }); };
@@ -1843,10 +1872,10 @@ $('room-overview').onclick = () => attempt(() => { roomSurface = 'overview'; ret
 $('room-record').onclick = () => attempt(() => { roomSurface = 'records'; return selectRoom(); });
 $('manage-members').onclick = () => openInvite($('manage-members'));
 dropTarget($('room-nav'), true); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
-for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace-toggle']]) {
+for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace-toggle'], ['archive', 'archive-button']]) {
   const toggle = $(id);
-  const collapse = collapsed => api.sidebar({ type: 'collapse', section, collapsed });
-  toggle.onclick = () => attempt(() => collapse(toggle.getAttribute('aria-expanded') === 'true'));
+  const collapse = collapsed => { if (section === 'archive' && !collapsed) ui.revealSidebar(); return api.sidebar({ type: 'collapse', section, collapsed }); };
+  toggle.onclick = () => attempt(() => collapse(section === 'archive' && toggle.closest('.naw')?.dataset.collapsed === 'true' ? false : toggle.getAttribute('aria-expanded') === 'true'));
   toggle.onkeydown = event => {
     if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || event.isComposing) return;
     event.preventDefault(); attempt(() => collapse(event.key === 'ArrowLeft'));

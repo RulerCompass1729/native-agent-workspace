@@ -213,7 +213,7 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).archived, 'Session archived');
   assert.equal(await page.locator(`[data-session-id="${a}"]`).count(), 0);
   const blocked = await page.evaluate(async id => { try { await workspace.input(id, 'MUST-NOT-REACH'); return false; } catch { return true; } }, a); assert.equal(blocked, true);
-  await page.locator('#archive-button').click(); assert.match(await page.locator(`[data-archived-session="${a}"]`).innerText(), /正在工作/); await capture('archived-working');
+  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click(); assert.match(await page.locator(`[data-archived-session="${a}"]`).innerText(), /正在工作/); await capture('archived-working');
   await reply('ARCHIVED-PRIVATE-REPLY'); assert.equal((await snapshot()).room.messages.some(m => m.text === 'ARCHIVED-PRIVATE-REPLY'), false);
   await page.locator(`[data-archived-session="${a}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
   assert.equal((await snapshot()).sessions.find(s => s.id === a).roomId, null); assert.deepEqual(identities(await snapshot()), ids);
@@ -224,11 +224,11 @@ async function run() {
   await until(async () => (await snapshot()).room.archived, 'Room archived'); assert.equal(await page.locator('#room-nav').isVisible(), false); assert.ok((await snapshot()).sessions.every(s => !s.roomId));
   await page.locator(`[data-session-menu="${a}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click(); await until(async () => (await snapshot()).sessions.find(s => s.id === a).archived, 'Former member independently archived');
   await app.close(); app = null; await launch(); assert.equal((await snapshot()).room.archived, true); assert.equal((await snapshot()).sessions.find(s => s.id === a).archived, true);
-  await page.locator('#archive-button').click(); await capture('archive-resume'); await page.getByRole('button', { name: '恢复工作区', exact: true }).click();
-  await until(async () => !(await snapshot()).room.archived && await page.locator('#room-nav').isVisible() && !await page.locator('#archive-dialog').isVisible(), 'Room restore completes and returns to its visible workspace');
+  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click(); await capture('archive-resume'); await page.getByRole('button', { name: '恢复工作区', exact: true }).click();
+  await until(async () => !(await snapshot()).room.archived && await page.locator('#room-nav').isVisible() && await page.locator('[data-archived-room]').count() === 0, 'Room restore completes and returns to its visible workspace');
   const restored = await snapshot(); assert.equal(restored.room.archived, false); assert.equal(restored.room.notes, preserved.room.notes); assert.deepEqual(restored.room.messages, preserved.room.messages);
   assert.equal(restored.sessions.find(s => s.id === b).roomId, 'shared'); assert.equal(restored.sessions.find(s => s.id === a).roomId, null); assert.equal(restored.sessions.find(s => s.id === a).archived, true);
-  await page.locator('#archive-button').click(); await page.locator(`[data-archived-session="${a}"]`).getByRole('button', { name: '恢复会话', exact: true }).click(); assert.deepEqual(identities(await snapshot()), ids);
+  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click(); await page.locator(`[data-archived-session="${a}"]`).getByRole('button', { name: '恢复会话', exact: true }).click(); assert.deepEqual(identities(await snapshot()), ids);
   assert.equal((await fixture()).sends.length, 4); assert.equal((await fixture()).inputs.some(x => x.data === 'MUST-NOT-REACH'), false);
   await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
   await page.locator('#send-button').getByText('接管此窗口', { exact: true }).click();

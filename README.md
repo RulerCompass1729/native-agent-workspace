@@ -71,7 +71,8 @@ to download this public source.
    locations without running a login probe. **选择已有程序…** handles custom locations;
    **自动查找** resets that choice. After installing a missing prerequisite, select
    **重新检查**. Then choose **新会话**, your provider,
-   a working folder (or keep the empty default), and **原生终端** or **对话**.
+   an existing working folder (or keep the displayed path for a new empty folder),
+   and **原生终端** or **对话**.
    If the session says **正在启动**, switch to **原生终端** to check for the native
    folder-trust or login prompt. Read and answer it there; the app does not approve
    it for you. Return to **对话** when the session is ready and send your first message.
@@ -81,6 +82,9 @@ the conversation view. No model prompt is sent merely by opening the workspace;
 messages you send use your provider's own plan or billing.
 
 New sessions inherit native permission defaults for their working directory.
+The displayed automatic folder is created only when you submit; cancelling creates
+no folder. Each new folder may need its own native trust decision. Existing sessions
+keep their directories, and automatic folders remain on disk after forgetting a session.
 Open **⋯** beside a session, or right-click its row, then choose **重命名…**
 to edit its local display name in the original sidebar row. Enter saves; Escape
 cancels. The same menu offers **在独立窗口打开**.

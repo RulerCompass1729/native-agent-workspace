@@ -293,9 +293,12 @@ header h1, header p { overflow-wrap: anywhere; }
 
 /* Keep native lifecycle notices small and human text visibly distinct. */
 .message.system{display:flex;align-items:baseline;gap:8px;color:var(--muted)}
-#messages .message.system .message-heading{display:none}
-#messages .message.system.native-notice{display:block;border-left:2px solid var(--border);padding-left:10px}
-#messages .message.system.native-notice .message-heading{display:flex;font-size:12px}
+:is(#messages,.collaboration-messages) .message.system .message-heading{display:none}
+:is(#messages,.collaboration-messages) .message.system.native-notice{display:block;border-left:2px solid var(--border);padding-left:10px}
+:is(#messages,.collaboration-messages) .message.system.native-notice .message-heading{display:flex;font-size:12px}
+/* Keep notice actions below the original text; reserve their space at rest so
+   hover and keyboard focus never move the following record. */
+:is(#messages,.collaboration-messages) .message.system.native-notice>.message-actions{position:static;width:fit-content;max-width:100%;margin:5px 0 0 auto;flex-wrap:wrap}
 .message.system .message-body{flex:1;font-size:12px}
 .message.system .message-actions{flex-shrink:0}.message.native-turn{margin-top:-8px;margin-bottom:18px;font-size:12px}.message.native-turn .message-body{line-height:1.5}.message.tool{border-left:1px solid var(--border);padding-left:12px}.message.tool .message-body{font-size:12px}
 .message-delivery,.native-tool-input{grid-column:1/-1}

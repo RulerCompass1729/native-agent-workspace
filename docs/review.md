@@ -648,3 +648,70 @@ Clean2b1b421 builds signed119 with105production packages and57matching runtime f
 Controlled backend refresh — recovery still open
 
 All six backends now report118, matching the daily app. The earlier one-shot operator failed while waiting for the first Claude recovery, before attempting Main resume or continuation. Its exact deadline predicate was not recorded; a later healthy state cannot identify it. Later native reads verify the original nine records, drafts and known configuration, and the same Main goal identity/objective; the user explicitly changed its status from blocked to active. This is not an unattended recovery pass. Original failures are retained, no uncertain dispatch is retried, and the next necessary recovery qualification must record the failed condition.
+
+
+Signed120 member/startup batch — partial backend refresh
+
+Clean committed aada4fd combines the reviewed member actions, inline names and two
+managed-Codex startup argv overrides. Signed installed acceptance passes seven
+member flows, seven inline-name flows, six related-menu flows and real0.164
+editor startup with zero task/title responses;85 affected unit checks pass.
+All57 runtime files match, strict signature survives native testing, and temporary
+counts stay6→6/0→0. Product test model calls are zero; independent reviews and
+productive developer work are separate. Physical input, first-time folder trust
+and new real-history resume are not certified.
+
+Ordinary visible GUI installation retains the nine original records, live native
+process/start identities, owners and12 flushed view drafts. A later separately
+reviewed one-shot backend refresh restores three selected backends on120, with
+original native identities, known settings, saved Codex goals and drafts. Main's
+active native goal starts another turn; the exact-turn guard refuses to retire
+its118 backend. Failure remains recorded, no Main resume or extra recovery input
+is attempted, and the GUI visibly reopens. The ten current records and12 flushed
+view drafts reconcile; the unselected secretary and new developer backend retain
+their daemon/native PID-start identities. Four of six backends are120; Main and
+the secretary remain118. Author holds are released with one productive task each;
+submission is not completion. This does not close Main recovery, all-backend
+update, full-day development or the overall dogfood milestone.
+
+Signed122 — directories, sidebar, process groups and Node children
+
+The reviewed T96/T68/T67/T98/T90 changes are integrated without rebuilding the
+native TUI. Signed e920cef passes six complete installed GUI flows: private
+per-session directories and collision preservation; pointer/keyboard sidebar
+sizing/folds; original process records and native completion; manual disclosure;
+reopen with original identities/draft/preferences; readable narrow/wide member
+notices. Unchanged directory-picker and startup-failure evidence is reused from
+signed121. Full1234 checks,55 affected checks,19 scratch checks and8 real-Framework
+checks pass with no skips. All57 runtime files match; strict signature and vendor
+Framework remain intact. GUI/model/clipboard boundaries remain explicit.
+
+| Finding and trigger | Owner / severity | Resolution and evidence |
+| --- | --- | --- |
+| RunAsNode still enables Node inspection despite Electron fuse readback | Main / high | Owned installed counterexample opens a listener. e920cef adds the native signal-disable argument at all three app-owned Node launch sites. Normal service/UI-host boot and a directly started signed MCP script survive owned signals without a new listener; Claude's own MCP launcher remains unverified. GUI inspection remains disabled. No user process was signaled. Scoped repair closed; old live backends remain pending replacement |
+| T68 cleanup alias rejected by the existing source census | Main / test | Accept the actual explicit shared-finalizer alias;19 cleanup and1234 full checks pass. No process/directory ownership guard removed |
+| T90 runner creates new-directory siblings outside owned scratch | Main / test | Place its default cwd inside scratch; exact six-scene source suite passes with six copy receipts and no new profile/sibling. Existing author leftovers remain assigned for provenance-checked cleanup; the same navigation-runner pattern must be fixed before its next run |
+| Installed test close acknowledgement / stale geometry read | Main / test | Observe actual owned child exit with a bound; measure both notice rectangles after hover. Original failed runs retained, final signed six-flow task succeeds without product workarounds |
+
+Independent headless Fable's first25-turn invocation hit its limit and is not a
+pass. The same-session delta returns PASS in8turns for signed e920cef and the
+GUI-only installer source;312 frozen file hashes and HEAD/status remain unchanged.
+It independently verifies payloads, archives, fuses, merged changes and raw
+evidence. A tracked signal-protection regression check remains a follow-up before
+the next edit to those launch paths; the private installed probes cover this build.
+
+The authorized ordinary-visible120→122 update retains all ten native records,
+reported live PID/start identities, owners, session drafts and12 flushed view
+drafts; one normal visible window has no background/debug arguments. The new
+active backend is122; four retain120 and Main/secretary retain118. No native
+retirement or recovery is claimed. Codex165 qualification, capacity recovery,
+all-backend replacement and the full dogfood milestone stay open. Product test
+inference is zero; independent review and actual development consume their own
+model usage. Physical input, OS picker/clipboard and native-provider recovery
+are not newly certified by these GUI fixtures.
+
+
+### Real-work file access interruption and Codex 0.165 integration
+
+- Source: actual developer commands stopped completing after the prior update, although the GUI and native processes stayed alive. Severity: blocking real work; owner: main integrator; status: access restored, cause and upgrade regression open. A bounded owned repository read/write/fsync/rename/delete probe now passes. Filesystem permission causality was not established; no permission changes were made during diagnosis. The failed pre-push reported an unavailable or timed-out required command, not a successful publication.
+- Integration task: preserve an existing native conversation, full goal identity, posture and draft when the installed Codex runtime is 0.165. Exact-version protocol qualification is integrated from the reviewed lane; unknown versions still fail closed. Installed qualification and integrated independent review are pending. Source qualification does not certify every TUI menu or full-day development.

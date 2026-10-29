@@ -192,6 +192,20 @@ not necessarily make it anonymous.
 
 ## Conditions before a public application build
 
+Packaged alpha.122 disables Electron's Node inspector arguments and inherited
+`NODE_OPTIONS`, while retaining RunAsNode for the local service and native MCP
+tool. Electron removes that inherited variable, so native children cannot inherit
+it through NAW; a native launcher can still supply its own explicit Node options.
+An owned installed GUI probe opened no Node inspector for `--inspect` or `SIGUSR1`;
+the signal terminated that test GUI. RunAsNode follows Node's separate inspector
+behavior, so NAW starts its service, UI host and MCP tool with
+[`--disable-sigusr1`](https://nodejs.org/api/cli.html#--disable-sigusr1).
+This does not prevent explicitly debugging a separately launched Node process.
+This is not protection against another
+process running as the same user. Chromium renderer debugging remains a separate
+switch, and ASAR integrity is not enabled for this unpacked, ad-hoc signed alpha.
+Existing running backends retain their old executable settings until replaced.
+
 The maintainer must review the actual build, rather than approve this list once:
 
 1. Inventory data categories, storage locations, retention, recipients, network

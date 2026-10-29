@@ -36,7 +36,7 @@ async function startDsh(dataDir) {
   await waitForPrevious(registry);
   const home = path.join(dataDir, 'dsh');
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  const child = spawn(process.execPath, ['--require', path.join(__dirname, 'ui-parent-lease.cjs'), path.join(__dirname, 'dsh-server.mjs'), home], {
+  const child = spawn(process.execPath, ['--disable-sigusr1', '--require', path.join(__dirname, 'ui-parent-lease.cjs'), path.join(__dirname, 'dsh-server.mjs'), home], {
     cwd: dataDir, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...Object.fromEntries(['PATH', 'TMPDIR', 'LANG', 'LC_ALL'].filter(key => process.env[key]).map(key => [key, process.env[key]])), ELECTRON_RUN_AS_NODE: '1', DSH_HOME: home },
   });

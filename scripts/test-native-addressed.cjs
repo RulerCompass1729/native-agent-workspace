@@ -248,7 +248,7 @@ async function start(first, text) {
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     assert.match(await page.locator('#room-messages').innerText(), /材料核对完成/);
     await page.locator(`[data-session-menu="${second.id}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
-    await page.locator('#archive-button').click();
+    if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
     assert.ok((await page.locator(`[data-archived-session="${second.id}"] strong`).innerText()).includes(second.id.slice(0, 6)));
     await page.locator(`[data-archived-session="${second.id}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
     await page.locator(`[data-session-menu="${second.id}"]`).click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();

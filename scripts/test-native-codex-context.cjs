@@ -13,7 +13,7 @@ fs.mkdirSync(base,{recursive:true,mode:0o700});
 fs.writeFileSync(path.join(base,'owned-fixture.json'),JSON.stringify({kind:'naw-native-fixture-v1',producer:'test-native-codex-context.cjs',uid:process.getuid()}),{mode:0o600});
 const profile=path.join(temporary,'profile'),cwd=path.join(base,'work'),home=path.join(base,'codex'),userHome=path.join(base,'home');
 for(const p of[profile,cwd,home,userHome])fs.mkdirSync(p,{mode:0o700});
-const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0'].includes(nativeVersion));
+const nativeVersion=process.env.NAW_CODEX_VERSION||'0.163.0';assert.ok(['0.163.0','0.164.0','0.165.0'].includes(nativeVersion));
 const binary=executable('codex');assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli '+nativeVersion);
 let app,page,calls=0,titles=0,seq=0,releaseRetry,releaseSearch,releaseGoal,goalRpc,goalCodeMode,budgetError,activeHeld;const errors=[],checks=[];
 const updateStartupTrial=process.env.NAW_NATIVE_UPDATE_STARTUP==='1';
@@ -23,6 +23,17 @@ const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIV
 // Active-goal recovery: the owned app-server dies while the goal's automatic
 // continuation turn is in flight (T-4); the completed-goal case is NAW_NATIVE_RECOVERY_TRIAL.
 const activeGoalRecovery=process.env.NAW_NATIVE_ACTIVE_GOAL_RECOVERY==='1';
+const fileAccessDirectory=process.env.NAW_NATIVE_FILE_ACCESS_DIR;
+let fileAccessCommand;
+if(fileAccessDirectory){
+ assert.ok(activeGoalRecovery,'File access is checked within the bounded recovery task');
+ const owned=fs.realpathSync(fileAccessDirectory),allowed=fs.realpathSync(path.join(root,'.local'))+path.sep;
+ const info=fs.lstatSync(owned);assert.ok(owned.startsWith(allowed)&&info.isDirectory()&&info.uid===process.getuid()&&!(info.mode&0o077));
+ const script=path.join(base,'native-file-access.py');
+ fs.writeFileSync(script,'import pathlib,tempfile,os,json,sys\nroot=pathlib.Path(sys.argv[1])\nwith tempfile.TemporaryDirectory(prefix="native-owned-",dir=root) as d:\n p=pathlib.Path(d)/"before"\n with p.open("xb") as f:f.write(b"native repository IO");f.flush();os.fsync(f.fileno())\n assert p.read_bytes()==b"native repository IO"\n q=p.with_name("after");p.rename(q);assert q.read_bytes()==b"native repository IO";q.unlink()\n(root/"native-file-access.json").write_text(json.dumps({"readWriteFsyncRenameDelete":True,"pid":os.getpid(),"parentPid":os.getppid()}))\n');
+ const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
+ fileAccessCommand='/usr/bin/python3 '+quote(script)+' '+quote(owned);
+}
 const scrollTrial=process.env.NAW_NATIVE_SCROLL_TRIAL==='1';
 const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1'||activeGoalRecovery||capacityGoal;
 const goalsDisabled=process.env.NAW_NATIVE_GOALS_DISABLED==='1';assert.ok(!goalsDisabled||!goalTrial);
@@ -56,7 +67,8 @@ const server=http.createServer((req,res)=>{if(updateStartupTrial){errors.push('U
   const name=n===1?'create_goal':'update_goal',args=n===1?{objective:'Verify native goal continuation with the NAW window closed, then mark this bounded fixture complete.'}:{status:'complete'};
   if(n===1)goalCodeMode=input.input?.some(m=>m.tools?.some(t=>t.type==='namespace'&&t.name==='functions'&&t.tools?.some(f=>f.name==='exec')));
   if(goalCodeMode){
-   const item={id:'goal_'+n,type:'custom_tool_call',call_id:'native_goal_'+n,namespace:'functions',name:'exec',input:'text(await tools.'+name+'('+JSON.stringify(args)+'));',status:'completed'};
+   const probe=activeGoalRecovery&&n===4&&fileAccessCommand?'text(await tools.exec_command('+JSON.stringify({cmd:fileAccessCommand,max_output_tokens:500})+'));':'';
+   const item={id:'goal_'+n,type:'custom_tool_call',call_id:'native_goal_'+n,namespace:'functions',name:'exec',input:probe+'text(await tools.'+name+'('+JSON.stringify(args)+'));',status:'completed'};
    event(res,'response.output_item.added',{output_index:0,item:{...item,input:'',status:'in_progress'}});event(res,'response.output_item.done',{output_index:0,item});event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();return;
   }
   const item={id:'goal_'+n,type:'function_call',call_id:'native_goal_'+n,name,arguments:JSON.stringify(args),status:'completed'};
@@ -105,9 +117,6 @@ async function nativeCommand(command){
   runtimeBinary=path.join(home,'packages/standalone/releases/0.164.0-test/codex');
   fs.mkdirSync(path.dirname(runtimeBinary),{recursive:true});fs.copyFileSync(fs.realpathSync(binary),runtimeBinary,fs.constants.COPYFILE_FICLONE);fs.chmodSync(runtimeBinary,0o700);
   fs.writeFileSync(path.join(home,'version.json'),JSON.stringify({latest_version:'0.165.0',last_checked_at:new Date().toISOString(),dismissed_version:null}),{mode:0o600});
-  // Update startup is exercised in an already trusted owned workspace; folder
-  // onboarding is a separate native interaction, not an updater requirement.
-  fs.appendFileSync(path.join(home,'config.toml'),`\n[projects.${JSON.stringify(cwd)}]\ntrust_level = \"trusted\"\n`);
  }
  const shim=path.join(base,'codex-local');fs.writeFileSync(shim,'#!/usr/bin/python3\nimport os,sys\n'+`os.environ["CODEX_HOME"]=${JSON.stringify(home)}\nos.environ["HOME"]=${JSON.stringify(userHome)}\n`+'for key in ["OPENAI_API_KEY","CODEX_API_KEY"]: os.environ.pop(key,None)\n'+`os.execv(${JSON.stringify(runtimeBinary)},["codex"]+sys.argv[1:])\n`,{mode:0o700});
  fs.writeFileSync(path.join(profile,'runtime-locations.json'),JSON.stringify({codex:shim}),{mode:0o600});
@@ -118,7 +127,13 @@ async function nativeCommand(command){
  // Search/retry parity needs a trusted, live TUI before the GUI task.
  // Native 0.164 resume deliberately skips replayed willRetry notifications.
  const initialTerminal=updateStartupTrial||scrollTrial||Boolean(capacityTrial)||process.env.NAW_NATIVE_INITIAL_TERMINAL==='1'||process.env.NAW_NATIVE_WEB_SEARCH_TRIAL==='1'||(nativeVersion==='0.164.0'&&process.env.NAW_NATIVE_RETRY_TRIAL==='1');
- await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#session-name').fill(autoName?'':'Native context');if(skipPermissions)await page.locator('#skip-permissions').check();await createIn(page, initialTerminal?'terminal':'chat');
+ await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#session-name').fill(autoName?'':'Native context');if(skipPermissions)await page.locator('#skip-permissions').check();
+ // New-session previews use a distinct child directory. Trust only the exact
+ // owned fixture path, in this fixture's private config, before native startup.
+ const chosenFolder=await page.locator('#chosen-folder').innerText();
+ assert.ok(path.isAbsolute(chosenFolder)&&chosenFolder.startsWith(base+path.sep),'Native test folder belongs to the owned fixture');
+ fs.appendFileSync(path.join(home,'config.toml'),`\n[projects.${JSON.stringify(chosenFolder)}]\ntrust_level = "trusted"\n`);
+ await createIn(page, initialTerminal?'terminal':'chat');
  if(updateStartupTrial){
   const versionBefore=fs.readFileSync(path.join(home,'version.json'),'utf8');
   await until(async()=>{const text=await terminalText();assert.ok(!text.includes('Update available'),'Startup update menu must not cover the native session');return text.includes('Trust this folder?')||text.includes('? for shortcuts');},'Actual native startup reaches folder gate or editor without update popup',60000);
@@ -252,19 +267,43 @@ async function nativeCommand(command){
    await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject);});const rpc=new Rpc(ws);
    await rpc.call('initialize',{clientInfo:{name,version:'1'},capabilities:{experimentalApi:true}});ws.send(JSON.stringify({method:'initialized',params:{}}));return rpc;
   };
-  const posture=r=>({approvalPolicy:r.approvalPolicy,sandbox:r.sandbox?.type,model:r.model,effort:r.reasoningEffort});
+  const posture=r=>({approvalPolicy:r.approvalPolicy,sandbox:r.sandbox,model:r.model,modelProvider:r.modelProvider,effort:r.reasoningEffort});
+  const stableGoal=goal=>{assert.ok(goal,'The owned original goal must exist');return Object.fromEntries(['threadId','objective','tokenBudget','createdAt'].map(key=>{assert.ok(Object.hasOwn(goal,key),'Goal identity field missing: '+key);return[key,goal[key]]}))};
   // The dogfood Codex fork got never/full access from its operator, not from config. A
   // running thread takes that posture through turn/start, so the witness starts the turn.
   goalRpc=await witness('naw_owned_active_goal_witness');
-  await goalRpc.call('turn/start',{threadId:before.nativeId,input:[{type:'text',text:'Create the bounded native goal, keep working toward it, then complete it.',text_elements:[]}],approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
+  await goalRpc.call('turn/start',{threadId:before.nativeId,input:[{type:'text',text:'Create the bounded native goal, keep working toward it, then complete it.',text_elements:[]}],effort:'high',approvalPolicy:'never',sandboxPolicy:{type:'dangerFullAccess'}});
   await until(()=>activeHeld,'Native goal continues automatically into a held turn',60000);
-  const active=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});assert.equal(active.goal.status,'active');
-  const posed={approvalPolicy:'never',sandbox:'dangerFullAccess'};
+  const initialGoal=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});assert.equal(initialGoal.goal.status,'active');
+  // Only this fixture's fresh, isolated goal gets a distinct retained budget.
+  // No status is sent: this cannot resume a later human pause.
+  await goalRpc.call('thread/goal/set',{threadId:before.nativeId,tokenBudget:100000,origin:'user'});
+  const active=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});assert.equal(active.goal.status,'active');assert.equal(active.goal.tokenBudget,100000);
+  const posed={approvalPolicy:'never',sandbox:{type:'dangerFullAccess'},model:'gpt-6-luna',modelProvider:'local_fixture',effort:'high'};
   const beforeLoss=posture(await goalRpc.call('thread/resume',{threadId:before.nativeId,excludeTurns:true}));
+  assert.deepEqual(beforeLoss,posed,'The observed thread has the requested nondefault test posture before loss');
+  assert.equal(active.goal.threadId,before.nativeId);assert.equal(active.goal.createdAt,initialGoal.goal.createdAt);assert.equal(active.goal.objective,initialGoal.goal.objective);
+  assert.equal(before.nativeVersion,nativeVersion);assert.equal(before.nativeVersionStatus,'verified');
+  // Reuse this one held native turn for read-only protocol qualification.
+  // None of these metadata calls starts another model request.
+  const catalog=await page.evaluate(()=>workspace.nativeHistory({search:''}));assert.ok(catalog.data.some(row=>row.nativeId===before.nativeId));
+  const metadata=await goalRpc.call('thread/read',{threadId:before.nativeId,includeTurns:false});assert.equal(metadata.thread.id,before.nativeId);
+  const turnMetadata=await goalRpc.call('thread/turns/list',{threadId:before.nativeId,limit:100,sortDirection:'asc',itemsView:'notLoaded'});
+  assert.ok(Array.isArray(turnMetadata.data)&&turnMetadata.data.length>0);
+  const fullTurnPage=await goalRpc.call('thread/turns/list',{threadId:before.nativeId,limit:1,itemsView:'full'});assert.equal(fullTurnPage.data.length,1);assert.ok(Array.isArray(fullTurnPage.data[0].items));
+  const liveTurn=turnMetadata.data.find(turn=>turn.status==='inProgress');assert.ok(liveTurn,'The held goal continuation has an authoritative active turn');
+  const staleTurn='naw-owned-stale-turn',staleRequestId=goalRpc.sequence+1;let staleReply;
+  const observeStale=data=>{const message=JSON.parse(data.toString());if(message.id===staleRequestId)staleReply=message;};goalRpc.ws.on('message',observeStale);
+  try{await assert.rejects(goalRpc.call('turn/steer',{threadId:before.nativeId,expectedTurnId:staleTurn,clientUserMessageId:'naw-owned-rejected-steer',input:[{type:'text',text:'This stale turn must reject without accepting input.',text_elements:[]}]}));}
+  finally{goalRpc.ws.off('message',observeStale);}
+  assert.equal(staleReply?.error?.code,-32600);assert.equal(staleReply.error.message,'expected active turn id `'+staleTurn+'` but found `'+liveTurn.id+'`');
+  assert.equal(calls,3,'Catalog, paging and rejected stale steering cause no inference');
+  assert.equal((await snapshot()).sessions[0].messages.some(m=>m.text==='This stale turn must reject without accepting input.'),false);
+  fs.writeFileSync(path.join(base,'protocol-qualified.json'),JSON.stringify({nativeVersion,catalog,metadata,turnMetadata,fullTurnPage,staleReply,modelRequests:calls},null,2));
   await page.locator('#message-input').fill('Unsent draft retained while the native goal runs.');await sleep(300);
   const identity=processIdentity((await snapshot()).sessions[0].serverIdentity?.pid);
   assert.ok(identity&&processMayBeAlive(identity),'Owned native server exists');
-  fs.writeFileSync(path.join(base,'active-goal-before-loss.json'),JSON.stringify({active,posed,beforeLoss,calls},null,2));
+  fs.writeFileSync(path.join(base,'active-goal-before-loss.json'),JSON.stringify({active,posed,beforeLoss,identity,calls},null,2));
   goalRpc.ws.close();goalRpc=null;process.kill(identity.pid,'SIGKILL');activeHeld.destroy();activeHeld=null;
   await until(async()=>!processMayBeAlive(identity)&&(await snapshot()).sessions[0].state==='recoverable','Native server loss reaches recoverable state');
   const callsAtLoss=calls;
@@ -272,15 +311,17 @@ async function nativeCommand(command){
   await until(async()=>{const s=(await snapshot()).sessions[0];return s.serverIdentity?.pid&&s.serverIdentity.pid!==identity.pid&&['idle','working'].includes(s.state);},'Same saved native thread resumes on a new server',45000);
   goalRpc=await witness('naw_owned_active_recovery_witness');
   const goalAfter=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});
+  assert.deepEqual(stableGoal(goalAfter.goal),stableGoal(active.goal),'Original objective, budget, creation time and thread identity survive loss');
   const afterLoss=posture(await goalRpc.call('thread/resume',{threadId:before.nativeId,excludeTurns:true}));
   const recovered=(await snapshot()).sessions[0];
   // Native may or may not continue an active goal after resume; observe a bounded window.
   await sleep(8000);const continuedAfterResume=calls>callsAtLoss;
   if(continuedAfterResume)await until(async()=>(await goalRpc.call('thread/goal/get',{threadId:before.nativeId})).goal.status==='complete','Resumed native goal completes',60000);
   // No completed tool is replayed: each later request carries the create_goal call exactly once.
+  const finalGoal=await goalRpc.call('thread/goal/get',{threadId:before.nativeId});assert.deepEqual(stableGoal(finalGoal.goal),stableGoal(active.goal));
   const createCalls=[];for(let n=callsAtLoss+1;n<=calls;n++){const req=JSON.parse(fs.readFileSync(path.join(base,`request-${n}.json`),'utf8'));createCalls.push(req.input.filter(i=>i.call_id==='native_goal_1'&&/call$/.test(i.type||'')).length);}
-  const result={goalBefore:active.goal.status,goalAfter:goalAfter.goal.status,posed,beforeLoss,afterLoss,continuedAfterResume,createCallsPerLaterRequest:createCalls,callsAtLoss,calls,
-   nativeId:recovered.nativeId===before.nativeId,draft:await page.locator('#message-input').inputValue(),dispatches:(await snapshot()).diagnostics.dispatches};
+  const result={goalBefore:active.goal.status,goalAfter:goalAfter.goal.status,goalFinal:finalGoal.goal.status,stableGoalBefore:stableGoal(active.goal),stableGoalAfter:stableGoal(finalGoal.goal),posed,beforeLoss,afterLoss,continuedAfterResume,continuationObservationMs:8000,noReplayEvidence:continuedAfterResume?'Later native requests contain exactly one completed goal-create call':'No later model request observed; automatic continuation and request-level replay inspection remain unproven',createCallsPerLaterRequest:createCalls,callsAtLoss,calls,
+   nativeId:recovered.nativeId===before.nativeId,serverBefore:identity,serverAfter:recovered.serverIdentity,draft:await page.locator('#message-input').inputValue(),dispatches:(await snapshot()).diagnostics.dispatches};
   fs.writeFileSync(path.join(base,'active-goal-recovered.json'),JSON.stringify(result,null,2));
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'active-goal-recovered.png')});
   // Survives = still active, or completed by native's own continuation after the resume.
@@ -289,6 +330,7 @@ async function nativeCommand(command){
   assert.equal(result.draft,'Unsent draft retained while the native goal runs.');assert.equal(result.dispatches,0,'Recovery sends no human message');
   assert.ok(createCalls.every(c=>c===1),'No completed native tool is replayed');
   assert.deepEqual(afterLoss,beforeLoss,'The thread posture survives NAW recovery');assert.deepEqual(errors,[]);
+  if(fileAccessDirectory)assert.equal(JSON.parse(fs.readFileSync(path.join(fileAccessDirectory,'native-file-access.json'))).readWriteFsyncRenameDelete,true,'The recovered installed native session executes actual repository file IO');
   console.log(JSON.stringify({checks:['Active native goal survives owned app-server loss mid-continuation: same thread, goal, draft and posture; no human or tool replay'],result,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(goalTrial){

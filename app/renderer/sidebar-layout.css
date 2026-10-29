@@ -1,0 +1,28 @@
+/* Existing sidebar sections share the available height; their contents scroll. */
+.sidebar-navigation.sidebar-layout { padding-bottom: 0; }
+.sidebar-layout > .sidebar-group { display: flex; flex-direction: column; flex: none; min-height: 0; min-width: 0; overflow: hidden; margin: 0; padding: 0; border: 0; }
+.sidebar-layout .nav-label { flex: none; margin: 0; }
+.sidebar-layout .sidebar-group-body { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; scroll-padding-block: 4px; }
+.sidebar-layout #session-list { flex: 1; margin-left: 8px; }
+.sidebar-layout #workspace-group-body { margin-left: 0; }
+.sidebar-layout #archive-button { display: flex; padding: 5px 8px; font: inherit; }
+.sidebar-layout #archive-label { margin: 0; }
+.sidebar-layout #archive-group-body { padding-inline: 8px; }
+.sidebar-layout .archive-item { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 0; overflow-wrap: anywhere; }
+.sidebar-layout .archive-item strong { font-size: 12px; }
+.sidebar-layout .archive-item small, .archive-explanation { font-size: 11px; line-height: 1.5; color: var(--muted); }
+.sidebar-layout .archive-item button { flex: none; margin: 0; font-size: 11px; padding: 4px 8px; align-self: flex-start; }
+.archive-explanation { margin: 12px 0 8px; }
+.sidebar-sash { flex: none; height: 8px; min-height: 8px; position: relative; cursor: row-resize; touch-action: none; user-select: none; outline-offset: -2px; }
+.sidebar-sash::before { content: ''; position: absolute; left: 8px; right: 8px; top: 3px; border-top: 1px solid var(--border); }
+.sidebar-sash:hover::before, .sidebar-sash:focus-visible::before { border-color: var(--ink); border-top-width: 2px; }
+.sidebar-sash:focus-visible { outline: 2px solid var(--ink); }
+.sidebar-sash[aria-disabled="true"] { cursor: default; pointer-events: none; }
+.sidebar-sash[aria-disabled="true"]::before { opacity: .4; }
+&[data-native-surface="sidebar"][data-collapsed="true"] .sidebar-sash,
+&[data-native-surface="sidebar"][data-collapsed="true"] #archive-group-body { display: none; }
+&[data-native-surface="sidebar"][data-collapsed="true"] .sidebar-layout > .sidebar-group:first-child { flex: 0 1 auto; }
+
+/* Preserve the original Archive icon when the host is showing only its rail. */
+&[data-native-surface="sidebar"][data-collapsed="true"] #archive-button .rail-icon { display: inline; }
+&[data-native-surface="sidebar"][data-collapsed="true"] #archive-button .group-chevron { display: none; }
