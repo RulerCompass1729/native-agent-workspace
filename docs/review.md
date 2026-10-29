@@ -673,3 +673,87 @@ their daemon/native PID-start identities. Four of six backends are120; Main and
 the secretary remain118. Author holds are released with one productive task each;
 submission is not completion. This does not close Main recovery, all-backend
 update, full-day development or the overall dogfood milestone.
+
+Signed122 — directories, sidebar, process groups and Node children
+
+The reviewed T96/T68/T67/T98/T90 changes are integrated without rebuilding the
+native TUI. Signed e920cef passes six complete installed GUI flows: private
+per-session directories and collision preservation; pointer/keyboard sidebar
+sizing/folds; original process records and native completion; manual disclosure;
+reopen with original identities/draft/preferences; readable narrow/wide member
+notices. Unchanged directory-picker and startup-failure evidence is reused from
+signed121. Full1234 checks,55 affected checks,19 scratch checks and8 real-Framework
+checks pass with no skips. All57 runtime files match; strict signature and vendor
+Framework remain intact. GUI/model/clipboard boundaries remain explicit.
+
+| Finding and trigger | Owner / severity | Resolution and evidence |
+| --- | --- | --- |
+| RunAsNode still enables Node inspection despite Electron fuse readback | Main / high | Owned installed counterexample opens a listener. e920cef adds the native signal-disable argument at all three app-owned Node launch sites. Normal service/UI-host boot and a directly started signed MCP script survive owned signals without a new listener; Claude's own MCP launcher remains unverified. GUI inspection remains disabled. No user process was signaled. Scoped repair closed; old live backends remain pending replacement |
+| T68 cleanup alias rejected by the existing source census | Main / test | Accept the actual explicit shared-finalizer alias;19 cleanup and1234 full checks pass. No process/directory ownership guard removed |
+| T90 runner creates new-directory siblings outside owned scratch | Main / test | Place its default cwd inside scratch; exact six-scene source suite passes with six copy receipts and no new profile/sibling. Existing author leftovers remain assigned for provenance-checked cleanup; the same navigation-runner pattern must be fixed before its next run |
+| Installed test close acknowledgement / stale geometry read | Main / test | Observe actual owned child exit with a bound; measure both notice rectangles after hover. Original failed runs retained, final signed six-flow task succeeds without product workarounds |
+
+Independent headless Fable's first25-turn invocation hit its limit and is not a
+pass. The same-session delta returns PASS in8turns for signed e920cef and the
+GUI-only installer source;312 frozen file hashes and HEAD/status remain unchanged.
+It independently verifies payloads, archives, fuses, merged changes and raw
+evidence. A tracked signal-protection regression check remains a follow-up before
+the next edit to those launch paths; the private installed probes cover this build.
+
+The authorized ordinary-visible120→122 update retains all ten native records,
+reported live PID/start identities, owners, session drafts and12 flushed view
+drafts; one normal visible window has no background/debug arguments. The new
+active backend is122; four retain120 and Main/secretary retain118. No native
+retirement or recovery is claimed. Codex165 qualification, capacity recovery,
+all-backend replacement and the full dogfood milestone stay open. Product test
+inference is zero; independent review and actual development consume their own
+model usage. Physical input, OS picker/clipboard and native-provider recovery
+are not newly certified by these GUI fixtures.
+
+
+### Real-work file access interruption and Codex 0.165 integration
+
+- Source: actual developer commands stopped completing after the prior update, although the GUI and native processes stayed alive. Severity: blocking real work; owner: main integrator; status: access restored, cause and upgrade regression open. A bounded owned repository read/write/fsync/rename/delete probe now passes. Filesystem permission causality was not established; no permission changes were made during diagnosis. The failed pre-push reported an unavailable or timed-out required command, not a successful publication.
+- Integration task: preserve an existing native conversation, full goal identity, posture and draft when the installed Codex runtime is 0.165. Exact-version protocol qualification is integrated from the reviewed lane; unknown versions still fail closed. Installed qualification and integrated independent review are pending. Source qualification does not certify every TUI menu or full-day development.
+
+- Installed qualification: signed123/beacc47, normal service bootstrap and actual Codex0.165, passes the owned mid-goal process-loss task. Old/new PID starts are retained; objective, budget, creation time, model/provider/effort/approval/sandbox and draft survive; native continues to completion with no human dispatch or completed-tool replay. A real native shell performs repository-tree file IO. Final witness5 fixed local responses, initial witness5; total10,0titles,0paid product inference. Related units143pass/0skip, strict signature intact, owned processes/profile/GUI lease removed.
+- Independent fresh Fable checkpoint: PASS for integrated source, signed isolated witness and the visible-update operator; reported model-list equivalent0.9084632USD, not a billing claim. Source313-file/HEAD/status/operator freeze unchanged. Nonblocking findings: the optional IO witness uses a fixed result path and should gain freshness/parent checks before reuse; it proves new gitignored-file operations, not existing tracked-file/Git access or daily-app permissions. Actual run timestamps and matching new-server parent verify this witness. The earlier file-access cause stays open. Cosmetic old-version assertion text has no behavior effect.
+- Actual authorized normal-visible122→123 GUI update: all10 original records/native IDs/live process starts/owners/drafts and saved view drafts retained, strict signature intact, no debug/background argv. A retained command receipt confirms actual Main, still on backend118, reads tracked source and runs Git after the GUI update. This does not establish123 native-backend file access. This is GUI upgrade continuity, not actual Main process recovery or an all-backend update; seven backends remain123×1/120×4/118×2. Full workday and complete dogfood goal remain open.
+
+
+### Long-conversation reading continuity and inactive input producer
+
+- User task: read older originals in a long conversation, find a specific message, return and continue without losing native identity, draft, selection or reading position. Integrated reviewed T89 paging keeps all source records and loads recent50 initially, expanding whole native process groups rather than splitting their content. Source qualification includes2480 records, independent member ranges, manual folds and latest-follow recovery. Isolated signed124/de84dd6 now passes all9 reading flows; daily deployment remains pending.
+- Main affected checks:90unit cases and9 actual isolated source-GUI flows pass,0product models/providers/native input/send. Installed test adapter uses renderer CDP; it reuses source-mode clipboard receipts, checks enabled copy focus/full source/visible content, and deliberately makes no installed OS-clipboard claim. Its workspace lives inside the owned profile; automatic per-session directories are removed with it.
+- T88 producer source is included with strict explicit receiver opt-in; current consumers remain disabled. No claim that queued native input is visible yet. Reused lane evidence covers8 real mod-engine cases on each310/311/312 and272 related Node checks; consumer implementation is a separate lane task.
+
+- Fresh independent review: initial12-turn limit is not a pass; same checkpoint finalize accepts the frozen source, signed candidate and unlaunched update operator, with required record corrections. Main records installed qualification here. The initial90unit/source-GUI runs preceded the version commit by a few minutes; source hashes stayed unchanged and the reviewer independently reran17cases on committed HEAD.
+- Launch provenance gap was reproduced in the original test result: it lacked an explicit executable/daemon receipt. Test-only metadata now records each actual GUI PID/argv/executable hash, source revision, signed CDHash/client hash and daemon argv/root/hash. A second installed9-flow run passes with those receipts,0model/provider/native input/send and owned cleanup; product payload is unchanged. No physical clipboard, trackpad, IME, VoiceOver, CPU/memory cap, actualMain process recovery or full milestone claim. Normal provider plugin upgrade was not tested by this synthetic transport; retained hosts need separate bootstrap acceptance.
+
+- Actual authorized daily123→124 GUI update: source de84dd6, normal visible launch, one window, strict signature intact and no background/debug argv. All10 native IDs/live process starts/owners/drafts and saved view drafts remain unchanged. Seven backends are124×1/120×4/118×2, so this is GUI update continuity; actualMain/all-backend recovery, provider-plugin bootstrap and the full dogfood goal remain open.
+
+
+### Native input ownership and collaboration list continuity
+
+- Integrated reviewed T88 Claude consumer with its required producer, and T91 list identities. User task: insert native input while work is running, see its original text once in the correct reader, keep private continuation outside the old shared grant, and retain attached member identity through list/navigation/reload. Original accepted UUIDs own rows; boundary-only events pause without producing a second row. Older retained queues without a proven app identity link stay disabled.
+- Main180affected unit cases pass; both source GUI tasks pass5flows each,0product models/providers/native input. Inline fixture performs1explicit synthetic shared send; list fixture performs none. IDs, owners, drafts, selected text and unchanged original sources remain checked. Signed installed acceptance is pending.
+- Necessary test-only ports retain the hardened renderer launcher and put working directories inside owned profiles. Source-mode clipboard/native-window receipts are reused; installed checks focus/exact source/menu dismissal and renderer viewport geometry, without OS clipboard or native outer-window claims. The shared launcher now verifies strict signatures and optional expected revision/CDHash before spawn and after close, recording actual launch provenance.
+
+- Blocking integration finding: an actual Claude312 terminal message submitted during an owned Bash tool appears in the TUI and next local model request, but not the GUI. The native accepted append is a queued-command delivery from the composer; the producer incorrectly required an engine attachment. The initial SDK fixture modeled the wrong ingress. Candidate125 is held, not installed. Seven total fixed local responses were used across retained trials, zero paid inference; a successful prompt-boundary trial does not qualify this mid-tool path.
+- Necessary receiver correction observes that authenticated native delivery and its accepted UUID without modifying native state or inferring authorship from text. It preserves the complete accepted native rendering, including native reminder framing: it does not strip the frame to reconstruct typed text. The same-screen TUI retains the typed presentation. Peer, scheduled, plugin, unclassified, meta and child deliveries cannot become human input rows. SDK regression first reproduces two missing rows, then all13cases pass;139 affected and1283 full Node checks pass. The prior exact compatibility-hook hash is added after the existing upgrade regression failed, preserving rejection of modified copies. Integrated review and signed mid-tool requalification remain pending.
+
+- Independent source-delta checkpoint: the20-turn invocation ended at its limit and is not a pass. Same-session finalization returns scoped SOURCE PASS, with R-A/R-B required before installed qualification. R-A: native reminder wording would appear under “you”, so bare typed-input fidelity is not claimed and T88 stays partial. Necessary existing-row correction labels native inline records with the already used “native session” author; native body, input, sharing and layout remain unchanged. R-B: actual312 lDe reads saved renderings without an in-human-turn override; SLn/QMt/bLn preserve their text. The API request's different system-channel formatting does not change that SDK projection. The installed assertion compares the GUI with the saved SDK rendering and exact UUID, not a reconstructed prompt. Bridge, modified308–311 startup and real-provider shared mid-tool behavior remain unverified.
+
+- R-A is reproduced in the old signed125 candidate: the heading is “you”. The one-line existing-reader correction uses the existing “native session” author for native-inline rows. All5 source list/input flows pass, followed by all5 corrected signed125 flows. R-B is confirmed both from shipped native rendering functions and the actual retained native record; GUI text equals the full saved rendering under the exact native attachment UUID. This is accepted-native-rendering fidelity, not bare-TUI presentation, and does not certify every T88 path.
+- Final isolated signed125/14af236 actual312 mid-tool witness passes: one ordinary terminal Enter during an8-second owned Bash call, one occurrence in the next local request, one exact-rendering GUI input under the native-session author, unchanged nativeID/PID, completed reply and idle state. All11 local responses across original and corrective trials are accounted for,0paid inference. An intermediate corrected trial already displayed the right row but failed a too-early transcript-read assertion; the failure is retained. The harness now saves runtime state before assertions and waits at most5seconds for the exact durable record. No product change or replay was used to resolve that test timing error. Strict signature remains intact; owned profile/processes and canonical GUI token are cleaned. Final same-reviewer delta, daily installation and push remain pending.
+
+- Same-reviewer final scoped PASS independently verifies the actual signed source,57 runtime payloads, full raw native/GUI input identity and rendering, one-time permission, cumulative local response budget and unchanged321-file/HEAD/status/operator freeze. R-A and R-B are closed. The prior turn-limit invocation is not counted as approval. The GUI-only update operator is reviewed but execution is pending; its approval-status file is a record, not a code gate. Execution still requires an explicit apply argument, clean committed descendant and matching candidate source; Main separately pins the reviewed CDHash before installation. T88 bare-presentation, retained plugins, bridge/older startup/shared real-provider input, physical input, actualRoot/all-backend recovery and full workday remain outside this acceptance.
+
+- Actual authorized normal-visible124→125 deployment installs the reviewed14af236 build/CDHash. One visible window has ordinary argv; strict signature passes. All10 original native records/IDs/live PID starts/owners/drafts and12 flushed view drafts survive. This executes the reviewed GUI-only operator; the active backend with no live sessions was replaced by125. Every backend and native process with live work kept its PID/start time. The backend split is125×1(active),120×4,118×2. Existing older backends are not retrofitted, and actualMain/all-backend recovery remains open.
+
+- Deployment-record review accepts the raw execution facts and requires two wording corrections: the empty active backend did restart, and installed CDHash needed a readback. The record now states the actual125×1/120×4/118×2 split; all live native identities are unchanged. Fresh installed signature detail confirms reviewed CDHash6de7e7fd, and application search returns only the ordinary installed app. The owned failed candidate and temporary rollback app are removed; distribution archives remain. Both nonempty saved view drafts, and the remaining draft states, are retained. No extra inference or app restart was needed for these record corrections.
+
+### Continuing addressed work and reading source images
+
+Integrated source-ready native wake/recipient reset, membership navigation and Codex local-image reading. Main resolves only the existing input-control/display predicate and capability/copy-list conflicts: per-session directories, native input deduplication, wake control and both new runtime modules stay present. Integrated installed qualification is pending.
+A new integration regression is reproduced: while the post-read authority query waits, an additional65th image preview is accepted because the guard finishes before revalidation. Main keeps the complete preview operation in the existing serialized queue, including revalidation/cache insertion;62 affected checks pass after the original rejection test fails. No new service or framework is added. Image references qualify local-file previews at the observed identity, not immutable pixels previously seen by a model; Claude native images and physical clipboard remain separate. Source-only local checkpoints are not daily delivery or actualRoot recovery acceptance.

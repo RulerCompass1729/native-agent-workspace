@@ -43,7 +43,7 @@ function installPlugin(cwd) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件路径不安全，未写入插件文件。');
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
-  const previousHooks = new Set(['add32628c2d9b306efc391e28801aa3b339520451a659101d6a6689c6e688fb3','959ab599a77d3a69a06c388eafe77cdfb57666defacb568cba28be957dba40e0','ba3228157c0b6c0288c6df9f389c9624efde43535f1a6c2fb3600846064c7de8',
+  const previousHooks = new Set(['ea38c6320e515aea2150db84e39bc2a817d57d68974661422e419617cdc14887','add32628c2d9b306efc391e28801aa3b339520451a659101d6a6689c6e688fb3','959ab599a77d3a69a06c388eafe77cdfb57666defacb568cba28be957dba40e0','ba3228157c0b6c0288c6df9f389c9624efde43535f1a6c2fb3600846064c7de8',
     'd86c8546f734b75620eea9fe1fbc80aa49092650da494d2d2cf73ba41a6f2453',
     '48b912ba8dd5df5e5609a32d4dbfb1a9f7894b51b50aa1f518a3a3da951f1190',
     '623b1ae035b00d8a0366d563945b98e6edf6486c9ca4a1977792506183fe7482',
@@ -59,7 +59,9 @@ function installPlugin(cwd) {
     '39a213b15740f1723dfb9886d709a1a4dd92a71e651a261d42ceac188e29f388',
     '22935561d72d25326d16fb150ac00210e9d6a3e05a9daec0dd3a5c209c075e72',
     '6924d98e28c3b7280d787f497806899f606a36ae5f07ce680471db74ff830650',
-    'a882f1f1a9051e9789cc1d4e7fa18e4ae77e485ea4b42135d1c40e7bc5b90339']);
+    'a882f1f1a9051e9789cc1d4e7fa18e4ae77e485ea4b42135d1c40e7bc5b90339',
+    '797306a5985d1704bbb4621012af6147610b8bfb73e29be913daa786ca5a5569',
+    '90e3355e6cce028caf9d62eb5c2039652067f041153ee3a935e09819b0b1a0f5']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);

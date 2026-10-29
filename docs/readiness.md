@@ -1,14 +1,18 @@
 # Readiness and next gates
 
-As of 2026-10-28. This is a local Apple Silicon macOS technical trial.
+As of 2026-10-29. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.120, committed source `aada4fd`. Four of six
-backends report120; Main and the active secretary remain118. The last refresh
+Current daily GUI: alpha.125, committed source `14af236`. The normal-visible update preserves all10 original native IDs/live process starts/owners/drafts and12 saved view drafts. The backend split is125×1(active, no live sessions),120×4,118×2. Earlier per-session mapping identifies Main and the active secretary on118. The earlier I70 refresh
 refused to retire Main when its native goal started another turn. Native identity,
 known settings and drafts were reconciled; this is a partial update, not a
 successful Main recovery or a completed dogfood milestone.
+
+On the preceding real-work run, repository file reads stopped completing while
+native processes and the GUI remained alive. Today an owned repository probe
+passed read/write/fsync/rename/delete. The cause and behavior across the next
+upgrade remain unverified; process survival alone is not a continuity pass.
 
 ## Current priority: a dependable single conversation
 
@@ -25,7 +29,11 @@ responses. Physical system clipboard/IME coverage is separate.
 
 | User task | Accepted scoped evidence | Remaining boundary |
 | --- | --- | --- |
-| Type and read a long conversation | Existing reader retains every row; 2,480-row input, selection/copy, streaming, view/session switching and reopening pass | Full-state broadcasting still has scale costs; no virtual rows or deferred draft saves |
+| Continue after upgrading Codex to 0.165 | Isolated signed123/beacc47 recovers an owned mid-goal server loss on a new PID with the same thread, full objective/budget/creation time, model/provider/effort/permissions and draft; native continuation executes repository-tree file IO and completes. 143 related unit checks pass; independent integrated review passes | Exact protocol gate only; old daily backends remain unqualified until migrated. Overload auto-continue and legacy shared replies retain their older version gates. Full TUI menus and the earlier real-work file-access cause remain unverified |
+| Create sessions in separate folders | Signed122/e920cef previews each new private directory, creates it only on submit, retains files/name on collision, and keeps existing identities/drafts; unchanged folder-picker/start-failure cases reuse signed121 proof | Folder trust remains native; no OS isolation or automatic Git worktree. Existing sessions keep their original directories |
+| Resize sidebar sections and read native process groups | Six installed122 task flows pass pointer/keyboard resizing, folds, exact tool originals, native completion, manual expansion and GUI reopen with identity/draft/preferences retained; narrow/wide member notices remain readable | Synthetic native transport,0models/providers; OS clipboard, physical input and screen readers not newly certified |
+| Limit app-owned Node debugging | Signed122 fuse readback and normal service/UI-host boot pass; a directly started MCP script survives owned signal probes. All three own Node launch sites pass the native signal-disable option | Claude's own MCP launcher remains unverified. GUI signal can terminate it; explicit separate RunAsNode debugging remains possible. Old live backends retain old executable settings; no ASAR/same-user isolation claim |
+| Find older originals and return in a long conversation | Isolated signed124/de84dd6 passes9 reading flows: all2480 source records retained,50 recent originals initially rendered, stable older/search/return/reopen anchors and drafts, whole native process groups and correct latest-follow | Included in the daily GUI. Retained native hosts need separate bootstrap acceptance. Shared room timeline is unpaged; explicit older loading grows the range, full-state broadcasts still scale. Installed clipboard actions and physical input are not certified |
 | Use the same terminal | Native bytes pass through unchanged; large plugin catalogs stay connected; unchanged geometry sends no resize; current-config middle insertion passes | Original cursor cause remains unassigned; real-use confirmation stays open |
 | Paste/drop screenshots | Three entry paths reach each original native TUI with unchanged pixels, no auto-send, preserved text draft and original identity | Renderer events/stubbed clipboard are tested; physical OS clipboard and other media formats are not claimed |
 | Recover Claude work | Mid-goal native loss retains ID/draft/goal/bypass/effort on a new PID; no task replay; explicit continuation completes the goal | Last-hook timing, native durable-tail/warning and best-effort external-holder limits remain in the [Claude audit](u17-claude310.md) |
@@ -33,7 +41,7 @@ responses. Physical system clipboard/IME coverage is separate.
 | Inspect questions, Plan and model state | Native originals remain visible; actual questions/multiple selection, Plan approval and model changes pass | [U17](interaction.md) distinguishes GUI facts from native-only interaction; commands/keymaps are an audit, not a per-key execution suite |
 | Branch an existing Claude conversation and type multiline input | Signed candidate105 uses the native picker, preserves the parent transcript and child history/ID, and cancels without creating a transcript; native Shift+Enter keeps two unsent lines | Direct takeover is separate; inherited history remains in the same-screen TUI |
 | Continue stopped external Claude history | Signed11043bcace actual312: active writer refused, sameUUID/history resumed only after the owned fixture exits, explicit GUI follow-up/reload/draft and missing-history failure pass;2 fixed main responses,0 paid | Choose the original directory and exit other connections first. Preflight is not an atomic native lock; inherited history stays in TUI, and live running-session attachment remains unimplemented. Included in the installed app |
-| Queue a message during work | Signed candidate105 solo/shared paths wait through the old deadlines, reload without replay and preserve newer drafts | Claude GUI submission waits for native idle; use the same-screen TUI for mid-turn interjection |
+| Queue a message during work | Prior signed105 GUI waiting paths are reused; signed125/14af236 actual312 also displays one accepted terminal mid-tool input under its original UUID, with native-session attribution and unchanged identity/PID | GUI submissions still wait for native idle. Terminal mid-tool records include native reminder framing; bare typed presentation stays in the TUI. Fresh312 bootstrap is qualified, retained backends and other queued paths remain separate |
 | Continue after a live native overload | Signed105 ccea1a6 actual310/311: original529 survives, a new continuation runs once after2minutes with the window closed, same nativeID/PID/result after reopen; each12 local responses,0paid. Codex164 ordinary recovery evidence is reused; structured non-overload and control/input guard regressions pass | The installed app includes the reviewed310/311 path; retained older sessions keep their original backend. Codex stopped goals require native /goal resume, and Claude goal reactivation is not claimed. This does not prove an unattended full workday |
 | Continue independent work alongside collaboration | Signed107 f736444: A capacity continuation leaves the unrelated B/C run authorized; B to C to B handoffs, identity and drafts survive; human input still pauses and late output stays private. Main1129 checks and the actual candidate GUI pass, zero models | Synthetic transport/identities, accelerated timer and empty native goal; unchanged native delay evidence is reused. New sessions include this path; retained older sessions keep their existing code |
 | Read native command exploration | Signed108 b576bee groups original read/search/list actions in the existing process disclosure; full commands/results, interruption, shared context, nested search and reload/draft survive; 2,480-row reading regression also passes | Synthetic transport, zero model/provider processes; older backends that omitted metadata retain ordinary original rows. Claude312 compatibility is covered separately below |

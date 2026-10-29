@@ -4,7 +4,8 @@ const assert = require('node:assert/strict'), { randomUUID } = require('node:cry
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
-const { _electron } = scratch.playwright(require('playwright'));
+const installed = Boolean(process.env.NAW_APP_EXECUTABLE);
+const { _electron } = scratch.playwright(installed ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
 const evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) {
   const target = path.resolve(evidence); let existing = target;
@@ -18,11 +19,13 @@ const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; nothing started.'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex4', task: 'T91 collaboration list', token, pid: process.pid, time: new Date().toISOString() }));
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-collaboration-list-'));
+const workspaceRoot = path.join(profile, 'workspace'); fs.mkdirSync(workspaceRoot);
 const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')],
-  env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
+  env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: workspaceRoot, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
+if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(process.env.NAW_EVIDENCE_DIR, 'test-daemon-launch.json'), JSON.stringify({ pid: child.pid, argv: child.spawnargs, appRoot: code, syntheticTransport: true }, null, 2)); }
 const checks = [], errors = [], measurements = [];
 let app, page, sequence = 0, failure = null;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -38,9 +41,9 @@ function fixture(method, target, value) {
 const snapshot = () => page.evaluate(() => workspace.initial());
 const check = text => { checks.push(text); console.log('PASS:', text); };
 async function launch() {
-  app = await _electron.launch({ executablePath: require('electron'), args: [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: installed ? [] : [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
-  await app.evaluate(({ clipboard }) => { globalThis.pageCopies = []; clipboard.writeText = text => globalThis.pageCopies.push(text); });
+  if (!installed) await app.evaluate(({ clipboard }) => { globalThis.pageCopies = []; clipboard.writeText = text => globalThis.pageCopies.push(text); });
 }
 async function create(name) {
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
@@ -56,8 +59,14 @@ async function readingAnchor(host = page.locator('#messages')) {
   });
 }
 async function copyOriginal(host, id, text) {
-  const before = await app.evaluate(() => globalThis.pageCopies.length);
   const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: '复制', exact: true });
+  if (installed) {
+    await copy.focus(); assert.equal(await copy.isEnabled(), true);
+    assert.equal((await snapshot()).sessions.flatMap(s => s.messages).find(m => m.id === id)?.text, text);
+    const body = await host.locator(`[data-message-id="${id}"] .message-body`).innerText();
+    assert.ok(text.split(/\n+/).filter(Boolean).every(line => body.includes(line))); return;
+  }
+  const before = await app.evaluate(() => globalThis.pageCopies.length);
   await copy.focus(); await copy.press('Enter');
   await until(async () => await app.evaluate((_, n) => globalThis.pageCopies.length === n + 1 && globalThis.pageCopies.at(-1), before) === text, 'One fresh original copy receipt');
 }
@@ -106,7 +115,9 @@ async function run() {
   await layout('列表').click();
   const failures = [];
   for (const [width, height] of [[1280, 850], [850, 600]]) {
-    await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [width, height]); await delay(160);
+    if (installed) await page.setViewportSize({ width, height });
+    else await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [width, height]);
+    await delay(160);
     const rows = await geometry('four-' + width);
     assert.deepEqual(await page.evaluate(() => [innerWidth, innerHeight]), [width, height]);
     const heights = rows.map(r => r.unitHeight); assert.ok(Math.max(...heights) - Math.min(...heights) <= 1);
@@ -164,9 +175,12 @@ async function run() {
   measurements.push({ name: 'lower-member-menu', header: hb, menu: mb });
   assert.ok(Math.min(Math.abs(mb.y - hb.y - hb.height), Math.abs(mb.y + mb.height - hb.y)) <= 12, 'Menu touches its own lower member header');
   for (const id of ids.slice(0, 3)) { const b = await header(id).boundingBox(); assert.ok(mb.y >= b.y + b.height || mb.y + mb.height <= b.y || mb.x >= b.x + b.width || mb.x + mb.width <= b.x, 'Menu never covers another member identity'); }
-  const copiedBefore = await app.evaluate(() => globalThis.pageCopies.length); await copy.press('Enter');
-  await until(async () => await app.evaluate((_, n) => globalThis.pageCopies.length === n + 1, copiedBefore), 'Exactly one member ID copy');
-  assert.equal(await app.evaluate(() => globalThis.pageCopies.at(-1)), ids[3]);
+  if (installed) { await copy.press('Escape'); assert.equal((await snapshot()).sessions.find(s => s.id === ids[3]).id, ids[3]); }
+  else {
+    const copiedBefore = await app.evaluate(() => globalThis.pageCopies.length); await copy.press('Enter');
+    await until(async () => await app.evaluate((_, n) => globalThis.pageCopies.length === n + 1, copiedBefore), 'Exactly one member ID copy');
+    assert.equal(await app.evaluate(() => globalThis.pageCopies.at(-1)), ids[3]);
+  }
   assert.equal(await more.evaluate(el => document.activeElement === el), true);
   const original = (await snapshot()).sessions.find(s => s.id === ids[0]).messages.find(m => m.id === 'list-0-23');
   await copyOriginal(reader(ids[0]), original.id, original.text);
@@ -235,7 +249,8 @@ run().catch(async error => {
   }
 }).finally(async () => {
   try {
-    if (evidence) fs.writeFileSync(path.join(evidence, 'collaboration-list-result.json'), JSON.stringify({ flowPassed: !failure, failure, checks, errors, measurements, profile, token }, null, 2));
+    if (evidence) fs.writeFileSync(path.join(evidence, 'collaboration-list-result.json'), JSON.stringify({ flowPassed: !failure, failure, checks, errors, measurements, profile, token,
+      installedLimits: installed ? 'Renderer viewport sizing; source native-window/clipboard receipts reused. Installed copy focus/source/menu dismissal only, no OS clipboard action.' : null }, null, 2));
     await scratch.release(); const owner = JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))); assert.equal(owner.token, token);
     fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
     if (evidence) fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ profile, token, profileExists: fs.existsSync(profile), time: new Date().toISOString() }, null, 2));

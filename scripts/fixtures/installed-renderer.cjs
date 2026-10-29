@@ -1,7 +1,8 @@
 // Renderer-only acceptance of hardened installed bundles. No Node inspector or
 // production test hooks. The caller owns the canonical GUI lease and profile.
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync, spawnSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { chromium } = require('playwright');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function launch({ executablePath, env, timeout = 70000 }) {
@@ -9,6 +10,17 @@ async function launch({ executablePath, env, timeout = 70000 }) {
   assert.ok(info.isDirectory() && !info.isSymbolicLink() && info.uid === process.getuid() && !(info.mode & 0o077));
   assert.equal(env.NAW_TEST_PARENT_PID, String(process.pid));
   assert.ok(path.isAbsolute(executablePath) && executablePath.includes('.app/Contents/MacOS/'));
+  const bundle = path.resolve(path.dirname(executablePath), '../..');
+  const attest = () => {
+    execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle]);
+    const signature = spawnSync('/usr/bin/codesign', ['--display', '--verbose=4', bundle], { encoding: 'utf8' });
+    assert.equal(signature.status, 0); const cdhash = signature.stderr.match(/^CDHash=(\w+)$/m)?.[1]; assert.ok(cdhash);
+    const revision = execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :NAWSourceRevision', path.join(bundle, 'Contents/Info.plist')], { encoding: 'utf8' }).trim();
+    if (env.NAW_TEST_EXPECTED_SOURCE) assert.equal(revision, env.NAW_TEST_EXPECTED_SOURCE);
+    if (env.NAW_TEST_EXPECTED_CDHASH) assert.equal(cdhash, env.NAW_TEST_EXPECTED_CDHASH);
+    return { bundle, cdhash, revision, executableSha256: createHash('sha256').update(fs.readFileSync(executablePath)).digest('hex') };
+  };
+  const artifact = attest();
   const portFile = path.join(profile, 'DevToolsActivePort');
   fs.rmSync(portFile, { force: true });
   const childEnv = { ...env }; delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -28,7 +40,9 @@ async function launch({ executablePath, env, timeout = 70000 }) {
   const close = async () => {
     if (!exited && browser?.isConnected()) {
       const session = await browser.newBrowserCDPSession();
-      await session.send('Browser.close').catch(error => { if (!/closed|disconnected/i.test(error.message)) throw error; });
+      // Electron may exit before acknowledging Browser.close. Its actual child
+      // exit is the completion signal, rather than an unbounded CDP response.
+      session.send('Browser.close').catch(error => { stderr += '\n' + error.message; });
     }
     for (let i = 0; i < 200 && !exited; i++) await delay(50);
     if (!exited) {
@@ -37,8 +51,13 @@ async function launch({ executablePath, env, timeout = 70000 }) {
       throw Error('Owned installed app did not close normally; cleanup fallback used');
     }
     await browser?.close().catch(() => {});
+    assert.deepEqual(attest(), artifact, 'The signed installed artifact stays unchanged');
   };
   try {
+    if (env.NAW_EVIDENCE_DIR) {
+      fs.mkdirSync(env.NAW_EVIDENCE_DIR, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(env.NAW_EVIDENCE_DIR, 'installed-launch-' + child.pid + '.json'), JSON.stringify({ at: new Date().toISOString(), pid: child.pid, executable: child.spawnfile, argv: child.spawnargs, profile, ...artifact }, null, 2));
+    }
     const port = await wait(() => {
       if (!fs.existsSync(portFile)) return;
       const [number, target] = fs.readFileSync(portFile, 'utf8').trim().split('\n');

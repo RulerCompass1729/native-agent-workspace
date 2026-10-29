@@ -230,7 +230,7 @@ function followQueuedRoomInput(id, mark) {
   if (!row) return;
   mark.tag = row.id;
   if (!mark.cleared && row.status === 'awaiting-native' && mark.revision === roomDraftRevision && $('shared-input').value === mark.raw && roomRecipient() === id && roomMention?.text === mark.address?.text) {
-    $('shared-input').value = roomMention.text + ' '; roomMention = { ...roomMention, start: 0, end: roomMention.text.length }; mark.cleared = ++roomDraftRevision; attempt(persistView);
+    $('shared-input').value = ''; roomMention = null; mark.cleared = ++roomDraftRevision; attempt(persistView);
   }
   if (row.status === 'awaiting-native') return;
   // The room draft lives in this view; after a reload the text stays in the record.
@@ -678,10 +678,10 @@ function openRoomMenu(point) {
   if (!point && roomMenu) { roomMenu(); return; }
   roomMenu?.(); sessionMenu?.close(); $('room-more').focus(); $('room-more').setAttribute('aria-expanded', 'true');
   roomMenu = ui.menu({
-    items: [{ id: 'rename', label: '重命名…' }, { id: 'notes', label: '共享笔记' }, { id: 'archive', label: '归档工作区' }],
+    items: [{ id: 'rename', label: '重命名…' }, { id: 'notes', label: '共享笔记' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: state.wakePolicy.enabled ? '关闭所有 agent 自动消息' : '允许 agent 自动消息' }] : []), { id: 'archive', label: '归档工作区' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : $('room-more').getBoundingClientRect(),
     onClose: () => { roomMenu = null; $('room-more').setAttribute('aria-expanded', 'false'); $('room-more').focus(); },
-    onSelect: action => { if (action === 'rename') openRename('room'); else if (action === 'notes') openNotes(); else attempt(async () => { await api.archiveRoom(); toast('工作区已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
+    onSelect: action => { if (action === 'wake-global') attempt(() => api.wakePolicy(null, !state.wakePolicy?.enabled)); else if (action === 'rename') openRename('room'); else if (action === 'notes') openNotes(); else attempt(async () => { await api.archiveRoom(); toast('工作区已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
   });
 }
 function openSessionMenu(id, point) {
@@ -693,10 +693,10 @@ function openSessionMenu(id, point) {
   row.more.focus(); row.more.setAttribute('aria-expanded', 'true');
   const record = state.sessions.find(s => s.id === id), visible = sidebarSessions(), index = visible.findIndex(s => s.id === id);
   const close = ui.menu({
-    items: [{ id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), { id: 'membership', label: record.roomId ? '脱出协作' : '加入协作' }, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }],
+    items: [{ id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), { id: 'membership', label: record.roomId ? '脱出协作' : '加入协作' }, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: record.wakeDisabled ? '允许其他 agent 叫醒' : '禁止其他 agent 叫醒' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : row.more.getBoundingClientRect(),
     onClose: () => { sessionMenu = null; row.more.setAttribute('aria-expanded', 'false'); focusSessionAction(id); },
-    onSelect: action => { if (action === 'up' || action === 'down') attempt(() => moveSidebarSession(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down')); else if (action === 'copy-id' || action === 'copy-native-id') attempt(() => api.copy(action === 'copy-id' ? id : state.sessions.find(s => s.id === id)?.nativeId)); else if (action === 'rename') openRename(id); else if (action === 'continue') attempt(() => api.continueConnection(id)); else if (action === 'window') attempt(() => api.newWindow(id)); else if (action === 'membership') attempt(() => state.sessions.find(s => s.id === id)?.roomId ? detach(id) : api.join(id, true)); else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
+    onSelect: action => { if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled))); else if (action === 'up' || action === 'down') attempt(() => moveSidebarSession(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down')); else if (action === 'copy-id' || action === 'copy-native-id') attempt(() => api.copy(action === 'copy-id' ? id : state.sessions.find(s => s.id === id)?.nativeId)); else if (action === 'rename') openRename(id); else if (action === 'continue') attempt(() => api.continueConnection(id)); else if (action === 'window') attempt(() => api.newWindow(id)); else if (action === 'membership') attempt(() => state.sessions.find(s => s.id === id)?.roomId ? detach(id) : api.join(id, true)); else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
   });
   sessionMenu = { id, close };
 }
@@ -2144,7 +2144,7 @@ async function submitRoom(automatic) {
   try {
     const receipt = await (automatic ? api.run(ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities) : roomQueueAvailable(recipient) ? api.queueShared(first, text, recipient.nativeId, roomReplyTo || undefined) : roomSteerAvailable(recipient) ? api.steerShared(first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined) : api.forward(first, text, recipient.nativeId, roomReplyTo || undefined));
     if (submission.cancelRequested || receipt?.contextChanged) return;
-    if (revision === roomDraftRevision && $('shared-input').value === raw && roomRecipient() === first && roomMention?.memberRevision === address?.memberRevision && roomMention?.text === address?.text) { $('shared-input').value = roomMention.text + ' '; roomMention = { ...roomMention, start: 0, end: roomMention.text.length }; roomDraftRevision++; await persistView(); }
+    if (revision === roomDraftRevision && $('shared-input').value === raw && roomRecipient() === first && roomMention?.memberRevision === address?.memberRevision && roomMention?.text === address?.text) { $('shared-input').value = ''; roomMention = null; roomDraftRevision++; await persistView(); }
   }
   catch (error) { if (!submission.cancelRequested) throw error; }
   finally {
