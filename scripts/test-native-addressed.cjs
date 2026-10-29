@@ -191,7 +191,7 @@ async function start(first, text) {
     }
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     for (const member of [claude, second]) {
-      await page.getByRole('button', { name: '参与者…', exact: true }).click(); await page.locator('#invite-button').click();
+      await page.locator('#manage-members').click();
       const invitation = page.locator(`[data-invite-session="${member.id}"]`);
       assert.ok((await invitation.innerText()).includes(member.id.slice(0, 6)), 'Invite target has exact same-name identity');
       await invitation.click();
@@ -231,9 +231,7 @@ async function start(first, text) {
     for (const message of state.room.messages.filter(m => m.sharedStream && m.role === 'system')) {
       assert.ok((await page.locator(`[data-message-id="${message.id}"] .message-heading`).innerText()).includes(message.sessionId.slice(0, 6)), 'Native turn notices identify their exact participant');
     }
-    await page.getByRole('button', { name: '参与者…', exact: true }).click();
-    for (const member of [claude, codex, second]) assert.ok((await page.locator(`[data-member-id="${member.id}"]`).innerText()).includes(member.id.slice(0, 6)));
-    await page.locator('#close-members').click();
+    for (const member of [claude, codex, second]) assert.ok((await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${member.id}"]`).innerText()).includes(member.id.slice(0, 6)));
     const beforeCopy = await app.evaluate(() => globalThis.copiedText.length);
     await page.locator('#copy-timeline').click();
     await until(async () => await app.evaluate(() => globalThis.copiedText.length) === beforeCopy + 1, 'Fresh copy acknowledgement');
