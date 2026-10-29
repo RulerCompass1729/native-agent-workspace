@@ -160,10 +160,10 @@ class WorkspaceClient extends EventEmitter {
     });
     const sum = key => this.entries.every(e => Number.isSafeInteger(e.state.diagnostics?.[key])) ? this.entries.reduce((n, e) => n + e.state.diagnostics[key], 0) : null;
     runs.sort((a, b) => Boolean(b.pausePending || b.pauseUnconfirmed) - Boolean(a.pausePending || a.pauseUnconfirmed) || (b.status === 'running') - (a.status === 'running') || (b.startedAt || 0) - (a.startedAt || 0));
-    return { ...this.active.state, sessions, capabilities,
+    return { ...this.active.state, wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
       room: { ...this.active.state.room, revision: this.entries.reduce((n, e) => n + (e.state.room.revision || 0), 0), run: runs[0] || null, messages: mergePeerMessages([...messages.values()]).sort((a, b) => (a.time || 0) - (b.time || 0)) },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
-      storageWarning: [...this.entries.map(e => e.state.storageWarning), this.control.legacyInput?.storageWarning,
+      storageWarning: [...this.entries.map(e => e.state.storageWarning), ...this.entries.map(e => e.state.wakePolicy?.warning), this.control.legacyInput?.storageWarning,
         this.control.legacyInput?.sharedReplies?.storageError ? '本地共享回复未能保存；后续内容留在原会话，请检查磁盘与文件权限。' : null].filter(Boolean).join('\n') || null,
       storageRetryable: this.entries.some(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave')),
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),
@@ -246,6 +246,7 @@ class WorkspaceClient extends EventEmitter {
   async intervene(operation, id, preserveManualStream = false) {
     // Every human action still invalidates pending automatic handoff intent.
     // Independent manual submissions only invalidate the same recipient.
+    if (typeof this.scope === 'string' && this.entries.some(e => e.state.capabilities?.includes('agentWakeV1'))) require('./session-wake.cjs').revoke({ dataDir: this.scope, sessions: new Map() });
     this.control.revision++;
     // Waiting shared input is not a native interruption. Keep the original
     // explicitly shared stream until its native end/pickup boundary.
@@ -298,6 +299,11 @@ class WorkspaceClient extends EventEmitter {
   async call(method, ...args) {
     if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
     this.authorizeOperation?.(method, args);
+    if (method === 'wakePolicy') {
+      const entry = args[0] === null ? this.entries.find(e => e.state.capabilities?.includes('agentWakeV1')) : this.route(args[0]);
+      if (!entry?.state.capabilities?.includes('agentWakeV1')) throw Error('该后台尚未接通自动消息设置。');
+      const result = await entry.client.call(method, ...args); await this.refresh(); return result;
+    }
     // Capture the context displayed when the human acted, before refresh,
     // pause or an earlier private ACK can yield to a native /clear.
     const replyTo = ['forward', 'run', 'queueShared', 'steerShared'].includes(method) ? require('./room-threads.js').replyReference(args[method === 'run' ? 6 : method === 'steerShared' ? 4 : 3]) : '';
