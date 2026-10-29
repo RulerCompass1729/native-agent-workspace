@@ -230,11 +230,11 @@ for (const scenario of ['pending', 'empty', 'missing-history', 'missing-disconne
   assert.ok(calls.every(c => c.method === 'thread/read' && c.params.threadId === record.nativeId && c.params.includeTurns));
 });
 
-for (const scenario of ['empty', 'pending', 'missing', 'wrong-error-id', 'wrong-thread', 'bad-page', 'null-turn', 'missing-turn-id', 'blank-turn-id', 'wrong-missing-history', 'unrelated', 'changed-rpc', 'unknown-version']) test('paginated first-turn terminal check: ' + scenario, async () => {
+for (const nativeVersion of ['0.163.0', '0.165.0']) for (const scenario of ['empty', 'pending', 'missing', 'wrong-error-id', 'wrong-thread', 'bad-page', 'null-turn', 'missing-turn-id', 'blank-turn-id', 'wrong-missing-history', 'unrelated', 'changed-rpc', 'unknown-version'].filter(s => s !== 'unknown-version' || nativeVersion === '0.163.0')) test('paginated first-turn terminal check ' + nativeVersion + ': ' + scenario, async () => {
   const record = { nativeId: 'first-thread', cwd: '/synthetic', view: 'chat' }, calls = [];
   let r;
   const host = { binaries: { codex: 'synthetic' }, codexSocket: '/synthetic/socket', rpc: {
-    nativeVersion: scenario === 'unknown-version' ? '0.165.0' : '0.163.0',
+    nativeVersion: scenario === 'unknown-version' ? '0.166.0' : nativeVersion,
     call: async (method, params) => {
       calls.push({ method, params });
       if (method === 'thread/read' && params.includeTurns) throw Object.assign(Error('Native turns unavailable'), { nativeUnsupportedTurns: true });

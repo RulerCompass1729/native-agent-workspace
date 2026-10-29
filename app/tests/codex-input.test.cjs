@@ -72,7 +72,7 @@ test('uncertain acknowledgement does not assign a buffered result or retry the i
   assert.equal(f.events.find(e => e.event === 'complete').args[0].tag, undefined);
   assert.ok(!f.events.some(e => e.event === 'replyBound'));
 });
-for (const nativeVersion of ['0.163.0', '0.164.0']) for (const outcome of ['accepted', 'rejected', 'wrong-turn']) test(`active-turn steering ${nativeVersion} ${outcome} preserves original turn correlation without retry`, async () => {
+for (const nativeVersion of ['0.163.0', '0.164.0', '0.165.0']) for (const outcome of ['accepted', 'rejected', 'wrong-turn']) test(`active-turn steering ${nativeVersion} ${outcome} preserves original turn correlation without retry`, async () => {
   const f = fixture(); f.runtime.host.rpc.nativeVersion = nativeVersion;
   f.notify('turn/started', { turn: { id: 'active' } });
   const original = f.runtime.pending = { tag: 'original-task', turnId: 'active' };

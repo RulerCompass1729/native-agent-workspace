@@ -709,3 +709,9 @@ all-backend replacement and the full dogfood milestone stay open. Product test
 inference is zero; independent review and actual development consume their own
 model usage. Physical input, OS picker/clipboard and native-provider recovery
 are not newly certified by these GUI fixtures.
+
+
+### Real-work file access interruption and Codex 0.165 integration
+
+- Source: actual developer commands stopped completing after the prior update, although the GUI and native processes stayed alive. Severity: blocking real work; owner: main integrator; status: access restored, cause and upgrade regression open. A bounded owned repository read/write/fsync/rename/delete probe now passes. Filesystem permission causality was not established; no permission changes were made during diagnosis. The failed pre-push reported an unavailable or timed-out required command, not a successful publication.
+- Integration task: preserve an existing native conversation, full goal identity, posture and draft when the installed Codex runtime is 0.165. Exact-version protocol qualification is integrated from the reviewed lane; unknown versions still fail closed. Installed qualification and integrated independent review are pending. Source qualification does not certify every TUI menu or full-day development.

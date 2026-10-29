@@ -10,6 +10,11 @@ refused to retire Main when its native goal started another turn. Native identit
 known settings and drafts were reconciled; this is a partial update, not a
 successful Main recovery or a completed dogfood milestone.
 
+On the preceding real-work run, repository file reads stopped completing while
+native processes and the GUI remained alive. Today an owned repository probe
+passed read/write/fsync/rename/delete. The cause and behavior across the next
+upgrade remain unverified; process survival alone is not a continuity pass.
+
 ## Current priority: a dependable single conversation
 
 Use the installed product for real Claude/Codex development. Preserve the native
