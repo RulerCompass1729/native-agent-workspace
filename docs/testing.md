@@ -2,6 +2,16 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Continuing addressed work and source images - 2026-10-29
+
+Signed126/126fc54 passes five wake-control flows across owned synthetic backends,
+recipient reset, and three image/membership groups in the actual installed reader.
+An actual312/165 MCP roundtrip uses five fixed local responses; retained failures
+bring the emitted total to seven, zero paid inference. Full1336 checks and the
+scoped independent checkpoint pass. Local image identity, native input boundaries
+and unverified physical/older-backend paths are recorded in readiness/review;
+this is not actualMain recovery or a full dogfood-milestone pass.
+
 ## Exact code copying and long commands - 2026-10-27
 
 `node scripts/test-markdown-copy.cjs` uses the existing synthetic transport and actual Electron/DSH reader. Signed114 e69cc05 passes four complete-task groups: pending acknowledgement and deduplication, truthful failure/retry, exact Unicode/tab/newline payload, narrow-window horizontal scrolling, private/shared records and reload preserving drafts/identity. Zero models/providers/native dispatch; the owned main-process writer is intercepted so all system clipboard formats remain intact. Existing native copy backend proof is reused.57 runtime files and strict post-test signature match; owned processes/profile are removed and temporary inventories stay unchanged. Ordinary visible daily114 preserves9 original sessions and12 flushed view drafts. Physical clipboard/device/screen-reader proof is not claimed.

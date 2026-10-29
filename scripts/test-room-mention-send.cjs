@@ -15,7 +15,8 @@ if (evidence) {
   fs.mkdirSync(target, { recursive: true, mode: 0o700 });
 }
 const sourceFiles = ['app/renderer/renderer.js', 'app/room-mention.js', 'app/dsh/client.js'];
-const hashes = () => Object.fromEntries(sourceFiles.map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(code, file))).digest('hex')]));
+// The signed payload contains the built client, not this source-only renderer file.
+const hashes = () => Object.fromEntries(sourceFiles.filter(file => !process.env.NAW_APP_EXECUTABLE || file !== 'app/renderer/renderer.js').map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(code, file))).digest('hex')]));
 const sourceBefore = hashes();
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();

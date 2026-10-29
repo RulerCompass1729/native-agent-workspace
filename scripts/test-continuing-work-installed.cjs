@@ -55,8 +55,8 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).liveDraft === 'OWNED_SOURCE_DRAFT', 'Source draft persisted');
   const before = identities(await snapshot()), nativeId = before.find(s => s.id === a).nativeId;
   const file = path.join(profile, 'original.png');
-  // Existing native-images unit fixture: opaque white 1x1 grayscale/alpha PNG.
-  fs.writeFileSync(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=', 'base64'));
+  // Opaque white 1x1 grayscale/alpha PNG, with verified chunk CRCs.
+  fs.writeFileSync(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64'));
   await fixture('nativeImageEvent', a, { method: 'item/completed', params: { item: { type: 'imageView', id: 'installed-original', path: file } }, cwd: profile });
   const picture = () => page.locator(`#messages [data-message-id="native:${nativeId}:tool:installed-original"] .native-image`);
   await until(() => picture().locator('img').evaluateAll(images => images.length === 1 && images[0].complete && images[0].naturalWidth === 1), 'Signed native image thumbnail decoded');

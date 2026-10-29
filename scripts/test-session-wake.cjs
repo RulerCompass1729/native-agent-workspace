@@ -7,7 +7,8 @@ const { connectService } = require(path.join(code, 'app/service-connection.cjs')
 const common = require('node:child_process').execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 const sourceFiles = ['app/adapters.cjs','app/session-wake.cjs','app/addressed-handoffs.cjs','app/claude-message-tool.cjs','app/claude-submit.cjs','app/workspace.cjs','app/peer-handoffs.cjs','app/daemon.cjs','app/workspace-client.cjs','app/main.cjs','app/preload.cjs','app/renderer/renderer.js','app/dsh/client.js'];
-const hashes = () => Object.fromEntries(sourceFiles.map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(code, file))).digest('hex')]));
+// The signed payload contains the built client, not this source-only renderer file.
+const hashes = () => Object.fromEntries(sourceFiles.filter(file => !process.env.NAW_APP_EXECUTABLE || file !== 'app/renderer/renderer.js').map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(code, file))).digest('hex')]));
 const sourceBefore = hashes();
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; no GUI launched.'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex2', task: 'T100 source wake workflow', token, pid: process.pid, at: new Date().toISOString() }));
