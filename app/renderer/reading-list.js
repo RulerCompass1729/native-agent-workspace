@@ -1,6 +1,70 @@
 // Per-window reading state. Only IDs and geometry are persisted, never selection.
 const messageViews = new Map();
 let readingPositions = {};
+// Pages contain original records, without spacers for unloaded history. Native
+// group plans supply atomic spans and aliases for saved process:<id> anchors.
+function readingPageData(messages, plans = []) {
+  const indices = new Map(messages.map((m, i) => [m.id, i])), spans = [];
+  for (const plan of plans) {
+    const members = plan.messages.map(m => indices.get(m.id)).filter(Number.isSafeInteger);
+    if (!members.length) continue;
+    let start = members[0], end = start + 1;
+    for (const i of members) { start = Math.min(start, i); end = Math.max(end, i + 1); }
+    if (plan.id && !indices.has(plan.id)) indices.set(plan.id, members[0]);
+    spans.push({ start, end });
+  }
+  const merged = [];
+  for (const span of spans.sort((a, b) => a.start - b.start)) {
+    const previous = merged.at(-1);
+    if (previous && span.start < previous.end) previous.end = Math.max(previous.end, span.end);
+    else merged.push({ ...span });
+  }
+  return { messages, indices, spans: merged };
+}
+function readingPageRange(data, previous, request, position = {}, pinned = false) {
+  const n = data.messages.length, size = 50, index = id => data.indices.get(id);
+  let start = Math.max(0, n - size), end = n;
+  const centred = i => { start = Math.max(0, Math.min(i - size / 2, n - size)); end = Math.min(n, start + size); };
+  const anchor = index(position.anchor), first = index(previous?.firstId), last = index(previous?.lastId);
+  if (previous) {
+    if (Number.isSafeInteger(first) && Number.isSafeInteger(last) && first <= last) { start = first; end = last + 1; }
+    else if (Number.isSafeInteger(anchor)) centred(anchor);
+    else if (Number.isSafeInteger(last)) { end = last + 1; start = Math.max(0, end - size); }
+    else if (Number.isSafeInteger(first)) { start = first; end = Math.min(n, start + size); }
+    if (previous.tail) {
+      end = n;
+      if (position.follow && !pinned) start = Math.max(0, n - size);
+    }
+  } else if (!position.follow && Number.isSafeInteger(anchor)) centred(anchor);
+  if (request?.action === 'older') start = Math.max(0, start - size);
+  else if (request?.action === 'newer') end = Math.min(n, end + size);
+  else if (request?.action === 'first') { start = 0; end = Math.min(n, size); }
+  else if (request?.action === 'latest') { start = Math.max(0, n - size); end = n; }
+  else if (request?.action === 'target' && Number.isSafeInteger(index(request.id))) centred(index(request.id));
+  for (const span of data.spans) if (span.start < end && span.end > start) { start = Math.min(start, span.start); end = Math.max(end, span.end); }
+  return { start, end, firstId: data.messages[start]?.id || '', lastId: data.messages[end - 1]?.id || '', tail: end === n };
+}
+function readingFollow(tail, nearEnd, selecting) { return tail === true && nearEnd && !selecting; }
+function changeReadingPage(view, action, fromButton = false, automatic = false) {
+  if (!view.reload || view.loadingPage || !view.el.isConnected) return;
+  captureReading(view);
+  const previous = readingPositions[view.key] || { top: 0, follow: false, anchor: '', offset: 0 };
+  const pagerFocused = document.activeElement === view.older || document.activeElement === view.newer;
+  const position = action === 'latest' ? { top: 0, follow: true, anchor: '', offset: 0 }
+    : action === 'first' ? { top: 0, follow: false, anchor: view.pageData.messages[0]?.id || '', offset: 0 }
+    : { ...previous, follow: Boolean(automatic && previous.follow && view.pageRange.tail) };
+  view.intent = { position }; saveReading(view, position);
+  view.pageRequest = { action }; view.pageChanging = true; view.loadingPage = true;
+  try { view.reload(); } finally { view.loadingPage = false; }
+  view.intent = { position }; scheduleReading(view);
+  if (fromButton || pagerFocused) view.el.focus({ preventScroll: true });
+  attempt(() => api.readingState(readingPositions));
+}
+function fillShortReadingPage(view) {
+  if (!view.paged || view.pageChanging || view.autoPages <= 0 || !view.el.clientHeight || view.el.scrollHeight > view.el.clientHeight + 1) return;
+  const action = view.pageRange.start ? 'older' : !view.pageRange.tail ? 'newer' : '';
+  if (action) { view.autoPages--; changeReadingPage(view, action, false, true); }
+}
 function saveReading(view, position) {
   if (view.folds && Object.keys(view.folds).length) position.folds = { ...view.folds };
   else delete position.folds;
@@ -19,11 +83,11 @@ function captureReading(view) {
   const selecting = !selection.isCollapsed && el.contains(selection.anchorNode);
   const top = el.getBoundingClientRect().top;
   const anchor = [...el.querySelectorAll(':scope > [data-message-id]')].find(row => row.getBoundingClientRect().bottom > top);
-  saveReading(view, { top: el.scrollTop, follow: !selecting && el.scrollHeight - el.scrollTop - el.clientHeight < 80, anchor: anchor?.dataset.messageId || '', offset: anchor ? anchor.getBoundingClientRect().top - top : 0 });
+  saveReading(view, { top: el.scrollTop, follow: readingFollow(view.pageRange?.tail, el.scrollHeight - el.scrollTop - el.clientHeight < 80, selecting), anchor: anchor?.dataset.messageId || '', offset: anchor ? anchor.getBoundingClientRect().top - top : 0 });
 }
 // Like the native terminal's "Jump to bottom": shown once the reader leaves the latest output.
 // Its bar has no height, so showing it never moves the scroll position.
-function updateJump(view) { view.jumpBar.hidden = !view.el.clientHeight || view.el.scrollHeight - view.el.scrollTop - view.el.clientHeight < 80; }
+function updateJump(view) { view.jumpBar.hidden = !view.el.clientHeight || view.pageRange?.tail !== false && view.el.scrollHeight - view.el.scrollTop - view.el.clientHeight < 80; }
 function captureReadingViews() { for (const view of messageViews.values()) captureReading(view); }
 function readingEntry(view, id) { return view.entries.get(id) || view.groups?.get(id); }
 function restoreVisibleReading() {
@@ -63,7 +127,18 @@ function revealProcessAncestors(view, entry) {
   }
 }
 function scheduleReading(view, intent = view.intent) {
-  if (!intent || view.intent !== intent) return;
+  if (!intent || view.intent !== intent || view.loadingPage) return;
+  // Load synchronously, before the frame: explicit search intent and its query
+  // must survive the internal render and asynchronous Markdown callbacks.
+  if (intent.position.follow && view.pageRange?.tail === false) {
+    // Following means the real latest record, never the historical anchor
+    // left at the viewport's top before streaming or an explicit search.
+    const latest = view.pageData?.messages.at(-1)?.id;
+    if (latest) view.loadMessage?.(latest);
+    view.intent = intent;
+  } else if (!intent.position.follow && intent.position.anchor && !readingEntry(view, intent.position.anchor)) {
+    view.loadMessage?.(intent.position.anchor); view.intent = intent;
+  }
   // Search focuses its original row immediately after scheduling. Reveal the
   // ancestors now, without turning that reveal into a saved manual choice.
   const target = readingEntry(view, intent.position.anchor);
@@ -91,20 +166,36 @@ function scheduleReading(view, intent = view.intent) {
       }
     }
     el.scrollTop = p.follow ? el.scrollHeight : anchor ? el.scrollTop + anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - p.offset : p.top;
-    view.assignedTop = el.scrollTop; updateJump(view);
+    view.assignedTop = el.scrollTop; view.pageChanging = false; updateJump(view); fillShortReadingPage(view);
   });
 }
 function readingView(el, key) {
   let view = messageViews.get(el);
   if (!view) {
     view = { el, key: '', entries: new Map(), groups: new Map(), days: new Map(), assignedTop: el.scrollTop, frame: 0, intent: null };
-    view.jump = button('↓ 跳到最新', () => {
-      view.intent = { position: { top: 0, follow: true, anchor: '', offset: 0 } };
-      saveReading(view, { ...view.intent.position }); attempt(() => api.readingState(readingPositions)); scheduleReading(view);
-    }, 'jump-latest'); view.jumpBar = node('div', undefined, 'jump-bar'); view.jumpBar.append(view.jump); view.jumpBar.hidden = true;
-    const interact = () => { view.intent = null; view.assignedTop = undefined; };
+    el.tabIndex = 0;
+    if (!el.hasAttribute('role')) el.setAttribute('role', 'region');
+    if (!el.hasAttribute('aria-label')) el.setAttribute('aria-label', '会话记录');
+    view.older = button('显示更早的记录', () => changeReadingPage(view, 'older', true), 'reading-page');
+    view.newer = button('显示较新的记录', () => changeReadingPage(view, 'newer', true), 'reading-page');
+    view.older.dataset.direction = 'older'; view.newer.dataset.direction = 'newer';
+    view.jump = button('↓ 跳到最新', () => changeReadingPage(view, 'latest'), 'jump-latest');
+    view.jumpBar = node('div', undefined, 'jump-bar'); view.jumpBar.append(view.jump); view.jumpBar.hidden = true;
+    const interact = () => { view.intent = null; view.assignedTop = undefined; view.pageChanging = false; view.autoPages = 4; };
+    const wheel = event => {
+      interact();
+      if (!view.paged) return;
+      if (event.deltaY < 0 && el.scrollTop <= 1 && view.pageRange.start) changeReadingPage(view, 'older');
+      else if (event.deltaY > 0 && el.scrollHeight - el.scrollTop - el.clientHeight <= 1 && !view.pageRange.tail) changeReadingPage(view, 'newer');
+    };
+    const keydown = event => {
+      interact();
+      if (!view.paged || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.shiftKey || event.altKey ||
+          event.target.closest('input,textarea,select,[contenteditable="true"]') || !['Home', 'End'].includes(event.key)) return;
+      event.preventDefault(); changeReadingPage(view, event.key === 'Home' ? 'first' : 'latest');
+    };
     const scroll = () => {
-      if (!el.clientHeight) return;
+      if (!el.clientHeight || view.pageChanging) return;
       const assigned = view.assignedTop; view.assignedTop = undefined;
       updateJump(view);
       if (el.scrollTop === assigned) return;
@@ -112,15 +203,18 @@ function readingView(el, key) {
       // Hand the geometry to main now; it coalesces disk writes and flushes on
       // normal close. A renderer timer could lose the last scroll on close.
       attempt(() => api.readingState(readingPositions));
+      if (view.paged && el.scrollTop <= 1 && view.pageRange.start) changeReadingPage(view, 'older');
+      else if (view.paged && el.scrollHeight - el.scrollTop - el.clientHeight <= 1 && !view.pageRange.tail) changeReadingPage(view, 'newer');
     };
-    el.addEventListener('pointerdown', interact); el.addEventListener('wheel', interact, { passive: true }); el.addEventListener('keydown', interact); el.addEventListener('scroll', scroll, { passive: true });
+    el.addEventListener('pointerdown', interact); el.addEventListener('wheel', wheel, { passive: true }); el.addEventListener('keydown', keydown); el.addEventListener('scroll', scroll, { passive: true });
     view.observer = new ResizeObserver(() => scheduleReading(view)); view.observer.observe(el);
-    view.dispose = () => { view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', interact); el.removeEventListener('wheel', interact); el.removeEventListener('keydown', interact); el.removeEventListener('scroll', scroll); ui.clearMarkdown(el); };
+    view.dispose = () => { view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', interact); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
     messageViews.set(el, view);
   }
   if (view.key !== key) {
     captureReading(view); ui.clearMarkdown(el); el.replaceChildren();
     view.entries.clear(); view.groups.clear(); view.days.clear(); view.key = key; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
+    view.pageRange = null; view.pageRequest = null; view.pageChanging = false; view.autoPages = 4; view.reload = null; view.loadMessage = null;
     // The new list is empty until Markdown mounts; never capture that temporary
     // zero as this session's saved reading position.
     view.intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
@@ -317,7 +411,7 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
 function messageList(el, messages, room = false, key = 'room', context = {}) {
   // A member reader observes its own session without selecting it or claiming
   // its input. Existing solo/shared callers retain their original context.
-  const session = context.session || (room ? null : current());
+  const session = context.session || (room ? null : current()), sourceMessages = messages;
   const view = readingView(el, key);
   view.session = session;
   const selection = window.getSelection(), selected = selection && !selection.isCollapsed && el.contains(selection.anchorNode)
@@ -326,10 +420,29 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   const intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
   view.intent = intent;
   let rows = []; const retained = new Set(), days = new Set(), originals = room ? state.room.messages : session?.messages || messages;
+  messages = messages.filter(m => !(m.kind === 'turn' && !nativeCompletionText(m)?.trim()) &&
+    !(m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)));
   const explorations = commandExplorations(messages, room, originals), groups = nativeProcessGroups(messages, room, originals, room ? state.sessions : session ? [session] : [], explorations); let lastDay = '';
-  for (const m of messages) {
-    if (m.kind === 'turn' && !nativeCompletionText(m)?.trim()) continue;
-    if (m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)) continue;
+  view.paged = !room;
+  view.pageData = readingPageData(messages, [...explorations.values(), ...groups.values()]);
+  const active = document.activeElement, pinned = Boolean(selected || active && el.contains(active) && active.closest('[data-message-id]'));
+  const range = room ? { start: 0, end: messages.length, tail: true }
+    : readingPageRange(view.pageData, view.pageRange, view.pageRequest, intent.position, pinned);
+  // Removing an old top row triggers browser scroll anchoring before our next
+  // frame. It is layout, not a human scroll that revokes the follow/anchor.
+  if (!room && (view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId)) view.pageChanging = true;
+  view.pageRange = range; view.pageRequest = null;
+  view.reload = () => { if (view.key === key && el.isConnected) messageList(el, sourceMessages, room, key, context); };
+  view.loadMessage = id => {
+    if (view.key !== key || !el.isConnected || view.loadingPage || !view.pageData.indices.has(id)) return false;
+    if (readingEntry(view, id)) return true;
+    const pending = view.intent;
+    view.pageRequest = { action: 'target', id }; view.pageChanging = true; view.loadingPage = true;
+    try { view.reload(); } finally { view.loadingPage = false; }
+    view.intent = pending;
+    return Boolean(readingEntry(view, id));
+  };
+  for (const m of messages.slice(range.start, range.end)) {
     if (room) {
       const day = Number.isFinite(m.time) ? new Date(m.time).toLocaleDateString() : '时间未记录';
       if (day !== lastDay) {
@@ -519,11 +632,13 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   }
   for (let i = rows.length - 1; i >= 0; i--) if (nested.has(rows[i])) rows.splice(i, 1);
   rows = processGroupRows(view, rows, groups, explorations, room, key);
-  if (!messages.length) {
+  if (!sourceMessages.length) {
     const s = session;
     const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对上方请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
     rows.push(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : empty, 'message empty'));
   }
+  view.older.hidden = room || !range.start; view.newer.hidden = room || range.tail;
+  if (!room) { rows.unshift(view.older); rows.push(view.newer); }
   rows.push(view.jumpBar);
   // Do not detach/reinsert unchanged rows: that would destroy live selections.
   let cursor = el.firstChild;
