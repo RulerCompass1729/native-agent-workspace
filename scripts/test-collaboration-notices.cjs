@@ -24,7 +24,7 @@ fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex4'
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-collaboration-notices-'));
 const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/collaboration-notices.cjs')],
-  env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
+  env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: path.join(profile, 'workspace'), NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
 let app, page, sequence = 0;

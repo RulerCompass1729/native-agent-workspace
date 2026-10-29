@@ -216,7 +216,7 @@ class Claude extends EventEmitter {
     // the person did not ask for; /recap stays available on request.
     fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', awaySummaryEnabled: false, promptSuggestionEnabled: false, hooks }), { mode: 0o600 });
     const mcp = JSON.stringify({ mcpServers: { native_workspace: { command: process.execPath,
-      args: [path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
+      args: ['--disable-sigusr1', path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
     // Native --resume restores the saved model and every permission mode except
     // bypassPermissions, but resolves effort from settings again. Re-pass only
     // those two, as this session's own last native reports had them.
