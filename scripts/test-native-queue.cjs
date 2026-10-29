@@ -147,14 +147,22 @@ async function cleanup() {
     await until(() => calls === 2, 'Native accepts its queued terminal input');
     await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && s.messages.some(m => m.text.includes('QUEUED_NATIVE_REPLY')); }, 'Second native reply completes');
     const after = (await snapshot()).sessions[0];
+    fs.writeFileSync(path.join(base, 'native-inline-snapshot.json'), JSON.stringify({ before, after, calls, errors }, null, 2));
     let acceptedText = text, acceptedId;
     if (inlineTool) {
       // Compare with the actual native saved rendering, not a hand-built or
       // stripped reminder. The typed input remains visible in the native TUI.
-      const transcriptRows = fs.readdirSync(path.join(config, 'projects'), { recursive: true })
-        .filter(name => name.endsWith(`${after.nativeId}.jsonl`))
-        .flatMap(name => fs.readFileSync(path.join(config, 'projects', name), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)));
-      const accepted = transcriptRows.filter(row => row.type === 'attachment' && row.attachment?.type === 'queued_command' && row.attachment.prompt === text);
+      let accepted;
+      // A native append resolves before the asynchronous transcript flush.
+      // Wait for that exact saved record; neither an API reply nor idle alone
+      // claims that durable text is already available on disk.
+      await until(() => {
+        const transcriptRows = fs.readdirSync(path.join(config, 'projects'), { recursive: true })
+          .filter(name => name.endsWith(`${after.nativeId}.jsonl`))
+          .flatMap(name => fs.readFileSync(path.join(config, 'projects', name), 'utf8').split('\n').slice(0, -1).filter(Boolean).map(line => JSON.parse(line)));
+        accepted = transcriptRows.filter(row => row.type === 'attachment' && row.attachment?.type === 'queued_command' && row.attachment.prompt === text);
+        return accepted.length > 0;
+      }, 'Actual native accepted attachment is durably saved', 5000);
       assert.equal(accepted.length, 1, 'One actual accepted queued attachment');
       acceptedText = accepted[0].rendered.flatMap(block => typeof block.content === 'string' ? [block.content] : block.content.filter(item => item.type === 'text').map(item => item.text)).join('\n');
       acceptedId = `native:${after.nativeId}:prompt:${accepted[0].uuid}`;
@@ -169,6 +177,7 @@ async function cleanup() {
     const request = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json')));
     assert.equal(request.messages.filter(m => m.role === 'user').flatMap(m => typeof m.content === 'string' ? [m.content] : m.content.filter(b => b.type === 'text').map(b => b.text)).filter(t => t.includes(text)).length, 1);
     await page.locator('#chat-tab').click(); assert.equal(await page.locator('#messages .message-body').filter({ hasText: text }).count(), 1);
+    if (inlineTool) assert.equal(await page.locator('#messages .message').filter({ has: page.locator('.message-body').filter({ hasText: text }) }).locator('.message-heading strong').first().innerText(), '原生会话', 'Native framing is not labeled as human-authored');
     fs.writeFileSync(path.join(base, 'native-inline-completed.json'), JSON.stringify({ before, after, rows, calls, errors }, null, 2));
     if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-inline.png') });
     assert.deepEqual(errors, []); console.log(JSON.stringify({ checks: ['Real312 queued input reaches the model once and its exact native accepted rendering appears once under the original UUID'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
