@@ -2,7 +2,7 @@
 const path = require('node:path');
 const { executable } = require('./platform.cjs');
 const serverVersion = result => typeof result?.userAgent === 'string' ? result.userAgent.match(/^[^/\s]+\/(\d+\.\d+\.\d+)(?:\s|$)/)?.[1] || null : null;
-const verifiedCodexProtocol = rpc => ['0.163.0', '0.164.0'].includes(rpc?.nativeVersion);
+const verifiedCodexProtocol = rpc => ['0.163.0', '0.164.0', '0.165.0'].includes(rpc?.nativeVersion);
 function codexVersionInfo(rpc, connected = true) {
   const version = typeof rpc?.nativeVersion === 'string' && /^\d+\.\d+\.\d+$/.test(rpc.nativeVersion) ? rpc.nativeVersion : null;
   const current = connected && rpc?.ws?.readyState === 1 && Object.hasOwn(rpc, 'nativeVersion');
@@ -39,7 +39,7 @@ class NativeHistory {
     if (host.codexBinary !== binary) throw Error('Codex 连接已变化，请重新打开历史列表。');
     // The running server's handshake is authoritative. A binary replaced at
     // the same path cannot lend its version to an older still-running process.
-    if (!verifiedCodexProtocol(host.rpc)) throw Error('已有历史接入目前仅验证 Codex 0.163.0 / 0.164.0 的运行后台；请暂时在原生界面继续。');
+    if (!verifiedCodexProtocol(host.rpc)) throw Error('已有历史接入目前仅验证 Codex 0.163.0 / 0.164.0 / 0.165.0 的运行后台；请暂时在原生界面继续。');
     return host.rpc;
   }
   async list(options = {}) {
