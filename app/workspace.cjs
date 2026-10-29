@@ -182,7 +182,7 @@ class Workspace extends EventEmitter {
   // restored from history or disk, and the original task is never replayed.
   capacityStatus(id) {
     const r = this.capacityRecoveries.get(id);
-    return r ? { status: r.status, attempt: r.attempt, due: r.due } : null;
+    return r ? { status: r.status, attempt: r.attempt, due: r.due, reason: r.reason } : null;
   }
   cancelCapacity(id) {
     const turn = this.runtimes.get(id)?.rootTurn;
@@ -200,17 +200,17 @@ class Workspace extends EventEmitter {
       !runtime.stopped && !runtime.transportDisconnected && !runtime.nativeObservationPending && !runtime.backendExitConfirmed && runtime.chatAvailable !== false &&
       !runtime.turnId && !runtime.pendingQueue && !runtime.pendingSteer && !runtime.nativeInputRequired && !runtime.nativeAbortRequest;
   }
-  scheduleCapacity(s, runtime, turnId) {
+  scheduleCapacity(s, runtime, turnId, reason = 'capacity') {
     const previous = this.capacityRecoveries.get(s.id);
     if (previous?.turnId === turnId) return;
     const r = { runtime, rpc: runtime.host?.rpc, lease: runtime.rootLease, epoch: runtime.observationEpoch, errorMessageId: runtime.rootTurn?.errorMessageId, transcript: runtime.rootTurn?.failedTranscript, lifecycle: runtime.lifecycleRevision, nativeId: s.nativeId, turnId, owner: s.owner, control: s.controlRevision, member: s.memberRevision,
-      draft: this.draftRevisions.get(s.id), attempt: previous?.attempt || 0, status: 'scheduled', due: 0 };
+      draft: this.draftRevisions.get(s.id), reason, attempt: previous?.attempt || 0, status: 'scheduled', due: 0 };
     this.capacityRecoveries.set(s.id, r);
     if (!this.capacityValid(s, r)) { this.capacityRecoveries.delete(s.id); return; }
     const delays = [120000, 300000, 600000];
     if (r.attempt >= delays.length) {
       r.status = 'exhausted';
-      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: '模型满载自动继续已达 3 次上限，需要你处理。', status: 'complete', time: Date.now() });
+      s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: `${reason === 'routing' ? '路由发现超时' : '模型满载'}自动继续已达 3 次上限，需要你处理。`, status: 'complete', time: Date.now() });
     } else r.due = Date.now() + delays[r.attempt];
     this.changed();
   }
@@ -259,7 +259,7 @@ class Workspace extends EventEmitter {
     }
     r.attempt++; r.status = 'sending';
     const time = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: `${time} 因模型满载自动继续（第 ${r.attempt} 次）`, status: 'complete', time: now });
+    s.messages.push({ id: randomUUID(), role: 'system', name: 'NAW', kind: 'notice', text: `${time} 因${r.reason === 'routing' ? '路由发现超时' : '模型满载'}自动继续（第 ${r.attempt} 次）`, status: 'complete', time: now });
     // send() and the adapter recheck the same identity/control before writing.
     try { await this.send(s.id, '继续', r.owner, null, null, null, r); }
     catch { stop('自动继续的接收结果未确认；已停止自动发送，请核对原生终端。'); }
@@ -302,7 +302,10 @@ class Workspace extends EventEmitter {
     on('nativeTurnStart', info => wake.nativeStart(this, runtime, info));
     on('nativeTurnEnd', info => {
       try { wake.complete(this, s, runtime, info); } catch { this.changed(); }
-      if ((s.provider === 'codex' && runtime.host?.rpc?.nativeVersion === '0.164.0' || s.provider === 'claude' && runtime.nativeAbortAvailable && !runtime.retainedReader) && info.nativeId === s.nativeId && info.status === 'failed' && info.errorInfo === 'serverOverloaded') this.scheduleCapacity(s, runtime, info.turnId);
+      const qualified = s.provider === 'codex' ? ['0.164.0', '0.165.0'].includes(runtime.host?.rpc?.nativeVersion) : s.provider === 'claude' && runtime.nativeAbortAvailable && !runtime.retainedReader;
+      // Other is broad: admit only the observed native routing timeout verbatim.
+      const reason = info.errorInfo === 'serverOverloaded' ? 'capacity' : s.provider === 'codex' && info.errorInfo === 'other' && info.errorMessage === 'workspace routing discovery timed out' ? 'routing' : null;
+      if (qualified && info.nativeId === s.nativeId && info.status === 'failed' && reason) this.scheduleCapacity(s, runtime, info.turnId, reason);
       else this.cancelCapacity(s.id);
     });
     on('inputRequired', () => this.changed());
@@ -528,7 +531,7 @@ class Workspace extends EventEmitter {
     } else if (!route) {
       if (s.owner !== owner) throw new Error('请先接管这个会话。');
       s.peerRevision = (s.peerRevision || 0) + 1;
-      if (recovery) this.pauseParticipant(id, '模型满载自动继续；原协作交接保持暂停');
+      if (recovery) this.pauseParticipant(id, `${recovery.reason === 'routing' ? '路由发现超时' : '模型满载'}自动继续；原协作交接保持暂停`, true);
       else { wake.human(this, id); this.pause('真人输入优先'); }
     }
     const failedTurn = !route && s.state === 'error' ? runtime.failedTurnInputId : null;

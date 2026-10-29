@@ -1437,12 +1437,18 @@ class Codex extends EventEmitter {
         break;
       case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage ? { ...p.tokenUsage, threadId: p.threadId, turnId: p.turnId, reportedAt: Date.now() } : null); break;
       case 'turn/completed': {
+        if (p.threadId !== this.record.nativeId) break;
         if (p.turn.id === this.turnId) { this.nativeTurnFinished = true; this.activeNativeItems.clear(); this.nativeWait = null; this.publishNativeActivity(); }
         this.textEndedTurns.add(p.turn.id);
         for (const [id, parts] of this.nativeTextParts) if (parts.turnId === p.turn.id) this.nativeTextParts.delete(id);
         const block = codexTurnBlock(this.record.nativeId, p.turn);
         if (block) this.emit('nativeBlock', { ...block, inputTag: this.turn(p.turn.id).inputTag || '' });
-        this.turn(p.turn.id).completed = p.turn;
+        const turn = this.turn(p.turn.id);
+        const errorText = [p.turn.error?.message, p.turn.error?.additionalDetails].filter(value => typeof value === 'string' && value).join('\n\n');
+        // Completion can be our first observed error. Keep its native body;
+        // an identical preceding error notice already carries the full text.
+        if (errorText && errorText !== turn.errorText) this.emit('nativeBlock', { id: `notice:terminal-error:${p.turn.id}`, nativeId: this.record.nativeId, kind: 'notice', turnId: p.turn.id, title: '', text: errorText, status: 'complete' });
+        turn.completed = p.turn;
         // Events can arrive before the RPC acknowledgement names our turn.
         // Wait for that identity instead of assigning whichever turn finishes.
         if (!this.pending || this.pending.turnId) this.finishTurn(p.turn.id);
@@ -1452,6 +1458,7 @@ class Codex extends EventEmitter {
         const text = [p.error?.message, p.error?.additionalDetails].filter(value => typeof value === 'string' && value).join('\n\n');
         if (text) this.emit('nativeBlock', { id: `notice:error:${p.turnId || crypto.randomUUID()}`, nativeId: this.record.nativeId, kind: 'notice', turnId: p.turnId,
           title: '', text, status: 'complete' });
+        const turn = this.turns.get(p.turnId); if (turn && text) turn.errorText = text;
         if (!p.turnId || p.turnId === this.turnId) {
           if (p.willRetry === true) { this.nativeRetry = this.turnId; this.publishNativeActivity(); }
           else this.emit('failed', '原生会话返回错误，请检查原文或同屏终端。');
@@ -1473,7 +1480,7 @@ class Codex extends EventEmitter {
     if (this.turnId === id) { this.turnId = null; this.emit('state', 'idle'); }
     if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag, supersededTag: pending?.supersededTag });
     else this.emit('complete', { tag: pending?.tag, supersededTag: pending?.supersededTag, messageId: turn.messageId, inputTag: turn.itemInputs.get(turn.messageId) || '', text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
-    if (live) this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: id, status: turn.completed.status, errorInfo: turn.completed.error?.codexErrorInfo });
+    if (live) this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: id, status: turn.completed.status, errorInfo: turn.completed.error?.codexErrorInfo, errorMessage: turn.completed.error?.message });
   }
   get steerAvailable() { return verifiedCodexProtocol(this.host.rpc) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   async steer(text, tag, expectedTurnId, guard, shared = false, acceptedGuard = guard) {
