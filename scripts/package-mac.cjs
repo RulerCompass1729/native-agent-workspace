@@ -27,7 +27,7 @@ async function build() {
     const sources = ['main.cjs', 'local-files.cjs', 'local-images.cjs', 'preload.cjs', 'startup.html', 'startup.js',
       'dsh-host.cjs', 'dsh-server.mjs', 'ui-errors.cjs', 'ui-parent-lease.cjs',
       'service-client.cjs', 'service-transport.cjs', 'service-layout.cjs', 'workspace-client.cjs', 'legacy-observation.cjs', 'legacy-input.cjs', 'legacy-codex.cjs', 'legacy-claude.cjs', 'reader-cache.cjs', 'legacy-shared.cjs', 'platform.cjs', 'runtime-locations.cjs', 'preflight.cjs', 'daemon.cjs',
-      'adapters.cjs', 'terminal-keyboard.cjs', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'native-blocks.cjs', 'shared-replies.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'room-mention.js', 'native-history.cjs', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'observation.cjs', 'window-placement.cjs', 'pty_host.py', 'claude_hook.py',
+      'adapters.cjs', 'terminal-keyboard.cjs', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'native-blocks.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'room-mention.js', 'native-history.cjs', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'observation.cjs', 'window-placement.cjs', 'pty_host.py', 'claude_hook.py',
       'claude-submit.cjs', 'submission-policy.cjs', 'session-labels.cjs', 'room-state.cjs', 'view-drafts.cjs', 'reading-state.cjs', 'view-store.cjs', 'claude-bridge/.claude-plugin/plugin.json',
       'claude-bridge/hooks/hooks.json', 'claude-bridge/hooks/register.js',
       'dsh/package.json', 'dsh/host.js', 'dsh/client.js'];

@@ -43,7 +43,10 @@ async function main() {
   const dispatch = async (owner, method, args, client) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'wakeTake': return require('./session-wake.cjs').take(workspace, args[0]);
+      case 'wakeReceive': return require('./session-wake.cjs').receive(workspace, args[0]);
+      case 'wakePolicy': return require('./session-wake.cjs').setPolicy(workspace, args[0], args[1]);
       case 'peerRun': return peerRunner.start(owner, args[0]);
       case 'peerPrepare': return workspace.peerLeases.prepare(client, owner, args[0]);
       case 'peerTake': return workspace.peerLeases.take(client, args[0]);

@@ -98,7 +98,9 @@ function createSubmissionServer(filename, targets) {
         try {
           if (!target.addressedSendAvailable || !target.validRootBinding(message) || message.epoch !== target.observationEpoch || !target.addressedCall) throw Error('当前原生连接不支持定向协作。');
           const identity = { nativeId: message.sessionId, turnId: message.turnId, promptId: message.promptId, callId: message.callId };
-          return res.end(JSON.stringify(req.url === '/addressed-failed' ? target.addressedFailed(identity) : target.addressedCall(identity, message.arguments)));
+          const result = req.url === '/addressed-failed' ? target.addressedFailed(identity) : target.addressedCall(identity, message.arguments);
+          if (result?.then) return result.then(value => res.end(JSON.stringify(value)), error => res.end(JSON.stringify({ status: 'unconfirmed', message: error.message })));
+          return res.end(JSON.stringify(result));
         } catch (error) {
           try { target.addressedFailed?.({ nativeId: message.sessionId, turnId: message.turnId, promptId: message.promptId, callId: message.callId }); } catch { /* Not the authorized root. */ }
           return res.end(JSON.stringify({ status: 'not-sent', message: error.message }));

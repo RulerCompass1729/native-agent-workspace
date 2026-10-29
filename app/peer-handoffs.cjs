@@ -121,6 +121,35 @@ class PeerRunner {
     return /^[a-f0-9]{20}$/.test(path.basename(this.dataDir)) && path.basename(path.dirname(this.dataDir)) === 'backends'
       ? path.dirname(path.dirname(this.dataDir)) : this.dataDir;
   }
+  async lookupWake(id) {
+    const root = this.root(), layout = readLayout(root); let found;
+    for (const key of layout.entries) {
+      const client = await this.connect(path.join(root, key), 'workspace-wake-lookup');
+      try {
+        const state = await client.call('initial'), session = state.sessions.find(s => s.id === id);
+        if (session) {
+          if (found || !state.capabilities?.includes('agentWakeV1') || state.storageWarning) throw Error('接收者后台尚未接通自动消息或身份有冲突。');
+          found = { key, session };
+        }
+      } finally { client.close(); }
+    }
+    if (!found) throw Error('没有找到准确的原会话 ID。');
+    return found;
+  }
+  async transferWake(intent) {
+    const root = this.root(), layout = readLayout(root), sourceKey = path.relative(root, this.dataDir) || '.';
+    if (!layout.entries.includes(sourceKey) || !layout.entries.includes(intent.targetKey)) throw Error('后台归属已变化，未重发自动消息。');
+    const client = await this.connect(path.join(root, intent.targetKey), 'workspace-wake-transfer');
+    try { return await client.call('wakeReceive', { id: intent.id, sourceKey, senderId: intent.senderId, recipientId: intent.recipientId }); }
+    finally { client.close(); }
+  }
+  async takeWake(spec) {
+    const root = this.root(), layout = readLayout(root), targetKey = path.relative(root, this.dataDir) || '.';
+    if (!layout.entries.includes(spec.sourceKey) || !layout.entries.includes(targetKey)) throw Error('自动消息后台归属未确认。');
+    const client = await this.connect(path.join(root, spec.sourceKey), 'workspace-wake-receipt');
+    try { return await client.call('wakeTake', { id: spec.id, senderId: spec.senderId, recipientId: spec.recipientId, targetKey }); }
+    finally { client.close(); }
+  }
   async start(owner, spec) {
     if (this.starting || this.processing || this.run?.pauseUnconfirmed || this.run?.status === 'running' || this.w.room.run?.status === 'running' || this.revoking) throw Error('已有协作或正在暂停，请稍候。');
     const { ids, goal, maxSteps, mode, labels, contexts, routes, replyTo, identities } = spec || {};
