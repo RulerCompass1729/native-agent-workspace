@@ -673,3 +673,39 @@ their daemon/native PID-start identities. Four of six backends are120; Main and
 the secretary remain118. Author holds are released with one productive task each;
 submission is not completion. This does not close Main recovery, all-backend
 update, full-day development or the overall dogfood milestone.
+
+Signed122 — directories, sidebar, process groups and Node children
+
+The reviewed T96/T68/T67/T98/T90 changes are integrated without rebuilding the
+native TUI. Signed e920cef passes six complete installed GUI flows: private
+per-session directories and collision preservation; pointer/keyboard sidebar
+sizing/folds; original process records and native completion; manual disclosure;
+reopen with original identities/draft/preferences; readable narrow/wide member
+notices. Unchanged directory-picker and startup-failure evidence is reused from
+signed121. Full1234 checks,55 affected checks,19 scratch checks and8 real-Framework
+checks pass with no skips. All57 runtime files match; strict signature and vendor
+Framework remain intact. GUI/model/clipboard boundaries remain explicit.
+
+| Finding and trigger | Owner / severity | Resolution and evidence |
+| --- | --- | --- |
+| RunAsNode still enables Node inspection despite Electron fuse readback | Main / high | Owned installed counterexample opens a listener. e920cef adds the native signal-disable argument at all three app-owned Node launch sites. Normal service/UI-host boot and a directly started signed MCP script survive owned signals without a new listener; Claude's own MCP launcher remains unverified. GUI inspection remains disabled. No user process was signaled. Scoped repair closed; old live backends remain pending replacement |
+| T68 cleanup alias rejected by the existing source census | Main / test | Accept the actual explicit shared-finalizer alias;19 cleanup and1234 full checks pass. No process/directory ownership guard removed |
+| T90 runner creates new-directory siblings outside owned scratch | Main / test | Place its default cwd inside scratch; exact six-scene source suite passes with six copy receipts and no new profile/sibling. Existing author leftovers remain assigned for provenance-checked cleanup; the same navigation-runner pattern must be fixed before its next run |
+| Installed test close acknowledgement / stale geometry read | Main / test | Observe actual owned child exit with a bound; measure both notice rectangles after hover. Original failed runs retained, final signed six-flow task succeeds without product workarounds |
+
+Independent headless Fable's first25-turn invocation hit its limit and is not a
+pass. The same-session delta returns PASS in8turns for signed e920cef and the
+GUI-only installer source;312 frozen file hashes and HEAD/status remain unchanged.
+It independently verifies payloads, archives, fuses, merged changes and raw
+evidence. A tracked signal-protection regression check remains a follow-up before
+the next edit to those launch paths; the private installed probes cover this build.
+
+The authorized ordinary-visible120→122 update retains all ten native records,
+reported live PID/start identities, owners, session drafts and12 flushed view
+drafts; one normal visible window has no background/debug arguments. The new
+active backend is122; four retain120 and Main/secretary retain118. No native
+retirement or recovery is claimed. Codex165 qualification, capacity recovery,
+all-backend replacement and the full dogfood milestone stay open. Product test
+inference is zero; independent review and actual development consume their own
+model usage. Physical input, OS picker/clipboard and native-provider recovery
+are not newly certified by these GUI fixtures.
