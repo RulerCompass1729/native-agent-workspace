@@ -4,7 +4,7 @@ As of 2026-10-29. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.125, committed source `14af236`. The normal-visible update preserves all10 original native IDs/live process starts/owners/drafts and12 saved view drafts. The backend split is125×1(active, no live sessions),120×4,118×2. Earlier per-session mapping identifies Main and the active secretary on118. The earlier I70 refresh
+Current daily GUI: alpha.126, committed source `126fc54`. The normal-visible update preserves all10 original native IDs/live process starts/owners/drafts and12 saved view drafts. The backend split is126×1(active, no live sessions),120×4,118×2. Earlier per-session mapping identifies Main and the active secretary on118. The earlier I70 refresh
 refused to retire Main when its native goal started another turn. Native identity,
 known settings and drafts were reconciled; this is a partial update, not a
 successful Main recovery or a completed dogfood milestone.
