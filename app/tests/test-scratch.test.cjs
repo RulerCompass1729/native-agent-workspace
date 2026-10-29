@@ -30,7 +30,7 @@ test('explicit export retains success and failure originals outside temporary pr
 });
 test('all temporary-profile test entry points use the shared allocator and finalizer', () => {
   const dir=path.resolve(__dirname,'../../scripts');let count=0;
-  for(const file of fs.readdirSync(dir).filter(n=>/^test-.*\.cjs$/.test(n))){const source=fs.readFileSync(path.join(dir,file),'utf8');assert.doesNotMatch(source,/\bfs\.mkdtempSync\(/,file);if(source.includes('testScratch.directory(')){count++;assert.match(source,/\.finally\(testScratch\.cleanup\(/,file);}}
+  for(const file of fs.readdirSync(dir).filter(n=>/^test-.*\.cjs$/.test(n))){const source=fs.readFileSync(path.join(dir,file),'utf8');assert.doesNotMatch(source,/\bfs\.mkdtempSync\(/,file);if(source.includes('testScratch.directory(')){count++;assert.ok(/\.finally\(testScratch\.cleanup\(/.test(source)||/const cleanup = testScratch\.cleanup\(/.test(source)&&/\.finally\(async \(\) => \{\s*try \{ await cleanup\(\)/.test(source),file);}}
   assert.ok(count>=57,'Census must cover all existing test profiles');
 });
 test('a replaced directory is never removed or exported as owned evidence', () => {

@@ -75,7 +75,7 @@ async function run() {
   await item(a, 'list', [{ type: 'listFiles', command: 'ls src', path: 'src' }], { output: 'first.js\nsecond.js\n' });
   await firstSummary.getByText('Explored', { exact: true }).waitFor();
   await until(async () => (await firstRow.locator(':scope > .process-tail').innerText()).includes('List src'), 'Full exploration summary');
-  assert.equal(await page.locator('#messages > .message.tool').count(), 1);
+  assert.equal(await page.locator('#messages > .message.tool, #messages > [data-process-group]').count(), 1);
   assert.equal(await firstRow.locator(':scope > .process-details').evaluate(el => el.open), false, 'Native search exit1 keeps exploration folded');
   assert.ok(!(await firstSummary.innerText()).includes('failed'));
   assert.equal(await firstRow.locator(':scope > .process-tail').innerText(), 'Read first.txt, second.txt\nSearch needle in src (exit 1)\nList src');
@@ -92,7 +92,7 @@ async function run() {
   await events(a, [{ method: 'item/completed', params: { threadId: active.nativeId, turnId: active.activeTurnId, item: { id: 'body', type: 'agentMessage', text: 'Original assistant paragraph.', phase: 'commentary' } } }]);
   await item(a, 'after-body', read('after.txt'), { output: 'After body result' });
   await row('after-body').locator(':scope > .process-details > summary').getByText('Explored', { exact: true }).waitFor();
-  assert.equal(await page.locator('#messages > .message.tool').count(), 2);
+  assert.equal(await page.locator('#messages > .message.tool, #messages > [data-process-group]').count(), 2);
   const output = Array.from({ length: 12 }, (_, i) => 'Runtime output ' + i).join('\n');
   await item(a, 'run', [{ type: 'read', command: 'cat misleading-name', name: 'misleading-name', path: '/synthetic/misleading-name' }, { type: 'unknown', command: 'npm test' }], { running: true, output });
   const runRow = row('run'); await runRow.locator(':scope > .process-details > summary').getByText('Running', { exact: true }).waitFor();
@@ -101,26 +101,32 @@ async function run() {
   await item(a, 'run', [{ type: 'read', command: 'cat misleading-name', name: 'misleading-name', path: '/synthetic/misleading-name' }, { type: 'unknown', command: 'npm test' }], { status: 'failed', exitCode: 2, output });
   await runRow.locator(':scope > .process-details > summary').getByText('failed', { exact: true }).waitFor();
   await runRow.locator(':scope > .process-details > summary').getByText('exit 2', { exact: true }).waitFor();
+  assert.equal(await runRow.locator(':scope > .process-details').evaluate(el => el.open), false, 'Failed output follows T66 default-closed policy');
+  await runRow.locator(':scope > .process-details > summary').click();
   assert.equal(await runRow.locator('.message-body').innerText(), output);
   await runRow.scrollIntoViewIfNeeded(); await shot('t29-ordinary-command-failed-full-output');
   await item(a, 'cancel', read('slow.txt'), { running: true, output: 'Partial before interrupt' });
   await page.locator('#interrupt').click();
   const before = (await snapshot()).sessions.find(s => s.id === a);
   await events(a, [{ method: 'turn/completed', params: { threadId: before.nativeId, turn: { id: before.activeTurnId, status: 'interrupted' } } }]);
+  const endedGroup = row('cancel').locator('xpath=ancestor::section[@data-process-group][1]');
+  await endedGroup.locator(':scope > details > summary').filter({ hasText: '已中断 1' }).waitFor();
+  assert.equal(await endedGroup.locator(':scope > details').evaluate(el => el.open), false, 'Ended process group defaults closed while its interruption remains visible');
+  await endedGroup.locator(':scope > details > summary').click();
   await row('cancel').locator(':scope > .process-details > summary').getByText('interrupted', { exact: true }).waitFor();
   commandStates.solo = await snapshot(); const identity = identities(commandStates.solo);
   assert.equal(commandStates.solo.sessions.find(s => s.id === a).messages.find(m => m.id.endsWith(':tool:cancel')).text, 'Partial before interrupt');
   checks.push('Assistant body breaks exploration; unknown shell-looking command stays Ran; failed and interrupted native content remains visible');
   await row('cancel').scrollIntoViewIfNeeded(); await shot('t29-interrupted-command');
-  for (const id of [a, b]) { await select(id); await page.getByRole('button', { name: '加入协作', exact: true }).click(); }
+  for (const id of [a, b]) { await select(id); await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); }
   await select(a); await page.locator('#message-input').fill('Unsent private draft');
   await room(); await chooseRecipient(page, a); await fillRoomMessage(page, 'Inspect shared files'); await page.locator('#forward-button').click();
   await until(async () => (await native()).sends.length === 2, 'Directed shared task');
   await item(a, 'shared1', read('shared-a.txt'), { output: 'Shared result A' }); await item(a, 'shared2', read('shared-b.txt'), { output: 'Shared result B' });
-  const shared = page.locator('#room-messages > .message.tool');
+  const shared = page.locator('#room-messages > .message.tool, #room-messages > [data-process-group] > details > div > .message.tool');
   await until(async () => await shared.count() === 1 && (await shared.locator(':scope > .process-tail').innerText()).includes('shared-b.txt'), 'Shared exploration grouped');
   await page.locator('#room-search').fill('Shared result B');
-  const contextRow = page.locator('#room-messages [data-message-id]').filter({ hasText: 'Shared result B' });
+  const contextRow = page.locator('#room-messages article[data-message-id]').filter({ hasText: 'Shared result B' });
   await contextRow.hover(); await contextRow.getByRole('button', { name: '查看上下文', exact: true }).click();
   await until(async () => await page.locator('#room-search').inputValue() === '', 'Context clears filter');
   const contextState = await snapshot(), nestedId = contextState.room.messages.find(m => m.text === 'Shared result B').id;

@@ -138,3 +138,37 @@ test('malformed sidebar metadata cannot erase existing names or permit overwrite
     assert.equal(fs.readFileSync(file, 'utf8'), content);
   }
 });
+
+test('sidebar section sizing persists beside legacy folds and retains closed section preferences', t => {
+  const { dir, labels } = fixture(t); labels.set('a', 'Original');
+  labels.updateSidebar({ type: 'resize', weights: [5000, 3000, 2000] }, []);
+  labels.updateSidebar({ type: 'collapse', section: 'archive', collapsed: false }, []);
+  labels.updateSidebar({ type: 'collapse', section: 'workspace', collapsed: true }, []);
+  assert.deepEqual(new SessionLabels(dir).sidebar.weights, [5000, 3000, 2000]);
+  assert.equal(new SessionLabels(dir).sidebar.archiveCollapsed, false);
+  labels.set('a', 'Renamed');
+  assert.deepEqual(new SessionLabels(dir).sidebar.weights, [5000, 3000, 2000]);
+  assert.equal(new SessionLabels(dir).sidebar.workspaceCollapsed, true);
+});
+test('invalid sizes and failed sizing writes preserve existing labels and sidebar preferences', t => {
+  const { file, labels } = fixture(t); labels.set('a', 'Original');
+  const before = fs.readFileSync(file, 'utf8');
+  for (const weights of [null, [], [1, 2], [1, 2, 3, 4], [0, 5000, 5000], [5000, -1, 5001], [NaN, 5000, 5000], [5000, Infinity, 5000], [4000.5, 3000, 2999.5], ['5000', 3000, 2000], [5000, 3000, 3000], Object.assign(new Array(3), { 0: 9998, 2: 2 })]) {
+    assert.throws(() => labels.updateSidebar({ type: 'resize', weights }, []));
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+  }
+  const stub = t.mock.method(fs, 'renameSync', () => { throw Error('Synthetic size save failure'); });
+  assert.throws(() => labels.updateSidebar({ type: 'resize', weights: [5000, 3000, 2000] }, []), /未能保存/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before); assert.equal(labels.sidebar.weights, undefined);
+  stub.mock.restore(); labels.updateSidebar({ type: 'resize', weights: [5000, 3000, 2000] }, []);
+  assert.deepEqual(labels.sidebar.weights, [5000, 3000, 2000]);
+});
+test('malformed saved optional sizing fields cannot silently overwrite existing local data', t => {
+  const { dir, file } = fixture(t);
+  for (const extra of [{ archiveCollapsed: 'false' }, { weights: [0, 5000, 5000] }, { weights: [1, 2, 3] }, { weights: { sessions: 5000 } }]) {
+    const data = JSON.stringify({ version: 1, labels: { a: 'Original' }, sidebar: { order: [], sessionsCollapsed: false, workspaceCollapsed: false, ...extra } });
+    fs.writeFileSync(file, data, { mode: 0o600 }); const loaded = new SessionLabels(dir);
+    assert.match(loaded.warning, /无法读取/); assert.throws(() => loaded.set('a', 'New'), /未覆盖/);
+    assert.equal(fs.readFileSync(file, 'utf8'), data);
+  }
+});
