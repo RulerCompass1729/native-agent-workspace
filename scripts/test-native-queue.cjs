@@ -5,24 +5,30 @@ const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require(
 // No paid inference, user profile edits, global keyboard input, or foregrounding.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict');
-const { _electron } = testScratch.playwright(require('playwright'));
+const installed = Boolean(process.env.NAW_APP_EXECUTABLE);
+const { _electron } = testScratch.playwright(installed ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connectService } = require(path.join(code, 'app/service-client.cjs'));
 const { executable, processIdentity } = require(path.join(code, 'app/platform.cjs'));
 const shared = process.env.NAW_QUEUE_SHARED === '1';
 const modelOnly = process.env.NAW_MODEL_ONLY === '1';
+const inlineTrial = process.env.NAW_NATIVE_INLINE_TRIAL === '1';
+const inlineTool = process.env.NAW_NATIVE_INLINE_TOOL === '1';
+assert.ok(!inlineTool || inlineTrial);
+assert.ok(!inlineTrial || (!shared && !modelOnly), 'One bounded native inline task only');
 const input = shared ? '#shared-input' : '#message-input', send = shared ? '#forward-button' : '#send-button';
 const base = testScratch.directory(path.join(os.tmpdir(), 'naw-native-queue-test-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), config = path.join(base, 'claude');
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const located = executable('claude'), binary = located && fs.realpathSync(located); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.(308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
+assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : /^2\.1\.(308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
 let application, page, client, calls = 0, held, releaseFinal, pausedNative;
+let budgetError, toolMarker;
 const errors = [], checks = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 30000) {
-  const start = Date.now(); while (Date.now() - start < timeout) { if (await fn()) return; await sleep(75); } throw Error(label);
+  const start = Date.now(); while (Date.now() - start < timeout) { if (budgetError) throw budgetError; if (await fn()) return; await sleep(75); } throw Error(label);
 }
 function event(res, type, body) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...body })}\n\n`); }
 function block(res, index, content) {
@@ -36,18 +42,22 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
     }
     const number = ++calls;
-    if (number > (modelOnly ? 0 : 2)) { res.writeHead(429); res.end(); return; }
+    if (number > (modelOnly ? 0 : 2)) { budgetError = Error('Native task response budget exceeded'); res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
+    if (inlineTrial) assert.match(request.model, /haiku/i, 'Only the explicitly selected fixture model');
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     event(res, 'message_start', { message: { id: `msg_local_${number}`, type: 'message', role: 'assistant', model: request.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     if (number > 2) throw Error('Native request budget exceeded');
     block(res, 0, { type: 'text', text: number === 1 ? 'FIRST_NATIVE_WORK: original task.\n' : 'QUEUED_NATIVE_REPLY: next task.\n' });
+    if (inlineTool && number === 1) {
+      block(res, 1, { type: 'tool_use', id: 'native_owned_hold', name: 'Bash', input: { command: 'printf ready > tool-started; sleep 8; printf NATIVE_TOOL_DONE', description: 'Bounded owned native input fixture' } });
+    }
     const finish = () => {
-      event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
+      event(res, 'message_delta', { delta: { stop_reason: inlineTool && number === 1 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
       event(res, 'message_stop', {}); res.end();
     };
-    if (number === 1) { held = res; releaseFinal = finish; } else finish();
+    if (number === 1) { held = res; if (inlineTool) finish(); else releaseFinal = finish; } else finish();
   });
 });
 const snapshot = () => client.call('initial');
@@ -78,18 +88,25 @@ async function cleanup() {
   // production adapter methods are replaced by this test.
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
     `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",DISABLE_AUTOUPDATER="1")\n` +
-    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"])\n`, { mode: 0o700 });
+    `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+${JSON.stringify(inlineTool ? ['--model', 'haiku', '--permission-mode', 'default', '--allowedTools', 'Bash(printf:*)', 'Bash(sleep:*)'] : ['--model', 'haiku', '--allowedTools', 'Bash(printf:*)'])})\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
   application = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR ? { recordVideo: { dir: process.env.NAW_VIDEO_DIR, size: { width: 1280, height: 900 } } } : {}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await application.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').waitFor(); client = await connectService(profile, 'native-block-test');
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="claude"]').check();
-  await page.locator('#session-name').fill('Native blocks'); await createIn(page, 'terminal');
+  await page.locator('#session-name').fill('Native blocks');
+  const chosen = await page.locator('#chosen-folder').innerText(); assert.ok([path.resolve(base), fs.realpathSync(base)].some(owned => chosen.startsWith(owned + path.sep)), 'Only owned fixture folders');
+  const prefix = [path.resolve(base), fs.realpathSync(base)].find(owned => chosen.startsWith(owned + path.sep));
+  const canonicalChosen = fs.realpathSync(base) + chosen.slice(prefix.length);
+  toolMarker = path.join(canonicalChosen, 'tool-started');
+  fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [chosen]: { hasTrustDialogAccepted: true }, [canonicalChosen]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
+  await createIn(page, 'terminal');
   await until(async () => /Yes, I trust this folder|Do you want to use this API key/.test(await page.locator('#terminal-area').innerText()) || (await snapshot()).sessions[0]?.chatAvailable, 'Native startup');
   if ((await page.locator('#terminal-area').innerText()).includes('Yes, I trust this folder')) {
-    assert.ok((await page.locator('#terminal-area').innerText()).includes(fs.realpathSync(cwd)));
-    await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowDown'); await sleep(200); await page.keyboard.press('Enter');
+    assert.ok((await terminalText()).replace(/\s/g, '').includes(canonicalChosen.replace(/\s/g, '')), 'Native trust question names only the exact owned fixture');
+    await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowDown');
+    await until(async () => /❯\s*Yes, I trust this folder/.test(await terminalText()), 'Actual native trust choice selected'); await page.keyboard.press('Enter');
   }
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key') || (await snapshot()).sessions[0]?.chatAvailable, 'Native key prompt');
   if ((await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key')) {
@@ -106,7 +123,65 @@ async function cleanup() {
   await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill('Run the original local task.'); await page.locator('#send-button').click();
   await until(() => calls === 1 && held, 'Native original task');
+  if (inlineTool) {
+    await until(async () => { const s = (await snapshot()).sessions[0]; return s.nativeApproval?.requests?.some(r => r.title === 'Bash') || fs.existsSync(toolMarker); }, 'Native tool permission or owned tool start');
+    if (!fs.existsSync(toolMarker)) {
+      const s = (await snapshot()).sessions[0], request = s.nativeApproval.requests.find(r => r.title === 'Bash');
+      assert.equal(JSON.parse(request.input).command, 'printf ready > tool-started; sleep 8; printf NATIVE_TOOL_DONE');
+      await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen >> visible=true').click();
+      await until(async () => /❯\s*1\. Yes/.test(await terminalText()), 'Exact native one-time approval is selected');
+      fs.writeFileSync(path.join(base, 'owned-tool-permission.txt'), await terminalText()); await page.keyboard.press('Enter');
+    }
+  }
   await until(async () => (await snapshot()).sessions[0].state === 'working', 'Working native state');
+  if (inlineTrial) {
+    const text = 'Native inline original text.';
+    if (inlineTool) await until(() => fs.existsSync(toolMarker), 'Owned native tool is actually running');
+    await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen >> visible=true').click();
+    await until(async () => /❯\s*$/.test((await terminalText()).split('\n').filter(l => /^❯/.test(l.trim())).at(-1) || ''), 'Native edit line is empty');
+    await page.keyboard.type(text, { delay: 15 });
+    await until(async () => ((await terminalText()).split('\n').filter(l => /^❯/.test(l.trim())).at(-1) || '').trim() === '❯ ' + text, 'Exact native edit line before Enter');
+    fs.writeFileSync(path.join(base, 'inline-before-enter.txt'), await terminalText()); await page.keyboard.press('Enter');
+    await sleep(400); assert.equal(calls, 1, 'Ordinary native Enter queues until the first task completes');
+    if (!inlineTool) { releaseFinal(); releaseFinal = null; }
+    await until(() => calls === 2, 'Native accepts its queued terminal input');
+    await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && s.messages.some(m => m.text.includes('QUEUED_NATIVE_REPLY')); }, 'Second native reply completes');
+    const after = (await snapshot()).sessions[0];
+    fs.writeFileSync(path.join(base, 'native-inline-snapshot.json'), JSON.stringify({ before, after, calls, errors }, null, 2));
+    let acceptedText = text, acceptedId;
+    if (inlineTool) {
+      // Compare with the actual native saved rendering, not a hand-built or
+      // stripped reminder. The typed input remains visible in the native TUI.
+      let accepted;
+      // A native append resolves before the asynchronous transcript flush.
+      // Wait for that exact saved record; neither an API reply nor idle alone
+      // claims that durable text is already available on disk.
+      await until(() => {
+        const transcriptRows = fs.readdirSync(path.join(config, 'projects'), { recursive: true })
+          .filter(name => name.endsWith(`${after.nativeId}.jsonl`))
+          .flatMap(name => fs.readFileSync(path.join(config, 'projects', name), 'utf8').split('\n').slice(0, -1).filter(Boolean).map(line => JSON.parse(line)));
+        accepted = transcriptRows.filter(row => row.type === 'attachment' && row.attachment?.type === 'queued_command' && row.attachment.prompt === text);
+        return accepted.length > 0;
+      }, 'Actual native accepted attachment is durably saved', 5000);
+      assert.equal(accepted.length, 1, 'One actual accepted queued attachment');
+      acceptedText = accepted[0].rendered.flatMap(block => typeof block.content === 'string' ? [block.content] : block.content.filter(item => item.type === 'text').map(item => item.text)).join('\n');
+      acceptedId = `native:${after.nativeId}:prompt:${accepted[0].uuid}`;
+      assert.equal(acceptedText.split(text).length - 1, 1);
+    }
+    const rows = after.messages.filter(m => m.role === 'user' && m.text === acceptedText);
+    fs.writeFileSync(path.join(base, 'native-inline-completed.json'), JSON.stringify({ before, after, rows, calls, errors }, null, 2));
+    assert.equal(rows.length, 1, 'Actual native accepted rendering has one GUI row');
+    if (acceptedId) assert.equal(rows[0].id, acceptedId, 'GUI identity is the actual accepted attachment UUID');
+    assert.equal(rows[0].inputMode, inlineTool ? 'native-inline' : 'native-prompt', 'Native accepted input follows its actual tool or prompt boundary');
+    assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid);
+    const request = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json')));
+    assert.equal(request.messages.filter(m => m.role === 'user').flatMap(m => typeof m.content === 'string' ? [m.content] : m.content.filter(b => b.type === 'text').map(b => b.text)).filter(t => t.includes(text)).length, 1);
+    await page.locator('#chat-tab').click(); assert.equal(await page.locator('#messages .message-body').filter({ hasText: text }).count(), 1);
+    if (inlineTool) assert.equal(await page.locator('#messages .message').filter({ has: page.locator('.message-body').filter({ hasText: text }) }).locator('.message-heading strong').first().innerText(), '原生会话', 'Native framing is not labeled as human-authored');
+    fs.writeFileSync(path.join(base, 'native-inline-completed.json'), JSON.stringify({ before, after, rows, calls, errors }, null, 2));
+    if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-inline.png') });
+    assert.deepEqual(errors, []); console.log(JSON.stringify({ checks: ['Real312 queued input reaches the model once and its exact native accepted rendering appears once under the original UUID'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+  }
   await until(async () => (await page.locator('#send-button').innerText()) === '等本轮结束后发送 ↑', 'Working composer receives state');
   // A draft in the native prompt makes native refuse a queued send before holding it.
   await nativeKey('x', /❯\s*x\s*$/);

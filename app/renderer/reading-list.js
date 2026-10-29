@@ -514,6 +514,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     entry.item.classList.toggle('native-notice', m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id)));
     const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
     let name = room ? roomMessageLabel(m) : m.name;
+    if (m.nativeBlock && m.kind === 'input' && m.inputMode === 'native-inline') name = '原生会话';
     name ||= m.role === 'user' ? '你' : session?.provider === 'claude' ? 'Claude' : 'Codex';
     if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
     const messageTime = room && m.kind !== 'turn' ? m.time : undefined;

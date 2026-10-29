@@ -124,6 +124,12 @@
       options.decorateHeader?.(name, record);
       name.addEventListener('pointerdown', () => { if (!focused) rememberSelection(); });
       const heading = el('div', undefined, 'collaboration-member-heading');
+      // Keep every original message action in the normal tab order, while
+      // offering a short keyboard route past a member's long conversation.
+      const next = button('', () => {
+        const index = records.findIndex(s => s.id === record.id);
+        if (layout === 'list' && !focused && index >= 0) panes.get(records[index + 1]?.id)?.name.focus();
+      }, 'collaboration-member-next');
       const more = button('⋯', () => options.onMemberMenu?.(record.id, more), 'collaboration-member-more');
       more.dataset.memberMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
@@ -135,7 +141,7 @@
         if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey || !(event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) return;
         event.preventDefault(); event.stopPropagation(); options.onMemberMenu?.(record.id, more);
       });
-      heading.append(name, more);
+      heading.append(name, more, next);
       const status = el('span', undefined, 'collaboration-member-state'); status.setAttribute('role', 'status');
       const child = el('span', undefined, 'collaboration-member-child'), freshness = el('span', undefined, 'collaboration-member-freshness');
       header.append(heading, status, child, freshness);
@@ -166,15 +172,18 @@
       const finish = () => { if (dragging) { dragging = null; options.onLayout?.(); } };
       grip.addEventListener('pointerup', finish); grip.addEventListener('pointercancel', finish); grip.addEventListener('lostpointercapture', finish);
       reader.append(messages, short, grip);
-      return pane = { header, name, more, status, child, freshness, reader, messages, short, quote, truncation, source, notice, grip };
+      const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(reader);
+      return pane = { header, name, more, next, status, child, freshness, unit, reader, messages, short, quote, truncation, source, notice, grip };
     }
     function render() {
       host.dataset.layout = layout; host.dataset.focused = String(Boolean(focused)); host.dataset.brief = String(brief); host.dataset.content = String(contentVisible);
       simplify.setAttribute('aria-pressed', String(brief)); grid.setAttribute('aria-pressed', String(layout === 'grid')); list.setAttribute('aria-pressed', String(layout === 'list'));
       back.hidden = !focused; simplify.hidden = Boolean(focused) || !contentVisible; layouts.hidden = Boolean(focused) || !contentVisible; readers.hidden = Boolean(focused) || !contentVisible; empty.hidden = records.length > 0 || !contentVisible;
+      const listUnits = layout === 'list' && !focused && contentVisible;
+      host.dataset.listUnits = String(listUnits); headers.hidden = listUnits;
       const retained = new Set(records.map(r => r.id));
       for (const [id, pane] of panes) if (!retained.has(id)) {
-        options.disposeMessages?.(pane.messages); pane.header.remove(); pane.reader.remove(); panes.delete(id); weights.delete(id);
+        options.disposeMessages?.(pane.messages); pane.header.remove(); pane.unit.remove(); panes.delete(id); weights.delete(id);
       }
       records.forEach((record, i) => {
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
@@ -183,13 +192,17 @@
         pane.more.hidden = !options.onMemberMenu;
         pane.more.disabled = !connected;
         pane.more.setAttribute('aria-label', `管理 ${label}`);
+        pane.next.hidden = !listUnits || i === records.length - 1;
+        setText(pane.next, `跳到下一成员：${records[i + 1] ? options.label(records[i + 1]) : ''}`);
         pane.header.classList.toggle('is-focused', focused === record.id);
         pane.messages.hidden = brief; pane.short.hidden = !brief;
         pane.messages.setAttribute('aria-label', `${label} 的原会话`);
         pane.grip.setAttribute('aria-label', `调整 ${label} 的阅读列宽`);
         // Stable nodes preserve text selection, process expansion and anchors.
-        if (headers.children[i] !== pane.header) headers.insertBefore(pane.header, headers.children[i] || null);
-        if (readers.children[i] !== pane.reader) readers.insertBefore(pane.reader, readers.children[i] || null);
+        if (listUnits) {
+          if (pane.header.parentElement !== pane.unit) pane.unit.insertBefore(pane.header, pane.reader);
+        } else if (headers.children[i] !== pane.header) headers.insertBefore(pane.header, headers.children[i] || null);
+        if (readers.children[i] !== pane.unit) readers.insertBefore(pane.unit, readers.children[i] || null);
         if (!focused && !brief && contentVisible) options.renderMessages(pane.messages, record, options.messages(record), key(record.id));
         if (brief) {
           const snippet = excerpt(record, options.messages(record));

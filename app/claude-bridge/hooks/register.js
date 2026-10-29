@@ -151,8 +151,13 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
   if (nativeBlocks) {
     // A queue record is virtual; only the accepted conversation attachment is
     // a display row. Its UUID and final content come from the native engine.
-    if (binding.nativeInlineInput && e.door === 'attachment' && e.origin?.kind === 'engine' && message.type === 'attachment' &&
-      message.name === 'queued_command' && message.role === 'user') {
+    const queuedHuman = e.door === 'delivery' && ['composer', 'bridge'].includes(e.origin?.kind);
+    const queuedEngine = e.door === 'attachment' && e.origin?.kind === 'engine' && message.role === 'user';
+    // Native queued deliveries can use the system channel, with no API role.
+    // Keep the final accepted rendering, including native framing; never strip
+    // it or infer a human author from the text of an unrelated delivery.
+    if (binding.nativeInlineInput && (queuedHuman || queuedEngine) && message.type === 'attachment' &&
+      message.name === 'queued_command') {
       const inputTurn = typeof turnId === 'string' && turnId && !displayTurns.get(turnId)?.ended ? turnId : undefined;
       enqueueBlock($, { id: `prompt:${result.uuid}`, kind: 'input', turnId: inputTurn,
         text: text(message.content), title: '工作中插入', inputMode: 'native-inline',
