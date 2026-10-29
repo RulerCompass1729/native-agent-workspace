@@ -476,6 +476,7 @@ class WorkspaceClient extends EventEmitter {
         guard();
         const state = await this.refresh(); assertNativeCreation(state);
         guard();
+        if (args[0]?.newDirectory != null && !state.capabilities?.includes('newSessionDirectory')) throw new Error('当前后台尚不支持自动新建目录，请重新打开应用连接新版后台。');
         const id = await this.active.client.call(method, ...args); await this.refresh(); return id;
       });
       creationQueue = operation.catch(() => {}); return operation;

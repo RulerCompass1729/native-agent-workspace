@@ -57,20 +57,25 @@ or start paid model runs as a side effect of editing documents.
 - Current development preference: the main agent implements and tests directly;
   do not delegate coding or routine testing unless requested. The independent
   reviewer at delivery checkpoints is a separate headless Claude Code session,
-  not a subagent of the main agent. Each checkpoint is one invocation that exits.
-  Run it from this repository as an unsandboxed background shell job (not
-  `claude --bg`), with the brief on stdin and output in private files:
+  not a subagent of the main agent. Start each new checkpoint in a fresh session,
+  saving its UUID with that checkpoint's private evidence. Point the brief to
+  `docs/review.md` for earlier findings. Each invocation exits. Run it from this
+  repository as an unsandboxed background shell job (not `claude --bg`), with the
+  brief on stdin and output in private files:
 
   ```sh
-  claude -p --resume "$(cat .local/reviewer-session-id)" --model fable \
+  claude -p --session-id "$NAW_REVIEW_ID" --model fable \
     --permission-mode bypassPermissions --output-format json \
     --disallowedTools Edit Write NotebookEdit "Bash(git commit *)" "Bash(git push *)" \
     < "$BRIEF" > "$OUT" 2> "$OUT.err"
   ```
 
-  If that gitignored file is missing, save a new `uuidgen` value there and use
-  `--session-id` instead of `--resume` once. A nonzero exit or `"is_error": true`
-  means Claude is unavailable. Give the reviewer the scope, commit range and raw
+  Set `NAW_REVIEW_ID` from `uuidgen` once for the new checkpoint. For fixes to
+  that same checkpoint, use `--resume` with its saved UUID. Keep the former
+  `.local/reviewer-session-id` session as a backup; do not run paired reviews by
+  default. For the next few checkpoints, retain the reported cost and findings
+  to check this choice. A nonzero exit or `"is_error": true` is not a pass.
+  Give the reviewer the scope, commit range and raw
   evidence paths, not your verdict. It may run existing no-model checks
   (rebuilding gitignored output is fine) and write scratch files only outside
   the repository; confirm `git rev-parse HEAD` and `git status --porcelain` are
