@@ -207,6 +207,10 @@ async function boot() {
   });
   register('roomRename', async (_c, name) => { roomState.rename(name); await broadcastRoom(); });
   register('roomNotes', async (_c, text, revision) => { roomState.notes(text, revision); await broadcastRoom(); });
+  register('roomMemberOrder', async (c, change) => {
+    const snapshot = await c.client.call('initial');
+    roomState.moveMember(change, snapshot.sessions); await broadcastRoom();
+  });
   register('archiveSession', async (c, id) => { try { await roomState.archiveSession(c.client, id, sessionLabels.labels.get(id)); } finally { await broadcastRoom(); } });
   register('restoreSession', async (c, id) => {
     const state = await c.client.call('initial'); if (!state.sessions.some(s => s.id === id)) throw Error('原生会话记录不可用。');
