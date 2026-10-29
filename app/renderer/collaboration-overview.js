@@ -56,6 +56,28 @@
     const setText = (n, text) => { if (n.textContent !== text) n.textContent = text; };
     const button = (text, action, cls) => { const n = el('button', text, cls); n.type = 'button'; n.addEventListener('click', action); return n; };
     const panes = new Map(); let records = [], connected = true, contentVisible = true, brief = false, layout = 'grid', focused = '', weights = new Map(), originSelection, briefSelection, dragging;
+    const orderType = 'application/x-native-room-member-order';
+    const canOrder = () => Boolean(options.onMove && connected && contentVisible && !focused);
+    const orderStatus = el('span', undefined, 'collaboration-order-status'); orderStatus.setAttribute('role', 'status');
+    const clearOrderMarkers = () => {
+      for (const pane of panes.values()) for (const marker of [pane.header, pane.unit]) {
+        marker.classList.remove('member-order-before', 'member-order-after'); delete marker.dataset.orderHint;
+      }
+    };
+    host.addEventListener('dragend', clearOrderMarkers);
+    host.addEventListener('keydown', event => { if (event.key === 'Escape') clearOrderMarkers(); });
+    async function moveMember(id, target, after) {
+      if (!canOrder() || id === target) return;
+      options.beforeLayout?.();
+      try {
+        await options.onMove(id, target, after);
+        // Announce the rendered broadcast, never a predicted native operation.
+        requestAnimationFrame(() => {
+          const index = records.findIndex(s => s.id === id);
+          if (index >= 0) orderStatus.textContent = `${options.label(records[index])} 已移到第 ${index + 1} 位，共 ${records.length} 位成员`;
+        });
+      } catch (error) { orderStatus.textContent = error.message || '顺序未更改。'; options.onOrderError?.(error); }
+    }
     const toolbar = el('div', undefined, 'collaboration-toolbar');
     const back = button('← 返回共同工作', () => focus(''), 'collaboration-back'); back.hidden = true;
     const simplify = button('简化信息', () => {
@@ -69,7 +91,7 @@
     const headers = el('div', undefined, 'collaboration-statuses'); headers.setAttribute('aria-label', '全体协作成员状态');
     const readers = el('div', undefined, 'collaboration-readers');
     const empty = el('p', '邀请已有会话加入，一起查看各自的工作。', 'quiet collaboration-empty');
-    host.classList.add('collaboration-overview'); host.append(toolbar, headers, readers, empty);
+    host.classList.add('collaboration-overview'); host.append(toolbar, headers, readers, empty, orderStatus);
     function key(id) { return `collaboration:${options.roomId || 'shared'}:${id}`; }
     function selectedRange() {
       const selection = doc.getSelection();
@@ -122,6 +144,34 @@
       // Reuse the application's existing member-drag contract on the handle,
       // leaving the conversation itself available for ordinary text selection.
       options.decorateHeader?.(name, record);
+      name.addEventListener('dragstart', event => { if (canOrder()) event.dataTransfer.setData(orderType, record.id); });
+      name.addEventListener('keydown', event => {
+        if (!canOrder() || event.isComposing || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+        event.preventDefault(); event.stopPropagation();
+        const index = records.findIndex(s => s.id === record.id), next = records[index + (event.key === 'ArrowUp' ? -1 : 1)];
+        if (next) moveMember(record.id, next.id, event.key === 'ArrowDown');
+      });
+      const acceptsOrder = event => canOrder() && event.dataTransfer.types.includes(orderType);
+      const after = event => {
+        const horizontal = layout === 'grid' && [...panes.values()].some(p => p.header !== header && Math.abs(p.header.getBoundingClientRect().top - header.getBoundingClientRect().top) < 2);
+        header.dataset.orderAxis = horizontal ? 'x' : 'y';
+        const box = header.getBoundingClientRect();
+        return horizontal ? event.clientX >= box.left + box.width / 2 : event.clientY >= box.top + box.height / 2;
+      };
+      header.addEventListener('dragover', event => {
+        if (!acceptsOrder(event)) return;
+        event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move';
+        clearOrderMarkers(); const below = after(event), marker = layout === 'list' ? panes.get(record.id).unit : header;
+        marker.dataset.orderAxis = header.dataset.orderAxis;
+        marker.classList.add(below ? 'member-order-after' : 'member-order-before');
+        marker.dataset.orderHint = below ? '移到此成员之后' : '移到此成员之前';
+      });
+      header.addEventListener('dragleave', event => { if (!header.contains(event.relatedTarget)) clearOrderMarkers(); });
+      header.addEventListener('drop', event => {
+        if (!acceptsOrder(event)) return;
+        event.preventDefault(); event.stopPropagation(); const id = event.dataTransfer.getData(orderType), below = after(event); clearOrderMarkers();
+        if (records.some(s => s.id === id)) moveMember(id, record.id, below);
+      });
       name.addEventListener('pointerdown', () => { if (!focused) rememberSelection(); });
       const heading = el('div', undefined, 'collaboration-member-heading');
       // Keep every original message action in the normal tab order, while
@@ -176,6 +226,13 @@
       return pane = { header, name, more, next, status, child, freshness, unit, reader, messages, short, quote, truncation, source, notice, grip };
     }
     function render() {
+      const reordered = [...readers.children].map(n => n.dataset.memberId).join('\n') !== records.map(r => r.id).join('\n');
+      const active = reordered && doc.activeElement, selection = reordered && doc.getSelection();
+      const selected = selection && !selection.isCollapsed && readers.contains(selection.anchorNode) && readers.contains(selection.focusNode)
+        ? { anchor: selection.anchorNode, start: selection.anchorOffset, focus: selection.focusNode, end: selection.focusOffset } : null;
+      const scrolls = reordered ? [...panes.values()].map(p => [p.messages, p.messages.scrollTop, p.messages.scrollLeft, p.short, p.short.scrollTop]) : [];
+      const anchor = reordered && host.dataset.listUnits === 'true' && [...readers.children].find(n => n.getBoundingClientRect().bottom > readers.getBoundingClientRect().top);
+      const anchorOffset = anchor && anchor.getBoundingClientRect().top - readers.getBoundingClientRect().top;
       host.dataset.layout = layout; host.dataset.focused = String(Boolean(focused)); host.dataset.brief = String(brief); host.dataset.content = String(contentVisible);
       simplify.setAttribute('aria-pressed', String(brief)); grid.setAttribute('aria-pressed', String(layout === 'grid')); list.setAttribute('aria-pressed', String(layout === 'list'));
       back.hidden = !focused; simplify.hidden = Boolean(focused) || !contentVisible; layouts.hidden = Boolean(focused) || !contentVisible; readers.hidden = Boolean(focused) || !contentVisible; empty.hidden = records.length > 0 || !contentVisible;
@@ -189,6 +246,11 @@
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
         const label = options.label(record); setText(pane.name, label);
         pane.name.setAttribute('aria-label', `放大 ${label} 的会话`); pane.name.setAttribute('aria-pressed', String(focused === record.id));
+        if (options.onMove) {
+          pane.name.setAttribute('aria-description', `第 ${i + 1} 位，共 ${records.length} 位成员。${canOrder() ? '拖动卡片头排序，或按 Option 加上下方向键；也可在成员菜单中上移或下移。' : ''}`);
+          if (canOrder()) pane.name.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');
+          else pane.name.removeAttribute('aria-keyshortcuts');
+        }
         pane.more.hidden = !options.onMemberMenu;
         pane.more.disabled = !connected;
         pane.more.setAttribute('aria-label', `管理 ${label}`);
@@ -218,10 +280,14 @@
         }
       });
       setWidths(); refreshStatus();
+      for (const [messages, top, left, short, briefTop] of scrolls) { messages.scrollTop = top; messages.scrollLeft = left; short.scrollTop = briefTop; }
+      if (anchor?.isConnected && host.dataset.listUnits === 'true') readers.scrollTop += anchor.getBoundingClientRect().top - readers.getBoundingClientRect().top - anchorOffset;
+      if (active?.isConnected && doc.activeElement === doc.body && host.contains(active)) active.focus({ preventScroll: true });
+      if (selected?.anchor.isConnected && selected.focus.isConnected) selection.setBaseAndExtent(selected.anchor, selected.start, selected.focus, selected.end);
     }
     return {
       update(people, isConnected = true, showContent = true, focusId = focused) {
-        if (records.map(r => r.id).join('\n') !== people.map(r => r.id).join('\n')) dragging = null;
+        if (!isConnected || records.map(r => r.id).join('\n') !== people.map(r => r.id).join('\n')) { dragging = null; clearOrderMarkers(); }
         records = people; connected = isConnected; contentVisible = showContent;
         if (!focusId || records.some(r => r.id === focusId)) { if (focusId !== focused) originSelection = null; focused = focusId; }
         if (focused && !records.some(r => r.id === focused)) { const previous = focused; focused = ''; options.onFocus?.('', previous, key(previous)); }

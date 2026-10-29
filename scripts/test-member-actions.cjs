@@ -103,7 +103,9 @@ async function run() {
   const passive = await fixture('stats'), owners = (await snapshot()).sessions.map(s => [s.id, s.owner, s.view, s.controlRevision]);
   await more(b).focus(); await page.keyboard.press('Shift+F10');
   await page.getByRole('menuitem', { name: '脱出协作', exact: true }).waitFor();
-  assert.equal(await page.getByRole('menuitem').count(), 2); assert.equal(await more(b).getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.getByRole('menuitem').count(), 4);
+  for (const name of ['脱出协作', '复制完整 NAW ID', '上移', '下移']) assert.equal(await page.getByRole('menuitem', { name, exact: true }).count(), 1);
+  assert.equal(await more(b).getAttribute('aria-expanded'), 'true');
   await visibleStates([a, b, c, d], true); await capture('02-member-menu-below-status-band');
   await page.getByRole('menuitem', { name: '复制完整 NAW ID', exact: true }).click();
   assert.equal(await app.evaluate(() => globalThis.memberCopies.at(-1)), b);

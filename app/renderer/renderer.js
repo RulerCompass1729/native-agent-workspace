@@ -132,6 +132,12 @@ const viewClaims = new Map();
 const activeSessionId = () => selected === 'room' ? roomSession : selected;
 const current = () => state?.sessions.find(s => s.id === activeSessionId());
 const members = () => state?.room.archived ? [] : state?.sessions.filter(s => s.roomId === 'shared' && !s.archived) || [];
+function orderedMembers() {
+  const people = members(), ranks = new Map((state?.room.memberOrder || []).map((id, index) => [id, index]));
+  const fallback = ranks.size;
+  return people.map((record, index) => ({ record, rank: ranks.get(record.id) ?? fallback + index }))
+    .sort((a, b) => a.rank - b.rank).map(item => item.record);
+}
 function focusRoomMember(id, previous, originKey) {
   if (selected !== 'room' || id && !members().some(s => s.id === id)) return;
   const leaving = terminals.get(activeSessionId()); cancelViewInput(leaving);
@@ -157,6 +163,8 @@ function renderRoomOverview() {
   const removedFocus = oldHeader && !members().some(s => s.id === oldHeader.dataset.memberId);
   if (!roomOverview) roomOverview = window.nativeWorkspaceCollaboration.create({
     host: $('collaboration-overview'), roomId: state.room.id,
+    onMove: moveRoomMember,
+    onOrderError: error => toast(error.message || '顺序未更改。'),
     label: s => participantLabel(s, state.sessions), messages: s => sessionMessages(s),
     renderMessages: (el, s, rows, key) => messageList(el, rows, false, key, { session: s, passive: true }),
     disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
@@ -171,7 +179,7 @@ function renderRoomOverview() {
   const focused = focusedRoomMember(), records = roomSurface === 'records';
   $('collaboration-overview').hidden = false;
   for (const person of members()) readLegacyProgress(person);
-  roomOverview.update(members(), !disconnected, !records, focused ? roomSession : '');
+  roomOverview.update(orderedMembers(), !disconnected, !records, focused ? roomSession : '');
   $('room-overview').setAttribute('aria-pressed', String(!records)); $('room-record').setAttribute('aria-pressed', String(records));
   $('room-member-tabs').hidden = true;
   $('room-record-view').querySelector('.timeline-tools').hidden = !records;
@@ -708,9 +716,12 @@ function openMemberMenu(id, anchor) {
   if (!key || !anchor.isConnected) return;
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
   anchor.focus({ preventScroll: true }); anchor.setAttribute('aria-expanded', 'true');
+  const people = orderedMembers(), index = people.findIndex(s => s.id === id), reorder = roomSurface === 'overview' && !roomSession;
   const close = ui.menu({
     contextElement: anchor,
-    items: [{ id: 'detach', label: '脱出协作' }, { id: 'copy-id', label: '复制完整 NAW ID' }],
+    items: [{ id: 'detach', label: '脱出协作' }, { id: 'copy-id', label: '复制完整 NAW ID' },
+      ...(reorder && index > 0 ? [{ id: 'earlier', label: '上移' }] : []),
+      ...(reorder && index < people.length - 1 ? [{ id: 'later', label: '下移' }] : [])],
     getAnchorRect: () => {
       const rect = anchor.getBoundingClientRect(), band = (anchor.closest('.collaboration-statuses') || anchor.closest('.collaboration-member-status') || anchor).getBoundingClientRect();
       return { left: rect.left, right: rect.right, top: band.bottom, bottom: band.bottom };
@@ -724,6 +735,11 @@ function openMemberMenu(id, anchor) {
       if (key !== memberMenuKey(id)) return toast('成员已变化，请重新打开菜单。');
       if (action === 'copy-id') attempt(() => api.copy(id));
       else if (action === 'detach') attempt(() => detach(id));
+      else if (action === 'earlier' || action === 'later') {
+        const people = orderedMembers(), index = people.findIndex(s => s.id === id), target = people[index + (action === 'earlier' ? -1 : 1)];
+        if (!target) return toast('已经位于列表边界，顺序未更改。');
+        attempt(async () => { captureReadingViews(); restoreOverviewReading(); toast(await moveRoomMember(id, target.id, action === 'later')); });
+      }
     },
   });
   sessionMenu = { id, anchor, key, kind: 'member', close };
@@ -954,6 +970,12 @@ function renderTimeline() {
   const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name]), filter.value, $('room-search').value, roomThread, [...roomThreads.groups].map(([id, rows]) => [id, rows.length])]);
   if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true, roomReadingKey()); lastRoomMessages = signature; }
   $('timeline-count').textContent = `${messages.length} 条`; $('copy-timeline').disabled = !messages.length;
+}
+async function moveRoomMember(id, target, after) {
+  await api.roomMemberOrder({ id, target, after });
+  const people = orderedMembers(), index = people.findIndex(s => s.id === id);
+  if (index < 0) throw Error('成员已离开，顺序请以当前列表为准。');
+  return `${participantLabel(people[index])} 已移到第 ${index + 1} 位，共 ${people.length} 位成员`;
 }
 function draggableSession(element, id, reorder = false) {
   element.draggable = true;
