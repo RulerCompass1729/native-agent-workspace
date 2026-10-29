@@ -290,6 +290,8 @@ header h1, header p { overflow-wrap: anywhere; }
 /* Preserve native text line breaks inside paragraphs, without treating the
    Markdown renderer's whitespace between block elements as extra blank lines. */
 .message.assistant .message-body p { white-space: pre-line; }
+.reading-page{display:block;margin:6px auto 12px;font-size:12px}
+.reading-page[hidden]{display:none}
 
 /* Keep native lifecycle notices small and human text visibly distinct. */
 .message.system{display:flex;align-items:baseline;gap:8px;color:var(--muted)}
