@@ -648,3 +648,28 @@ Clean2b1b421 builds signed119 with105production packages and57matching runtime f
 Controlled backend refresh — recovery still open
 
 All six backends now report118, matching the daily app. The earlier one-shot operator failed while waiting for the first Claude recovery, before attempting Main resume or continuation. Its exact deadline predicate was not recorded; a later healthy state cannot identify it. Later native reads verify the original nine records, drafts and known configuration, and the same Main goal identity/objective; the user explicitly changed its status from blocked to active. This is not an unattended recovery pass. Original failures are retained, no uncertain dispatch is retried, and the next necessary recovery qualification must record the failed condition.
+
+
+Signed120 member/startup batch — partial backend refresh
+
+Clean committed aada4fd combines the reviewed member actions, inline names and two
+managed-Codex startup argv overrides. Signed installed acceptance passes seven
+member flows, seven inline-name flows, six related-menu flows and real0.164
+editor startup with zero task/title responses;85 affected unit checks pass.
+All57 runtime files match, strict signature survives native testing, and temporary
+counts stay6→6/0→0. Product test model calls are zero; independent reviews and
+productive developer work are separate. Physical input, first-time folder trust
+and new real-history resume are not certified.
+
+Ordinary visible GUI installation retains the nine original records, live native
+process/start identities, owners and12 flushed view drafts. A later separately
+reviewed one-shot backend refresh restores three selected backends on120, with
+original native identities, known settings, saved Codex goals and drafts. Main's
+active native goal starts another turn; the exact-turn guard refuses to retire
+its118 backend. Failure remains recorded, no Main resume or extra recovery input
+is attempted, and the GUI visibly reopens. The ten current records and12 flushed
+view drafts reconcile; the unselected secretary and new developer backend retain
+their daemon/native PID-start identities. Four of six backends are120; Main and
+the secretary remain118. Author holds are released with one productive task each;
+submission is not completion. This does not close Main recovery, all-backend
+update, full-day development or the overall dogfood milestone.
