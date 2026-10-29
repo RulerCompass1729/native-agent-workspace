@@ -152,6 +152,9 @@ function restoreOverviewReading() {
   }
 }
 function renderRoomOverview() {
+  const origin = document.activeElement, oldHeader = origin?.closest('.collaboration-member-status');
+  const oldIndex = oldHeader ? [...$('collaboration-overview').querySelectorAll('.collaboration-member-status')].indexOf(oldHeader) : -1;
+  const removedFocus = oldHeader && !members().some(s => s.id === oldHeader.dataset.memberId);
   if (!roomOverview) roomOverview = window.nativeWorkspaceCollaboration.create({
     host: $('collaboration-overview'), roomId: state.room.id,
     label: s => participantLabel(s, state.sessions), messages: s => sessionMessages(s),
@@ -176,6 +179,7 @@ function renderRoomOverview() {
   if (!records) $('thread-heading').hidden = true;
   $('room-composer').hidden = focused;
   $('room-layout').classList.toggle('collaboration-focus', focused);
+  if (removedFocus) focusRemainingMember(origin, oldIndex);
 }
 const nativeUsable = s => s && !s.archived && !s.backendUnavailable && (['starting', 'idle', 'working', 'approval'].includes(s.state) || ((s.state === 'error' || s.nativeContextPending) && s.terminalAvailable));
 const canResume = s => s?.nativeId && !s.nativeContextPending && !s.backendUnavailable &&
@@ -331,7 +335,39 @@ function renderComposer(s) {
   send.disabled = action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
   $('compose-hint').textContent = inputRecoveries.get(s?.id)?.text.value ? '上一段原生输入未确认。草稿可继续编辑；请在原生终端查看保留的文字。' : pendingMode?.id === s?.id ? '正在切换输入方式，可以先编辑草稿。' : action.hint;
 }
-function toast(text) { $('toast-text').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500); }
+function toast(text, action) {
+  clearTimeout(toastTimer);
+  const old = $('toast').querySelector('.toast-action');
+  if (old === document.activeElement) $('toast-close').focus({ preventScroll: true });
+  old?.remove(); $('toast-text').textContent = text; $('toast').hidden = false;
+  if (action) {
+    const open = button(action.label, () => {
+      if (!open.isConnected || $('toast').hidden) return;
+      $('toast').hidden = true; return action.run();
+    }, 'toast-action');
+    open.setAttribute('aria-label', action.name || action.label); $('toast').insertBefore(open, $('toast-close'));
+  } else toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500);
+}
+function sessionNotice(text, id) {
+  const record = state.sessions.find(s => s.id === id);
+  toast(text, record && selected !== id && { label: '打开', name: `打开 ${participantLabel(record, state.sessions)}`, run: () => {
+    if (selected === id) return;
+    if (!state.sessions.some(s => s.id === id)) throw Error('原会话记录已不可用。');
+    return select(id);
+  } });
+}
+function focusAfterRemoval(origin, candidates) {
+  if (!origin || origin.isConnected && origin.getClientRects().length) return;
+  const surface = JSON.stringify([selected, roomSession, roomSurface, mode]);
+  requestAnimationFrame(() => {
+    if (surface !== JSON.stringify([selected, roomSession, roomSurface, mode]) || document.activeElement && document.activeElement !== document.body) return;
+    candidates.find(el => el?.isConnected && !el.disabled && el.getClientRects().length)?.focus({ preventScroll: true });
+  });
+}
+function focusRemainingMember(origin, index) {
+  const cards = [...$('collaboration-overview').querySelectorAll('.collaboration-member-status')];
+  focusAfterRemoval(origin, [cards[index]?.querySelector('.collaboration-member-more'), cards[index - 1]?.querySelector('.collaboration-member-more'), $('manage-members')]);
+}
 ui.copyCode = async text => {
   try { await api.copy(text); toast('已复制'); }
   catch (error) { toast('复制失败，请重试。'); throw error; }
@@ -384,15 +420,10 @@ async function operateNative(id) {
   if (activeSessionId() === id) await switchMode('terminal');
 }
 async function detach(id) {
-  const nextMode = current()?.id === id ? mode : 'terminal';
-  const revision = selectionRevision;
   await api.join(id, false);
-  // Membership arrives through the state stream. Do not overwrite newer state
-  // or pull a person back after they have already selected another view.
-  if (roomSession === id) roomSession = '';
-  if (revision !== selectionRevision) { await persistView(); return; }
-  await select(id, nextMode);
-  const s = current(); if (s?.owner === owner && s.view !== nextMode) await claimView(id, nextMode, selectionRevision);
+  // State reconciliation removes the reader in place. Opening its original
+  // session is a separate human action, never another input/view claim.
+  sessionNotice('已脱出协作', id);
 }
 function focusTerminal(id = activeSessionId()) {
   if ((terminalCanInput(id) || canCaptureTerminal(id)) && inputFocusAllowed()) terminals.get(id).term.focus();
@@ -800,20 +831,35 @@ function renderArchives() {
   $('archive-button').title = `归档 ${count} 项${running ? `，${running} 个原生会话仍需查看状态` : ''}`;
   if ($('archive-group-body').hidden) return;
   const list = $('archive-list');
+  const origin = document.activeElement, oldRow = origin?.closest('.archive-item'), oldIndex = oldRow ? [...list.children].indexOf(oldRow) : -1;
   const signature = JSON.stringify([state.room.archived, state.room.name, records.map(s => [s.id, s.name, s.state]), state.sessions.map(s => [s.id, s.name])]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
   if (state.room.archived) {
-    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = state.room.id; row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', async () => { await api.restoreRoom(); state = await api.initial(); selectRoom(); })); list.append(row);
+    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = state.room.id; row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', restoreArchivedRoom)); list.append(row);
   }
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
     row.append(node('strong', participantLabel(s, state.sessions)), node('small', `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[s.state]}${['ended', 'recoverable'].includes(s.state) ? ' · 需继续原生历史' : ' · 归档未结束原生进程'} · ${sessionTimes(s)}`), button('恢复会话', () => restoreArchivedSession(s.id))); list.append(row);
   }
   if (!count) list.append(node('p', '还没有归档内容。使用会话或工作区旁的 ⋯ 菜单归档。'));
+  if (oldRow) {
+    const rows = [...list.children], same = rows.find(row => oldRow.dataset.archivedSession ? row.dataset.archivedSession === oldRow.dataset.archivedSession : row.dataset.archivedRoom === oldRow.dataset.archivedRoom);
+    focusAfterRemoval(origin, [same?.querySelector('button'), rows[oldIndex]?.querySelector('button'), rows[oldIndex - 1]?.querySelector('button'), $('archive-button')]);
+  }
 }
 async function restoreArchivedSession(id) {
-  await api.restoreSession(id); state = await api.initial();
-  await select(id);
+  const origin = document.activeElement, surface = JSON.stringify([selected, roomSession, roomSurface, mode]);
+  await api.restoreSession(id); updateState(await api.initial()); render();
+  if (surface === JSON.stringify([selected, roomSession, roomSurface, mode])) focusAfterRemoval(origin, [$('session-header-more'), $('archive-button')]);
+  sessionNotice('会话已恢复', id);
+}
+async function restoreArchivedRoom() {
+  await api.restoreRoom(); updateState(await api.initial()); render();
+  toast('工作区已恢复', selected !== 'room' && { label: '打开', name: `打开 ${state.room.name}`, run: () => {
+    if (selected === 'room') return;
+    if (state.room.archived) throw Error('工作区已再次归档。');
+    return selectRoom();
+  } });
 }
 async function showSetup() {
   state.preflight = await api.preflight();
@@ -1338,12 +1384,15 @@ function render() {
   if (!state || rendering) return;
   captureReadingViews();
   rendering = true;
+  let removedRoomFocus;
   try {
     if (selected === 'room' && state.room.archived) { selected = ''; roomSession = ''; attempt(persistView); }
-    // A member may leave in another window. Keep its existing session in view.
+    // A member may leave in another window. Stay in the room, returning through
+    // the same input/composition guards as the explicit overview Back action.
     if (selected === 'room' && roomSession && !members().some(s => s.id === roomSession)) {
-      selected = state.sessions.some(s => s.id === roomSession) ? roomSession : 'room';
-      roomSession = ''; attempt(persistView);
+      const id = roomSession, cards = [...$('collaboration-overview').querySelectorAll('.collaboration-member-status')];
+      removedRoomFocus = { origin: document.activeElement, index: cards.findIndex(el => el.dataset.memberId === id) };
+      focusRoomMember('', id, roomOverview?.key(id));
     }
     const s = current(); const inRoom = selected === 'room', memberFocus = focusedRoomMember();
     const slot = inRoom ? $('room-session') : $('solo-session');
@@ -1502,6 +1551,7 @@ function render() {
     if ($('approval').parentElement !== approvalParent) approvalParent.prepend($('approval'));
     renderApproval(approvalTarget, approvalTarget?.owner === owner);
     renderRename(); updateSelectedSharing();
+    if (removedRoomFocus) focusRemainingMember(removedRoomFocus.origin, removedRoomFocus.index);
   } finally { restoreVisibleReading(); rendering = false; }
 }
 async function switchMode(next, takeControl = false) {
