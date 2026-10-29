@@ -33,6 +33,7 @@ function applyNativeBlock(session, event) {
   if (typeof event.text === 'string') row.text = event.text;
   if (typeof event.delta === 'string') row.text += event.delta;
   for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag', 'toolKind']) if (typeof event[field] === 'string') row[field] = event[field];
+  if (event.kind === 'input' && ['native-inline', 'native-prompt'].includes(event.inputMode)) row.inputMode = event.inputMode;
   if (event.kind === 'turn') for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) {
     if (Number.isFinite(event[field]) && (field === 'nativeDurationMs' ? Number.isSafeInteger(event[field]) && event[field] >= 0 : Math.abs(event[field]) <= 8640000000000000)) row[field] = event[field];
   }
