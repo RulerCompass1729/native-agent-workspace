@@ -4,7 +4,7 @@ import { test, expect, mock } from 'claude-code/testing';
 const session = '11111111-1111-4111-8111-111111111111';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const text = (value: string) => [{ type: 'text' as const, text: value }];
-async function fixture($, on, options: { inlineInput?: boolean } = { inlineInput: true }) {
+async function fixture($, on, options: { inlineInput?: boolean; promptInput?: boolean } = { inlineInput: true }) {
   const clock = mock.clock(on), stored = mock.session(on), observations = [], calls = [];
   mock.env(on, { NAW_SUBMIT_SOCKET: '/fixture/socket', NAW_HOOK_TOKEN: 'fixture-token' });
   on('session.id', async () => ({ value: session }));
@@ -22,7 +22,7 @@ async function fixture($, on, options: { inlineInput?: boolean } = { inlineInput
     // The real next request long-polls. Keep it beyond this test's clock so
     // an immediate empty reply cannot turn the native zero-delay poll into a loop.
     if (route === '/next') await clock.sleep(1);
-    const value = route === '/root-bind' ? { lease: 'synthetic-lease', observationEpoch: 'synthetic-epoch', nativeBlocks: true, nativeInlineInput: options.inlineInput }
+    const value = route === '/root-bind' ? { lease: 'synthetic-lease', observationEpoch: 'synthetic-epoch', nativeBlocks: true, nativeInlineInput: options.inlineInput, nativePromptInput: options.promptInput }
       : route === '/next' ? {} : { observed: true };
     return { value: { ok: true, status: 200, headers: {}, text: JSON.stringify(value) } };
   });
@@ -33,6 +33,25 @@ async function fixture($, on, options: { inlineInput?: boolean } = { inlineInput
 const attachment = (n: number, content = text('ORIGINAL_MIDTURN_TEXT')) => ({
   door: 'attachment' as const, origin: { kind: 'engine' as const }, uuid: id(n),
   message: { type: 'attachment' as const, name: 'queued_command', role: 'user' as const, content },
+});
+
+test('qualified ordinary native input uses its accepted original UUID, not a settings-hook surrogate', async ($, on) => {
+  const f = await fixture($, on, { inlineInput: true, promptInput: true });
+  await $.session.append({ door: 'prompt', origin: { kind: 'composer' }, uuid: id(20),
+    message: { type: 'user', role: 'user', content: text('ORDINARY_NATIVE_TEXT') } });
+  await f.clock.settle();
+  expect(f.inputs().length).toBe(1);
+  expect(f.inputs()[0]).toEqual(expect.objectContaining({ id: `prompt:${id(20)}`, kind: 'input',
+    inputMode: 'native-prompt', text: 'ORDINARY_NATIVE_TEXT', status: 'complete' }));
+  expect(f.inputs()[0].inputTag).toBe(undefined); expect(f.inputs()[0].promptId).toBe(undefined);
+});
+
+test('this mod own accepted app prompt keeps its existing app row rather than adding a native duplicate', async ($, on) => {
+  const f = await fixture($, on, { inlineInput: true, promptInput: true });
+  await $.session.append({ door: 'prompt', origin: { kind: 'plugin', name: 'native-workspace-submit', asUser: true }, uuid: id(21),
+    message: { type: 'user', role: 'user', content: text('APP_OWN_INPUT') } });
+  await f.clock.settle(); expect(f.inputs()).toEqual([]);
+  expect(f.stored.appended().at(-1)?.message.content).toEqual(text('APP_OWN_INPUT'));
 });
 
 for (const options of [{}, { inlineInput: false }]) {
