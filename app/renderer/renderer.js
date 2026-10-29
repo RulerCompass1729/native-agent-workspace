@@ -35,7 +35,7 @@ let roomThread = '', roomReplyTo = '';
 let roomThreads = window.nativeWorkspaceThreads.threadIndex([]);
 const roomReadingKey = () => roomThread ? `room:${roomThread}` : 'room';
 const sessionRows = new Map();
-const memberRows = new Map();
+let inviteOrigin;
 let headerControls, advancedControls;
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
 const terminalThemes = {
@@ -154,6 +154,7 @@ function renderRoomOverview() {
     disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
     beforeLayout: captureReadingViews, onLayout: restoreOverviewReading, onFocus: focusRoomMember,
     decorateHeader: (handle, record) => draggableSession(handle, record.id),
+    onMemberMenu: openMemberMenu,
     onSource: (el, key, source) => {
       if (!pointToMessage(el, key, source.messageId)) toast('这段原文已不在当前保留的记录中；没有改为打开其他消息。');
       attempt(persistView);
@@ -648,6 +649,42 @@ function openSessionMenu(id, point) {
   });
   sessionMenu = { id, close };
 }
+function memberMenuKey(id) {
+  const record = members().find(s => s.id === id);
+  return selected === 'room' && !disconnected && !state.room.archived && record
+    ? JSON.stringify([selectionRevision, roomSurface, roomSession, id, record.memberRevision, record.nativeId, record.roomId, record.archived]) : null;
+}
+function focusMemberAction(anchor) {
+  const visible = element => element?.isConnected && !element.disabled && element.getClientRects().length;
+  const target = visible(anchor) ? anchor : visible($('manage-members')) ? $('manage-members') : $('room-nav');
+  target.focus({ preventScroll: true });
+}
+function openMemberMenu(id, anchor) {
+  if (sessionMenu?.anchor === anchor) return sessionMenu.close();
+  const key = memberMenuKey(id);
+  if (!key || !anchor.isConnected) return;
+  contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
+  anchor.focus({ preventScroll: true }); anchor.setAttribute('aria-expanded', 'true');
+  const close = ui.menu({
+    contextElement: anchor,
+    items: [{ id: 'detach', label: '脱出协作' }, { id: 'copy-id', label: '复制完整 NAW ID' }],
+    getAnchorRect: () => {
+      const rect = anchor.getBoundingClientRect(), band = anchor.closest('.collaboration-statuses').getBoundingClientRect();
+      return { left: rect.left, right: rect.right, top: band.bottom, bottom: band.bottom };
+    },
+    onClose: () => {
+      if (sessionMenu?.close === close) sessionMenu = null;
+      anchor.setAttribute('aria-expanded', 'false');
+      focusMemberAction(key === memberMenuKey(id) ? anchor : null);
+    },
+    onSelect: action => {
+      if (key !== memberMenuKey(id)) return toast('成员已变化，请重新打开菜单。');
+      if (action === 'copy-id') attempt(() => api.copy(id));
+      else if (action === 'detach') attempt(() => detach(id));
+    },
+  });
+  sessionMenu = { id, anchor, key, kind: 'member', close };
+}
 function sidebarSessions() {
   const ranks = new Map((state.sidebar?.order || []).map((id, index) => [id, index]));
   return state.sessions.filter(s => !s.archived).sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity));
@@ -1061,7 +1098,7 @@ function renderHeaderLayout(s, inRoom) {
     else subtitle.textContent = s ? values.join(' · ') : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
     subtitle.dataset.identity = signature;
   }
-  if (sessionMenu?.anchor && sessionMenu.key !== headerMenuKey()) sessionMenu.close();
+  if (sessionMenu?.anchor && sessionMenu.key !== (sessionMenu.kind === 'member' ? memberMenuKey(sessionMenu.id) : headerMenuKey())) sessionMenu.close();
 }
 function renderHeader(s, inRoom) {
   if (!headerControls) {
@@ -1244,25 +1281,6 @@ function renderAdvanced(s) {
   a.stop.hidden = !switchedAway(s) && ['ended', 'background', 'stopping', 'recoverable'].includes(s.state);
   a.forget.hidden = !(['ended', 'background', 'recoverable', 'error'].includes(s.state) && !s.backendUnavailable && !s.terminalAvailable && (s.serviceCapabilities || state.capabilities)?.includes('forget'));
 }
-function renderMembers() {
-  const people = members(), ids = new Set(people.map(s => s.id)), list = $('members');
-  for (const [id, row] of memberRows) if (!ids.has(id)) {
-    if (row.element.contains(document.activeElement)) $('close-members').focus();
-    row.element.remove(); memberRows.delete(id);
-  }
-  people.forEach((record, index) => {
-    let row = memberRows.get(record.id);
-    if (!row) {
-      const element = node('div', undefined, 'member-card'), heading = node('div', undefined, 'member-name');
-      const name = node('strong'), status = node('p'), actions = node('div', undefined, 'actions');
-      element.dataset.memberId = record.id; heading.append(icon(record.provider), name);
-      actions.append(button('查看会话', () => { $('members-dialog').close(); selectRoom(record.id); }), button('脱出', async () => { await detach(record.id); $('members-dialog').close(); }));
-      element.append(heading, status, actions); row = { element, name, status }; memberRows.set(record.id, row);
-    }
-    row.name.textContent = participantLabel(record, state.sessions); row.status.textContent = sessionStatus(record);
-    const slot = list.children[index]; if (slot !== row.element) list.insertBefore(row.element, slot || null);
-  });
-}
 // Native activity words as plain Chinese; a native permission title passes through.
 const nativeActivityLabels = { requesting: '正在请求', thinking: '思考中', text: '正在输出', input: '正在准备工具', tool: '正在运行工具',
   inProgress: '工作中', commandExecution: '正在运行命令', fileChange: '正在修改文件', mcpToolCall: '正在调用工具', dynamicToolCall: '正在调用工具',
@@ -1426,7 +1444,6 @@ function render() {
       if ($('run-status').textContent !== runText) $('run-status').textContent = runText;
       $('pause-button').hidden = !run && !roomSubmitting;
       renderTimeline();
-      renderMembers();
       const previousRecipient = $('recipient').value;
       normalizeRoomMention();
       $('recipient').dataset.hadChoices = 'true';
@@ -1824,8 +1841,7 @@ $('room-nav').oncontextmenu = event => { event.preventDefault(); openRoomMenu({ 
 $('room-nav').onkeydown = event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openRoomMenu(); } };
 $('room-overview').onclick = () => attempt(() => { roomSurface = 'overview'; return selectRoom(); });
 $('room-record').onclick = () => attempt(() => { roomSurface = 'records'; return selectRoom(); });
-$('manage-members').onclick = () => $('members-dialog').showModal();
-$('close-members').onclick = () => { $('members-dialog').close(); focusTerminal(); };
+$('manage-members').onclick = () => openInvite($('manage-members'));
 dropTarget($('room-nav'), true); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
 for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace-toggle']]) {
   const toggle = $(id);
@@ -2172,7 +2188,25 @@ $('pause-button').onclick = () => attempt(async () => {
     render();
   }
 });
-$('invite-button').onclick = () => { $('members-dialog').close(); $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && !s.archived && s.state !== 'ended').map(s => { const entry = button(`加入 ${participantLabel(s, state.sessions)}`, async () => { await api.join(s.id, true); $('invite-dialog').close(); }); entry.dataset.inviteSession = s.id; return entry; })); if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。')); $('invite-dialog').showModal(); };
+function openInvite(anchor) {
+  if (disconnected || state.room.archived || $('invite-dialog').open) return;
+  contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
+  inviteOrigin = { anchor, revision: selectionRevision };
+  $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && !s.archived && s.state !== 'ended').map(s => {
+    const entry = button(`加入 ${participantLabel(s, state.sessions)}`, async () => {
+      const current = state.sessions.find(record => record.id === s.id);
+      if (!current || current.roomId || current.archived || current.state === 'ended' || current.memberRevision !== s.memberRevision || current.nativeId !== s.nativeId) throw new Error('会话已变化，请关闭并重新打开邀请。');
+      await api.join(s.id, true); $('invite-dialog').close();
+    });
+    entry.dataset.inviteSession = s.id; return entry;
+  }));
+  if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。'));
+  $('invite-dialog').showModal();
+}
+$('invite-dialog').addEventListener('close', () => {
+  const origin = inviteOrigin; inviteOrigin = null;
+  if (origin?.revision === selectionRevision && selected === 'room') focusMemberAction(origin.anchor);
+});
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
 $('share-dialog').onclose = () => { shareRevision++; };

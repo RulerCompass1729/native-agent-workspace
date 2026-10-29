@@ -123,9 +123,22 @@
       // leaving the conversation itself available for ordinary text selection.
       options.decorateHeader?.(name, record);
       name.addEventListener('pointerdown', () => { if (!focused) rememberSelection(); });
+      const heading = el('div', undefined, 'collaboration-member-heading');
+      const more = button('⋯', () => options.onMemberMenu?.(record.id, more), 'collaboration-member-more');
+      more.dataset.memberMenu = record.id;
+      more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
+      more.addEventListener('pointerdown', event => { if (more.getAttribute('aria-expanded') === 'true') event.stopPropagation(); });
+      more.addEventListener('contextmenu', event => {
+        event.preventDefault(); event.stopPropagation(); options.onMemberMenu?.(record.id, more);
+      });
+      more.addEventListener('keydown', event => {
+        if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey || !(event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) return;
+        event.preventDefault(); event.stopPropagation(); options.onMemberMenu?.(record.id, more);
+      });
+      heading.append(name, more);
       const status = el('span', undefined, 'collaboration-member-state'); status.setAttribute('role', 'status');
       const child = el('span', undefined, 'collaboration-member-child'), freshness = el('span', undefined, 'collaboration-member-freshness');
-      header.append(name, status, child, freshness);
+      header.append(heading, status, child, freshness);
       const reader = el('section', undefined, 'collaboration-member-reader'); reader.dataset.memberId = record.id;
       const messages = el('div', undefined, 'messages collaboration-messages'); messages.setAttribute('aria-label', `${record.name} 的原会话`);
       let pane;
@@ -153,7 +166,7 @@
       const finish = () => { if (dragging) { dragging = null; options.onLayout?.(); } };
       grip.addEventListener('pointerup', finish); grip.addEventListener('pointercancel', finish); grip.addEventListener('lostpointercapture', finish);
       reader.append(messages, short, grip);
-      return pane = { header, name, status, child, freshness, reader, messages, short, quote, truncation, source, notice, grip };
+      return pane = { header, name, more, status, child, freshness, reader, messages, short, quote, truncation, source, notice, grip };
     }
     function render() {
       host.dataset.layout = layout; host.dataset.focused = String(Boolean(focused)); host.dataset.brief = String(brief); host.dataset.content = String(contentVisible);
@@ -167,6 +180,9 @@
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
         const label = options.label(record); setText(pane.name, label);
         pane.name.setAttribute('aria-label', `放大 ${label} 的会话`); pane.name.setAttribute('aria-pressed', String(focused === record.id));
+        pane.more.hidden = !options.onMemberMenu;
+        pane.more.disabled = !connected;
+        pane.more.setAttribute('aria-label', `管理 ${label}`);
         pane.header.classList.toggle('is-focused', focused === record.id);
         pane.messages.hidden = brief; pane.short.hidden = !brief;
         pane.messages.setAttribute('aria-label', `${label} 的原会话`);
