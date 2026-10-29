@@ -3,11 +3,16 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const loadWarning = '本地会话显示设置暂时无法读取，正在显示原有名称和顺序；原生会话不受影响。';
+function validSidebarWeights(value) {
+  return Array.isArray(value) && value.length === 3 && Array.from(value).every(n => Number.isInteger(n) && n >= 1 && n <= 9998) && value.reduce((a, b) => a + b, 0) === 10000;
+}
 function validSidebar(value) {
   return value && typeof value === 'object' && !Array.isArray(value) &&
     Array.isArray(value.order) && value.order.length <= 10000 && new Set(value.order).size === value.order.length &&
     value.order.every(id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id)) &&
-    typeof value.sessionsCollapsed === 'boolean' && typeof value.workspaceCollapsed === 'boolean';
+    typeof value.sessionsCollapsed === 'boolean' && typeof value.workspaceCollapsed === 'boolean' &&
+    (value.archiveCollapsed === undefined || typeof value.archiveCollapsed === 'boolean') &&
+    (value.weights === undefined || validSidebarWeights(value.weights));
 }
 function validateName(value) {
   if (typeof value !== 'string') throw new Error('请输入会话名称。');
@@ -66,8 +71,11 @@ class SessionLabels {
     if (!change || typeof change !== 'object' || Array.isArray(change)) throw new Error('无效侧栏操作。');
     const next = { ...this.sidebar };
     if (change.type === 'collapse') {
-      if (!['sessions', 'workspace'].includes(change.section) || typeof change.collapsed !== 'boolean') throw new Error('无效分区。');
+      if (!['sessions', 'workspace', 'archive'].includes(change.section) || typeof change.collapsed !== 'boolean') throw new Error('无效分区。');
       next[change.section + 'Collapsed'] = change.collapsed;
+    } else if (change.type === 'resize') {
+      if (!validSidebarWeights(change.weights)) throw new Error('无效分区高度。');
+      next.weights = [...change.weights];
     } else if (change.type === 'move') {
       const ids = records.filter(s => !s.archived).map(s => s.id);
       if (!ids.includes(change.id) || !ids.includes(change.target) || typeof change.after !== 'boolean') throw new Error('会话已变化，顺序未更改。');
