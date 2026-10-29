@@ -58,15 +58,20 @@ function showContentMenu(element, point, keyboard = false, event) {
       const edit = text => {
         if (!editable()) throw contentMenuChanged();
         const maximum = field.id === 'message-input' ? 16000 : field.maxLength;
-        if (maximum >= 0 && field.value.length - (fieldState.end - fieldState.start) + text.length > maximum) throw new Error(`超过 ${maximum} 个字符；原内容保留，没有截断粘贴。`);
         // This is the same Chromium edit mechanism used by chooseMention.
         // A direct value assignment would discard the person's undo history.
+        if (!field.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: text ? 'insertFromPaste' : 'deleteByCut', data: text || null }))) return;
+        if (maximum >= 0 && field.value.length - (field.selectionEnd - field.selectionStart) + text.length > maximum) {
+          field.setSelectionRange(fieldState.start, fieldState.end, fieldState.direction);
+          throw new Error(`超过 ${maximum} 个字符；原内容保留，没有截断粘贴。`);
+        }
         if (!document.execCommand(text ? 'insertText' : 'delete', false, text)) throw new Error('未能编辑原输入框，内容保留。');
       };
       actions = [
         { id: 'cut', label: '剪切', disabled: field.readOnly || !selectedText, run: async () => {
           if (!editable()) throw contentMenuChanged();
-          await api.copy(selectedText); edit('');
+          const range = field.id === 'shared-input' ? nativeWorkspaceMentions.atomicRange(roomMention, field.value, { start: fieldState.start, end: fieldState.end, type: 'deleteByCut' }) : null;
+          await api.copy(range ? field.value.slice(range.start, range.end) : selectedText); edit('');
         } },
         { id: 'copy', label: '复制', disabled: !selectedText, run: () => { if (!validField()) throw contentMenuChanged(); return api.copy(selectedText); } },
         { id: 'paste', label: '粘贴', disabled: field.readOnly, run: async () => {
