@@ -80,7 +80,8 @@ async function create(name, provider) {
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Fixture session created');
   const record = (await snapshot()).sessions.find(s => s.name === name);
-  await page.getByRole('button', { name: '加入协作', exact: true }).click();
+  await page.locator('#session-header-more').click();
+  await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
   return record.id;
 }
 function identity(state) { return state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, owner: s.owner, view: s.view, controlRevision: s.controlRevision, claudeQuestion: s.claudeQuestion })).sort((a, b) => a.id.localeCompare(b.id)); }
@@ -164,12 +165,12 @@ async function run() {
     const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); return selection.toString();
   });
   await unchangedNative(before, stateBefore);
-  await header(a).getByRole('button').click();
+  await header(a).locator('.collaboration-member-name').click();
   assert.equal(await page.locator('#send-button').innerText(), '启用对话输入');
   await unchangedNative(before, stateBefore);
   await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
   assert.equal(await page.evaluate(() => getSelection().toString()), selectionBeforeFocus);
-  await header(b).getByRole('button').click();
+  await header(b).locator('.collaboration-member-name').click();
   await page.locator('#conversation-pane').waitFor(); assert.equal(await page.locator('#native-pane').isVisible(), false);
   await page.locator('#session-files').click(); await page.locator('#file-dialog').waitFor();
   assert.equal(await page.locator('#file-content').innerText(), 'SYNTHETIC_MEMBER_FILE: local preview only.');
@@ -183,7 +184,7 @@ async function run() {
   await unchangedNative(before, stateBefore); await capture('03-focused-member');
   await page.locator('#messages').hover(); await page.mouse.wheel(0, 140); await delay(120);
   const focusedTop = await page.locator('#messages').evaluate(el => el.scrollTop);
-  await header(b).getByRole('button').click(); await delay(100);
+  await header(b).locator('.collaboration-member-name').click(); await delay(100);
   assert.ok(Math.abs(await page.locator('#messages').evaluate(el => el.scrollTop) - focusedTop) < 3, 'Clicking the already-focused member must not reset reading');
   await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
   assert.ok(Math.abs(await reader(b).evaluate(el => el.scrollTop) - positionBeforeFocus) < 3);
@@ -215,12 +216,12 @@ async function run() {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(900, 840));
   await until(async () => (await page.evaluate(() => innerWidth)) <= 900, 'Owned narrow window');
   await allHeadersVisible([a, b, c]); await capture('04-narrow-overview');
-  await header(b).getByRole('button').click(); await allHeadersVisible([a, b, c]); await capture('05-narrow-focus');
+  await header(b).locator('.collaboration-member-name').click(); await allHeadersVisible([a, b, c]); await capture('05-narrow-focus');
   await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 860));
   await unchangedNative(before, stateBefore);
   check('Keyboard sizing, grid/list, narrow focus and shared-record navigation retain member visibility and private boundaries');
-  await header(b).getByRole('button').click();
+  await header(b).locator('.collaboration-member-name').click();
   await page.locator('#send-button').getByText('接管此窗口', { exact: true }).click();
   await until(async () => { const s = await snapshot(); return s.sessions.find(x => x.id === b).owner === s.owner; }, 'Explicit takeover');
   await page.locator('#message-input').fill('Unsent private member B draft');
@@ -244,7 +245,7 @@ async function run() {
   await until(async () => (await fixture('stats', b)).approvalReplies?.length === 1, 'Existing focused permission reaches native fixture once');
   assert.equal((await fixture('stats', b)).approvalReplies[0].requestId, 17);
   await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
-  await header(b).getByRole('button').click(); assert.equal(await page.locator('#message-input').inputValue(), 'Unsent private member B draft');
+  await header(b).locator('.collaboration-member-name').click(); assert.equal(await page.locator('#message-input').inputValue(), 'Unsent private member B draft');
   await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
   check('Only deliberate existing takeover changes ownership; private GUI drafts and the independent room draft survive return');
   const ids = (await snapshot()).sessions.map(s => [s.id, s.nativeId]);
@@ -260,18 +261,18 @@ async function run() {
   check('Reopen preserves the same native identities and drafts; deliberate send targets only the unchanged chosen recipient');
   await fillRoomMessage(page, 'Retained room draft after send');
   const retainedRoomDraft = await page.locator('#shared-input').inputValue();
-  await header(b).getByRole('button').click();
+  await header(b).locator('.collaboration-member-name').click();
   await page.locator(`[data-session-menu="${b}"]`).click();
   await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
   await page.locator('#rename-name').fill('Member A'); await page.locator('#confirm-rename').click();
   await until(async () => (await header(b).innerText()).includes('Member A'), 'Same visible member header renamed');
-  assert.match(await header(a).getByRole('button').innerText(), /Member A.*Claude/);
-  assert.match(await header(b).getByRole('button').innerText(), /Member A.*Codex/);
-  assert.notEqual(await header(a).getByRole('button').innerText(), await header(b).getByRole('button').innerText());
+  assert.match(await header(a).locator('.collaboration-member-name').innerText(), /Member A.*Claude/);
+  assert.match(await header(b).locator('.collaboration-member-name').innerText(), /Member A.*Codex/);
+  assert.notEqual(await header(a).locator('.collaboration-member-name').innerText(), await header(b).locator('.collaboration-member-name').innerText());
   const sameB = (await snapshot()).sessions.find(s => s.id === b);
   assert.equal(sameB.nativeId, ids.find(x => x[0] === b)[1]);
   assert.equal(sameB.liveDraft, 'Unsent private member B draft');
-  const handle = header(b).getByRole('button'); assert.equal(await handle.getAttribute('draggable'), 'true');
+  const handle = header(b).locator('.collaboration-member-name'); assert.equal(await handle.getAttribute('draggable'), 'true');
   await handle.dragTo(page.locator('#solo-drop'));
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b).roomId, 'Visible member drag detaches existing native session');
   assert.equal(await page.locator('#message-input').inputValue(), 'Unsent private member B draft');
@@ -280,7 +281,8 @@ async function run() {
   assert.equal(await page.locator('#shared-input').inputValue(), retainedRoomDraft);
   assert.equal(await page.locator('#recipient').inputValue(), recipient);
   await page.locator(`[data-session-id="${b}"]`).click();
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); await page.locator('#room-nav').click();
+  await page.locator('#session-header-more').click();
+  await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); await page.locator('#room-nav').click();
   await header(b).waitFor(); await allHeadersVisible([a, b, c]);
   assert.equal((await snapshot()).sessions.find(s => s.id === b).nativeId, sameB.nativeId);
   assert.equal((await snapshot()).sessions.find(s => s.id === b).liveDraft, sameB.liveDraft);

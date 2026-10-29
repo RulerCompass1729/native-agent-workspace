@@ -7,6 +7,9 @@
 .collaboration-statuses,.collaboration-readers{display:grid;grid-template-columns:var(--collaboration-columns,1fr);min-width:0;gap:8px;padding:0 12px}
 .collaboration-statuses{padding-bottom:8px;align-items:stretch}
 .collaboration-member-status{display:flex;flex-direction:column;gap:3px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--panel);min-width:0}
+.collaboration-member-heading{display:flex;align-items:flex-start;gap:6px;min-width:0}
+.collaboration-member-heading>.collaboration-member-name{flex:1;min-width:0}
+.collaboration-member-more{flex:none;padding:2px 6px;min-width:28px;background:transparent;border:0}
 .collaboration-member-name{font-weight:600;text-align:left;white-space:normal;overflow-wrap:anywhere;align-self:flex-start;max-width:100%;padding:2px 0;background:transparent;border:0}
 .collaboration-member-name::after{content:" ↗";color:var(--muted);font-weight:400}
 .collaboration-member-state{font-size:13px;font-weight:600;overflow-wrap:anywhere}
