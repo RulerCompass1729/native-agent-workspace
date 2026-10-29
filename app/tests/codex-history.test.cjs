@@ -21,10 +21,10 @@ async function fixture(t, pages) {
   t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   return { w, r, s, id, calls, notify };
 }
-test('native turn metadata pages restore exact boundaries without sharing history or replaying work', async t => {
+for (const nativeVersion of ['0.163.0', '0.165.0']) test(`native turn metadata pages restore exact boundaries without sharing history or replaying work ${nativeVersion}`, async t => {
   const items = [entry('a', 'agentMessage', 'first'), { ...entry('b', 'agentMessage', 'second'), turnId: 'second-turn' }];
   const f = await fixture(t, () => ({ data: items }));
-  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0';
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = nativeVersion;
   rpc.call = async (method, params) => {
     if (method !== 'thread/turns/list') return call(method, params);
     f.calls.push({ method, params });
@@ -45,9 +45,9 @@ test('native turn metadata pages restore exact boundaries without sharing histor
   assert.deepEqual(stored.sessions.find(s => s.id === f.id).messages.filter(m => m.kind === 'turn'), [first, second]);
   await f.r.hydrateHistory(f.s.nativeId); await f.r.turnMetadataHydration; assert.equal(f.s.messages.filter(m => m.kind === 'turn').length, 2);
 });
-test('late history cannot replace a live interruption or stop a different active turn', async t => {
+for (const nativeVersion of ['0.163.0', '0.165.0']) test(`late history cannot replace a live interruption or stop a different active turn ${nativeVersion}`, async t => {
   const f = await fixture(t, () => ({ data: [entry('a', 'agentMessage', 'historical final')] }));
-  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0';
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = nativeVersion;
   rpc.call = async (method, params) => {
     if (method !== 'thread/turns/list') return call(method, params);
     f.notify('turn/completed', { turn: { id: 'old-turn', status: 'interrupted', completedAt: 1700000001, durationMs: 1500 } });
@@ -60,9 +60,9 @@ test('late history cannot replace a live interruption or stop a different active
   assert.equal(boundary.status, 'interrupted'); assert.equal(boundary.nativeCompletedAt, 1700000001000); assert.equal(boundary.nativeDurationMs, 1500);
   assert.equal(f.r.turnId, 'new-turn'); assert.equal(f.s.state, 'working');
 });
-test('optional native timing failure preserves readable history and input, retry removes the notice', async t => {
+for (const nativeVersion of ['0.163.0', '0.165.0']) test(`optional native timing failure preserves readable history and input, retry removes the notice ${nativeVersion}`, async t => {
   const f = await fixture(t, () => ({ data: [entry('a', 'agentMessage', 'retained answer')] }));
-  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0'; let fail = true;
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = nativeVersion; let fail = true;
   rpc.call = async (method, params) => { if (method !== 'thread/turns/list') return call(method, params); if (fail) throw Error('Disconnected metadata read'); return { data: [] }; };
   await f.r.observeFirstTurn();
   await f.r.turnMetadataHydration;
@@ -71,9 +71,9 @@ test('optional native timing failure preserves readable history and input, retry
   fail = false; await f.r.hydrateHistory(f.s.nativeId); await f.r.turnMetadataHydration;
   assert.equal(f.s.messages.filter(m => m.kind === 'notice').length, 0); assert.equal(f.s.messages[0].nativeCompletedAt, undefined);
 });
-test('held timing request does not delay readable history/input or overwrite later native text', async t => {
+for (const nativeVersion of ['0.163.0', '0.165.0']) test(`held timing request does not delay readable history/input or overwrite later native text ${nativeVersion}`, async t => {
   const f = await fixture(t, () => ({ data: [entry('a', 'agentMessage', 'saved answer')] }));
-  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0'; let release;
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = nativeVersion; let release;
   rpc.call = (method, params) => method === 'thread/turns/list' ? new Promise(resolve => { release = resolve; }) : call(method, params);
   await f.r.observeFirstTurn();
   assert.equal(typeof release, 'function'); assert.equal(f.r.chatAvailable, true); assert.equal(f.s.messages[0].text, 'saved answer');
@@ -82,9 +82,9 @@ test('held timing request does not delay readable history/input or overwrite lat
   assert.equal(f.s.messages.find(m => m.id === 'a').text, 'new authoritative answer');
   assert.equal(f.s.messages.find(m => m.kind === 'turn').nativeDurationMs, 2400);
 });
-test('metadata held across a lifecycle change cannot enrich another native identity', async t => {
+for (const nativeVersion of ['0.163.0', '0.165.0']) test(`metadata held across a lifecycle change cannot enrich another native identity ${nativeVersion}`, async t => {
   const f = await fixture(t, () => ({ data: [entry('a', 'agentMessage', 'saved answer')] }));
-  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = '0.163.0'; let release;
+  const rpc = f.r.host.rpc, call = rpc.call; rpc.nativeVersion = nativeVersion; let release;
   rpc.call = (method, params) => method === 'thread/turns/list' ? new Promise(resolve => { release = resolve; }) : call(method, params);
   await f.r.hydrateHistory(f.s.nativeId); await Promise.resolve();
   f.r.lifecycleRevision++; f.s.nativeId = 'new-native';
