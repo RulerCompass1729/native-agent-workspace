@@ -49,6 +49,7 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).liveDraft === 'UNSENT_PRIVATE_INLINE_DRAFT', 'Private draft stored');
   const originalIdentity = identity(await snapshot());
   await fixture('bindSends', a); await page.locator('#room-nav').click(); await chooseRecipient(page, a); await fillRoomMessage(page, 'PUBLIC_APPROVED_TASK'); await page.locator('#forward-button').click();
+  if (process.env.NAW_INLINE_LAYOUT === 'list') await page.getByRole('button', { name: '列表', exact: true }).click();
   await until(async () => (await fixture('stats', a)).lastSend?.text === 'PUBLIC_APPROVED_TASK', 'One explicit synthetic shared send');
   const send = (await fixture('stats', a)).lastSend;
   await emit(a, { id: 'control:turn-start', kind: 'control', turnId: send.turnId, promptId: send.promptId, status: 'running' });
@@ -82,6 +83,7 @@ async function run() {
   assert.equal(await page.evaluate(() => getSelection().toString()), selection); assert.equal(await node.evaluate(el => el.isConnected), true);
   const inputs = (await snapshot()).sessions.find(s => s.id === a).messages.filter(m => m.inputMode === 'native-inline');
   assert.equal(inputs.length, 2); assert.ok(inputs.every(m => m.text === text));
+  assert.equal(await row.locator('.message-heading strong').first().innerText(), '原生会话', 'Native accepted framing is not attributed to the human');
   assert.equal((await snapshot()).sessions.find(s => s.id === a).messages.filter(m => m.role === 'user').length, 3, 'One app task plus two actual native inputs, no hook or boundary rows');
   check('Duplicate UUID updates its original row; equal text under a second UUID remains distinct; another member stream preserves selected text and row identity');
   await row.hover(); const copy = row.locator(':scope > .message-actions').getByRole('button', { name: '复制', exact: true });
