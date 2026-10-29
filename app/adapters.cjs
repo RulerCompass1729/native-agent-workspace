@@ -938,7 +938,7 @@ class Codex extends EventEmitter {
       this.host.pendingCodexRuntime = this;
       this.initialTerminalThread = started;
       try {
-        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', ...(this.record.skipPermissions ? ['-a', 'never', '-s', 'danger-full-access'] : []), '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
+        this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', ...(this.record.skipPermissions ? ['-a', 'never', '-s', 'danger-full-access'] : []), '--remote', `unix://${endpoint}`, '-C', this.record.cwd]).once('closed', closed);
       } catch (error) { cleanup(); reject(error); }
     });
   }
@@ -1616,7 +1616,7 @@ class Codex extends EventEmitter {
     const endpoint = await this.terminalEndpoint();
     if (!guard() || this.stopped || this.transportDisconnected) throw new Error('终端控制权已变化，请重新选择会话。');
     if (this.terminal?.alive) return this.terminal;
-    return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', 'resume', '--remote', `unix://${endpoint}`, '-C', this.record.cwd, this.record.nativeId]);
+    return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', 'resume', '--remote', `unix://${endpoint}`, '-C', this.record.cwd, this.record.nativeId]);
   }
   async reconnect() {
     const transportOnly = Boolean(this.transportDisconnected);
