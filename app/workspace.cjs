@@ -308,7 +308,7 @@ class Workspace extends EventEmitter {
         this.changed();
       }
     });
-    on('nativeBlock', item => { if (item.kind === 'gap') { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生观察连接出现缺口；请核对后重新授权。', s.id); this.pauseParticipant(s.id, '原生观察连接出现缺口，请核对后重新授权。'); } if (applyNativeBlock(s, item)) { this.sharedReplies.record(s, s.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`)); this.changed(); } });
+    on('nativeBlock', item => { if (item.kind === 'gap') { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生观察连接出现缺口；请核对后重新授权。', s.id); this.pauseParticipant(s.id, '原生观察连接出现缺口，请核对后重新授权。'); } if (applyNativeBlock(s, item, this.dataDir)) { this.sharedReplies.record(s, s.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`)); this.changed(); } });
     on('replyBound', identity => { this.sharedReplies.bind(s, identity.tag, identity); this.changed(); });
     on('contextEnd', info => this.endNativeContext(s, runtime, info));
     on('contextClear', info => this.clearNativeContext(s, runtime, info));

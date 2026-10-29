@@ -43,7 +43,7 @@ function installPlugin(cwd) {
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件路径不安全，未写入插件文件。');
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
-  const previousHooks = new Set(['ea38c6320e515aea2150db84e39bc2a817d57d68974661422e419617cdc14887','add32628c2d9b306efc391e28801aa3b339520451a659101d6a6689c6e688fb3','959ab599a77d3a69a06c388eafe77cdfb57666defacb568cba28be957dba40e0','ba3228157c0b6c0288c6df9f389c9624efde43535f1a6c2fb3600846064c7de8',
+  const previousHooks = new Set(['6fd9a5650c74e5ee1cbde98efdb6ba33bc83dae1eeacbef3e86c614aabca785a','ea38c6320e515aea2150db84e39bc2a817d57d68974661422e419617cdc14887','add32628c2d9b306efc391e28801aa3b339520451a659101d6a6689c6e688fb3','959ab599a77d3a69a06c388eafe77cdfb57666defacb568cba28be957dba40e0','ba3228157c0b6c0288c6df9f389c9624efde43535f1a6c2fb3600846064c7de8',
     'd86c8546f734b75620eea9fe1fbc80aa49092650da494d2d2cf73ba41a6f2453',
     '48b912ba8dd5df5e5609a32d4dbfb1a9f7894b51b50aa1f518a3a3da951f1190',
     '623b1ae035b00d8a0366d563945b98e6edf6486c9ca4a1977792506183fe7482',

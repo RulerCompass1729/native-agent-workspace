@@ -75,7 +75,7 @@ function createSubmissionServer(filename, targets) {
     let body = '';
     req.setEncoding('utf8');
     req.on('error', () => {});
-    req.on('data', chunk => { body += chunk; if (body.length > (req.url === '/observation' ? 600000 : 100000)) req.destroy(); });
+    req.on('data', chunk => { body += chunk; if (body.length > (req.url === '/observation' ? target.nativeMedia === true ? 2 * 1024 * 1024 : 600000 : 100000)) req.destroy(); });
     req.on('end', async () => {
       let message;
       try { message = JSON.parse(body); } catch { res.writeHead(400); res.end('{}'); return; }
