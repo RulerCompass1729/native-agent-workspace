@@ -1,7 +1,7 @@
 const scratch = require('./fixtures/test-scratch.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto'), { once } = require('node:events');
-const { fork } = scratch.childProcess, { _electron } = scratch.playwright(require('playwright'));
+const { fork } = scratch.childProcess, { _electron } = scratch.playwright(process.env.NAW_APP_EXECUTABLE ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connectService } = require(path.join(code, 'app/service-connection.cjs'));
 const common = require('node:child_process').execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();

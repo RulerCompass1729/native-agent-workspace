@@ -4,7 +4,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const assert = require('node:assert/strict'), { randomUUID, createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process'), { once } = require('node:events');
 const scratch = require('./fixtures/test-scratch.cjs');
-const { fork } = scratch.childProcess, { _electron } = scratch.playwright(require('playwright'));
+const { fork } = scratch.childProcess, { _electron } = scratch.playwright(process.env.NAW_APP_EXECUTABLE ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
 const { chooseRecipient, fillRoomMessage } = require('./room-input.cjs');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const evidence = process.env.NAW_EVIDENCE_DIR;

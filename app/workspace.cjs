@@ -399,6 +399,7 @@ class Workspace extends EventEmitter {
       if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
       this.changed();
     });
+    on('nativeInputImages', event => { if (require('./native-images.cjs').applyInputImages(s, event)) this.changed(); });
     on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
     on('submitted', tag => { for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
