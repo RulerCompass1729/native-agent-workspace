@@ -52,10 +52,12 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(12000); page.on('pageerror', error => errors.push(error.message));
   await page.locator('#new-session').waitFor();
   const a = await create('claude'), header = page.locator('#header-actions');
-  await hold(header.getByRole('button', { name: '加入协作', exact: true }), () => update(a));
+  await page.locator('#session-header-more').click();
+  await hold(page.getByRole('menuitem', { name: '加入协作', exact: true }), () => update(a));
   await page.keyboard.press('Enter'); await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === 'shared', 'Keyboard joins current session');
   const b = await create('codex');
-  await hold(header.getByRole('button', { name: '加入协作', exact: true }), () => update(b));
+  await page.locator('#session-header-more').click();
+  await hold(page.getByRole('menuitem', { name: '加入协作', exact: true }), () => update(b));
   await page.keyboard.press('Enter'); await until(async () => (await snapshot()).sessions.find(s => s.id === b).roomId === 'shared', 'Changed selection joins new session');
   checks.push('Header button retains its original node and keyboard focus during history updates; Enter acts on the currently selected session');
 
@@ -67,22 +69,23 @@ async function run() {
   assert.match(await page.locator('#context-text').inputValue(), /本会话仍参与该工作区/); await page.locator('#close-context').click();
   checks.push('Advanced notes/context actions retain focus through updates and open the intended local dialog without sending context');
 
-  await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await page.locator('#manage-members').click();
-  const member = page.locator(`[data-member-id="${a}"]`), view = member.getByRole('button', { name: '查看终端', exact: true });
+  await page.locator('#room-nav').click();
+  const member = page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${a}"]`), view = member.locator('.collaboration-member-name');
   await hold(view, async () => { await update(a); await page.evaluate(id => workspace.rename(id, 'Renamed keyboard member'), a); });
-  await member.getByText('Renamed keyboard member', { exact: true }).waitFor();
+  await until(async () => (await view.innerText()).includes('Renamed keyboard member'), 'Renamed member still visible');
   assert.equal(await view.evaluate(el => document.activeElement === el), true);
-  await page.keyboard.press('Enter'); await until(async () => !(await page.locator('#members-dialog').evaluate(el => el.open)), 'Members closed');
+  await page.keyboard.press('Enter');
   await until(async () => (await snapshot()).viewState.roomSession === a, 'Exact member selected');
-  await page.locator('#terminal-area .xterm-screen:visible').waitFor();
-  checks.push('Member action retains focus while history and local name change; Enter opens that same member terminal');
+  await page.locator('#conversation-pane:visible').waitFor();
+  checks.push('Visible member name retains focus while history/name change; Enter passively opens that same original GUI conversation');
 
-  await page.locator('#room-record').click(); await page.locator('#manage-members').click(); await view.focus();
+  await page.locator('#room-overview').click();
+  await member.locator('[data-member-menu]').click();
   await client.call('join', a, false); await until(async () => await member.count() === 0, 'Member removed');
-  assert.equal(await page.locator('#close-members').evaluate(el => document.activeElement === el), true);
-  await page.keyboard.press('Enter'); assert.equal(await page.locator('#members-dialog').evaluate(el => el.open), false);
+  assert.equal(await page.locator('#manage-members').evaluate(el => document.activeElement === el), true);
+  assert.equal(await page.getByRole('menu').count(), 0);
   assert.equal((await snapshot()).sessions.find(s => s.id === b).roomId, 'shared');
-  checks.push('Removing the focused member returns focus to dialog completion, never the adjacent member action');
+  checks.push('Removing the menu member returns focus to invitation, never an adjacent member action');
 
   await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
   await fixture('approval', b, { requestId: 17, method: 'item/commandExecution/requestApproval', params: { command: 'echo synthetic', cwd: '/synthetic', reason: 'Keyboard-only check' } });
@@ -123,24 +126,30 @@ async function run() {
   checks.push('A Codex question is answered in the chat view with the native structured reply, an option or other text, never before every question is answered');
 
   await page.locator(`[data-session-id="${a}"]`).click();
-  const join = header.getByRole('button', { name: '加入协作', exact: true });
+  await page.locator('#session-header-more').click();
+  const join = page.getByRole('menuitem', { name: '加入协作', exact: true });
   await join.focus(); await client.call('join', a, true);
-  const leave = header.getByRole('button', { name: '脱出协作', exact: true }); await leave.waitFor();
+  await until(() => page.getByRole('menu').count().then(n => n === 0), 'Obsolete join menu withdrawn');
   await page.keyboard.press('Enter');
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal((await snapshot()).sessions.find(s => s.id === a).roomId, 'shared', 'Old join focus cannot execute opposite leave action');
-  assert.equal(await leave.evaluate(el => document.activeElement === el), false);
-  await leave.focus(); await client.call('join', a, false); await join.waitFor();
+  assert.equal(await page.getByRole('menu').count(), 0);
+  await page.locator('#session-header-more').click();
+  const leave = page.getByRole('menuitem', { name: '脱出协作', exact: true });
+  await leave.focus(); await client.call('join', a, false);
+  await until(() => page.getByRole('menu').count().then(n => n === 0), 'Obsolete leave menu withdrawn');
   await page.keyboard.press('Enter');
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal((await snapshot()).sessions.find(s => s.id === a).roomId, null, 'Old leave focus cannot execute opposite join action');
-  assert.equal(await join.evaluate(el => document.activeElement === el), false);
+  assert.equal(await page.getByRole('menu').count(), 0);
   checks.push('External membership changes withdraw obsolete keyboard focus in both directions; Enter never executes the opposite operation');
-  await hold(header.getByRole('button', { name: '加入协作', exact: true }), () => update(a));
+  await page.locator('#session-header-more').click();
+  await hold(join, () => update(a));
   await page.keyboard.press('Enter'); await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === 'shared', 'Rejoin current member');
   assert.equal((await snapshot()).sessions.find(s => s.id === b).roomId, 'shared');
-  assert.equal(await header.getByRole('button', { name: '脱出协作', exact: true }).count(), 1);
-  await hold(header.getByRole('button', { name: '脱出协作', exact: true }), () => update(a)); await page.keyboard.press('Enter');
+  await page.locator('#session-header-more').click();
+  assert.equal(await leave.count(), 1);
+  await hold(leave, () => update(a)); await page.keyboard.press('Enter');
   await until(async () => !(await snapshot()).sessions.find(s => s.id === a).roomId, 'Detach current session');
   assert.equal((await snapshot()).sessions.find(s => s.id === b).roomId, 'shared');
   await shot('header-focus');
@@ -149,6 +158,10 @@ async function run() {
   // native terminal once on release, and is remembered; the chat can take the full width.
   await page.locator(`[data-session-id="${a}"]`).click(); await page.locator('#terminal-tab').click();
   await page.locator('#terminal-area .xterm-screen:visible').waitFor();
+  // A visible terminal can precede its initial asynchronous fit. Observe that
+  // settling before counting only the subsequent, deliberate divider drag.
+  let previousResize = -1, stableResize = 0;
+  await until(async () => { const count = (await fixture()).stats.resizes; stableResize = count === previousResize ? stableResize + 1 : 0; previousResize = count; return stableResize >= 4; }, 'Initial native fit settled');
   const layout = page.locator('#session-layout'), divider = layout.locator('.split-divider');
   const area = await layout.boundingBox(), centre = area.x + area.width / 2, y = area.y + 120;
   const split = () => layout.evaluate(el => el.style.getPropertyValue('--split-left'));

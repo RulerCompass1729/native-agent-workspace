@@ -57,7 +57,7 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Daemon ready'); client = await connect(profile, 'collaboration-observer'); await launch();
   const a = await create('claude'), b = await create('codex'), ids = identities(await snapshot());
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
-  await page.getByRole('button', { name: '参与者…', exact: true }).click(); await page.locator('#invite-button').click();
+  await page.locator('#manage-members').click();
   for (const id of [a, b]) assert.ok((await page.locator(`[data-invite-session="${id}"]`).innerText()).includes(id.slice(0, 6)), 'Initial invite disambiguates names');
   await fixture('event', '', b, { method: 'turn/started', params: { threadId: 'synthetic-' + b, turn: { id: 'identity-refresh-check' } } });
   await until(async () => (await page.locator(`[data-session-id="${b}"]`).innerText()).includes('正在工作'), 'Actual state update rendered while invite stays open');
