@@ -40,11 +40,19 @@ async function controls(label) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   geometry.push({ label, list: await page.locator('#session-list').boundingBox(), room: await page.locator('#room-nav').boundingBox() });
 }
+async function entryInView(id) {
+  const row = `[data-session-row="${id}"]`, list = '#session-list';
+  const sizes = await page.locator(row).evaluate(el => { const r=el.getBoundingClientRect(), v=document.getElementById('session-list').getBoundingClientRect();return {row:r.height,list:v.height,overlap:Math.min(r.bottom,v.bottom)-Math.max(r.top,v.top)}; });
+  // A resized section can be shorter than one collision-expanded ID row.
+  // Keep the whole-row check whenever possible; otherwise require its actual
+  // menu inside the viewport and exercise that control below.
+  return sizes.row <= sizes.list + 1 ? inView(row, list) : sizes.overlap > 0 && inView(`[data-session-menu="${id}"]`, list);
+}
 async function searchName(name, id) {
   await page.locator('#search-button').click(); await page.locator('#search-input').fill(name);
   await page.locator(`[data-search-key="session:${id}"]`).waitFor(); await page.locator('#search-input').press('Enter');
   await page.locator('#search-dialog').waitFor({ state: 'hidden' });
-  await until(() => inView(`[data-session-row="${id}"]`, '#session-list'), 'Selected session and its menu visible after search');
+  await until(() => entryInView(id), 'Selected entry and its menu remain reachable after search');
 }
 async function create(name) {
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
@@ -66,7 +74,7 @@ async function run() {
   checks.push('Sixty histories scroll independently; collaboration and footer actions remain visible; search reveals the selected history and long names retain their menu');
   await page.locator('[data-session-menu="synthetic-session-59"]').click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === 'synthetic-session-59').archived, 'Archived');
-  await page.locator('#archive-button').click();
+  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
   const archived = page.locator('[data-archived-session="synthetic-session-89"]');
   await archived.getByRole('button', { name: '恢复会话', exact: true }).click();
   await until(() => inView('[data-session-row="synthetic-session-89"]', '#session-list'), 'Restored history and menu visible');
@@ -120,7 +128,7 @@ async function run() {
   await until(() => page.locator('[data-session-menu="synthetic-session-58"]').evaluate(el => document.activeElement === el), 'Menu focus returns to visible row');
   checks.push('Minimum-size window keeps primary actions and selected history reachable; keyboard menu dismissal restores focus');
   const before = await snapshot(); await app.close(); app = null; await launch();
-  await until(() => inView('[data-session-row="synthetic-session-58"]', '#session-list'), 'Reopen reveals selected history and menu');
+  await until(() => entryInView('synthetic-session-58'), 'Reopen reveals selected history and menu');
   const after = await snapshot();
   assert.deepEqual(after.sessions.map(s => [s.id, s.nativeId, s.messages, s.name, s.archived, s.liveDraft]), before.sessions.map(s => [s.id, s.nativeId, s.messages, s.name, s.archived, s.liveDraft]));
   const stats = await fixture('stats'); assert.deepEqual(stats.sends, []); assert.deepEqual(stats.inputs, []); assert.deepEqual(stats.interruptions, []);

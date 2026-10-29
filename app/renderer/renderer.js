@@ -35,6 +35,7 @@ let roomThread = '', roomReplyTo = '';
 let roomThreads = window.nativeWorkspaceThreads.threadIndex([]);
 const roomReadingKey = () => roomThread ? `room:${roomThread}` : 'room';
 const sessionRows = new Map();
+let sidebarLayout;
 let inviteOrigin;
 let headerControls, advancedControls;
 let terminalDisplay = { fontSize: 14, palette: 'dark' };
@@ -703,15 +704,17 @@ function renderSidebarGroups() {
   const working = visible.filter(s => s.state === 'working').length;
   $('session-group-summary').textContent = `${visible.length}${working ? ` · ${working} 工作中` : ''}`;
   $('workspace-group-summary').textContent = state.room.archived ? '0' : `${members().length} 成员`;
-  for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body']]) {
-    const collapsed = Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
-    toggle.setAttribute('aria-label', `${section === 'sessions' ? '会话' : '协作空间'} · ${$(section === 'sessions' ? 'session-group-summary' : 'workspace-group-summary').textContent}`);
+  for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body'], ['archive', 'archive-button', 'archive-group-body']]) {
+    const collapsed = section === 'archive' ? state.sidebar?.archiveCollapsed !== false : Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
+    const name = { sessions: '会话', workspace: '协作空间', archive: '归档' }[section];
+    toggle.setAttribute('aria-label', section === 'archive' ? `归档 · ${state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived))} 项` : `${name} · ${$(section === 'sessions' ? 'session-group-summary' : 'workspace-group-summary').textContent}`);
     toggle.setAttribute('aria-expanded', String(!collapsed));
     toggle.querySelector('.group-chevron').textContent = collapsed ? '▸' : '▾';
     if (collapsed && $(body).contains(document.activeElement)) { sessionMenu?.close(); roomMenu?.(); toggle.focus(); }
     $(body).hidden = collapsed;
-    toggle.title = `${collapsed ? '展开' : '折叠'}${section === 'sessions' ? '会话；把协作成员拖到这里独立使用' : '协作空间'}`;
+    toggle.title = `${collapsed ? '展开' : '折叠'}${section === 'sessions' ? '会话；把协作成员拖到这里独立使用' : name}`;
   }
+  sidebarLayout?.update(state.sidebar);
 }
 function renderSessions() {
   renderSidebarGroups();
@@ -779,12 +782,12 @@ function renderArchives() {
   const running = records.filter(s => ['working', 'approval', 'starting', 'stopping', 'disconnected'].includes(s.state)).length;
   $('archive-label').textContent = `归档${count ? ` · ${count}` : ''}${running ? ` · ${running} 个待查看` : ''}`;
   $('archive-button').title = `归档 ${count} 项${running ? `，${running} 个原生会话仍需查看状态` : ''}`;
-  if (!$('archive-dialog').open) return;
+  if ($('archive-group-body').hidden) return;
   const list = $('archive-list');
   const signature = JSON.stringify([state.room.archived, state.room.name, records.map(s => [s.id, s.name, s.state]), state.sessions.map(s => [s.id, s.name])]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
   if (state.room.archived) {
-    const row = node('div', undefined, 'archive-item'); row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', async () => { await api.restoreRoom(); state = await api.initial(); $('archive-dialog').close(); selectRoom(); })); list.append(row);
+    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = state.room.id; row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', async () => { await api.restoreRoom(); state = await api.initial(); selectRoom(); })); list.append(row);
   }
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
@@ -794,7 +797,7 @@ function renderArchives() {
 }
 async function restoreArchivedSession(id) {
   await api.restoreSession(id); state = await api.initial();
-  $('archive-dialog').close(); await select(id);
+  await select(id);
 }
 async function showSetup() {
   state.preflight = await api.preflight();
@@ -1772,6 +1775,8 @@ const disposers = [
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
   api.onNew(() => openCreate()),
 ];
+sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), onError: error => toast(error.message || '未能保存侧栏高度。') });
+disposers.push(() => sidebarLayout.dispose());
 // A drag resizes the native terminal once, on release, not on every move.
 const observer = new ResizeObserver(() => { if (activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
 function applySplit() {
@@ -1833,8 +1838,6 @@ $('create-form').onsubmit = event => { event.preventDefault();
   finally { $('confirm-create').disabled = false; }
 }); };
 $('room-nav').onclick = () => attempt(() => select('room'));
-$('archive-button').onclick = () => { $('archive-dialog').showModal(); renderArchives(); };
-$('close-archive').onclick = () => $('archive-dialog').close();
 $('room-more').onclick = () => openRoomMenu();
 $('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
 $('room-nav').oncontextmenu = event => { event.preventDefault(); openRoomMenu({ x: event.clientX, y: event.clientY }); };
@@ -1843,10 +1846,10 @@ $('room-overview').onclick = () => attempt(() => { roomSurface = 'overview'; ret
 $('room-record').onclick = () => attempt(() => { roomSurface = 'records'; return selectRoom(); });
 $('manage-members').onclick = () => openInvite($('manage-members'));
 dropTarget($('room-nav'), true); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
-for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace-toggle']]) {
+for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace-toggle'], ['archive', 'archive-button']]) {
   const toggle = $(id);
-  const collapse = collapsed => api.sidebar({ type: 'collapse', section, collapsed });
-  toggle.onclick = () => attempt(() => collapse(toggle.getAttribute('aria-expanded') === 'true'));
+  const collapse = collapsed => { if (section === 'archive' && !collapsed) ui.revealSidebar(); return api.sidebar({ type: 'collapse', section, collapsed }); };
+  toggle.onclick = () => attempt(() => collapse(section === 'archive' && toggle.closest('.naw')?.dataset.collapsed === 'true' ? false : toggle.getAttribute('aria-expanded') === 'true'));
   toggle.onkeydown = event => {
     if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || event.isComposing) return;
     event.preventDefault(); attempt(() => collapse(event.key === 'ArrowLeft'));
