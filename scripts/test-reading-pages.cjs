@@ -1,6 +1,7 @@
 // Actual isolated source GUI/service. Only native output is synthetic.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
+const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
@@ -27,6 +28,7 @@ const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [prof
 });
 const checks = [], errors = [], measurements = [];
 let app, page, sequence = 0, failure = null;
+const launches = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let i = 0; i < 200; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
 function fixture(method, target, value) {
@@ -41,6 +43,17 @@ const snapshot = () => page.evaluate(() => workspace.initial());
 const check = text => { checks.push(text); console.log('PASS:', text); };
 async function launch() {
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: installed ? [] : [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  if (installed && evidence) {
+    const process = app.process(), contents = path.resolve(code, '../..'), bundle = path.dirname(contents);
+    const signature = require('node:child_process').spawnSync('/usr/bin/codesign', ['--display', '--verbose=4', bundle], { encoding: 'utf8' });
+    assert.equal(signature.status, 0); const cdhash = signature.stderr.match(/^CDHash=(\w+)$/m)?.[1]; assert.ok(cdhash);
+    const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    launches.push({ pid: process.pid, executable: process.spawnfile, argv: process.spawnargs, bundle, cdhash,
+      sourceRevision: execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :NAWSourceRevision', path.join(contents, 'Info.plist')], { encoding: 'utf8' }).trim(),
+      executableSha256: hash(process.spawnfile), clientSha256: hash(path.join(code, 'app/dsh/client.js')),
+      daemon: { pid: child.pid, argv: child.spawnargs, appRoot: code, sourceSha256: hash(path.join(code, 'app/daemon.cjs')) } });
+    fs.writeFileSync(path.join(evidence, 'installed-launches.json'), JSON.stringify(launches, null, 2));
+  }
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   if (!installed) await app.evaluate(({ clipboard }) => { globalThis.pageCopies = []; clipboard.writeText = text => globalThis.pageCopies.push(text); });
 }
