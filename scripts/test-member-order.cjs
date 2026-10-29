@@ -18,9 +18,10 @@ const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; nothing started.'); process.exit(75); }
 fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex4', task: 'T86 member order', token, pid: process.pid, time: new Date().toISOString() }));
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-member-order-'));
+const workspacePath = path.join(profile, 'workspace'); fs.mkdirSync(workspacePath, { recursive: true, mode: 0o700 });
 const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/collaboration-overview.cjs')],
-  env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
+  env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: workspacePath, NAW_APP_VERSION: require(path.join(code, 'package.json')).version },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
 const checks = [], errors = [], measurements = [];
@@ -81,6 +82,8 @@ async function copyOriginal(host, id, text) {
 }
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Own fixture started'); await launch();
+  const ownedRoot = fs.realpathSync(profile), defaultWorkspace = fs.realpathSync((await snapshot()).defaultWorkspace);
+  assert.ok(defaultWorkspace.startsWith(ownedRoot + path.sep), 'Fixture cwd must be inside the owned profile before creating any automatic sibling workspace');
   const ids = [], labels = ['Order same', 'Order same', 'Order C', 'Order D'];
   for (let i = 0; i < labels.length; i++) {
     const id = await create(labels[i]); ids.push(id);
@@ -134,9 +137,13 @@ async function run() {
   await overview.getByRole('button',{name:'列表',exact:true}).click(); await expectOrder(page,[b,c,a,d]);
   async function pointerAfter(id,target,axis,shot) {
     await page.evaluate(()=>{globalThis.memberOrderDragTrace=[];});
+    await name(id).hover();
+    assert.equal(await name(id).getAttribute('draggable'),'true');
     const from=await name(id).boundingBox(),to=await header(target).boundingBox();
+    assert.equal(await page.evaluate(([x,y])=>document.elementFromPoint(x,y)?.closest('.collaboration-member-status')?.dataset.memberId,[from.x+from.width/2,from.y+from.height/2]),id,'The drag starts on the exact ready member handle');
     const x=axis==='x'?to.x+to.width-9:to.x+to.width/2,y=axis==='x'?to.y+to.height/2:to.y+to.height-3;
     await page.mouse.move(from.x+from.width/2,from.y+from.height/2);await page.mouse.down();await page.mouse.move(from.x+from.width/2+12,from.y+from.height/2,{steps:5});
+    await until(()=>page.evaluate(()=>globalThis.memberOrderDragTrace.some(e=>e.type==='dragstart')),'The browser really started the member drag before moving to a target');
     await page.mouse.move(x,y,{steps:15});await page.mouse.move(x+1,y);
     const unit=header(target).locator('..'),marker=axis==='y'?unit:header(target);
     await until(()=>marker.evaluate(el=>el.classList.contains('member-order-after')),'Actual pointer insertion target');
@@ -244,6 +251,7 @@ async function run() {
   measurements.push({name:'six-list-anchors',receiverBefore,receiverAfter,actorBefore,actorAfter});await capture('05-six-member-list-anchors');await second.close();
   check('Six-member List preserves the outer reading anchor and original selection in both the keyboard actor and the receiving window');
   const complete=await fixture('stats'); assert.equal(complete.stats.sends,0); assert.equal((await snapshot()).diagnostics.dispatches,0); assert.deepEqual(errors,[]);
+  assert.ok((await snapshot()).sessions.every(s => fs.realpathSync(s.cwd).startsWith(ownedRoot + path.sep)), 'Every created working folder stays inside the owned profile');
   measurements.push({name:'complete-native-actions',stats:complete.stats,calls:complete.overviewCalls});
 }
 run().catch(async error => {
