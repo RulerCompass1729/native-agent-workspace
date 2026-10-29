@@ -126,7 +126,7 @@ async function run() {
   const privateDraft = await page.locator('#message-input').inputValue(); await until(async () => (await snapshot()).sessions.find(s => s.id === c).liveDraft === privateDraft, 'Solo draft saved');
   assert.equal((await snapshot()).sessions.find(s => s.id === c).roomId, null);
   await page.locator(`[data-session-menu="${c}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
-  await page.locator('#archive-button').click(); await page.locator('#archive-list').getByRole('button', { name: '恢复会话', exact: true }).click();
+  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click(); await page.locator('#archive-list').getByRole('button', { name: '恢复会话', exact: true }).click();
   await page.locator(`[data-session-id="${c}"]`).click(); await page.locator('#chat-tab').click(); await shot('solo-after-detach');
   // A delayed picker must not attach to a newly selected conversation.
   await app.evaluate(({ dialog }) => { global.__normalFileDialog = dialog.showOpenDialog; dialog.showOpenDialog = () => new Promise(resolve => { global.__resolvePicker = resolve; }); });

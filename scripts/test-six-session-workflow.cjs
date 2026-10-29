@@ -92,7 +92,7 @@ async function run() {
     assert.deepEqual(after.filter(s => ids.includes(s.id)).map(s => [s.id, s.nativeId, s.state]), before);
     await shot('seventh-session-created');
     await app.close(); app = null; await launch();
-    await page.locator('#archive-button').click();
+    if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
     await page.locator(`[data-archived-session="${selected}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
     await page.locator('[data-session-id="' + selected + '"]').click(); await page.locator('#chat-tab').click();
     assert.equal(await page.locator('#message-input').inputValue(), draft);
@@ -130,7 +130,7 @@ async function run() {
   assert.ok((await snapshot()).room.messages.every(m => !m.text.includes('脱出之后的私人结果')));
   await page.locator(`[data-session-id="${ids[4]}"]`).click({ button: 'right' });
   await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
-  await page.locator('#archive-button').click();
+  if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
   await page.locator(`[data-archived-session="${ids[4]}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();
   assert.equal(await page.locator('#message-input').inputValue(), draft);
   assert.equal((await snapshot()).sessions.find(s => s.id === ids[4]).roomId, null);
