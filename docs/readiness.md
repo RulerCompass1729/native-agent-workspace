@@ -1,11 +1,11 @@
 # Readiness and next gates
 
-As of 2026-10-28. This is a local Apple Silicon macOS technical trial.
+As of 2026-10-29. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.120, committed source `aada4fd`. Four of six
-backends report120; Main and the active secretary remain118. The last refresh
+Current daily GUI: alpha.122, committed source `e920cef`. One of seven
+backends reports122, four retain120; Main and the active secretary remain118. The earlier I70 refresh
 refused to retire Main when its native goal started another turn. Native identity,
 known settings and drafts were reconciled; this is a partial update, not a
 successful Main recovery or a completed dogfood milestone.
@@ -25,6 +25,9 @@ responses. Physical system clipboard/IME coverage is separate.
 
 | User task | Accepted scoped evidence | Remaining boundary |
 | --- | --- | --- |
+| Create sessions in separate folders | Signed122/e920cef previews each new private directory, creates it only on submit, retains files/name on collision, and keeps existing identities/drafts; unchanged folder-picker/start-failure cases reuse signed121 proof | Folder trust remains native; no OS isolation or automatic Git worktree. Existing sessions keep their original directories |
+| Resize sidebar sections and read native process groups | Six installed122 task flows pass pointer/keyboard resizing, folds, exact tool originals, native completion, manual expansion and GUI reopen with identity/draft/preferences retained; narrow/wide member notices remain readable | Synthetic native transport,0models/providers; OS clipboard, physical input and screen readers not newly certified |
+| Limit app-owned Node debugging | Signed122 fuse readback and normal service/UI-host boot pass; a directly started MCP script survives owned signal probes. All three own Node launch sites pass the native signal-disable option | Claude's own MCP launcher remains unverified. GUI signal can terminate it; explicit separate RunAsNode debugging remains possible. Old live backends retain old executable settings; no ASAR/same-user isolation claim |
 | Type and read a long conversation | Existing reader retains every row; 2,480-row input, selection/copy, streaming, view/session switching and reopening pass | Full-state broadcasting still has scale costs; no virtual rows or deferred draft saves |
 | Use the same terminal | Native bytes pass through unchanged; large plugin catalogs stay connected; unchanged geometry sends no resize; current-config middle insertion passes | Original cursor cause remains unassigned; real-use confirmation stays open |
 | Paste/drop screenshots | Three entry paths reach each original native TUI with unchanged pixels, no auto-send, preserved text draft and original identity | Renderer events/stubbed clipboard are tested; physical OS clipboard and other media formats are not claimed |

@@ -198,7 +198,8 @@ tool. Electron removes that inherited variable, so native children cannot inheri
 it through NAW; a native launcher can still supply its own explicit Node options.
 An owned installed GUI probe opened no Node inspector for `--inspect` or `SIGUSR1`;
 the signal terminated that test GUI. RunAsNode follows Node's separate inspector
-behavior, so NAW starts its service, UI host and MCP tool with `--disable-sigusr1`.
+behavior, so NAW starts its service, UI host and MCP tool with
+[`--disable-sigusr1`](https://nodejs.org/api/cli.html#--disable-sigusr1).
 This does not prevent explicitly debugging a separately launched Node process.
 This is not protection against another
 process running as the same user. Chromium renderer debugging remains a separate
