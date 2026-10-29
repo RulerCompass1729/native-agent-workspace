@@ -28,7 +28,9 @@ async function launch({ executablePath, env, timeout = 70000 }) {
   const close = async () => {
     if (!exited && browser?.isConnected()) {
       const session = await browser.newBrowserCDPSession();
-      await session.send('Browser.close').catch(error => { if (!/closed|disconnected/i.test(error.message)) throw error; });
+      // Electron may exit before acknowledging Browser.close. Its actual child
+      // exit is the completion signal, rather than an unbounded CDP response.
+      session.send('Browser.close').catch(error => { stderr += '\n' + error.message; });
     }
     for (let i = 0; i < 200 && !exited; i++) await delay(50);
     if (!exited) {

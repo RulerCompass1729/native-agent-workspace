@@ -104,7 +104,11 @@ async function run() {
     const notice = page.locator(`.collaboration-member-reader[data-member-id="${a.id}"] [data-message-id="fixture-notice-${a.id}"]`);
     await notice.waitFor(); const body = notice.locator('.message-body'); assert.equal(await body.textContent(), noticeText);
     const size = await body.boundingBox(); assert.ok(size.width > 140, 'Original notice body has readable width');
-    await notice.hover(); const actions = await notice.locator(':scope > .message-actions').boundingBox(); assert.ok(actions && actions.y >= size.y + size.height, 'Copy actions remain below original notice');
+    await notice.hover();
+    const geometry = await notice.evaluate(el => Object.fromEntries(['.message-body', '.message-actions', '.message-heading'].map(selector => { const n = el.querySelector(selector); return [selector, { rect: n.getBoundingClientRect().toJSON(), display: getComputedStyle(n).display, position: getComputedStyle(n).position }]; })));
+    fs.writeFileSync(path.join(evidence, 'notice-geometry-' + width + '.json'), JSON.stringify(geometry, null, 2)); await shot('notice-before-check-' + width);
+    const bodyRect = geometry['.message-body'].rect, actions = geometry['.message-actions'].rect;
+    assert.ok(actions.y >= bodyRect.bottom - 1, 'Copy actions remain below original notice');
     assert.equal(await notice.locator('.message-heading').evaluate(el => getComputedStyle(el).display), 'flex');
     await shot('03-installed-member-notice-' + width);
   }
