@@ -166,6 +166,13 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
         text: text(message.content), status: 'complete', incomplete: nonText,
         ...(candidate === collecting && !candidate?.invalid && candidate?.appends === 1 && candidate?.tag && text(message.content) === candidate.text ? { inputTag: candidate.tag } : {}) });
     }
+    // A qualified managed reader uses accepted IDs for ordinary input too.
+    // This mod's own submissions already have their visible app row.
+    if (!legacyOnly && binding.nativePromptInput && e.door === 'prompt' && message.type === 'user' &&
+      !(e.origin?.kind === 'plugin' && e.origin.name === 'native-workspace-submit')) {
+      enqueueBlock($, { id: `prompt:${result.uuid}`, kind: 'input', inputMode: 'native-prompt',
+        text: text(message.content), status: 'complete', incomplete: message.content.some(b => b?.type !== 'text') }, binding);
+    }
     // Display IDs and saved transcript IDs are different namespaces. Text is
     // collected from MessageDisplay only, not guessed equal to an append/Stop.
     if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
@@ -307,6 +314,8 @@ async function refreshLegacyObserver($, ownGeneration) {
       observationRequests++;
       observerBindRequest = { token: binding.token, generation: ownGeneration,
         promise: request($, '/root-bind', { nativeBlocks, nativeQueue: version === '2.1.302',
+          nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
+          nativePromptInput: false,
           nativeSharedDisplay: nativeBlocks && version === '2.1.302' }, binding).finally(() => { observationRequests--; }) };
     }
     const pending = observerBindRequest;
@@ -323,7 +332,7 @@ async function refreshLegacyObserver($, ownGeneration) {
     // listeners hold a separate connection value: their old receipt/grant must
     // still go to its old credential, never to this new observer.
     Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
-      nativeInlineInput: nativeBlocks && result.nativeInlineInput === true });
+      nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: false });
     for (const entry of observations) if (entry.binding === previous) {
       entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence, replayed: true };
     }
@@ -443,12 +452,14 @@ async function bindRoot($, ownGeneration) {
   const binding = await connection($);
   const version = (await $.session.version()).version;
   const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(version)),
+    nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
+    nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
-    nativeInlineInput: nativeBlocks && result.nativeInlineInput === true };
+    nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true };
   heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
   // metadata refresh avoids waiting for the existing /next poll to return.
@@ -487,7 +498,7 @@ async function syncRoot($) {
       if (typeof result.lease !== 'string') throw Error('Root lease missing');
       rootEnds.delete(rootBinding.sessionId);
       rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
-        nativeInlineInput: nativeBlocks && result.nativeInlineInput === true };
+        nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true };
       observationGap = false; observationGapRevision++;
       rootTransitions.shift();
     }

@@ -389,7 +389,7 @@ class Workspace extends EventEmitter {
     on('nativeInput', (text, item) => {
       this.cancelCapacity(s.id);
       this.pause('真人在原生终端输入'); s.controlRevision++;
-      if (!item?.id || !s.messages.some(m => m.id === item.id)) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
+      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
       this.changed();
     });
     on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });

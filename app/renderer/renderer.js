@@ -145,6 +145,9 @@ function focusRoomMember(id, previous, originKey) {
 function restoreOverviewReading() {
   for (const view of messageViews.values()) {
     if (!view.key.startsWith('collaboration:') || !view.el.clientHeight) continue;
+    // Layout and hiding can emit scroll events before our restoration frame.
+    // Keep the saved source anchor authoritative until that frame completes.
+    view.pageChanging = true;
     view.intent = { position: readingPositions[view.key] || { top: 0, follow: true, anchor: '', offset: 0 } }; scheduleReading(view);
   }
 }
@@ -154,7 +157,7 @@ function renderRoomOverview() {
     label: s => participantLabel(s, state.sessions), messages: s => sessionMessages(s),
     renderMessages: (el, s, rows, key) => messageList(el, rows, false, key, { session: s, passive: true }),
     disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
-    beforeLayout: captureReadingViews, onLayout: restoreOverviewReading, onFocus: focusRoomMember,
+    beforeLayout: () => { captureReadingViews(); restoreOverviewReading(); }, onLayout: restoreOverviewReading, onFocus: focusRoomMember,
     decorateHeader: (handle, record) => draggableSession(handle, record.id),
     onMemberMenu: openMemberMenu,
     onSource: (el, key, source) => {
@@ -678,7 +681,7 @@ function openMemberMenu(id, anchor) {
     contextElement: anchor,
     items: [{ id: 'detach', label: '脱出协作' }, { id: 'copy-id', label: '复制完整 NAW ID' }],
     getAnchorRect: () => {
-      const rect = anchor.getBoundingClientRect(), band = anchor.closest('.collaboration-statuses').getBoundingClientRect();
+      const rect = anchor.getBoundingClientRect(), band = (anchor.closest('.collaboration-statuses') || anchor.closest('.collaboration-member-status') || anchor).getBoundingClientRect();
       return { left: rect.left, right: rect.right, top: band.bottom, bottom: band.bottom };
     },
     onClose: () => {
