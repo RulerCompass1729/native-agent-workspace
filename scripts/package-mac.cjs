@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
+const { packageFuseOptions, verifyPackageFuses } = require('./package-fuses.cjs');
 const root = path.resolve(__dirname, '..');
 const manifest = require('../package.json');
 const run = (bin, args, cwd) => execFileSync(bin, args, { cwd, stdio: 'inherit' });
@@ -75,12 +76,14 @@ async function build() {
       extendInfo: { NAWSourceRevision: revision },
       electronVersion: manifest.devDependencies.electron,
       out: path.join(scratch, 'bundles.noindex'), overwrite: true, asar: false, prune: false,
+      ...packageFuseOptions,
       // Ad-hoc signatures are for local alpha testing, not notarized distribution.
       osxSign: { identity: '-', identityValidation: false, preAutoEntitlements: false, optionsForFile: () => ({ hardenedRuntime: false }) },
     });
     const app = path.join(output[0], 'Native Agent Workspace.app');
     if (sourceRevision() !== revision) throw new Error('Source revision changed during packaging; no bundle was published.');
     run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
+    await verifyPackageFuses(app);
     fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
     const archive = path.join(root, 'dist', `native-agent-workspace-${manifest.version}-mac-arm64.zip`);
     fs.rmSync(archive, { force: true });
