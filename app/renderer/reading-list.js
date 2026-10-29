@@ -630,6 +630,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       for (const child of [entry.heading, entry.inputBody, entry.body, entry.delivery]) if (child && disclosure.contains(child)) disclosure.before(child);
       disclosure.remove(); entry.tail?.remove(); entry.more?.remove();
       delete entry.disclosure; delete entry.content; delete entry.preview; delete entry.tail; delete entry.more;
+      entry.item.classList.remove('process');
     }
     if (hasImages && !entry.images) {
       const host = node('div', undefined, 'message-images'); entry.body.after(host);
