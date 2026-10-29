@@ -1302,6 +1302,7 @@ class Codex extends EventEmitter {
         title: fleetActivity ? `${fleetTitle}${item.agentPath ? ' · ' + item.agentPath : ''}` : item.command || item.tool || item.type,
         status: fleetActivity ? 'observed' : toolStatus(item, message.method === 'item/completed'),
         ...toolContent(item, message.method === 'item/completed'),
+        ...(item.type === 'imageView' ? { imageCwd: this.nativeSettings?.cwd || this.record.cwd } : {}),
       });
     }
     if (['item/commandExecution/outputDelta', 'item/mcpToolCall/progress'].includes(message.method) && !this.historyMessageItems.has(p.itemId)) {
@@ -1442,6 +1443,12 @@ class Codex extends EventEmitter {
         if (p.item?.type === 'userMessage' && !this.ownInputs.has(p.item.clientId) && (!p.item.id || !this.inputItems.has(p.item.id))) {
           if (p.item.id) this.inputItems.add(p.item.id);
           this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), { id: p.item.id });
+        }
+        if (p.item?.type === 'userMessage' && p.item.id) {
+          const images = require('./native-images.cjs').userImageReferences(p.item.content);
+          if (images.length) this.emit('nativeInputImages', { id: p.item.id, nativeId: this.record.nativeId,
+            clientId: this.ownInputs.has(p.item.clientId) ? p.item.clientId : undefined,
+            cwd: this.nativeSettings?.cwd || this.record.cwd, images });
         }
         break;
       case 'thread/tokenUsage/updated': this.emit('usage', p.tokenUsage ? { ...p.tokenUsage, threadId: p.threadId, turnId: p.turnId, reportedAt: Date.now() } : null); break;

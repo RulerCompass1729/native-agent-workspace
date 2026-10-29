@@ -10,6 +10,9 @@ for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create',
     return result.value;
   };
 }
+for (const name of ['previewImage', 'expandImage', 'copyImage', 'releaseImage']) {
+  api[name] = async (...args) => { const result = await ipcRenderer.invoke(`workspace:${name}`, ...args); if (!result.ok) throw new Error(result.error); return result.value; };
+}
 api.retryStartup = () => ipcRenderer.invoke('workspace:retry-startup');
 api.startupData = () => ipcRenderer.invoke('workspace:startup-data');
 for (const [name, channel] of [['onState', 'workspace:state'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
