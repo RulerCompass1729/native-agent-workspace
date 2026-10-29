@@ -117,3 +117,32 @@ test('native projection text stays exact, source content stays unchanged and non
   // Image display is T78; do not invent an image, path or body here.
   expect(f.inputs()[0].image).toBe(undefined);
 });
+
+// Native 2.1.312 files queued_command as a delivery from the actual
+// composer/bridge. System-channel renderings have no API role. Observe the
+// accepted rendering, never reconstruct a typed prompt by stripping its frame.
+for (const kind of ['composer', 'bridge'] as const) {
+  test(`native queued delivery from ${kind} keeps the accepted rendering and UUID`, async ($, on) => {
+    const f = await fixture($, on);
+    await $.turn.start({ turnId: 'native-running-turn' });
+    const content = text('NATIVE_ENGINE_FRAME\nORIGINAL_MIDTURN_TEXT\nNATIVE_ENGINE_SUFFIX');
+    await $.session.append({ door: 'delivery', origin: { kind }, uuid: id(30),
+      message: { type: 'attachment', name: 'queued_command', content } });
+    await f.clock.settle();
+    expect(f.inputs().length).toBe(1);
+    expect(f.inputs()[0]).toEqual(expect.objectContaining({ id: `prompt:${id(30)}`,
+      inputMode: 'native-inline', turnId: 'native-running-turn', text: content[0].text }));
+    expect(f.stored.appended().at(-1)?.message.content).toEqual(content);
+  });
+}
+
+test('native queued delivery does not mislabel peer, scheduled, app or meta input as a human input', async ($, on) => {
+  const f = await fixture($, on);
+  for (const [index, kind] of ['peer', 'peer-send-message', 'task-notification', 'scheduled-trigger', 'plugin', 'unclassified'].entries()) {
+    await $.session.append({ door: 'delivery', origin: { kind, ...(kind === 'plugin' ? { name: 'native-workspace-submit' } : {}) }, uuid: id(40 + index),
+      message: { type: 'attachment', name: 'queued_command', content: text('UNRELATED_DELIVERY') } });
+  }
+  await $.session.append({ door: 'delivery', origin: { kind: 'composer' }, uuid: id(50),
+    message: { type: 'attachment', name: 'queued_command', isMeta: true, content: text('META_DELIVERY') } });
+  await f.clock.settle(); expect(f.inputs()).toEqual([]);
+});
