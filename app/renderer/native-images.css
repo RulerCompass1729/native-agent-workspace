@@ -1,0 +1,10 @@
+.message-images:empty{display:none}
+.native-image{display:flex;flex-direction:column;align-items:flex-start;gap:5px;margin:10px 0;max-width:100%;min-width:0}
+.native-image-toggle{display:block;max-width:100%;min-width:44px;min-height:44px;padding:3px;border:1px solid var(--line);border-radius:7px;background:transparent;overflow:hidden}
+.native-image-toggle img{display:block;max-width:256px;max-height:192px;width:auto;height:auto;object-fit:contain}
+.native-image[data-expanded="true"]{width:100%}
+.native-image[data-expanded="true"] .native-image-toggle{width:100%}
+.native-image[data-expanded="true"] img{width:100%;max-width:100%;height:auto;max-height:70vh;object-fit:contain}
+.native-image-caption,.native-image-note{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.native-image-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;max-width:100%}
+.native-image-copy{font-size:12px}

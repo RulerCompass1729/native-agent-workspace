@@ -103,6 +103,7 @@ class SharedReplies {
         g.rows.set(message.id, row); this.workspace.room.messages.push(row);
       }
       for (const field of ['text', 'input', 'title', 'kind', 'toolKind', 'commandActions', 'commandSource', 'exitCode', 'status', 'incomplete', 'volatile', 'displayTurnId', 'nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) row[field] = message[field];
+      if (Array.isArray(message.images)) row.images = message.images.map(ref => ({ ...ref }));
       row.nativeStatus = message.status;
       this.boundary(g, message);
     }
