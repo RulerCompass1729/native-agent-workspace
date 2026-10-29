@@ -23,6 +23,17 @@ const failureTrial=process.env.NAW_NATIVE_FAILURE_TRIAL==='1',failureBody='NATIV
 // Active-goal recovery: the owned app-server dies while the goal's automatic
 // continuation turn is in flight (T-4); the completed-goal case is NAW_NATIVE_RECOVERY_TRIAL.
 const activeGoalRecovery=process.env.NAW_NATIVE_ACTIVE_GOAL_RECOVERY==='1';
+const fileAccessDirectory=process.env.NAW_NATIVE_FILE_ACCESS_DIR;
+let fileAccessCommand;
+if(fileAccessDirectory){
+ assert.ok(activeGoalRecovery,'File access is checked within the bounded recovery task');
+ const owned=fs.realpathSync(fileAccessDirectory),allowed=fs.realpathSync(path.join(root,'.local'))+path.sep;
+ const info=fs.lstatSync(owned);assert.ok(owned.startsWith(allowed)&&info.isDirectory()&&info.uid===process.getuid()&&!(info.mode&0o077));
+ const script=path.join(base,'native-file-access.py');
+ fs.writeFileSync(script,'import pathlib,tempfile,os,json,sys\nroot=pathlib.Path(sys.argv[1])\nwith tempfile.TemporaryDirectory(prefix="native-owned-",dir=root) as d:\n p=pathlib.Path(d)/"before"\n with p.open("xb") as f:f.write(b"native repository IO");f.flush();os.fsync(f.fileno())\n assert p.read_bytes()==b"native repository IO"\n q=p.with_name("after");p.rename(q);assert q.read_bytes()==b"native repository IO";q.unlink()\n(root/"native-file-access.json").write_text(json.dumps({"readWriteFsyncRenameDelete":True,"pid":os.getpid(),"parentPid":os.getppid()}))\n');
+ const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
+ fileAccessCommand='/usr/bin/python3 '+quote(script)+' '+quote(owned);
+}
 const scrollTrial=process.env.NAW_NATIVE_SCROLL_TRIAL==='1';
 const goalTrial=process.env.NAW_NATIVE_GOAL_TRIAL==='1'||activeGoalRecovery||capacityGoal;
 const goalsDisabled=process.env.NAW_NATIVE_GOALS_DISABLED==='1';assert.ok(!goalsDisabled||!goalTrial);
@@ -56,7 +67,8 @@ const server=http.createServer((req,res)=>{if(updateStartupTrial){errors.push('U
   const name=n===1?'create_goal':'update_goal',args=n===1?{objective:'Verify native goal continuation with the NAW window closed, then mark this bounded fixture complete.'}:{status:'complete'};
   if(n===1)goalCodeMode=input.input?.some(m=>m.tools?.some(t=>t.type==='namespace'&&t.name==='functions'&&t.tools?.some(f=>f.name==='exec')));
   if(goalCodeMode){
-   const item={id:'goal_'+n,type:'custom_tool_call',call_id:'native_goal_'+n,namespace:'functions',name:'exec',input:'text(await tools.'+name+'('+JSON.stringify(args)+'));',status:'completed'};
+   const probe=activeGoalRecovery&&n===4&&fileAccessCommand?'text(await tools.exec_command('+JSON.stringify({cmd:fileAccessCommand,max_output_tokens:500})+'));':'';
+   const item={id:'goal_'+n,type:'custom_tool_call',call_id:'native_goal_'+n,namespace:'functions',name:'exec',input:probe+'text(await tools.'+name+'('+JSON.stringify(args)+'));',status:'completed'};
    event(res,'response.output_item.added',{output_index:0,item:{...item,input:'',status:'in_progress'}});event(res,'response.output_item.done',{output_index:0,item});event(res,'response.completed',{response:{...response,status:'completed',output:[item]}});res.end();return;
   }
   const item={id:'goal_'+n,type:'function_call',call_id:'native_goal_'+n,name,arguments:JSON.stringify(args),status:'completed'};
@@ -318,6 +330,7 @@ async function nativeCommand(command){
   assert.equal(result.draft,'Unsent draft retained while the native goal runs.');assert.equal(result.dispatches,0,'Recovery sends no human message');
   assert.ok(createCalls.every(c=>c===1),'No completed native tool is replayed');
   assert.deepEqual(afterLoss,beforeLoss,'The thread posture survives NAW recovery');assert.deepEqual(errors,[]);
+  if(fileAccessDirectory)assert.equal(JSON.parse(fs.readFileSync(path.join(fileAccessDirectory,'native-file-access.json'))).readWriteFsyncRenameDelete,true,'The recovered installed native session executes actual repository file IO');
   console.log(JSON.stringify({checks:['Active native goal survives owned app-server loss mid-continuation: same thread, goal, draft and posture; no human or tool replay'],result,nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(goalTrial){
