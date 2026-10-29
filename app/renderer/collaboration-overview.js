@@ -28,7 +28,9 @@
     const state = !live ? '连接状态待核对' : record.nativeContextPending ? '原生上下文待核对' : record.claudeQuestion || question && record.approval.params?.isBlocking !== false
       ? '等待回答' : question ? `${base} · 有待回答问题` : base;
     const pending = record.nativeApproval?.requests?.length || record.approvals?.length || 0;
-    return { state: pending > 1 ? `${state} · ${pending} 项待处理` : state, child, freshness: `${stale ? '最后观察 · ' : ''}${time}`, stale };
+    const compactChild = children.children.length ? [children.running && `${children.running} 进行中`, children.unknown && `${children.unknown} 未知`, !children.running && !children.unknown && `${children.children.length} 已结束`, '部分观察'].filter(Boolean).join(' · ') : '';
+    return { state: pending > 1 ? `${state} · ${pending} 项待处理` : state, child, freshness: `${stale ? '最后观察 · ' : ''}${time}`, stale,
+      compactChild, freshnessReported: age !== null || stale };
   }
   function excerpt(record, messages = record.messages || [], limit = 220) {
     const source = messages.findLast(message => message.role === 'assistant' && typeof message.id === 'string' && message.id &&
@@ -123,6 +125,9 @@
         const pane = panes.get(record.id); if (!pane) continue;
         const facts = statusFacts(record, connected);
         setText(pane.status, facts.state); setText(pane.child, facts.child); setText(pane.freshness, facts.freshness);
+        setText(pane.compactChild, facts.compactChild);
+        pane.compactChild.title = facts.child;
+        pane.freshness.classList.toggle('compact-status-hidden', !facts.freshnessReported);
         pane.header.dataset.state = record.state || 'unknown'; pane.header.dataset.stale = String(facts.stale);
       }
     }
@@ -141,6 +146,13 @@
     function makePane(record) {
       const header = el('section', undefined, 'collaboration-member-status'); header.dataset.memberId = record.id;
       const name = button('', () => focus(record.id), 'collaboration-member-name');
+      const nameText = el('span', undefined, 'collaboration-name-text'), nameSuffix = el('span', undefined, 'collaboration-name-suffix'); name.append(nameText, nameSuffix);
+      const revealName = reveal => {
+        if (name.classList.contains('is-revealed') === reveal) return;
+        options.beforeLayout?.(); name.classList.toggle('is-revealed', reveal); options.onLayout?.();
+      };
+      name.addEventListener('focus', () => { if (host.closest('.compact-room-surface') && name.matches(':focus-visible') && nameText.scrollWidth > nameText.clientWidth) revealName(true); });
+      name.addEventListener('blur', () => revealName(false));
       // Reuse the application's existing member-drag contract on the handle,
       // leaving the conversation itself available for ordinary text selection.
       options.decorateHeader?.(name, record);
@@ -178,7 +190,10 @@
       // offering a short keyboard route past a member's long conversation.
       const next = button('', () => {
         const index = records.findIndex(s => s.id === record.id);
-        if (layout === 'list' && !focused && index >= 0) panes.get(records[index + 1]?.id)?.name.focus();
+        if (layout === 'list' && !focused && index >= 0) {
+          const target = panes.get(records[index + 1]?.id);
+          target?.name.focus(); target?.header.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
       }, 'collaboration-member-next');
       const more = button('⋯', () => options.onMemberMenu?.(record.id, more), 'collaboration-member-more');
       more.dataset.memberMenu = record.id;
@@ -193,8 +208,9 @@
       });
       heading.append(name, more, next);
       const status = el('span', undefined, 'collaboration-member-state'); status.setAttribute('role', 'status');
-      const child = el('span', undefined, 'collaboration-member-child'), freshness = el('span', undefined, 'collaboration-member-freshness');
-      header.append(heading, status, child, freshness);
+      const child = el('span', undefined, 'collaboration-member-child compact-status-hidden'), freshness = el('span', undefined, 'collaboration-member-freshness');
+      const compactChild = el('span', undefined, 'collaboration-member-child-compact'); compactChild.setAttribute('aria-hidden', 'true');
+      header.append(heading, status, child, compactChild, freshness);
       const reader = el('section', undefined, 'collaboration-member-reader'); reader.dataset.memberId = record.id;
       const messages = el('div', undefined, 'messages collaboration-messages'); messages.setAttribute('aria-label', `${record.name} 的原会话`);
       let pane;
@@ -223,7 +239,7 @@
       grip.addEventListener('pointerup', finish); grip.addEventListener('pointercancel', finish); grip.addEventListener('lostpointercapture', finish);
       reader.append(messages, short, grip);
       const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(reader);
-      return pane = { header, name, more, next, status, child, freshness, unit, reader, messages, short, quote, truncation, source, notice, grip };
+      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, unit, reader, messages, short, quote, truncation, source, notice, grip };
     }
     function render() {
       const reordered = [...readers.children].map(n => n.dataset.memberId).join('\n') !== records.map(r => r.id).join('\n');
@@ -244,7 +260,8 @@
       }
       records.forEach((record, i) => {
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
-        const label = options.label(record); setText(pane.name, label);
+        const label = options.label(record), suffix = label.startsWith(record.name) ? label.slice(record.name.length) : '';
+        setText(pane.nameText, suffix ? record.name : label); setText(pane.nameSuffix, suffix); pane.name.title = label;
         pane.name.setAttribute('aria-label', `放大 ${label} 的会话`); pane.name.setAttribute('aria-pressed', String(focused === record.id));
         if (options.onMove) {
           pane.name.setAttribute('aria-description', `第 ${i + 1} 位，共 ${records.length} 位成员。${canOrder() ? '拖动卡片头排序，或按 Option 加上下方向键；也可在成员菜单中上移或下移。' : ''}`);
@@ -293,8 +310,8 @@
         if (focused && !records.some(r => r.id === focused)) { const previous = focused; focused = ''; options.onFocus?.('', previous, key(previous)); }
         render();
       },
-      focus, key, refresh: refreshStatus, get focused() { return focused; },
-      dispose() { for (const pane of panes.values()) options.disposeMessages?.(pane.messages); panes.clear(); host.replaceChildren(); },
+      focus, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
+      dispose() { toolbar.remove(); for (const pane of panes.values()) options.disposeMessages?.(pane.messages); panes.clear(); host.replaceChildren(); },
     };
   }
   return { create, statusFacts, excerpt, adjustedWidths };

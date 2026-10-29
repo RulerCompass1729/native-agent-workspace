@@ -113,7 +113,7 @@ async function run() {
   assert.equal((await view()).selected, b); assert.equal((await view()).mode, solo.mode); await stableCalls(soloCalls, 'Solo detach');
   assert.equal(await page.locator('#message-input').inputValue(), 'Original private draft Navigation B');
   await joinFromSolo(b); await page.locator('#room-nav').click();
-  await page.locator('#collaboration-overview').getByRole('button', { name: '列表', exact: true }).click();
+  await page.getByRole('button', { name: '列表', exact: true }).click();
   await header(b).locator('.collaboration-member-name').click();
   if (await page.locator('#toast-close').isVisible()) await page.locator('#toast-close').click();
   await hold('join', b, 'after'); const focusedCalls = await fixture('stats');

@@ -134,7 +134,7 @@ async function run() {
   const afterAnchor=await readingAnchor(reader(a)); assert.equal(afterAnchor.id,anchor.id); assert.ok(Math.abs(afterAnchor.offset-anchor.offset)<=2);
   assert.deepEqual(identity(await snapshot()),original); assert.equal(await page.locator('#shared-input').inputValue(),shared); assert.equal(await page.locator('#recipient').inputValue(),recipient);
   await capture('02-grid-reordered'); check('A real header drag displays its insertion target and reorders Grid without changing original selection, reading anchor, drafts, recipient or native identities');
-  await overview.getByRole('button',{name:'列表',exact:true}).click(); await expectOrder(page,[b,c,a,d]);
+  await page.getByRole('button',{name:'列表',exact:true}).click(); await expectOrder(page,[b,c,a,d]);
   async function pointerAfter(id,target,axis,shot) {
     await page.evaluate(()=>{globalThis.memberOrderDragTrace=[];});
     await name(id).hover();
@@ -164,7 +164,7 @@ async function run() {
   assert.equal(await name(a).evaluate(el=>document.activeElement===el),true);
   await until(()=>overview.locator('.collaboration-order-status').innerText().then(s=>s.includes('第 2')&&s.includes('4')),'Accessible position update');
   await name(a).press('Alt+ArrowDown'); await expectOrder(page,[b,c,a,d]);
-  await overview.getByRole('button',{name:'网格',exact:true}).click(); await expectOrder(page,[b,c,a,d]);
+  await page.getByRole('button',{name:'网格',exact:true}).click(); await expectOrder(page,[b,c,a,d]);
   const menuRead=await watchMovingMember(page,a),menuSelection=await page.evaluate(()=>getSelection().toString());
   assert.notEqual(menuRead.anchor.id,afterAnchor.id,'A new wheel scroll changed the original paragraph after the previous move');
   await header(a).locator('.collaboration-member-more').click(); await page.getByRole('menuitem',{name:'上移',exact:true}).click(); await expectOrder(page,[b,a,c,d]);
@@ -228,15 +228,15 @@ async function run() {
   assert.equal(fs.readFileSync(path.join(profile,'room-state.json'),'utf8'),beforeFailure); await expectOrder(page,[b,c,d,a]);
   check('Actual atomic disk failure announces the failure in the existing notice and live status without a predicted reorder');
   const extra=[];
-  for(let i=0;i<2;i++) {const id=await create('Order extra '+i);extra.push(id);await fixture('history',id,Array.from({length:16},(_,j)=>({id:`extra-${i}-${j}`,type:'agentMessage',turnId:`extra-${i}`,text:`Extra member ${i} original ${j}`})));await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入协作',exact:true}).click();}
-  await page.locator('#room-nav').click(); await overview.getByRole('button',{name:'列表',exact:true}).click();
+  for(let i=0;i<4;i++) {const id=await create('Order extra '+i);extra.push(id);await fixture('history',id,Array.from({length:16},(_,j)=>({id:`extra-${i}-${j}`,type:'agentMessage',turnId:`extra-${i}`,text:`Extra member ${i} original ${j}`})));await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入协作',exact:true}).click();}
+  await page.locator('#room-nav').click(); await page.getByRole('button',{name:'列表',exact:true}).click();
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setContentSize(850,600));
   await expectOrder(page,[b,c,d,a,...extra]);
-  const secondPromise=app.waitForEvent('window');await page.evaluate(()=>workspace.newWindow());const second=await secondPromise;second.setDefaultTimeout(10000);await second.locator('#room-nav').click();await second.locator('#collaboration-overview').getByRole('button',{name:'列表',exact:true}).click();
+  const secondPromise=app.waitForEvent('window');await page.evaluate(()=>workspace.newWindow());const second=await secondPromise;second.setDefaultTimeout(10000);await second.locator('#room-nav').click();await second.getByRole('button',{name:'列表',exact:true}).click();
   await (await app.browserWindow(second)).evaluate(win=>win.setContentSize(850,600));
   assert.deepEqual(await second.evaluate(()=>[innerWidth,innerHeight]),[850,600]);
   const outer=target=>target.locator('.collaboration-readers');
-  await until(()=>outer(second).evaluate(el=>el.scrollHeight>el.clientHeight+80),'Six member list really scrolls');
+  await until(()=>outer(second).evaluate(el=>el.scrollHeight>el.clientHeight+80),'Eight member list really scrolls');
   await outer(second).evaluate((el,id)=>{const row=[...el.children].find(n=>n.dataset.memberId===id);el.scrollTop+=row.getBoundingClientRect().top-el.getBoundingClientRect().top+1;},c);
   const outerAnchor=target=>outer(target).evaluate(el=>{const top=el.getBoundingClientRect().top;const n=[...el.children].find(n=>n.getBoundingClientRect().bottom>top);return {id:n?.dataset.memberId,offset:n?.getBoundingClientRect().top-top,top:el.scrollTop};});
   const receiverBefore=await outerAnchor(second); assert.equal(receiverBefore.id,c);
@@ -248,8 +248,8 @@ async function run() {
   const receiverAfter=await outerAnchor(second),actorAfter=await outerAnchor(page);
   assert.equal(receiverAfter.id,receiverBefore.id);assert.ok(Math.abs(receiverAfter.offset-receiverBefore.offset)<=2);assert.equal(actorAfter.id,actorBefore.id);assert.ok(Math.abs(actorAfter.offset-actorBefore.offset)<=2);
   assert.equal(await second.evaluate(()=>getSelection().toString()),receiverSelection);assert.deepEqual((await fixture('stats')).overviewCalls,beforeList.overviewCalls);
-  measurements.push({name:'six-list-anchors',receiverBefore,receiverAfter,actorBefore,actorAfter});await capture('05-six-member-list-anchors');await second.close();
-  check('Six-member List preserves the outer reading anchor and original selection in both the keyboard actor and the receiving window');
+  measurements.push({name:'eight-list-anchors',receiverBefore,receiverAfter,actorBefore,actorAfter});await capture('05-eight-member-list-anchors');await second.close();
+  check('Eight-member List preserves the outer reading anchor and original selection in both the keyboard actor and the receiving window');
   const complete=await fixture('stats'); assert.equal(complete.stats.sends,0); assert.equal((await snapshot()).diagnostics.dispatches,0); assert.deepEqual(errors,[]);
   assert.ok((await snapshot()).sessions.every(s => fs.realpathSync(s.cwd).startsWith(ownedRoot + path.sep)), 'Every created working folder stays inside the owned profile');
   measurements.push({name:'complete-native-actions',stats:complete.stats,calls:complete.overviewCalls});
