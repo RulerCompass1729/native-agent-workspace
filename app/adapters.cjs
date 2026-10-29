@@ -276,11 +276,15 @@ class Claude extends EventEmitter {
     this.rootObservation = null; this.rootTurn = null; this.liveTurn = null; this.livePermissions = new Map(); this.observationSeenAt = Date.now();
     this.nativeBlocks = message.nativeBlocks === true;
     this.nativeQueue = message.nativeQueue === true;
+    // Managed input needs both the accepted-row display and boundary-only hook
+    // path. Old retained queues lack an attachment-to-app identity link.
+    this.nativePromptInput = this.nativeBlocks && message.nativeInlineInput === true && message.nativePromptInput === true && !this.retainedReader;
+    this.nativeInlineInput = this.nativeBlocks && message.nativeInlineInput === true && (this.retainedReader ? !this.nativeQueue : this.nativePromptInput);
     this.nativeAbortAvailable = message.nativeAbort === true && !this.retainedReader;
     this.addressedSendAvailable = this.nativeBlocks && message.addressedTool === true && !this.retainedReader;
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
     this.displayProofs = new Map(); this.displayGap = false;
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput };
   }
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
@@ -304,14 +308,23 @@ class Claude extends EventEmitter {
     return { observed: true };
   }
   observeBlock(message) {
+    const inline = message.kind === 'input' && message.inputMode === 'native-inline';
+    const nativePrompt = message.kind === 'input' && message.inputMode === 'native-prompt';
     if (!this.nativeBlocks || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
       !/^(display|tool|turn|prompt|control):[a-zA-Z0-9_:-]{1,160}$/.test(message.id || '') ||
-      !['response', 'tool', 'turn', 'control', ...(this.retainedReader ? ['input'] : [])].includes(message.kind) ||
+      !['response', 'tool', 'turn', 'control', ...(this.retainedReader || this.nativeInlineInput ? ['input'] : [])].includes(message.kind) ||
       !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
       !['streaming', 'running', 'complete', 'failed', 'interrupted'].includes(message.status) ||
       (message.id === 'control:model' && (message.kind !== 'control' || message.status !== 'complete' || typeof message.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/\[\]-]{0,159}$/.test(message.model))) ||
       (message.kind === 'response' && (!Number.isSafeInteger(message.index) || message.index < 0 || typeof message.delta !== 'string')) ||
       (message.kind === 'input' && (!message.id.startsWith('prompt:') || typeof message.text !== 'string' || message.status !== 'complete')) ||
+      (message.kind === 'input' && (inline || nativePrompt ? (inline ? !this.nativeInlineInput : !this.nativePromptInput) ||
+        !/^prompt:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(message.id) ||
+        (inline ? message.title !== '工作中插入' : message.title !== undefined) || message.inputTag !== undefined || message.promptId !== undefined ||
+        message.delta !== undefined || message.index !== undefined || message.input !== undefined || message.displayTurnId !== undefined ||
+        (message.incomplete !== undefined && typeof message.incomplete !== 'boolean') ||
+        (message.turnId !== undefined && (typeof message.turnId !== 'string' || !/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId)))
+        : !this.retainedReader || message.inputMode !== undefined)) ||
       !['text', 'delta', 'input', 'title'].every(k => message[k] === undefined || (typeof message[k] === 'string' && message[k].length <= 500000))) throw Error('Invalid native block');
     const usage = message.id === 'control:usage' ? claudeUsage(message.usage) : null;
     if (message.id === 'control:usage' && (!usage || message.kind !== 'control' || message.status !== 'complete')) throw Error('Invalid native usage');
@@ -367,11 +380,20 @@ class Claude extends EventEmitter {
         // event can arrive later or be coalesced before a peer sees a snapshot.
         this.emit('nativeControlBoundary', message.id);
         if (this.nativeSharedDisplay) this.emit('sharingBoundary', message.id);
+        // The ordered ingress owns the human boundary; accepted appends own
+        // display. Settings hooks and later attachments must not repeat either.
+        if (message.id === 'control:input' && this.nativePromptInput && !message.replayed) this.emit('nativeInput', '', { display: false });
         if (message.id === 'control:permission' && !message.replayed && !message.gap) this.emit('state', 'approval');
       }
       this.emit('capability'); return { observed: true };
     }
     const { id, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete } = message;
+    const freshInline = inline && !message.replayed && !this.record.messages?.some(row => row.id === `native:${this.record.nativeId}:${id}`);
+    if (freshInline) {
+      this.rootTurn = null;
+      this.emit('nativeControlBoundary', 'control:input');
+      this.emit('sharingBoundary', 'control:input');
+    }
     const inputTag = kind === 'input' && /^[a-f0-9-]{36}$/i.test(message.inputTag || '') ? message.inputTag : undefined;
     if (!['tool', 'input'].includes(kind) && (typeof turnId !== 'string' || !/^[a-zA-Z0-9_:-]{1,160}$/.test(turnId))) throw Error('Invalid native turn');
     this.displayProofs ||= new Map();
@@ -395,7 +417,7 @@ class Claude extends EventEmitter {
       const block = turn.blocks.get(message.finalDisplayId);
       if (status === 'complete' && !turn.incomplete && block?.final) { turn.safeText = block.text; turn.messageId = `native:${this.record.nativeId}:${message.finalDisplayId}`; }
     }
-    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag });
+    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag, ...(inline || nativePrompt ? { inputMode: message.inputMode } : {}) });
     if (kind === 'turn' && this.rootTurn?.id === turnId && !this.rootTurn.completed && ['working', 'error', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
       this.rootTurn.status = status === 'interrupted' ? 'idle' : status === 'failed' && message.failedRequest === true ? 'error' : null;
       this.rootTurn.completed = status === 'complete';
@@ -508,7 +530,7 @@ class Claude extends EventEmitter {
     const previous = this.lastRootTransition;
     if (previous && previous.lease === message.lease && previous.sessionId === message.sessionId &&
       previous.nextSessionId === message.nextSessionId && this.record.nativeId === message.nextSessionId) {
-      return { lease: this.rootLease, observationEpoch: this.observationEpoch }; // Lost metadata ACK, never a second clear.
+      return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput }; // Lost metadata ACK, never a second clear.
     }
     if (!this.rootLease || message.lease !== this.rootLease || this.rootEnding?.sessionId !== message.sessionId ||
       !FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] || FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] !== message.source || this.rootEnding.unfollowed || message.agentId ||
@@ -527,7 +549,7 @@ class Claude extends EventEmitter {
     const observed = (this.contextEvents || []).filter(e => e.session_id === change.nativeId);
     this.contextEvents = (this.contextEvents || []).filter(e => e.session_id !== change.nativeId);
     for (const event of observed) this.hook(event);
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput };
   }
   hook(event) {
     // A new root can already be receiving human input while its identity is
@@ -640,7 +662,8 @@ class Claude extends EventEmitter {
           if (entering === this.queued) this.emit('state', 'working');
         } else if (!this.pending || event.prompt !== this.pending.text || event.prompt_id !== this.pending.promptId) {
           if (this.queued) this.queued.superseded = true;
-          this.pending = null; this.emit('state', 'working'); this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: `claude-prompt-${event.prompt_id}` } : undefined);
+          this.pending = null; this.emit('state', 'working');
+          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: `claude-prompt-${event.prompt_id}` } : undefined);
         }
         break;
       }
