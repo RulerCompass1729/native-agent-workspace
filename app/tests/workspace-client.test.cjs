@@ -4,6 +4,18 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['claudePromptIdentity', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+test('new-directory creation checks the active backend, never a retained capability', async () => {
+  const { old, next, c } = fixture();
+  old.real.capabilities.push('newSessionDirectory');
+  await assert.rejects(c.call('create', { provider: 'codex', newDirectory: true }), /尚不支持自动新建目录/);
+  assert.equal(next.calls.some(([method]) => method === 'create'), false);
+  next.real.capabilities.push('newSessionDirectory');
+  next.real.newWorkspaceRoot = '/synthetic/new-workspaces';
+  await c.call('initial'); assert.equal(c.snapshot().newWorkspaceRoot, '/synthetic/new-workspaces');
+  await c.call('create', { provider: 'codex', newDirectory: true, cwd: '/synthetic/new-workspaces/preview' });
+  assert.equal(next.calls.filter(([method]) => method === 'create').length, 1);
+  assert.equal(old.calls.some(([method]) => method === 'create'), false); c.close();
+});
 test('retained native version metadata uses its connected original RPC rather than another backend snapshot', async () => {
   const { old, c } = fixture(); old.real.runtimeVersion = '0.1.0-alpha.2';
   Object.assign(old.real.sessions[1], { nativeVersion: '0.164.0', nativeVersionStatus: 'verified' });

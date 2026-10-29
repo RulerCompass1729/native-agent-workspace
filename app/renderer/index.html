@@ -8,28 +8,34 @@
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="collaboration-overview.css">
+  <link rel="stylesheet" href="sidebar-layout.css">
 </head>
 <body>
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">◒</span><div>Native Workspace<small>本地桌面 · Alpha</small></div></div>
     <button class="new-button" id="new-session" aria-label="新会话" title="新会话"><span class="rail-icon" aria-hidden="true">＋</span><span class="rail-label">＋ 新会话</span><kbd>⌘N</kbd></button>
     <button id="search-button" class="subtle" aria-label="查找会话与记录" title="查找会话与记录"><span class="rail-icon" aria-hidden="true">⌕</span><span class="rail-label">查找会话与记录</span></button>
-    <div class="sidebar-navigation">
-      <section class="sidebar-group" aria-labelledby="session-group-label">
+    <div class="sidebar-navigation sidebar-layout">
+      <section class="sidebar-group" id="sessions-group" aria-labelledby="session-group-label">
         <h2 class="nav-label"><button id="solo-drop" class="group-toggle" type="button" aria-expanded="true" aria-controls="session-list" title="折叠或展开会话；把协作成员拖到这里独立使用"><span class="group-chevron" aria-hidden="true">▾</span><span id="session-group-label">会话</span><small id="session-group-summary"></small></button></h2>
-        <nav id="session-list" aria-label="会话列表"></nav>
+        <nav id="session-list" class="sidebar-group-body" aria-label="会话列表"></nav>
       </section>
+      <div class="sidebar-sash" id="sidebar-session-sash" role="separator" aria-orientation="horizontal" aria-label="会话" tabindex="0"></div>
       <section class="sidebar-group" id="workspace-group" aria-labelledby="workspace-group-label">
         <h2 class="nav-label"><button id="workspace-toggle" class="group-toggle" type="button" aria-expanded="true" aria-controls="workspace-group-body"><span class="group-chevron" aria-hidden="true">▾</span><span id="workspace-group-label">协作空间</span><small id="workspace-group-summary"></small></button></h2>
-        <div id="workspace-group-body">
+        <div id="workspace-group-body" class="sidebar-group-body">
         <div class="room-row"><button class="room-nav" id="room-nav" aria-label="共同工作" title="共同工作"><span class="rail-icon" aria-hidden="true">◉</span><span class="rail-label" id="room-nav-name">◉ 共同工作</span><span id="member-count">0</span></button><button id="room-more" class="session-more" aria-label="工作区操作" aria-haspopup="menu" aria-expanded="false">⋯</button></div>
         <p class="drop-hint">拖入一起工作 · 拖回会话区独立使用</p>
         <p id="workspace-empty" class="nav-empty" hidden>工作区已归档，可从下方“归档”恢复。</p>
         </div>
       </section>
+      <div class="sidebar-sash" id="sidebar-workspace-sash" role="separator" aria-orientation="horizontal" aria-label="协作空间" tabindex="0"></div>
+      <section class="sidebar-group" id="archive-group" aria-labelledby="archive-label">
+        <h2 class="nav-label"><button id="archive-button" class="group-toggle" type="button" aria-expanded="false" aria-controls="archive-group-body" title="归档"><span class="group-chevron" aria-hidden="true">▸</span><span class="rail-icon" aria-hidden="true">▤</span><span class="rail-label" id="archive-label">归档</span></button></h2>
+        <div id="archive-group-body" class="sidebar-group-body" hidden><div id="archive-list"></div><p class="archive-explanation">归档保留记录，不结束原生任务。恢复会话回到原来的身份；恢复工作区找回原成员（单独归档的除外），不重发任务。原生进程已丢失时仍需明确继续原生历史。</p></div>
+      </section>
     </div>
     <div class="sidebar-tools">
-    <button id="archive-button" class="subtle" aria-label="归档" title="归档"><span class="rail-icon" aria-hidden="true">▤</span><span class="rail-label" id="archive-label">归档</span></button>
     <button id="setup-button" class="subtle" aria-label="检查安装与版本" title="检查安装与版本"><span class="rail-icon" aria-hidden="true">⚙</span><span class="rail-label">检查安装与版本</span></button>
     <div class="sidebar-bottom"><span class="local-status"><span class="local-dot"></span> 本地运行</span><button id="privacy-button" aria-label="查看隐私与用量" title="隐私与用量"><span class="rail-icon" aria-hidden="true">ⓘ</span><span class="rail-label">隐私与用量</span></button></div>
     </div>
@@ -81,7 +87,7 @@
       <div class="split-divider" role="separator" aria-orientation="vertical" aria-label="调整对话与终端的宽度" tabindex="0"></div></div>
     </section>
   </main>
-  <dialog id="create-dialog"><form id="create-form"><h2>开始一个会话</h2><p>使用已安装的原生 agent 和你的原生登录。</p><div class="provider-choice"><label><input type="radio" name="provider" value="claude" checked> Claude</label><label><input type="radio" name="provider" value="codex"> Codex</label></div><label for="initial-view" id="initial-view-label" hidden>Codex 从哪边开始</label><select id="initial-view" hidden><option value="chat">对话：可定向协作，首条消息后才能开终端</option><option value="terminal">原生终端：终端立即可用，不能定向协作</option></select><label for="session-name">名称（可选）</label><input id="session-name" maxlength="60" placeholder="例如：学习笔记"><label>工作目录</label><div class="folder-field"><span id="chosen-folder"></span><button type="button" id="choose-folder">选择…</button></div><label id="skip-permissions-option" hidden><input type="checkbox" id="skip-permissions">跳过所有权限确认（危险）</label><p class="quiet" id="create-permission-note">默认是独立的空目录。原生文件和命令权限仍由原生确认。</p><p id="create-readiness" role="status"></p><div id="claude-history-id-option" hidden><label for="claude-history-id">接管已退出的 Claude 会话 ID（可选）</label><input id="claude-history-id" maxlength="36" autocomplete="off" spellcheck="false" aria-describedby="claude-history-note" placeholder="留空则从已有会话分支"><p class="quiet" id="claude-history-note">填写原生 UUID，并在上方选择原会话工作目录；先在其他终端退出该会话。这里不停止其他进程，不重发旧任务。</p></div><button type="button" id="open-native-history" class="subtle" hidden>继续已有 Codex 会话…</button><div class="dialog-actions"><button type="button" id="create-setup">检查安装</button><button type="button" id="cancel-create">取消</button><button type="submit" id="confirm-create" class="primary">创建会话</button></div></form></dialog>
+  <dialog id="create-dialog"><form id="create-form"><h2>开始一个会话</h2><p>使用已安装的原生 agent 和你的原生登录。</p><div class="provider-choice"><label><input type="radio" name="provider" value="claude" checked> Claude</label><label><input type="radio" name="provider" value="codex"> Codex</label></div><label for="initial-view" id="initial-view-label" hidden>Codex 从哪边开始</label><select id="initial-view" hidden><option value="chat">对话：可定向协作，首条消息后才能开终端</option><option value="terminal">原生终端：终端立即可用，不能定向协作</option></select><label for="session-name">名称（可选）</label><input id="session-name" maxlength="60" placeholder="例如：学习笔记"><label>工作目录</label><div class="folder-field"><span id="chosen-folder"></span><button type="button" id="new-folder" hidden>自动新建</button><button type="button" id="choose-folder">选择…</button></div><label id="skip-permissions-option" hidden><input type="checkbox" id="skip-permissions">跳过所有权限确认（危险）</label><p class="quiet" id="create-permission-note">工作目录显示在上方。原生文件和命令权限仍由原生确认。</p><p id="create-readiness" role="status"></p><p id="create-error" role="alert"></p><div id="claude-history-id-option" hidden><label for="claude-history-id">接管已退出的 Claude 会话 ID（可选）</label><input id="claude-history-id" maxlength="36" autocomplete="off" spellcheck="false" aria-describedby="claude-history-note" placeholder="留空则从已有会话分支"><p class="quiet" id="claude-history-note">填写原生 UUID，并在上方选择原会话工作目录；先在其他终端退出该会话。这里不停止其他进程，不重发旧任务。</p></div><button type="button" id="open-native-history" class="subtle" hidden>继续已有 Codex 会话…</button><div class="dialog-actions"><button type="button" id="create-setup">检查安装</button><button type="button" id="cancel-create">取消</button><button type="submit" id="confirm-create" class="primary">创建会话</button></div></form></dialog>
   <dialog id="native-history-dialog" aria-labelledby="native-history-heading">
     <h2 id="native-history-heading">继续已有 Codex 会话</h2>
     <p>选择原生历史，保留原会话身份。请先结束其他地方的连接；这里不会重发旧任务。活动团队和目标不会自动重建。</p>
@@ -95,7 +101,6 @@
   <dialog id="setup-dialog"><h2>开始前的准备</h2><p>本试用版使用你自己安装的 Claude Code 或 Codex，以及 Python 3。登录在原生终端中完成。</p><div id="setup-status"></div><div class="dialog-actions"><button id="refresh-setup">重新检查</button><button id="close-setup">完成</button></div><p class="quiet" id="version-info"></p></dialog>
   <div id="rename-editor" class="inline-rename" hidden><form id="rename-form"><label id="rename-label" for="rename-name" class="visually-hidden">会话名称</label><div class="inline-rename-controls"><input id="rename-name" maxlength="60" autocomplete="off" aria-describedby="rename-help rename-error" title="最多 60 个字符；Enter 保存，Esc 取消"><button type="submit" id="confirm-rename" aria-label="保存名称" title="保存名称">✓</button><button type="button" id="cancel-rename" aria-label="取消重命名" title="取消重命名">×</button></div><p id="rename-help">本机显示名；协作时可作为来源标签，原生会话不变。</p><p id="rename-error" role="alert" hidden></p></form></div>
   <dialog id="invite-dialog"><h2>邀请已有会话</h2><p>只建立成员关系；不复制会话、不发送历史。</p><div id="invite-list"></div><button id="close-invite">完成</button></dialog>
-  <dialog id="archive-dialog" aria-labelledby="archive-heading"><h2 id="archive-heading">归档</h2><p>归档保留记录，不结束原生任务。恢复会话回到原来的身份；恢复工作区找回原成员（单独归档的除外），不重发任务。原生进程已丢失时仍需明确继续原生历史。</p><div id="archive-list"></div><div class="dialog-actions"><button id="close-archive">完成</button></div></dialog>
   <dialog id="notes-dialog" aria-labelledby="notes-heading"><form id="notes-form"><h2 id="notes-heading">共享笔记</h2><p>把共同目标、决定和待办留在这里。本机保存；只有明确附到消息发送后，agent 才会收到。脱出后仍可查看，已发送内容留在原生会话。保存版本会留在共享记录；清空当前笔记不会删除旧版本。</p><textarea id="room-notes-text" rows="8" maxlength="8000" aria-label="共享笔记正文"></textarea><p id="notes-error" role="alert" hidden></p><div class="dialog-actions"><button id="cancel-notes" type="button">取消</button><button id="save-notes" class="primary" type="submit">保存笔记</button></div></form></dialog>
   <dialog id="context-dialog" aria-labelledby="context-heading"><h2 id="context-heading">协作背景</h2><p>以下是成员状态与共享笔记，不含私人历史。可编辑后加入草稿，或复制到原生终端。只有发送时才占用模型上下文；不会另开一轮通知。</p><textarea id="context-text" rows="9" maxlength="12000" aria-label="将要附上的协作背景"></textarea><p id="context-error" role="alert" hidden></p><div class="dialog-actions"><button id="close-context">取消</button><button id="copy-context">复制</button><button id="insert-context" class="primary">加入草稿</button></div></dialog>
   <dialog id="file-dialog" aria-labelledby="file-title"><h2 id="file-title"></h2><p id="file-info" class="quiet"></p><pre id="file-content" tabindex="0" aria-label="文件内容"></pre><p>仅在本机预览。加入草稿后仍需你发送，内容才会交给所选 agent；不会自动共享文件或整个目录。</p><p id="file-error" role="alert" hidden></p><div class="dialog-actions"><button id="close-file">关闭</button><button id="save-file">另存副本…</button><button id="insert-file" class="primary">加入草稿</button></div></dialog>
@@ -115,6 +120,7 @@
   <script src="local-search.js"></script>
   <script src="search-view.js"></script>
   <script src="collaboration-overview.js"></script>
+  <script src="sidebar-layout.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -72,7 +72,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
       fs.copyFileSync(path.join(path.dirname(require.resolve('@xterm/xterm/package.json')), 'LICENSE'), path.join(target, 'LICENSE'));
     }
   }
-  const child = spawn(executablePath, [path.join(runtime, 'daemon.cjs'), dataDir], { detached: true, stdio: 'ignore', env: { ...process.env, NAW_WORKSPACE: defaultWorkspace, ELECTRON_RUN_AS_NODE: '1' } }); child.unref();
+  const child = spawn(executablePath, ['--disable-sigusr1', path.join(runtime, 'daemon.cjs'), dataDir], { detached: true, stdio: 'ignore', env: { ...process.env, NAW_WORKSPACE: defaultWorkspace, ELECTRON_RUN_AS_NODE: '1' } }); child.unref();
   for (let i = 0; i < 100; i++) { try { const c = await connectService(dataDir, 'bootstrap'); try { return await c.call('initial'); } finally { c.close(); } } catch {} await new Promise(r => setTimeout(r, 100)); }
   throw new Error('运行服务未能启动。原生会话没有自动重发。');
 }
