@@ -153,7 +153,7 @@ async function run() {
   await page.locator('#room-record').click(); await more(c).click(); await visibleStates([a, b, c], true); await page.keyboard.press('Escape');
   await page.locator('#room-overview').click();
   await app.browserWindow(page).then(win => win.evaluate(win => win.setSize(680, 860)));
-  await page.locator('#collaboration-overview').getByRole('button', { name: '简化信息', exact: true }).click();
+  await page.getByRole('button', { name: '简化信息', exact: true }).click();
   await more(b).click(); await visibleStates([a, b, c], true); await capture('03-narrow-brief-menu'); await page.keyboard.press('Escape');
   const ids = identity(await snapshot()); await app.close(); app = null; await launch();
   await header(b).waitFor(); assert.deepEqual(identity(await snapshot()), ids); await visibleStates([a, b, c]);

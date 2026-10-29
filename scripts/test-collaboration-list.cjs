@@ -87,7 +87,7 @@ async function run() {
   const overview = page.locator('#collaboration-overview'), list = overview.locator('.collaboration-readers');
   const reader = id => overview.locator(`.collaboration-member-reader[data-member-id="${id}"] .messages`);
   const header = id => overview.locator(`.collaboration-member-status[data-member-id="${id}"]`);
-  const layout = name => overview.getByRole('button', { name, exact: true });
+  const layout = name => page.getByRole('button', { name, exact: true });
   await overview.locator('.collaboration-member-reader').nth(3).waitFor();
   await page.evaluate(() => { globalThis.listOriginalNodes = [...document.querySelectorAll('.collaboration-member-reader')].map(r => [r, r.querySelector('.messages')]); });
   async function geometry(name) {
@@ -102,7 +102,7 @@ async function run() {
           for (const rect of range.getClientRects()) if (rect.height >= 12 && rect.top >= Math.max(box.top, clip.top) - 1 && rect.bottom <= Math.min(box.bottom, clip.bottom, innerHeight) + 1 && rect.left >= clip.left - 1 && rect.right <= clip.right + 1) lines++;
         }
         return { id, unit: Boolean(unit && unit.contains(h)), headerTop: hb.top, headerBottom: hb.bottom, readerTop: box.top, readerBottom: box.bottom,
-          unitHeight: unit?.getBoundingClientRect().height || 0, factsVisible: ['state', 'child', 'freshness'].every(k => { const n = h.querySelector('.collaboration-member-' + k), b = n.getBoundingClientRect(); return n.textContent.trim() && b.top >= hb.top - 1 && b.bottom <= hb.bottom + 1 && b.left >= hb.left - 1 && b.right <= hb.right + 1 && b.top >= clip.top - 1 && b.bottom <= clip.bottom + 1; }), headerVisible: hb.top >= clip.top - 1 && hb.bottom <= clip.bottom + 1, fullTextLines: lines, headerHeight: hb.height, readerHeight: box.height,
+          unitHeight: unit?.getBoundingClientRect().height || 0, factsVisible: ['state', 'child', 'freshness'].every(k => { const n = h.querySelector('.collaboration-member-' + k), compact = h.querySelector('.collaboration-member-child-compact'); if (!n.textContent.trim() || n.getAttribute('aria-hidden') === 'true') return false; const srOnly = getComputedStyle(n).clipPath === 'inset(50%)'; const shown = k === 'child' && compact?.textContent ? compact : n, b = shown.getBoundingClientRect(); if (srOnly && shown === n) return k !== 'state'; return b.top >= hb.top - 1 && b.bottom <= hb.bottom + 1 && b.left >= hb.left - 1 && b.right <= hb.right + 1 && b.top >= clip.top - 1 && b.bottom <= clip.bottom + 1; }), headerVisible: hb.top >= clip.top - 1 && hb.bottom <= clip.bottom + 1, fullTextLines: lines, headerHeight: hb.height, readerHeight: box.height,
           nameNoHorizontalOverflow: h.querySelector('.collaboration-member-name').scrollWidth <= h.querySelector('.collaboration-member-name').clientWidth + 1 };
       });
     });
@@ -118,6 +118,21 @@ async function run() {
     if (installed) await page.setViewportSize({ width, height });
     else await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [width, height]);
     await delay(160);
+    const started = Date.now(), readiness = [];
+    await until(async () => {
+      const visible = await overview.evaluate(el => {
+        const clip = el.querySelector('.collaboration-readers').getBoundingClientRect();
+        return [...el.querySelectorAll('.collaboration-member-reader')].map(reader => {
+          const box = reader.getBoundingClientRect();
+          return [...reader.querySelectorAll('.message-body')].some(body => {
+            const range = document.createRange(); range.selectNodeContents(body);
+            return [...range.getClientRects()].some(r => r.height >= 12 && r.top >= Math.max(box.top, clip.top) - 1 && r.bottom <= Math.min(box.bottom, clip.bottom, innerHeight) + 1 && r.left >= clip.left - 1 && r.right <= clip.right + 1);
+          });
+        });
+      });
+      readiness.push({ elapsed: Date.now() - started, visible }); return visible.length === 4 && visible.every(Boolean);
+    }, 'Four real original lines settle after the native resize');
+    measurements.push({ name: 'resize-original-lines-ready-' + width, readiness });
     const rows = await geometry('four-' + width);
     assert.deepEqual(await page.evaluate(() => [innerWidth, innerHeight]), [width, height]);
     const heights = rows.map(r => r.unitHeight); assert.ok(Math.max(...heights) - Math.min(...heights) <= 1);

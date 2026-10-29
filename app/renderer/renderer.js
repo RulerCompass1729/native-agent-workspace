@@ -180,6 +180,7 @@ function renderRoomOverview() {
   $('collaboration-overview').hidden = false;
   for (const person of members()) readLegacyProgress(person);
   roomOverview.update(orderedMembers(), !disconnected, !records, focused ? roomSession : '');
+  renderHeaderLayout(current(), selected === 'room');
   $('room-overview').setAttribute('aria-pressed', String(!records)); $('room-record').setAttribute('aria-pressed', String(records));
   $('room-member-tabs').hidden = true;
   $('room-record-view').querySelector('.timeline-tools').hidden = !records;
@@ -617,7 +618,7 @@ $('confirm-native-history').onclick = async () => {
   } catch (error) { $('native-history-status').textContent = error.message; }
   finally { historyImporting = false; renderNativeHistory(); }
 };
-function openRename(id) {
+function openRename(id, origin) {
   const record = id === 'room' ? { id, name: state.room.name } : state.sessions.find(s => s.id === id); if (!record) return;
   if (renaming) return toast('名称正在保存，请稍候。');
   if (renameTarget) {
@@ -628,7 +629,7 @@ function openRename(id) {
   }
   const row = id === 'room' ? $('room-nav').parentElement : sessionRows.get(id)?.element;
   if (!row || record.archived || id === 'room' && state.room.archived) return;
-  renameTarget = { id, originalName: record.name, row, label: id === 'room' ? $('room-nav-name') : sessionRows.get(id).name };
+  renameTarget = { id, origin, originalName: record.name, row, label: id === 'room' ? $('room-nav-name') : sessionRows.get(id).name };
   renameRevision++; renameComposing = false; $('rename-name').value = record.name;
   $('rename-label').textContent = id === 'room' ? '工作区名称' : '会话名称';
   $('rename-error').hidden = true; $('rename-error').textContent = '';
@@ -667,22 +668,33 @@ function closeRename(returnFocus = true) {
   $('rename-editor').hidden = true; $('header').parentElement.append($('rename-editor'));
   target.row.classList.remove('is-renaming'); target.label.hidden = false; render();
   if (returnFocus) {
-    const action = target.id === 'room' ? $('room-more') : sessionRows.get(target.id)?.more;
+    const action = target.origin?.isConnected && target.origin.getClientRects().length ? target.origin : target.id === 'room' ? $('room-more') : sessionRows.get(target.id)?.more;
     (action?.getClientRects().length && !action.disabled ? action : $(target.id === 'room' ? 'workspace-toggle' : 'solo-drop')).focus({ preventScroll: true });
   }
 }
 function focusSessionAction(id) { if (id === 'room') $('room-more').focus(); else sessionRows.get(id)?.more.focus(); }
-function openRoomMenu(point) {
+const roomMenuKey = () => JSON.stringify([selectionRevision, selected, roomSession, roomSurface, disconnected, state.room.archived]);
+function openRoomMenu(point, anchor = $('room-more')) {
   contentMenu?.close();
-  if (disconnected) return;
-  if (!point && roomMenu) { roomMenu(); return; }
-  roomMenu?.(); sessionMenu?.close(); $('room-more').focus(); $('room-more').setAttribute('aria-expanded', 'true');
+  if ($('room-more').disabled) return;
+  if (!point && roomMenu?.anchor === anchor) { roomMenu(); return; }
+  roomMenu?.(); sessionMenu?.close(); anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
+  const key = roomMenuKey();
   roomMenu = ui.menu({
-    items: [{ id: 'rename', label: '重命名…' }, { id: 'notes', label: '共享笔记' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: state.wakePolicy.enabled ? '关闭所有 agent 自动消息' : '允许 agent 自动消息' }] : []), { id: 'archive', label: '归档工作区' }],
-    getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : $('room-more').getBoundingClientRect(),
-    onClose: () => { roomMenu = null; $('room-more').setAttribute('aria-expanded', 'false'); $('room-more').focus(); },
-    onSelect: action => { if (action === 'wake-global') attempt(() => api.wakePolicy(null, !state.wakePolicy?.enabled)); else if (action === 'rename') openRename('room'); else if (action === 'notes') openNotes(); else attempt(async () => { await api.archiveRoom(); toast('工作区已归档。原生任务仍可能运行，可从归档列表恢复。'); }); },
+    items: [{ id: 'rename', label: '重命名…' }, { id: 'notes', label: '共享笔记' }, { id: 'usage', label: '用量' }, { id: 'about', label: '协作说明' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: state.wakePolicy.enabled ? '关闭所有 agent 自动消息' : '允许 agent 自动消息' }] : []), { id: 'archive', label: '归档工作区' }],
+    getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(),
+    onClose: () => { roomMenu = null; anchor.setAttribute('aria-expanded', 'false'); if (key === roomMenuKey() && anchor.isConnected && anchor.getClientRects().length && !anchor.disabled) anchor.focus({ preventScroll: true }); },
+    onSelect: action => {
+      if (key !== roomMenuKey()) return;
+      if (action === 'wake-global') attempt(() => api.wakePolicy(null, !state.wakePolicy?.enabled));
+      else if (action === 'rename') openRename('room', anchor);
+      else if (action === 'notes') openNotes();
+      else if (action === 'usage') attempt(() => showTrust({ usageScope: { kind: 'room', roomId: state.room.id, name: state.room.name } }));
+      else if (action === 'about') toast('你决定谁参与、分享什么、什么时候停。成员原文和状态分别来自各自的原生会话；子任务状态只包含已观察到的部分。');
+      else if (action === 'archive') attempt(async () => { await api.archiveRoom(); toast('工作区已归档。原生任务仍可能运行，可从归档列表恢复。'); });
+    },
   });
+  roomMenu.key = key; roomMenu.anchor = anchor;
 }
 function openSessionMenu(id, point) {
   contentMenu?.close();
@@ -1160,6 +1172,23 @@ function openHeaderMenu(anchor, terminal = false) {
 }
 function renderHeaderLayout(s, inRoom) {
   const compact = Boolean(s && !inRoom), toolbar = $('session-toolbar');
+  const compactRoom = Boolean(inRoom && !s), header = $('header'), tabs = $('room-tabs'), band = $('run-status').parentElement;
+  const moving = compactRoom !== header.classList.contains('compact-room') || roomOverview && (roomOverview.toolbar.parentElement === tabs) !== compactRoom;
+  if (moving) { captureReadingViews(); restoreOverviewReading(); }
+  header.classList.toggle('compact-room', compactRoom);
+  $('room-view').classList.toggle('compact-room-surface', compactRoom);
+  const relocate = (element, parent, before = null) => {
+    if (element.parentElement === parent) return;
+    const active = element.contains(document.activeElement) ? document.activeElement : null;
+    parent.insertBefore(element, before);
+    if (active?.getClientRects().length && !active.hidden) active.focus({ preventScroll: true });
+  };
+  if (compactRoom) { relocate(band, header, $('header-actions')); relocate(tabs, header); }
+  else { relocate(band, $('room-view'), $('room-layout')); relocate(tabs, $('room-view'), $('room-layout')); }
+  if (roomOverview) {
+    relocate(roomOverview.toolbar, compactRoom ? tabs : $('collaboration-overview'), compactRoom ? $('manage-members') : $('collaboration-overview').firstChild);
+    $('collaboration-overview').dataset.externalToolbar = String(compactRoom);
+  }
   $('header').classList.toggle('compact-session', compact);
   $('session-view').classList.toggle('compact-session-surface', compact);
   if (compact) {
@@ -1172,20 +1201,25 @@ function renderHeaderLayout(s, inRoom) {
   }
   $('conversation-pane-toolbar').hidden = !compact;
   $('terminal-more').hidden = !compact;
-  $('title').tabIndex = compact ? 0 : -1;
-  $('title').title = compact ? s.name : '';
+  $('title').tabIndex = compact || compactRoom ? 0 : -1;
+  $('title').title = compact ? s.name : compactRoom ? state.room.name : '';
+  $('title').onfocus = () => { if (header.classList.contains('compact-room')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
+  $('title').onblur = () => { if (header.classList.contains('reveal-room-title')) { captureReadingViews(); restoreOverviewReading(); header.classList.remove('reveal-room-title'); } };
+  if (!compactRoom) header.classList.remove('reveal-room-title');
   const settings = s?.nativeSettings?.nativeId === s?.nativeId ? [s?.nativeSettings?.mode === 'plan' ? 'Plan' : '', s?.nativeSettings?.effort].filter(Boolean) : [];
   const values = s ? [s.provider === 'claude' ? 'Claude Code' : 'Codex', sessionShortId(s.id), s.model, ...settings, s.roomId ? '协作中，也可单独操作' : '独立会话'] : [];
-  const subtitle = $('subtitle'), signature = JSON.stringify([compact, inRoom, values]);
+  const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, compactRoom && members().length]);
   if (subtitle.dataset.identity !== signature) {
     if (compact) subtitle.replaceChildren(...values.map((value, index) => {
       const field = node('span', value, `identity-value${index === 2 ? ' identity-model' : ''}`);
       field.tabIndex = 0; field.title = value; field.setAttribute('aria-label', value); return field;
     }));
-    else subtitle.textContent = s ? values.join(' · ') : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
+    else subtitle.textContent = compactRoom ? `${members().length} 位成员` : s ? values.join(' · ') : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
     subtitle.dataset.identity = signature;
   }
   if (sessionMenu?.anchor && sessionMenu.key !== (sessionMenu.kind === 'member' ? memberMenuKey(sessionMenu.id) : headerMenuKey())) sessionMenu.close();
+  if (roomMenu && roomMenu.key !== roomMenuKey()) roomMenu();
+  if (moving) restoreOverviewReading();
 }
 function renderHeader(s, inRoom) {
   if (!headerControls) {
@@ -1204,7 +1238,8 @@ function renderHeader(s, inRoom) {
     });
     usage.id = 'usage-button'; usage.setAttribute('aria-label', '查看原生用量');
     const restore = button('恢复会话', () => { const s = current(); if (s?.archived) return restoreArchivedSession(s.id); }, 'primary');
-    const more = button('⋯', () => openRoomMenu()); more.setAttribute('aria-label', '工作区菜单');
+    const more = button('⋯', () => openRoomMenu(null, more)); more.id = 'room-header-more'; more.setAttribute('aria-label', '工作区菜单'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
+    more.onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
     const compactMore = button('⋯', () => openHeaderMenu(compactMore));
     compactMore.id = 'session-header-more'; compactMore.setAttribute('aria-label', '会话更多操作'); compactMore.setAttribute('aria-haspopup', 'menu'); compactMore.setAttribute('aria-expanded', 'false');
     compactMore.onpointerdown = event => { if (sessionMenu?.anchor === compactMore) event.stopPropagation(); };
@@ -1224,6 +1259,7 @@ function renderHeader(s, inRoom) {
   h.membership.textContent = s?.roomId ? '脱出协作' : '加入协作';
   h.restore.hidden = !s?.archived;
   h.more.hidden = !inRoom || !!s;
+  h.more.disabled = $('room-more').disabled;
   h.compactMore.hidden = !s || inRoom;
   renderHeaderLayout(s, inRoom);
 }
