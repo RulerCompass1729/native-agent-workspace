@@ -140,7 +140,7 @@ async function run() {
   assert.equal(await page.evaluate(() => getSelection().toString()), selectedText);
   check('Live output in one member preserves independent reading anchors in other members');
   await capture('01-conversation-columns');
-  await page.locator('#collaboration-overview').getByRole('button', { name: '简化信息', exact: true }).click();
+  await page.getByRole('button', { name: '简化信息', exact: true }).click();
   const quote = page.locator(`.collaboration-member-reader[data-member-id="${b}"] blockquote`);
   assert.equal(await quote.innerText(), 'PRIVATE_B_LATEST: original text with **Markdown** and 🙂');
   const source = page.locator(`.collaboration-member-reader[data-member-id="${b}"] .collaboration-source`);
@@ -205,9 +205,9 @@ async function run() {
   const grip = page.locator(`.collaboration-member-reader[data-member-id="${a}"] [role="separator"]`);
   const width = (await reader(a).boundingBox()).width; await grip.focus(); await page.keyboard.press('ArrowRight');
   assert.ok((await reader(a).boundingBox()).width > width);
-  await page.locator('#collaboration-overview').getByRole('button', { name: '列表', exact: true }).click();
+  await page.getByRole('button', { name: '列表', exact: true }).click();
   for (const id of [a, b, c]) assert.equal(await header(id).isVisible(), true);
-  await page.locator('#collaboration-overview').getByRole('button', { name: '网格', exact: true }).click();
+  await page.getByRole('button', { name: '网格', exact: true }).click();
   await page.locator('#room-record').click(); assert.equal(await page.locator('#room-messages').isVisible(), true);
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('PRIVATE_'));
   for (const id of [a, b, c]) assert.equal(await header(id).isVisible(), true);

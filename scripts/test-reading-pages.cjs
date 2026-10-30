@@ -193,7 +193,7 @@ async function run() {
   await member(id).evaluate(el => { el.scrollTop = 0; });
   await until(() => member(id).locator('article').count().then(n => n === 100), 'Member A older page');
   assert.equal(await member(other).locator('article').count(), 50); assert.equal(await member(other).evaluate(el => el.scrollTop), otherPosition);
-  await page.locator('#collaboration-overview').getByRole('button', { name: '简化信息', exact: true }).click();
+  await page.getByRole('button', { name: '简化信息', exact: true }).click();
   const source = page.locator(`.collaboration-member-reader[data-member-id="${id}"] .collaboration-source`);
   await source.click(); await member(id).locator('[data-message-id="page-live"][data-search-target="true"]').waitFor();
   assert.ok(!(await page.locator('#toast').innerText()).includes('已不在当前'));
