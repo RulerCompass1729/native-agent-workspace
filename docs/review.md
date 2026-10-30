@@ -899,3 +899,40 @@ removed. 58 affected checks and five complete source GUI journeys pass. These
 use synthetic native output and intercepted OS openers/clipboard; installed and
 actual default-viewer acceptance remain pending. Native error activation, exact
 footer availability and historical process gaps are separate open findings.
+
+
+### Alpha.132 original file-link installation
+
+Alpha.132, source `c31f367`, is installed locally and its source is pushed to main.
+Original local material links retain their targets and source context. Relative
+paths require the original working directory to remain provable; errors stay
+with the message that was clicked. The existing OS opener is reused.
+
+Validation: 58 affected checks, including an independent rerun; five integrated
+source GUI journeys; and five signed installed guard/context/reload journeys pass.
+The source run, recorded before the version-only bump, intercepted seven valid
+file-dispatch calls and checked their bytes plus the original copy payload. The signed
+run checked missing, script, executable and symlink rejection, member and shared
+source context, and unchanged IDs, owners and drafts after reload. It did not open
+a valid file in the OS viewer or use the OS clipboard. Both runs used synthetic
+native output; the signed run made two explicit synthetic shared sends, zero
+terminal inputs, three fixture terminal opens and three fixture resizes. These
+are test-transport counters, not OS file openings. No provider/model ran in those
+checks by construction; real development and independent reviews are excluded.
+
+The first installed test omitted the synthetic Claude prompt identity; the existing
+sharing guard correctly kept its streamed row private. Only that fixture identity
+was corrected. The product guard was retained and all five journeys then passed.
+The integration also retains the metadata-before-fresh-state startup fix and the
+recorded-time reader. Earlier test-probe and accessible-name adaptations preserve
+their original assertions. Source, candidate/operator and actual installation
+records are retained for independent review.
+
+The ordinary visible update retained all 10 native IDs, live native process start
+identities, owners and both draft scopes. Six backend records are identical; only
+the empty active backend restarted on 132. The split is 132×1 active/empty, 129×1,
+120×4, 118×1. Strict signature verification passes, one application copy is indexed,
+and the production reader matches the executable-bound private installation record.
+The developer session's native goal is unchanged by this update. The single-agent
+dogfood milestone, actual default viewer, physical input, native error activation,
+exact footer availability and historical process gaps remain open or unqualified.
