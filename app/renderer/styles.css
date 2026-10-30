@@ -417,3 +417,7 @@ header h1, header p { overflow-wrap: anywhere; }
 .column-native-host .terminal-host,.column-native-host .terminal-surface{width:100%;height:100%;min-height:0;margin:0;padding:0}
 .column-native-host .terminal-surface{overflow:auto}
 .column-native-host .terminal-input-recovery{position:absolute;inset:0;z-index:4;overflow:auto;padding:4px;background:var(--surface)}
+
+/* One observed latest step remains readable while its active group is folded. */
+.process-latest{margin:0 0 2px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;unicode-bidi:isolate;font:12px/1.5 ui-monospace,monospace;color:var(--muted)}
+.process-latest[hidden],.process-details[open]~.process-latest{display:none}
