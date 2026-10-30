@@ -4,8 +4,14 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.134, committed build source `0fdb09b`. The native
-overload/refinement receipt ordering passes 251 related checks and five signed
+Current daily GUI: alpha.135, committed build source `b6f633f`. Compact native-only
+requests and existing member-title menus pass 44 related checks and twelve signed
+alpha.135 flows with three synthetic members. Original fields remain available;
+these requests still use the native terminal for decisions. The default installed
+window, positive private/shared drafts, owners and ordinary reopening are checked;
+source-only narrow windows and intercepted copy retain their earlier scope.
+
+The unchanged overload/refinement path reuses 251 checks and five signed alpha.134
 GUI flows with synthetic transport. Real native overload, goal reactivation and
 retained-backend activation remain unqualified by this update. Local refresh
 reports progress and completion separately from native usage report times.
@@ -18,7 +24,7 @@ recorded clocks, known native-turn boundaries and 50-record paging remain.
 Actual OS viewers, clipboard, choosers, IME and VoiceOver are unqualified.
 
 The ordinary visible update retained all 10 native IDs, live process starts,
-owners and both draft scopes. Only the empty active backend restarted on 134;
+owners and both draft scopes. Only the empty active backend restarted on 135;
 six retained backend records are unchanged: 129×1, 120×4, 118×1. The earlier
 replay-clock adapter fix applies to new backends, not these retained processes.
 The actual production reader matches the build-bound installation record.
@@ -27,7 +33,7 @@ dogfood milestone remains open: full-day use, window-only lifecycle, external-te
 escape, Claude's active goal, native shell-command ingestion, Claude native clocks,
 native error activation, exact footer availability and historical process gaps
 are not certified. See the
-alpha.129–134 acceptance records in [review](review.md).
+alpha.129–135 acceptance records in [review](review.md).
 
 Local builds now use the existing named signing certificate and verify its
 certificate-bound designated requirement; a missing identity stops the build.
