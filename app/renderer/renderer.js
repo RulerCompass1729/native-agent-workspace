@@ -979,6 +979,40 @@ function sidebarSessions() {
   const ranks = new Map((state.sidebar?.order || []).map((id, index) => [id, index]));
   return state.sessions.filter(s => !s.archived).sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity));
 }
+function versionValue(value) {
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9.+_-]{0,95}$/i.test(value) ? value : null;
+}
+function compactAppVersion(value) {
+  const version = versionValue(value), alpha = version?.match(/^\d+\.\d+\.\d+-alpha\.(\d+)$/);
+  return alpha ? 'α' + alpha[1] : version || '?';
+}
+function backendVersionNotice(record, applicationVersion) {
+  const backend = versionValue(record.runtimeVersion), application = versionValue(applicationVersion);
+  if (backend && backend === application) return null;
+  return backend ? { label: '后台 ' + backend.replace(/^0\.1\.0-/, ''), title: `后台 ${backend} · 应用 ${application || '版本未报告'}；后台仅报告版本号。` }
+    : { label: '后台版本未知', title: '这个会话的后台未报告版本，不能用新会话后台的版本代替。' };
+}
+function appVersionReport(snapshot) {
+  const version = versionValue(snapshot.appVersion) || '未报告', commit = snapshot.appBuild?.commit;
+  const installedAt = snapshot.appBuild?.installedAt;
+  const installation = typeof installedAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(installedAt) &&
+    Number.isFinite(Date.parse(installedAt)) && new Date(installedAt).toISOString() === installedAt ? installedAt : '未记录';
+  const lines = ['Native Agent Workspace', '应用版本：' + version,
+    '提交号：' + (typeof commit === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commit) ? commit : '未记录'),
+    '安装时间：' + installation, '后台仅报告版本号，未报告提交号。'];
+  for (const [i, service] of (Array.isArray(snapshot.services) ? snapshot.services : []).entries()) {
+    lines.push(`后台 ${i + 1}：${versionValue(service.version) || '未报告'} · ${service.active ? '新会话' : '保留会话'} · ${Number.isSafeInteger(service.sessions) && service.sessions >= 0 ? service.sessions : '未知'} 个会话`);
+  }
+  return lines.join('\n');
+}
+function renderVersions() {
+  const version = versionValue(state.appVersion) || '未报告', control = $('app-version');
+  $('app-version-label').textContent = 'v' + version;
+  $('app-version-compact').textContent = compactAppVersion(state.appVersion);
+  control.setAttribute('aria-label', `应用 ${version}，复制版本信息`);
+  control.title = `应用 ${version} · 点击复制版本信息`;
+}
+$('app-version').onclick = () => { if (state) return ui.copyCode(appVersionReport(state)).catch(() => {}); };
 function sessionShortId(id) {
   let length = Math.min(6, id.length);
   while (length < id.length && state.sessions.some(s => s.id !== id && s.id.startsWith(id.slice(0, length)))) length++;
@@ -1006,6 +1040,7 @@ function renderSidebarGroups() {
   sidebarLayout?.update(state.sidebar);
 }
 function renderSessions() {
+  renderVersions();
   renderSidebarGroups();
   const visible = sidebarSessions();
   const ids = new Set(visible.map(s => s.id));
@@ -1017,8 +1052,9 @@ function renderSessions() {
       const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id;
       const link = button('', () => select(record.id), 'session-link'); link.dataset.sessionId = record.id; link.draggable = true;
       draggableSession(link, record.id, true); sidebarDropRow(element, record.id);
-      const label = node('span', undefined, 'label'), name = node('span'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), dot = node('span');
-      label.append(name, shortId, status); link.append(icon(record.provider), label, dot);
+      const label = node('span', undefined, 'label'), name = node('span'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
+      version.setAttribute('aria-hidden', 'true');
+      label.append(name, shortId, status, version); link.append(icon(record.provider), label, dot);
       const more = button('⋯', () => openSessionMenu(record.id), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       // Treat the external trigger as part of DSH's menu: let its click toggle
@@ -1026,11 +1062,13 @@ function renderSessions() {
       more.addEventListener('pointerdown', event => { if (sessionMenu?.id === record.id) event.stopPropagation(); });
       element.addEventListener('contextmenu', event => { if (event.target.closest('#rename-editor')) return; event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }); });
       element.addEventListener('keydown', event => { if (event.target.closest('#rename-editor')) return; if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openSessionMenu(record.id); } });
-      element.append(link, more); row = { element, link, more, name, shortId, status, dot }; sessionRows.set(record.id, row);
+      element.append(link, more); row = { element, link, more, name, shortId, status, dot, version }; sessionRows.set(record.id, row);
     }
     const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sessionStatus(record)}`;
+    const version = backendVersionNotice(record, state.appVersion);
     row.link.disabled = false;
-    row.link.setAttribute('aria-label', `${label} · ${sessionTimes(record)}`); row.link.title = `${label}\n${sessionTimes(record)}`;
+    row.link.setAttribute('aria-label', `${label} · ${sessionTimes(record)}${version ? ' · ' + version.title : ''}`); row.link.title = `${label}\n${sessionTimes(record)}${version ? '\n' + version.title : ''}`;
+    row.version.textContent = version?.label || ''; row.version.title = version?.title || ''; row.version.hidden = !version;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
     row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}`); row.more.title = `会话操作：${record.name} · ${sessionShortId(record.id)}`; row.more.disabled = disconnected || renameTarget?.id === record.id;
@@ -1623,7 +1661,7 @@ function renderAdvanced(s) {
     advancedControls = { id: s.id, info, usage, fleet, stop, forget };
   }
   const a = advancedControls;
-  a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}${s.provider === 'codex' ? '\n' + nativeVersionText(s) : ''}\n后台版本：${s.runtimeVersion || state.runtimeVersion || '未报告'}\n工作目录：${s.cwd}${s.nativeContexts?.length ? '\n此前上下文（仅历史）：' + s.nativeContexts.map(c => c.nativeId).join('、') : ''}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
+  a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}${s.provider === 'codex' ? '\n' + nativeVersionText(s) : ''}\n后台版本：${s.runtimeVersion || '未报告'}\n工作目录：${s.cwd}${s.nativeContexts?.length ? '\n此前上下文（仅历史）：' + s.nativeContexts.map(c => c.nativeId).join('、') : ''}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
   a.usage.hidden = false; a.usage.textContent = window.nativeWorkspaceUsage.usageLines(s.provider, s.usage).join('\n');
   a.fleet.replaceChildren(...s.fleet.slice(-8).map(event => node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`)));
   a.stop.hidden = !switchedAway(s) && ['ended', 'background', 'stopping', 'recoverable'].includes(s.state);

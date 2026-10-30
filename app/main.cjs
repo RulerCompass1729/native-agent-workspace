@@ -5,7 +5,7 @@ const { randomUUID } = require('node:crypto');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
 const { startDsh, resetUiAuthentication } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
-const { preflight } = require('./preflight.cjs');
+const { preflight, appBuildInfo } = require('./preflight.cjs');
 const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
@@ -62,6 +62,7 @@ let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
 let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
+let applicationBuild;
 const startupFile = path.join(__dirname, 'startup.html');
 function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, show: !backgroundTest && !backgroundLaunch, focusable: !backgroundTest, minWidth: Math.min(850, view.bounds?.width || 850), minHeight: Math.min(600, view.bounds?.height || 600), backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
 function createWindow(view) {
@@ -374,7 +375,7 @@ async function boot() {
     if (answer.response === 1) return c.client.call('stop', id);
   });
   register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接类型不支持。'); return shell.openExternal(url.href); });
-  register('initial', async c => ({ ...displayState(await c.client.call('initial'), c), viewState: c.view, appVersion: app.getVersion(), preflight: preflight() }));
+  register('initial', async c => ({ ...displayState(await c.client.call('initial'), c), viewState: c.view, appVersion: app.getVersion(), appBuild: await (applicationBuild ||= appBuildInfo(app, dataDir)), preflight: preflight() }));
   register('readingState', (c, positions) => { c.view.readingPositions = readingState(positions); return saveReadingSoon(); });
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
