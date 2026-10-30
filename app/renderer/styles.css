@@ -96,6 +96,21 @@ header h1, header p { overflow-wrap: anywhere; }
 .rail-icon { display: none; }
 #approval { overflow: auto; max-height: 40vh; }
 .approval-command { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 8px 0; }
+#approval.native-only{display:block;position:relative;width:calc(100% - 48px);max-width:1000px;align-self:center;margin:0 auto 8px;padding:8px 12px;border:1px solid var(--border);border-radius:8px}
+.native-approval-request{min-width:0;max-width:100%}
+.native-approval-request>summary{min-width:0;font-size:12px;line-height:26px;padding-right:60px;gap:3px;flex-wrap:wrap}
+.native-approval-author{flex:none;max-width:45%;white-space:normal;overflow-wrap:anywhere;min-width:0;line-height:1.35}
+.native-approval-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:min(90px,65%)}
+.native-approval-status,.native-approval-scope{flex:none;font-size:11px;line-height:1.4;color:var(--warning,#9a6700)}
+.native-approval-incomplete{flex:none;color:var(--warning,#9a6700);font-size:11px}
+.native-approval-request[data-incomplete='true']>summary{flex-wrap:wrap}.native-approval-incomplete{flex-basis:100%;line-height:1.4}
+.native-approval-content{padding:6px 0 0 12px;min-width:0;font-size:12px}
+.native-approval-content pre{max-width:100%;margin:4px 0 10px}
+.native-approval-content strong{font-size:11px;font-weight:550}
+.native-approval-original>summary{font-size:11px;color:var(--muted);cursor:pointer}
+#approval.native-only>.native-approval-terminal{position:absolute;top:8px;right:12px;white-space:nowrap;font-size:11px;padding:4px 8px}
+#approval.native-only>.native-approval-stale{margin:0;font-size:11px}
+@media(max-width:650px){#approval.native-only{width:calc(100% - 32px)}.native-approval-request>summary{padding-right:0}.native-approval-author{flex-basis:calc(100% - 18px);max-width:calc(100% - 18px)}#approval.native-only>.native-approval-terminal{position:static;display:block;max-width:100%;margin-left:auto}.native-approval-incomplete{white-space:normal;line-height:1.4}}
 /* Shared conversation: one timeline, one explicit recipient, native views nearby. */
 .sidebar { padding: 18px 12px 12px; }
 .brand { margin-bottom: 18px; gap: 8px; }

@@ -199,12 +199,22 @@
       more.dataset.memberMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       more.addEventListener('pointerdown', event => { if (more.getAttribute('aria-expanded') === 'true') event.stopPropagation(); });
-      more.addEventListener('contextmenu', event => {
+      const memberMenuTarget = event => {
+        const control = event.target.closest('button, a, input, textarea, select, [contenteditable], [role="button"], [role="link"]');
+        return !control || control === name || control === more;
+      };
+      const showMemberMenu = event => {
+        if (event.defaultPrevented || more.disabled || more.hidden || !memberMenuTarget(event)) return;
         event.preventDefault(); event.stopPropagation(); options.onMemberMenu?.(record.id, more);
+      };
+      header.addEventListener('contextmenu', showMemberMenu);
+      header.addEventListener('pointerdown', event => {
+        // Keep the original same-anchor toggle when a menu is already open.
+        if ((event.button === 2 || event.button === 0 && event.ctrlKey) && more.getAttribute('aria-expanded') === 'true' && memberMenuTarget(event)) event.stopPropagation();
       });
-      more.addEventListener('keydown', event => {
-        if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey || !(event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) return;
-        event.preventDefault(); event.stopPropagation(); options.onMemberMenu?.(record.id, more);
+      header.addEventListener('keydown', event => {
+        if (event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey || !(event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) return;
+        showMemberMenu(event);
       });
       heading.append(name, more, next);
       const status = el('span', undefined, 'collaboration-member-state'); status.setAttribute('role', 'status');

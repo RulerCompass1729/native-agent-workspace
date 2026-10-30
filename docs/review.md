@@ -1019,3 +1019,24 @@ Strict signature, a single application-search entry and the executable-bound
 production installation reader pass. The original developer goal is unchanged.
 Full-day use, retained-backend activation and the whole dogfood milestone remain
 open; the scoped source items above are not silently closed by this installation.
+
+
+### Correct member menu and original pending request: source checkpoint
+
+Native-only requests start folded in the existing approval area. The original
+agent, tool and waiting state remain visible; literal edit excerpts and every raw
+field stay available. Changed requests start closed, unchanged requests retain
+selection and expansion, and removal does not claim tool success. Native-only
+questions and permissions retain their existing terminal-only action.
+
+Collaboration member titles reuse the existing member menu, anchor, actions,
+identity guards and focus return for right-click and menu keys. They add no action
+or authority. The integrated user task checks the chosen member, original request
+and corresponding terminal while preserving other members and drafts.
+
+The two released source slices retain their prior independent reviews: nine
+request-reader source flows, plus five distinct member-menu groups with one
+keyboard-selection supplement. Main's 44 related checks pass without skips.
+Source narrow-window and intercepted-copy evidence is reused only for its recorded
+scope. Signed combined acceptance, physical input and VoiceOver remain pending;
+no new provider or product inference is required for these display repairs.
