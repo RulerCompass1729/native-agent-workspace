@@ -999,3 +999,23 @@ delta; its two injected setup-failure checks cover that delta. Main's integrated
 activation remain pending at this source checkpoint. No new recovery policy,
 watcher, framework or provider call is added. A lost refinement receipt followed
 by a later overload and the shared-room form of this race are not newly qualified.
+
+
+Signed alpha.134, committed source `0fdb09b`, passes the five complete installed
+flows on the final runtime bytes: the original error and scheduled recovery stay
+visible, one literal continuation completes, later human input cancels recovery,
+a lost receipt retains the unconfirmed input and draft, and reopening preserves
+both synthetic identities, owners and drafts. Three original tasks, three native
+refinements and one continuation are synthetic dispatches. Transport, goal lookup
+and deadline advancement are controlled fixtures; no provider or product model is
+initialized. This does not qualify live native overload, goal reactivation, an
+actual two-minute wait or the two unqualified orderings above.
+
+Independent review approves the signed candidate and the exact visible-update
+operator after its evidence wording was narrowed. The actual ordinary visible
+update retains ten native IDs, live process starts, owners and both draft scopes.
+Only the empty active backend changes to 134; six older backends remain unchanged.
+Strict signature, a single application-search entry and the executable-bound
+production installation reader pass. The original developer goal is unchanged.
+Full-day use, retained-backend activation and the whole dogfood milestone remain
+open; the scoped source items above are not silently closed by this installation.
