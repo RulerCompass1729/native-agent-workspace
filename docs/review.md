@@ -1071,3 +1071,44 @@ milestone remain open; this does not qualify live native permissions or provider
 Open low-severity text issue, owner Main: an existing overview placeholder points
 to a request “above” that is not shown in that overview. Full-session navigation
 still exposes the original request. The text correction is not part of this update.
+
+
+### Disabled local prepared-command integration — alpha.136
+
+The complete local authority/session slice preserves existing human-control
+boundaries and recorded input times. Preparing reserves the original native
+identity and connection. Commit follows confirmed revocation and pause of older
+relays; cancellation, disconnect, expiry or a newer human action cannot reuse that
+preparation. Duplicate requests return their original receipt without replay.
+Both new modules are included in signed payloads and writable runtime copies.
+No product code enables pairing or exposes a phone/HTTP entry point or GUI broker.
+
+Main passes 351 related checks and the corrected 20-check cold-bootstrap suite.
+The retained initial failure was an old timestamp fixture missing the existing
+finishTurn contract, not a production regression. An initially vacuous authority
+filename assertion is corrected before installed acceptance. Independent source
+review runs 95 checks and one cold case before the filename correction, then
+reuses the corrected 20 and passes after
+its first bounded invocation ended without a verdict.
+
+Clean committed source `18b6965` builds the signed 136 candidate: all 61 runtime files
+match, 105 production dependencies are unchanged, and signature/fuse checks pass.
+Actual signed GUI cold boot copies both exact modules, leaves authority absent
+and rejects invalid/direct dispatch without creating native sessions. One
+signed-executable Unix case verifies original-socket binding, one synthetic native
+send, stable duplicate receipt, disconnect cancellation and unchanged owner/draft.
+These local transport witnesses do not qualify a phone, frontend, real provider,
+physical input, OS clipboard or actual same-app GUI broker.
+
+Independent candidate/operator review approves the ordinary visible 135-to-136
+update. Actual installation retains 10 native IDs, live process starts, owners,
+reported settings, private drafts and 12 view drafts. Only the empty active
+backend changes; six older backends retain their exact versions and PID starts.
+The original developer goal/UUID/body/status/creation remain unchanged. The 61
+files, strict signature, sole existing indexed app and executable-bound production
+installation reader pass after installation. H1, whole T19 and dogfood remain open.
+Open low-severity notes from the independent operator review, owner Main: a
+cosmetic old lease label, broad denial assertions offset by exact module/Unix
+proof, and deferred precondition checks. Address these only before reusing the
+private harness/operator; the precondition risks did not trigger in this run.
+They are not additional installed qualifications or hidden native changes.
