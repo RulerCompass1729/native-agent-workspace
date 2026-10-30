@@ -249,10 +249,12 @@ function commandExplorations(messages, room = false, originals = messages) {
     if (message.status === 'interrupted') { group = null; previousKey = null; }
   }
   for (const group of groups.values()) {
-    const lines = []; let reads = [];
+    const lines = [], counts = new Map(), exits = new Set(); let reads = [];
     const flush = () => { if (reads.length) lines.push('Read ' + [...new Set(reads)].join(', ')); reads = []; };
     for (const message of group.messages) {
       const actions = message.commandActions, nativeExit = Number.isSafeInteger(message.exitCode) && message.exitCode !== 0;
+      for (const action of actions) counts.set(action.type, (counts.get(action.type) || 0) + 1);
+      if (nativeExit) exits.add(message.exitCode);
       // Native marks all nonzero exits failed. Exploration keeps its native exit
       // annotation compact; a search exit1 can simply mean no matches.
       const error = ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(message.status) && !(message.status === 'failed' && nativeExit) ? message.status : '';
@@ -265,6 +267,8 @@ function commandExplorations(messages, room = false, originals = messages) {
       if (error) lines[lines.length - 1] += ' (' + error + ')';
     }
     flush(); group.summary = lines.join('\n'); group.active = group.messages.some(m => ['running', 'streaming'].includes(m.status));
+    group.counts = Object.fromEntries(counts);
+    group.caption = [...counts].map(([type, count]) => `${count} ${{ read: '次读取', search: '次搜索', listFiles: '次列目录' }[type]}`).concat([...exits].map(code => `exit ${code}`)).join(' · ');
   }
   return groups;
 }
@@ -331,7 +335,9 @@ function updateProcessTail(entry) {
   // An open outer disclosure must not hide a closed original row's preview.
   entry.preview.style.display = open ? 'none' : 'inline';
   if (entry.exploration) {
-    entry.tail.hidden = open; entry.tail.textContent = entry.exploration.summary; entry.more.hidden = true; return;
+    entry.tail.hidden = open;
+    if (entry.tail.textContent !== entry.exploration.caption) entry.tail.textContent = entry.exploration.caption;
+    entry.more.hidden = true; return;
   }
   // Like the native TUIs: a folded command keeps two one-line rows of output (the
   // newest while it runs, the first once done) and says how many more there are.
@@ -353,9 +359,10 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
       author.style.cssText = 'flex:0 1 auto;max-width:30%;overflow:hidden;text-overflow:ellipsis';
       caption.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis';
       outcome.style.cssText = 'flex:0 1 auto;min-width:0;max-width:65%;overflow:hidden;text-overflow:ellipsis;color:var(--warning,#9a6700)';
-      heading.append(author, caption, outcome); summary.append(heading); disclosure.append(summary, content); item.append(disclosure);
+      const latest = node('p', undefined, 'process-latest'); latest.hidden = true;
+      heading.append(author, caption, outcome); summary.append(heading); disclosure.append(summary, content); item.append(disclosure, latest);
       item.dataset.messageId = plan.id; item.dataset.processGroup = plan.id;
-      group = { item, disclosure, summary, author, caption, outcome, content }; view.groups.set(plan.id, group);
+      group = { item, disclosure, summary, author, caption, outcome, content, latest }; view.groups.set(plan.id, group);
       const remember = () => {
         if (!group.effective || view.key !== key) return;
         // A manual close after search is still a new reading intent even if
@@ -400,8 +407,12 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
     const query = room ? $('room-search').value.trim().toLocaleLowerCase() : '';
     const reveal = query && plan.messages.some(m => [m.text, m.input].some(text => text?.toLocaleLowerCase().includes(query)));
     const choice = view.folds[id], saved = typeof choice === 'boolean' ? choice : choice?.open;
-    const open = !group.effective || Boolean(saved !== undefined ? saved : plan.active || reading || reveal);
+    const open = !group.effective || Boolean(saved !== undefined ? saved : reading || reveal);
     if (group.disclosure.open !== open) { group.expectedOpen = open; group.disclosure.open = open; }
+    const last = view.entries.get(plan.messages.at(-1).id);
+    const latestText = (last?.exploration ? last.tail.textContent : last?.preview?.textContent) || last?.heading?.querySelector(':scope > span:not(.process-label)')?.textContent || '';
+    if (group.latest.textContent !== latestText) { group.latest.textContent = latestText; group.latest.title = latestText; }
+    group.latest.hidden = !group.effective || !plan.active || open || !latestText;
     let cursor = group.content.firstChild;
     for (const child of children) { if (child === cursor) cursor = cursor.nextSibling; else group.content.insertBefore(child, cursor); }
     while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
