@@ -784,7 +784,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   }
   if (!sourceMessages.length) {
     const s = session;
-    const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对上方请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
+    const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对待处理请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
     rows.push(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : empty, 'message empty'));
   }
   view.older.hidden = room || !range.start; view.newer.hidden = room || range.tail;
