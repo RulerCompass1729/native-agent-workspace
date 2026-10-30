@@ -31,6 +31,8 @@ let renameTarget = null, renaming = false, renameRevision = 0, renameComposing =
 let sessionMenu;
 let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, mentionRoster = '', roomMention = null, roomMentionEdit = null, notesRevision, contextTarget = null;
 let roomDraftRevision = 0;
+const roomMentionHistory = nativeWorkspaceMentions.editHistory();
+let mentionChanging = false, mentionComposing = false;
 let pendingRoomFilter = '';
 let roomThread = '', roomReplyTo = '';
 let roomThreads = window.nativeWorkspaceThreads.threadIndex([]);
@@ -1013,6 +1015,8 @@ function mentionRosterKey() { return JSON.stringify(members().map(s => [s.id, s.
 function closeMentions() { mentionRoster = ''; mentionOptions = []; mentionRange = null; $('mention-list').hidden = true; $('shared-input').setAttribute('aria-expanded', 'false'); $('shared-input').removeAttribute('aria-activedescendant'); }
 function showMentions(force = false) {
   const input = $('shared-input'), before = input.value.slice(0, input.selectionStart);
+  if (mentionComposing || input.readOnly || document.activeElement !== input || input.selectionStart !== input.selectionEnd) return closeMentions();
+  if (!force && nativeWorkspaceMentions.valid(roomMention, input.value) && input.selectionStart === roomMention.end) return closeMentions();
   const match = before.match(/(?:^|\s)@([^\s@]*)$/u);
   if (!force && !match) return closeMentions();
   mentionRoster = mentionRosterKey();
@@ -1055,12 +1059,16 @@ function chooseMention(id) {
   const suffix = text.slice(range.end), separator = suffix && /^\s/u.test(suffix) ? '' : ' ';
   const next = text.slice(0, range.start) + token + separator + suffix;
   if (next.length > 16000) return toast('草稿已达长度上限，请先缩短再选择成员。');
+  const before = input.value, prior = roomMention && { ...roomMention };
   input.focus(); input.setSelectionRange(0, input.value.length);
-  // Chromium's native edit command keeps the textarea undo history; assigning
-  // value or introducing a second editor would discard it. Routing is rebound
-  // explicitly below, never by a later undo/redo text match.
-  if (!document.execCommand('insertText', false, next)) input.value = next;
+  // Chromium owns text and undo. Record this explicit identity occurrence,
+  // including an unbound before-state; equal text alone never grants routing.
+  mentionChanging = true;
+  try { if (!document.execCommand('insertText', false, next)) input.value = next; }
+  finally { mentionChanging = false; }
   roomMention = { id, active: true, memberRevision: person.memberRevision || 0, start: range.start, end: range.start + token.length, text: token };
+  roomMentionHistory.record(before, prior, input.value, roomMention);
+  $('mention-status').textContent = '';
   roomMentionEdit = null; roomDraftRevision++;
   input.setSelectionRange(roomMention.end + separator.length, roomMention.end + separator.length);
   closeMentions(); attempt(persistView); render(); input.focus();
@@ -1356,7 +1364,7 @@ function renderNativeActivity(s) {
   const recovery = !disconnected && !s?.transportDisconnected && s?.capacityRecovery;
   if (recovery && ['scheduled', 'exhausted'].includes(recovery.status)) {
     el.hidden = false;
-    $('native-phase').textContent = `${s.name} · 模型满载${recovery.status === 'exhausted' ? '，自动继续已达上限，需要你处理' : ''}`;
+    $('native-phase').textContent = `${s.name} · ${recovery.reason === 'routing' ? '路由发现超时' : '模型满载'}${recovery.status === 'exhausted' ? '，自动继续已达上限，需要你处理' : ''}`;
     $('native-elapsed').textContent = recovery.status === 'scheduled' ? ` · ${new Date(recovery.due).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 自动继续（第 ${recovery.attempt + 1}/3 次）` : '';
     return;
   }
@@ -2087,18 +2095,63 @@ $('interrupt').onclick = () => {
   pendingInterrupts.add(id); render();
   attempt(async () => { try { await api.interrupt(id); } finally { pendingInterrupts.delete(id); render(); } });
 };
-$('shared-input').onbeforeinput = event => { const input = $('shared-input'); roomMentionEdit = { before: input.value, start: input.selectionStart, end: input.selectionEnd, type: event.inputType }; };
+function roomMentionSelectionChanged() {
+  const input = $('shared-input');
+  if (mentionChanging || mentionComposing || document.activeElement !== input) return;
+  if (input.selectionStart === input.selectionEnd) {
+    const point = nativeWorkspaceMentions.caretPosition(roomMention, input.value, input.selectionStart);
+    if (point !== input.selectionStart) input.setSelectionRange(point, point);
+  }
+  showMentions();
+}
+$('shared-input').onbeforeinput = event => {
+  if (mentionChanging) return;
+  const input = $('shared-input');
+  const edit = { before: input.value, binding: roomMention && { ...roomMention }, start: input.selectionStart, end: input.selectionEnd, type: event.inputType };
+  if (!mentionComposing && !event.isComposing) {
+    const range = nativeWorkspaceMentions.atomicRange(roomMention, input.value, edit);
+    if (range) { input.setSelectionRange(range.start, range.end); Object.assign(edit, range); }
+  }
+  roomMentionHistory.sync(edit.before, edit.binding); roomMentionEdit = edit;
+};
 $('shared-input').oninput = event => {
-  const edit = roomMentionEdit; roomMentionEdit = null;
-  roomMention = edit ? nativeWorkspaceMentions.edited(roomMention, edit.before, $('shared-input').value, edit) : null;
-  roomDraftRevision++; attempt(persistView); render(); if (event.inputType === 'insertText' && !event.isComposing) showMentions(); else closeMentions(); };
-$('shared-input').oncompositionend = () => showMentions();
+  if (mentionChanging) return;
+  const input = $('shared-input'), edit = roomMentionEdit; roomMentionEdit = null;
+  const prior = edit?.binding;
+  if (edit && /^(historyUndo|historyRedo)$/u.test(event.inputType)) roomMention = roomMentionHistory.travel(event.inputType, edit.before, prior, input.value, event.isTrusted);
+  else {
+    roomMention = edit ? nativeWorkspaceMentions.edited(prior, edit.before, input.value, edit) : null;
+    if (edit) roomMentionHistory.record(edit.before, prior, input.value, roomMention); else roomMentionHistory.sync(input.value, null);
+  }
+  if (prior && !roomMention) $('mention-status').textContent = `已移除收件人 ${prior.text.slice(1)}`;
+  else if (roomMention) $('mention-status').textContent = '';
+  roomDraftRevision++; attempt(persistView); render();
+  if (event.isComposing || mentionComposing) closeMentions(); else showMentions();
+};
+$('shared-input').oncompositionstart = () => { mentionComposing = true; closeMentions(); };
+$('shared-input').oncompositionend = () => { mentionComposing = false; roomMentionSelectionChanged(); };
+$('shared-input').addEventListener('selectionchange', roomMentionSelectionChanged);
+$('shared-input').onclick = $('shared-input').onfocus = roomMentionSelectionChanged;
+$('shared-input').onkeyup = event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) roomMentionSelectionChanged(); };
 $('shared-input').onkeydown = event => {
   if (event.isComposing || event.keyCode === 229) return;
   if (!$('mention-list').hidden) {
     if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); mentionIndex = (mentionIndex + (event.key === 'ArrowDown' ? 1 : -1) + mentionOptions.length) % (mentionOptions.length || 1); highlightMention(); return; }
     if (event.key === 'Escape') { event.preventDefault(); closeMentions(); return; }
-    if (event.key === 'Enter') { event.preventDefault(); if (mentionOptions[mentionIndex]) chooseMention(mentionOptions[mentionIndex].id); return; }
+    if (event.key === 'Enter' || event.key === 'Tab' && !event.shiftKey && mentionOptions[mentionIndex]) { event.preventDefault(); if (mentionOptions[mentionIndex]) chooseMention(mentionOptions[mentionIndex].id); return; }
+    if (event.key === 'Tab') closeMentions();
+  }
+  if (!event.metaKey && !event.ctrlKey && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    const input = $('shared-input'), direction = event.key === 'ArrowLeft' ? -1 : 1;
+    const backward = input.selectionDirection === 'backward', anchor = backward ? input.selectionEnd : input.selectionStart;
+    const point = event.shiftKey ? backward ? input.selectionStart : input.selectionEnd : direction < 0 ? input.selectionStart : input.selectionEnd;
+    const target = nativeWorkspaceMentions.caretPosition(roomMention, input.value, point, direction);
+    if (target !== point) {
+      event.preventDefault();
+      if (event.shiftKey) input.setSelectionRange(Math.min(anchor, target), Math.max(anchor, target), target < anchor ? 'backward' : 'forward');
+      else input.setSelectionRange(target, target);
+      roomMentionSelectionChanged(); return;
+    }
   }
   if (event.key === 'Enter' && !event.shiftKey && !$('shared-input').readOnly) { event.preventDefault(); if (!$('forward-button').disabled) { if ($('forward-button').type === 'button') $('forward-button').click(); else $('room-composer').requestSubmit(); } }
 };
