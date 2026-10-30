@@ -98,3 +98,7 @@
 .compact-room-surface .collaboration-member-child-compact:not(:empty){display:inline;font-size:11px;line-height:16px;color:var(--muted)}
 .compact-room-surface .collaboration-member-freshness{font-size:11px;line-height:16px}
 .compact-room-surface .compact-status-hidden{position:absolute;width:1px;height:1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%)}
+
+.collaboration-member-reader.has-column-input{grid-template-rows:minmax(20px,1fr) auto auto}
+.column-native-footer{min-width:0;min-height:0}
+.column-native-footer .collaboration-member-next{position:static;display:block;max-width:100%;margin:0}

@@ -44,3 +44,12 @@ test('ordinary compound captions retain every literal command without guessing o
     context.message = { input, commandActions: actions }; assert.equal(vm.runInContext('nativeCommandPreview(message)', context), expected);
   }
 });
+
+test('collapsed exploration counts observed actions, retaining duplicates and native exits without changing originals', () => {
+  const rows=[read('a'),read('again',{commandActions:read('a').commandActions}),read('search',{commandActions:[{type:'search',command:'rg needle src',query:'needle',path:'src'}],exitCode:1,status:'failed'}),read('search2',{commandActions:[{type:'search',command:'rg other src',query:'other',path:'src'}],exitCode:1,status:'failed'}),read('list',{commandActions:[{type:'listFiles',command:'ls src',path:'src'}]})];
+  const copy=structuredClone(rows),result=groups(rows)[0];
+  assert.deepEqual(result.counts,{read:2,search:2,listFiles:1});
+  assert.equal(result.caption,'2 次读取 · 2 次搜索 · 1 次列目录 · exit 1');
+  assert.equal(result.summary,'Read a\nSearch needle in src (exit 1)\nSearch other in src (exit 1)\nList src');
+  assert.deepEqual(rows,copy);assert.equal(result.error,'');
+});
