@@ -870,3 +870,14 @@ recorded times and all text. Actual adapter-to-record and reader checks cover it
 279 related checks pass without failures or skips. Signed installed acceptance
 and review of this final delta remain pending. Whole native shell-command ingestion
 and Claude native-clock correlation remain open; no additional live trial is run.
+
+
+### Alpha.131 installed reader acceptance
+
+Alpha.131, committed source `6c4d043`, is installed locally; its source is pushed to main. The reader now keeps copy/share controls with their own original message, identifies recorded message times in tooltips, and separates known native turns without enlarging the 50-record page. Missing times remain absent; native completion/duration uses native metadata only.
+
+Validation: 279 affected checks and eight signed installed reading journeys pass. The installed journeys use synthetic native output, one explicit synthetic send, emulated narrow layout, and no provider/model/OS-clipboard calls by construction. Exact copy acknowledgement, rejection and payload evidence is reused from the unchanged source path; installed physical clipboard, IME and VoiceOver are not certified. Initial test-adaptation and package-attestation assumptions failed, were recorded and corrected; they did not change the product payload.
+
+The replay-clock repair leaves first-seen replayed observations undated while retaining their text and existing recorded clocks. This adapter repair applies to the new 131 backend; retained older backends still run their own code. The ordinary visible update preserved all 10 native IDs, live native process starts, owners and both draft scopes. Six backend records stayed identical; only the empty active backend's PID/version changed. Strict signature passes, one application copy is indexed, and the installed production reader matches the actual build-bound installation record. The split is 131×1 active/empty, 129×1, 120×4, 118×1. The developer session's native goal is unchanged by this update. The single-agent dogfood milestone remains open.
+
+Headless Fable source, replay-clock delta, signed candidate/operator and actual daily-update reviews pass. Whole native shell-command ingestion and Claude native-clock correlation remain open.
