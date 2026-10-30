@@ -46,10 +46,11 @@ function imageSource(snapshot, source) {
     typeof source.messageId !== 'string' || typeof source.nativeId !== 'string' ||
     [source.sessionId, source.messageId, source.nativeId].some(id => !id || id.length > 512) ||
     !Number.isSafeInteger(source.index) || source.index < 0 || source.index > MAX_IMAGES ||
-    Object.keys(source).some(key => !['kind', 'sessionId', 'nativeId', 'messageId', 'index'].includes(key))) throw Error('图片来源无效。');
+    source.roomId !== undefined && (source.kind !== 'room' || !require('./collaboration-spaces.cjs').roomId(source.roomId)) ||
+    Object.keys(source).some(key => !['kind', 'roomId', 'sessionId', 'nativeId', 'messageId', 'index'].includes(key))) throw Error('图片来源无效。');
   const session = snapshot?.sessions?.find(s => s.id === source.sessionId);
   const message = source.kind === 'room'
-    ? snapshot?.room?.messages?.find(m => m.id === source.messageId && m.sessionId === source.sessionId && m.sharedStream === true)
+    ? (snapshot?.rooms || [snapshot?.room]).find(r => (r?.id || 'shared') === (source.roomId || 'shared'))?.messages?.find(m => m.id === source.messageId && m.sessionId === source.sessionId && m.sharedStream === true)
     : session?.messages?.find(m => m.id === source.messageId);
   if (!message || message.nativeId !== source.nativeId || !['complete', 'submitted'].includes(message.status) ||
     !(message.role === 'user' || message.kind === 'tool') || !Array.isArray(message.images)) throw Error('原图片记录已变化或原生读取尚未确认。');

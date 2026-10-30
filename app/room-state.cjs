@@ -2,15 +2,28 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { validateName } = require('./session-labels.cjs');
+const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
+const initialRoom = name => ({ version: 1, name, notes: '', revision: 0, events: [], archived: false, restoreMembers: [], memberOrder: [], files: [] });
+function validateRoom(data) {
+  if (!data || data.version !== 1 || validateName(data.name) !== data.name || typeof data.notes !== 'string' || data.notes.length > 8000 || !Number.isSafeInteger(data.revision) || data.revision < 0 || !Array.isArray(data.events)) throw Error('Invalid room');
+  for (const e of data.events) if (!e || typeof e.id !== 'string' || e.role !== 'system' || typeof e.text !== 'string' || !Number.isFinite(e.time) || (e.sessionId !== undefined && typeof e.sessionId !== 'string')) throw Error('Invalid event');
+  for (const key of ['archivedSessions', 'restoreMembers']) if (data[key] !== undefined && (!Array.isArray(data[key]) || data[key].some(id => !orderId(id)))) throw Error('Invalid archive');
+  if (data.archived !== undefined && typeof data.archived !== 'boolean') throw Error('Invalid archive');
+  if (data.files !== undefined && (!Array.isArray(data.files) || data.files.some(f => !f || typeof f.id !== 'string' || !roomId(f.id) || f.id === DEFAULT_ROOM_ID || typeof f.path !== 'string' || !path.isAbsolute(f.path) || /\u0000/.test(f.path) || typeof f.name !== 'string' || !f.name || /[\u0000-\u001f]/u.test(f.name)) || new Set(data.files.map(f => f.id)).size !== data.files.length)) throw Error('Invalid files');
+  return { ...initialRoom(data.name), ...data, memberOrder: memberOrder(data.memberOrder) };
+}
 
 // One desktop-profile writer, independent of retained provider services.
 // This is human-readable local context, never a provider memory injection.
 class RoomState {
   constructor(directory) {
     this.file = path.join(directory, 'room-state.json');
-    this.value = { version: 1, name: '共同工作', notes: '', revision: 0, events: [], archived: false, archivedSessions: [], restoreMembers: [], memberOrder: [] };
+    this.spacesFile = path.join(directory, 'collaboration-spaces.json');
+    this.value = { ...initialRoom('共同工作'), archivedSessions: [] };
+    this.spaces = { version: 1, rooms: [] };
+    this.spacesWarning = '';
     this.warning = '';
     this.queue = Promise.resolve();
     this.gates = new Set();
@@ -18,83 +31,132 @@ class RoomState {
       const stat = fs.lstatSync(this.file);
       if (!stat.isFile() || (process.getuid && stat.uid !== process.getuid()) || (stat.mode & 0o077)) throw Error('Unsafe file');
       const data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (data.version !== 1 || validateName(data.name) !== data.name || typeof data.notes !== 'string' || data.notes.length > 8000 || !Number.isSafeInteger(data.revision) || data.revision < 0 || !Array.isArray(data.events)) throw Error('Invalid room');
-      for (const e of data.events) if (!e || typeof e.id !== 'string' || e.role !== 'system' || typeof e.text !== 'string' || !Number.isFinite(e.time) || (e.sessionId !== undefined && typeof e.sessionId !== 'string')) throw Error('Invalid event');
-      for (const key of ['archivedSessions', 'restoreMembers']) if (data[key] !== undefined && (!Array.isArray(data[key]) || data[key].some(id => typeof id !== 'string' || !id || id.length > 100))) throw Error('Invalid archive');
-      if (data.archived !== undefined && typeof data.archived !== 'boolean') throw Error('Invalid archive');
       // A damaged display preference must never block native input or sharing.
-      this.value = { ...this.value, ...data, memberOrder: memberOrder(data.memberOrder) };
+      this.value = { ...this.value, ...validateRoom(data) };
     } catch (error) { if (error.code !== 'ENOENT') this.warning = '协作资料暂时无法读取；原文件已保留，请检查本机数据后重开。'; }
+    try {
+      const stat = fs.lstatSync(this.spacesFile);
+      if (!stat.isFile() || (process.getuid && stat.uid !== process.getuid()) || (stat.mode & 0o077)) throw Error('Unsafe file');
+      const data = JSON.parse(fs.readFileSync(this.spacesFile, 'utf8'));
+      if (data.version !== 1 || !Array.isArray(data.rooms) || data.rooms.some(r => !r || !roomId(r.id) || r.id === DEFAULT_ROOM_ID) || new Set(data.rooms.map(r => r.id)).size !== data.rooms.length) throw Error('Invalid spaces');
+      this.spaces = { version: 1, rooms: data.rooms.map(r => ({ ...validateRoom(r), id: r.id })) };
+    } catch (error) { if (error.code !== 'ENOENT') this.spacesWarning = '其他协作空间的资料暂时无法读取；原文件已保留，请检查本机数据后重开。'; }
   }
-  commit(next) {
-    if (this.warning) throw Error(this.warning);
-    const temp = `${this.file}.${randomUUID()}.tmp`; let fd;
+  metadata(id = DEFAULT_ROOM_ID) {
+    if (!roomId(id)) throw Error('无效协作空间。');
+    if (id === DEFAULT_ROOM_ID) return this.value;
+    if (this.spacesWarning) throw Error(this.spacesWarning);
+    const value = this.spaces.rooms.find(r => r.id === id);
+    if (!value) throw Error('找不到这个协作空间。');
+    return value;
+  }
+  write(file, next) {
+    const temp = `${file}.${randomUUID()}.tmp`; let fd;
     try {
       fd = fs.openSync(temp, 'wx', 0o600); fs.writeFileSync(fd, JSON.stringify(next)); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
-      fs.renameSync(temp, this.file);
+      fs.renameSync(temp, file);
     } catch { throw Error('协作资料未能保存，请检查磁盘空间与本机数据权限。'); }
     finally { if (fd !== undefined) fs.closeSync(fd); try { fs.unlinkSync(temp); } catch {} }
-    this.value = next;
   }
-  update(fields, event) {
-    const events = event ? [...this.value.events, { id: randomUUID(), role: 'system', time: Date.now(), ...event }] : (fields.events || this.value.events);
-    this.commit({ ...this.value, ...fields, revision: this.value.revision + 1, events });
+  commit(next, id = DEFAULT_ROOM_ID) {
+    this.metadata(id);
+    if (id === DEFAULT_ROOM_ID) {
+      if (this.warning) throw Error(this.warning);
+      this.write(this.file, next); this.value = next;
+    } else {
+      const spaces = { ...this.spaces, rooms: this.spaces.rooms.map(r => r.id === id ? next : r) };
+      this.write(this.spacesFile, spaces); this.spaces = spaces;
+    }
   }
-  rename(name) {
+  create(name) {
+    if (this.spacesWarning) throw Error(this.spacesWarning);
+    const value = { ...initialRoom(validateName(name)), id: randomUUID() };
+    const spaces = { ...this.spaces, rooms: [...this.spaces.rooms, value] };
+    this.write(this.spacesFile, spaces); this.spaces = spaces;
+    return value.id;
+  }
+  update(fields, event, id = DEFAULT_ROOM_ID) {
+    const value = this.metadata(id);
+    if (value.revision === Number.MAX_SAFE_INTEGER) throw Error('协作资料版本已达上限，未覆盖原记录。');
+    const events = event ? [...value.events, { id: randomUUID(), role: 'system', time: Date.now(), ...event }] : (fields.events || value.events);
+    this.commit({ ...value, ...fields, revision: value.revision + 1, events }, id);
+  }
+  rename(name, id = DEFAULT_ROOM_ID) {
     const validated = validateName(name);
-    if (this.value.name !== validated) this.update({ name: validated }, { kind: 'rename', text: `工作区改名为「${validated}」` });
+    if (this.metadata(id).name !== validated) this.update({ name: validated }, { kind: 'rename', text: `工作区改名为「${validated}」` }, id);
   }
-  notes(text, revision) {
+  notes(text, revision, id = DEFAULT_ROOM_ID) {
     if (typeof text !== 'string' || text.length > 8000 || /\u0000/.test(text)) throw Error('共享笔记最多 8000 个字符，不能包含空字符。');
-    if (revision !== this.value.revision) throw Error('协作资料已在另一个窗口更新。请先复制你的修改，再重新打开核对。');
-    if (text !== this.value.notes) this.update({ notes: text }, { kind: 'notes', text: text ? `更新了共享笔记（尚未发送给 agent）\n${text}` : '清空了共享笔记（不会撤回已经发送的内容）' });
+    const value = this.metadata(id);
+    if (revision !== value.revision) throw Error('协作资料已在另一个窗口更新。请先复制你的修改，再重新打开核对。');
+    if (text !== value.notes) this.update({ notes: text }, { kind: 'notes', text: text ? `更新了共享笔记（尚未发送给 agent）\n${text}` : '清空了共享笔记（不会撤回已经发送的内容）' }, id);
   }
-  moveMember(change, records) {
+  addFiles(files, id = DEFAULT_ROOM_ID) {
+    const value = this.metadata(id), next = [...value.files];
+    if (!Array.isArray(files)) throw Error('无效文件列表。');
+    for (const file of files) {
+      if (typeof file !== 'string' || !path.isAbsolute(file) || /[\u0000-\u001f]/u.test(file)) throw Error('无效本机文件路径。');
+      if (!next.some(f => f.path === file)) next.push({ id: randomUUID(), path: file, name: path.basename(file) });
+    }
+    if (next.length !== value.files.length) this.update({ files: next }, { kind: 'files', text: '添加了本机文件引用 · 尚未发送给 agent' }, id);
+  }
+  removeFile(fileId, revision, id = DEFAULT_ROOM_ID) {
+    const value = this.metadata(id);
+    if (revision !== value.revision) throw Error('协作资料已更新，请重新核对文件列表。');
+    if (value.files.some(f => f.id === fileId)) this.update({ files: value.files.filter(f => f.id !== fileId) }, { kind: 'files', text: '移除了文件引用 · 本机原文件保留' }, id);
+  }
+  moveMember(change, records, room = DEFAULT_ROOM_ID) {
     if (!change || ![Object.prototype, null].includes(Object.getPrototypeOf(change)) || !orderId(change.id) || !orderId(change.target) || typeof change.after !== 'boolean') throw Error('无效成员顺序。');
-    const people = records.filter(s => s.roomId === 'shared' && !s.archived);
+    const value = this.metadata(room), people = records.filter(s => isMember(s, room) && !s.archived);
     for (const id of [change.id, change.target]) {
-      this.assertAvailable(id, true);
+      this.assertAvailable(id, true, room);
       if (!people.some(s => s.id === id)) throw Error('成员已变化，顺序未更改。');
     }
     if (change.id === change.target) return;
-    const ids = new Set(records.map(s => s.id)), order = this.value.memberOrder.filter(id => ids.has(id));
+    const ids = new Set(records.map(s => s.id)), order = value.memberOrder.filter(id => ids.has(id));
     for (const id of ids) if (!order.includes(id)) order.push(id);
     if (order.length > 10000 || order.some(id => !orderId(id))) throw Error('成员顺序过长或无效。');
     order.splice(order.indexOf(change.id), 1);
     order.splice(order.indexOf(change.target) + Number(change.after), 0, change.id);
-    if (JSON.stringify(order) === JSON.stringify(this.value.memberOrder)) return;
+    if (JSON.stringify(order) === JSON.stringify(value.memberOrder)) return;
     // Presentation changes neither invalidate notes/clear confirmations nor
     // create membership events, pause routing, or touch a native session.
-    this.commit({ ...this.value, memberOrder: order });
+    this.commit({ ...value, memberOrder: order }, room);
   }
   // Register human intervention immediately, then serialize membership changes
   // across windows. Record only acknowledged state transitions, not drag intent.
-  enqueue(client, action, sessionId) {
-    const pause = sessionId ? client.call('pause', sessionId) : client.call('pause'); pause.catch(() => {});
+  enqueue(client, action, sessionId, room = DEFAULT_ROOM_ID) {
+    const pause = typeof client.callSpace === 'function' ? Promise.all((Array.isArray(room) ? room : [room]).map(id => client.callSpace(id, 'pause', []))) : room === DEFAULT_ROOM_ID || Array.isArray(room) ? sessionId ? client.call('pause', sessionId) : client.call('pause') : client.call('pauseSpace', room); pause.catch(() => {});
     const operation = this.queue.then(async () => { await pause; return action(); });
     this.queue = operation.catch(() => {}); return operation;
   }
-  membership(client, id, join, label) {
+  membership(client, id, join, label, room = DEFAULT_ROOM_ID, expected) {
     if (typeof id !== 'string' || typeof join !== 'boolean') return Promise.reject(Error('无效成员操作。'));
+    try { this.metadata(room); } catch (error) { return Promise.reject(error); }
     return this.enqueue(client, () => {
-      if (join) this.assertAvailable(id, true);
-      return this.changeMember(client, id, join, label);
-    }, id);
+      if (join) this.assertAvailable(id, true, room);
+      return this.changeMember(client, id, join, label, room, expected);
+    }, id, room);
   }
-  async changeMember(client, id, join, label) {
+  async changeMember(client, id, join, label, room = DEFAULT_ROOM_ID, expected) {
       const before = (await client.call('initial')).sessions.find(s => s.id === id);
       if (!before) throw Error('找不到这个会话。');
-      if (Boolean(before.roomId) === join) return;
-      await client.call('join', id, join);
+      if (expected !== undefined && (!expected || expected.nativeId !== before.nativeId || expected.revision !== membershipRevision(before, room))) throw Error('成员关系或原生身份已变化；这次撤销没有执行。');
+      if (isMember(before, room) === join) return { changed: false, roomId: room, sessionId: id, joined: join };
+      if (typeof client.callSpace === 'function') await client.callSpace(room, 'join', expected === undefined ? [id, join] : [id, join, expected]);
+      else if (expected !== undefined) await client.call('joinSpace', id, join, room, expected);
+      else if (room === DEFAULT_ROOM_ID) await client.call('join', id, join);
+      else await client.call('joinSpace', id, join, room);
       const after = (await client.call('initial')).sessions.find(s => s.id === id);
-      if (!after || Boolean(after.roomId) !== join) throw Error('成员状态未确认，请重新连接核对。');
-      try { this.update({}, { kind: join ? 'join' : 'leave', sessionId: id, name: label || before.name, text: join ? '加入了工作区 · 未发送历史或通知模型' : '离开了工作区 · 原生会话与已收到的内容保留' }); }
+      if (!after || isMember(after, room) !== join) throw Error('成员状态未确认，请重新连接核对。');
+      try { this.update({}, { kind: join ? 'join' : 'leave', sessionId: id, name: label || before.name, text: join ? '加入了工作区 · 未发送历史或通知模型' : '离开了工作区 · 原生会话与已收到的内容保留' }, room); }
       catch { throw Error('成员关系已更新，但时间线未能保存。原生会话已保留，请检查本机数据。'); }
+      return { changed: true, roomId: room, sessionId: id, joined: join, revision: membershipRevision(after, room), nativeId: after.nativeId };
   }
-  assertAvailable(id, shared = false) {
+  assertAvailable(id, shared = false, room = DEFAULT_ROOM_ID) {
     if (this.warning) throw Error(this.warning);
     if (id && (this.value.archivedSessions.includes(id) || this.gates.has(id))) throw Error('这个会话已归档或正在归档，请先从归档列表恢复。');
-    if (shared && (this.value.archived || this.gates.has('room'))) throw Error('这个工作区已归档或正在恢复，请先从归档列表恢复。');
+    if (shared && (this.metadata(room).archived || this.gates.has(room === DEFAULT_ROOM_ID ? 'room' : `room:${room}`))) throw Error('这个工作区已归档或正在恢复，请先从归档列表恢复。');
   }
   archiveSession(client, id, label) {
     if (typeof id !== 'string' || !id || id.length > 100) return Promise.reject(Error('无效会话。'));
@@ -102,45 +164,60 @@ class RoomState {
     this.gates.add(id);
     return this.enqueue(client, async () => {
       if (this.value.archivedSessions.includes(id)) return;
-      await this.changeMember(client, id, false, label);
+      const session = (await client.call('initial')).sessions.find(s => s.id === id);
+      if (!session) throw Error('找不到这个会话。');
+      for (const space of roomIds(session)) { this.metadata(space); await this.changeMember(client, id, false, label, space); }
       this.update({ archivedSessions: [...this.value.archivedSessions, id] });
-    }, id).finally(() => this.gates.delete(id));
+    }, id, typeof client.snapshot === 'function' ? roomIds(client.snapshot().sessions.find(s => s.id === id)) : DEFAULT_ROOM_ID).finally(() => this.gates.delete(id));
   }
   restoreSession(id) {
     if (this.gates.has(id)) throw Error('这个会话正在归档，请稍候。');
     if (this.value.archivedSessions.includes(id)) this.update({ archivedSessions: this.value.archivedSessions.filter(value => value !== id) });
   }
-  archiveRoom(client, labels) {
-    if (this.gates.has('room')) return Promise.reject(Error('工作区正在更新，请稍候。'));
-    this.gates.add('room');
+  archiveRoom(client, labels, room = DEFAULT_ROOM_ID) {
+    const gate = room === DEFAULT_ROOM_ID ? 'room' : `room:${room}`;
+    try { this.metadata(room); } catch (error) { return Promise.reject(error); }
+    if (this.gates.has(gate)) return Promise.reject(Error('工作区正在更新，请稍候。'));
+    this.gates.add(gate);
     return this.enqueue(client, async () => {
-      if (this.value.archived) return;
-      const members = (await client.call('initial')).sessions.filter(s => s.roomId === 'shared');
+      const value = this.metadata(room);
+      if (value.archived) return;
+      const members = (await client.call('initial')).sessions.filter(s => isMember(s, room));
       // Save the intended roster before detaching so a partial failure cannot
       // lose the information needed for an explicit restore/retry.
-      const restoreMembers = [...new Set([...this.value.restoreMembers, ...members.map(s => s.id)])];
-      this.update({ restoreMembers });
-      for (const s of members) await this.changeMember(client, s.id, false, labels?.get(s.id));
-      this.update({ archived: true }, { kind: 'archive', text: '工作区已归档 · 后续投递已暂停，原生任务仍可能继续' });
-    }).finally(() => this.gates.delete('room'));
+      const restoreMembers = [...new Set([...value.restoreMembers, ...members.map(s => s.id)])];
+      this.update({ restoreMembers }, undefined, room);
+      for (const s of members) await this.changeMember(client, s.id, false, labels?.get(s.id), room);
+      this.update({ archived: true }, { kind: 'archive', text: '工作区已归档 · 后续投递已暂停，原生任务仍可能继续' }, room);
+    }, undefined, room).finally(() => this.gates.delete(gate));
   }
-  restoreRoom(client, labels) {
-    if (this.gates.has('room')) return Promise.reject(Error('工作区正在更新，请稍候。'));
-    this.gates.add('room');
+  restoreRoom(client, labels, room = DEFAULT_ROOM_ID) {
+    const gate = room === DEFAULT_ROOM_ID ? 'room' : `room:${room}`;
+    try { this.metadata(room); } catch (error) { return Promise.reject(error); }
+    if (this.gates.has(gate)) return Promise.reject(Error('工作区正在更新，请稍候。'));
+    this.gates.add(gate);
     return this.enqueue(client, async () => {
-      if (!this.value.archived && !this.value.restoreMembers.length) return;
+      const value = this.metadata(room);
+      if (!value.archived && !value.restoreMembers.length) return;
       const sessions = (await client.call('initial')).sessions;
-      const wanted = this.value.restoreMembers.filter(id => sessions.some(s => s.id === id) && !this.value.archivedSessions.includes(id));
-      for (const id of wanted) await this.changeMember(client, id, true, labels?.get(id));
-      this.update({ archived: false, restoreMembers: [] }, { kind: 'restore', text: '工作区已恢复 · 原记录与可用成员已保留，没有重发任务' });
-    }).finally(() => this.gates.delete('room'));
+      const wanted = value.restoreMembers.filter(id => sessions.some(s => s.id === id) && !this.value.archivedSessions.includes(id));
+      for (const id of wanted) await this.changeMember(client, id, true, labels?.get(id), room);
+      this.update({ archived: false, restoreMembers: [] }, { kind: 'restore', text: '工作区已恢复 · 原记录与可用成员已保留，没有重发任务' }, room);
+    }, undefined, room).finally(() => this.gates.delete(gate));
   }
-  clear(revision = this.value.revision) {
-    if (revision !== this.value.revision) throw Error('协作资料已在清除期间更新，请核对后重新清除。');
-    this.update({ notes: '', events: [] });
+  clear(revision, room = DEFAULT_ROOM_ID) {
+    const value = this.metadata(room);
+    if (revision === undefined) revision = value.revision;
+    if (revision !== value.revision) throw Error('协作资料已在清除期间更新，请核对后重新清除。');
+    this.update({ notes: '', events: [] }, undefined, room);
   }
-  apply(snapshot) {
-    return { ...snapshot, sessions: snapshot.sessions.map(s => ({ ...s, archived: this.value.archivedSessions.includes(s.id) })), roomStorageWarning: this.warning, room: { ...snapshot.room, name: this.value.name, notes: this.value.notes, metadataRevision: this.value.revision, events: this.value.events, archived: this.value.archived, memberOrder: [...this.value.memberOrder] } };
+  apply(snapshot, selected = DEFAULT_ROOM_ID) {
+    const metadata = [{ ...this.value, id: DEFAULT_ROOM_ID }, ...this.spaces.rooms];
+    const rooms = metadata.map(value => {
+      const backend = (snapshot.rooms || [snapshot.room]).find(r => r?.id === value.id || value.id === DEFAULT_ROOM_ID && r && !r.id);
+      return { ...(backend || { id: value.id, revision: 0, run: null, messages: [] }), id: value.id, name: value.name, notes: value.notes, metadataRevision: value.revision, events: value.events, archived: value.archived, memberOrder: [...value.memberOrder], files: value.files.map(f => ({ ...f })) };
+    });
+    return { ...snapshot, sessions: snapshot.sessions.map(s => ({ ...s, archived: this.value.archivedSessions.includes(s.id) })), roomStorageWarning: this.warning || this.spacesWarning, rooms, room: rooms.find(r => r.id === selected) || { id: selected, name: '空间资料未能读取', unavailable: true, archived: true, messages: [], events: [], files: [], notes: '', memberOrder: [], metadataRevision: 0 } };
   }
 }
 module.exports = { RoomState };

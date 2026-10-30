@@ -1,6 +1,7 @@
 // Explicit native tool intent, not a parser for prose, mentions or terminal text.
 // A call reserves at most one handoff. Workspace.advance owns actual delivery
 // after the same native turn finishes and rechecks the human authorization.
+const { isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 const TOOL = 'workspace_message';
 const NAMESPACE = 'workspace';
 const tool = { type: 'function', name: TOOL,
@@ -16,7 +17,7 @@ function taskText(run, body, senderId) {
 }
 
 function authorized(workspace, session, runtime, identity) {
-  const run = workspace.peerLeases?.directed(session.id) || workspace.room.run, awaiting = run?.awaiting;
+  const run = workspace.peerLeases?.directed(session.id) || (workspace.activeRun ? workspace.activeRun(session.id) : workspace.room.run), awaiting = run?.awaiting;
   if (workspace.expireRun(run) || !run || run.mode !== 'directed' || run.status !== 'running' ||
     awaiting?.sessionId !== session.id || workspace.runtimes.get(session.id) !== runtime ||
     identity?.nativeId !== session.nativeId || !identity.turnId || !identity.callId ||
@@ -33,7 +34,7 @@ function failed(workspace, session, runtime, identity) {
   return { status: 'not-sent' };
 }
 function accept(workspace, session, runtime, identity, args) {
-  const active = workspace.peerLeases?.directed(session.id) || workspace.room.run;
+  const active = workspace.peerLeases?.directed(session.id) || (workspace.activeRun ? workspace.activeRun(session.id) : workspace.room.run);
   if (!(active?.mode === 'directed' && active.status === 'running' && active.ids.includes(session.id))) return require('./session-wake.cjs').stage(workspace, session, runtime, identity, args);
   const { run, awaiting } = authorized(workspace, session, runtime, identity);
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !['recipient_id', 'message'].includes(k)) ||
@@ -41,7 +42,7 @@ function accept(workspace, session, runtime, identity, args) {
     /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(args.message)) throw Error('请提供准确的接收者 ID 和不超过 6000 字符的完整消息。');
   if (run.steps + 1 >= run.maxSteps) throw Error('本轮回复上限已到，不再安排后续转交。');
   const target = run.peerLease ? run.participants?.[args.recipient_id] : workspace.sessions.get(args.recipient_id);
-  if (!target || target.id === session.id || !run.ids.includes(target.id) || (!run.peerLease && target.roomId !== 'shared')) throw Error('接收者不在本次已授权成员中。');
+  if (!target || target.id === session.id || !run.ids.includes(target.id) || (!run.peerLease && !isMember(target, run.roomId || 'shared'))) throw Error('接收者不在本次已授权成员中。');
   const previous = run.pendingHandoff;
   if (previous) {
     if (previous.sourceTag === awaiting.tag && previous.callId === identity.callId && previous.recipientId === target.id && previous.text === args.message) return { status: 'staged', message: '同一调用已登记，尚未投递；不会重复登记。' };
@@ -49,7 +50,7 @@ function accept(workspace, session, runtime, identity, args) {
   }
   run.pendingHandoff = { sourceTag: awaiting.tag, senderId: session.id, callId: identity.callId,
     turnId: identity.turnId, ...(identity.promptId ? { promptId: identity.promptId } : {}), recipientId: target.id, text: args.message,
-    nativeId: target.nativeId, member: target.memberRevision, control: target.controlRevision, connection: target.connectionRevision };
+    nativeId: target.nativeId, member: run.peerLease ? target.roomMemberRevision ?? target.memberRevision : membershipRevision(target, run.roomId || 'shared'), control: target.controlRevision, connection: target.connectionRevision };
   workspace.changed();
   return { status: 'staged', message: '已登记，尚未投递。当前原生回复正常结束后才会在仍有效的授权内投递；不要轮询或等待。真人可随时撤销。' };
 }

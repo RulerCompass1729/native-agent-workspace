@@ -1276,3 +1276,20 @@ versions and process starts. Strict signature and ordinary launch arguments pass
 The original Main goal keeps its UUID, objective, creation time and active status.
 These checks do not qualify physical input, activate every original retained
 reader, prove original cold recovery or close the dogfood goal.
+
+### Integration in progress: spaces and native-tool silence
+
+The reviewed source components for multiple collaboration spaces, session
+membership views and an observed-tool silence advisory are integrated together.
+One shared interval conflict required preserving both each room's expiry and the
+tool observation tick. A regression exercises that real interval with a still
+authorized default room, two expired extra rooms and a silent native tool. Either
+incorrect conflict resolution fails; the combined behavior preserves the native
+working state, identity and unsent text. The first incomplete fixture and weaker
+counterexample are retained separately rather than counted as product failures.
+
+All 1711 source checks pass without skips. Earlier independent component reviews
+and synthetic source-GUI evidence are reused within their stated scope. The
+integration review and signed installed acceptance are pending; this is not a
+claim that existing older native backends support extra rooms, that desktop
+notifications were delivered, or that the full dogfood goal is complete.

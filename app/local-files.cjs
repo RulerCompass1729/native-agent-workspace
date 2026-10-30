@@ -58,13 +58,14 @@ function origin(snapshot, source) {
     ['sessionId', 'messageId'].some(key => typeof source[key] !== 'string' || !source[key] || source[key].length > 512) ||
     !(source.nativeId === null || typeof source.nativeId === 'string' && source.nativeId.length > 0 && source.nativeId.length <= 512) ||
     !(source.cwd === null || validPath(source.cwd) && path.isAbsolute(source.cwd)) ||
-    Object.keys(source).some(key => !['kind', 'sessionId', 'messageId', 'nativeId', 'cwd'].includes(key))) throw changed();
+    source.roomId !== undefined && (source.kind !== 'room' || !require('./collaboration-spaces.cjs').roomId(source.roomId)) ||
+    Object.keys(source).some(key => !['kind', 'roomId', 'sessionId', 'messageId', 'nativeId', 'cwd'].includes(key))) throw changed();
   const session = snapshot?.sessions?.find(item => item.id === source.sessionId);
   // A room row authorizes only its own already-shared content, never a lookup
   // into a private row through nativeMessageId. Addressed/final rows need not
   // carry the streaming marker.
   const message = source.kind === 'room'
-    ? snapshot?.room?.messages?.find(item => item.id === source.messageId && item.sessionId === source.sessionId)
+    ? (snapshot?.rooms || [snapshot?.room]).find(r => (r?.id || 'shared') === (source.roomId || 'shared'))?.messages?.find(item => item.id === source.messageId && item.sessionId === source.sessionId)
     : session?.messages?.find(item => item.id === source.messageId);
   // No old cwd is persisted for Markdown replies. A changed or reused native
   // context must not reinterpret its historical relative links in today's cwd.

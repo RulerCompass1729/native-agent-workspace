@@ -1,13 +1,16 @@
 const { randomUUID } = require('node:crypto');
 const { trimVolatileRows } = require('./native-blocks.cjs');
+const { isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 
 // A room displays only the turn bound to its explicit send. Display is not
 // model delivery; only Workspace.advance may hand off an accepted final reply.
 class SharedReplies {
   constructor(workspace) { this.workspace = workspace; this.grants = new Map(); }
-  authorize(s, runtime, tag, source, run) {
+  room(id = 'shared') { return this.workspace.roomFor ? this.workspace.roomFor(id) : this.workspace.room; }
+  rooms() { return this.workspace.rooms ? [...this.workspace.rooms.values()] : [this.workspace.room]; }
+  authorize(s, runtime, tag, source, run, roomId = run?.roomId || 'shared') {
     this.grants.set(tag, { tag, sessionId: s.id, runtime, nativeId: s.nativeId,
-      member: s.memberRevision, control: s.controlRevision, connection: s.connectionRevision,
+      roomId, member: membershipRevision(s, roomId), control: s.controlRevision, connection: s.connectionRevision,
       failedTurnId: !run && s.state === 'error' ? runtime.failedTurnInputId : null,
       recoveryLease: runtime.rootLease,
       sourceId: source.id, requiredInputTag: source.inputMode === 'steer' ? tag : '', run, rows: new Map(), closed: false });
@@ -17,9 +20,9 @@ class SharedReplies {
     const w = this.workspace, s = w.sessions.get(g.sessionId);
     const explicitRecovery = this.recovering(g);
     return !g.closed && s && w.runtimes.get(s.id) === g.runtime && s.nativeId === g.nativeId &&
-      s.roomId === 'shared' && s.memberRevision === g.member && s.controlRevision === g.control && s.connectionRevision === g.connection &&
+      isMember(s, g.roomId || 'shared') && membershipRevision(s, g.roomId || 'shared') === g.member && s.controlRevision === g.control && s.connectionRevision === g.connection &&
       !['ended', 'recoverable', 'disconnected', 'approval'].includes(s.state) && (s.state !== 'error' || explicitRecovery) && !s.approval && !g.runtime.transportDisconnected && !g.runtime.backendExitConfirmed &&
-      (!g.run || (w.routeValid ? w.routeValid(g.run) : w.room.run === g.run && g.run.status === 'running' && Date.now() < g.run.deadline));
+      (!g.run || (w.routeValid ? w.routeValid(g.run) : this.room(g.roomId).run === g.run && g.run.status === 'running' && Date.now() < g.run.deadline));
   }
   recovering(g) {
     const r = g.runtime;
@@ -49,10 +52,10 @@ class SharedReplies {
   refresh() {
     for (const g of this.grants.values()) if (!g.closed && !this.valid(g)) this.close(g.tag);
   }
-  activity(s) {
+  activity(s, roomId = 'shared') {
     const runtime = this.workspace.runtimes.get(s.id), activity = runtime?.nativeActivity;
     if (!activity || activity.nativeId !== s.nativeId) return null;
-    for (const g of this.grants.values()) if (g.sessionId === s.id && g.nativeId === activity.nativeId &&
+    for (const g of this.grants.values()) if ((g.roomId || 'shared') === roomId && g.sessionId === s.id && g.nativeId === activity.nativeId &&
       g.turnId === activity.turnId && !g.requiredInputTag && this.valid(g)) return activity;
     // Steered turns can still contain earlier private native items. Until the
     // provider reports input-scoped activity, their generic phase stays private.
@@ -60,7 +63,7 @@ class SharedReplies {
   }
   restoreTurnMetadata(s) {
     let changed = false;
-    for (const row of this.workspace.room.messages) {
+    for (const room of this.rooms()) for (const row of room.messages) {
       if (row.sessionId !== s.id || row.nativeId !== s.nativeId || !row.sharedStream || !row.nativeMessageId) continue;
       const native = s.messages.find(m => m.id === row.nativeMessageId && m.kind === 'turn' && m.turnId === row.turnId && m.status === row.nativeStatus);
       if (!native) continue;
@@ -100,17 +103,18 @@ class SharedReplies {
         row = { id: randomUUID(), sessionId: s.id, name: s.name, role: message.role, time: Date.now(),
           replyTo: g.sourceId, sourceTag: g.tag, nativeMessageId: message.id, nativeId: g.nativeId,
           turnId: g.turnId, ...(g.run ? { runId: g.run.id } : {}), sharedStream: true, deliveryTracked: true };
-        g.rows.set(message.id, row); this.workspace.room.messages.push(row);
+        g.rows.set(message.id, row); this.room(g.roomId).messages.push(row);
       }
       for (const field of ['text', 'input', 'title', 'kind', 'toolKind', 'commandActions', 'commandSource', 'exitCode', 'status', 'incomplete', 'volatile', 'displayTurnId', 'nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) row[field] = message[field];
       if (Array.isArray(message.images)) row.images = message.images.map(ref => ({ ...ref }));
       row.nativeStatus = message.status;
       this.boundary(g, message);
     }
-    const room = this.workspace.room;
-    room.messages = trimVolatileRows(room.messages, 'shared-native-cache-gap');
-    const retained = new Set(room.messages.map(m => m.id));
-    for (const g of this.grants.values()) for (const [id, row] of g.rows) if (!retained.has(row.id)) g.rows.delete(id);
+    for (const room of this.rooms()) {
+      room.messages = trimVolatileRows(room.messages, 'shared-native-cache-gap');
+      const retained = new Set(room.messages.map(m => m.id));
+      for (const g of this.grants.values()) if ((g.roomId || 'shared') === (room.id || 'shared')) for (const [id, row] of g.rows) if (!retained.has(row.id)) g.rows.delete(id);
+    }
   }
   boundary(g, message) {
     if (message.kind !== 'turn') return;
@@ -137,7 +141,7 @@ class SharedReplies {
     if (!row || row.role !== 'assistant') {
       row = { id: randomUUID(), role: 'assistant', sessionId: s.id, name: s.name, time: Date.now(),
         ...(g ? { replyTo: g.sourceId, sourceTag: g.tag } : {}), ...(run ? { runId: run.id } : {}), deliveryTracked: true };
-      this.workspace.room.messages.push(row);
+      this.room(g.roomId).messages.push(row);
     }
     row.text = info.text; row.status = 'complete'; row.finalReply = true;
     this.close(info.tag, '本次回复已结束');

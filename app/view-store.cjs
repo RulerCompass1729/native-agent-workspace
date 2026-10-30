@@ -1,9 +1,19 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { roomId } = require('./collaboration-spaces.cjs');
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, limit) => typeof value === 'string' && value.length <= limit;
+function validRoomView(view) {
+  if (!object(view)) return false;
+  for (const key of ['roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo']) if (view[key] !== undefined && !text(view[key], 100)) return false;
+  if (view.sharedDraft !== undefined && !text(view.sharedDraft, 16000)) return false;
+  if (view.roomSearch !== undefined && !text(view.roomSearch, 1000)) return false;
+  if (view.roomSurface !== undefined && !['overview', 'records'].includes(view.roomSurface)) return false;
+  if (view.roomMention !== undefined && view.roomMention !== null && !require('./room-mention.js').validView(view.roomMention, view.sharedDraft, view.roomRecipient)) return false;
+  return true;
+}
 function validViews(views) {
   if (!Array.isArray(views)) return false;
   const owners = new Set();
@@ -11,6 +21,10 @@ function validViews(views) {
     if (!object(view) || !text(view.owner, 100) || !view.owner || owners.has(view.owner)) return false;
     owners.add(view.owner);
     if (view.active !== undefined && typeof view.active !== 'boolean') return false;
+    if (view.spaceId !== undefined && !roomId(view.spaceId)) return false;
+    if (view.sidebarView !== undefined && !['flat', 'grouped'].includes(view.sidebarView)) return false;
+    if (view.sidebarSpaceFilter !== undefined && view.sidebarSpaceFilter !== '' && !roomId(view.sidebarSpaceFilter)) return false;
+    if (view.roomViews !== undefined && (!object(view.roomViews) || Object.entries(view.roomViews).some(([id, value]) => !roomId(id) || !validRoomView(value)))) return false;
     for (const key of ['selected', 'roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo'])
       if (view[key] !== undefined && !text(view[key], 100)) return false;
     for (const key of ['mode', 'preference'])
@@ -72,4 +86,4 @@ class ViewStore {
     }
   }
 }
-module.exports = { ViewStore };
+module.exports = { ViewStore, validViews };

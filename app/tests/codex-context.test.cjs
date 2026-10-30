@@ -10,6 +10,90 @@ function fixture(t){
  t.after(()=>{w.close();fs.rmSync(dir,{recursive:true,force:true});});
  return {dir,w,s,r,host,replies};
 }
+test('T103 live command silence warns without controlling work and clears on progress, completion or source change',t=>{
+ const {r,s,w,host}=fixture(t),original=Date.now;let now=original(),calls=[];Date.now=()=>now;
+ host.rpc.call=async(method)=>{calls.push(method);return {}};
+ try{
+  const emit=(method,params)=>r.event({method,params:{threadId:s.nativeId,...params}});
+  emit('turn/started',{turn:{id:'wait-a'}});
+  emit('item/started',{turnId:'wait-a',startedAtMs:now-10000,item:{id:'read-a',type:'commandExecution',command:'synthetic read',status:'inProgress',commandActions:[]}});
+  assert.equal(r.nativeActivity.toolWait?.source,'live-observation');const start=r.nativeActivity.toolWait.progressAt;
+  w.room.run={id:'other-collaboration',ids:['B','C'],status:'running'};const run=JSON.stringify(w.room.run),draft='Original unsent draft';w.setDraft(s.id,draft,s.owner);
+  now+=5*60*1000-1;w.tickToolWait();assert.equal(r.nativeActivity.waitNotice,undefined);
+  now++;w.tickToolWait();assert.equal(w.snapshot().sessions[0].nativeActivity.waitNotice.progressAt,start);assert.equal(s.state,'working');assert.equal(JSON.stringify(w.room.run),run);assert.deepEqual(calls,[]);assert.equal(w.drafts.get(s.id),draft);
+  emit('item/commandExecution/outputDelta',{turnId:'wait-a',itemId:'read-a',delta:'new progress'});assert.equal(r.nativeActivity.waitNotice,undefined);w.tickToolWait();assert.equal(r.toolWaitNotice,null);
+  now+=5*60*1000;w.tickToolWait();assert.ok(r.nativeActivity.waitNotice);
+  emit('thread/status/changed',{status:{type:'active',activeFlags:['waitingOnApproval']}});w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined);
+  now+=20*60*1000;emit('thread/status/changed',{status:{type:'active',activeFlags:[]}});w.tickToolWait();assert.equal(r.nativeActivity.waitNotice,undefined,'Human waiting time is not a fresh tool timeout');
+  emit('turn/started',{turn:{id:'wait-b'}});emit('item/commandExecution/outputDelta',{turnId:'wait-a',itemId:'read-a',delta:'late old output'});w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined);
+  emit('item/started',{turnId:'wait-b',item:{id:'read-b',type:'commandExecution',command:'synthetic read',status:'inProgress',commandActions:[]}});
+  now+=5*60*1000;w.tickToolWait();assert.ok(r.nativeActivity.waitNotice);
+  const native=s.nativeId;s.nativeId=randomUUID();w.tickToolWait();assert.equal(r.nativeActivity?.toolWait,undefined,'An old live tool cannot bind to a replacement native ID');s.nativeId=native;
+  emit('item/completed',{turnId:'wait-b',item:{id:'read-b',type:'commandExecution',status:'completed',command:'synthetic read',exitCode:0}});w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined);assert.equal(r.toolWaitNotice,null);assert.deepEqual(calls,[]);
+ }finally{Date.now=original}
+});
+for(const type of ['mcpToolCall','dynamicToolCall','fileChange'])test('T103 live '+type+' silence is observed without requiring a shell command',t=>{
+ const {r,s,w}=fixture(t),original=Date.now;let now=original();Date.now=()=>now;
+ const item={id:'tool',type,status:'inProgress',server:'synthetic',tool:'read',arguments:{},changes:[]};
+ const emit=(method,params)=>r.event({method,params:{threadId:s.nativeId,turnId:'tool-turn',...params}});
+ try{
+  emit('turn/started',{turn:{id:'tool-turn'}});emit('item/started',{item});
+  now+=5*60*1000;w.tickToolWait();assert.ok(r.nativeActivity.waitNotice,'Non-command native tools must not stay silently unwatched');
+  const at=r.nativeActivity.toolWait.progressAt;emit('item/started',{item});assert.equal(r.nativeActivity.toolWait.progressAt,at,'Duplicate starts are not progress');
+  if(type!=='dynamicToolCall'){
+   const method=type==='mcpToolCall'?'item/mcpToolCall/progress':'item/fileChange/patchUpdated';
+   const body=type==='mcpToolCall'?{message:'Read made progress'}:{changes:[{path:'synthetic.txt',kind:{type:'update'},diff:'+new'}]};
+   emit(method,{itemId:item.id,turnId:'old-turn',...body});assert.equal(r.nativeActivity.toolWait.progressAt,at);
+   now++;emit(method,{itemId:item.id,...body});w.tickToolWait();assert.equal(r.nativeActivity.waitNotice,undefined,'Real current native tool progress clears the advisory');
+  }
+  emit('item/completed',{item:{...item,status:'completed'}});w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined);
+  emit('item/started',{item});now+=5*60*1000;w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined,'A late duplicate start cannot revive an already completed tool');
+ }finally{Date.now=original}
+});
+test('T103 tool timing rejects unknown thread, history, old RPC and old observation lifetime',t=>{
+ const {r,s,w,host}=fixture(t),original=Date.now;let now=original();Date.now=()=>now;
+ const params={threadId:s.nativeId,turnId:'same-turn',item:{id:'same-item',type:'commandExecution',command:'synthetic read',status:'inProgress',commandActions:[]}};
+ try{
+  r.event({method:'turn/started',params:{threadId:s.nativeId,turn:{id:'same-turn'}}});
+  r.event({method:'item/started',params:{...params,threadId:undefined}});assert.equal(r.nativeActivity.toolWait,undefined,'An unbound source cannot authorize a clock');
+  const rpc=host.rpc;host.rpc=null;r.event({method:'item/started',params});assert.equal(r.nativeActivity.toolWait,undefined,'A missing RPC is not an observation source');host.rpc=rpc;
+  const native=s.nativeId;s.nativeId=null;r.event({method:'item/started',params:{...params,threadId:null}});assert.equal(r.nativeActivity.toolWait,undefined,'A missing native identity cannot establish a tool clock');s.nativeId=native;
+  r.historyMessageItems.add(params.item.id);r.event({method:'item/started',params});assert.equal(r.nativeActivity.toolWait,undefined,'History cannot establish live execution');
+  r.historyMessageItems.clear();r.event({method:'item/started',params});now+=5*60*1000;w.tickToolWait();assert.ok(r.nativeActivity.waitNotice);
+  const oldRpc=host.rpc;host.rpc={call:async()=>({})};w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined,'Replacing the observation source invalidates its clock');
+  r.event({method:'item/started',params},oldRpc);assert.equal(r.nativeActivity.toolWait,undefined);
+  r.event({method:'item/started',params});w.tickToolWait();assert.equal(r.nativeActivity.waitNotice,undefined,'A newly observed source starts with fresh quiet time');
+  now+=5*60*1000;w.tickToolWait();assert.ok(r.nativeActivity.waitNotice);r.lifecycleRevision++;w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined,'The same native/turn IDs do not bridge observation lifetimes');
+ }finally{Date.now=original}
+});
+test('T103 progress or completion of another concurrent tool cannot hide a stalled file read',t=>{
+ const {r,s,w}=fixture(t),original=Date.now;let now=original();Date.now=()=>now;
+ const emit=(method,params)=>r.event({method,params:{threadId:s.nativeId,turnId:'parallel-turn',...params}});
+ const read={id:'blocked-read',type:'mcpToolCall',server:'synthetic',tool:'read',arguments:{},status:'inProgress'};
+ const command={id:'working-command',type:'commandExecution',command:'synthetic work',commandActions:[],status:'inProgress'};
+ try{
+  emit('turn/started',{turn:{id:'parallel-turn'}});emit('item/started',{item:read});emit('item/started',{item:command});const at=now;
+  now+=299900;emit('item/commandExecution/outputDelta',{itemId:command.id,delta:'Other tool progress'});
+  now+=100;w.tickToolWait();assert.equal(r.nativeActivity.waitNotice?.progressAt,at,'The original read is still silent even while the command works');
+  now++;emit('item/mcpToolCall/progress',{itemId:read.id,message:'Read made progress'});w.tickToolWait();assert.equal(r.nativeActivity.waitNotice,undefined);
+  now=at+599900;w.tickToolWait();assert.equal(r.nativeActivity.waitNotice?.progressAt,at+299900,'Each tool keeps its own last progress time');
+  emit('item/completed',{item:{...read,status:'completed'}});w.tickToolWait();assert.equal(r.nativeActivity.waitNotice?.progressAt,at+299900,'Finishing another tool cannot reset the pending command deadline');
+  emit('item/completed',{item:{...command,status:'completed'}});w.tickToolWait();assert.equal(r.nativeActivity.waitNotice,undefined);
+  assert.equal(s.state,'working','A warning never fabricates turn completion');
+ }finally{Date.now=original}
+});
+test('T103 assistant content and an explicit native sleep are not stalled execution tools',t=>{
+ const {r,s,w}=fixture(t),original=Date.now;let now=original();Date.now=()=>now;
+ const items=[{type:'reasoning',summary:['Still thinking'],content:[]},{type:'plan',text:'Original plan'},
+  {type:'agentMessage',text:'Original response'},{type:'sleep',durationMs:60*60*1000}];
+ try{
+  for(const [n,item]of items.entries()){
+   const turnId='content-'+n,emit=(method,params)=>r.event({method,params:{threadId:s.nativeId,turnId,...params}});
+   emit('turn/started',{turn:{id:turnId}});emit('item/started',{item:{id:'item-'+n,...item}});
+   now+=6*60*1000;w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined,item.type+' must retain its native meaning');assert.equal(s.state,'working');
+  }
+ }finally{Date.now=original}
+});
 test('native settings show effective Plan/model/effort without copying private instructions or another context',t=>{
  const {r,s,w}=fixture(t);
  r.event({method:'thread/settings/updated',params:{threadId:s.nativeId,threadSettings:{model:'native-model',effort:'low',collaborationMode:{mode:'plan',settings:{developer_instructions:'PRIVATE_INSTRUCTIONS'}}}}});

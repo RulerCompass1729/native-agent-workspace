@@ -10,7 +10,7 @@ function openSearch(scope = 'all') {
   if (!state || document.querySelector('dialog[open]')) return;
   searchOpener = document.activeElement; searchNavigating = false;
   captureReadingViews();
-  searchOrigin = { selected, roomSession, roomSurface, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
+  searchOrigin = { spaceId, selected, roomSession, roomSurface, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
     roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread };
   const currentOption = $('search-scope').querySelector('[value="current"]');
   currentOption.disabled = !current();
@@ -84,13 +84,14 @@ function pointToMessage(element, key, id, query = '') {
 async function openSearchResult(result) {
   clearTimeout(searchTimer);
   if (result.kind === 'shared' || result.kind === 'room') {
-    if (result.messageId && !timeline().some(m => m.id === result.messageId)) { renderSearch(); toast('这条共享记录已移除，搜索结果已更新。'); return; }
-    if (state.room.archived) {
-      const message = result.messageId ? timeline().find(m => m.id === result.messageId) : null;
-      const text = message?.text ?? `${state.room.name}\n\n${state.room.messages.length} 条共享消息。${state.room.notes ? `\n\n共享笔记：\n${state.room.notes}` : ''}`;
+    const room = spaceRecord(result.roomId || 'shared'), records = room ? [...room.messages, ...(room.events || [])] : [];
+    if (!room || result.messageId && !records.some(m => m.id === result.messageId)) { renderSearch(); toast('这条共享记录已移除，搜索结果已更新。'); return; }
+    if (room.archived) {
+      const message = result.messageId ? records.find(m => m.id === result.messageId) : null;
+      const text = message?.text ?? `${room.name}\n\n${room.messages.length} 条共享消息。${room.notes ? `\n\n共享笔记：\n${room.notes}` : ''}`;
       const body = $('search-preview-body'); ui.clearMarkdown(body);
       body.textContent = text;
-      $('search-preview-title').textContent = `${state.room.name} · 已归档，只读`;
+      $('search-preview-title').textContent = `${room.name} · 已归档，只读`;
       $('search-preview-copy').onclick = () => attempt(() => api.copy(text));
       $('search-results').hidden = true; $('search-more').hidden = true; $('search-preview').hidden = false;
       $('search-preview-back').focus();
@@ -104,10 +105,11 @@ async function openSearchResult(result) {
   searchNavigating = true;
   $('search-dialog').close();
   if (result.kind === 'shared' || result.kind === 'room') {
+    await selectSpace(result.roomId || 'shared');
     $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
     roomSurface = 'records';
     await selectRoom();
-    if (result.messageId) pointToMessage($('room-messages'), 'room', result.messageId, query);
+    if (result.messageId) pointToMessage($('room-messages'), roomReadingKey(), result.messageId, query);
   } else if (origin.selected === 'room' && members().some(s => s.id === result.sessionId)) {
     roomSurface = 'overview';
     await select('room', 'chat', result.sessionId);
@@ -123,9 +125,10 @@ async function openSearchResult(result) {
 async function returnToReading() {
   const target = searchReturn; if (!target) return;
   if (target.selected !== 'room' && target.selected && !state.sessions.some(s => s.id === target.selected)) { toast('原会话已移除。'); return; }
-  if (target.selected === 'room' && state.room.archived) { toast('原工作区已归档。'); return; }
+  if (target.selected === 'room' && (!spaceRecord(target.spaceId || 'shared') || spaceRecord(target.spaceId || 'shared').archived)) { toast('原工作区已归档或资料不可用。'); return; }
   searchReturn = null; $('return-reading').hidden = true;
   document.querySelectorAll('[data-search-target]').forEach(el => delete el.dataset.searchTarget);
+  if (spaceId !== (target.spaceId || 'shared')) await selectSpace(target.spaceId || 'shared');
   $('room-search').value = target.roomSearch;
   roomThread = target.roomThread || '';
   $('room-filter').value = target.roomFilter; pendingRoomFilter = target.roomFilter;

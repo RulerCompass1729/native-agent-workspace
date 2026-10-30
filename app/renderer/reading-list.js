@@ -705,7 +705,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     const fileCwdKnown = fileSession && !fileSession.nativeContextPending && (m.nativeId
       ? m.nativeId === fileSession.nativeId && !fileSession.nativeContexts?.some(c => c.nativeId === m.nativeId)
       : !fileSession.nativeContexts?.length);
-    const fileSource = { kind: room ? 'room' : 'session', sessionId: room ? m.sessionId : session?.id,
+    const fileSource = { kind: room ? 'room' : 'session', ...(room ? { roomId: state.room?.id || 'shared' } : {}), sessionId: room ? m.sessionId : session?.id,
       messageId: m.id, nativeId: m.nativeId || null, cwd: fileCwdKnown ? fileSession.cwd || null : null };
     const fileSourceKey = m.role === 'assistant' ? JSON.stringify(fileSource) : null;
     if (entry.text !== displayText || entry.role !== m.role || entry.streaming !== (m.status === 'streaming') || m.role === 'assistant' && entry.fileSourceKey !== fileSourceKey) {
@@ -758,7 +758,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         },
       });
     }
-    entry.images?.update(m.images || [], { kind: room ? 'room' : 'session', sessionId: room ? m.sessionId : session?.id,
+    entry.images?.update(m.images || [], { kind: room ? 'room' : 'session', ...(room ? { roomId: state.room?.id || 'shared' } : {}), sessionId: room ? m.sessionId : session?.id,
       nativeId: m.nativeId, messageId: m.id }, room ? m.name || name : session?.name || name, m.status);
     if (entry.inputBody && hasImages && m.toolKind === 'imageView') entry.inputBody.hidden = true;
     if (entry.copyText) { entry.copyText.hidden = hasImages && !m.text || m.kind === 'turn' && !displayText; entry.copyText.textContent = hasImages ? '复制文字' : '复制'; }
