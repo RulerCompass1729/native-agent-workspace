@@ -1641,18 +1641,109 @@ function appendQuestionForm(parent, questions, disabled, submit) {
   form.onsubmit = event => { event.preventDefault(); if (!send.disabled) send.click(); };
   form.append(send); update(); parent.append(form);
 }
+function nativeApprovalPreview(request) {
+  const raw = typeof request.input === 'string' ? request.input : '', title = request.title || '原生请求';
+  let fields;
+  try { const value = JSON.parse(raw); if (value && typeof value === 'object' && !Array.isArray(value)) fields = value; } catch { /* Original native input remains readable. */ }
+  let detail = '', kind = 'raw', before, after, command, scope = '';
+  if (title === 'Edit' && typeof fields?.file_path === 'string' && typeof fields.old_string === 'string' && typeof fields.new_string === 'string') {
+    detail = fields.file_path; kind = 'edit'; before = fields.old_string; after = fields.new_string;
+    scope = fields.replace_all === true ? '全部匹配' : fields.replace_all === false ? '单处' : '';
+  } else if (title === 'Bash' && typeof fields?.command === 'string') {
+    detail = fields.command; kind = 'command'; command = fields.command;
+  } else if (title === 'AskUserQuestion' && Array.isArray(fields?.questions)) {
+    const question = fields.questions[0]; detail = question?.header || question?.question || ''; kind = 'questions';
+  }
+  const text = String(detail).replace(/[\r\n\t]/g, ' '), chars = Array.from(text);
+  return { label: title + (text ? ' ' + chars.slice(0, 240).join('') + (chars.length > 240 ? '…' : '') : ''), kind, raw, before, after, command, scope };
+}
+function nativeApprovalExcerpt(text) {
+  const prefix = Array.from(text.split('\n').slice(0, 8).join('\n')).slice(0, 1200).join('');
+  return { text: prefix, truncated: prefix !== text };
+}
+function nativeApprovalChangeExcerpts(before, after) {
+  const left = Array.from(before), right = Array.from(after);
+  let changed = 0;
+  while (changed < left.length && changed < right.length && left[changed] === right[changed]) changed++;
+  const excerpt = (points, original) => {
+    const anchor = Math.min(changed, points.length); let start = Math.max(0, anchor - 48);
+    for (let i = anchor - 1; i >= start; i--) if (points[i] === '\n') { start = i + 1; break; }
+    // Start on the changed line, retaining only literal nearby context. A long
+    // common prefix must not push the actual change outside the short preview.
+    const text = nativeApprovalExcerpt(points.slice(start, start + 1200).join('')).text;
+    return { text, truncated: start > 0 || text !== original };
+  };
+  return { before: excerpt(left, before), after: excerpt(right, after) };
+}
+function renderNativeOnlyApproval(el, s, stale) {
+  const context = JSON.stringify([s.id, s.nativeId]);
+  if (el.nativeApprovalContext !== context) { el.replaceChildren(); el.nativeApprovalContext = context; }
+  const requests = Array.isArray(s.nativeApproval.requests) ? s.nativeApproval.requests : [];
+  if (!requests.length) { el.replaceChildren(); el.hidden = true; return; }
+  const previous = new Map([...el.querySelectorAll(':scope > .native-approval-request')].map(row => [row.nativeRequestSignature, row])), rows = [];
+  for (const request of requests) {
+    const signature = JSON.stringify([request.id, request.turnId, request.title, request.input, request.incomplete]);
+    let row = previous.get(signature);
+    if (!row) {
+      row = node('details', undefined, 'native-approval-request process-details');
+      row.nativeRequestSignature = signature; row.dataset.nativeRequestId = request.id || '';
+      const summary = node('summary'), author = node('span', undefined, 'native-approval-author'), label = node('span', undefined, 'native-approval-label'), content = node('div', undefined, 'native-approval-content');
+      const status = node('span', request.title === 'AskUserQuestion' ? '待回答' : '待批准', 'native-approval-status');
+      row.nativeAuthor = author; row.nativeLabel = label; row.dataset.incomplete = String(Boolean(request.incomplete)); summary.append(author, status, label); row.append(summary, content);
+      if (request.incomplete) { summary.append(node('span', '内容未完整同步', 'native-approval-incomplete')); content.append(node('p', '请求内容未完整同步，请在原生终端核对。')); }
+      const preview = nativeApprovalPreview(request);
+      if (preview.kind === 'edit') {
+        if (preview.scope) summary.append(node('span', preview.scope, 'native-approval-scope'));
+        const excerpts = nativeApprovalChangeExcerpts(preview.before, preview.after);
+        for (const [name, excerpt, cls] of [['修改前', excerpts.before, 'native-approval-before'], ['修改后', excerpts.after, 'native-approval-after']]) {
+          const group = node('div', undefined, cls);
+          group.append(node('strong', name + (excerpt.truncated ? '（节选）' : '')), node('pre', excerpt.text, 'approval-command')); content.append(group);
+        }
+      } else if (preview.kind === 'command') content.append(node('pre', preview.command, 'approval-command'));
+      else if (preview.kind === 'questions') {
+        if (!appendNativeQuestions(content, JSON.parse(preview.raw).questions)) content.append(node('pre', preview.raw, 'approval-command'));
+      } else if (preview.raw) content.append(node('pre', preview.raw, 'approval-command native-approval-raw-body'));
+      if (preview.kind !== 'raw') {
+        const original = node('details', undefined, 'native-approval-original');
+        original.append(node('summary', '完整原始请求'), node('pre', preview.raw, 'approval-command native-approval-raw-body')); content.append(original);
+      }
+    }
+    const preview = nativeApprovalPreview(request), description = preview.label, caption = `${s.name} · ${request.title === 'AskUserQuestion' ? '等待你回答' : '等你批准'} · ${description}${preview.scope ? ' · ' + preview.scope : ''}`;
+    if (row.nativeAuthor.textContent !== s.name) row.nativeAuthor.textContent = s.name;
+    row.nativeAuthor.title = s.name;
+    if (row.nativeLabel.textContent !== description) row.nativeLabel.textContent = description;
+    row.firstChild.title = caption; row.firstChild.setAttribute('aria-label', caption); rows.push(row);
+  }
+  let terminal = el.querySelector(':scope > .native-approval-terminal');
+  if (!terminal) terminal = button('', () => operateNative(s.id), 'native-approval-terminal');
+  const action = `在 ${s.name} 的原生终端处理`; if (terminal.textContent !== '去终端') terminal.textContent = '去终端';
+  terminal.setAttribute('aria-label', action);
+  terminal.title = action + '；请求正在等待你处理，这里不会代发批准。'; rows.push(terminal);
+  let notice = el.querySelector(':scope > .native-approval-stale');
+  if (!notice) notice = node('p', '原生状态待核验，请在原生终端核对。', 'native-approval-stale');
+  notice.hidden = !stale; rows.push(notice);
+  // Keep unchanged native request nodes connected: receipt/owner updates must
+  // not collapse an open request or discard a selection in its original text.
+  let cursor = el.firstChild;
+  for (const row of rows) { if (row === cursor) cursor = cursor.nextSibling; else el.insertBefore(row, cursor); }
+  while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next; }
+}
 function renderApproval(s, own) {
   const el = $('approval');
   const requests = s?.approvals?.length ? s.approvals : s?.approval ? [s.approval] : [];
   const requested = approvalViews.get(s?.id), chosen = requests.find(a => requested && a.requestId === requested);
   if (requested && !chosen) approvalViews.delete(s.id);
   if (chosen) s = { ...s, approval: chosen, approvalDecisions: chosen.decisions || s.approvalDecisions };
-  el.hidden = !s || (s.state !== 'approval' && !s.nativeApproval && !s.approval && !s.claudeQuestion);
+  const nativeOnly = Boolean(s?.nativeApproval?.nativeOnly && !s?.claudeQuestion);
+  el.hidden = !s || (s.state !== 'approval' && !s.nativeApproval && !s.approval && !s.claudeQuestion) ||
+    nativeOnly && (!Array.isArray(s.nativeApproval.requests) || !s.nativeApproval.requests.length);
   const stale = !nativeStatusFresh(s?.nativeApproval);
   const { observedAt, ...nativeApprovalContent } = s?.nativeApproval || {};
-  const signature = JSON.stringify([s?.id, s?.state, own, s?.claudeQuestion, s?.approval, requests, s?.approvalOverflow, s?.approvalNotice, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
+  el.classList.toggle('native-only', nativeOnly);
+  const signature = JSON.stringify([s?.id, s?.nativeId, s?.name, s?.state, own, s?.claudeQuestion, s?.approval, requests, s?.approvalOverflow, s?.approvalNotice, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
   if (el.dataset.signature === signature) return;
-  el.dataset.signature = signature; el.replaceChildren();
+  el.dataset.signature = signature;
+  if (!nativeOnly || el.hidden) { el.replaceChildren(); delete el.nativeApprovalContext; }
   if (el.hidden) return;
   if (s.claudeQuestion) {
     // Held before the native dialog opens: answer here, or let the terminal ask it.
@@ -1663,16 +1754,7 @@ function renderApproval(s, own) {
     return;
   }
   if (s.nativeApproval?.nativeOnly) {
-    el.append(node('strong', s.name));
-    if (stale) el.append(node('p', '原生状态待核验'));
-    for (const request of s.nativeApproval.requests) {
-      if (request.title) el.append(node('div', request.title));
-      let questions;
-      if (request.title === 'AskUserQuestion') { try { questions = JSON.parse(request.input).questions; } catch {} }
-      if (!appendNativeQuestions(el, questions) && request.input) el.append(node('pre', request.input, 'approval-command'));
-      if (request.incomplete) el.append(node('p', '请求内容未完整同步，请在原生终端核对。'));
-    }
-    el.append(button(`在 ${s.name} 的原生终端处理`, () => operateNative(s.id)));
+    renderNativeOnlyApproval(el, s, stale);
     return;
   }
   if (requests.length > 1) {

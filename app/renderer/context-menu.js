@@ -28,7 +28,7 @@ async function pasteTerminalContext(target = terminalMenuTarget()) {
   if (content.images) await pasteImages([], content.images, target.id); else pasteTerminal(content.text, target.id);
 }
 function showContentMenu(element, point, keyboard = false, event) {
-  if (element instanceof Element && element.closest('[data-member-menu]')) return false;
+  if (element instanceof Element && element.closest('[data-member-menu], .collaboration-member-name')) return false;
   if (!(element instanceof Element) || !element.closest('.naw') || element.closest('[data-session-row], #room-nav') && !element.closest('#rename-editor')) return false;
   const origin = contentMenuOrigin(), opener = document.activeElement;
   const terminal = element.closest('[data-terminal-id]');
