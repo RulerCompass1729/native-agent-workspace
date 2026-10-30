@@ -4,6 +4,21 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['claudePromptIdentity', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+test('each session reports its owning backend version even when another backend is active', async () => {
+  const { old, next, c } = fixture();
+  next.real.runtimeVersion = '0.1.0-alpha.128';
+  for (const value of ['0.1.0-alpha.114', undefined, 'development']) {
+    old.real.runtimeVersion = value;
+    // A stored record's stale value must not replace the connected service's report.
+    old.real.sessions.forEach(s => { s.runtimeVersion = '0.1.0-alpha.1'; });
+    await c.refresh(); const snapshot = c.snapshot();
+    assert.ok(snapshot.sessions.filter(s => old.real.sessions.some(o => o.id === s.id)).every(s => s.runtimeVersion === value));
+    assert.ok(snapshot.sessions.filter(s => next.real.sessions.some(o => o.id === s.id)).every(s => s.runtimeVersion === next.real.runtimeVersion));
+    assert.equal(snapshot.services.find(s => !s.active).version, value);
+    assert.equal(snapshot.services.find(s => s.active).version, next.real.runtimeVersion);
+  }
+  assert.equal([...old.calls, ...next.calls].some(([method]) => method !== 'initial'), false); c.close();
+});
 test('new-directory creation checks the active backend, never a retained capability', async () => {
   const { old, next, c } = fixture();
   old.real.capabilities.push('newSessionDirectory');
