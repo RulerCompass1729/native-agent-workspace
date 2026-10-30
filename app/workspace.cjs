@@ -690,17 +690,19 @@ class Workspace extends EventEmitter {
       s.connectionRevision === connection && !['ended', 'recoverable', 'error', 'disconnected', 'approval'].includes(s.state) && !s.approval && runtime.turnId === expectedTurnId &&
       (!shared || (s.roomId === 'shared' && s.memberRevision === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed));
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
-    runtime.pendingSteer = tag;
     const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId, time: Date.now() };
-    if (shared) {
-      const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, text, status: 'awaiting-native', inputMode: 'steer', time: Date.now(), deliveryTracked: true,
-        ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
-      this.room.messages.push(source); this.forwards.set(tag, { member, control, replyTo });
-      this.sharedReplies.authorize(s, runtime, tag, source);
-    }
-    s.messages.push(message); this.versions.dispatches++; this.changed();
+    let accepted = false;
     try {
+      runtime.pendingSteer = tag;
+      if (shared) {
+        const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, text, status: 'awaiting-native', inputMode: 'steer', time: Date.now(), deliveryTracked: true,
+          ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
+        this.room.messages.push(source); this.forwards.set(tag, { member, control, replyTo });
+        this.sharedReplies.authorize(s, runtime, tag, source);
+      }
+      s.messages.push(message); this.versions.dispatches++; this.changed();
       await runtime.steer(text, tag, expectedTurnId, valid, Boolean(shared));
+      accepted = true;
       message.status = 'submitted'; this.deliveryStatus(tag, 'submitted');
       if (!shared && s.controlRevision === control && this.draftRevisions.get(id) === draftRevision && draft?.trim() === text) this.drafts.set(id, '');
       return tag;
@@ -713,7 +715,20 @@ class Workspace extends EventEmitter {
         if (source?.status === 'awaiting-native') source.status = 'unconfirmed';
       }
       throw error;
-    } finally { if (runtime.pendingSteer === tag) runtime.pendingSteer = null; this.changed(); }
+    } finally {
+      if (runtime.pendingSteer === tag) {
+        runtime.pendingSteer = null;
+        // Drain a completion received before the steer ACK only after its draft
+        // and pending marker settle. Uncertain input or a newer human boundary
+        // must still cancel recovery, including edits subsequently cleared.
+        const unchanged = accepted && this.runtimes.get(id) === runtime && s.owner === owner &&
+          s.nativeId === nativeId && s.controlRevision === control && s.memberRevision === member &&
+          s.connectionRevision === connection && this.draftRevisions.get(id) === draftRevision;
+        runtime.finishTurn(expectedTurnId);
+        if (!unchanged) this.cancelCapacity(id);
+      }
+      this.changed();
+    }
   }
   async terminal(id, owner) {
     this.claim(id, owner, 'terminal');
