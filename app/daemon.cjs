@@ -8,6 +8,7 @@ const { Workspace } = require('./workspace.cjs');
 const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED } = require('./peer-handoffs.cjs');
 const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./service-transport.cjs');
 const { roomId: validRoomId, isMember, membershipRevision } = require('./collaboration-spaces.cjs');
+const gitWorktree = require('./git-worktree.cjs');
 
 async function main() {
   const dataDir = process.argv[2];
@@ -47,7 +48,11 @@ async function main() {
   const dispatch = async (owner, method, args, client, roomId = 'shared', scoped = false) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, CAPABILITY, DIRECTED, 'collaborationSpacesV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'collaborationSpacesV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'mergeSnapshot': {
+        if (roomId !== 'shared' || args.length !== 1) throw Error('无效快照导入请求。');
+        return workspace.mergeSnapshot(args[0]);
+      }
       case 'spaceAction': {
         const [space, action, values, expected] = args, bounds = { join: 3, forward: 4, queueShared: 4, steerShared: 5, run: 7, pause: 0, clearSharedHistory: 0 };
         if (roomId !== 'shared' || !validRoomId(space) || !Object.hasOwn(bounds, action) || !Array.isArray(values) || values.length > bounds[action]) throw Error('无效协作空间操作。');
@@ -78,7 +83,8 @@ async function main() {
       case 'nativeHistory': return workspace.nativeHistory.list(args[0]);
       case 'importHistory': return workspace.importHistory(args[0], owner, args[1]);
       case 'observe': return workspace.observe(args[0]);
-      case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view, { fork: args[0].fork, skipPermissions: args[0].skipPermissions, newDirectory: args[0].newDirectory });
+      case 'gitWorktreePreview': return gitWorktree.preview(args[0], args[1], args[2]);
+      case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view, { fork: args[0].fork, skipPermissions: args[0].skipPermissions, newDirectory: args[0].newDirectory, gitWorktree: args[0].gitWorktree });
       case 'join': {
         if (typeof args[1] !== 'boolean') throw new Error('无效成员操作。');
         const s = workspace.get(args[0]), proof = args[2];

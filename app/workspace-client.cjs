@@ -151,8 +151,13 @@ class WorkspaceClient extends EventEmitter {
       if (state.room.run) runs.push(state.room.run);
       for (const room of backendRooms(state)) if (room?.id && room.id !== 'shared') {
         if (!spaces.roomId(room.id) || !state.capabilities?.includes('collaborationSpacesV1')) throw Error('空间后台能力或记录归属未能核对。');
-        if (!additional.has(room.id)) additional.set(room.id, { id: room.id, revision: 0, messages: new Map(), runs: [] });
+        if (!additional.has(room.id)) additional.set(room.id, { id: room.id, revision: 0, messages: new Map(), runs: [], snapshotBatches: [] });
         const combined = additional.get(room.id); combined.revision += room.revision || 0;
+        if (room.snapshotBatches !== undefined && !Array.isArray(room.snapshotBatches)) throw Error('合并快照归属未能核对。');
+        for (const marker of room.snapshotBatches || []) {
+          if (combined.snapshotBatches.some(value => value.operationId === marker.operationId)) throw Error('合并快照由多个后台声明拥有；没有派发。');
+          combined.snapshotBatches.push({ ...marker });
+        }
         for (const m of room.messages || []) { if (combined.messages.has(m.id)) throw Error('空间记录归属冲突；原记录已保留。'); combined.messages.set(m.id, m); }
         if (room.run) combined.runs.push(room.run);
       }
@@ -173,7 +178,11 @@ class WorkspaceClient extends EventEmitter {
     const sum = key => this.entries.every(e => Number.isSafeInteger(e.state.diagnostics?.[key])) ? this.entries.reduce((n, e) => n + e.state.diagnostics[key], 0) : null;
     const sortedRun = runs => runs.sort((a, b) => Boolean(b.pausePending || b.pauseUnconfirmed) - Boolean(a.pausePending || a.pauseUnconfirmed) || (b.status === 'running') - (a.status === 'running') || (b.startedAt || 0) - (a.startedAt || 0))[0] || null;
     const rooms = [{ ...this.active.state.room, id: 'shared', revision: this.entries.reduce((n, e) => n + (e.state.room.revision || 0), 0), run: sortedRun(runs), messages: mergePeerMessages([...messages.values()]).sort((a, b) => (a.time || 0) - (b.time || 0)) },
-      ...[...additional.values()].map(r => ({ id: r.id, revision: r.revision, run: sortedRun(r.runs), messages: mergePeerMessages([...r.messages.values()]).sort((a, b) => (a.time || 0) - (b.time || 0)) }))];
+      ...[...additional.values()].map(r => ({ id: r.id, revision: r.revision, run: sortedRun(r.runs), snapshotBatches: r.snapshotBatches,
+        messages: mergePeerMessages([...r.messages.values()]).sort((a, b) =>
+          Boolean(b.snapshotBatch) - Boolean(a.snapshotBatch) || (a.snapshotBatch && b.snapshotBatch
+            ? r.snapshotBatches.findIndex(marker => marker.operationId === a.snapshotBatch) - r.snapshotBatches.findIndex(marker => marker.operationId === b.snapshotBatch) || a.snapshotOrder - b.snapshotOrder
+            : (a.time || 0) - (b.time || 0))) }))];
     return { ...this.active.state, wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
       rooms, room: rooms.find(r => r.id === roomId) || { id: roomId, revision: 0, run: null, messages: [] },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
@@ -344,6 +353,24 @@ class WorkspaceClient extends EventEmitter {
   async callScoped(roomId, method, args, scoped = false) {
     if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
     this.authorizeOperation?.(method, args, roomId);
+    if (method === 'gitWorktreePreview') {
+      const entry = this.active, guard = this.operationGuard(entry);
+      guard(); await this.refresh(); guard();
+      if (!entry.state.capabilities?.includes('gitWorktreeV1')) throw Error('当前后台不支持 Git 工作副本，请重新连接新版后台；未使用原目录启动。');
+      const plan = await entry.client.call(method, ...args); guard(); return plan;
+    }
+    if (method === 'mergeSnapshot') {
+      if (roomId !== 'shared' || args.length !== 1) throw Error('无效合并快照请求。');
+      const batch = require('./space-merge.cjs').validateBatch(args[0]);
+      const owners = this.entries.filter(entry => backendRooms(entry.state).some(room => room?.snapshotBatches?.some(marker => marker.operationId === batch.operationId)));
+      if (owners.length > 1) throw Error('合并快照归属冲突；没有重放。');
+      const target = owners[0] || this.active;
+      if (!target.state.capabilities?.includes('spaceMergeV1') || batch.memberIds.some(id => !this.route(id).state.capabilities?.includes('collaborationSpacesV1'))) throw Error('目标后台或成员尚不支持多个空间的合并；原空间与草稿保留。');
+      const guards = this.entries.map(entry => this.operationGuard(entry)); guards.forEach(check => check());
+      const result = await target.client.call('mergeSnapshot', batch);
+      guards.forEach(check => check()); await this.refresh(); guards.forEach(check => check());
+      return result;
+    }
     const spaceRevision = this.control.spaceRevisions.get(roomId) || 0;
     if (roomId !== 'shared') {
       const targets = ['pause', 'clearSharedHistory'].includes(method)
@@ -594,6 +621,7 @@ class WorkspaceClient extends EventEmitter {
         const state = await this.refresh(roomId); assertNativeCreation(state);
         guard();
         if (args[0]?.newDirectory != null && !state.capabilities?.includes('newSessionDirectory')) throw new Error('当前后台尚不支持自动新建目录，请重新打开应用连接新版后台。');
+        if (args[0]?.gitWorktree != null && !state.capabilities?.includes('gitWorktreeV1')) throw new Error('当前后台不支持 Git 工作副本，未使用原目录启动。');
         const id = await this.active.client.call(method, ...args); await this.refresh(roomId); return id;
       });
       creationQueue = operation.catch(() => {}); return operation;

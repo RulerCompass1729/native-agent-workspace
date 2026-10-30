@@ -597,12 +597,20 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     name ||= m.role === 'user' ? '你' : session?.provider === 'claude' ? 'Claude' : 'Codex';
     if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
     const messageTime = readingMessageClock(m);
-    const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped]);
+    const snapshotSource = room && m.snapshotSource && state.room.merge?.sources.find(source => source.id === m.snapshotSource.roomId);
+    const snapshotName = snapshotSource ? mergeSourceLabel(snapshotSource, state.room.merge.sources) : '';
+    const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped, snapshotName]);
     if (entry.headingKey !== headingKey) {
       const authorId = room && (m.sessionId || m.recipientId);
       const author = authorId ? button(name, () => { $('room-filter').value = authorId; renderTimeline(); attempt(persistView); }, 'message-author') : node('strong', name);
       if (authorId) { author.title = `查看 ${name} 的共享轨迹`; author.setAttribute('aria-label', `查看 ${name} 的共享轨迹`); }
       entry.heading.replaceChildren(author); entry.headingKey = headingKey;
+      if (snapshotSource) {
+        const source = button(`来自 ${snapshotName} · 快照`, () => {
+          openSearch('all'); return openSearchResult({ kind: 'shared', roomId: m.snapshotSource.roomId, messageId: m.snapshotSource.messageId });
+        }, 'snapshot-source');
+        source.setAttribute('aria-label', `查看原空间「${snapshotName}」中的来源记录`); entry.heading.append(source);
+      }
       if (nativeTitle) entry.heading.append(node('span', nativeTitle));
       if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
       if (m.volatile && !entry.disclosure) entry.heading.append(node('span', (m.nativeMessageId || m.id || '').startsWith(`native:${m.nativeId}:tool:`) ? '工具记录' : '本次运行记录'));
@@ -656,15 +664,15 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       entry.delivery.hidden = m.role === 'system';
       const deliveries = (m.deliveries || []).map(d => {
         const recipient = state.sessions.find(s => s.id === d.recipientId);
-        return { ...d, label: recipient ? participantLabel(recipient, state.sessions) : historicalParticipantLabel(d.recipientName, d.recipientId) };
+        return { ...d, label: m.snapshotBatch ? historicalParticipantLabel(d.recipientName, d.recipientId) : recipient ? participantLabel(recipient, state.sessions) : historicalParticipantLabel(d.recipientName, d.recipientId) };
       });
-      const deliveryKey = JSON.stringify([m.deliveryTracked, deliveries]);
+      const deliveryKey = JSON.stringify([m.deliveryTracked, deliveries, Boolean(m.snapshotBatch)]);
       if (entry.deliveryKey !== deliveryKey) {
         entry.deliveryKey = deliveryKey;
         const status = d => ({ submitted: '原生已接收', 'awaiting-native': m.inputMode === 'queue' ? '排队中，等空闲后发送' : '等待原生确认', unconfirmed: '接收结果未确认', 'not-sent': '没有发出' }[d.status] || '接收结果未记录');
         entry.deliverySummary.textContent = deliveries.length
-          ? `发送详情 · ${deliveries.map(d => `${d.label}：${status(d)}`).join('；')}`
-          : m.deliveryTracked ? '本条未由工作区转发' : '旧记录 · 发送详情未记录';
+          ? `${m.snapshotBatch ? '来源接收记录' : '发送详情'} · ${deliveries.map(d => `${d.label}：${status(d)}`).join('；')}`
+          : m.snapshotBatch ? '来源记录 · 合并未发送' : m.deliveryTracked ? '本条未由工作区转发' : '旧记录 · 发送详情未记录';
         const retainedDeliveries = new Set();
         for (const d of deliveries) {
           let row = entry.deliveryRows.get(d.id);
@@ -674,12 +682,12 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
             entry.deliveryRows.set(d.id, row);
           }
           retainedDeliveries.add(d.id);
-          const label = `发给 ${d.label} · ${status(d)}`;
+          const label = `${m.snapshotBatch ? '当时发给' : '发给'} ${d.label} · ${status(d)}`;
           if (row.label.textContent !== label) row.label.textContent = label;
           if (row.payload.textContent !== d.text) row.payload.textContent = d.text;
         }
         for (const [id, row] of entry.deliveryRows) if (!retainedDeliveries.has(id)) { row.item.remove(); entry.deliveryRows.delete(id); }
-        const note = deliveries.length
+        const note = m.snapshotBatch ? '这是来源空间的记录；合并没有新增发送或执行授权。' : deliveries.length
           ? '以上是本次交给原生 agent 的正文，不是其完整模型上下文；原生历史、系统指令和 hooks 仍由原生管理。列入共享记录不会自动发送给其他成员。'
           : m.deliveryTracked ? '这条消息保留在共享记录中，工作区没有将本条转发给其他 agent。'
           : '这条旧记录没有完整的发送凭据，不能据此判断哪些 agent 已收到。';

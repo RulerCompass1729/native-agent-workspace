@@ -55,7 +55,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     if (alive) throw new Error('已有运行服务仍存在但无法连接；为保住会话，不启动替代进程。');
     fs.rmSync(lock); // Dead PID only; never kill or replace a live owner.
   }
-  const names = ['service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'terminal-keyboard.cjs', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'collaboration-spaces.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'native-blocks.cjs', 'native-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
+  const names = ['service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'terminal-keyboard.cjs', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'session-labels.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'native-blocks.cjs', 'native-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
   const localLocations = path.join(dataDir, 'runtime-locations.json');
   let runtimeConfig = process.env.NAW_RUNTIME_CONFIG;
   // Keep Settings reachable when the root backend shares the global file.

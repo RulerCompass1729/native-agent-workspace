@@ -196,6 +196,9 @@ async function openWindow(saved) {
   finally { clearTimeout(context.readyTimer); }
   return win;
 }
+function hasSavedSpaceDraft(records, targetId) {
+  return Boolean(targetId && records.some(view => view.roomViews?.[targetId]?.sharedDraft || view.spaceId === targetId && view.sharedDraft));
+}
 function register(name, handler) {
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
     const context = windows.get(event.sender.id);
@@ -251,6 +254,20 @@ async function boot() {
   register('archiveRoom', async c => { try { await roomState.archiveRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('restoreRoom', async c => { try { await roomState.restoreRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('spaceCreate', async (_c, name) => { const id = roomState.create(name); await broadcastRoom(); return id; });
+  register('spaceMerge', async (c, action, value) => {
+    if (!value || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw Error('无效合并请求。');
+    if (action === 'preview') return roomState.mergePreview(c.client, value);
+    if (!validRoomId(value.operationId) || value.operationId === 'shared' || Object.keys(value).some(key => !['operationId', 'binding'].includes(key))) throw Error('合并记录无法核对。');
+    if (action === 'discard') { roomState.discardMergePreview(value.operationId); return; }
+    if (action === 'status') return roomState.mergeStatus(c.client, value.operationId);
+    if (!['commit', 'recover', 'undo'].includes(action) || !/^[a-f0-9]{64}$/u.test(value.binding)) throw Error('无效合并确认。');
+    try {
+      const targetId = roomState.mergeRecord(value.operationId)?.id;
+      const keepDraft = hasSavedSpaceDraft(views, targetId);
+      return action === 'undo' ? await roomState.mergeUndo(c.client, value.operationId, value.binding, keepDraft)
+        : await roomState.mergeCommit(c.client, value.operationId, value.binding, action === 'recover');
+    } finally { await broadcastRoom(); }
+  });
   register('spaceAction', async (c, roomId, action, args = []) => {
     if (!validRoomId(roomId) || !Array.isArray(args) || args.length > 8) throw Error('无效协作空间操作。');
     roomState.metadata(roomId); // Never reinterpret a missing space as shared.
@@ -267,10 +284,12 @@ async function boot() {
     } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
     else if (['forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory'].includes(action)) {
       if (action === 'clearSharedHistory') {
+        roomState.writable(roomId);
         const value = roomState.metadata(roomId), revision = value.revision;
         const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: `清除「${value.name}」的共享记录？`, detail: '仅清除这个空间的共享消息、成员时间线和笔记。文件引用和原生会话保留，已经收到的内容无法撤回。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
         if (answer.response !== 1) return false;
         if (roomState.metadata(roomId).revision !== revision) throw Error('空间资料已变化，请重新核对后清除。');
+        roomState.writable(roomId);
         await c.client.callSpace(roomId, action, []);
         try { roomState.clear(revision, roomId); } catch (error) { throw Error(`共享消息已清除，时间线和笔记已保留。${error.message}`); }
         await broadcastRoom(); return true;
@@ -305,7 +324,23 @@ async function boot() {
       roomState.assertAvailable(null, true, roomId); roomState.addFiles(result.filePaths, roomId); await broadcastRoom(); return true;
     } finally { c.fileChoosing = false; }
   });
-  register('create', async (c, ...args) => { assertNativeCreation(await c.client.call('initial')); return c.client.call('create', ...args); });
+  register('gitWorktreePreview', async (c, selected, nonce, relative) => {
+    if (selected !== c.worktreeSource) throw Error('请先选择要复制的仓库目录。');
+    const revision = c.worktreePreviewRevision = (c.worktreePreviewRevision || 0) + 1;
+    c.worktreePlan = null;
+    const plan = await c.client.call('gitWorktreePreview', selected, nonce, relative);
+    if (c.win.isDestroyed() || c.worktreeSource !== selected || c.worktreePreviewRevision !== revision) throw Error('仓库预览已变化，未准备工作副本。');
+    c.worktreePlan = plan; return plan;
+  });
+  register('create', async (c, ...args) => {
+    assertNativeCreation(await c.client.call('initial'));
+    if (args[0]?.gitWorktree != null) {
+      const requested = args[0].gitWorktree, plan = c.worktreePlan;
+      if (!plan || Object.keys(requested).length !== Object.keys(plan).length || Object.keys(plan).some(key => requested[key] !== plan[key])) throw Error('Git 工作副本预览已失效，请重新选择；未启动会话。');
+      c.worktreePlan = null;
+    }
+    return c.client.call('create', ...args);
+  });
   register('nativeHistory', (c, options) => c.client.call('nativeHistory', options));
   register('importHistory', (c, nativeId, options) => c.client.call('importHistory', nativeId, options));
   register('rename', async (c, id, name) => {
@@ -527,7 +562,13 @@ async function boot() {
       await saveCopy(preview, result.filePath); return true;
     } finally { c.fileSaving = false; }
   });
-  register('chooseFolder', async c => { const result = await dialog.showOpenDialog(c.win, { title: '选择这个会话可以工作的目录', properties: ['openDirectory', 'createDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
+  register('chooseFolder', async c => {
+    const result = await dialog.showOpenDialog(c.win, { title: '选择这个会话可以工作的目录', properties: ['openDirectory', 'createDirectory'] });
+    if (result.canceled || c.win.isDestroyed()) return null;
+    c.worktreeSource = result.filePaths[0]; c.worktreePlan = null;
+    c.worktreePreviewRevision = (c.worktreePreviewRevision || 0) + 1;
+    return result.filePaths[0];
+  });
   register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw new Error('找不到会话。'); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });
   register('copy', (_c, text) => { if (typeof text !== 'string' || text.length > 100000) throw new Error('复制内容无效。'); return clipboard.writeText(text); });
   // Read only when the person presses Paste; never watch or persist clipboard content.

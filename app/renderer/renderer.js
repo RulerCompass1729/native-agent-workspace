@@ -9,6 +9,7 @@ const switchedAway = record => record.state === 'stopping' && record.nativeConte
 const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let newDirectory = false, creatingSession = false;
+let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSurface = 'overview', roomOverview;
@@ -681,9 +682,123 @@ function openSpaceCreate() {
   $('space-create-name').value = ''; $('space-create-error').hidden = true; $('confirm-space-create').disabled = false;
   openTransientDialog('space-create-dialog'); $('space-create-name').focus();
 }
+let mergeDialog;
+function mergeSourceLabel(room, choices) {
+  return choices.filter(value => value.name === room.name).length > 1 ? `${room.name} · ${room.id.slice(0, 8)}` : room.name;
+}
+function mergeCheckbox(text, checked, change) {
+  const label = node('label', undefined, 'merge-option'), input = node('input'); input.type = 'checkbox'; input.checked = checked;
+  input.onchange = () => change(input.checked); label.append(input, node('span', text)); return { label, input };
+}
+function mergeError(message) { $('space-merge-error').textContent = message || ''; $('space-merge-error').hidden = !message; }
+function mergeButtons(preview, record = false) {
+  $('space-merge-options').hidden = preview; $('space-merge-preview').hidden = !preview;
+  $('preview-space-merge').hidden = preview; $('back-space-merge').hidden = !preview || record;
+  $('confirm-space-merge').hidden = !preview || record; $('open-space-merge-target').hidden = !record;
+  $('undo-space-merge').hidden = !record; $('recover-space-merge').hidden = !record;
+}
+function renderMergeChoices() {
+  const draft = mergeDialog; if (!draft || draft.record) return;
+  const chosen = draft.rooms.filter(room => draft.sourceInputs.get(room.id)?.checked);
+  $('space-merge-members').replaceChildren(); $('space-merge-selection').replaceChildren();
+  for (const session of state.sessions.filter(session => !session.archived && chosen.some(room => inSpace(session, room.id)))) {
+    const available = Boolean(session.nativeId) && (!Array.isArray(session.serviceCapabilities) || session.serviceCapabilities.includes('collaborationSpacesV1'));
+    if (!draft.memberChoices.has(session.id)) draft.memberChoices.set(session.id, available);
+    const field = mergeCheckbox(participantLabel(session, state.sessions) + (!available ? ' · 当前后台不可加入新空间' : ''), available && draft.memberChoices.get(session.id), checked => draft.memberChoices.set(session.id, checked));
+    field.input.disabled = !available; field.input.dataset.mergeMember = session.id; $('space-merge-members').append(field.label);
+  }
+  for (const room of chosen) {
+    const eligible = room.messages.filter(window.nativeWorkspaceSpaces.completedSharedRecord);
+    if (!draft.selections.has(room.id)) draft.selections.set(room.id, { messages: new Set(eligible.map(message => message.id)), files: new Set((room.files || []).map(file => file.id)), events: new Set((room.events || []).map(event => event.id)), notes: true });
+    const choice = draft.selections.get(room.id), details = node('details'), summary = node('summary', `${mergeSourceLabel(room, draft.rooms)} · ${eligible.length} 条完整记录`), body = node('div');
+    details.append(summary, body); let built = false;
+    details.ontoggle = () => {
+      if (!details.open || built) return; built = true;
+      if (room.notes) body.append(mergeCheckbox('原空间笔记', choice.notes, checked => choice.notes = checked).label);
+      for (const [title, records, selectedIds, text] of [
+        ['共享记录', eligible, choice.messages, message => `${message.name || message.role} · ${message.text.slice(0, 140) || '原生状态记录'}`],
+        ['本机文件引用', room.files || [], choice.files, file => file.name],
+        ['空间历史事件', room.events || [], choice.events, event => event.text.slice(0, 140)],
+      ]) {
+        if (!records.length) continue;
+        const section = node('fieldset'), legend = node('legend', title), inputs = [];
+        section.append(legend, mergeCheckbox('全部选择', records.every(record => selectedIds.has(record.id)), checked => {
+          for (const record of records) checked ? selectedIds.add(record.id) : selectedIds.delete(record.id);
+          for (const input of inputs) input.checked = checked;
+        }).label);
+        for (const record of records) {
+          const field = mergeCheckbox(text(record), selectedIds.has(record.id), checked => checked ? selectedIds.add(record.id) : selectedIds.delete(record.id));
+          field.input.setAttribute('aria-label', `导入 ${room.name} ${title} ${record.id}`); inputs.push(field.input); section.append(field.label);
+          if (record.text) { const full = node('details'), label = node('summary', '原文'); full.append(label, node('pre', record.text)); section.append(full); }
+        }
+        body.append(section);
+      }
+      const omitted = room.messages.length - eligible.length;
+      if (omitted) body.append(node('p', `${omitted} 条未完成或未确认的记录留在原空间。`, 'quiet'));
+    };
+    $('space-merge-selection').append(details);
+  }
+  $('preview-space-merge').disabled = chosen.length < 2 || disconnected;
+}
+function openSpaceMerge(origin = spaceId) {
+  if (!state.capabilities?.includes('spaceMergeV1')) return toast('当前后台尚不支持合并快照；原空间与草稿保留。');
+  const rooms = allSpaces().filter(room => !room.archived && !room.unavailable);
+  if (rooms.length < 2) return toast('请先准备至少两个协作空间。');
+  const ticket = openTransientDialog('space-merge-dialog');
+  mergeDialog = { ticket, rooms: structuredClone(rooms), sourceInputs: new Map(), memberChoices: new Map(), selections: new Map(), batch: null, record: null };
+  $('space-merge-title').textContent = '合并协作空间'; $('space-merge-name').value = '合并空间'; $('space-merge-disposition').value = 'keep';
+  $('space-merge-sources').replaceChildren(); $('space-merge-preview').replaceChildren(); mergeError(''); mergeButtons(false);
+  for (const room of rooms) {
+    const label = mergeSourceLabel(room, rooms), field = mergeCheckbox(label, room.id === origin, renderMergeChoices); field.input.value = room.id;
+    field.input.setAttribute('aria-label', `来源空间：${label}`); mergeDialog.sourceInputs.set(room.id, field.input); $('space-merge-sources').append(field.label);
+  }
+  renderMergeChoices(); $('space-merge-name').focus();
+}
+function mergeSpec() {
+  const draft = mergeDialog, sourceIds = [...draft.sourceInputs].filter(([, input]) => input.checked).map(([id]) => id);
+  return { sourceIds, name: $('space-merge-name').value, disposition: $('space-merge-disposition').value,
+    memberIds: [...$('space-merge-members').querySelectorAll('input[data-merge-member]:checked')].map(input => input.dataset.mergeMember),
+    selections: sourceIds.map(roomId => { const choice = draft.selections.get(roomId); return { roomId, messageIds: [...choice.messages], fileIds: [...choice.files], eventIds: [...choice.events], includeNotes: choice.notes }; }) };
+}
+function renderMergeBatch(batch, record) {
+  const element = $('space-merge-preview'); element.replaceChildren(node('h3', batch.name));
+  element.append(node('p', `${batch.memberIds.length} 个成员 · ${batch.blocks.reduce((n, block) => n + block.entries.length, 0)} 条完整记录 · ${(batch.bytes / 1024).toFixed(1)} KB`));
+  element.append(node('p', batch.disposition === 'archive' ? '确认后归档原空间，暂停它们的后续交接；已开始的工作可能继续。原记录可恢复。' : '原空间继续独立使用；后续新内容不会自动同步到新空间。'));
+  for (const block of batch.blocks) {
+    const section = node('details'), summary = node('summary', `${mergeSourceLabel({ id: block.roomId, name: block.name }, batch.sources)} · ${block.entries.length} 条记录 · ${block.files.length} 个文件引用`); section.append(summary);
+    if (block.notes) { section.append(node('h4', '原笔记'), node('pre', block.notes)); }
+    for (const entry of block.entries) { const original = node('details'); original.append(node('summary', `${entry.payload.name || entry.payload.role} · ${entry.payload.text.slice(0, 100) || '原生状态记录'}`), node('pre', entry.payload.text)); section.append(original); }
+    for (const file of block.files) section.append(node('p', file.name));
+    if (block.omitted.length) section.append(node('p', `${block.omitted.length} 条未完成或未确认记录留在来源中。`, 'quiet'));
+    if (block.pending) section.append(node('p', '来源仍有工作；晚到输出不会补入这个快照。', 'quiet'));
+    element.append(section);
+  }
+  $('confirm-space-merge').disabled = Boolean(batch.conflicts.length);
+  if (batch.conflicts.length) element.append(node('p', '同一原生会话存在多个归属记录，请先核对；没有合并或派发。', 'warning'));
+  if (record) {
+    const stage = { preparing: '目标保存待核对', joining: '成员待核对', archiving: '来源归档中', ready: '新空间已保存', partial: '有步骤待核对', failed: '合并未完成', undoing: '正在撤销组织关系', undone: '已撤销合并组织，来源与后来工作保留' }[record.stage];
+    element.prepend(node('p', stage || record.stage));
+    for (const source of record.sources) element.append(node('p', `${batch.sources.find(value => value.id === source.id)?.name || '来源'}：${batch.disposition === 'keep' ? '保留使用' : ({ done: '已归档', restored: '已恢复', pending: '未归档', failed: '待核对', changed: '后来有变化，保留现状' }[source.status] || source.status)}${source.error ? ` · ${source.error}` : ''}`));
+    $('recover-space-merge').hidden = !['failed', 'partial', 'preparing', 'joining'].includes(record.stage) || record.undoStarted;
+    $('undo-space-merge').hidden = record.stage === 'undone';
+    mergeError(record.warning || record.failures.join('\n'));
+  }
+}
+async function openMergeRecord(id) {
+  const room = spaceRecord(id); if (!room?.merge) return;
+  const ticket = openTransientDialog('space-merge-dialog'); mergeDialog = { ticket, record: null, batch: null, targetId: id };
+  $('space-merge-title').textContent = '合并详情'; mergeButtons(true, true); mergeError(''); $('space-merge-preview').textContent = '正在核对保存记录…';
+  for (const key of ['open-space-merge-target', 'undo-space-merge', 'recover-space-merge']) $(key).disabled = true;
+  try {
+    const record = await api.spaceMerge('status', { operationId: room.merge.operationId });
+    if (!currentDialogTicket(ticket)) return;
+    mergeDialog.record = record; mergeDialog.batch = record.batch; renderMergeBatch(record.batch, record);
+    for (const key of ['open-space-merge-target', 'undo-space-merge', 'recover-space-merge']) $(key).disabled = false;
+  } catch (error) { if (currentDialogTicket(ticket)) mergeError(error.message); else toast(error.message); }
+}
 function openSpaceRegionMenu(point, anchor = $('new-space')) {
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
-  roomMenu = ui.menu({ items: [{ id: 'create', label: '新建协作空间…' }], getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(), onSelect: () => openSpaceCreate(), onClose: () => { roomMenu = null; if (anchor.isConnected) anchor.focus({ preventScroll: true }); } });
+  roomMenu = ui.menu({ items: [{ id: 'create', label: '新建协作空间…' }, { id: 'merge', label: '合并协作空间…', disabled: allSpaces().filter(room => !room.archived).length < 2 }], getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(), onSelect: action => action === 'merge' ? openSpaceMerge() : openSpaceCreate(), onClose: () => { roomMenu = null; if (anchor.isConnected) anchor.focus({ preventScroll: true }); } });
 }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession) {
@@ -917,10 +1032,45 @@ function openCreate(provider = 'claude') {
   resetCreateDirectory(); $('create-error').textContent = ''; openTransientDialog('create-dialog'); createReadiness();
 }
 function resetCreateDirectory() {
+  invalidateGitPreview(true); $('git-worktree').checked = false; $('git-worktree-relative').value = '';
   newDirectory = state.capabilities?.includes('newSessionDirectory') && typeof state.newWorkspaceRoot === 'string';
   folder = newDirectory ? `${state.newWorkspaceRoot}/${crypto.randomUUID()}` : state.defaultWorkspace;
   $('chosen-folder').textContent = folder;
 }
+function invalidateGitPreview(newNonce = false) {
+  clearTimeout(gitPreviewTimer); gitPreviewTimer = null; gitPreviewRevision++;
+  gitWorktreePlan = null; gitPreviewLoading = false;
+  if (newNonce) gitWorktreeNonce = crypto.randomUUID();
+}
+async function refreshGitPreview() {
+  invalidateGitPreview();
+  if (!$('git-worktree').checked || newDirectory || !$('create-dialog').open) { createReadiness(); return; }
+  const ticket = dialogTickets.get($('create-dialog')), revision = gitPreviewRevision;
+  const source = folder, relative = $('git-worktree-relative').value, nonce = gitWorktreeNonce;
+  const current = () => currentDialogTicket(ticket) && revision === gitPreviewRevision && folder === source && $('git-worktree').checked;
+  gitPreviewLoading = true; $('git-worktree-preview').textContent = '正在读取已提交快照；尚未创建目录或分支。'; createReadiness();
+  try {
+    const plan = await api.gitWorktreePreview(source, nonce, relative);
+    if (!current()) return;
+    gitWorktreePlan = plan;
+    $('git-worktree-preview').textContent = `来源：${plan.repository}\n提交：${plan.revision.slice(0, 12)} · 新分支：${plan.branch}\n工作目录：${plan.cwd}`;
+    $('chosen-folder').textContent = plan.cwd;
+  } catch (error) {
+    if (current()) { gitWorktreePlan = null; $('git-worktree-preview').textContent = error.message; }
+  } finally { if (current()) { gitPreviewLoading = false; createReadiness(); } }
+}
+function scheduleGitPreview() {
+  invalidateGitPreview();
+  $('chosen-folder').textContent = folder;
+  if ($('git-worktree').checked) {
+    $('git-worktree-preview').textContent = '等你填写后读取副本内目录…';
+    gitPreviewTimer = setTimeout(() => { gitPreviewTimer = null; refreshGitPreview(); }, 250);
+  }
+  createReadiness();
+}
+$('create-dialog').addEventListener('close', event => {
+  if (!event.currentTarget.open) invalidateGitPreview();
+});
 let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
 function renderNativeHistory() {
   if (!$('native-history-dialog').open) return;
@@ -1064,12 +1214,14 @@ function openRoomMenu(point, anchor, id = spaceId) {
   roomMenu?.(); sessionMenu?.close(); anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const key = roomMenuKey(id);
   roomMenu = ui.menu({
-    items: [{ id: 'create', label: '新建协作空间…' }, { id: 'rename', label: '重命名…' }, { id: 'notes', label: '共享笔记' }, { id: 'files', label: '空间文件…' }, { id: 'usage', label: '用量' }, { id: 'about', label: '协作说明' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: state.wakePolicy.enabled ? '关闭所有 agent 自动消息' : '允许 agent 自动消息' }] : []), { id: 'archive', label: '归档工作区' }],
+    items: [{ id: 'create', label: '新建协作空间…' }, { id: 'merge', label: '合并协作空间…', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: '合并详情…' }] : []), { id: 'rename', label: '重命名…' }, { id: 'notes', label: '共享笔记' }, { id: 'files', label: '空间文件…' }, { id: 'usage', label: '用量' }, { id: 'about', label: '协作说明' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: state.wakePolicy.enabled ? '关闭所有 agent 自动消息' : '允许 agent 自动消息' }] : []), { id: 'archive', label: '归档工作区' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(),
     onClose: () => { roomMenu = null; anchor.setAttribute('aria-expanded', 'false'); if (key === roomMenuKey(id) && anchor.isConnected && anchor.getClientRects().length && !anchor.disabled) anchor.focus({ preventScroll: true }); },
     onSelect: action => {
       if (key !== roomMenuKey(id)) return;
       if (action === 'create') openSpaceCreate();
+      else if (action === 'merge') openSpaceMerge(id);
+      else if (action === 'merge-record') attempt(() => openMergeRecord(id));
       else if (action === 'wake-global') attempt(() => api.wakePolicy(null, !state.wakePolicy?.enabled));
       else if (action === 'rename') openRename('room', anchor, id);
       else if (action === 'notes') openNotes(id);
@@ -1296,8 +1448,18 @@ function createReadiness() {
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
   if ($('claude-history-id-option').hidden) $('claude-history-id').value = '';
   const takeover = historyProvider === 'claude' && $('claude-history-id').value.trim();
+  const gitSelected = $('git-worktree').checked, gitSupported = state.capabilities?.includes('gitWorktreeV1');
+  $('git-worktree-option').hidden = !gitSupported && !gitSelected;
+  $('git-worktree').disabled = creatingSession || newDirectory || Boolean(takeover) || (!gitSupported && !gitSelected);
+  $('git-worktree-details').hidden = !gitSelected;
+  $('git-worktree-relative').disabled = creatingSession;
+  if (gitSelected && !gitSupported) {
+    invalidateGitPreview();
+    $('chosen-folder').textContent = folder;
+    $('git-worktree-preview').textContent = '后台不支持此工作副本。请重新连接，或明确取消这个选项后使用原目录；不会自动改用原目录。';
+  }
   $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : takeover ? '接管此 Claude 会话' : '从已有 Claude 会话分支…';
-  $('open-native-history').disabled = creatingSession || (historyProvider === 'claude' && newDirectory);
+  $('open-native-history').disabled = creatingSession || gitSelected || (historyProvider === 'claude' && newDirectory);
   if (historyProvider === 'claude' && newDirectory) $('open-native-history').textContent = '选择原目录后分支或接管…';
   $('new-folder').hidden = !state.capabilities?.includes('newSessionDirectory');
   $('new-folder').disabled = $('choose-folder').disabled = creatingSession;
@@ -1308,7 +1470,7 @@ function createReadiness() {
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
   if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
-  const directoryNote = newDirectory ? '创建时自动新建此空目录。' : '使用上方已有目录，多个会话可能共用。';
+  const directoryNote = gitSelected ? '只在副本准备完成后启动一个新的原生会话。' : newDirectory ? '创建时自动新建此空目录。' : '使用上方已有目录，多个会话可能共用。';
   $('create-permission-note').textContent = directoryNote + ($('skip-permissions').checked
     ? '这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
     : '原生可能要求确认文件夹信任；文件和命令权限仍由原生确认。');
@@ -1319,8 +1481,8 @@ function createReadiness() {
   }
   const provider = document.querySelector('input[name="provider"]:checked').value;
   const ready = state.preflight?.python && state.preflight?.[provider];
-  $('confirm-create').disabled = creatingSession || !ready || Boolean(takeover && newDirectory);
-  $('create-readiness').textContent = takeover && newDirectory ? '接管历史会话前，请选择原工作目录。' : ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
+  $('confirm-create').disabled = creatingSession || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
+  $('create-readiness').textContent = takeover && (newDirectory || gitSelected) ? '接管历史会话前，请选择原工作目录并取消 Git 副本。' : ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
 }
 function renderArchives() {
   const records = state.sessions.filter(s => s.archived), archivedRooms = allSpaces().filter(r => r.archived), count = records.length + archivedRooms.length;
@@ -1403,6 +1565,12 @@ function historicalParticipantLabel(name, id) {
   return `${name || '历史成员'}${typeof id === 'string' && id ? ` · ${id.slice(0, 6)}` : ' · 身份未记录'}`;
 }
 function roomMessageLabel(m) {
+  if (m.snapshotBatch) {
+    const id = m.role === 'human' ? m.recipientId : m.sessionId, label = m.name || (m.role === 'human' ? '你' : historicalParticipantLabel('', m.sessionId));
+    const actors = new Set((state.room?.messages || []).filter(row => row.snapshotBatch && row.role === m.role && row.name === m.name)
+      .map(row => row.role === 'human' ? row.recipientId : row.sessionId).filter(Boolean));
+    return id && actors.size > 1 ? `${label} · ${id.slice(0, 8)}` : label;
+  }
   // Run notices describe coordination; streamed native system rows still belong
   // to their exact agent. Reuse the same identity in reading and copied records.
   if (m.role === 'system' && m.runId && !m.sharedStream) return m.name || '协作';
@@ -1413,7 +1581,27 @@ function roomMessageLabel(m) {
   return m.name || (m.role === 'human' ? '你' : '工作区');
 }
 function timeline() {
-  return [...state.room.messages, ...(state.room.events || [])].sort((a, b) => (a.time || 0) - (b.time || 0));
+  const imported = state.room.messages.filter(message => message.snapshotBatch);
+  const current = [...state.room.messages.filter(message => !message.snapshotBatch), ...(state.room.events || [])].sort((a, b) => (a.time || 0) - (b.time || 0));
+  return [...imported, ...current].map(message => message.snapshotReplyTo ? { ...message, replyTo: message.snapshotReplyTo } : message);
+}
+function renderSnapshotMaterials() {
+  const element = $('space-snapshot-materials'), merge = state.room.merge;
+  element.hidden = !merge || roomSurface !== 'records';
+  const signature = JSON.stringify(merge || null); if (element.dataset.signature === signature) return;
+  element.dataset.signature = signature; element.replaceChildren();
+  if (!merge) return;
+  const row = node('div', undefined, 'snapshot-origin');
+  row.append(node('span', merge.stage === 'undone' ? '合并组织已撤销，来源与后来工作保留' : ['ready', 'archiving'].includes(merge.stage) ? '来自所选空间的独立快照' : '合并有步骤待核对'), button('合并详情', () => openMergeRecord(state.room.id), 'small'));
+  element.append(row);
+  for (const source of merge.sources) {
+    const note = merge.notes.find(note => note.roomId === source.id), events = merge.events.find(value => value.roomId === source.id)?.events || [];
+    if (!note && !events.length) continue;
+    const details = node('details'); details.append(node('summary', `${source.name} · 原笔记与空间记录`));
+    if (note) details.append(node('pre', note.text));
+    for (const event of events) details.append(node('p', event.text));
+    element.append(details);
+  }
 }
 function filteredTimeline() {
   const id = $('room-filter').value, query = $('room-search').value.trim().toLocaleLowerCase();
@@ -1428,6 +1616,7 @@ function openThread(id) {
   render(); attempt(persistView); $('shared-input').focus();
 }
 function renderTimeline() {
+  renderSnapshotMaterials();
   roomThreads = window.nativeWorkspaceThreads.threadIndex(timeline());
   $('thread-heading').hidden = !roomThread;
   const root = roomThreads.rows.get(roomThread);
@@ -2140,6 +2329,9 @@ function render() {
         runText = [runText, ...active].filter(Boolean).join(' · ');
         $('run-status').parentElement.hidden = false;
       }
+      if (state.room.merge && !['ready', 'undone'].includes(state.room.merge.stage)) {
+        runText = [runText, '合并有步骤待核对，可从空间菜单查看详情'].filter(Boolean).join(' · '); $('run-status').parentElement.hidden = false;
+      }
       if ($('run-status').textContent !== runText) $('run-status').textContent = runText;
       $('pause-button').hidden = !run && !roomSubmitting;
       renderTimeline();
@@ -2156,11 +2348,12 @@ function render() {
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
       $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : interruptPending(recipient) ? '等待中断确认' : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : roomSteerAvailable(recipient) ? '追加指令 ↑' : '发送 ↑';
       const recipientPending = roomPendingRecipients.has(recipient?.id);
-      const unavailable = roomSubmitting || recipientPending || disconnected || !nativeWorkspaceMentions.body(roomMention, $('shared-input').value).trim();
+      const mergeBlocked = state.room.merge && (!state.room.merge.imported || ['preparing', 'joining', 'failed', 'undoing'].includes(state.room.merge.stage));
+      const unavailable = mergeBlocked || roomSubmitting || recipientPending || disconnected || !nativeWorkspaceMentions.body(roomMention, $('shared-input').value).trim();
       const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
       const ready = s => s && !interruptPending(s) && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
       const manualErrorReady = !interruptPending(recipient) && recipient?.state === 'error' && recipient.failedTurnInputAvailable && !recipient.pendingTag && !recipient.pendingQueue && !recipient.approval;
-      $('forward-button').disabled = nativeRoute ? roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !manualErrorReady && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
+      $('forward-button').disabled = nativeRoute ? mergeBlocked || roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !manualErrorReady && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
       const otherRun = allSpaces().find(r => r.id !== spaceId && r.run?.status === 'running');
       $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed || !safeHandoffs || Boolean(threadUnsupported) || Boolean(otherRun);
       $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : roomMention?.active === false ? '接收者已变化，重新 @ 选择。正文保留，不会发送给旧成员。' : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
@@ -2544,21 +2737,26 @@ $('rename-form').onsubmit = async event => {
   } catch (error) { if (renameTarget === target) { showRenameError(error.message || '名称未能保存，请重试。'); if (mayRestoreFocus()) $('rename-name').focus({ preventScroll: true }); } }
   finally { renaming = false; if (renameTarget === target) renderRename(); }
 };
-$('choose-folder').onclick = () => attempt(async () => { const ticket = dialogTickets.get($('create-dialog')); const value = await api.chooseFolder(); if (value && currentDialogTicket(ticket)) { folder = value; newDirectory = false; $('chosen-folder').textContent = folder; createReadiness(); } });
+$('choose-folder').onclick = () => attempt(async () => { const ticket = dialogTickets.get($('create-dialog')); const value = await api.chooseFolder(); if (value && currentDialogTicket(ticket)) { folder = value; newDirectory = false; invalidateGitPreview(true); $('git-worktree-relative').value = ''; $('chosen-folder').textContent = folder; if ($('git-worktree').checked) await refreshGitPreview(); else createReadiness(); } });
+$('git-worktree').onchange = () => { invalidateGitPreview(true); $('git-worktree-relative').value = ''; $('chosen-folder').textContent = folder; if ($('git-worktree').checked) refreshGitPreview(); else createReadiness(); };
+$('git-worktree-relative').oninput = scheduleGitPreview;
 $('new-folder').onclick = () => { if (!creatingSession) { resetCreateDirectory(); createReadiness(); } };
 $('create-form').onsubmit = event => { event.preventDefault();
   const ticket = dialogTickets.get($('create-dialog')), revision = selectionRevision;
   if (creatingSession || !currentDialogTicket(ticket)) return;
   if (document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim()) { $('open-native-history').click(); return; }
   attempt(async () => {
+  const worktree = $('git-worktree').checked ? gitWorktreePlan : null;
+  if ($('git-worktree').checked && (!worktree || newDirectory || gitPreviewLoading || !state.capabilities?.includes('gitWorktreeV1'))) throw Error('请先完成 Git 副本预览；没有改用原目录启动。');
   creatingSession = true; $('create-error').textContent = ''; createReadiness();
-  const submittedFolder = folder, priorIds = new Set(state.sessions.map(s => s.id));
-  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, ...(newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); updateState(await api.initial()); render(); if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, view); } else toast('此前创建的会话已保留在侧栏。'); }
+  const submittedFolder = worktree?.cwd || folder, priorIds = new Set(state.sessions.map(s => s.id));
+  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); updateState(await api.initial()); render(); if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, view); } else toast('此前创建的会话已保留在侧栏。'); }
   catch (error) {
     try { updateState(await api.initial()); render(); } catch {}
     const created = state.sessions.find(s => s.cwd === submittedFolder && !priorIds.has(s.id));
     const message = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。${error.message}` : error.message;
     if (currentDialogTicket(ticket)) $('create-error').textContent = message; else toast(message);
+    if (worktree && currentDialogTicket(ticket)) { invalidateGitPreview(); $('chosen-folder').textContent = folder; $('git-worktree-preview').textContent = '若已生成副本，其路径和分支会保留。要再创建，请明确重新选择仓库或重新勾选副本；不会自动重试。'; }
     // A failed/uncertain start may already own the displayed path. Preserve
     // that record and any files; a new explicit submit gets a fresh preview.
     if (currentDialogTicket(ticket) && newDirectory) resetCreateDirectory();
@@ -2566,6 +2764,57 @@ $('create-form').onsubmit = event => { event.preventDefault();
   finally { creatingSession = false; createReadiness(); }
 }); };
 $('new-space').onclick = openSpaceCreate;
+$('close-space-merge').onclick = () => $('space-merge-dialog').close();
+$('space-merge-dialog').addEventListener('close', () => {
+  if ($('space-merge-dialog').open) return;
+  const draft = mergeDialog; mergeDialog = null;
+  if (draft?.batch && !draft.record) api.spaceMerge('discard', { operationId: draft.batch.operationId }).catch(() => {});
+});
+$('back-space-merge').onclick = () => {
+  if (!mergeDialog?.batch) return;
+  api.spaceMerge('discard', { operationId: mergeDialog.batch.operationId }).catch(() => {});
+  mergeDialog.batch = null; mergeButtons(false); mergeError('');
+};
+$('preview-space-merge').onclick = () => attempt(async () => {
+  const draft = mergeDialog, ticket = draft?.ticket;
+  if (!currentDialogTicket(ticket) || $('preview-space-merge').disabled) return;
+  $('preview-space-merge').disabled = true; mergeError('');
+  try {
+    const batch = await api.spaceMerge('preview', mergeSpec());
+    if (!currentDialogTicket(ticket)) { api.spaceMerge('discard', { operationId: batch.operationId }).catch(() => {}); return; }
+    draft.batch = batch; mergeButtons(true); renderMergeBatch(batch); $('confirm-space-merge').focus();
+  } catch (error) { if (currentDialogTicket(ticket)) mergeError(error.message); else toast(error.message); }
+  finally { if (currentDialogTicket(ticket)) $('preview-space-merge').disabled = false; }
+});
+async function submitSpaceMerge(action) {
+  const draft = mergeDialog, ticket = draft?.ticket, batch = draft?.batch, revision = selectionRevision;
+  if (!batch || !currentDialogTicket(ticket)) return;
+  const controls = ['confirm-space-merge', 'undo-space-merge', 'recover-space-merge'];
+  for (const key of controls) $(key).disabled = true; mergeError('');
+  try {
+    // A newly typed C draft is a reason to retain C during organization undo.
+    if (action === 'undo') await persistView();
+    const record = await api.spaceMerge(action, { operationId: batch.operationId, binding: batch.binding });
+    updateState(await api.initial()); render();
+    if (!currentDialogTicket(ticket)) return toast('合并记录已保留，可从空间菜单查看详情。');
+    draft.record = record; draft.targetId = batch.targetId;
+    if (action === 'commit' && record.stage === 'ready' && revision === selectionRevision) {
+      $('space-merge-dialog').close(); await selectSpace(batch.targetId);
+      return toast(`已合并为「${batch.name}」`, { label: '查看详情', run: () => openMergeRecord(batch.targetId) });
+    }
+    mergeButtons(true, true); renderMergeBatch(batch, record);
+  } catch (error) {
+    try { updateState(await api.initial()); render(); } catch {}
+    if (currentDialogTicket(ticket)) mergeError(error.message); else toast(error.message);
+  } finally { if (currentDialogTicket(ticket)) for (const key of controls) $(key).disabled = false; }
+}
+$('confirm-space-merge').onclick = () => attempt(() => submitSpaceMerge('commit'));
+$('recover-space-merge').onclick = () => attempt(() => submitSpaceMerge('recover'));
+$('undo-space-merge').onclick = () => attempt(() => submitSpaceMerge('undo'));
+$('open-space-merge-target').onclick = () => attempt(async () => {
+  const id = mergeDialog?.targetId || mergeDialog?.batch?.targetId;
+  if (!id) return; $('space-merge-dialog').close(); await selectSpace(id);
+});
 $('cancel-space-create').onclick = () => $('space-create-dialog').close();
 $('space-create-form').onsubmit = event => { event.preventDefault(); attempt(async () => {
   const ticket = dialogTickets.get($('space-create-dialog')); if (!currentDialogTicket(ticket) || $('confirm-space-create').disabled) return;
