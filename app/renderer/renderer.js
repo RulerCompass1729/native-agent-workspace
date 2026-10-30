@@ -1918,7 +1918,7 @@ function render() {
       $('interrupt').disabled = interruptPending(s);
       readLegacyProgress(s);
       const visibleMessages = sessionMessages(s);
-      const signature = JSON.stringify(visibleMessages);
+      const signature = JSON.stringify([visibleMessages, !visibleMessages.length && [s.state, Boolean(s.nativeApproval)]]);
       const readingKey = focusedReadingKey(s.id);
       if (signature !== lastMessages || messageViews.get($('messages'))?.key !== readingKey) { messageList($('messages'), visibleMessages, false, readingKey); lastMessages = signature; }
       renderAdvanced(s);
