@@ -14,6 +14,13 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+test('T103 old or unbound journal rows do not authorize a tool timeout notice',async t=>{
+ const {workspace:w,runtimes:[r],ids:[id]}=await fixture(t);r.emit('state','working');
+ w.progress.get(id).update({id:'old-history',turnId:'old-turn',kind:'commandExecution',status:'running'});
+ w.progress.get(id).items.get('old-history').time=1;w.progress.get(id).items.get('old-history').updatedAt=1;
+ r.nativeActivity={nativeId:w.get(id).nativeId,turnId:'new-turn',label:'commandExecution'};
+ w.tickToolWait();assert.equal(r.toolWaitNotice,null);assert.equal(w.get(id).state,'working');assert.equal(w.versions.dispatches,0);
+});
 test('creating a seventh session keeps existing sessions and their drafts', async t => {
   const { workspace: w, runtimes, ids, directory } = await fixture(t, 6);
   w.setDraft(ids[0], 'Unsent work stays here', 'owner');

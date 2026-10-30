@@ -12,18 +12,22 @@ const pending = () => { let resolve, reject; const promise = new Promise((a, b) 
 function fixture() {
   const elements = new Map(), calls = [], messages = [];
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const context = vm.createContext({ $, state: { appVersion: 'fixture', room: { notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
+  const context = vm.createContext({ $, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
     toast: text => messages.push(text), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
-    api: Object.fromEntries(['preflight', 'roomNotes', 'runtimeLocation'].map(method => [method, (...args) => { const request = pending(); calls.push({ method, args, ...request }); return request.promise; }])) });
+    api: Object.fromEntries(['preflight', 'spaceAction', 'runtimeLocation'].map(method => [method, (...args) => { const request = pending(); calls.push({ method, args, ...request }); return request.promise; }])) });
   vm.runInContext(source.slice(source.indexOf('const dialogTickets ='), source.indexOf('let trustScope =')), context);
   vm.runInContext(source.slice(source.indexOf('async function showSetup()'), source.indexOf('function populateSelect(')), context);
-  vm.runInContext(source.slice(source.indexOf('function openNotes()'), source.indexOf('function openContext()')), context);
+  vm.runInContext(source.slice(source.indexOf('function openNotes('), source.indexOf('function openContext()')), context);
   vm.runInContext(source.slice(source.indexOf("$('room-notes').onclick"), source.indexOf("$('attach-context').onclick")), context);
   const openNotes = text => { context.openNotes(); if (text !== undefined) $('room-notes-text').value = text; };
   const save = () => $('notes-form').onsubmit({ preventDefault() {} });
   return { $, context, calls, messages, openNotes, save };
 }
 const preflight = () => ({ paths: {}, configured: {} });
+test('the actual notes button passes selected space rather than treating its click event as a space ID', () => {
+  const f = fixture(); f.$('room-notes').onclick({ type: 'click' });
+  assert.equal(f.$('notes-dialog').open, true); assert.equal(f.$('room-notes-text').value, 'Saved original');
+});
 test('an old setup result cannot reopen a closed window or overwrite a newer check', async () => {
   const f = fixture(), old = f.context.showSetup(); assert.equal(f.$('setup-dialog').open, true);
   f.$('setup-dialog').close(); const fresh = f.context.showSetup(); f.calls[0].resolve(preflight()); await old;
@@ -42,7 +46,7 @@ test('an earlier accepted save cannot close the new notes editor or discard its 
   const f = fixture(); f.openNotes('First accepted edit'); const old = f.save(); f.$('notes-dialog').close(); f.openNotes('New unsaved edit');
   f.calls[0].resolve(); await old;
   assert.equal(f.$('notes-dialog').open, true); assert.equal(f.$('room-notes-text').value, 'New unsaved edit');
-  assert.deepEqual(f.calls[0].args, ['First accepted edit', 7]); assert.deepEqual(f.messages, ['此前提交的笔记已保存。']);
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0].args)), ['shared', 'notes', ['First accepted edit', 7]]); assert.deepEqual(f.messages, ['此前提交的笔记已保存。']);
 });
 test('an earlier save failure does not write into a new notes editor', async () => {
   const f = fixture(); f.openNotes('First'); const old = f.save(); f.$('notes-dialog').close(); f.openNotes('Fresh');

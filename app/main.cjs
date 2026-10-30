@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, session, shell, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, nativeImage, session, shell, screen, Notification } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -14,7 +14,9 @@ const { ImagePreviews } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { readingState } = require('./reading-state.cjs');
-const { ViewStore } = require('./view-store.cjs');
+const { ViewStore, validViews } = require('./view-store.cjs');
+const { roomId: validRoomId } = require('./collaboration-spaces.cjs');
+const { identity: roomPeerIdentity } = require('./peer-handoffs.cjs');
 const { windowPlacement } = require('./window-placement.cjs');
 const { backups, beginDraft, acknowledgeDraft, acceptSentDraft, forgetDraft, retainRecovery, discardRecovery } = require('./view-drafts.cjs');
 
@@ -58,6 +60,7 @@ if (testParent > 1) {
 const primary = app.requestSingleInstanceLock();
 if (!primary) app.quit();
 const windows = new Map();
+const toolWaitNotifications = new Map();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
 let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, views = [], quitting = false;
@@ -69,22 +72,49 @@ function createWindow(view) {
   const win = new BrowserWindow(windowOptions(view));
   return win;
 }
+function notifyToolWait(snapshot, win) {
+  for (const s of snapshot.sessions || []) {
+    const activity = s.nativeActivity, notice = activity?.waitNotice;
+    if (s.state !== 'working' || s.transportDisconnected || s.nativeContextPending || s.approval || s.approvalOverflow || s.claudeQuestion ||
+        !s.nativeId || !s.activeTurnId || activity?.phase === 'approval' ||
+        notice?.kind !== 'tool-wait' || notice.nativeId !== s.nativeId || notice.turnId !== s.activeTurnId ||
+        activity?.nativeId !== s.nativeId || activity.turnId !== s.activeTurnId || activity.stale === true ||
+        notice.marker !== activity.toolWait?.marker || notice.progressAt !== activity.toolWait?.progressAt ||
+        typeof s.id !== 'string' || !Number.isFinite(notice.createdAt)) continue;
+    const key = `${s.nativeId}:${s.activeTurnId}`, prior = toolWaitNotifications.get(s.id);
+    if (prior?.key === key || prior && notice.createdAt < prior.time) continue;
+    const record = { key, time: notice.createdAt }; toolWaitNotifications.set(s.id, record);
+    try {
+      if (!Notification.isSupported()) continue;
+      const notification = record.notification = new Notification({ title: 'NAW · 工具等待提醒', body: '原生工具较长时间未返回。请检查原生界面或系统权限提示；任务没有自动重发。' });
+      // A notification is an observation of that past turn, never a session-only
+      // interrupt action that could accidentally target its replacement.
+      notification.once('click', () => { if (!win.isDestroyed()) win.show(); });
+      notification.once('close', () => { if (record.notification === notification) delete record.notification; });
+      notification.show();
+    } catch { /* The existing in-app status remains available if OS delivery fails. */ }
+  }
+}
 function bindClient(context) {
   const { win, client } = context;
   // Rechecked by the router after awaited pauses as well as at IPC entry.
   // A task already accepted natively is not retroactively cancelled.
-  client.authorizeOperation = (method, args) => {
+  client.authorizeOperation = (method, args, roomId = 'shared') => {
     if (['send', 'queue', 'queueShared', 'steerShared', 'steer', 'forward', 'run', 'input', 'claim', 'terminal', 'approve', 'answer', 'draft', 'resume'].includes(method)) {
-      for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method));
+      for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
   };
   const send = (channel, data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, data); };
-  client.on('state', data => send('workspace:state', displayState(data, context)));
+  client.on('state', data => { if (context.client === client && !win.isDestroyed()) { send('workspace:state', displayState(data, context)); notifyToolWait(data, win); } });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
   client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
 }
-function displayState(snapshot, context) { return { ...roomState.apply(sessionLabels.apply(submissionState(snapshot))), viewStorageWarning }; }
+function displayState(snapshot, context) {
+  const roomId = context?.view?.spaceId || 'shared';
+  const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
+  return { ...display, sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning };
+}
 function reportViewStorage(warning) {
   if (viewStorageWarning === warning) return;
   viewStorageWarning = warning;
@@ -220,6 +250,61 @@ async function boot() {
   });
   register('archiveRoom', async c => { try { await roomState.archiveRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('restoreRoom', async c => { try { await roomState.restoreRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
+  register('spaceCreate', async (_c, name) => { const id = roomState.create(name); await broadcastRoom(); return id; });
+  register('spaceAction', async (c, roomId, action, args = []) => {
+    if (!validRoomId(roomId) || !Array.isArray(args) || args.length > 8) throw Error('无效协作空间操作。');
+    roomState.metadata(roomId); // Never reinterpret a missing space as shared.
+    if (action === 'join') {
+      try { return await roomState.membership(c.client, args[0], args[1], sessionLabels.labels.get(args[0]), roomId, args[2]); }
+      finally { await broadcastRoom(); }
+    }
+    if (action === 'rename') roomState.rename(args[0], roomId);
+    else if (action === 'notes') roomState.notes(args[0], args[1], roomId);
+    else if (action === 'memberOrder') roomState.moveMember(args[0], (await c.client.call('initial')).sessions, roomId);
+    else if (action === 'archive' || action === 'restore') {
+      try { return await roomState[action === 'archive' ? 'archiveRoom' : 'restoreRoom'](c.client, sessionLabels.labels, roomId); }
+      finally { await broadcastRoom(); }
+    } else if (action === 'removeFile') roomState.removeFile(args[0], args[1], roomId);
+    else if (['forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory'].includes(action)) {
+      if (action === 'clearSharedHistory') {
+        const value = roomState.metadata(roomId), revision = value.revision;
+        const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: `清除「${value.name}」的共享记录？`, detail: '仅清除这个空间的共享消息、成员时间线和笔记。文件引用和原生会话保留，已经收到的内容无法撤回。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
+        if (answer.response !== 1) return false;
+        if (roomState.metadata(roomId).revision !== revision) throw Error('空间资料已变化，请重新核对后清除。');
+        await c.client.callSpace(roomId, action, []);
+        try { roomState.clear(revision, roomId); } catch (error) { throw Error(`共享消息已清除，时间线和笔记已保留。${error.message}`); }
+        await broadcastRoom(); return true;
+      }
+      if (action !== 'pause') for (const id of action === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]]) roomState.assertAvailable(id, true, roomId);
+      if (action === 'run' && Array.isArray(args[0])) {
+        const snapshot = sessionLabels.apply(c.client.snapshot(roomId));
+        if (args[4] && args[0].some(id => args[4][id] !== snapshot.sessions.find(s => s.id === id)?.name)) throw Error('参与者名称已变化，请重新预览任务。');
+        args[4] = Object.fromEntries(args[0].filter(id => sessionLabels.labels.has(id)).map(id => [id, sessionLabels.labels.get(id)]));
+      }
+      return c.client.callSpace(roomId, action, args);
+    } else throw Error('不支持的协作空间操作。');
+    await broadcastRoom();
+  });
+  register('spaceFiles', async (c, roomId, fileId) => {
+    if (!validRoomId(roomId)) throw Error('无效协作空间。');
+    const value = roomState.metadata(roomId);
+    if (fileId !== undefined) {
+      const file = value.files.find(f => f.id === fileId); if (!file) throw Error('文件引用已变化，请重新打开。');
+      const preview = await readPreview(file.path);
+      if (c.win.isDestroyed() || !roomState.metadata(roomId).files.some(f => f.id === fileId && f.path === file.path)) throw Error('空间文件列表已变化，未打开。');
+      c.filePreview = preview;
+      return { token: preview.token, name: preview.name, text: preview.text, size: preview.bytes.length };
+    }
+    roomState.assertAvailable(null, true, roomId);
+    if (c.fileChoosing) throw Error('文件选择窗口已经打开。');
+    c.fileChoosing = true;
+    try {
+      const result = await dialog.showOpenDialog(c.win, { title: `添加到「${value.name}」的本机文件`, filters: [{ name: '文本材料', extensions: textExtensions }], properties: ['openFile', 'multiSelections', 'dontAddToRecent'] });
+      if (result.canceled || c.win.isDestroyed()) return false;
+      for (const file of result.filePaths) await readPreview(file);
+      roomState.assertAvailable(null, true, roomId); roomState.addFiles(result.filePaths, roomId); await broadcastRoom(); return true;
+    } finally { c.fileChoosing = false; }
+  });
   register('create', async (c, ...args) => { assertNativeCreation(await c.client.call('initial')); return c.client.call('create', ...args); });
   register('nativeHistory', (c, options) => c.client.call('nativeHistory', options));
   register('importHistory', (c, nativeId, options) => c.client.call('importHistory', nativeId, options));
@@ -394,6 +479,10 @@ async function boot() {
     if (next.sharedDraft !== undefined && (typeof next.sharedDraft !== 'string' || next.sharedDraft.length > 16000)) throw new Error('协作草稿过长。');
     if (next.roomMention !== undefined && next.roomMention !== null && !require('./room-mention.js').validView(next.roomMention, next.sharedDraft, next.roomRecipient)) throw new Error('无效协作提及。');
     if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw new Error('无效终端显示设置。');
+    if (!validViews([{ ...c.view, ...next }])) throw Error('空间界面记录无效；草稿没有覆盖。');
+    for (const key of ['spaceId', 'sidebarView', 'sidebarSpaceFilter', 'roomViews']) if (next[key] !== undefined) c.view[key] = structuredClone(next[key]);
+    // Retained UI rollback must still see only the original shared draft.
+    if (next.roomViews) for (const key of ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo']) next[key] = next.roomViews.shared?.[key] ?? (key === 'roomMention' ? null : '');
     const positions = next.readingPositions === undefined ? undefined : readingState(next.readingPositions);
     Object.assign(c.view, { selected: next.selected, mode: next.mode, preference: ['chat', 'terminal'].includes(next.preference) ? next.preference : c.view.preference });
     if (next.terminalLayout !== undefined) c.view.terminalLayout = next.terminalLayout;

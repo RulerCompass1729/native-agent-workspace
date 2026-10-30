@@ -38,7 +38,7 @@ function fixture(member = 0) {
   const menus = [], copies = [], changed = [], notices = [], records = [{ id: 'naw-alpha', nativeId: 'native-alpha', name: 'Same name', roomId: 'shared', memberRevision: 1 }, { id: 'naw-beta', nativeId: 'native-beta', name: 'Same name', roomId: 'shared', memberRevision: 1 }];
   const button = (text, action, cls) => { const value = node('button', cls); value.textContent = text; value.addEventListener('click', action); return value; };
   const context = vm.createContext({ Element, document, window: { getSelection: () => ({ toString: () => 'Previously selected private reading text' }) },
-    selectionRevision: 1, selected: 'room', disconnected: false, state: { room: { archived: false }, members: records }, roomSurface: 'overview', roomSession: '', sessionMenu: null, roomMenu: null,
+    spaceId: 'shared', pairRevision: record => require('../collaboration-spaces.cjs').membershipRevision(record), selectionRevision: 1, selected: 'room', disconnected: false, state: { room: { archived: false }, members: records }, roomSurface: 'overview', roomSession: '', sessionMenu: null, roomMenu: null,
     members: () => context.state.members, orderedMembers: () => context.state.members, $: id => elements.get(id),
     activeSessionId: () => 'naw-alpha', current: () => records[0], terminals: new Map(), sessionComposers: new Map(), owner: 'fixture-owner',
     toast: text => notices.push(text), attempt: action => action(), detach: id => changed.push(id),

@@ -462,3 +462,24 @@ header h1, header p { overflow-wrap: anywhere; }
 #app-version-compact{display:none}
 .session-link .label>.session-backend-version{grid-column:1/-1;display:block;font-size:11px;color:var(--warning,#9a6700);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .session-link .label>.session-backend-version[hidden]{display:none}
+
+/* Room membership is a relationship, separate from a native status line. */
+.session-view-switch{display:flex;gap:4px;flex-wrap:wrap;padding:0 8px 6px;flex:none}
+.session-view-switch button{font-size:11px;padding:4px 6px;border:1px solid transparent;border-radius:5px;color:var(--muted)}
+.session-view-switch button[aria-pressed="true"]{background:var(--raised);border-color:var(--border);color:var(--ink)}
+.session-link .label>.session-space-badges{grid-column:1/-1;display:flex;gap:3px;flex-wrap:wrap;white-space:normal;min-width:0;margin:3px 0}
+.space-tone-0{--space-ink:#315a92;--space-tint:#e7eef9}.space-tone-1{--space-ink:#256950;--space-tint:#e2f1e9}.space-tone-2{--space-ink:#85532a;--space-tint:#f7ecde}.space-tone-3{--space-ink:#77518e;--space-tint:#f0e7f6}.space-tone-4{--space-ink:#8a3f54;--space-tint:#f8e6eb}.space-tone-5{--space-ink:#286b79;--space-tint:#e3f1f4}
+.space-badge{font-size:10px;font-weight:500;line-height:1.5;padding:0 4px;border-radius:3px;color:var(--space-ink);background:var(--space-tint);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.space-badge-more{color:var(--muted);background:var(--raised)}
+.session-row.space-dim{opacity:.4}.session-row.space-highlight{background:var(--raised);box-shadow:inset 3px 0 var(--green)}
+.session-space-group{margin:2px 0 10px}.session-space-group h3{font-size:11px;font-weight:600;margin:3px 8px}
+.session-space-heading{color:var(--space-ink,var(--muted));font-size:11px;font-weight:600;padding:4px 2px;text-align:left}
+.room-nav.space-filtered{box-shadow:inset 3px 0 var(--space-ink)}
+#new-space{margin:2px 8px 6px;font-size:12px;text-align:left}
+.space-file-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:8px 0;border-bottom:1px solid var(--border)}
+.space-file-row>button:first-child{min-width:0;overflow-wrap:anywhere;text-align:left}
+.space-file-row>button:last-child{white-space:nowrap;font-size:12px;color:var(--muted)}
+#space-create-name{width:100%;margin:8px 0 16px}
+.naw[data-collapsed="true"] .session-view-switch,.naw[data-collapsed="true"] .session-space-badges,.naw[data-collapsed="true"] .session-space-group h3,.naw[data-collapsed="true"] #new-space{display:none}
+@media(prefers-reduced-motion:no-preference){.session-row{transition:opacity .1s ease}}
+.session-link .label small{white-space:normal;overflow-wrap:anywhere}

@@ -20,7 +20,7 @@ function pending() { let resolve, reject; const promise = new Promise((a, b) => 
 function fixture() {
   const elements = new Map(), requests = [];
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const context = vm.createContext({ $, selectionRevision: 1, node: (tag, text) => new Element(tag, text), participantLabel: s => s.name,
+  const context = vm.createContext({ $, spaceId: 'shared', spaceRecord: () => ({ id: 'shared', name: 'Synthetic shared' }), selectionRevision: 1, node: (tag, text) => new Element(tag, text), participantLabel: s => s.name,
     window: { nativeWorkspaceUsage: require('../native-usage.js') }, api: { initial() { const request = pending(); requests.push(request); return request.promise; } } });
   vm.runInContext(source.slice(source.indexOf('let trustScope ='), source.indexOf('function openCreate(')), context);
   return { $, context, requests, open: options => context.showTrust(options) };

@@ -176,6 +176,7 @@ test('workspace native version metadata follows its actual runtime RPC and never
     runtimes: new Map([['test', runtime]]), host: { binaries: {}, rpc: { nativeVersion: '0.164.0' } },
     sharedReplies: { activity: () => null }, drafts: new Map(), capacityRecoveries: new Map(), room: {}, versions: {},
   });
+  workspace.rooms = new Map([['shared', workspace.room]]);
   assert.equal(workspace.snapshot().sessions[0].nativeVersion, '0.163.0');
   runtime.transportDisconnected = true;
   assert.equal(workspace.snapshot().sessions[0].nativeVersionStatus, 'last-known');

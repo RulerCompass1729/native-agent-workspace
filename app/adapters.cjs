@@ -20,6 +20,17 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
 const { executable, pythonExecutable, nativeEnvironment } = require('./platform.cjs');
 
+// Local receipt timing is an observation, never a native failure or authority
+// to cancel/replay work. Keep the original activity and its identity intact.
+const observedToolTypes = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall']);
+function withObservedTool(runtime, activity, marker, progressAt) {
+  if (!marker || !Number.isFinite(progressAt)) return activity;
+  const toolWait = { source: 'live-observation', marker, progressAt };
+  const notice = runtime.toolWaitNotice;
+  return { ...activity, toolWait, ...(notice && notice.nativeId === activity.nativeId && notice.turnId === activity.turnId &&
+    notice.marker === marker && notice.progressAt === progressAt ? { waitNotice: notice } : {}) };
+}
+
 class Terminal extends EventEmitter {
   constructor(argv, cwd, env = {}) {
     super();
@@ -169,7 +180,12 @@ class Claude extends EventEmitter {
   get turnId() { return this.liveTurn?.id || null; }
   get nativeActivity() {
     if (!this.liveTurn || this.rootEnding || this.disposed || !this.terminal?.alive) return null;
-    return { nativeId: this.record.nativeId, turnId: this.liveTurn.id, label: this.livePermissions?.size ? [...this.livePermissions.values()].map(r => r.title).join(', ') : this.liveTurn.label, phase: this.livePermissions?.size ? 'approval' : this.liveTurn.phase, observedAt: this.observationSeenAt };
+    const activity = { nativeId: this.record.nativeId, turnId: this.liveTurn.id, label: this.livePermissions?.size ? [...this.livePermissions.values()].map(r => r.title).join(', ') : this.liveTurn.label, phase: this.livePermissions?.size ? 'approval' : this.liveTurn.phase, observedAt: this.observationSeenAt };
+    const turn = this.liveTurn, binding = turn.toolBinding;
+    const tool = ['tool', 'tool-use'].includes(activity.phase) && !turn.question &&
+      binding && binding.nativeId === this.record.nativeId && binding.epoch === this.observationEpoch &&
+      Number.isFinite(this.observationSeenAt) && Date.now() - this.observationSeenAt <= 5000;
+    return withObservedTool(this, activity, tool ? `${binding.epoch}:${turn.id}:${turn.toolPhaseSerial}` : null, turn.toolProgressAt);
   }
   // A native AskUserQuestion held for the chat view (see the --ask hook). Only the
   // root's own questions; the workspace decides, and any doubt lets native ask.
@@ -374,6 +390,11 @@ class Claude extends EventEmitter {
         const phases = ['requesting', 'thinking', 'text', 'input', 'tool', 'responding', 'tool-input', 'tool-use']; // Old mod phases remain readable during an exact-byte upgrade.
         if (!phases.includes(message.phase) || typeof message.turnId !== 'string') throw Error('Invalid native activity');
         if (!message.replayed && !message.gap && this.liveTurn?.id === message.turnId) {
+          if (['tool', 'tool-use'].includes(message.phase) && !['tool', 'tool-use'].includes(this.liveTurn.phase)) {
+            this.liveTurn.toolPhaseSerial = (this.liveTurn.toolPhaseSerial || 0) + 1;
+            this.liveTurn.toolBinding = { nativeId: this.record.nativeId, epoch: this.observationEpoch };
+            this.liveTurn.toolProgressAt = Date.now();
+          }
           this.liveTurn.phase = message.phase; this.liveTurn.label = message.phase;
         }
       } else if (message.id === 'control:permission-end') {
@@ -403,6 +424,9 @@ class Claude extends EventEmitter {
       this.emit('capability'); return { observed: true };
     }
     const { id, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete } = message;
+    if (kind === 'tool' && !message.replayed && !message.gap && this.liveTurn?.id === turnId) {
+      this.liveTurn.toolProgressAt = Date.now();
+    }
     const freshInline = inline && !message.replayed && !this.record.messages?.some(row => row.id === `native:${this.record.nativeId}:${id}`);
     if (freshInline) {
       this.rootTurn = null;
@@ -1256,24 +1280,55 @@ class Codex extends EventEmitter {
     const labels = { commandExecution: 'commandExecution', fileChange: 'fileChange', mcpToolCall: 'mcpToolCall', dynamicToolCall: 'dynamicToolCall', webSearch: 'webSearch', reasoning: 'reasoning', plan: 'plan', agentMessage: 'agentMessage' };
     const kinds = [...this.activeNativeItems.values()];
     const kind = ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch', 'reasoning', 'plan', 'agentMessage'].find(type => kinds.includes(type));
-    return { nativeId: this.record.nativeId, turnId: this.turnId, startedAt: this.nativeStartedAt,
+    const activity = { nativeId: this.record.nativeId, turnId: this.turnId, startedAt: this.nativeStartedAt,
       label: this.nativeWait || (this.nativeRetry === this.turnId ? 'willRetry' : '') || labels[kind] || 'inProgress' };
+    const binding = this.nativeToolBinding;
+    let tool;
+    if (this.latestState === 'working' && !this.nativeWait && this.nativeRetry !== this.turnId &&
+        binding && binding.nativeId === this.record.nativeId && binding.turnId === this.turnId &&
+        binding.lifecycle === this.lifecycleRevision && binding.rpc && this.currentRpc(binding.rpc)) {
+      for (const [id, item] of binding.items) {
+        if (item && !this.historyMessageItems.has(id) && this.activeNativeItems.get(id) === item.type &&
+            (!tool || item.progressAt < tool.progressAt)) tool = item;
+      }
+    }
+    return withObservedTool(this, activity, tool ? `${binding.lifecycle}:${this.turnId}:${tool.serial}` : null, tool?.progressAt);
   }
   publishNativeActivity() {
     const label = this.nativeActivity?.label || '';
     if (label !== this.publishedNativeActivity) { this.publishedNativeActivity = label; this.emit('activity', label); }
   }
-  observeNativeItem(method, params) {
+  observeNativeItem(method, params, sourceRpc = this.host.rpc) {
     if (params.turnId !== this.turnId || !params.item?.id) return;
     this.stateRevision++; // A delayed resume status predates these native events.
+    let binding = this.nativeToolBinding;
+    if (typeof this.record.nativeId === 'string' && this.record.nativeId && params.threadId === this.record.nativeId && sourceRpc && this.currentRpc(sourceRpc) &&
+        observedToolTypes.has(params.item.type) && !this.historyMessageItems.has(params.item.id)) {
+      if (!binding || binding.nativeId !== this.record.nativeId || binding.turnId !== this.turnId ||
+          binding.lifecycle !== this.lifecycleRevision || binding.rpc !== sourceRpc) {
+        binding = this.nativeToolBinding = { nativeId: this.record.nativeId, turnId: this.turnId,
+          lifecycle: this.lifecycleRevision, rpc: sourceRpc, items: new Map() };
+      }
+    } else binding = null;
     if (method === 'item/started') {
       if (this.activeNativeItems.size < 200) this.activeNativeItems.set(params.item.id, params.item.type);
+      if (binding && params.item.status === 'inProgress' && !binding.items.has(params.item.id) && binding.items.size < 4096 &&
+          this.activeNativeItems.get(params.item.id) === params.item.type) {
+        const serial = this.nativeToolPhaseSerial = (this.nativeToolPhaseSerial || 0) + 1;
+        binding.items.set(params.item.id, { type: params.item.type, progressAt: Date.now(), serial });
+      }
       if (params.item.type === 'mcpToolCall' && params.item.server === 'native_workspace' && params.item.tool === 'workspace_message') {
         this.workspaceMcpCalls ||= new Map();
         if (this.workspaceMcpCalls.size < 64) this.workspaceMcpCalls.set(params.item.id, { turnId: params.turnId, arguments: params.item.arguments });
         this.emit('workspaceMcpProof');
       }
-    } else { this.activeNativeItems.delete(params.item.id); this.workspaceMcpCalls?.delete(params.item.id); }
+    } else {
+      if (binding) {
+        // Keep a bounded tombstone: a late duplicate start is not new work.
+        if (binding.items.has(params.item.id) || binding.items.size < 4096) binding.items.set(params.item.id, null);
+      }
+      this.activeNativeItems.delete(params.item.id); this.workspaceMcpCalls?.delete(params.item.id);
+    }
     this.publishNativeActivity();
   }
   observeStatus(status) {
@@ -1331,7 +1386,7 @@ class Codex extends EventEmitter {
       this.closed = true; this.stopped = true; this.finishRecoveryConnection?.(false); this.host.codexTargets.delete(this.record.nativeId); this.emit('state', 'ended'); return;
     }
     if (this.stopped) return;
-    if (['item/started', 'item/completed'].includes(message.method)) this.observeNativeItem(message.method, p);
+    if (['item/started', 'item/completed'].includes(message.method)) this.observeNativeItem(message.method, p, sourceRpc);
     if (message.method === 'item/completed' && p.item?.type === 'userMessage' &&
       p.turnId && this.ownInputs.has(p.item.clientId)) {
       this.nativeAcceptedInput = { turnId: p.turnId, tag: p.item.clientId, rpc: this.host.rpc, lifecycle: this.lifecycleRevision };
@@ -1349,6 +1404,15 @@ class Codex extends EventEmitter {
         ...(item.type === 'imageView' ? { imageCwd: this.nativeSettings?.cwd || this.record.cwd } : {}),
       });
     }
+    const progressType = { 'item/commandExecution/outputDelta': 'commandExecution', 'item/mcpToolCall/progress': 'mcpToolCall', 'item/fileChange/patchUpdated': 'fileChange' }[message.method];
+    const hasProgress = progressType === 'fileChange' ? Array.isArray(p.changes) && p.changes.length > 0 :
+      progressType === 'mcpToolCall' ? typeof p.message === 'string' && p.message.length > 0 : typeof p.delta === 'string' && p.delta.length > 0;
+    const binding = this.nativeToolBinding;
+    const tool = binding?.items.get(p.itemId);
+    if (progressType && hasProgress && p.threadId === this.record.nativeId && p.turnId === this.turnId &&
+        binding && binding.nativeId === this.record.nativeId && binding.turnId === this.turnId && binding.lifecycle === this.lifecycleRevision &&
+        binding.rpc === sourceRpc && tool?.type === progressType &&
+        this.activeNativeItems.get(p.itemId) === progressType && !this.historyMessageItems.has(p.itemId)) tool.progressAt = Date.now();
     if (['item/commandExecution/outputDelta', 'item/mcpToolCall/progress'].includes(message.method) && !this.historyMessageItems.has(p.itemId)) {
       this.liveToolItems.add(p.itemId);
       this.emit('progress', {

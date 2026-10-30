@@ -19,6 +19,22 @@ async function fixture(t) {
   const clear=(binding=bind())=>{r.endRoot({...binding,reason:'clear'});const next=randomUUID();const result=r.clearRoot({...binding,nextSessionId:next,source:'clear'});return {binding,result,next}};
   return {dir,w,id,s,r,bind,clear};
 }
+test('T103 ordered live tool phase measures silence separately from heartbeat and ignores old roots',async t=>{
+ const f=await fixture(t),{r,w,s}=f,b={sessionId:s.nativeId,...r.bindRoot({sessionId:s.nativeId,nativeBlocks:true})},original=Date.now;let now=original(),seq=0;Date.now=()=>now;
+ const emit=body=>r.observeRoot({block:true,sessionId:s.nativeId,lease:b.lease,epoch:b.observationEpoch,sequence:++seq,...body});
+ try{
+  emit({id:'control:turn-start',kind:'control',status:'running',turnId:'wait-a',promptId:'prompt-a'});r.emit('state','working');
+  emit({id:'control:activity',kind:'control',status:'running',turnId:'wait-a',phase:'tool'});
+  assert.equal(r.nativeActivity.toolWait?.source,'live-observation');const at=r.nativeActivity.toolWait.progressAt;
+  now+=5*60*1000;emit({id:'control:heartbeat',kind:'control',status:'running'});w.tickToolWait();assert.equal(r.nativeActivity.waitNotice.progressAt,at,'Heartbeat proves observer freshness, not tool progress');
+  emit({id:'control:activity',kind:'control',status:'running',turnId:'wait-a',phase:'thinking'});w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined);
+  emit({id:'control:turn-start',kind:'control',status:'running',turnId:'wait-b',promptId:'prompt-b'});
+  emit({id:'control:activity',kind:'control',status:'running',turnId:'wait-a',phase:'tool'});assert.equal(r.nativeActivity.toolWait,undefined);
+  emit({id:'control:activity',kind:'control',status:'running',turnId:'wait-b',phase:'tool'});now+=5*60*1000;emit({id:'control:heartbeat',kind:'control',status:'running'});w.tickToolWait();assert.ok(r.nativeActivity.waitNotice);
+  now+=6000;w.tickToolWait();assert.equal(r.nativeActivity.toolWait,undefined,'A stale observer is unknown, not a hung tool');assert.equal(r.toolWaitNotice,null);
+  const old=s.nativeId;s.nativeId=randomUUID();assert.equal(r.nativeActivity?.toolWait,undefined);s.nativeId=old;
+ }finally{Date.now=original}
+});
 test('two confirmed root clears preserve row, history, draft and terminal but revoke sharing',async t=>{
  const f=await fixture(t),{w,id,s,r}=f;const first=s.nativeId, terminal=r.terminal;
  s.messages.push({id:'old-message',role:'user',text:'Private original context'});w.setDraft(id,'Unsent material','owner');w.join(id,true);

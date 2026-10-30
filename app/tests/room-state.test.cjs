@@ -1,6 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { RoomState } = require('../room-state.cjs');
+const { withMembership, roomIds, isMember } = require('../collaboration-spaces.cjs');
 function setup(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-room-state-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -174,4 +175,82 @@ test('partial room restore survives cold reopen and retry without duplicate join
   assert.equal(calls.filter(([method, id, join]) => method === 'join' && id === 'one' && join).length, 1);
   assert.deepEqual(records.map(s => s.nativeId), ['native-one', 'native-two', 'native-three']);
   assert.ok(calls.every(([method]) => ['pause', 'initial', 'join'].includes(method)));
+});
+test('new spaces preserve legacy bytes and isolate names, notes, file references and optimistic revisions across reopen', t => {
+  const { dir, room } = setup(t);
+  room.rename('Original'); room.notes('Original note', room.value.revision);
+  const legacy = fs.readFileSync(room.file, 'utf8');
+  const a = room.create('Research'), b = room.create('Delivery');
+  assert.equal(fs.readFileSync(room.file, 'utf8'), legacy, 'Creating spaces does not migrate or rewrite the first space');
+  room.notes('A note', 0, a); room.notes('B note', 0, b);
+  const aRevision = room.metadata(a).revision;
+  room.rename('Renamed B', b); room.notes('A independent edit', aRevision, a);
+  assert.throws(() => room.notes('Stale A edit', aRevision, a), /另一个窗口/);
+  const aFile = path.join(dir, 'a.txt'), bFile = path.join(dir, 'b.txt');
+  room.addFiles([aFile, aFile], a); room.addFiles([bFile], b);
+  assert.equal(room.metadata(a).files.length, 1); assert.equal(room.metadata(b).files.length, 1);
+  assert.equal(fs.existsSync(aFile), false, 'A file reference does not read, write or create the file');
+  const saved = new RoomState(dir), snapshot = { sessions: [{ id: 'one', nativeId: 'same', liveDraft: 'unsent', roomId: null }], room: { id: 'shared', messages: ['Original history'] }, rooms: [{ id: 'shared', messages: ['Original history'] }, { id: a, messages: ['A history'] }, { id: b, messages: ['B history'] }] };
+  const viewA = saved.apply(snapshot, a), viewB = saved.apply(snapshot, b);
+  assert.equal(viewA.room.id, a); assert.equal(viewA.room.notes, 'A independent edit'); assert.deepEqual(viewA.room.messages, ['A history']);
+  assert.equal(viewB.room.id, b); assert.equal(viewB.room.name, 'Renamed B'); assert.deepEqual(viewB.room.files.map(f => f.path), [bFile]);
+  assert.deepEqual(viewA.rooms.map(r => r.id), ['shared', a, b]);
+  assert.equal(saved.value.notes, 'Original note'); assert.equal(fs.readFileSync(room.file, 'utf8'), legacy);
+  assert.equal(fs.statSync(room.spacesFile).mode & 0o777, 0o600);
+  assert.equal(viewB.sessions[0].nativeId, 'same'); assert.equal(viewB.sessions[0].liveDraft, 'unsent');
+  viewA.room.files[0].name = 'local mutation'; assert.equal(saved.metadata(a).files[0].name, 'a.txt');
+  assert.throws(() => saved.removeFile(saved.metadata(a).files[0].id, 0, a), /已更新/);
+  saved.removeFile(saved.metadata(a).files[0].id, saved.metadata(a).revision, a);
+  assert.equal(saved.metadata(a).files.length, 0); assert.equal(saved.metadata(b).files.length, 1);
+});
+test('room archive removes only that membership; global session archive detaches every space without cloning native identity', async t => {
+  const { room } = setup(t), a = room.create('A'), b = room.create('B');
+  let record = { id: 'one', name: 'Agent', nativeId: 'original', pid: 123, liveDraft: 'unsent', roomId: 'shared' };
+  const calls = [], client = { call: async (method, id, join, space) => {
+    calls.push([method, id, join, space]);
+    if (method === 'initial') return { sessions: [structuredClone(record)] };
+    if (method === 'join' || method === 'joinSpace') record = withMembership(record, method === 'join' ? 'shared' : space, join);
+  } };
+  await room.membership(client, 'one', true, 'Agent', a); await room.membership(client, 'one', true, 'Agent', b);
+  assert.deepEqual(roomIds(record), ['shared', a, b]);
+  await room.archiveRoom(client, null, a);
+  assert.deepEqual(roomIds(record), ['shared', b]); assert.equal(room.metadata(a).archived, true); assert.equal(room.metadata(b).archived, false);
+  await room.restoreRoom(client, null, a); assert.equal(isMember(record, a), true);
+  await room.archiveSession(client, 'one'); assert.deepEqual(roomIds(record), []);
+  assert.equal(record.nativeId, 'original'); assert.equal(record.pid, 123); assert.equal(record.liveDraft, 'unsent');
+  room.restoreSession('one'); assert.deepEqual(roomIds(record), [], 'A session restore cannot silently rejoin any room');
+  assert.ok(calls.every(([m]) => ['pause', 'pauseSpace', 'initial', 'join', 'joinSpace'].includes(m)));
+  assert.equal(room.metadata(a).events.filter(e => e.kind === 'leave').length, 2);
+  assert.equal(room.metadata(b).events.filter(e => e.kind === 'leave').length, 1);
+});
+test('nondefault membership refuses an old backend rather than falling back to shared or fabricating a join', async t => {
+  const { room } = setup(t), a = room.create('A'); let shared = false;
+  const client = { call: async (method, id, joined) => {
+    if (method === 'initial') return { sessions: [{ id: 'one', roomId: shared ? 'shared' : null }] };
+    if (method === 'joinSpace') throw Error('Backend does not support collaboration spaces');
+    if (method === 'join') shared = joined;
+  } };
+  await assert.rejects(room.membership(client, 'one', true, 'Agent', a), /does not support/);
+  assert.equal(shared, false); assert.deepEqual(room.metadata(a).events, []); assert.deepEqual(room.value.events, []);
+});
+test('extension corruption and atomic failure preserve old shared data and never silently replace other rooms', t => {
+  const { dir, room } = setup(t); room.notes('Original preserved', 0); const a = room.create('A');
+  const before = fs.readFileSync(room.spacesFile, 'utf8');
+  t.mock.method(fs, 'renameSync', () => { throw Error('Synthetic failure'); });
+  assert.throws(() => room.rename('Lost', a), /未能保存/); assert.equal(room.metadata(a).name, 'A'); assert.equal(fs.readFileSync(room.spacesFile, 'utf8'), before);
+  assert.throws(() => room.create('Not created'), /未能保存/); assert.equal(room.spaces.rooms.length, 1);
+  t.mock.restoreAll();
+  fs.writeFileSync(room.spacesFile, '{broken', { mode: 0o600 }); const loaded = new RoomState(dir);
+  assert.match(loaded.spacesWarning, /无法读取/); assert.throws(() => loaded.create('No overwrite')); assert.throws(() => loaded.notes('No overwrite', 0, a));
+  loaded.rename('Shared remains usable'); assert.equal(loaded.value.notes, 'Original preserved'); assert.equal(fs.readFileSync(room.spacesFile, 'utf8'), '{broken');
+  fs.unlinkSync(room.spacesFile); const other = path.join(dir, 'other'); fs.writeFileSync(other, before, { mode: 0o600 }); fs.symlinkSync(other, room.spacesFile);
+  const symlinked = new RoomState(dir); assert.throws(() => symlinked.create('No symlink writes')); assert.equal(fs.readFileSync(other, 'utf8'), before);
+});
+test('ordering a shared native session within one group leaves every other group and notes revision unchanged', t => {
+  const { room } = setup(t), a = room.create('A'), b = room.create('B');
+  const records = ['one', 'two', 'three'].map(id => withMembership(withMembership({ id, roomId: null, nativeId: `native-${id}` }, a, true), b, true));
+  room.moveMember({ id: 'one', target: 'three', after: true }, records, a);
+  assert.deepEqual(room.metadata(a).memberOrder, ['two', 'three', 'one']); assert.deepEqual(room.metadata(b).memberOrder, []);
+  assert.equal(room.metadata(a).revision, 0); assert.equal(room.metadata(b).revision, 0);
+  assert.ok(records.every(r => roomIds(r).length === 2));
 });
