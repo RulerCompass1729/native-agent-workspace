@@ -4,7 +4,12 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.136, committed build source `18b6965`. Compact native-only
+Current daily GUI: alpha.137, committed build source `da5bc30`. Six signed installed
+flows verify local wheel reading of oversized read-only native grids, ordinary
+xterm history and an empty reader following native approval state. Reading keeps
+the original owner, grid and unsent draft, with zero native input. Geometry is
+renderer viewport emulation; physical input and real second-window control are
+not newly qualified. Compact native-only
 requests and existing member-title menus reuse 44 related checks and twelve signed
 alpha.135 flows with three synthetic members. Original fields remain available;
 these requests still use the native terminal for decisions. The default installed
@@ -31,7 +36,7 @@ recorded clocks, known native-turn boundaries and 50-record paging remain.
 Actual OS viewers, clipboard, choosers, IME and VoiceOver are unqualified.
 
 The ordinary visible update retained all 10 native IDs, live process starts,
-owners and both draft scopes. Only the empty active backend restarted on 136;
+owners and both draft scopes. Only the empty active backend restarted on 137;
 six retained backend records are unchanged: 129×1, 120×4, 118×1. The earlier
 replay-clock adapter fix applies to new backends, not these retained processes.
 The actual production reader matches the build-bound installation record.
@@ -40,7 +45,7 @@ dogfood milestone remains open: full-day use, window-only lifecycle, external-te
 escape, Claude's active goal, native shell-command ingestion, Claude native clocks,
 native error activation, exact footer availability and historical process gaps
 are not certified. See the
-alpha.129–136 acceptance records in [review](review.md).
+alpha.129–137 acceptance records in [review](review.md).
 
 Local builds now use the existing named signing certificate and verify its
 certificate-bound designated requirement; a missing identity stops the build.

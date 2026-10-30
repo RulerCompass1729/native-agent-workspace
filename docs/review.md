@@ -1112,3 +1112,60 @@ cosmetic old lease label, broad denial assertions offset by exact module/Unix
 proof, and deferred precondition checks. Address these only before reusing the
 private harness/operator; the precondition risks did not trigger in this run.
 They are not additional installed qualifications or hidden native changes.
+
+
+### Read-only original-terminal reading and empty approval state — alpha.137
+
+An oversized original terminal owned by another window could be read by dragging
+its scrollbar, but xterm swallowed wheel events over mouse-tracking or alternate
+screens. The observer now lets the browser scroll that unchanged frame locally.
+The existing owner/input path and ordinary xterm history remain unchanged.
+
+The signed alpha.136 baseline reproduces the wheel failure. Fifteen related checks
+pass. The first signed137 candidate passes five terminal flows but exposes a real
+empty-reader defect: native approval and its original request appear while the
+cached welcome caption remains. A six-second render wait still fails. The fix
+adds state and approval presence to the empty-list cache key; nonempty bodies
+retain their previous invalidation behavior. The earlier driver failure on an
+unsupported window protocol is retained as a harness failure, not product evidence.
+
+Clean committed source `da5bc30` builds the corrected signed137 candidate. All61
+runtime files and committed renderer inputs match,105 dependencies are unchanged,
+and certificate, fuse and post-test strict-signature checks pass. Six installed
+flows verify the complete last row, both mouse-frame ends, alternate-screen
+reading, ordinary history, stable synthetic identity/owner/draft/grid/revisions,
+and the updated approval caption with the unchanged original command. The real
+request remains available in the existing card; native decisions stay in the TUI.
+
+Setup includes a synthetic creation, snapshot, claim, resize and saved draft.
+After read-only assignment, through the five reading flows, the measured wire
+trace contains only initial reads;
+fixture counters record zero native input, sends or interruptions. Geometry uses
+installed renderer viewport emulation, not OS-window resizing. The author's prior
+source-window resizing result is reused only for its original scope. A synthetic
+other owner and null PID are not two actual OS windows or real-provider proof.
+Physical trackpad, iTerm, IME and VoiceOver remain untested. Owned profiles and
+processes are removed and the exact shared GUI token is released.
+
+Four Claude audit startup-policy rows now explicitly name the same-screen native
+surface. Existing disabled-feature decisions and pending installed acceptance
+remain unchanged; ownership labels do not qualify unavailable behavior.
+
+Independent source, one-line-delta and candidate/operator reviews pass. The first
+bounded source review reached its limit without a verdict and is not a pass.
+Actual ordinary visible installation retains all10 native IDs,11 live process
+start witnesses, reported settings, owners, private drafts and12 view drafts.
+Only the empty active backend changes to137; six retained backends keep their
+versions and starts. The original developer goal remains the same active record;
+usage counters may advance. All61 payload files, strict signature, one indexed
+application and the executable-bound production installation reader pass.
+
+The I4 positional wording is corrected. The full-session reader has installed
+proof; the overview uses the same message renderer and has source-only coverage.
+The composer's separate positional hint remains a low open issue pending its affected
+layout check. The reused operator now checks empty-backend and private receipt
+preconditions before quitting and uses the correct lease label. Its remaining
+low limitations are a short emptiness-check race, rollback-archive existence
+rather than hash checking, and visible reopening of the new app after a late
+failure. These did not trigger in this update. Whole dogfood, retained-backend
+activation and the previously recorded native/physical/lifecycle gaps remain open.
