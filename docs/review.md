@@ -1280,7 +1280,7 @@ The original Main goal keeps its UUID, objective, creation time and active statu
 These checks do not qualify physical input, activate every original retained
 reader, prove original cold recovery or close the dogfood goal.
 
-### Integration in progress: spaces and native-tool silence
+### Signed integration: spaces and native-tool silence (alpha.139)
 
 The reviewed source components for multiple collaboration spaces, session
 membership views and an observed-tool silence advisory are integrated together.
@@ -1291,8 +1291,39 @@ incorrect conflict resolution fails; the combined behavior preserves the native
 working state, identity and unsent text. The first incomplete fixture and weaker
 counterexample are retained separately rather than counted as product failures.
 
-All 1711 source checks pass without skips. Earlier independent component reviews
-and synthetic source-GUI evidence are reused within their stated scope. The
-integration review and signed installed acceptance are pending; this is not a
-claim that existing older native backends support extra rooms, that desktop
-notifications were delivered, or that the full dogfood goal is complete.
+All 1711 source checks pass without skips. An independent replay confirms the
+two exact component commits and the timer resolution, preserving the earlier
+effective-settings fix. Signed `c9800cc` matches all 62 runtime files and 105
+production dependencies. Fourteen installed space/member groups and three
+tool-advisory groups pass. Two same-profile space launches preserve seven
+synthetic native identities, positive private drafts, scoped shared drafts and
+the original history. A late A acceptance does not clear an equal B draft or
+retarget A's shared reply. Native chooser and clear-confirmation steps are not
+repeated in the signed build; their intercepted source-fixture evidence is reused.
+
+The installed native runtimes, including the tool-activity getter, are stand-ins.
+The real Workspace, daemon, IPC, Main and renderer run; the real Codex detector
+and projection have source-unit evidence only. One original synthetic tool task
+is sent, with zero advisory-induced input, replay or interrupt. The real OS
+notification API is not intercepted, but delivery and request count are not
+observed; deduplication reuses the source mock evidence. No notification is
+clicked and no system permission is changed. All owned profiles/processes are
+cleaned and exact GUI leases released. The named signature is verified, without
+claiming macOS hardened-runtime protection.
+
+The ordinary visible 138-to-139 update preserves ten saved native identities,
+eleven live process start identities and owners. The corrected draft witness
+compares private records, shared text, recipients and additional-room scopes in
+twelve saved views; zero private drafts and one shared draft contain text. Five
+pure checks cover legacy migration and losses that the old private-only witness
+missed. Only the empty active backend changes; the six older backends remain.
+Strict signature, ordinary launch arguments, the visible window and the sole
+indexed application pass. The original Main goal keeps its identity, objective,
+creation time and active status. Source, installed evidence and the operating
+delta and final delivery record pass independent review.
+
+Extra rooms on retained backends, native five-minute timing, real notification
+delivery, physical input, original cold recovery and the full dogfood goal remain
+unqualified. Notification clicks may reveal a window that is not displaying the
+session; no task content enters the notification. The approved later space-merge
+journey is not part of this batch.

@@ -4,18 +4,30 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.138, committed build source `b7513ac`. Four signed
-installed flows verify effective Codex model/effort on opening and same-thread
+Current daily GUI: alpha.139, committed build source `c9800cc`. Fourteen signed
+installed groups cover multiple spaces, membership views, independent drafts,
+scoped delivery and same-profile reopening. Three more cover the existing
+tool-silence status, progress and completion. These use stand-in native runtimes;
+the real Codex detector is covered by source tests. All 1711 source checks pass.
+OS chooser/clear-confirmation steps reuse source-fixture evidence; real OS
+notification delivery and count remain unqualified. Source checks verify that
+extra-room operations refuse older backends lacking the capability. Actual extra
+rooms on retained backends remain unqualified.
+
+The ordinary visible update preserves ten native IDs, eleven live process starts,
+owners and draft hashes in all twelve saved views, including the shared draft,
+its recipient and additional-room scopes. Private drafts are empty; one shared
+draft contains text. Only the GUI and empty active backend update. Six earlier
+backends remain at their original versions and process starts. The original Main
+goal remains active with the same identity, objective and creation time.
+
+The unchanged Codex settings path reuses four signed alpha.138
+installed flows verifying effective Codex model/effort on opening and same-thread
 reconnection, newer settings winning over a delayed reply, and unreported effort
 remaining unknown. They use the actual adapter with synthetic native responses,
 zero provider/model calls, and preserve identity and draft. The retained reader's
 same response projection passes Unix WebSocket checks; original native recovery
-is not newly qualified. The ordinary visible update retains all ten saved native
-IDs, live process starts and owners. The ten session draft hashes and twelve saved
-view draft records are unchanged. A later shape check corrects the earlier
-non-empty count: both saved private draft objects contain empty text. One shared
-draft contains text and matches its pre-update hash. Six older native backends
-remain deliberately unchanged. The existing reader path reuses six signed alpha.137
+is not newly qualified. The existing reader path reuses six signed alpha.137
 flows that verify local wheel reading of oversized read-only native grids,
 ordinary xterm history and an empty reader following native approval state.
 Reading keeps the original owner, grid and unsent draft, with zero native input. Geometry is
