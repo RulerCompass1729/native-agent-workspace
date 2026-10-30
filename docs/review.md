@@ -961,3 +961,22 @@ and a file chosen while another modal is open is discarded. The twelve source
 journeys ran at alpha.132 before the version-only bump; the independent 27-check
 rerun covers alpha.133. Native OS choosers, the OS clipboard and live providers
 remain unqualified.
+
+Signed alpha.133 acceptance adds eleven real renderer/dialog journeys on the
+committed build `b3cde07`: both providers' scoped report times and missing usage,
+dismissal, saved notes/settings, unsent task cancellation and ordinary reopening.
+The synthetic transport records three terminal opens, sixteen resizes and zero
+sends/inputs. Other decision counters and deep asynchronous cases remain covered
+only by the twelve source journeys. By construction these fixtures initialize no
+provider or product inference; they do not measure live usage or actual billing.
+
+Independent Fable review approves the exact signed payload and visible-update
+operator. Actual daily update preserves ten native IDs, live process starts,
+owners and both draft scopes; only the empty active backend restarts on 133.
+Six older backends remain unchanged. Signature, one application-search entry and
+the production executable-bound installation reader pass. The first reader probe
+used system Node and correctly returned unknown build metadata; rerunning the
+unchanged reader under the installed executable matches the private record.
+The original developer goal remains unchanged. Full-day use and the whole dogfood
+milestone remain open. Known cancellation limits and physical-input boundaries
+above still apply; actual OS viewers and live providers are not newly qualified.
