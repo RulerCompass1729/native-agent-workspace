@@ -13,10 +13,12 @@ function codexTurnBlock(nativeId, turn) {
   if (Number.isSafeInteger(turn.durationMs) && turn.durationMs >= 0) event.nativeDurationMs = turn.durationMs;
   return event;
 }
-function applyNativeBlock(session, event) {
+function applyNativeBlock(session, event, imageDataDir) {
   if (!event || typeof event.id !== 'string' || !event.id || event.nativeId !== session.nativeId) return false;
   const id = `native:${event.nativeId}:${event.id}`;
   let row = session.messages.find(m => m.id === id);
+  // Image enrichment has no authority to advance delivery or rewrite fields.
+  if (event.imagePayload) return Boolean(row && require('./native-images.cjs').applyImagePayload(row, event.imagePayload, imageDataDir, session.id));
   if (row?.kind === 'turn' && ['interrupted', 'failed'].includes(row.status) && event.status === 'complete') return false;
   if (row?.turnId && event.turnId && row.turnId !== event.turnId) { row.incomplete = true; return true; }
   const boundary = event.turnId && session.messages.find(m => m.nativeId === event.nativeId && m.kind === 'turn' && m.turnId === event.turnId);
@@ -35,6 +37,10 @@ function applyNativeBlock(session, event) {
   for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag', 'toolKind']) if (typeof event[field] === 'string') row[field] = event[field];
   if (event.kind === 'input' && ['native-inline', 'native-prompt'].includes(event.inputMode)) row.inputMode = event.inputMode;
   if (Object.hasOwn(event, 'images')) row.images = require('./native-images.cjs').imageReferences(event.images, event.imageCwd || session.cwd, row.images);
+  if (Number.isSafeInteger(event.imageCount) && event.imageCount > 0 && event.imageCount <= 17 && ['tool', 'input'].includes(row.kind) && row.status === 'complete') {
+    if (!Array.isArray(row.images)) row.images = [];
+    while (row.images.length < event.imageCount) row.images.push({ pending: true, unavailable: '图片尚未完整同步。' });
+  }
   if (event.kind === 'turn') for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) {
     if (Number.isFinite(event[field]) && (field === 'nativeDurationMs' ? Number.isSafeInteger(event[field]) && event[field] >= 0 : Math.abs(event[field]) <= 8640000000000000)) row[field] = event[field];
   }

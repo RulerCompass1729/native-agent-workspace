@@ -1,6 +1,7 @@
 // Display references only. No provider upload, file watcher or model call.
 const fs = require('node:fs'), path = require('node:path'), { randomUUID, createHash } = require('node:crypto');
 const MAX_IMAGES = 16, MAX_BYTES = 20 * 1024 * 1024, MAX_PIXELS = 16 * 1024 * 1024;
+const MAX_NATIVE_BYTES = 1024 * 1024, MAX_NATIVE_ENCODED = Math.ceil(MAX_NATIVE_BYTES / 3) * 4;
 const validPath = value => typeof value === 'string' && value.length > 0 && value.length <= 8192 &&
   !/[\u0000-\u001f\u007f]/u.test(value) && !/^[a-z][a-z0-9+.-]*:\/\//i.test(value);
 const fileIdentity = stat => [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs];
@@ -60,10 +61,85 @@ function imageSource(snapshot, source) {
 }
 function resolvedImagePath(ref) {
   if (ref?.unavailable) throw Error(ref.unavailable);
+  if (ref?.kind === 'native-pixels') {
+    if (!validPath(ref.cachedPath) || !path.isAbsolute(ref.cachedPath) || !/^[a-f0-9]{64}$/.test(ref.pixelSha256 || '')) throw Error('原生图片缓存来源无效。');
+    return ref.cachedPath;
+  }
   if (!validPath(ref?.path)) throw Error('图片没有有效的本机路径。');
   if (path.isAbsolute(ref.path)) return path.normalize(ref.path);
   if (typeof ref.cwd !== 'string' || !path.isAbsolute(ref.cwd)) throw Error('原生记录未保存这张图片的工作目录。');
   return path.resolve(ref.cwd, ref.path);
+}
+function validImagePayload(payload) {
+  if (!payload || !Number.isSafeInteger(payload.index) || payload.index < 0 || payload.index > MAX_IMAGES ||
+    Object.keys(payload).some(key => !['index', 'mime', 'data', 'sourcePath', 'unavailable'].includes(key)) ||
+    payload.sourcePath !== undefined && (!validPath(payload.sourcePath) || !path.isAbsolute(payload.sourcePath))) return false;
+  if (payload.unavailable !== undefined) return typeof payload.unavailable === 'string' && payload.unavailable.length > 0 && payload.unavailable.length <= 200 && payload.data === undefined && payload.mime === undefined;
+  return payload.index < MAX_IMAGES && ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(payload.mime) &&
+    typeof payload.data === 'string' && payload.data.length > 0 && payload.data.length <= MAX_NATIVE_ENCODED;
+}
+function nativePixelReference(dataDir, sessionId, payload, previous) {
+  const original = payload.sourcePath ? { path: payload.sourcePath } : {};
+  if (payload.unavailable) return { ...original, unavailable: payload.unavailable };
+  let bytes, digest;
+  try {
+    if (payload.data.length % 4 || !/^[a-zA-Z0-9+/]+={0,2}$/.test(payload.data)) throw Error('原生图片编码无法核验。');
+    bytes = Buffer.from(payload.data, 'base64');
+    if (!bytes.length || bytes.length > MAX_NATIVE_BYTES || bytes.toString('base64') !== payload.data) throw Error('原生图片超过 1 MB 或编码无法核验。');
+    imageDimensions(bytes);
+    const mime = bytes[0] === 0x89 ? 'image/png' : bytes[0] === 0xff ? 'image/jpeg' : bytes.toString('ascii', 0, 3) === 'GIF' ? 'image/gif' : 'image/webp';
+    if (mime !== payload.mime) throw Error('原生图片类型与文件头不符。');
+    digest = createHash('sha256').update(bytes).digest('hex');
+    if (previous && !previous.pending && previous.pixelSha256 !== digest) return { ...previous, unavailable: '原生图片内容已变化，请核对原生会话。' };
+    if (typeof dataDir !== 'string' || !path.isAbsolute(dataDir) || typeof sessionId !== 'string' || !sessionId) throw Error('原生图片缺少本机存储位置。');
+    const safeDirectory = (directory, create) => {
+      if (create) try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+      const stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('原生图片缓存目录无法核验。');
+      return directory;
+    };
+    safeDirectory(dataDir, false);
+    const base = safeDirectory(path.join(dataDir, 'native-image-cache'), true);
+    const folder = safeDirectory(path.join(base, createHash('sha256').update(sessionId).digest('hex')), true);
+    const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[mime];
+    const file = path.join(folder, digest + '.' + extension); let stat;
+    if (fs.existsSync(file)) {
+      const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+      try {
+        stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.size !== bytes.length) throw Error('原生图片缓存已变化。');
+        const stored = Buffer.alloc(bytes.length + 1); let offset = 0;
+        while (offset < stored.length) { const read = fs.readSync(fd, stored, offset, stored.length - offset, offset); if (!read) break; offset += read; }
+        if (offset !== bytes.length || !stored.subarray(0, offset).equals(bytes) || JSON.stringify(fileIdentity(stat)) !== JSON.stringify(fileIdentity(fs.fstatSync(fd)))) throw Error('原生图片缓存已变化。');
+      } finally { fs.closeSync(fd); }
+    } else {
+      let stored = 0;
+      for (const name of fs.readdirSync(folder)) {
+        const value = fs.lstatSync(path.join(folder, name));
+        if (!/^[a-f0-9]{64}\.(png|jpg|gif|webp)$/.test(name) || !value.isFile() || value.isSymbolicLink()) throw Error('原生图片缓存目录无法核验。');
+        stored += value.size;
+      }
+      if (stored + bytes.length > 64 * 1024 * 1024) throw Error('本会话原生图片已达 64 MB 上限。');
+      const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+      const created = fs.fstatSync(fd);
+      try { fs.writeFileSync(fd, bytes); stat = fs.fstatSync(fd); }
+      catch (error) {
+        try { const current = fs.lstatSync(file); if (current.dev === created.dev && current.ino === created.ino && !current.isSymbolicLink()) fs.unlinkSync(file); } catch {}
+        throw error;
+      } finally { fs.closeSync(fd); }
+    }
+    return previous && !previous.pending && previous.cachedPath ? previous : { ...original, kind: 'native-pixels', pixelSha256: digest, cachedPath: file, observedAt: Date.now(), fileIdentity: fileIdentity(stat) };
+  } catch (error) {
+    return { ...(previous && !previous.pending ? previous : original), ...(!previous?.pixelSha256 && digest ? { kind: 'native-pixels', pixelSha256: digest } : {}), unavailable: error.code ? '原生图片无法存入本机缓存。' : error.message };
+  }
+}
+function applyImagePayload(row, payload, dataDir, sessionId) {
+  if (!validImagePayload(payload) || !['tool', 'input'].includes(row.kind) || !['complete', 'submitted'].includes(row.status)) return false;
+  if (!Array.isArray(row.images)) row.images = [];
+  while (row.images.length <= payload.index) row.images.push({ pending: true, unavailable: '图片尚未完整同步。' });
+  row.images[payload.index] = nativePixelReference(dataDir, sessionId, payload, row.images[payload.index]);
+  if (row.images[payload.index].unavailable) row.incomplete = true;
+  return true;
 }
 // Preflight the bounded encoded bytes before nativeImage allocates a bitmap.
 // Static PNG/JPEG/GIF/WebP only; unknown or animated containers fail closed.
@@ -154,9 +230,9 @@ async function readImage(ref, nativeImage) {
   try {
     handle = await fs.promises.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const before = await handle.stat();
-    if (!before.isFile() || before.size <= 0 || before.size > MAX_BYTES) throw Error('图片须为不超过 20 MB 的普通文件。');
+    if (!before.isFile() || before.size <= 0 || before.size > (ref.kind === 'native-pixels' ? MAX_NATIVE_BYTES : MAX_BYTES)) throw Error('图片须为本机大小限制内的普通文件（本机文件 20 MB，原生缓存 1 MB）。');
     if (!Array.isArray(ref.fileIdentity) || ref.fileIdentity.length !== 5) throw Error('图片记录缺少文件来源，请重新在原生会话查看。');
-    if (JSON.stringify(fileIdentity(before)) !== JSON.stringify(ref.fileIdentity)) throw Error('图片在这条记录后已变化，请重新在原生会话查看。');
+    if (ref.kind !== 'native-pixels' && JSON.stringify(fileIdentity(before)) !== JSON.stringify(ref.fileIdentity)) throw Error('图片在这条记录后已变化，请重新在原生会话查看。');
     const buffer = Buffer.alloc(before.size + 1); let offset = 0;
     while (offset < buffer.length) {
       const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
@@ -166,7 +242,9 @@ async function readImage(ref, nativeImage) {
     const after = await handle.stat();
     if (offset !== before.size || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
       before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw Error('图片在读取时已变化。');
-    const encoded = buffer.subarray(0, offset), declared = imageDimensions(encoded);
+    const encoded = buffer.subarray(0, offset);
+    if (ref.kind === 'native-pixels' && createHash('sha256').update(encoded).digest('hex') !== ref.pixelSha256) throw Error('原生图片缓存已变化。');
+    const declared = imageDimensions(encoded);
     const image = nativeImage.createFromBuffer(encoded), size = image.getSize();
     if (image.isEmpty() || !size.width || !size.height || size.width > 10000 || size.height > 10000 || size.width * size.height > MAX_PIXELS ||
       !(size.width === declared.width && size.height === declared.height || size.width === declared.height && size.height === declared.width)) throw Error('图片无法解码或尺寸与文件头不符。');
@@ -230,4 +308,4 @@ class ImagePreviews {
   release(token) { const entry = this.entries.get(token); if (entry) { this.bytes -= entry.png.length; this.entries.delete(token); } }
   close() { this.closed = true; this.entries.clear(); this.bytes = 0; }
 }
-module.exports = { MAX_IMAGES, MAX_BYTES, MAX_PIXELS, imageDimensions, userImageReferences, imageReferences, applyInputImages, imageSource, resolvedImagePath, readImage, ImagePreviews };
+module.exports = { MAX_IMAGES, MAX_BYTES, MAX_PIXELS, MAX_NATIVE_BYTES, MAX_NATIVE_ENCODED, validImagePayload, applyImagePayload, imageDimensions, userImageReferences, imageReferences, applyInputImages, imageSource, resolvedImagePath, readImage, ImagePreviews };
