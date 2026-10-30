@@ -812,3 +812,24 @@ Validation: 1426 no-model unit checks; installed column 5 and timestamp 4 comple
 The actual original developer fork was then recovered once on the installed 129 backend after a controlled server loss and graceful old-daemon stop. The native UUID, original blocked goal identity/body, draft, model/effort/permissions and known Claude posture were retained. Both selected providers use the exact retained native binaries; the Codex TUI and server match. One ordinary visible reopening and one productive continuation were observed, with no retry. The author observed successful resumed source/Git and owned file IO; the private native history and IO witness retain those outputs. The interrupted turn was not replayed. Other native IDs, live native starts and nine protected parent processes remained; the native-process scan found no unaccounted process.
 
 This qualifies the selected original backend recovery only. Five older backends remain deferred, Claude's active goal is not certified, and the full real-workday/window-only/external-terminal conditions are still open. Source READY is not installed acceptance; the next integration is the source-READY version-information slice. No whole-milestone completion is claimed.
+
+
+### Application and owning-backend version information
+
+The existing brand exposes the application version and copies its packaged source
+revision plus backend versions/counts. A session with a different or missing
+backend version retains that fact rather than borrowing the active backend's
+version. No dialog, native session or provider call is added.
+
+Installation time is read only from a private, size-bounded record matching the
+version, commit and executable device/inode. Missing, invalid or copied-build
+records remain unrecorded; file times and first launch are not installation times.
+The record is not a same-user security boundary. A managed install must write it
+atomically after promoting and signing the final executable.
+
+Independent source review passed after strengthening two ineffective negative
+tests: a valid linked receipt and oversized valid JSON now exercise the intended
+guards, and removing either guard fails the tests. 119 related checks and the
+unchanged six-flow source GUI proof pass; the full suite's 1441 passing result is
+reused for the test-only delta. Signed installed acceptance and the actual daily
+installation record remain pending at this source checkpoint.
