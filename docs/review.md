@@ -1169,3 +1169,36 @@ low limitations are a short emptiness-check race, rollback-archive existence
 rather than hash checking, and visible reopening of the new app after a late
 failure. These did not trigger in this update. Whole dogfood, retained-backend
 activation and the previously recorded native/physical/lifecycle gaps remain open.
+
+
+### Integration ownership helper — source and actual Main adoption
+
+The shared operator lease now supports normal Main integration and explicitly
+delegated fallback. It reuses atomic directory ownership, preserves checkpoint
+records, rejects an occupied or incomplete holder and requires the exact release
+token. Time, PID appearance and delegation text do not grant a takeover.
+A bounded foreground command can acquire, execute and release within one call.
+Interrupted wrappers remain fail-closed; detached descendants are unqualified.
+
+Fifteen focused regressions pass without skips. They cover real CLI contention,
+returning Main, stale tokens, release failure after the child, reserved exit-code
+mapping and explicit rehearsal scope. The author's initial argument-order error
+briefly acquired the canonical directory twice during failed child starts. Both
+leases released; exact synthetic records were preserved and then removed. The
+corrected launcher and independent rehearsal boundary reject that case before
+coordination writes. Initial review findings were fixed and re-reviewed.
+
+Main uses the exact released helper for the actual two-file integration. A second
+Main acquisition is refused with code 75 while the existing token remains unchanged;
+the real patch applies, the child exits with code 0 and ownership is released. This is a real
+normal-Main integration, not an authorized backup takeover or installation.
+The earlier complete backup/return journey remains isolated and synthetic.
+
+The 61 installed runtime files, committed renderer inputs and strict signature
+remain unchanged on alpha.137/source `da5bc30`. This repository operator is not in
+the app payload; no version bump, package, GUI or provider trial is justified.
+Both operators must adopt the helper: unwrapped commands are not fenced. Recorded
+HEAD, installed version and delegation fields require separate verification;
+a checkpoint archive alone does not prove release or power-loss durability.
+Actual delegated READY merge, signed installation and return acceptance remain
+open with Main and the secretary. Whole fallback and dogfood goals remain open.
