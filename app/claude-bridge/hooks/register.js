@@ -78,6 +78,42 @@ async function observeUsage($) {
 let activeTurn = null;
 let lastPhase = null;
 const rootToolCalls = new Map();
+const nativeReadImages = new Map();
+const nativeImageEncodedLimit = 1398104; // 1 MiB, before base64, same consumer bound.
+function nativeImagePart(part) {
+  const source = part?.source;
+  return part?.type === 'image' && source?.type === 'base64' &&
+    ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(source.media_type) &&
+    typeof source.data === 'string' && source.data.length > 0 && source.data.length <= nativeImageEncodedLimit;
+}
+function mediaIncomplete(parts, binding, complete = true) {
+  return Array.isArray(parts) && parts.some(part => part?.type !== 'text' && !(complete && binding?.nativeMedia && nativeImagePart(part)));
+}
+function enqueueWithImages($, row, parts, binding = rootBinding) {
+  const count = binding?.nativeMedia && row.status === 'complete' && Array.isArray(parts) ? Math.min(17, parts.filter(part => part?.type === 'image').length) : 0;
+  // The original frame already records missing media if a later frame is lost.
+  if (count) row = { ...row, imageCount: count };
+  enqueueBlock($, row, binding);
+  if (!binding?.nativeMedia || !Array.isArray(parts) || row.status !== 'complete') return;
+  let index = 0;
+  const toolId = row.kind === 'tool' && row.id.startsWith('tool:') ? row.id.slice(5) : undefined;
+  const fact = toolId && nativeReadImages.get(toolId);
+  for (const part of parts) {
+    if (part?.type !== 'image') continue;
+    let imagePayload;
+    if (index === 16) { imagePayload = { index, unavailable: '其余图片超过本地预览上限，请在原生终端核对。' }; }
+    else if (!nativeImagePart(part)) imagePayload = { index, unavailable: '原生图片超过 1 MB、格式不支持或不是本机图片内容。' };
+    else {
+      imagePayload = { index, mime: part.source.media_type, data: part.source.data };
+      // This is a label only. Pixels always come from the accepted native
+      // block; the possibly changed original path is never reread.
+      if (fact?.binding === binding && fact.data === part.source.data && fact.mime === part.source.media_type) imagePayload.sourcePath = fact.path;
+    }
+    enqueueBlock($, { id: row.id, kind: row.kind, status: 'complete', mediaOnly: true, imagePayload }, binding);
+    if (++index > 16) break;
+  }
+  if (toolId) nativeReadImages.delete(toolId);
+}
 function observePhase($, phase, binding = rootBinding, turnId = activeTurn) {
   if (!nativeBlocks || stopped || !binding || binding !== rootBinding || !turnId || turnId !== activeTurn ||
       (lastPhase?.binding === binding && lastPhase.turnId === turnId && lastPhase.phase === phase)) return;
@@ -132,8 +168,15 @@ function enqueueBlock($, row, binding = rootBinding) {
   if (!nativeBlocks || !binding || binding !== rootBinding || stopped) return;
   // No synchronous IO in a display hook. Keep the entire accepted batch; an
   // overrun is an explicit gap, never a sliced fragment presented as complete.
-  const size = JSON.stringify(row).length;
-  if (size > 500000) { markObservationGap(binding); return; }
+  let size = JSON.stringify(row).length;
+  const media = row.mediaOnly === true && binding.nativeMedia;
+  if (size > (media ? 1500000 : 500000)) { markObservationGap(binding); return; }
+  if (media && observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000) {
+    row = { ...row, imagePayload: { index: row.imagePayload.index, unavailable: '图片观察暂时超过本地缓冲上限，请在原生终端核对。' } };
+    size = JSON.stringify(row).length;
+  }
+  // Image enrichment never evicts an earlier original text/control record.
+  if (media && (observations.length >= 256 || observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000)) { markObservationGap(binding); return; }
   while (observations.length >= 256 || observations.reduce((n, x) => n + JSON.stringify(x.row).length, 0) + size > 4000000) {
     observations.shift(); markObservationGap(binding);
   }
@@ -159,24 +202,24 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
     if (binding.nativeInlineInput && (queuedHuman || queuedEngine) && message.type === 'attachment' &&
       message.name === 'queued_command') {
       const inputTurn = typeof turnId === 'string' && turnId && !displayTurns.get(turnId)?.ended ? turnId : undefined;
-      enqueueBlock($, { id: `prompt:${result.uuid}`, kind: 'input', turnId: inputTurn,
+      enqueueWithImages($, { id: `prompt:${result.uuid}`, kind: 'input', turnId: inputTurn,
         text: text(message.content), title: '工作中插入', inputMode: 'native-inline',
-        status: 'complete', incomplete: [e.message?.content, message.content].some(blocks => Array.isArray(blocks) && blocks.some(b => b?.type !== 'text')) }, binding);
+        status: 'complete', incomplete: [e.message?.content, message.content].some(blocks => mediaIncomplete(blocks, binding)) }, message.content, binding);
     }
     // Retained hosts have no stable GUI user-row ID. Observe the accepted
     // native append instead of guessing a match to a random legacy cache ID.
     if (legacyOnly && e.door === 'prompt' && message.type === 'user') {
-      const nonText = message.content.some(b => b?.type !== 'text');
-      enqueueBlock($, { id: `prompt:${result.uuid}`, kind: 'input',
+      const nonText = mediaIncomplete(message.content, binding);
+      enqueueWithImages($, { id: `prompt:${result.uuid}`, kind: 'input',
         text: text(message.content), status: 'complete', incomplete: nonText,
-        ...(candidate === collecting && !candidate?.invalid && candidate?.appends === 1 && candidate?.tag && text(message.content) === candidate.text ? { inputTag: candidate.tag } : {}) });
+        ...(candidate === collecting && !candidate?.invalid && candidate?.appends === 1 && candidate?.tag && text(message.content) === candidate.text ? { inputTag: candidate.tag } : {}) }, message.content, binding);
     }
     // A qualified managed reader uses accepted IDs for ordinary input too.
     // This mod's own submissions already have their visible app row.
     if (!legacyOnly && binding.nativePromptInput && e.door === 'prompt' && message.type === 'user' &&
       !(e.origin?.kind === 'plugin' && e.origin.name === 'native-workspace-submit')) {
-      enqueueBlock($, { id: `prompt:${result.uuid}`, kind: 'input', inputMode: 'native-prompt',
-        text: text(message.content), status: 'complete', incomplete: message.content.some(b => b?.type !== 'text') }, binding);
+      enqueueWithImages($, { id: `prompt:${result.uuid}`, kind: 'input', inputMode: 'native-prompt',
+        text: text(message.content), status: 'complete', incomplete: mediaIncomplete(message.content, binding) }, message.content, binding);
     }
     // Display IDs and saved transcript IDs are different namespaces. Text is
     // collected from MessageDisplay only, not guessed equal to an append/Stop.
@@ -199,9 +242,10 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
       }
     } else if (e.door === 'tool-result' && e.origin?.kind === 'tool' && message.type === 'user') {
       for (const block of message.content) if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-        const nonText = Array.isArray(block.content) && block.content.some(b => b?.type !== 'text');
-        enqueueBlock($, { id: `tool:${block.tool_use_id}`, kind: 'tool',
-          title: e.origin.tool || '', text: text(block.content), status: block.is_error ? 'failed' : 'complete', incomplete: nonText });
+        const nonText = mediaIncomplete(block.content, binding, !block.is_error);
+        enqueueWithImages($, { id: `tool:${block.tool_use_id}`, kind: 'tool',
+          title: e.origin.tool || '', text: text(block.content), status: block.is_error ? 'failed' : 'complete', incomplete: nonText }, block.content, binding);
+        if (block.is_error) nativeReadImages.delete(block.tool_use_id);
       }
     }
     return;
@@ -320,7 +364,7 @@ async function refreshLegacyObserver($, ownGeneration) {
       observerBindRequest = { token: binding.token, generation: ownGeneration,
         promise: request($, '/root-bind', { nativeBlocks, nativeQueue: version === '2.1.302',
           nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
-          nativePromptInput: false,
+          nativePromptInput: false, nativeMedia: version === '2.1.312',
           nativeSharedDisplay: nativeBlocks && version === '2.1.302' }, binding).finally(() => { observationRequests--; }) };
     }
     const pending = observerBindRequest;
@@ -337,7 +381,9 @@ async function refreshLegacyObserver($, ownGeneration) {
     // listeners hold a separate connection value: their old receipt/grant must
     // still go to its old credential, never to this new observer.
     Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
-      nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: false });
+      nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: false,
+      nativeMedia: nativeBlocks && version === '2.1.312' && result.nativeMedia === true });
+    nativeReadImages.clear();
     for (const entry of observations) if (entry.binding === previous) {
       entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence, replayed: true };
     }
@@ -459,12 +505,15 @@ async function bindRoot($, ownGeneration) {
   const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(version)),
     nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
+    nativeMedia: version === '2.1.312',
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
-    nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true };
+    nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
+    nativeMedia: nativeBlocks && version === '2.1.312' && result.nativeMedia === true };
+  nativeReadImages.clear();
   heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
   // metadata refresh avoids waiting for the existing /next poll to return.
@@ -503,7 +552,9 @@ async function syncRoot($) {
       if (typeof result.lease !== 'string') throw Error('Root lease missing');
       rootEnds.delete(rootBinding.sessionId);
       rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
-        nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true };
+        nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
+        nativeMedia: nativeBlocks && rootBinding.nativeMedia && result.nativeMedia === true };
+      nativeReadImages.clear();
       observationGap = false; observationGapRevision++;
       rootTransitions.shift();
     }
@@ -566,7 +617,7 @@ export function register(on) {
   on('tool.call', async ($, e, next) => {
     const binding = rootBinding;
     if (!nativeBlocks || e.agentId || !e.tool_use_id || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core') return next(e);
-    const call = { binding, turnId: activeTurn, id: `permission:${e.tool_use_id}`, progress: false };
+    const call = { binding, turnId: activeTurn, id: `permission:${e.tool_use_id}`, tool: e.tool, progress: false };
     rootToolCalls.set(e.tool_use_id, call);
     try { return await next(e); }
     finally {
@@ -574,6 +625,29 @@ export function register(on) {
       if (binding === rootBinding) enqueueBlock($, { id: 'control:permission-end', kind: 'control', status: 'complete', permissionId: call.id }, binding);
     }
   }).catch(($, e, next) => next(e));
+  on('classic.PostToolUse', async ($, e, next) => {
+    const binding = rootBinding, call = rootToolCalls.get(e.tool_use_id), ownGeneration = generation;
+    let fact;
+    try {
+      const file = e.tool_response?.file, name = e.tool_input?.file_path;
+      if (binding?.nativeMedia && call?.binding === binding && call.tool === 'Read' && e.tool_name === 'Read' &&
+        !e.agent_id && e.session_id === binding.sessionId && next.origin?.plugin === 'engine' && next.origin?.tier === 'core' &&
+        e.tool_response?.type === 'image' && typeof file?.base64 === 'string' && file.base64.length <= nativeImageEncodedLimit &&
+        ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type) && typeof name === 'string' && name.startsWith('/') && name.length <= 8192 && !/[\u0000-\u001f\u007f]/u.test(name)) {
+        // Capture scalars before downstream hooks can mutate their objects.
+        fact = { binding, path: name, data: file.base64, mime: file.type };
+      }
+    } catch { /* A missing optional path label cannot change the native tool. */ }
+    const result = await next(e);
+    try {
+      if (fact && binding === rootBinding && ownGeneration === generation && !stopped && !rootEnds.has(binding.sessionId) &&
+        result?.continue !== false && result?.decision !== 'block' && result?.updatedToolOutput === undefined && result?.updatedMCPToolOutput === undefined) {
+        nativeReadImages.set(e.tool_use_id, fact);
+        while (nativeReadImages.size > 64 || [...nativeReadImages.values()].reduce((n, value) => n + value.data.length, 0) > 4000000) nativeReadImages.delete(nativeReadImages.keys().next().value);
+      }
+    } catch { /* Only the optional label is dropped; relay the exact result. */ }
+    return result;
+  });
   on('tool.check', async ($, e, next) => {
     const call = rootToolCalls.get(e.tool_use_id), result = await next(e);
     if (!call || e.agentId || call.binding !== rootBinding || next.origin?.plugin !== 'engine' || next.origin?.tier !== 'core' || result.decision !== 'ask') return result;

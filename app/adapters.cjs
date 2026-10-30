@@ -275,6 +275,7 @@ class Claude extends EventEmitter {
     this.observationEpoch = crypto.randomBytes(16).toString('hex');
     this.rootObservation = null; this.rootTurn = null; this.liveTurn = null; this.livePermissions = new Map(); this.observationSeenAt = Date.now();
     this.nativeBlocks = message.nativeBlocks === true;
+    this.nativeMedia = this.nativeBlocks && message.nativeMedia === true;
     this.nativeQueue = message.nativeQueue === true;
     // Managed input needs both the accepted-row display and boundary-only hook
     // path. Old retained queues lack an attachment-to-app identity link.
@@ -284,7 +285,7 @@ class Claude extends EventEmitter {
     this.addressedSendAvailable = this.nativeBlocks && message.addressedTool === true && !this.retainedReader;
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
     this.displayProofs = new Map(); this.displayGap = false;
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia };
   }
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
@@ -308,6 +309,19 @@ class Claude extends EventEmitter {
     return { observed: true };
   }
   observeBlock(message) {
+    if (message.mediaOnly === true) {
+      const row = this.record.messages?.find(m => m.id === `native:${this.record.nativeId}:${message.id}`);
+      if (!this.nativeMedia || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
+        !row || row.kind !== message.kind || !['tool', 'input'].includes(row.kind) || !['complete', 'submitted'].includes(row.status) ||
+        message.status !== 'complete' || !require('./native-images.cjs').validImagePayload(message.imagePayload) ||
+        Object.keys(message).some(key => !['id', 'kind', 'status', 'mediaOnly', 'imagePayload', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'replayed'].includes(key))) throw Error('Invalid native media');
+      // Media can enrich only an already accepted original. Derive all text
+      // and attribution from that row, never from the metadata frame.
+      message = { ...message, text: row.text, title: row.title, turnId: row.turnId,
+        inputMode: row.inputMode, ...(row.kind === 'input' && !row.inputMode && row.inputTag ? { inputTag: row.inputTag } : {}) };
+    } else if (message.imagePayload !== undefined) throw Error('Invalid native media');
+    if (message.imageCount !== undefined && (!this.nativeMedia || !Number.isSafeInteger(message.imageCount) || message.imageCount < 1 || message.imageCount > 17 ||
+      !['tool', 'input'].includes(message.kind) || message.status !== 'complete')) throw Error('Invalid native image count');
     const inline = message.kind === 'input' && message.inputMode === 'native-inline';
     const nativePrompt = message.kind === 'input' && message.inputMode === 'native-prompt';
     if (!this.nativeBlocks || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
@@ -418,7 +432,9 @@ class Claude extends EventEmitter {
       const block = turn.blocks.get(message.finalDisplayId);
       if (status === 'complete' && !turn.incomplete && block?.final) { turn.safeText = block.text; turn.messageId = `native:${this.record.nativeId}:${message.finalDisplayId}`; }
     }
-    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag, ...(inline || nativePrompt ? { inputMode: message.inputMode } : {}) });
+    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag,
+      ...(inline || nativePrompt ? { inputMode: message.inputMode } : {}), ...(message.mediaOnly ? { imagePayload: message.imagePayload } : {}),
+      ...(message.imageCount !== undefined ? { imageCount: message.imageCount } : {}) });
     if (kind === 'turn' && this.rootTurn?.id === turnId && !this.rootTurn.completed && ['working', 'error', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
       this.rootTurn.status = status === 'interrupted' ? 'idle' : status === 'failed' && message.failedRequest === true ? 'error' : null;
       this.rootTurn.completed = status === 'complete';
@@ -532,7 +548,7 @@ class Claude extends EventEmitter {
     const previous = this.lastRootTransition;
     if (previous && previous.lease === message.lease && previous.sessionId === message.sessionId &&
       previous.nextSessionId === message.nextSessionId && this.record.nativeId === message.nextSessionId) {
-      return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput }; // Lost metadata ACK, never a second clear.
+      return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia }; // Lost metadata ACK, never a second clear.
     }
     if (!this.rootLease || message.lease !== this.rootLease || this.rootEnding?.sessionId !== message.sessionId ||
       !FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] || FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] !== message.source || this.rootEnding.unfollowed || message.agentId ||
@@ -551,7 +567,7 @@ class Claude extends EventEmitter {
     const observed = (this.contextEvents || []).filter(e => e.session_id === change.nativeId);
     this.contextEvents = (this.contextEvents || []).filter(e => e.session_id !== change.nativeId);
     for (const event of observed) this.hook(event);
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia };
   }
   hook(event) {
     // A new root can already be receiving human input while its identity is

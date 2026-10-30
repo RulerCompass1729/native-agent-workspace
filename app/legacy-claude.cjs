@@ -27,7 +27,7 @@ class LegacyClaude extends Claude {
         const pending = this.record.messages.find(m => m.id === event.inputTag && m.inputMode === 'queue' && m.nativeId === event.nativeId && m.text === event.text);
         if (pending) { pending.id = `native:${event.nativeId}:${event.id}`; pending.nativeBlock = true; }
       }
-      if (applyNativeBlock(this.record, event)) {
+      if (applyNativeBlock(this.record, event, dataDir)) {
         this.emit('readerBlock', this.record.messages.find(m => m.id === `native:${event.nativeId}:${event.id}`));
         this.scheduleSave(); this.emit('change');
       }
