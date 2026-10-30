@@ -1,5 +1,5 @@
-// A reading surface for existing sessions. It has no native input, launch or
-// sharing API; deliberate input stays in the existing session workspace.
+// Existing-session readers with injected input hosts. This module has no native
+// input, launch or sharing API; the workspace supplies the same Solo bindings.
 (function (target, factory) {
   const fleet = typeof module !== 'undefined' && module.exports ? require('./fleet-observation.js') : target.nativeWorkspaceFleet;
   const api = factory(target, fleet);
@@ -70,7 +70,7 @@
     host.addEventListener('keydown', event => { if (event.key === 'Escape') clearOrderMarkers(); });
     async function moveMember(id, target, after) {
       if (!canOrder() || id === target) return;
-      options.beforeLayout?.();
+      options.beforeInputLayout?.(); options.beforeLayout?.();
       try {
         await options.onMove(id, target, after);
         // Announce the rendered broadcast, never a predicted native operation.
@@ -83,7 +83,7 @@
     const toolbar = el('div', undefined, 'collaboration-toolbar');
     const back = button('← 返回共同工作', () => focus(''), 'collaboration-back'); back.hidden = true;
     const simplify = button('简化信息', () => {
-      options.beforeLayout?.(); brief = !brief; render(); options.onLayout?.();
+      options.beforeInputLayout?.(); options.beforeLayout?.(); brief = !brief; render(); options.onLayout?.();
       if (!brief) { restoreSelection(briefSelection); briefSelection = null; }
     }); simplify.setAttribute('aria-pressed', 'false');
     simplify.addEventListener('pointerdown', () => { if (!brief) briefSelection = selectedRange(); });
@@ -108,7 +108,7 @@
     function focus(id) {
       if (id === focused) return;
       if (id && !records.some(s => s.id === id)) return;
-      options.beforeLayout?.();
+      options.beforeInputLayout?.(); options.beforeLayout?.();
       if (id && !focused && !originSelection) rememberSelection();
       const previous = focused; focused = id; render();
       options.onFocus?.(id, previous, id ? key(id) : key(previous));
@@ -119,7 +119,7 @@
       }
       options.onLayout?.();
     }
-    function setLayout(value) { options.beforeLayout?.(); layout = value; render(); options.onLayout?.(); }
+    function setLayout(value) { options.beforeInputLayout?.(); options.beforeLayout?.(); layout = value; render(); options.onLayout?.(); }
     function refreshStatus() {
       for (const record of records) {
         const pane = panes.get(record.id); if (!pane) continue;
@@ -190,7 +190,7 @@
       // offering a short keyboard route past a member's long conversation.
       const next = button('', () => {
         const index = records.findIndex(s => s.id === record.id);
-        if (layout === 'list' && !focused && index >= 0) {
+        if (!focused && index >= 0) {
           const target = panes.get(records[index + 1]?.id);
           target?.name.focus(); target?.header.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         }
@@ -237,9 +237,11 @@
       });
       const finish = () => { if (dragging) { dragging = null; options.onLayout?.(); } };
       grip.addEventListener('pointerup', finish); grip.addEventListener('pointercancel', finish); grip.addEventListener('lostpointercapture', finish);
-      reader.append(messages, short, grip);
+      const input = el('div', undefined, 'collaboration-member-input'); input.hidden = true;
+      const nativeFooter = el('div', undefined, 'column-native-footer'); nativeFooter.hidden = true;
+      reader.append(messages, short, input, nativeFooter, grip);
       const unit = el('div', undefined, 'collaboration-member-unit'); unit.dataset.memberId = record.id; unit.append(reader);
-      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, unit, reader, messages, short, quote, truncation, source, notice, grip };
+      return pane = { header, name, nameText, nameSuffix, more, next, status, child, compactChild, freshness, unit, reader, messages, input, nativeFooter, heading, short, quote, truncation, source, notice, grip };
     }
     function render() {
       const reordered = [...readers.children].map(n => n.dataset.memberId).join('\n') !== records.map(r => r.id).join('\n');
@@ -252,11 +254,12 @@
       host.dataset.layout = layout; host.dataset.focused = String(Boolean(focused)); host.dataset.brief = String(brief); host.dataset.content = String(contentVisible);
       simplify.setAttribute('aria-pressed', String(brief)); grid.setAttribute('aria-pressed', String(layout === 'grid')); list.setAttribute('aria-pressed', String(layout === 'list'));
       back.hidden = !focused; simplify.hidden = Boolean(focused) || !contentVisible; layouts.hidden = Boolean(focused) || !contentVisible; readers.hidden = Boolean(focused) || !contentVisible; empty.hidden = records.length > 0 || !contentVisible;
+      const columnInput = layout === 'grid' && !focused && !brief && contentVisible && records.length <= 4;
       const listUnits = layout === 'list' && !focused && contentVisible;
       host.dataset.listUnits = String(listUnits); headers.hidden = listUnits;
       const retained = new Set(records.map(r => r.id));
       for (const [id, pane] of panes) if (!retained.has(id)) {
-        options.disposeMessages?.(pane.messages); pane.header.remove(); pane.unit.remove(); panes.delete(id); weights.delete(id);
+        options.disposeInput?.(id); options.disposeMessages?.(pane.messages); pane.header.remove(); pane.unit.remove(); panes.delete(id); weights.delete(id);
       }
       records.forEach((record, i) => {
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
@@ -271,7 +274,13 @@
         pane.more.hidden = !options.onMemberMenu;
         pane.more.disabled = !connected;
         pane.more.setAttribute('aria-label', `管理 ${label}`);
-        pane.next.hidden = !listUnits || i === records.length - 1;
+        pane.input.hidden = !columnInput;
+        const nativeVisible = options.renderInput?.(pane.input, record, columnInput) || false;
+        pane.reader.classList.toggle('has-column-input', columnInput);
+        pane.nativeFooter.hidden = !nativeVisible;
+        const nextParent = nativeVisible ? pane.nativeFooter : pane.heading;
+        if (pane.next.parentElement !== nextParent) nextParent.append(pane.next);
+        pane.next.hidden = (!listUnits && !nativeVisible) || i === records.length - 1;
         setText(pane.next, `跳到下一成员：${records[i + 1] ? options.label(records[i + 1]) : ''}`);
         pane.header.classList.toggle('is-focused', focused === record.id);
         pane.messages.hidden = brief; pane.short.hidden = !brief;
@@ -304,14 +313,14 @@
     }
     return {
       update(people, isConnected = true, showContent = true, focusId = focused) {
-        if (!isConnected || records.map(r => r.id).join('\n') !== people.map(r => r.id).join('\n')) { dragging = null; clearOrderMarkers(); }
+        if (!isConnected || records.map(r => r.id).join('\n') !== people.map(r => r.id).join('\n')) { options.beforeInputLayout?.(); dragging = null; clearOrderMarkers(); }
         records = people; connected = isConnected; contentVisible = showContent;
         if (!focusId || records.some(r => r.id === focusId)) { if (focusId !== focused) originSelection = null; focused = focusId; }
         if (focused && !records.some(r => r.id === focused)) { const previous = focused; focused = ''; options.onFocus?.('', previous, key(previous)); }
         render();
       },
       focus, key, toolbar, refresh: refreshStatus, get focused() { return focused; },
-      dispose() { toolbar.remove(); for (const pane of panes.values()) options.disposeMessages?.(pane.messages); panes.clear(); host.replaceChildren(); },
+      dispose() { toolbar.remove(); for (const [id, pane] of panes) { options.disposeInput?.(id); options.disposeMessages?.(pane.messages); } panes.clear(); host.replaceChildren(); },
     };
   }
   return { create, statusFacts, excerpt, adjustedWidths };
