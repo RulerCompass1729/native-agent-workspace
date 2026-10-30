@@ -7,6 +7,29 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('../service-client.cjs');
 const { readLayout, writeLayout } = require('../service-layout.cjs');
 
+test('cold bootstrap stages the disabled local prepared-command service without provider inference', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-prepared-bootstrap-'));
+  let client;
+  try {
+    await ensureService(directory, process.execPath);
+    client = await connect(directory, 'bootstrap-check');
+    const state = await client.call('initial');
+    assert.ok(state.capabilities.includes('humanMobileV1'));
+    assert.ok(state.capabilities.includes('humanMobilePreparedV1'));
+    assert.deepEqual(state.sessions, []);
+    assert.equal(state.diagnostics.dispatches, 0);
+    assert.equal(fs.existsSync(path.join(directory, 'mobile-authority.json')), false);
+    const runtimes = fs.readdirSync(path.join(directory, 'runtimes'));
+    assert.equal(runtimes.length, 1);
+    for (const name of ['mobile-access.cjs', 'mobile-session.cjs']) {
+      assert.deepEqual(fs.readFileSync(path.join(directory, 'runtimes', runtimes[0], name)), fs.readFileSync(path.join(__dirname, '..', name)));
+    }
+  } finally {
+    client?.close(); await stopOwnEmptyService(directory);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('continuation requires every session to end and rejects missing history or failed persistence', () => {
   const record = { id: 'old', nativeId: 'native', name: 'Old task', state: 'ended' };
   for (const state of ['idle', 'working', 'disconnected', 'recoverable', 'error', 'stopping']) {
