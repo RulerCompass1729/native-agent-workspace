@@ -157,13 +157,13 @@ class LegacyCodex extends EventEmitter {
     }
     if (this.closed) throw Error('连接操作已取消。');
     if (!loaded) throw Error('原生会话未处于可连接状态，没有恢复或重建它。');
-    const revision = adapter.stateRevision;
+    const revision = adapter.stateRevision, settings = adapter.nativeSettings;
     // No model/cwd/permission overrides. This is an explicit connection action
     // to an already loaded thread, not a background observer or cold recovery.
     try {
       const result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true });
       if (this.closed || result.thread?.id !== this.record.nativeId) throw Error('原生会话连接未确认。');
-      this.model = result.model || result.thread.model || null;
+      adapter.observeReplySettings(result, settings);
       if (revision === adapter.stateRevision) adapter.observeStatus(result.thread.status);
       this.subscribed = true;
     } catch (error) {

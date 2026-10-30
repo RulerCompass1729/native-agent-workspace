@@ -1219,3 +1219,38 @@ as the source of the photographed prompt. The accessing process and target app
 remain unknown. No container read, prompt replay, permission change, provider test
 or installed-app change is justified by this partial diagnosis. The incident stays
 open; its next checkpoint needs naturally available attribution evidence.
+
+### Codex effective settings when opening or recovering a thread
+
+The native start/resume response already reports the effective model and optional
+reasoning effort. Waiting only for a later settings-change event omitted the
+initial effort. The existing reader projection now consumes those response
+fields on creation, recovery, native attachment and reconnection. No new native
+request, settings override, permission change or input is introduced.
+
+A response cannot replace a settings event observed while that request was in
+flight. This also repairs an unconditional old-model update after recovery.
+Known same-thread Plan mode is retained; missing effort remains unknown, and a
+committed identity switch does not inherit the previous thread's mode or effort.
+Only public model/effort fields enter the projection, with existing mode provenance.
+
+Five valid original regressions fail before the fix. The first incomplete test
+host is retained separately and is not counted as a product reproduction.
+The 416 affected checks pass without skips, including 15 focused cases for
+these response paths, races, missing values, identity changes and private-field
+exclusion. They use the actual Codex adapter with synthetic RPC responses and
+make no provider or model calls. Pinned native 0.164 response definitions and
+the earlier owned 0.165 response evidence establish the field names, not a new
+runtime compatibility claim.
+
+The retained-backend reader uses the same adapter but has its own loaded-thread
+resume caller. Two additional Unix WebSocket regressions reproduce the omitted
+effort and late-model overwrite there. That caller now reuses the same projection
+and ordering guard, without changing its native request. All 96 focused adapter
+and retained-reader checks pass with zero skips or provider/model calls. An
+initial test event used an invalid payload shape; the corrected baseline is
+recorded separately and both valid cases fail before this caller fix.
+
+Installed GUI acceptance remains pending the next meaningful batch. These source
+checks do not retrofit retained live backends, qualify physical input or prove
+the original author's cold recovery. The dogfood goal remains open.

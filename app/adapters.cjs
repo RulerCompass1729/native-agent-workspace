@@ -905,7 +905,7 @@ class Codex extends EventEmitter {
         if (message.role === 'user' && ['human', 'room', 'agent-wake'].includes(message.origin)) this.ownInputs.add(message.id);
       }
       this.host.codexTargets.set(this.record.nativeId, this);
-      const revision = this.stateRevision;
+      const revision = this.stateRevision, settings = this.nativeSettings;
       let result;
       try {
         result = await rpc.call('thread/resume', { threadId: this.record.nativeId, ...(!this.record.externalHistory ? { cwd: this.record.cwd } : {}), excludeTurns: true });
@@ -921,7 +921,7 @@ class Codex extends EventEmitter {
       if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
       this.hasHistory = true; this.addressedSendAvailable = this.record.addressedToolVersion === 1; this.finishRecoveryConnection?.(true);
       if (this.record.externalHistory && typeof result.thread.cwd === 'string' && path.isAbsolute(result.thread.cwd)) this.record.cwd = result.thread.cwd;
-      this.emit('pid', this.host.codexProcess.pid); this.emit('model', result.model || result.thread.model || '原生默认');
+      this.emit('pid', this.host.codexProcess.pid); this.observeReplySettings(result, settings);
       if (revision === this.stateRevision) this.observeStatus(result.thread.status);
       // The TUI can display native history while the graphical copy is loading.
       if (this.record.view === 'terminal') await this.openTerminal();
@@ -941,13 +941,14 @@ class Codex extends EventEmitter {
     if (!current()) throw new Error('原生后台已变化，没有继续旧的启动请求。');
     // Native configuration/requirements choose permissions unless the person
     // chose to skip confirmations for this session when creating it.
+    const settings = this.nativeSettings;
     const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false, dynamicTools: [require('./addressed-handoffs.cjs').codexTool],
       ...(this.record.skipPermissions ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : {}) });
     if (!current()) throw new Error('原生后台已变化，没有接管旧的启动结果。');
     this.record.addressedToolVersion = 1; this.addressedSendAvailable = true;
     this.record.nativeId = r.thread.id; this.nativeSessionId = r.thread.sessionId; this.emit('workspaceMcpProof');
     this.host.codexTargets.set(this.record.nativeId, this);
-    this.emit('model', r.model || r.thread.model || '原生默认');
+    this.observeReplySettings(r, settings);
     this.emit('pid', this.host.codexProcess.pid); this.emit('state', 'idle');
     });
   }
@@ -999,8 +1000,10 @@ class Codex extends EventEmitter {
       const nativeState = thread.status?.type;
       if (revision === this.eventRevision) this.emit('state', nativeState === 'active' ? 'working' : nativeState === 'idle' ? 'idle' : 'starting');
       if (!thread.preview || nativeState !== 'idle') continue;
-      await rpc.call('thread/resume', { threadId: thread.id, excludeTurns: true });
+      const settings = this.nativeSettings;
+      const result = await rpc.call('thread/resume', { threadId: thread.id, excludeTurns: true });
       if (!current()) return;
+      this.observeReplySettings(result, settings);
       if (!await this.hydrateHistory(thread.id, lifecycle) || !current()) return;
       this.chatAvailable = true; this.hasHistory = true; this.emit('capability');
     }
@@ -1111,6 +1114,14 @@ class Codex extends EventEmitter {
       mode: ['plan', 'default'].includes(mode) ? mode : null };
     this.emit('model', settings.model); this.emit('capability');
   }
+  observeReplySettings(result, previous) {
+    if (typeof result?.thread?.id !== 'string' || !result.thread.id || result.thread.id !== this.record.nativeId || this.nativeSettings !== previous) return;
+    const model = result.model || result.thread.model;
+    // A reply has effective model/effort, but no collaboration-mode report.
+    // Keep a separately observed mode for this same native identity only.
+    const mode = previous?.nativeId === this.record.nativeId ? previous.mode : null;
+    this.observeSettings({ model, effort: result.reasoningEffort, collaborationMode: { mode } });
+  }
   rememberQuestion(params) {
     if (typeof params.turnId !== 'string' || typeof params.itemId !== 'string' || !Array.isArray(params.questions)) return;
     const id = `notice:question:${params.turnId}:${params.itemId}`;
@@ -1157,10 +1168,11 @@ class Codex extends EventEmitter {
       for (const row of this.record.messages || []) if (row.nativeId === this.record.nativeId && row.turnId === this.turnId && ['streaming', 'running'].includes(row.status)) row.incomplete = true;
       this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
       if (this.turnId && !this.nativeTurnFinished) this.emit('nativeBlock', { id: `gap:source:${crypto.randomUUID()}`, nativeId: this.record.nativeId, turnId: this.turnId, kind: 'gap', status: 'complete', text: '原生显示连接已断开，正在核对图形连接；此间的临时变化可能未同步，原会话继续保留。' });
-      const rpc = this.host.rpc, id = this.record.nativeId, revision = this.lifecycleRevision, stateRevision = this.stateRevision;
+      const rpc = this.host.rpc, id = this.record.nativeId, revision = this.lifecycleRevision, stateRevision = this.stateRevision, settings = this.nativeSettings;
       this.observing = rpc.call('thread/resume', { threadId: id, excludeTurns: true }).then(async result => {
         if (revision !== this.lifecycleRevision || this.stopped || this.transportDisconnected || this.host.rpc !== rpc || result.thread?.id !== id) return;
         this.nativeObservationPending = false;
+        this.observeReplySettings(result, settings);
         if (stateRevision === this.stateRevision) this.observeStatus(result.thread.status);
         if (await this.hydrateHistory(id, revision, true) && revision === this.lifecycleRevision && !this.stopped) { this.chatAvailable = true; this.emit('capability'); }
       }).catch(() => this.emit('activity', '原生终端已退出；图形连接尚未确认，记录和草稿保留。'));
@@ -1168,6 +1180,7 @@ class Codex extends EventEmitter {
     }
     if (event.ephemeral) return; // Native title/Recap helpers are not the displayed root.
     if (event.kind === 'request') {
+      this.terminalSettingsRequest = { key: event.key, previous: this.nativeSettings };
       if (event.method === 'thread/resume' && event.threadId === this.record.nativeId && !this.terminalSwitch) return;
       if (!this.record.nativeId) return;
       this.pendingTerminalContext = null; this.terminalSwitch = event.key; this.chatAvailable = false;
@@ -1188,9 +1201,15 @@ class Codex extends EventEmitter {
     if (!thread || !/^[a-f0-9-]{36}$/i.test(thread.id || '') || thread.ephemeral || thread.parentThreadId) return;
     if (!this.record.nativeId) {
       this.terminalNotificationSource = true; this.terminalRpc = event.rpc;
-      this.initialTerminalThread?.(thread, event.result.model); this.initialTerminalThread = null; this.emit('capability'); return;
+      const settings = this.terminalSettingsRequest?.key === event.key ? this.terminalSettingsRequest.previous : this.nativeSettings;
+      this.initialTerminalThread?.(thread, event.result.model); this.initialTerminalThread = null;
+      this.observeReplySettings(event.result, settings); this.emit('capability'); return;
     }
-    if (event.method === 'thread/resume' && thread.id === this.record.nativeId && !this.terminalSwitch) { this.terminalRpc = event.rpc; return; }
+    if (event.method === 'thread/resume' && thread.id === this.record.nativeId && !this.terminalSwitch) {
+      this.terminalRpc = event.rpc;
+      if (this.terminalSettingsRequest?.key === event.key) this.observeReplySettings(event.result, this.terminalSettingsRequest.previous);
+      return;
+    }
     if (this.terminalSwitch !== event.key) return;
     const existing = this.host.codexTargets.get(thread.id);
     if (existing && existing !== this) {
@@ -1210,6 +1229,7 @@ class Codex extends EventEmitter {
     this.liveMessageItems.clear(); this.historyMessageItems.clear(); this.liveToolItems.clear(); this.textEndedTurns.clear();
     this.nativeStartedAt = null; this.nativeTurnFinished = false; this.nativeWait = null; this.forgetNativeRequests();
     this.nativeSettings = null;
+    this.observeReplySettings(event.result, null);
     this.record.addressedToolVersion = null; this.addressedSendAvailable = false;
     this.hasHistory = Array.isArray(thread.turns) && thread.turns.length > 0;
     this.chatAvailable = false; this.observeStatus(thread.status);
@@ -1582,7 +1602,7 @@ class Codex extends EventEmitter {
   }
   async observeAcceptedTurn(turnId, inputTag) {
     if (this.stopped || !turnId) throw Error('原生观察连接已变化。');
-    const revision = this.stateRevision, lifecycle = this.lifecycleRevision, rpc = this.host.rpc;
+    const revision = this.stateRevision, lifecycle = this.lifecycleRevision, rpc = this.host.rpc, settings = this.nativeSettings;
     let result;
     try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
     catch (error) {
@@ -1606,6 +1626,7 @@ class Codex extends EventEmitter {
       return;
     }
     if (this.stopped || lifecycle !== this.lifecycleRevision || result.thread?.id !== this.record.nativeId) throw Error('原生观察连接已变化。');
+    this.observeReplySettings(result, settings);
     this.needsSubscription = false; this.hasHistory = true;
     if (revision === this.stateRevision && this.latestState !== 'approval') this.observeStatus(result.thread.status);
     const page = await this.host.rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 20, itemsView: 'full' });
@@ -1705,6 +1726,7 @@ class Codex extends EventEmitter {
       if (!current()) throw new Error('原生连接已经变化；没有重发任务。');
       rpc = this.host.rpc; child = this.host.codexProcess;
       this.transportDisconnected = false;
+      const settings = this.nativeSettings;
       let result;
       try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
       catch (error) {
@@ -1722,7 +1744,7 @@ class Codex extends EventEmitter {
       if (!current()) throw new Error('原生连接已经关闭；没有重发任务。');
       this.hasHistory = true; this.needsSubscription = false;
       this.emit('pid', this.terminal?.alive && this.terminal.pid ? this.terminal.pid : this.host.codexProcess.pid);
-      if (result.model || result.thread.model) this.emit('model', result.model || result.thread.model);
+      this.observeReplySettings(result, settings);
       if (revision === this.stateRevision) this.observeStatus(result.thread.status);
       if (!await this.hydrateHistory(this.record.nativeId, lifecycle) || !current()) throw new Error('连接在同步记录时断开；没有重发任务。');
       this.nativeObservationPending = false; this.chatAvailable = true; this.emit('capability');

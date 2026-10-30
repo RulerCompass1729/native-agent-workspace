@@ -62,6 +62,31 @@ test('retained connection preserves settings and only closes its own transport',
   assert.equal(f.calls.some(c => c.method === 'thread/unsubscribe'), false);
 });
 
+test('retained reader uses effective model and effort without changing native settings', async t => {
+  const f = await fixture(t, { resume(reply) {
+    reply({ model: 'synthetic-small', reasoningEffort: 'high', thread: { id: f.record.nativeId, status: { type: 'idle' } } });
+  } });
+  const target = new LegacyCodex(f.record); t.after(() => target.close());
+  await target.connect(f.socket);
+  assert.equal(target.model, 'synthetic-small');
+  assert.deepEqual(target.nativeSettings, { nativeId: f.record.nativeId, model: 'synthetic-small', effort: 'high', mode: null });
+  assert.deepEqual(f.calls.find(c => c.method === 'thread/resume').params, { threadId: f.record.nativeId, excludeTurns: true });
+  assert.equal(f.calls.some(c => ['thread/start', 'turn/start', 'turn/interrupt', 'config/write', 'thread/unsubscribe'].includes(c.method)), false);
+});
+
+test('retained reader never replaces newer settings with a late resume reply', async t => {
+  const f = await fixture(t, { resume(reply, event) {
+    event('thread/settings/updated', { threadSettings: { model: 'synthetic-new', effort: 'ultra', collaborationMode: { mode: 'plan' } } });
+    reply({ model: 'synthetic-old', reasoningEffort: 'low', thread: { id: f.record.nativeId, status: { type: 'idle' } } });
+  } });
+  const target = new LegacyCodex(f.record); t.after(() => target.close());
+  await target.connect(f.socket);
+  assert.equal(target.model, 'synthetic-new');
+  assert.deepEqual(target.nativeSettings, { nativeId: f.record.nativeId, model: 'synthetic-new', effort: 'ultra', mode: 'plan' });
+  assert.equal(f.calls.filter(c => c.method === 'thread/resume').length, 1);
+  assert.equal(f.calls.some(c => ['thread/start', 'turn/start', 'turn/interrupt', 'thread/unsubscribe'].includes(c.method)), false);
+});
+
 test('unloaded native identity is rejected without resume or model requests', async t => {
   const f = await fixture(t, { notLoaded: true }), target = new LegacyCodex(f.record); t.after(() => target.close());
   await assert.rejects(target.connect(f.socket), /未处于可连接/);
