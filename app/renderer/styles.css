@@ -200,11 +200,14 @@ header h1, header p { overflow-wrap: anywhere; }
 &[data-native-surface="sidebar"][data-collapsed="true"] {
   .sidebar { padding: 18px 8px 12px; gap: 8px; }
   .brand { justify-content: center; padding: 0; margin-bottom: 14px; }
-  .brand > div, .rail-label, kbd, .drop-hint, .nav-empty, .local-status, #member-count, .session-link .state-dot { display: none; }
+  .brand .brand-info, .brand .brand-mark, .rail-label, kbd, .drop-hint, .nav-empty, .local-status, #member-count, .session-link .state-dot { display: none; }
+  #app-version-compact { display: block; max-width: 100%; max-height: 36px; overflow: hidden; overflow-wrap: anywhere; font-size: 11px; }
   .group-toggle { justify-content: center; padding: 4px 0; }
   .group-toggle > span:not(.group-chevron), .group-toggle small { display: none; }
   .session-link .label { display: flex; flex-direction: column; max-width: 100%; }
   .session-link .label > span:not(.session-short-id), .session-link .label > small { display: none; }
+  .session-link .label > span.session-backend-version:not([hidden]) { display: block; font-size: 0; }
+  .session-backend-version::before { content: '!'; font-size: 11px; }
   .session-short-id { white-space: normal; overflow-wrap: anywhere; font-size: 9px; }
   .sidebar-navigation { margin-top: 0; }
   .sidebar-group + .sidebar-group { margin-top: 12px; padding-top: 12px; }
@@ -421,3 +424,11 @@ header h1, header p { overflow-wrap: anywhere; }
 /* One observed latest step remains readable while its active group is folded. */
 .process-latest{margin:0 0 2px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;unicode-bidi:isolate;font:12px/1.5 ui-monospace,monospace;color:var(--muted)}
 .process-latest[hidden],.process-details[open]~.process-latest{display:none}
+
+/* Version information reuses the brand's existing space, including the rail. */
+.brand{width:100%;border:0;background:transparent;text-align:left;border-radius:6px}
+.brand:hover{background:var(--hover)}
+.brand-info{min-width:0}
+#app-version-compact{display:none}
+.session-link .label>.session-backend-version{grid-column:1/-1;display:block;font-size:11px;color:var(--warning,#9a6700);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.session-link .label>.session-backend-version[hidden]{display:none}
