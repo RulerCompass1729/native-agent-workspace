@@ -1,14 +1,14 @@
 // Search is a local reading action. Opening a result never restores, sends,
 // changes membership or takes control of another window's native session.
 let searchLimit = 60, searchTimer, searchOrigin, searchReturn;
-let searchOpener, searchNavigating = false, searchOutsidePointer = false;
+let searchOpener, searchNavigating = false;
 const searchOptions = () => ({
   scope: $('search-scope').value, sessionId: searchOrigin?.sessionId || '',
   archived: $('search-archived').checked, limit: searchLimit,
 });
 function openSearch(scope = 'all') {
   if (!state || document.querySelector('dialog[open]')) return;
-  searchOpener = document.activeElement; searchNavigating = false; searchOutsidePointer = false;
+  searchOpener = document.activeElement; searchNavigating = false;
   captureReadingViews();
   searchOrigin = { selected, roomSession, roomSurface, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
     roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread };
@@ -18,11 +18,11 @@ function openSearch(scope = 'all') {
   $('search-scope').value = scope === 'current' && !current() ? 'room' : scope;
   $('search-input').value = ''; $('search-archived').checked = Boolean(current()?.archived);
   $('search-options').open = false;
-  searchLimit = 60; renderSearch(); $('search-dialog').showModal(); $('search-input').focus();
+  searchLimit = 60; $('search-dialog').showModal(); renderSearch(); $('search-input').focus();
 }
 function renderSearch() {
   clearTimeout(searchTimer);
-  if (!searchOrigin) return;
+  if (!searchOrigin || !$('search-dialog').open) return;
   ui.clearMarkdown($('search-preview-body')); $('search-preview').hidden = true; $('search-results').hidden = false;
   const { results, total } = window.nativeWorkspaceSearch.searchRecords(state, $('search-input').value, searchOptions());
   const list = $('search-results');
@@ -60,15 +60,14 @@ function searchResultKey(event) {
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1)) % rows.length;
   rows[next]?.focus();
 }
-function searchOutside(event) {
-  const rect = $('search-dialog').getBoundingClientRect();
-  return event.target === $('search-dialog') && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
-}
 function finishSearch() {
   if ($('search-dialog').open) return;
   clearTimeout(searchTimer); ui.clearMarkdown($('search-preview-body')); $('search-preview-body').textContent = '';
+  $('search-input').value = ''; $('search-archived').checked = false; $('search-scope').value = 'all'; $('search-options').open = false;
+  $('search-results').replaceChildren(); $('search-count').textContent = ''; $('search-preview-title').textContent = '';
+  $('search-preview-copy').onclick = null; $('search-preview').hidden = true; $('search-more').hidden = true;
+  $('search-options-summary').textContent = '全部记录'; searchLimit = 60;
   if (!searchNavigating) (searchOpener?.isConnected && searchOpener.getClientRects().length ? searchOpener : $('search-button')).focus();
-  searchOutsidePointer = false;
 }
 function pointToMessage(element, key, id, query = '') {
   const view = messageViews.get(element);
