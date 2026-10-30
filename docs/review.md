@@ -1040,3 +1040,34 @@ keyboard-selection supplement. Main's 44 related checks pass without skips.
 Source narrow-window and intercepted-copy evidence is reused only for its recorded
 scope. Signed combined acceptance, physical input and VoiceOver remain pending;
 no new provider or product inference is required for these display repairs.
+
+
+Signed alpha.135, committed source `b6f633f`, passes twelve combined default-window
+flows with three synthetic members. These cover folded requests and literal raw
+fields, stable selection, the original member menu and anchor, both menu keys,
+correct native-terminal navigation and ordinary reopening. Private and shared
+drafts are nonempty positive controls; all three identities, owners and control
+revisions are checked after terminal navigation and reopen. API creation, joining
+and renaming are setup, not user-path evidence. Narrow-window, intercepted-copy
+and physical-input claims are not extended by this installed run.
+
+The synthetic transport records two terminal opens, one resize, one setup claim,
+two terminal snapshots and seven no-relay pauses. It records zero sends, native
+input or decisions; providers and product inference are absent by construction.
+The terminal navigation assertion alone was weak, but the independent review also
+verifies the actual chat-to-terminal mode change in the retained before/after
+records. The folded-after-reopen assertion precedes the expanded raw screenshot.
+Post-test strict signature and owned cleanup pass.
+
+Independent review approves the signed candidate and visible-update operator.
+Actual installation retains ten native IDs, live process starts, owners and both
+draft scopes. Only the empty active backend changes to 135; six older backends
+remain unchanged. Strict signature, one application-search entry and the
+executable-bound production installation reader pass. The developer goal is
+unchanged. Retained-backend activation, physical input and the whole dogfood
+milestone remain open; this does not qualify live native permissions or providers.
+
+
+Open low-severity text issue, owner Main: an existing overview placeholder points
+to a request “above” that is not shown in that overview. Full-session navigation
+still exposes the original request. The text correction is not part of this update.
