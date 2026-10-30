@@ -850,3 +850,23 @@ The managed install wrote a build- and executable-bound private installation rec
 The ordinary visible update retained all 10 native IDs, live process starts, owners and both draft scopes. Strict signature verification passes and one application copy remains indexed. Backends now report 130×1 active/empty, 129×1, 120×4 and 118×1: six retained backends are not current. This does not certify the whole dogfood goal, full-day use, window-only lifecycle, external-terminal escape, physical clipboard or VoiceOver.
 
 Independent source, signed candidate, actual deployment and final public-record reviews pass. The final full suite has 1443 passing checks with no skips; the two-window initial-state regression is included.
+
+
+### Reading actions and recorded message clocks
+
+The reader keeps copy/share actions with their own message heading and highlights
+the exact body on hover or keyboard focus. Copy success waits for its acknowledgement;
+failure retains the original error. Existing payloads, sharing controls, original
+process disclosures and 50-record paging are preserved. Recorded input/final-reply
+times appear quietly; the tooltip and accessible name identify them as recorded
+times. Native turn completion/duration uses only native metadata. Missing history
+times stay absent. Known native turns receive a light divider; no identity is inferred.
+
+Integrated source review initially accepted a replay-clock issue as non-blocking.
+The maintainer reproduced it and fixed it within this task: first-seen replayed
+Claude observations had acquired the reconnect time. The existing replay flag now
+reaches the record writer, which leaves their time absent while retaining existing
+recorded times and all text. Actual adapter-to-record and reader checks cover it.
+279 related checks pass without failures or skips. Signed installed acceptance
+and review of this final delta remain pending. Whole native shell-command ingestion
+and Claude native-clock correlation remain open; no additional live trial is run.

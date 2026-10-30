@@ -1044,3 +1044,18 @@ test('missing native row gets at most five bounded reads, no delayed surprise re
   fs.writeFileSync(f.file, JSON.stringify(f.row) + '\n'); f.w.tickCapacity(); f.stop(); f.fail();
   assert.equal(f.w.capacityStatus(f.s.id), null); assert.equal(f.sent.length, 0);
 });
+
+
+test('replayed native display content stays readable without acquiring a current message clock', () => {
+  const { applyNativeBlock } = require('../native-blocks.cjs'), r = adapter();
+  r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true }); r.record.messages = [];
+  const rows = []; r.on('nativeBlock', e => { rows.push(e); applyNativeBlock(r.record, e); });
+  const base = { block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch,
+    kind: 'response', turnId: 'replayed-turn', status: 'complete', index: 0 };
+  r.observeRoot({ ...base, sequence: 1, id: 'display:old', delta: 'Original old text', replayed: true });
+  assert.equal(rows[0].replayed, true); assert.equal(r.record.messages[0].text, 'Original old text');
+  assert.equal(r.record.messages[0].time, undefined);
+  const before = Date.now();
+  r.observeRoot({ ...base, sequence: 2, id: 'display:new', delta: 'Original live text' });
+  assert.ok(r.record.messages[1].time >= before && r.record.messages[1].time <= Date.now());
+});

@@ -24,7 +24,7 @@ function applyNativeBlock(session, event, imageDataDir) {
   const boundary = event.turnId && session.messages.find(m => m.nativeId === event.nativeId && m.kind === 'turn' && m.turnId === event.turnId);
   if (!row) {
     row = { id, role: event.kind === 'input' ? 'user' : ['response', 'summary', 'plan'].includes(event.kind) ? 'assistant' : event.kind === 'tool' ? 'tool' : 'system',
-      nativeId: event.nativeId, nativeBlock: true, volatile: event.kind === 'tool', kind: event.kind, turnId: event.turnId, text: '', time: Date.now() };
+      nativeId: event.nativeId, nativeBlock: true, volatile: event.kind === 'tool', kind: event.kind, turnId: event.turnId, text: '', ...(event.replayed === true ? {} : { time: Date.now() }) };
     session.messages.push(row);
   }
   if (Number.isSafeInteger(event.index)) {

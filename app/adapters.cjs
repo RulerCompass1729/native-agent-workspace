@@ -432,7 +432,7 @@ class Claude extends EventEmitter {
       const block = turn.blocks.get(message.finalDisplayId);
       if (status === 'complete' && !turn.incomplete && block?.final) { turn.safeText = block.text; turn.messageId = `native:${this.record.nativeId}:${message.finalDisplayId}`; }
     }
-    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag,
+    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag, replayed: message.replayed === true,
       ...(inline || nativePrompt ? { inputMode: message.inputMode } : {}), ...(message.mediaOnly ? { imagePayload: message.imagePayload } : {}),
       ...(message.imageCount !== undefined ? { imageCount: message.imageCount } : {}) });
     if (kind === 'turn' && this.rootTurn?.id === turnId && !this.rootTurn.completed && ['working', 'error', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {

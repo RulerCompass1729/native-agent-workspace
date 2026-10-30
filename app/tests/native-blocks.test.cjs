@@ -73,3 +73,14 @@ test('native command interruption stops the displayed activity without losing co
   applyNativeBlock(s, { nativeId: 'N', id: 'tool:cmd', kind: 'tool', toolKind: 'commandExecution', turnId: 'T', status: 'complete', text: 'late full output' });
   assert.equal(s.messages[0].status, 'interrupted'); assert.equal(s.messages[0].text, 'late full output');
 });
+
+
+test('replay preserves existing recorded clocks but never dates first-seen history as now', () => {
+  const s = { nativeId: 'N', messages: [] }, event = { nativeId: 'N', id: 'display:old', kind: 'response', turnId: 'T', status: 'complete', text: 'Original' };
+  applyNativeBlock(s, { ...event, replayed: true });
+  assert.equal(s.messages[0].time, undefined); assert.equal(s.messages[0].text, 'Original');
+  applyNativeBlock(s, { ...event, id: 'display:live' }); const time = s.messages[1].time;
+  assert.ok(Number.isFinite(time));
+  applyNativeBlock(s, { ...event, id: 'display:live', replayed: true });
+  assert.equal(s.messages[1].time, time);
+});
