@@ -980,3 +980,22 @@ unchanged reader under the installed executable matches the private record.
 The original developer goal remains unchanged. Full-day use and the whole dogfood
 milestone remain open. Known cancellation limits and physical-input boundaries
 above still apply; actual OS viewers and live providers are not newly qualified.
+
+
+### Native overload completion during a pending refinement: source checkpoint
+
+An exact accepted native refinement now settles its pending marker and draft
+before the adapter finalizes an already received failed turn. The existing bounded
+capacity recovery can then schedule one literal continuation. For this ordering,
+uncertain receipts, later human edits, ownership changes or explicit interruption
+still prevent that continuation; the original instruction is never replayed and
+no goal is changed.
+Preparation exceptions pass through the same cleanup.
+
+The released source slice and independent lane review cover 251 affected checks
+and five source GUI flows. Those source flows preceded the final try-coverage-only
+delta; its two injected setup-failure checks cover that delta. Main's integrated
+251-check rerun passes without skips. Signed installation and retained-backend
+activation remain pending at this source checkpoint. No new recovery policy,
+watcher, framework or provider call is added. A lost refinement receipt followed
+by a later overload and the shared-room form of this race are not newly qualified.

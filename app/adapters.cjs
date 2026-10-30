@@ -1518,7 +1518,7 @@ class Codex extends EventEmitter {
   }
   turn(id) { if (!this.turns.has(id)) this.turns.set(id, { text: '', inputItems: new Set(), itemInputs: new Map(), inputTag: '' }); return this.turns.get(id); }
   finishTurn(id) {
-    const turn = this.turns.get(id); if (!turn?.completed || this.steering?.turnId === id) return;
+    const turn = this.turns.get(id); if (!turn?.completed || this.steering?.turnId === id || this.pendingSteer && this.turnId === id) return;
     const live = turn.liveStarted === true && this.turnId === id && !this.stopped && !this.transportDisconnected;
     const pending = this.pending?.turnId === id ? this.pending : null;
     if (pending) this.pending = null;

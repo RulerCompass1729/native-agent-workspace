@@ -7,7 +7,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 async function fixture(t, count = 1) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-test-'));
   const runtimes = [];
-  const host = { binaries: {}, close() {}, create() { const runtime = new EventEmitter(); runtime.start = async () => runtime.emit('state', 'idle'); runtime.send = async () => {}; runtimes.push(runtime); return runtime; } };
+  const host = { binaries: {}, close() {}, create() { const runtime = new EventEmitter(); runtime.start = async () => runtime.emit('state', 'idle'); runtime.send = async () => {}; runtime.finishTurn = () => {}; runtimes.push(runtime); return runtime; } };
   const workspace = new Workspace(host, directory);
   t.after(() => { workspace.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const ids = [];

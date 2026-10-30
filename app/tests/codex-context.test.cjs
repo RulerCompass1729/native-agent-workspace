@@ -154,6 +154,39 @@ function capacityFixture(t) {
 }
 const capacityTick=()=>new Promise(resolve=>setImmediate(resolve));
 const routingError='workspace routing discovery timed out';
+for(const failure of ['authorization','change notification'])test('steer preparation failure releases its marker and drains an observed overload: '+failure,async t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.s.roomId='shared';f.start('live');
+ const fail=()=>{f.end('live');throw Error('Synthetic preparation failure');};
+ if(failure==='authorization')f.w.sharedReplies.authorize=fail;
+ else {let raised=false;f.w.on('change',()=>{if(!raised&&f.r.pendingSteer){raised=true;fail();}});}
+ await assert.rejects(f.w.steer(f.s.id,'Human refinement','window','live',{}),/Synthetic preparation failure/);
+ assert.equal(f.r.pendingSteer,null);assert.equal(f.r.turnId,null);assert.equal(f.w.capacityStatus(f.s.id),null);
+ f.w.tickCapacity(Date.now()+86400000);await capacityTick();assert.equal(f.calls.length,0,'No native input or continuation after failed preparation');
+});
+for(const outcome of ['accepted','ACK lost','wrong turn','new draft','edited then cleared','human input','owner changed','cancelled'])test('overload before steer ACK preserves recovery only for the accepted unchanged input: '+outcome,async t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.start('live');
+ const read=f.host.rpc.call;let accept,reject;
+ f.host.rpc.call=(method,params)=>method==='turn/steer'?new Promise((yes,no)=>{accept=yes;reject=no;}):read(method,params);
+ f.w.setDraft(f.s.id,'Refine the existing task','window');
+ const sending=f.w.steer(f.s.id,'Refine the existing task','window','live');
+ const rejected=outcome==='ACK lost'||outcome==='wrong turn'?assert.rejects(sending):null;
+ f.end('live');assert.equal(f.w.capacityStatus(f.s.id),null,'Unsettled native input cannot authorize recovery');
+ if(outcome==='new draft')f.w.setDraft(f.s.id,'New human direction','window');
+ if(outcome==='edited then cleared'){f.w.setDraft(f.s.id,'Human edit','window');f.w.setDraft(f.s.id,'','window');}
+ if(outcome==='human input')f.r.emit('nativeInput','Human terminal direction',{turnId:'live'});
+ if(outcome==='owner changed')f.w.claim(f.s.id,'other-window','chat');
+ if(outcome==='cancelled')await f.w.interrupt(f.s.id,'window');
+ if(outcome==='ACK lost')reject(Error('Synthetic lost ACK'));else accept({turnId:outcome==='wrong turn'?'other':'live'});
+ if(rejected)await rejected;else await sending;
+ assert.equal(f.r.pendingSteer,null);assert.equal(f.r.turnId,null,'The exact completed native turn is drained after the input settles');
+ const recovery=f.w.capacityStatus(f.s.id);
+ if(outcome==='accepted'){
+  assert.ok(recovery,'A confirmed steer must not swallow the subsequent typed overload');
+  assert.equal(f.w.drafts.get(f.s.id),'');f.w.tickCapacity(recovery.due);await capacityTick();
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].params.input[0].text,'继续');
+ }else{assert.equal(recovery,null);f.w.tickCapacity(Date.now()+86400000);await capacityTick();assert.equal(f.calls.filter(c=>c.method==='turn/start').length,0);}
+ assert.equal(f.s.messages.filter(m=>m.inputMode==='steer').length,1,'Never replay the human instruction');
+});
 for(const version of ['0.164.0','0.165.0'])for(const cause of ['capacity','routing'])test('qualified native '+version+' recovers only the exact terminal transient cause: '+cause,async t=>{
  const f=capacityFixture(t);f.host.rpc.nativeVersion=version;
  const error={message:cause==='routing'?routingError:'NATIVE ORIGINAL',codexErrorInfo:cause==='routing'?'other':'serverOverloaded'};
