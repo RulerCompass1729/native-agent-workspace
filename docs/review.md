@@ -839,3 +839,14 @@ snapshot returning an older native state. The initial handler now waits for the
 shared metadata promise before fetching fresh backend state. Two-window
 regression and all six source GUI journeys pass; independent delta review passes.
 The earlier candidate is superseded and was not installed.
+
+
+### Alpha.130 managed daily acceptance
+
+Alpha.130, source `282bcab`, is installed with a visible application version and owning-backend notices. The pre-deployment initial-snapshot race was reproduced and fixed before this build: metadata resolves before fetching fresh native state.
+
+The managed install wrote a build- and executable-bound private installation record before visible launch. The installed production reader returned exactly that recorded commit and time; neither file times nor first launch were used. The live renderer's cached copy text and real OS clipboard were not observed. Evidence combines six source GUI journeys with intercepted copy, four signed installed UI journeys, and the actual managed writer/production reader result. Isolated tests used zero providers/models; ongoing real development is excluded from that claim.
+
+The ordinary visible update retained all 10 native IDs, live process starts, owners and both draft scopes. Strict signature verification passes and one application copy remains indexed. Backends now report 130×1 active/empty, 129×1, 120×4 and 118×1: six retained backends are not current. This does not certify the whole dogfood goal, full-day use, window-only lifecycle, external-terminal escape, physical clipboard or VoiceOver.
+
+Independent source, signed candidate, actual deployment and final public-record reviews pass. The final full suite has 1443 passing checks with no skips; the two-window initial-state regression is included.
