@@ -176,7 +176,11 @@ as `NAWSourceRevision`. Source development with `npm start` remains separate.
 The `.app` is staged temporarily and included inside those archives; it is not
 left as a second launchable copy in `dist/`. Keep the daily app in `/Applications`.
 Test and rollback copies stay outside application search, with tests hidden by default.
-The local artifact is ad-hoc signed, not notarized or automatically published.
+New local builds require the existing **NAW Local Code Signing** identity in the
+login keychain. Packaging fails if that identity is missing or ambiguous; it does
+not fall back to ad-hoc signing. The private key stays in the keychain, and the
+build does not change system trust. Keychain or folder-consent prompts still need
+the person's confirmation. The artifact is not notarized or automatically published.
 See [alpha trial instructions](docs/alpha.md) for startup, recovery and limits.
 The DMG contains the app and an Applications shortcut. It removes Git/npm from
 the user's installation path, but does not install Python or provider runtimes.
