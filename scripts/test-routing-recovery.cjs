@@ -4,7 +4,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const assert = require('node:assert/strict'), { randomUUID, createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process'), { once } = require('node:events');
 const scratch = require('./fixtures/test-scratch.cjs');
-const { fork } = scratch.childProcess, { _electron } = scratch.playwright(require('playwright'));
+const { fork } = scratch.childProcess, { _electron } = scratch.playwright(process.env.NAW_APP_EXECUTABLE ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const evidence = process.env.NAW_EVIDENCE_DIR;
 if (evidence) {
@@ -13,7 +13,7 @@ if (evidence) {
   for (const folder of [root, code]) { const base = fs.realpathSync(folder); if (target === base || target.startsWith(base + path.sep)) throw Error('Evidence must be outside the repository'); }
   fs.mkdirSync(target, { recursive: true, mode: 0o700 });
 }
-const hashes = () => Object.fromEntries(['app/adapters.cjs', 'app/workspace.cjs', 'app/renderer/renderer.js', 'app/dsh/client.js'].map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(code, file))).digest('hex')]));
+const hashes = () => Object.fromEntries(['app/adapters.cjs', 'app/workspace.cjs', 'app/renderer/renderer.js', 'app/dsh/client.js'].filter(file => !process.env.NAW_APP_EXECUTABLE || file !== 'app/renderer/renderer.js').map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(code, file))).digest('hex')]));
 const sourceBefore = hashes(), common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('GUI slot occupied; no GUI launched.'); process.exit(75); }
@@ -38,7 +38,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
 const session = async id => (await snapshot()).sessions.find(s => s.id === id);
 async function capture(name) { if (evidence) { await page.screenshot({ path: path.join(evidence, name + '.png') }); fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(await snapshot(), null, 2)); } }
 async function launch() {
-  app = await _electron.launch({ executablePath: require('electron'), args: [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
 }
 async function select(id) {

@@ -9,6 +9,30 @@ const { packageFuseOptions, verifyPackageFuses } = require('./package-fuses.cjs'
 const root = path.resolve(__dirname, '..');
 const manifest = require('../package.json');
 const run = (bin, args, cwd) => execFileSync(bin, args, { cwd, stdio: 'inherit' });
+const localIdentityName = 'NAW Local Code Signing';
+function localSigningIdentity(query = execFileSync) {
+  let output;
+  try { output = query('/usr/bin/security', ['find-identity', '-p', 'codesigning'], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] }); }
+  catch { throw Error(`Cannot inspect ${localIdentityName}; unlock the login keychain before packaging.`); }
+  // A local self-signed identity need not be a system-trusted identity. Do not
+  // use security's -v filter or change the certificate's trust/access policy.
+  const rows = [...output.matchAll(/^\s*\d+\)\s+([A-Fa-f0-9]{40})\s+"NAW Local Code Signing"([^\r\n]*)$/gm)];
+  const identities = new Set(rows.map(row => row[1].toUpperCase()));
+  if (identities.size !== 1 || rows.some(row => !['', '(CSSMERR_TP_NOT_TRUSTED)'].includes(row[2].trim()))) {
+    throw Error(`A unique usable ${localIdentityName} keychain identity is required; no ad-hoc fallback.`);
+  }
+  return [...identities][0];
+}
+function verifyLocalSigning(app, identity, query = execFileSync) {
+  const requirement = query('/usr/bin/codesign', ['-d', '-r-', app], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const expected = new RegExp('^designated => identifier "?io\\.github\\.rulercompass1729\\.native-agent-workspace"? and certificate leaf = H"' + identity + '"$', 'i');
+  if (!expected.test(requirement)) throw Error('The application must retain the selected certificate-bound designated requirement.');
+  return requirement;
+}
+function localSigningOptions(identity) {
+  return { identity, identityValidation: false, preAutoEntitlements: false,
+    optionsForFile: () => ({ hardenedRuntime: false, timestamp: 'none' }) };
+}
 function sourceRevision(directory = root) {
   const git = args => execFileSync('git', args, { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   if (git(['status', '--porcelain', '--untracked-files=normal'])) throw new Error('Commit source changes before packaging; no bundle was published.');
@@ -17,6 +41,7 @@ function sourceRevision(directory = root) {
 async function build() {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('This alpha is verified only on Apple Silicon macOS.');
   const revision = sourceRevision();
+  const signingIdentity = localSigningIdentity();
   // Generate the ignored client only after checking its committed inputs.
   run(process.execPath, [path.join(root, 'scripts/build-ui.cjs')], root);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-package-'));
@@ -77,12 +102,14 @@ async function build() {
       electronVersion: manifest.devDependencies.electron,
       out: path.join(scratch, 'bundles.noindex'), overwrite: true, asar: false, prune: false,
       ...packageFuseOptions,
-      // Ad-hoc signatures are for local alpha testing, not notarized distribution.
-      osxSign: { identity: '-', identityValidation: false, preAutoEntitlements: false, optionsForFile: () => ({ hardenedRuntime: false }) },
+      // Use the existing local keychain identity without exporting its key or
+      // changing system trust. Offline local signing is not notarization.
+      osxSign: localSigningOptions(signingIdentity),
     });
     const app = path.join(output[0], 'Native Agent Workspace.app');
     if (sourceRevision() !== revision) throw new Error('Source revision changed during packaging; no bundle was published.');
     run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
+    verifyLocalSigning(app, signingIdentity);
     await verifyPackageFuses(app);
     fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
     const archive = path.join(root, 'dist', `native-agent-workspace-${manifest.version}-mac-arm64.zip`);
@@ -95,4 +122,4 @@ async function build() {
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }
 if (require.main === module) build().catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { sourceRevision };
+module.exports = { sourceRevision, localSigningIdentity, verifyLocalSigning, localSigningOptions };

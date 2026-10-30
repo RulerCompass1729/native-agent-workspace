@@ -77,6 +77,17 @@ async function run() {
   const identities = (await client.call('initial')).sessions.map(s => ({ id: s.id, nativeId: s.nativeId }));
   fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify([{ owner: 'mention-view', active: true, selected: 'room', mode: 'chat' }]), { mode: 0o600 });
   await launch(); await page.locator('#room-record').click();
+  await draft(a, 'Atomic edit body'); const editRaw = await input().inputValue();
+  await input().evaluate(el => { el.focus(); el.setSelectionRange(2, 3); }); await input().press('Backspace');
+  assert.equal(await input().inputValue(), 'Atomic edit body'); assert.equal(await page.locator('#recipient').inputValue(), '');
+  await input().press('Meta+z'); await until(async () => await page.locator('#recipient').inputValue() === a, 'Native undo restores exact recipient');
+  assert.equal(await input().inputValue(), editRaw); await input().press('Meta+Shift+z');
+  assert.equal(await input().inputValue(), 'Atomic edit body'); assert.equal(await page.locator('#recipient').inputValue(), '');
+  await input().fill('@'); await page.locator('#mention-list').waitFor(); await input().press('Escape');
+  await page.locator('#mention-list').waitFor({ state: 'hidden' }); await input().press('ArrowLeft'); await input().press('ArrowRight');
+  await page.locator('#mention-list').waitFor(); await input().press('Escape');
+  assert.equal((await native()).sends.length, 0);
+  check('Partial recipient deletion is atomic, native Undo/Redo restores exact authority, and caret movement reopens @ choices without dispatch');
   await draft(a, 'Deliver this exact body.'); await sendAndWait(1); await native('release'); await cleared();
   assert.deepEqual((await native()).sends, [{ id: a, text: 'Deliver this exact body.' }]);
   assert.equal(await page.locator('#forward-button').isDisabled(), true); await capture('01-cleared');
