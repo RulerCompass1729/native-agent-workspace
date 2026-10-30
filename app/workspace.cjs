@@ -24,6 +24,7 @@ class Workspace extends EventEmitter {
   constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces')) {
     super(); this.host = host; this.dataDir = dataDir; this.newWorkspaceRoot = newWorkspaceRoot; this.sessions = new Map(); this.runtimes = new Map(); this.drafts = new Map(); this.draftRevisions = new Map();
     this.claudeAsks = new Map();
+    this.mobileRequests = [];
     this.capacityRecoveries = new Map();
     this.room = { id: 'shared', name: '共同工作', revision: 0, run: null, messages: [] };
     this.versions = { shellModelCalls: 0, dispatches: 0 };
@@ -40,6 +41,7 @@ class Workspace extends EventEmitter {
     wake.initialize(this);
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
+      this.mobileRequests = Array.isArray(stored.mobileRequests) ? stored.mobileRequests.map(r => r && typeof r === 'object' && ['prepared', 'awaiting-native', 'reply-written'].includes(r.status) ? { ...r, status: 'unconfirmed' } : r) : stored.mobileRequests ?? [];
       for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, claudeQuestion: null, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。' });
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
@@ -92,7 +94,8 @@ class Workspace extends EventEmitter {
     try {
       // No terminal bytes, credentials, environment, hook secrets or raw protocol.
       const sessions = [...this.sessions.values()].map(({ owner, approval, approvals, approvalOverflow, approvalResolved, pid, ...s }) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null }));
-      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts) }), { mode: 0o600 });
+      const mobile = Array.isArray(this.mobileRequests) && !this.mobileRequests.length ? {} : { mobileRequests: this.mobileRequests };
+      fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...mobile }), { mode: 0o600 });
       fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
     } catch { this.storageFailure = 'write'; this.storageWarning = '本地保存失败，当前会话仍在内存中；请保留窗口并检查磁盘，恢复后重试保存。'; this.emit('change'); }
   }
@@ -552,11 +555,22 @@ class Workspace extends EventEmitter {
     }
   }
   routeValid(route) { return route?.peerLease ? this.peerLeases?.valid(route) === true : this.room.run === route && route?.status === 'running' && Date.now() < route.deadline; }
-  async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null) {
-    const originalText = text; text = cleanText(text); if (wakeTicket) text = originalText;
+  mobileRead(ticket) { return require('./mobile-session.cjs').read(this, ticket); }
+  mobileSend(ticket, spec) { return require('./mobile-session.cjs').send(this, ticket, spec); }
+  mobileAnswer(ticket, spec) { return require('./mobile-session.cjs').answer(this, ticket, spec); }
+  mobileReceipt(ticket, spec, action) { return require('./mobile-session.cjs').find(this, ticket, spec, action); }
+  mobilePrepare(ticket, spec, action, client) { return require('./mobile-session.cjs').prepare(this, ticket, spec, action, client); }
+  mobileCommit(ticket, lease, action, client) { return require('./mobile-session.cjs').commit(this, ticket, lease, client, action); }
+  mobileCancel(ticket, lease, action, client, reason) { return require('./mobile-session.cjs').cancel(this, ticket, lease, client, action, reason); }
+  mobileDisconnected(client) { return require('./mobile-session.cjs').disconnected(this, client); }
+  async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null) {
+    const originalText = text; text = cleanText(text); if (wakeTicket || mobile) text = originalText;
+    const mobileSession = mobile && require('./mobile-session.cjs');
+    if (mobile && (!mobileSession.valid(mobile) || route || forward || sourceMessage || recovery || wakeTicket)) throw Error('手机委托未确认。');
     const s = this.get(id); const runtime = this.runtime(id);
     if (runtime.nativeAbortRequest) throw Error('正在等待原生中断确认；草稿保留。');
-    if (wakeTicket) {
+    if (mobile) mobile.human();
+    else if (wakeTicket) {
       if (!wakeTicket.valid()) throw Error('自动消息授权已失效。');
       this.pauseParticipant(id, '原会话收到自动消息；旧协作交接已撤销', true);
     } else if (!route) {
@@ -571,18 +585,18 @@ class Workspace extends EventEmitter {
     const control = s.controlRevision; const member = s.memberRevision; const connection = s.connectionRevision;
     const guard = () => {
       this.expireRun(route);
-      return (!wakeTicket || wakeTicket.valid(wakeTicket.tag)) && (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
+      return (!mobile || mobileSession.valid(mobile)) && (!wakeTicket || wakeTicket.valid(wakeTicket.tag)) && (!recovery || this.capacityValid(s, recovery)) && !runtime.nativeInputRequired && s.state !== 'ended' && s.controlRevision === control &&
         (!failedTurn || runtime.submission?.pending?.authorized || runtime.pending?.accepted || runtime.failedTurnInputMatches(failedTurn)) &&
         (!(route || forward) || (s.roomId === 'shared' && s.memberRevision === member)) && (!route || (this.routeValid(route)));
     };
     if (!guard()) throw new Error('交接已经失效。');
     if (!recovery) this.cancelCapacity(id);
-    const tag = randomUUID(); s.pendingTag = tag;
+    const tag = mobile?.row?.tag || randomUUID(); s.pendingTag = tag;
     if (recovery) recovery.tag = tag;
     if (wakeTicket) wakeTicket.tag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
-    const clearedDraft = !wakeTicket && !route && !forward && typeof draft === 'string' && draft.trim() === text;
-    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native' });
+    const clearedDraft = !mobile && !wakeTicket && !route && !forward && typeof draft === 'string' && draft.trim() === text;
+    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native' });
     if (forward) {
       this.forwards.set(tag, { ...forward, control });
       sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
@@ -598,9 +612,11 @@ class Workspace extends EventEmitter {
     else if (clearedDraft) { this.pendingDrafts.set(id, { tag, text: draft, revision: draftRevision }); this.drafts.set(id, ''); }
     this.changed();
     try {
+      if (mobile) mobile.reserve(tag);
       if (wakeTicket) { this.persist(); if (this.storageWarning) throw Error('自动消息记录未能保存，没有派发。'); }
       if (recovery) { this.persist(); if (this.storageWarning) throw Error('自动继续记录未能保存，没有派发。'); }
       if (route?.peerLease) { this.persist(); if (this.storageWarning) throw Error('交接记录未能保存，没有向原生派发。'); }
+      if (mobile) mobile.started = true;
       await runtime.send(text, tag, guard);
     }
     catch (error) {
@@ -608,7 +624,7 @@ class Workspace extends EventEmitter {
       const sameControl = s.controlRevision === control;
       this.forwards.delete(tag); this.sharedReplies.close(tag, '接收结果未确认');
       this.deliveryStatus(tag, 'unconfirmed');
-      for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m?.status === 'awaiting-native') m.status = 'unconfirmed'; }
+      for (const list of [s.messages, this.room.messages]) { const m = list.find(m => m.id === tag); if (m?.status === 'awaiting-native') m.status = mobile && (!mobile.started || error.notSent === true) ? 'not-sent' : 'unconfirmed'; }
       if (current) {
         s.pendingTag = null;
         if (sameControl) {
@@ -905,10 +921,10 @@ class Workspace extends EventEmitter {
   }
   // Answers by question text; several choices are joined with commas, as native
   // reads them. null hands the question back to the native dialog.
-  answerClaude(s, requestId, answers, owner) {
+  answerClaude(s, requestId, answers, owner, mobile = null) {
     const held = this.claudeAsks.get(s.id);
-    if (!held || held.requestId !== requestId || s.owner !== owner || !held.open()) throw new Error('问题已变化，请重新查看。');
-    if (answers === null) return this.releaseQuestion(s, null);
+    if (!held || held.requestId !== requestId || (!mobile && s.owner !== owner) || mobile && !require('./mobile-session.cjs').valid(mobile) || !held.open()) throw new Error('问题已变化，请重新查看。');
+    if (answers === null) { if (mobile) throw Error('手机不能交还或停止原生问题。'); return this.releaseQuestion(s, null); }
     if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new Error('请回答每个问题。');
     const reply = {};
     for (const q of held.questions) {
@@ -917,14 +933,16 @@ class Workspace extends EventEmitter {
         !given.every(a => typeof a === 'string' && a.trim() && a.length <= 16000)) throw new Error('请回答每个问题。');
       reply[q.question] = given.map(a => a.trim()).join(', ');
     }
+    if (mobile) { if (mobile.prepare() === false) return; if (!require('./mobile-session.cjs').valid(mobile)) throw Error('手机问题已变化。'); }
+    if (mobile) mobile.started = true;
     this.releaseQuestion(s, reply);
   }
   // A native Codex question answered here, with the reply native defines. The
   // terminal may answer the same request; native resolves it once, first wins.
-  answer(id, requestId, answers, owner) {
-    if (this.get(id).provider === 'claude') return this.answerClaude(this.get(id), requestId, answers, owner);
+  answer(id, requestId, answers, owner, mobile = null) {
+    if (this.get(id).provider === 'claude') return this.answerClaude(this.get(id), requestId, answers, owner, mobile);
     const s = this.get(id), queue = this.approvalRoutes.get(id), route = queue?.get(requestId);
-    if (!route || queue.overflow || route.approval.pending || s.state !== 'approval' || s.owner !== owner ||
+    if (!route || queue.overflow || route.approval.pending || s.state !== 'approval' || (!mobile && s.owner !== owner) || mobile && !require('./mobile-session.cjs').valid(mobile) ||
       route.runtime !== this.runtimes.get(id) || !(route.rpc === this.host.rpc || route.runtime.currentRpc?.(route.rpc)) || route.runtime.transportDisconnected ||
       route.runtime.backendExitConfirmed) throw new Error('问题已变化，请重新查看。');
     const questions = nativeApprovalPolicy(route.approval).questions;
@@ -937,6 +955,8 @@ class Workspace extends EventEmitter {
       if (labels.length && !q.isOther && !labels.includes(given[0])) throw new Error('只能从给出的选项中选择。');
       reply[q.id] = { answers: given };
     }
+    if (mobile) { if (mobile.prepare() === false) return; if (!require('./mobile-session.cjs').valid(mobile)) throw Error('手机问题已变化。'); }
+    if (mobile) mobile.started = true;
     route.rpc.reply(route.nativeRequestId, { answers: reply });
     if (this.approvalRoutes.get(id)?.get(requestId) === route) { route.approval = { ...route.approval, pending: true }; Object.assign(s, queue.snapshot()); }
     this.changed();

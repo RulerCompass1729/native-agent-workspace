@@ -243,10 +243,13 @@ class WorkspaceClient extends EventEmitter {
     const epoch = this.control.manualEpoch, revision = this.control.sessionRevisions.get(id);
     return () => this.control.manualEpoch === epoch && this.control.sessionRevisions.get(id) === revision;
   }
-  async intervene(operation, id, preserveManualStream = false) {
+  async intervene(operation, id, preserveManualStream = false, strictWake = false) {
     // Every human action still invalidates pending automatic handoff intent.
     // Independent manual submissions only invalidate the same recipient.
-    if (typeof this.scope === 'string' && this.entries.some(e => e.state.capabilities?.includes('agentWakeV1'))) require('./session-wake.cjs').revoke({ dataDir: this.scope, sessions: new Map() });
+    if (typeof this.scope === 'string' && (strictWake || this.entries.some(e => e.state.capabilities?.includes('agentWakeV1')))) {
+      const confirmed = require('./session-wake.cjs').revoke({ dataDir: this.scope, sessions: new Map() });
+      if (strictWake && confirmed !== true) throw Object.assign(Error('旧自动消息授权未能确认撤销，手机输入没有派发。'), { notSent: true });
+    } else if (strictWake) throw Object.assign(Error('手机入口的本机范围未确认，没有派发。'), { notSent: true });
     this.control.revision++;
     // Waiting shared input is not a native interruption. Keep the original
     // explicitly shared stream until its native end/pickup boundary.
@@ -303,6 +306,55 @@ class WorkspaceClient extends EventEmitter {
       const entry = args[0] === null ? this.entries.find(e => e.state.capabilities?.includes('agentWakeV1')) : this.route(args[0]);
       if (!entry?.state.capabilities?.includes('agentWakeV1')) throw Error('该后台尚未接通自动消息设置。');
       const result = await entry.client.call(method, ...args); await this.refresh(); return result;
+    }
+    if (['mobileRead', 'mobileSendReceipt', 'mobileAnswerReceipt', 'mobileSend', 'mobileAnswer'].includes(method)) {
+      const [ticket, spec] = args, id = ticket?.sessionId, target = this.route(id), origin = target.client, guard = this.operationGuard(target);
+      const check = () => {
+        guard(); this.authorizeOperation?.(method, args);
+        const current = target.state.sessions.find(s => s.id === id);
+        if (this.route(id) !== target || target.key !== ticket.serviceKey || current?.nativeId !== ticket.nativeId || current.nativeContextPending || !target.state.capabilities?.includes('humanMobileV1')) throw Error('手机目标的原生身份或后台能力已变化，没有重新派发。');
+      };
+      check();
+      if (method !== 'mobileSend' && method !== 'mobileAnswer') return origin.call(method, ...args);
+      if (!target.state.capabilities.includes('humanMobilePreparedV1')) throw Error('这个后台尚不支持手机输入的预备确认；原会话和草稿保留。');
+      const action = method === 'mobileSend' ? 'Send' : 'Answer', originalManual = this.manualGuard(id);
+      const ready = await origin.call('mobilePrepare' + action, ticket, spec);
+      if (ready?.prepared !== true) {
+        if (!ready || !Object.hasOwn(ready, 'receipt')) throw Error('手机预备回执未确认，没有重新派发。');
+        return ready.receipt;
+      }
+      if (typeof ready.lease !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(ready.lease)) throw Error('手机预备凭证未确认，没有提交。');
+      const checkProof = () => {
+        const current = target.state.sessions.find(s => s.id === id), proof = spec?.proof;
+        if (!proof || proof.nativeId !== current?.nativeId || proof.controlRevision !== (current.controlRevision ?? 0) || proof.connectionRevision !== (current.connectionRevision ?? 0)) throw Error('预备期间原会话已发生新的操作，手机输入没有派发。');
+        if (typeof this.scope !== 'string') throw Error('手机入口的本机范围未确认，没有派发。');
+        const layout = require('./service-layout.cjs').readLayout(this.scope);
+        if (layout.pending || JSON.stringify([...layout.entries].sort()) !== JSON.stringify(this.entries.map(e => e.key).sort())) throw Error('后台列表已变化，请重新连接手机入口；输入没有派发。');
+        // This broker runs in the issuing app itself. Its positive PID/start
+        // identity is stable for this process lifetime; do not spawn ps per click.
+        if (!Object.hasOwn(this.control, 'mobileIssuerIdentity')) this.control.mobileIssuerIdentity = require('./platform.cjs').processIdentity(process.pid);
+        const own = this.control.mobileIssuerIdentity;
+        require('./mobile-access.cjs').verifyTicket(this.scope, ticket, { serviceKey: target.key, sessionId: id, nativeId: current.nativeId }, action === 'Send' ? 'send' : 'answer', {
+          alive: issuer => Boolean(own && own.pid === process.pid && issuer.pid === own.pid && issuer.started === own.started),
+        });
+      };
+      let commitStarted = false;
+      try {
+        check(); checkProof(); if (!originalManual()) throw Error('预备期间发生了新的真人操作，手机输入没有派发。');
+        return await this.intervene(async () => {
+          const manual = this.manualGuard(id);
+          await this.pauseExcept(null); await this.refresh();
+          check(); checkProof();
+          if (!manual() || this.entries.some(e => e.state.room.run?.status === 'running' || e.state.room.run?.pausePending || e.state.room.run?.pauseUnconfirmed || e.state.peerLeases?.some(g => g.status === 'running'))) throw Error('旧接力尚未确认全部暂停，手机输入没有派发。');
+          commitStarted = true;
+          return origin.call('mobileCommit' + action, ticket, ready.lease);
+        }, id, false, true);
+      } catch (error) {
+        // After writing commit, its outcome may be native work. Never abort or replay.
+        if (commitStarted) throw error;
+        try { return await origin.call('mobileCancel' + action, ticket, ready.lease, String(error.message || error).slice(0, 16000)); }
+        catch { throw Object.assign(Error(`${error.message}\n取消回执未能确认；提交没有发出，请保留手机草稿并核对。`), { notSent: true }); }
+      }
     }
     // Capture the context displayed when the human acted, before refresh,
     // pause or an earlier private ACK can yield to a native /clear.

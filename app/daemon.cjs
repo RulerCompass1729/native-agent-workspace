@@ -27,6 +27,8 @@ async function main() {
   workspace.peerLeases = new PeerLeases(workspace);
   const peerRunner = workspace.peerRunner = new PeerRunner(workspace, dataDir);
   const send = (client, value) => writers.get(client)?.send(value);
+  // Retained copied runtimes must not advertise modules they do not contain.
+  const mobileCapabilities = ['mobile-access.cjs', 'mobile-session.cjs'].every(name => fs.existsSync(path.join(__dirname, name))) ? ['humanMobileV1', 'humanMobilePreparedV1'] : [];
   const broadcast = (event, data) => {
     if (!clients.size) return;
     let frame;
@@ -44,7 +46,18 @@ async function main() {
   const dispatch = async (owner, method, args, client) => {
     if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, CAPABILITY, DIRECTED, 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'mobileRead': return workspace.mobileRead(args[0]);
+      case 'mobileSend':
+      case 'mobileAnswer': throw Error('手机输入需要先预备并核对旧接力已暂停；没有派发。');
+      case 'mobilePrepareSend': return workspace.mobilePrepare(args[0], args[1], 'send', client);
+      case 'mobilePrepareAnswer': return workspace.mobilePrepare(args[0], args[1], 'answer', client);
+      case 'mobileCommitSend': return workspace.mobileCommit(args[0], args[1], 'send', client);
+      case 'mobileCommitAnswer': return workspace.mobileCommit(args[0], args[1], 'answer', client);
+      case 'mobileCancelSend': return workspace.mobileCancel(args[0], args[1], 'send', client, args[2]);
+      case 'mobileCancelAnswer': return workspace.mobileCancel(args[0], args[1], 'answer', client, args[2]);
+      case 'mobileSendReceipt': return workspace.mobileReceipt(args[0], args[1], 'send');
+      case 'mobileAnswerReceipt': return workspace.mobileReceipt(args[0], args[1], 'answer');
       case 'wakeTake': return require('./session-wake.cjs').take(workspace, args[0]);
       case 'wakeReceive': return require('./session-wake.cjs').receive(workspace, args[0]);
       case 'wakePolicy': return require('./session-wake.cjs').setPolicy(workspace, args[0], args[1]);
@@ -132,7 +145,7 @@ async function main() {
       if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
       Promise.resolve().then(() => dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。' }));
     });
-    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); workspace.peerLeases.disconnected(client); if (!shuttingDown) workspace.release(owner); });
+    client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner); });
   });
   await new Promise(resolve => server.listen(endpoint, resolve)); fs.chmodSync(endpoint, 0o600);
   const connection = path.join(dataDir, 'connection.json'); const tmp = `${connection}.tmp`;
