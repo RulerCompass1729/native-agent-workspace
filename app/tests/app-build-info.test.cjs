@@ -91,3 +91,18 @@ test('an installation receipt cannot supply a missing packaged commit', async t 
   const read = subject((_c, _a, _o, reply) => reply(null, 'not-a-commit'), process.execPath);
   assert.equal((await read(app, f.directory)).installedAt, null);
 });
+
+test('slow cached build metadata never makes the initial native snapshot stale', async () => {
+  const line = fs.readFileSync(require.resolve('../main.cjs'), 'utf8').split('\n').find(line => line.trim().startsWith("register('initial',"));
+  let handler, release, metadataCalls = 0, snapshotCalls = 0, state = 'working';
+  vm.runInNewContext(line, { register: (_name, fn) => { handler = fn; }, displayState: value => value, applicationBuild: null,
+    appBuildInfo: () => { metadataCalls++; return new Promise(resolve => { release = resolve; }); },
+    app: { getVersion: () => '0.1.0-alpha.130' }, dataDir: '/synthetic/profile', preflight: () => ({}) });
+  const client = { async call() { snapshotCalls++; return { nativeState: state }; } };
+  const first = handler({ client, view: {} }), second = handler({ client, view: {} });
+  await new Promise(resolve => setImmediate(resolve));
+  state = 'idle'; release({ commit: null, installedAt: null });
+  const results = await Promise.all([first, second]);
+  assert.deepEqual(results.map(value => value.nativeState), ['idle', 'idle']);
+  assert.equal(metadataCalls, 1); assert.equal(snapshotCalls, 2);
+});

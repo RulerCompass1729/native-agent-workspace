@@ -833,3 +833,9 @@ guards, and removing either guard fails the tests. 119 related checks and the
 unchanged six-flow source GUI proof pass; the full suite's 1441 passing result is
 reused for the test-only delta. Signed installed acceptance and the actual daily
 installation record remain pending at this source checkpoint.
+
+Before installation, a controlled slow-metadata check reproduced an initial
+snapshot returning an older native state. The initial handler now waits for the
+shared metadata promise before fetching fresh backend state. Two-window
+regression and all six source GUI journeys pass; independent delta review passes.
+The earlier candidate is superseded and was not installed.

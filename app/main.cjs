@@ -375,7 +375,7 @@ async function boot() {
     if (answer.response === 1) return c.client.call('stop', id);
   });
   register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接类型不支持。'); return shell.openExternal(url.href); });
-  register('initial', async c => ({ ...displayState(await c.client.call('initial'), c), viewState: c.view, appVersion: app.getVersion(), appBuild: await (applicationBuild ||= appBuildInfo(app, dataDir)), preflight: preflight() }));
+  register('initial', async c => { const appBuild = await (applicationBuild ||= appBuildInfo(app, dataDir)); return { ...displayState(await c.client.call('initial'), c), viewState: c.view, appVersion: app.getVersion(), appBuild, preflight: preflight() }; });
   register('readingState', (c, positions) => { c.view.readingPositions = readingState(positions); return saveReadingSoon(); });
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
