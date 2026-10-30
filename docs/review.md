@@ -787,3 +787,17 @@ Independent recovery review blocks the old private packet: it would silently mov
 I81 source review found that the root backend and global Settings shared one path: strict local validation could make Settings unreachable. Local overrides now apply only to a distinct backend file; global Settings keep the prior repair path. The actual nested-backend bootstrap test and damaged-global-file startup test cover both cases. Backend configuration errors identify the file and the required repair/removal; cold-start failure is explicit. Signed/runtime acceptance is still pending.
 
 Independent I81 product-source delta passes. Native164 remains unqualified under the new129 bundle until the pinned rehearsal; the native workspace messaging tool is enabled only on165, so no164 agent-tool capability is claimed. Source1425 full-suite evidence preceded the bootstrap alias fix; the final affected21 cases and independent19-case rerun pass. The original164 fork already lacks that newer tool; preserving164 is not a new capability claim.
+
+
+I81 recovery-source follow-up (independent checkpoint, deployment still open):
+- A pre-existing backend-private runtime file selected an old one-shot launcher.
+  The running legacy daemon ignored it, but normal cold bootstrap would adopt it.
+  The original file was privately archived with its hash before replacing it with
+  the exact retained native executable paths. Global discovery was left unchanged;
+  the adoption behavior is explicit in the interaction contract.
+- The legacy-daemon recovery fallback could resolve a mutable executable shortcut.
+  That branch now records the recoverable condition without resuming or prompting.
+  Continuation on a restarted backend requires actual kernel executable path,
+  binary hash and version checks for both retained providers before any input.
+- These are controller-source findings, separate from installed acceptance and
+  actual developer-fork recovery. No process-loss pass is claimed from mock probes.

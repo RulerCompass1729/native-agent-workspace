@@ -790,8 +790,9 @@ Codex 活动来自 [官方 app-server 的 turn/item/status 事件](https://learn
 
 
 An existing backend may retain explicit native executable paths in its private
-`runtime-locations.json`. Normal bootstrap validates and reuses that file, including
-after app relaunch; other backends retain their normal discovery settings. The file
+`runtime-locations.json`. Pre-existing backend files are also adopted at the next
+cold bootstrap; deployment-only launchers must be explicitly replaced or removed.
+Normal bootstrap validates and reuses that file, including after app relaunch; other backends retain their normal discovery settings. The file
 is part of the backend profile, not disposable test evidence. An invalid backend override blocks cold workspace opening until that file is
 fixed or removed; the error identifies the backend file. The root backend keeps
 the global Settings recovery behavior, so Settings remain reachable.
