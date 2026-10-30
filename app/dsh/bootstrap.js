@@ -28,9 +28,34 @@ window.__ModuleLoader__.load({
         }
         let mounted = 0, cleanup;
         const markdownRoots = new Map();
-        function MessageMarkdown({ text, streaming, onLayout }) {
+        function MessageMarkdown({ text, streaming, onLayout, source }) {
           const pendingCopy = React.useRef(new WeakSet());
+          const pendingFile = React.useRef(null), alive = React.useRef(true);
+          const [fileStatus, setFileStatus] = React.useState(''), [fileBusy, setFileBusy] = React.useState(false);
+          const sourceKey = JSON.stringify(source || null), visible = React.useRef(null);
+          visible.current = { sourceKey, text };
+          React.useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+          React.useLayoutEffect(() => { pendingFile.current = null; setFileBusy(false); setFileStatus(''); }, [sourceKey, text]);
           React.useLayoutEffect(() => { onLayout?.(); });
+          const stillVisible = () => alive.current && visible.current?.sourceKey === sourceKey && visible.current?.text === text;
+          const openFile = (file, options) => {
+            if (pendingFile.current) return;
+            const request = {}; pendingFile.current = request; setFileBusy(true); setFileStatus('');
+            const requestVisible = () => pendingFile.current === request && stillVisible();
+            const original = source && { ...source };
+            Promise.resolve().then(() => window.workspace.openMessageFile(original, file, options)).then(result => {
+              if (result?.accepted !== true) throw Error('系统打开结果未确认，请先检查系统窗口。');
+              if (requestVisible() && options?.line) setFileStatus('文件已交给系统打开；行号暂未定位。');
+            }).catch(error => { if (requestVisible()) setFileStatus(`无法打开文件：${error.message || error}`); }).finally(() => {
+              const current = requestVisible();
+              if (pendingFile.current === request) pendingFile.current = null;
+              if (current) setFileBusy(false);
+            });
+          };
+          const showTarget = event => {
+            const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+            if (anchor && event.currentTarget.contains(anchor)) anchor.title = anchor.getAttribute('href') || '';
+          };
           const copy = event => {
             const button = event.target instanceof Element ? event.target.closest('[data-code-block-banner] button') : null;
             const block = button?.closest('.md-code-block'), banner = button?.closest('[data-code-block-banner]');
@@ -45,9 +70,11 @@ window.__ModuleLoader__.load({
               pendingCopy.current.delete(button); button.removeAttribute('aria-busy');
             });
           };
-          return React.createElement('div', { className: 'naw-markdown', onClickCapture: copy },
-            React.createElement(MarkdownDelegateProvider, { openExternalLink: href => window.workspace.openExternal(href) },
-              React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' } })));
+          return React.createElement('div', { className: 'naw-markdown', onClickCapture: copy, onMouseOverCapture: showTarget, onFocusCapture: showTarget, 'aria-busy': fileBusy || undefined },
+            React.createElement(MarkdownDelegateProvider, { openFile, openExternalLink: href => {
+              Promise.resolve().then(() => window.workspace.openExternal(href)).catch(error => { if (stillVisible()) setFileStatus(`无法打开链接：${error.message || error}`); });
+            } }, React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' } })),
+            fileStatus ? React.createElement('p', { role: 'status' }, fileStatus) : null);
         }
         const ui = {
           revealSidebar() {
@@ -103,10 +130,10 @@ window.__ModuleLoader__.load({
             root.render(React.createElement(SessionMenu));
             return close;
           },
-          markdown(el, text, streaming, onLayout) {
+          markdown(el, text, streaming, onLayout, source) {
             let root = markdownRoots.get(el);
             if (!root) { root = ReactDOM.createRoot(el); markdownRoots.set(el, root); }
-            root.render(React.createElement(MessageMarkdown, { text, streaming, onLayout }));
+            root.render(React.createElement(MessageMarkdown, { text, streaming, onLayout, source }));
           },
           clearMarkdown(el) { for (const [target, root] of markdownRoots) if (el.contains(target)) { root.unmount(); markdownRoots.delete(target); } },
         };

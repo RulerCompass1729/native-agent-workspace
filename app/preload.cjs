@@ -10,7 +10,7 @@ for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create',
     return result.value;
   };
 }
-for (const name of ['previewImage', 'expandImage', 'copyImage', 'releaseImage']) {
+for (const name of ['previewImage', 'expandImage', 'copyImage', 'releaseImage', 'openMessageFile']) {
   api[name] = async (...args) => { const result = await ipcRenderer.invoke(`workspace:${name}`, ...args); if (!result.ok) throw new Error(result.error); return result.value; };
 }
 api.retryStartup = () => ipcRenderer.invoke('workspace:retry-startup');

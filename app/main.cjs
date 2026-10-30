@@ -9,7 +9,7 @@ const { preflight, appBuildInfo } = require('./preflight.cjs');
 const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
-const { readPreview, saveCopy, extensions: textExtensions } = require('./local-files.cjs');
+const { readPreview, saveCopy, extensions: textExtensions, openMessageFile } = require('./local-files.cjs');
 const { ImagePreviews } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
@@ -375,6 +375,11 @@ async function boot() {
     if (answer.response === 1) return c.client.call('stop', id);
   });
   register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接类型不支持。'); return shell.openExternal(url.href); });
+  register('openMessageFile', (c, source, file, options) => openMessageFile({
+    snapshot: async () => roomState.apply(await c.client.call('initial')),
+    openPath: target => shell.openPath(target),
+    isCurrent: () => !c.win.isDestroyed() && windows.get(c.win.webContents.id) === c,
+  }, source, file, options));
   register('initial', async c => { const appBuild = await (applicationBuild ||= appBuildInfo(app, dataDir)); return { ...displayState(await c.client.call('initial'), c), viewState: c.view, appVersion: app.getVersion(), appBuild, preflight: preflight() }; });
   register('readingState', (c, positions) => { c.view.readingPositions = readingState(positions); return saveReadingSoon(); });
   register('viewState', (c, next) => {
