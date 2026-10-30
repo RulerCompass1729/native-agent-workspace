@@ -1251,6 +1251,28 @@ and retained-reader checks pass with zero skips or provider/model calls. An
 initial test event used an invalid payload shape; the corrected baseline is
 recorded separately and both valid cases fail before this caller fix.
 
-Installed GUI acceptance remains pending the next meaningful batch. These source
-checks do not retrofit retained live backends, qualify physical input or prove
-the original author's cold recovery. The dogfood goal remains open.
+Signed alpha.138 from clean committed `b7513ac` passes four installed flows with
+the actual Codex adapter, Workspace, IPC and renderer: initial reported effort,
+same-thread reconnection, a newer settings event winning over a delayed response,
+and unknown effort. Native transport and terminal are synthetic; one start and
+three resume responses produce no model turn or native input. Four local terminal
+resizes are observed. Identity, owner, membership and draft remain; each explicit
+continuation deliberately advances its control fence once.
+
+Two initial harness failures are retained: an incorrect unchanged-control-fence
+expectation, then checking DOM before the existing state broadcast arrived. The
+final driver waits for the actual visible header within six seconds. All three
+owned profiles/processes are cleaned and their exact GUI tokens released. Source
+and installed evidence pass the same independent reviewer; max-turn exits remain
+non-passes. The cumulative reviewer list equivalent is recorded privately, not
+reported as an invoice or summed across resumes.
+
+The ordinary visible 137-to-138 update preserves ten saved native IDs, live
+process starts and owners. Draft hashes are unchanged in both scopes: two of the
+twelve saved view drafts contain text; the ten session drafts and ten other view
+drafts are empty. Only the
+GUI and empty active backend update; six retained backends keep their earlier
+versions and process starts. Strict signature and ordinary launch arguments pass.
+The original Main goal keeps its UUID, objective, creation time and active status.
+These checks do not qualify physical input, activate every original retained
+reader, prove original cold recovery or close the dogfood goal.

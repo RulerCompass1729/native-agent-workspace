@@ -4,10 +4,19 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.137, committed build source `da5bc30`. Six signed installed
-flows verify local wheel reading of oversized read-only native grids, ordinary
-xterm history and an empty reader following native approval state. Reading keeps
-the original owner, grid and unsent draft, with zero native input. Geometry is
+Current daily GUI: alpha.138, committed build source `b7513ac`. Four signed
+installed flows verify effective Codex model/effort on opening and same-thread
+reconnection, newer settings winning over a delayed reply, and unreported effort
+remaining unknown. They use the actual adapter with synthetic native responses,
+zero provider/model calls, and preserve identity and draft. The retained reader's
+same response projection passes Unix WebSocket checks; original native recovery
+is not newly qualified. The ordinary visible update retains all ten saved native
+IDs, live process starts and owners. Draft hashes remain unchanged in both scopes:
+two saved view drafts contain text; the ten session drafts are empty. Six older native backends
+remain deliberately unchanged. The existing reader path reuses six signed alpha.137
+flows that verify local wheel reading of oversized read-only native grids,
+ordinary xterm history and an empty reader following native approval state.
+Reading keeps the original owner, grid and unsent draft, with zero native input. Geometry is
 renderer viewport emulation; physical input and real second-window control are
 not newly qualified. Compact native-only
 requests and existing member-title menus reuse 44 related checks and twelve signed
