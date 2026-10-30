@@ -240,14 +240,24 @@ function followQueuedRoomInput(id, mark) {
   if (row.status === 'not-sent' && mark.cleared === roomDraftRevision) { $('shared-input').value = mark.raw; roomMention = mark.address; roomDraftRevision++; attempt(persistView); }
   queuedRoomInputs.delete(id);
 }
-// Session times, never guessed: older rows without a record say so.
+// Recorded times only; message-derived activity is labelled as an estimate.
 function sessionTime(value) {
   if (!Number.isFinite(value)) return '';
   const date = new Date(value), now = new Date();
+  if (!Number.isFinite(date.getTime())) return '';
   const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return date.toDateString() === now.toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()}${date.getFullYear() === now.getFullYear() ? '' : `/${date.getFullYear()}`} ${time}`;
 }
-const sessionTimes = s => `创建 ${sessionTime(s.createdAt) || '未记录'} · 最后活动 ${sessionTime(s.lastActivityAt) || '未记录'}`;
+function sessionActivityTime(s) {
+  const reported = sessionTime(s.lastActivityAt);
+  if (reported) return reported;
+  let latest = null;
+  for (const m of Array.isArray(s.messages) ? s.messages : []) {
+    if (!m?.volatile && m?.kind !== 'gap' && Number.isFinite(m?.time) && Number.isFinite(new Date(m.time).getTime())) latest = latest === null ? m.time : Math.max(latest, m.time);
+  }
+  return latest === null ? '时间未知' : `推算 ${sessionTime(latest)}`;
+}
+const sessionTimes = s => `创建 ${sessionTime(s.createdAt) || '未记录'} · 最后活动 ${sessionActivityTime(s)}`;
 function renderDraftRecovery(id) {
   const copies = draftRecoveries.get(id) || [], list = $('draft-recovery-list');
   $('draft-recovery').hidden = !copies.length;
@@ -817,7 +827,7 @@ function renderSessions() {
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
     row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}`); row.more.title = `会话操作：${record.name} · ${sessionShortId(record.id)}`; row.more.disabled = disconnected || renameTarget?.id === record.id;
-    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''}${sessionTime(record.lastActivityAt) ? ` · ${sessionTime(record.lastActivityAt)}` : ''}`; row.dot.className = `state-dot ${record.state}`;
+    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = `${sessionStatus(record)}${record.roomId ? ' · 协作中' : ''} · ${sessionActivityTime(record)}`; row.dot.className = `state-dot ${record.state}`;
     // Keep existing DOM nodes: native state updates must not remove a focused
     // row or its open menu anchor every 35 ms.
     const slot = $('session-list').children[index]; if (slot !== row.element) $('session-list').insertBefore(row.element, slot || null);
@@ -862,7 +872,7 @@ function renderArchives() {
   if ($('archive-group-body').hidden) return;
   const list = $('archive-list');
   const origin = document.activeElement, oldRow = origin?.closest('.archive-item'), oldIndex = oldRow ? [...list.children].indexOf(oldRow) : -1;
-  const signature = JSON.stringify([state.room.archived, state.room.name, records.map(s => [s.id, s.name, s.state]), state.sessions.map(s => [s.id, s.name])]);
+  const signature = JSON.stringify([state.room.archived, state.room.name, records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name])]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
   if (state.room.archived) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = state.room.id; row.append(node('strong', state.room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', restoreArchivedRoom)); list.append(row);
