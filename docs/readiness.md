@@ -4,12 +4,15 @@ As of 2026-10-29. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.128, committed source `b3a8d8a`. Both normal-visible
-updates preserve all10 original native IDs/live process starts/owners/drafts and12
-saved view drafts. The backend split is128×1(active, no live sessions),120×4,
-118×2. Per the earlier mapping and unchanged process identities, Main and the
-active secretary remain on118. This is a GUI update,
-not a successful Main recovery or a completed dogfood milestone.
+Current daily GUI: alpha.129, committed build source `506f1d6`. The ordinary
+visible GUI update retained all 10 native IDs, live process starts, owners and
+draft scopes. A subsequent controlled recovery of the original developer backend
+retained the same native IDs, goal and settings on new processes using the exact
+retained Codex 0.164 and Claude 2.1.312 binaries. That selected recovery passed
+independent review; the interrupted turn was not replayed. The current split is
+129×2 (including the empty new-session backend), 120×4, 118×1. Five older backends
+remain deferred; Claude's active goal and the full dogfood milestone are not
+certified by this result. See the alpha.129 record in [review](review.md).
 
 Local builds now use the existing named signing certificate and verify its
 certificate-bound designated requirement; a missing identity stops the build.

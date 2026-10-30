@@ -801,3 +801,14 @@ I81 recovery-source follow-up (independent checkpoint, deployment still open):
   binary hash and version checks for both retained providers before any input.
 - These are controller-source findings, separate from installed acceptance and
   actual developer-fork recovery. No process-loss pass is claimed from mock probes.
+
+
+### Alpha.129 selected developer-backend recovery
+
+Signed alpha.129 was built from committed source 506f1d6 and accepted in the installed interface. It combines private member-column inputs, native confirmation of image paste, compact process folds with original details, honest activity times for legacy metadata, and persistent per-backend native runtime selection. The runtime change reuses the existing executable-path validator; it installs no provider and changes no global default.
+
+Validation: 1426 no-model unit checks; installed column 5 and timestamp 4 complete journeys; six fixed local responses from actual Codex 0.164 for active-goal loss/recovery and a blocked-goal continuation, zero paid inference for these isolated tests. The actual recovery continuation and subsequent development used real gpt-6.1-sol turns in the developer session and are excluded from that zero-cost statement. Native attachments in the column test use a synthetic transport; physical clipboard/IME and real narrow-column provider interpretation remain unqualified. Headless Fable source and installed candidate reviews passed after resolving runtime drift, legacy override adoption, unsafe fallback and the root/global Settings alias finding.
+
+The actual original developer fork was then recovered once on the installed 129 backend after a controlled server loss and graceful old-daemon stop. The native UUID, original blocked goal identity/body, draft, model/effort/permissions and known Claude posture were retained. Both selected providers use the exact retained native binaries; the Codex TUI and server match. One ordinary visible reopening and one productive continuation were observed, with no retry. The author observed successful resumed source/Git and owned file IO; the private native history and IO witness retain those outputs. The interrupted turn was not replayed. Other native IDs, live native starts and nine protected parent processes remained; the native-process scan found no unaccounted process.
+
+This qualifies the selected original backend recovery only. Five older backends remain deferred, Claude's active goal is not certified, and the full real-workday/window-only/external-terminal conditions are still open. Source READY is not installed acceptance; the next integration is the source-READY version-information slice. No whole-milestone completion is claimed.
