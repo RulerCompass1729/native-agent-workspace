@@ -6,12 +6,14 @@ const contentMenuCurrent = target => target.revision === selectionRevision && ta
 const contentMenuChanged = () => new Error('内容或会话已变化，请重新打开菜单。');
 function terminalMenuTarget(id = activeSessionId()) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
-  return { ...contentMenuOrigin(), id, entry, nativeId: record?.nativeId, owner: record?.owner, text: entry?.term.getSelection() || '' };
+  const binding = columnTerminalBinding(id);
+  return { ...contentMenuOrigin(), id, entry, binding, bindingRevision: binding?.revision, controlRevision: record?.controlRevision, nativeId: record?.nativeId, owner: record?.owner, text: entry?.term.getSelection() || '' };
 }
 function terminalMenuCurrent(target, writable = false) {
-  const record = current();
-  return Boolean(contentMenuCurrent(target) && target.entry?.ready && terminals.get(target.id) === target.entry &&
-    currentTerminalDisplay(target.entry, record) && (!writable || record?.owner === target.owner && target.owner === owner && terminalCanInput(target.id)));
+  const record = state?.sessions.find(s => s.id === target.id);
+  const context = target.binding ? columnTerminalBinding(target.id) === target.binding && target.binding.revision === target.bindingRevision && record?.nativeId === target.nativeId : contentMenuCurrent(target);
+  return Boolean(context && target.entry?.ready && terminals.get(target.id) === target.entry &&
+    currentTerminalDisplay(target.entry, record) && (!writable || record?.owner === target.owner && record?.controlRevision === target.controlRevision && target.owner === owner && terminalCanInput(target.id)));
 }
 async function copyTerminalContext(target = terminalMenuTarget()) {
   if (!terminalMenuCurrent(target)) throw contentMenuChanged();
@@ -23,7 +25,7 @@ async function pasteTerminalContext(target = terminalMenuTarget()) {
   if (!terminalMenuCurrent(target, true)) throw new Error('请先连接并接管这个终端。');
   const content = await api.pasteNativeContent(target.id, target.nativeId);
   if (!terminalMenuCurrent(target, true)) throw contentMenuChanged();
-  if (content.images) await pasteImages([], content.images); else pasteTerminal(content.text);
+  if (content.images) await pasteImages([], content.images, target.id); else pasteTerminal(content.text, target.id);
 }
 function showContentMenu(element, point, keyboard = false, event) {
   if (element instanceof Element && element.closest('[data-member-menu]')) return false;
@@ -46,10 +48,13 @@ function showContentMenu(element, point, keyboard = false, event) {
   } else {
     field = element.closest('input, textarea');
     if (field && !field.disabled && typeof field.selectionStart === 'number') {
-      const draftRevision = () => field.id === 'message-input' ? draftRevisions.get(origin.id) : field.id === 'shared-input' ? roomDraftRevision : field.id === 'rename-name' ? renameRevision : undefined;
+      const binding = sessionComposers.get(field.dataset.composerSession), bindingRevision = binding?.revision;
+      const record = binding && state.sessions.find(s => s.id === binding.id), nativeId = record?.nativeId, controlRevision = record?.controlRevision;
+      const fieldCurrent = () => binding ? composerCurrent(binding) && binding.revision === bindingRevision && binding.ui.input === field && state.sessions.find(s => s.id === binding.id)?.nativeId === nativeId && state.sessions.find(s => s.id === binding.id)?.controlRevision === controlRevision : contentMenuCurrent(origin);
+      const draftRevision = () => binding ? draftRevisions.get(binding.id) : field.id === 'message-input' ? draftRevisions.get(origin.id) : field.id === 'shared-input' ? roomDraftRevision : field.id === 'rename-name' ? renameRevision : undefined;
       fieldState = { value: field.value, start: field.selectionStart, end: field.selectionEnd, direction: field.selectionDirection, revision: draftRevision() };
       const selectedText = fieldState.value.slice(fieldState.start, fieldState.end);
-      const validField = () => contentMenuCurrent(origin) && field.isConnected && !field.disabled && field.value === fieldState.value && draftRevision() === fieldState.revision;
+      const validField = () => fieldCurrent() && field.isConnected && !field.disabled && field.value === fieldState.value && draftRevision() === fieldState.revision;
       const editable = () => validField() && !field.readOnly && document.activeElement === field && field.selectionStart === fieldState.start && field.selectionEnd === fieldState.end;
       restore = () => {
         if (!validField()) return;
@@ -57,7 +62,7 @@ function showContentMenu(element, point, keyboard = false, event) {
       };
       const edit = text => {
         if (!editable()) throw contentMenuChanged();
-        const maximum = field.id === 'message-input' ? 16000 : field.maxLength;
+        const maximum = binding || field.id === 'message-input' ? 16000 : field.maxLength;
         // This is the same Chromium edit mechanism used by chooseMention.
         // A direct value assignment would discard the person's undo history.
         if (!field.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: text ? 'insertFromPaste' : 'deleteByCut', data: text || null }))) return;

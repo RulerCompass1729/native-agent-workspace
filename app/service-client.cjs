@@ -56,6 +56,16 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
     fs.rmSync(lock); // Dead PID only; never kill or replace a live owner.
   }
   const names = ['service-transport.cjs', 'daemon.cjs', 'adapters.cjs', 'terminal-keyboard.cjs', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'native-blocks.cjs', 'native-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'native-history.cjs', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'service-layout.cjs', 'observation.cjs', 'pty_host.py', 'claude_hook.py', 'platform.cjs', 'runtime-locations.cjs', 'claude-submit.cjs'];
+  const localLocations = path.join(dataDir, 'runtime-locations.json');
+  let runtimeConfig = process.env.NAW_RUNTIME_CONFIG;
+  // Keep Settings reachable when the root backend shares the global file.
+  if (!runtimeConfig || path.resolve(localLocations) !== path.resolve(runtimeConfig)) {
+    try {
+      fs.lstatSync(localLocations);
+      require('./runtime-locations.cjs').readLocations(localLocations);
+      runtimeConfig = localLocations;
+    } catch (error) { if (error.code !== 'ENOENT') throw Error(`后台程序位置配置无法读取：${localLocations}。请修复或移除此文件后重新打开工作区。`); }
+  }
   const pluginFiles = ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js'];
   const hash = crypto.createHash('sha256'); for (const name of names) hash.update(fs.readFileSync(path.join(__dirname, name)));
   for (const name of pluginFiles) hash.update(fs.readFileSync(path.join(__dirname, 'claude-bridge', name)));
@@ -72,7 +82,7 @@ async function ensureServiceAt(dataDir, executablePath, defaultWorkspace, allowE
       fs.copyFileSync(path.join(path.dirname(require.resolve('@xterm/xterm/package.json')), 'LICENSE'), path.join(target, 'LICENSE'));
     }
   }
-  const child = spawn(executablePath, ['--disable-sigusr1', path.join(runtime, 'daemon.cjs'), dataDir], { detached: true, stdio: 'ignore', env: { ...process.env, NAW_WORKSPACE: defaultWorkspace, ELECTRON_RUN_AS_NODE: '1' } }); child.unref();
+  const child = spawn(executablePath, ['--disable-sigusr1', path.join(runtime, 'daemon.cjs'), dataDir], { detached: true, stdio: 'ignore', env: { ...process.env, NAW_RUNTIME_CONFIG: runtimeConfig, NAW_WORKSPACE: defaultWorkspace, ELECTRON_RUN_AS_NODE: '1' } }); child.unref();
   for (let i = 0; i < 100; i++) { try { const c = await connectService(dataDir, 'bootstrap'); try { return await c.call('initial'); } finally { c.close(); } } catch {} await new Promise(r => setTimeout(r, 100)); }
   throw new Error('运行服务未能启动。原生会话没有自动重发。');
 }

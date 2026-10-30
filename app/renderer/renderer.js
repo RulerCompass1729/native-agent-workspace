@@ -127,6 +127,175 @@ function updateLegacyProgress(event) {
 const inputRecoveries = new Map();
 const draftRevisions = new Map();
 const pendingDrafts = new Map();
+const sessionComposers = new Map();
+const composerPlaceholder = { form: $('composer'), input: $('message-input'), send: $('send-button'), hint: $('compose-hint') };
+const composerTemplate = composerPlaceholder.form.cloneNode(true), composerInterrupt = $('interrupt');
+let soloComposer = null, inputFocusRevision = 0;
+document.addEventListener('focusin', () => { inputFocusRevision++; });
+const composerParking = node('div'); composerParking.hidden = true; document.querySelector('.naw').append(composerParking);
+const terminalParking = node('div'); terminalParking.hidden = true; document.querySelector('.naw').append(terminalParking);
+function composerIds(parts, active) {
+  for (const [part, id] of [['form', 'composer'], ['input', 'message-input'], ['send', 'send-button'], ['hint', 'compose-hint']]) {
+    if (active) parts[part].id = id; else parts[part].removeAttribute('id');
+  }
+}
+function getSessionComposer(id) {
+  let binding = sessionComposers.get(id); if (binding) return binding;
+  const form = composerTemplate.cloneNode(true); form.querySelector('#interrupt').remove();
+  for (const el of [form, ...form.querySelectorAll('[id]')]) el.removeAttribute('id');
+  form.dataset.composerSession = id;
+  binding = { id, column: false, visible: false, revision: 0, changing: false };
+  binding.ui = window.nativeWorkspaceComposer.create({ form,
+    onInput: () => saveSessionDraft(binding), onError: error => toast(error.message || '操作未完成。'),
+    onFocus: () => { if (!binding.column && mode !== 'chat' && inputFocusAllowed()) attempt(() => switchMode('chat')); },
+    onCompositionEnd: () => { if (binding.syncAfterComposition) { binding.syncAfterComposition = false; binding.ui.setValue(state.sessions.find(s => s.id === id)?.liveDraft || ''); } },
+    onSubmit: () => submitSession(binding), onAction: () => sessionComposerAction(binding),
+    onNative: () => activateColumnNative(binding), onImages: (_, files) => pasteImages(files, undefined, id),
+  });
+  binding.ui.input.dataset.composerSession = id;
+  binding.ui.setValue(pendingDrafts.get(id)?.text ?? state?.sessions.find(s => s.id === id)?.liveDraft ?? '');
+  sessionComposers.set(id, binding); composerParking.append(form); return binding;
+}
+function activateSoloComposer(id) {
+  const next = id ? getSessionComposer(id) : null;
+  if (soloComposer === next) return next;
+  if (soloComposer) { composerIds(soloComposer.ui, false); composerParking.append(soloComposer.ui.form); }
+  composerIds(composerPlaceholder, false); composerPlaceholder.form.hidden = true;
+  soloComposer = next;
+  if (next) {
+    next.column = false; next.visible = true; composerIds(next.ui, true);
+    next.ui.send.before(composerInterrupt); $('composer-wrap').append(next.ui.form);
+  } else {
+    composerIds(composerPlaceholder, true); composerPlaceholder.send.before(composerInterrupt);
+  }
+  return next;
+}
+function composerCurrent(binding) {
+  return sessionComposers.get(binding.id) === binding && binding.visible && binding.ui.form.isConnected &&
+    (binding.column ? selected === 'room' && !roomSession && roomSurface === 'overview' && members().some(s => s.id === binding.id) : activeSessionId() === binding.id);
+}
+function saveSessionDraft(binding) {
+  const s = state?.sessions.find(s => s.id === binding.id);
+  if (!s || s.owner !== owner || !composerCurrent(binding)) return;
+  const revision = (draftRevisions.get(s.id) || 0) + 1; draftRevisions.set(s.id, revision);
+  const pending = { text: binding.ui.input.value, revision }; pendingDrafts.set(s.id, pending); s.liveDraft = pending.text;
+  attempt(async () => {
+    try { await api.draft(s.id, pending.text); }
+    catch (error) { if (draftRevisions.get(s.id) === revision && pending.text) rememberDraftRecovery(s.id, pending.text); throw error; }
+    finally { if (pendingDrafts.get(s.id) === pending) pendingDrafts.delete(s.id); if (activeSessionId() === s.id) renderDraftRecovery(s.id); }
+  });
+  updateSessionComposer(binding, s, binding.column);
+}
+async function submitSession(binding) {
+  const s = state.sessions.find(s => s.id === binding.id), action = soloAction(s, { column: binding.column, mode: binding.column ? 'chat' : mode });
+  if (!composerCurrent(binding) || binding.ui.send.disabled || binding.ui.composing || action.kind !== 'send') return;
+  if (inputFocusAllowed()) binding.ui.input.focus();
+  const { id, nativeId } = s, text = binding.ui.input.value, revision = draftRevisions.get(id);
+  const mark = s.state === 'working' && s.queueAvailable && { text, revision, before: new Set(s.messages.map(m => m.id)) };
+  if (mark) queuedInputs.set(id, mark);
+  let receipt;
+  try { receipt = mark ? await api.queue(id, text, nativeId) : s.state === 'working' && s.steerAvailable && s.activeTurnId
+    ? await api.steer(id, text, nativeId, s.activeTurnId) : await api.send(id, text, nativeId); }
+  finally { if (mark && !mark.tag && queuedInputs.get(id) === mark) queuedInputs.delete(id); }
+  const fresh = state.sessions.find(s => s.id === id);
+  if (!receipt?.contextChanged && fresh?.owner === owner && fresh?.nativeId === nativeId && !fresh.nativeContextPending && draftRevisions.get(id) === revision && binding.ui.input.value === text) binding.ui.setValue('');
+}
+async function sessionComposerAction(binding) {
+  if (!composerCurrent(binding) || binding.ui.send.disabled) return;
+  const s = state.sessions.find(s => s.id === binding.id), action = soloAction(s, { column: binding.column, mode: binding.column ? 'chat' : mode });
+  if (binding.column) {
+    if (action.kind === 'terminal') return activateColumnNative(binding);
+    if (['claim', 'chat'].includes(action.kind)) return changeColumnView(binding, 'chat', action.kind === 'claim');
+    if (action.kind === 'connect') {
+      await api.prepareInput(s.id); if (!composerCurrent(binding)) return;
+      updateState(await api.initial()); render();
+      if (s.provider === 'claude') await activateColumnNative(binding); return;
+    }
+    if (action.kind === 'resume') { await api.resume(s.id); return; }
+    return;
+  }
+  if (action.kind === 'terminal') await switchMode('terminal');
+  else if (action.kind === 'chat') await switchMode('chat');
+  else if (action.kind === 'connect') {
+    const revision = selectionRevision; await api.prepareInput(s.id);
+    if (revision !== selectionRevision || !composerCurrent(binding)) return;
+    if (s.provider === 'codex') { updateState(await api.initial()); render(); if (composerCurrent(binding) && !binding.ui.input.readOnly && inputFocusAllowed()) binding.ui.input.focus(); return; }
+    await switchMode('terminal');
+    if (current()?.id === s.id && mode === 'terminal') toast('请在此会话运行 /reload-plugins；连接成功后即可切回对话输入。');
+  } else if (action.kind === 'claim') await switchMode(s.chatAvailable === false && !s.legacyInputEligible ? 'terminal' : 'chat', true);
+  else if (action.kind === 'resume') await api.resume(s.id);
+}
+function cancelColumnComposition(entry) {
+  if (!entry) return;
+  if (entry.composing && entry.compositionOrigin) entry.compositionOrigin.cancelled = true;
+  if (entry.composition && !entry.composition.consumed) entry.composition.cancelled = true;
+}
+function suspendColumnInputs() {
+  for (const binding of sessionComposers.values()) if (binding.column && binding.visible) {
+    binding.revision++; binding.resizeAllowed = false; cancelViewInput(terminals.get(binding.id));
+    const entry = terminals.get(binding.id);
+    if (entry) { cancelColumnComposition(entry); if (entry.composing) entry.term.blur(); }
+    binding.ui.suspend();
+  }
+}
+function renderColumnInput(host, record, visible) {
+  const binding = getSessionComposer(record.id);
+  const wasVisible = binding.column && binding.visible;
+  binding.columnHost = host; binding.nativeHost ||= node('div', undefined, 'column-native-host');
+  if (binding !== soloComposer) {
+    binding.column = true; binding.visible = visible;
+    if (wasVisible && !visible) { binding.revision++; binding.resizeAllowed = false; cancelViewInput(terminals.get(record.id)); binding.ui.suspend(); const entry = terminals.get(record.id); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } }
+    if (visible) { if (binding.nativeHost.parentElement !== host) host.append(binding.nativeHost); if (binding.ui.form.parentElement !== host) host.append(binding.ui.form); }
+    else if (binding.ui.form.parentElement !== composerParking) composerParking.append(binding.ui.form);
+    updateSessionComposer(binding, record, true);
+  }
+  const nativeVisible = visible && record.view === 'terminal' && binding !== soloComposer;
+  binding.nativeVisible = nativeVisible; binding.nativeHost.hidden = !nativeVisible;
+  if (nativeVisible && nativeUsable(record) && record.terminalState?.alive) ensureTerminal(record.id).catch(error => toast(error.message));
+  syncTerminalMount(record.id);
+  return nativeVisible;
+}
+function removeColumnInput(id) {
+  const binding = sessionComposers.get(id); if (!binding) return;
+  binding.revision++; binding.visible = binding.nativeVisible = false; binding.resizeAllowed = false;
+  binding.ui.suspend(); if (binding !== soloComposer) composerParking.append(binding.ui.form);
+  const entry = terminals.get(id); cancelViewInput(entry); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } syncTerminalMount(id);
+}
+async function changeColumnView(binding, next, takeControl = false) {
+  if (!composerCurrent(binding) || !binding.column || binding.changing) return false;
+  const revision = binding.revision, record = state.sessions.find(s => s.id === binding.id), nativeId = record?.nativeId, generation = record?.connectionRevision || 0;
+  const valid = () => { const fresh = state.sessions.find(s => s.id === binding.id); return composerCurrent(binding) && binding.column && binding.revision === revision && fresh?.nativeId === nativeId && !fresh.nativeContextPending && (fresh.connectionRevision || 0) === generation; };
+  if (!takeControl && record?.owner === owner && record.view === next && valid()) return true;
+  binding.changing = true; render();
+  try {
+    if (!await claimView(binding.id, next, selectionRevision, takeControl, valid) || !valid()) return false;
+    render(); return true;
+  } finally { binding.changing = false; render(); }
+}
+async function activateColumnNative(binding) {
+  if (!composerCurrent(binding) || !binding.column) return false;
+  const focusIntent = inputFocusRevision;
+  if (!await changeColumnView(binding, 'terminal')) return false;
+  const revision = binding.revision;
+  clearFailedTerminal(binding.id); await ensureTerminal(binding.id, true);
+  if (!composerCurrent(binding) || binding.revision !== revision || !binding.nativeVisible) return false;
+  binding.resizeAllowed = true;
+  fitTerminal(binding.id); await new Promise(requestAnimationFrame); if (!composerCurrent(binding) || binding.revision !== revision) return false; if (inputFocusRevision === focusIntent) focusTerminal(binding.id); return true;
+}
+function columnTerminalBinding(id) {
+  const binding = sessionComposers.get(id);
+  return binding?.column && binding.nativeVisible && composerCurrent(binding) ? binding : null;
+}
+function terminalContextVisible(id) {
+  return Boolean(columnTerminalBinding(id) || id === activeSessionId() && mode === 'terminal' && selected !== 'room' || id === activeSessionId() && mode === 'terminal' && focusedRoomMember());
+}
+function syncTerminalMount(id) {
+  const entry = terminals.get(id); if (!entry) return;
+  const binding = columnTerminalBinding(id), solo = activeSessionId() === id && (selected !== 'room' || focusedRoomMember());
+  const parent = binding ? binding.nativeHost : solo ? $('terminal-area') : terminalParking;
+  if (entry.element.parentElement !== parent) parent.append(entry.element);
+  entry.element.hidden = parent === terminalParking;
+}
 const queuedInputs = new Map(), queuedRoomInputs = new Map();
 const draftRecoveries = new Map();
 const draftRecoveryQueues = new Map();
@@ -147,7 +316,7 @@ function focusRoomMember(id, previous, originKey) {
   selectionRevision++;
   if (id && id !== previous && readingPositions[originKey]) readingPositions[`collaboration-focus:${id}`] = structuredClone(readingPositions[originKey]);
   roomSurface = 'overview'; roomSession = id; mode = 'chat';
-  $('message-input').value = state.sessions.find(s => s.id === id)?.liveDraft || '';
+  activateSoloComposer(id);
   lastMessages = ''; render(); attempt(persistView);
 }
 function restoreOverviewReading() {
@@ -170,6 +339,8 @@ function renderRoomOverview() {
     label: s => participantLabel(s, state.sessions), messages: s => sessionMessages(s),
     renderMessages: (el, s, rows, key) => messageList(el, rows, false, key, { session: s, passive: true }),
     disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
+    renderInput: renderColumnInput, disposeInput: removeColumnInput,
+    beforeInputLayout: suspendColumnInputs,
     beforeLayout: () => { captureReadingViews(); restoreOverviewReading(); }, onLayout: restoreOverviewReading, onFocus: focusRoomMember,
     decorateHeader: (handle, record) => draggableSession(handle, record.id),
     onMemberMenu: openMemberMenu,
@@ -199,17 +370,19 @@ const canResume = s => s?.nativeId && !s.nativeContextPending && !s.backendUnava
   ['resume', 'nativePermissionDefaults'].every(c => (s.serviceCapabilities || state.capabilities || []).includes(c));
 const inputFocusAllowed = () => !sessionMenu && !roomMenu && !contentMenu && !renameTarget && !document.querySelector('dialog[open]');
 function updateState(next) {
-  const before = current(), id = activeSessionId();
+  const before = new Map((state?.sessions || []).map(s => [s.id, s]));
   state = { ...state, ...next };
   for (const s of state.sessions || []) if (legacyProgressOffline(s)) freezeLegacyProgress(s);
   if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
-  const after = current();
-  if (before && after && (before.owner !== owner || after.owner !== owner)) {
-    const pending = pendingDrafts.get(id);
-    if (pending && pending.text !== after.liveDraft) rememberDraftRecovery(id, pending.text);
-    // Observing/taking over a session reads its current draft. Do not rewrite
-    // an owner's in-progress input on routine service broadcasts.
-    $('message-input').value = after.liveDraft || '';
+  for (const [id, binding] of sessionComposers) {
+    const previous = before.get(id), after = state.sessions.find(s => s.id === id);
+    if (previous && after && (previous.owner !== owner || after.owner !== owner)) {
+      const pending = pendingDrafts.get(id);
+      if (pending && pending.text !== after.liveDraft) rememberDraftRecovery(id, pending.text);
+      // An owning editor keeps its node/value across ordinary snapshots.
+      // Ownership changes read the current draft, after IME has committed.
+      if (!binding.ui.setValue(after.liveDraft || '')) binding.syncAfterComposition = true;
+    }
   }
   for (const [queuedId, mark] of queuedInputs) followQueuedInput(queuedId, mark);
   for (const [queuedId, mark] of queuedRoomInputs) followQueuedRoomInput(queuedId, mark);
@@ -222,10 +395,10 @@ function followQueuedInput(id, mark) {
   const row = s?.messages.find(m => mark.tag ? m.id === mark.tag : m.inputMode === 'queue' && !mark.before.has(m.id));
   if (!row) { if (!s) queuedInputs.delete(id); return; }
   mark.tag = row.id;
-  const untouched = activeSessionId() === id && draftRevisions.get(id) === mark.revision;
-  if (!mark.cleared && row.status === 'awaiting-native' && !s.liveDraft && untouched && $('message-input').value === mark.text) { $('message-input').value = ''; mark.cleared = true; }
+  const input = sessionComposers.get(id)?.ui.input, untouched = input && draftRevisions.get(id) === mark.revision;
+  if (!mark.cleared && row.status === 'awaiting-native' && !s.liveDraft && untouched && input.value === mark.text) { sessionComposers.get(id).ui.setValue(''); mark.cleared = true; }
   if (row.status === 'awaiting-native') return;
-  if (row.status === 'not-sent' && mark.cleared && untouched && !$('message-input').value && s.liveDraft) $('message-input').value = s.liveDraft;
+  if (row.status === 'not-sent' && mark.cleared && untouched && !input.value && s.liveDraft) sessionComposers.get(id).ui.setValue(s.liveDraft);
   queuedInputs.delete(id);
 }
 function followQueuedRoomInput(id, mark) {
@@ -289,11 +462,11 @@ function changeDraftRecovery(id, method, text) {
   task.then(clear, clear);
   return task;
 }
-function claimView(id, next, revision, takeControl = false) {
+function claimView(id, next, revision, takeControl = false, contextCurrent) {
   const intent = state.sessions.find(s => s.id === id);
   const expectedOwner = intent?.owner, expectedControl = intent?.controlRevision;
   const pending = viewClaims.get(id);
-  const isCurrent = () => selectionRevision === revision && activeSessionId() === id;
+  const isCurrent = contextCurrent || (() => selectionRevision === revision && activeSessionId() === id);
   // Serialize only this session's view changes. Other sessions remain usable.
   const operation = (pending || Promise.resolve()).catch(() => {}).then(async () => {
     if (!isCurrent()) return false;
@@ -304,7 +477,7 @@ function claimView(id, next, revision, takeControl = false) {
     // Waiting is not renewed consent to override a more recent human action.
     // Older native services have no atomic conditional-claim protocol; this
     // cancels stale queued intent, not changes after this local observation.
-    if (!target || target.owner !== expectedOwner || (pending && target.controlRevision !== expectedControl) || (!takeControl && target.owner !== owner)) { render(); return false; }
+    if (!target || target.owner !== expectedOwner || ((pending || contextCurrent) && target.controlRevision !== expectedControl) || (!takeControl && target.owner !== owner)) { render(); return false; }
     await api.claim(id, next);
     if (!isCurrent()) return false;
     const acknowledged = await api.initial();
@@ -317,7 +490,7 @@ function claimView(id, next, revision, takeControl = false) {
   const clear = () => { if (viewClaims.get(id) === operation) viewClaims.delete(id); };
   operation.then(clear, clear); return operation;
 }
-function soloAction(s) {
+function soloAction(s, context = {}) {
   if (!s || disconnected || s.archived) return { kind: 'none', label: s?.archived ? '已归档' : '未连接', hint: s?.archived ? '恢复会话后继续，草稿保留。' : '重新连接本机服务后继续，草稿保留。' };
   if (s.transportDisconnected && canResume(s)) return { kind: 'resume', label: '继续原生会话', hint: '图形连接已断开；重接同一后台与会话，已有终端和草稿保留，不重发任务。' };
   if (!nativeUsable(s)) return canResume(s)
@@ -333,7 +506,7 @@ function soloAction(s) {
     ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
     : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
   if (s.chatAvailable === false || s.state === 'starting') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
-  if (focusedRoomMember() && mode === 'chat' && s.view !== 'chat') return { kind: 'chat', label: '启用对话输入', hint: '正在查看原会话；明确启用后可在这里输入，草稿保留。' };
+  if ((context.column || focusedRoomMember()) && (context.mode || mode) === 'chat' && s.view !== 'chat') return { kind: 'chat', label: '启用对话输入', hint: '正在查看原会话；明确启用后可在这里输入，草稿保留。' };
   if (s.legacyReaderPending && s.state === 'idle') return { kind: 'send', label: '发送 ↑', hint: '输入已接通；实时过程尚待更新。在原生终端运行 /reload-plugins 后生效，无需重启。' };
   // Native runs a plugin's queued prompt only once idle; text typed in the TUI reaches the running turn.
   if (s.pendingQueue) return { kind: 'send', label: '等待原生接收', hint: '要等 Claude 空闲后才发送；想中途插话，请在原生终端输入。可先编辑后续草稿。' };
@@ -347,14 +520,21 @@ function soloAction(s) {
 }
 function renderComposer(s) {
   renderDraftRecovery(s?.id);
-  const action = soloAction(s), send = $('send-button');
+  if (s) updateSessionComposer(activateSoloComposer(s.id), s, false);
+}
+function updateSessionComposer(binding, s, column) {
+  const action = soloAction(s, { column, mode: column ? 'chat' : mode });
   const legacyDraft = (s?.legacyInputEligible || s?.nativeInputRequired) && s.owner === owner && !disconnected && !s.archived && ['connect', 'terminal'].includes(action.kind);
-  $('message-input').readOnly = action.kind !== 'send' && !legacyDraft;
-  $('message-input').disabled = false; // Saved drafts remain selectable/copyable.
-  $('message-input').placeholder = action.kind === 'send' ? '直接说你想做什么…' : legacyDraft ? '可以继续编辑草稿。' : '草稿保留在这里；请使用下方操作继续。';
-  send.textContent = action.label; send.type = action.kind === 'send' ? 'submit' : 'button';
-  send.disabled = action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !$('message-input').value.trim() || pendingMode?.id === s.id || inputRecoveries.get(s.id)?.text.value));
-  $('compose-hint').textContent = inputRecoveries.get(s?.id)?.text.value ? '上一段原生输入未确认。草稿可继续编辑；请在原生终端查看保留的文字。' : pendingMode?.id === s?.id ? '正在切换输入方式，可以先编辑草稿。' : action.hint;
+  const disabled = action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !binding.ui.input.value.trim() || pendingMode?.id === s.id || binding.changing || inputRecoveries.get(s.id)?.text.value));
+  const identity = participantLabel(s, state.sessions);
+  binding.ui.update({ readOnly: action.kind !== 'send' && !legacyDraft, submit: action.kind === 'send', disabled,
+    label: action.label, actionLabel: column ? `${action.label}：${identity}` : '',
+    placeholder: column ? `发送给 ${identity}…` : action.kind === 'send' ? '直接说你想做什么…' : legacyDraft ? '可以继续编辑草稿。' : '草稿保留在这里；请使用下方操作继续。',
+    inputLabel: column ? `发送给 ${identity} 的消息` : '发送给当前 agent 的消息',
+    hint: inputRecoveries.get(s.id)?.text.value ? '上一段原生输入未确认。草稿保留；请查看本会话的原生输入。' : binding.changing || pendingMode?.id === s.id ? '正在切换输入方式，草稿保留。' : column && action.hint === 'Enter 发送 · Shift Enter 换行' ? '' : action.hint,
+    showNative: column && action.kind === 'send' && s.owner === owner, nativeDisabled: binding.changing || disconnected,
+    nativeLabel: `${identity}：原生输入`,
+  });
 }
 function toast(text, action) {
   clearTimeout(toastTimer);
@@ -398,7 +578,7 @@ async function attempt(action) { try { return await action(); } catch (error) { 
 function persistView() { normalizeRoomMention(); captureReadingViews(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession) {
-  captureReadingViews();
+  captureReadingViews(); suspendColumnInputs();
   const revision = ++selectionRevision;
   const leaving = terminals.get(activeSessionId());
   cancelViewInput(leaving);
@@ -408,7 +588,7 @@ async function select(id, requestedMode, member = roomSession) {
   selected = id; const s = current();
   if (selected === 'room') mode = roomSurface === 'overview' ? 'chat' : s ? 'terminal' : 'chat'; else if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
   if (mode === 'terminal' && terminalLayout === 'hidden') terminalLayout = 'split';
-  $('message-input').value = s?.liveDraft || '';
+  activateSoloComposer(s?.id);
   clearFailedTerminal(s?.id);
   lastMessages = ''; lastRoomMessages = ''; render(); attempt(persistView);
   // Reveal only deliberate navigation (including search/restore/reopen).
@@ -451,9 +631,10 @@ function focusTerminal(id = activeSessionId()) {
 }
 function terminalCanInput(id) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
-  return Boolean(entry?.ready && currentTerminalDisplay(entry, record) && id === activeSessionId() && mode === 'terminal' && nativeUsable(record) && record?.owner === owner && record?.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
+  return Boolean(entry?.ready && currentTerminalDisplay(entry, record) && terminalContextVisible(id) && nativeUsable(record) && record?.owner === owner && record?.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
 }
 function currentTerminalDisplay(entry, record) {
+  if (columnTerminalBinding(record?.id) && (!entry?.epoch || !record?.terminalState?.epoch || entry.nativeId !== record.nativeId || record.nativeContextPending)) return false;
   return entry?.generation === (record?.connectionRevision || 0) && (!record?.recovering || record.terminalState?.alive === true) &&
     record?.terminalState?.alive !== false && (!entry?.epoch || !record?.terminalState?.epoch || entry.epoch === record.terminalState.epoch);
 }
@@ -481,36 +662,62 @@ function applyTerminalDisplay() {
   for (const entry of terminals.values()) { entry.term.options.fontSize = terminalDisplay.fontSize; entry.term.options.theme = { ...theme }; }
   fitTerminal(activeSessionId());
 }
-function pasteTerminal(text) {
-  const entry = terminals.get(activeSessionId());
-  if (!terminalCanInput(activeSessionId())) throw new Error('请先连接并接管这个终端。');
+function pasteTerminal(text, id = activeSessionId()) {
+  const entry = terminals.get(id);
+  if (!terminalCanInput(id)) throw new Error('请先连接并接管这个终端。');
   if (!text) return;
   if (text.length > 65500) throw new Error('粘贴内容过长，请分段粘贴。');
   if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw new Error('原生程序尚未启用多行粘贴保护，请先分行粘贴。');
-  entry.term.paste(text); focusTerminal();
+  entry.term.paste(text); focusTerminal(id);
 }
 const imageFiles = transfer => Array.from(transfer?.files || []).filter(file => file.type.startsWith('image/'));
-async function pasteImages(files, staged) {
-  const s = current(), id = s?.id, nativeId = s?.nativeId, revision = selectionRevision;
-  if (!s || !['codex', 'claude'].includes(s.provider) || s.owner !== owner || !s.terminalState?.alive || !['idle', 'working'].includes(s.state)) throw Error('请先连接并接管原生终端；图片没有放入。');
+async function pasteImages(files, staged, id = activeSessionId()) {
+  const binding = sessionComposers.get(id), column = Boolean(binding?.column), bindingRevision = binding?.revision;
+  const revision = selectionRevision, intended = state.sessions.find(s => s.id === id);
+  if (column) {
+    const fresh = await api.initial();
+    if (!composerCurrent(binding) || !binding.column || binding.revision !== bindingRevision) throw Error('此列已变化，图片没有放入。');
+    updateState(fresh);
+  }
+  const s = state.sessions.find(s => s.id === id), nativeId = intended?.nativeId, control = s?.controlRevision, generation = intended?.connectionRevision || 0;
+  const valid = () => {
+    const fresh = state.sessions.find(s => s.id === id);
+    return fresh?.nativeId === nativeId && fresh.controlRevision === control && (fresh.connectionRevision || 0) === generation && !fresh.nativeContextPending && fresh.owner === owner && fresh.terminalState?.alive && ['idle', 'working'].includes(fresh.state) &&
+      (column ? composerCurrent(binding) && binding.column && binding.revision === bindingRevision : selectionRevision === revision && activeSessionId() === id);
+  };
+  if (!s || !['codex', 'claude'].includes(s.provider) || !valid()) throw Error('请先连接并接管原生终端；图片没有放入。');
   if (!staged && (files.length > 4 || files.reduce((n, file) => n + file.size, 0) > 20 * 1024 * 1024)) throw Error('每次可放入 1–4 张图片，总大小不超过 20 MB。');
   const paths = staged || await api.stageImages(id, nativeId, await Promise.all(files.map(async file => new Uint8Array(await file.arrayBuffer()))));
-  if (selectionRevision !== revision || current()?.id !== id || current()?.nativeId !== nativeId || current()?.owner !== owner) throw Error('会话或控制权已变化，图片没有放入终端。');
-  const switching = switchMode('terminal'), terminalRevision = selectionRevision;
-  await switching;
-  if (selectionRevision !== terminalRevision || current()?.id !== id || current()?.nativeId !== nativeId || !terminalCanInput(id)) throw Error('原生输入已变化，图片没有放入终端。');
-  for (const file of paths) pasteTerminal(JSON.stringify(file));
-  toast('图片已放入原生输入框，确认后发送。对话草稿保留。');
+  if (!valid()) throw Error('会话或控制权已变化，图片没有放入终端。');
+  let terminalRevision = revision;
+  if (column) { if (!await activateColumnNative(binding)) throw Error('未能启用此列的原生输入，图片没有放入。'); }
+  else { const switching = switchMode('terminal'); terminalRevision = selectionRevision; await switching; }
+  const fresh = state.sessions.find(s => s.id === id);
+  if (fresh?.nativeId !== nativeId || fresh.nativeContextPending || fresh.owner !== owner || !['idle', 'working'].includes(fresh.state) ||
+      (column ? !composerCurrent(binding) || binding.revision !== bindingRevision : selectionRevision !== terminalRevision || activeSessionId() !== id) || !terminalCanInput(id)) throw Error('原生输入已变化，图片没有放入终端。');
+  for (const file of paths) pasteTerminal(JSON.stringify(file), id);
+  revealTerminalCursor(terminals.get(id));
+  toast('图片已放入本会话的原生输入框，确认后发送。对话草稿保留，分开发送。');
 }
-function bindImageInput(element) {
+function bindImageInput(element, id) {
   element.addEventListener('paste', event => {
     const files = imageFiles(event.clipboardData); if (!files.length) return;
-    event.preventDefault(); event.stopPropagation(); attempt(() => pasteImages(files));
+    event.preventDefault(); event.stopPropagation(); attempt(() => pasteImages(files, undefined, id));
   }, true);
   element.addEventListener('dragover', event => { if (Array.from(event.dataTransfer?.items || []).some(item => item.kind === 'file' && item.type.startsWith('image/'))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } });
   element.addEventListener('drop', event => {
     const files = imageFiles(event.dataTransfer); if (!files.length) return;
-    event.preventDefault(); event.stopPropagation(); attempt(() => pasteImages(files));
+    event.preventDefault(); event.stopPropagation(); attempt(() => pasteImages(files, undefined, id));
+  });
+}
+function revealTerminalCursor(entry) {
+  if (!entry || !columnTerminalBinding(entry.element.dataset.terminalId)) return;
+  entry.term.scrollToBottom();
+  requestAnimationFrame(() => {
+    const surface = entry.element.querySelector('.terminal-surface'), buffer = entry.term.buffer.active;
+    const cell = entry.term.element.querySelector('.xterm-screen')?.clientWidth / entry.term.cols;
+    const line = entry.term.element.querySelector('.xterm-screen')?.clientHeight / entry.term.rows;
+    if (surface && cell && line) { surface.scrollLeft = Math.max(0, (buffer.cursorX + 1) * cell - surface.clientWidth); surface.scrollTop = Math.max(0, (buffer.cursorY + 1) * line - surface.clientHeight); }
   });
 }
 function nativeVersionText(s) {
@@ -1471,6 +1678,8 @@ function render() {
       focusRoomMember('', id, roomOverview?.key(id));
     }
     const s = current(); const inRoom = selected === 'room', memberFocus = focusedRoomMember();
+    activateSoloComposer(s?.id);
+    if (!inRoom) for (const binding of sessionComposers.values()) if (binding.column && binding.visible) removeColumnInput(binding.id);
     const slot = inRoom ? $('room-session') : $('solo-session');
     if ($('session-view').parentElement !== slot) slot.append($('session-view'));
     $('solo-session').hidden = inRoom || !s;
@@ -1532,7 +1741,7 @@ function render() {
       const readingKey = focusedReadingKey(s.id);
       if (signature !== lastMessages || messageViews.get($('messages'))?.key !== readingKey) { messageList($('messages'), visibleMessages, false, readingKey); lastMessages = signature; }
       renderAdvanced(s);
-      for (const [id, entry] of terminals) { entry.element.hidden = id !== s.id; entry.term.options.disableStdin = !(terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)); }
+      for (const id of terminals.keys()) syncTerminalMount(id);
       $('terminal-empty').hidden = terminals.has(s.id);
       // Without a terminal in this window: not started yet, ended, or (status line says
       // which: archived, background, disconnected…) simply none here.
@@ -1686,7 +1895,7 @@ async function ensureTerminal(id, explicit = false) {
   if (record?.recovering && !record.terminalAvailable && !record.terminalState?.alive) return;
   const generation = record?.connectionRevision || 0;
   const old = terminals.get(id);
-  if (old && old.generation !== generation) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, new Error('原生连接已变化；旧输入没有发送。')); }
+  if (old && (old.generation !== generation || old.nativeId !== record?.nativeId)) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, new Error('原生连接已变化；旧输入没有发送。')); }
   if (old?.waitingForFirstTurn && terminals.get(id) === old &&
       (record?.activeTurnId && record.activeTurnId !== old.firstTurnAttemptId || record?.messages.some(message => message.role === 'assistant') && !old.firstTurnHadOutput)) {
     // A first-message instruction never launched a display. Once that same
@@ -1701,7 +1910,7 @@ async function ensureTerminal(id, explicit = false) {
     cancelViewInput(old); old.term.dispose(); old.element.remove(); terminals.delete(id);
   }
   if (!explicit && !terminals.has(id) && record?.terminalState?.alive === false) return;
-  if (terminals.has(id)) { const existing = terminals.get(id); if (existing.ready) fitTerminal(id); return existing.pending; }
+  if (terminals.has(id)) { const existing = terminals.get(id); syncTerminalMount(id); if (existing.ready) fitTerminal(id); return existing.pending; }
   const element = node('div', undefined, 'terminal-host'); element.dataset.terminalId = id; $('terminal-area').append(element);
   if (activeSessionId() === id) $('terminal-empty').hidden = true;
   const theme = terminalThemes[terminalDisplay.palette];
@@ -1711,7 +1920,7 @@ async function ensureTerminal(id, explicit = false) {
   const term = new Terminal({ fontFamily: '"MesloLGS NF", Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
   const intent = selectionRevision;
-  const entry = { element, term, fit, generation, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: record?.messages.some(message => message.role === 'assistant') }; terminals.set(id, entry);
+  const entry = { element, term, fit, generation, nativeId: record?.nativeId, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: record?.messages.some(message => message.role === 'assistant') }; terminals.set(id, entry); syncTerminalMount(id);
   term.onSelectionChange(() => nativeSelectionChanged(id, term));
   let recovery = inputRecoveries.get(id);
   if (!recovery) {
@@ -1727,6 +1936,8 @@ async function ensureTerminal(id, explicit = false) {
     toast(`${state.sessions.find(s => s.id === id)?.name || '原会话'}：${error.message || '输入未确认'}。文字保留在该原生终端的提示中，不会自动重发。`);
   };
   const claimTerminalFocus = () => {
+    const binding = columnTerminalBinding(id);
+    if (binding) return;
     if (mode !== 'terminal' && activeSessionId() === id && state.sessions.find(s => s.id === id)?.owner === owner && inputFocusAllowed()) attempt(() => switchMode('terminal'));
   };
   surface.addEventListener('pointerdown', event => { if (event.button === 0) claimTerminalFocus(); }, true);
@@ -1739,8 +1950,8 @@ async function ensureTerminal(id, explicit = false) {
     // view as a click; ordinary local scrollback needs no native input/control.
     if (event.deltaY && (['vt200', 'drag', 'any'].includes(term.modes.mouseTrackingMode) || term.buffer.active.type === 'alternate')) claimTerminalFocus();
   }, { capture: true, passive: true });
-  bindImageInput(surface);
-  surface.addEventListener('paste', event => { if (imageFiles(event.clipboardData).length) return; event.preventDefault(); event.stopPropagation(); attempt(() => { if (activeSessionId() === id) pasteTerminal(event.clipboardData?.getData('text/plain') || ''); }); }, true);
+  bindImageInput(surface, id);
+  surface.addEventListener('paste', event => { if (imageFiles(event.clipboardData).length) return; event.preventDefault(); event.stopPropagation(); attempt(() => { pasteTerminal(event.clipboardData?.getData('text/plain') || '', id); }); }, true);
   term.onData(data => {
     // The service's canonical terminal answers device queries, once. Focus
     // reports belong to this observing view, not to the native input stream:
@@ -1769,12 +1980,12 @@ async function ensureTerminal(id, explicit = false) {
     input.catch(error => { if (finishing) preserveUnconfirmed(data, error); else toast(error.message || '终端输入未确认；不会自动重发。'); });
   });
   let confirmingEnter = false, blurValue, compositionSequence = 0;
-  element.addEventListener('compositionstart', () => { entry.composing = true; compositionSequence++; entry.compositionIntent = entry.viewInput; }, true);
+  element.addEventListener('compositionstart', () => { entry.composing = true; compositionSequence++; entry.compositionIntent = entry.viewInput; entry.compositionOrigin = { cancelled: false }; }, true);
   element.addEventListener('compositionend', event => {
     entry.composing = false;
     // Bubble after xterm's target listener: its textarea commit timer must run
     // before this barrier. Microtasks can run between native event listeners.
-    const token = { sequence: compositionSequence, consumed: false, text: event.data, cancelled: Boolean(entry.compositionIntent?.cancelled) };
+    const token = { sequence: compositionSequence, consumed: false, text: event.data, cancelled: Boolean(entry.compositionIntent?.cancelled || entry.compositionOrigin?.cancelled) };
     token.done = new Promise((resolve, reject) => setTimeout(async () => {
       try {
         if (!token.consumed && token.text) {
@@ -1790,6 +2001,12 @@ async function ensureTerminal(id, explicit = false) {
   });
   element.addEventListener('blur', () => {
     confirmingEnter = false;
+    // A column can be reordered/parked after its header receives focus, before
+    // the layout callback runs. Cancel at the origin blur, ahead of xterm's
+    // deferred commit, so that navigation retains this text without writing it.
+    if (columnTerminalBinding(id) && (entry.composing || entry.composition && !entry.composition.consumed)) {
+      cancelColumnComposition(entry);
+    }
     blurValue = entry.composition && !entry.composing ? term.textarea.value : undefined;
   }, true);
   term.textarea.addEventListener('blur', () => {
@@ -1861,7 +2078,7 @@ async function ensureTerminal(id, explicit = false) {
       entry.sequence = snapshot.sequence; entry.ready = true;
       for (const event of entry.queued) writeTerminal(entry, event);
       entry.queued = []; loading.remove(); surface.hidden = false; surface.inert = false;
-      render(); fitTerminal(id); if (intent === selectionRevision) focusTerminal(id);
+      render(); if (!columnTerminalBinding(id)) { fitTerminal(id); if (intent === selectionRevision) focusTerminal(id); } else revealTerminalCursor(entry);
     } catch (error) {
       if (terminals.get(id) === entry) {
         entry.failed = true; entry.ready = false; entry.queued = []; entry.pending = Promise.resolve();
@@ -1880,20 +2097,24 @@ function fitTerminal(id) {
   const entry = terminals.get(id); const s = state.sessions.find(s => s.id === id);
   if (!entry?.ready) return;
   if (s?.owner !== owner) { entry.nativeSize = undefined; return; }
-  if (activeSessionId() !== id || terminalLayout === 'hidden') return;
+  const column = columnTerminalBinding(id);
+  if (column ? !column.resizeAllowed : activeSessionId() !== id || terminalLayout === 'hidden') return;
   if (entry.composing || entry.composition) { entry.fitPending = true; return; }
   if (entry.fitScheduled) return;
   entry.fitScheduled = true;
   requestAnimationFrame(() => {
     entry.fitScheduled = false;
     const latest = state.sessions.find(s => s.id === id);
-    if (terminals.get(id) !== entry || activeSessionId() !== id || terminalLayout === 'hidden' || !entry.element.isConnected || !entry.element.checkVisibility() || latest?.owner !== owner) return;
+    const binding = columnTerminalBinding(id);
+    if (terminals.get(id) !== entry || (column ? binding !== column || !column.resizeAllowed : activeSessionId() !== id || terminalLayout === 'hidden') || !entry.element.isConnected || !entry.element.checkVisibility() || latest?.owner !== owner) return;
     if (entry.composing || entry.composition) { entry.fitPending = true; return; }
     const dimensions = entry.fit.proposeDimensions();
     if (!dimensions || !Number.isFinite(dimensions.cols) || !Number.isFinite(dimensions.rows)) return;
     // Keep the display and native PTY on the same bounded grid. An undersized
     // pane reads that original grid through the surface's local overflow.
+    if (column) column.resizeAllowed = false;
     entry.term.resize(Math.max(20, Math.min(400, dimensions.cols)), Math.max(5, Math.min(200, dimensions.rows)));
+    revealTerminalCursor(entry);
     const size = JSON.stringify([entry.term.cols, entry.term.rows]);
     if (entry.nativeSize === size) return;
     entry.nativeSize = size;
@@ -1903,7 +2124,7 @@ function fitTerminal(id) {
     });
   });
 }
-function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; } }
+function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => { if (document.activeElement === entry.term.textarea) revealTerminalCursor(entry); }); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; } }
 const disposers = [
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
@@ -2018,7 +2239,7 @@ $('close-native-terminal').onclick = () => attempt(async () => {
   if (selected === 'room') return selectRoom('');
   terminalLayout = 'hidden'; await switchMode('chat');
 });
-for (const input of [$('message-input'), $('shared-input')]) input.addEventListener('focus', () => {
+for (const input of [$('shared-input')]) input.addEventListener('focus', () => {
   if (mode !== 'chat' && current() && inputFocusAllowed()) attempt(() => switchMode('chat'));
 });
 $('take-control').onclick = () => attempt(() => switchMode(mode, true));
@@ -2079,7 +2300,7 @@ $('insert-file').onclick = async () => {
     // must save this draft, never append the same material a second time.
     const token = filePreview.token; $('file-dialog').close(); filePreview = null; attempt(() => api.closeLocalFile(token));
     if (room) { roomDraftRevision++; render(); input.focus(); await persistView(); }
-    else { input.oninput(); input.focus(); }
+    else { input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); }
   } catch (error) {
     if ($('file-dialog').open) { $('file-error').textContent = error.message; $('file-error').hidden = false; }
     else toast(error.message);
@@ -2091,70 +2312,6 @@ $('save-file').onclick = async () => {
   try { if (await api.saveLocalFile(filePreview.token)) toast('已保存预览副本。'); }
   catch (error) { $('file-error').textContent = error.message; $('file-error').hidden = false; }
   finally { $('save-file').disabled = false; }
-};
-$('message-input').oninput = () => {
-  const s = current();
-  if (s) {
-    const revision = (draftRevisions.get(s.id) || 0) + 1;
-    draftRevisions.set(s.id, revision);
-    const pending = { text: $('message-input').value, revision };
-    pendingDrafts.set(s.id, pending); s.liveDraft = pending.text;
-    attempt(async () => {
-      try { await api.draft(s.id, pending.text); }
-      catch (error) {
-        if (draftRevisions.get(s.id) === revision && pending.text) rememberDraftRecovery(s.id, pending.text);
-        throw error;
-      } finally {
-        if (pendingDrafts.get(s.id) === pending) pendingDrafts.delete(s.id);
-        if (activeSessionId() === s.id) renderDraftRecovery(s.id);
-      }
-    });
-    renderComposer(s);
-  }
-};
-bindImageInput($('message-input'));
-$('message-input').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229 && !$('message-input').readOnly) { event.preventDefault(); if (!$('send-button').disabled) $('composer').requestSubmit(); } };
-$('send-button').onclick = () => attempt(async () => {
-  if ($('send-button').disabled) return;
-  const s = current(), action = soloAction(s);
-  if (action.kind === 'terminal') await switchMode('terminal');
-  else if (action.kind === 'chat') await switchMode('chat');
-  else if (action.kind === 'connect') {
-    const revision = selectionRevision;
-    await api.prepareInput(s.id);
-    if (revision !== selectionRevision || current()?.id !== s.id) return;
-    if (s.provider === 'codex') {
-      const fresh = await api.initial();
-      if (revision !== selectionRevision || current()?.id !== s.id) return;
-      updateState(fresh); render();
-      if (mode === 'chat' && inputFocusAllowed() && !$('message-input').readOnly) $('message-input').focus();
-      return;
-    }
-    await switchMode('terminal');
-    if (current()?.id === s.id && mode === 'terminal') toast('请在此会话运行 /reload-plugins；连接成功后即可切回对话输入。');
-  }
-  else if (action.kind === 'claim') await switchMode(s.chatAvailable === false && !s.legacyInputEligible ? 'terminal' : 'chat', true);
-  else if (action.kind === 'resume') await api.resume(s.id);
-});
-$('composer').onsubmit = event => {
-  event.preventDefault();
-  if ($('send-button').disabled || soloAction(current()).kind !== 'send') return;
-  // The clicked action can become disabled/hidden in the next state update.
-  // Return to editing now, before any asynchronous reply can change selection.
-  if (inputFocusAllowed()) $('message-input').focus();
-  attempt(async () => {
-    const id = activeSessionId(), nativeId = current()?.nativeId, text = $('message-input').value, revision = draftRevisions.get(id);
-    const s = current();
-    const mark = s?.state === 'working' && s.queueAvailable && { text, revision, before: new Set(s.messages.map(m => m.id)) };
-    if (mark) queuedInputs.set(id, mark);
-    let receipt;
-    try {
-      receipt = mark
-        ? await api.queue(id, text, nativeId) : s?.state === 'working' && s.steerAvailable && s.activeTurnId
-        ? await api.steer(id, text, nativeId, s.activeTurnId) : await api.send(id, text, nativeId);
-    } finally { if (mark && !mark.tag && queuedInputs.get(id) === mark) queuedInputs.delete(id); }
-    if (!receipt?.contextChanged && current()?.nativeId === nativeId && !current()?.nativeContextPending && activeSessionId() === id && draftRevisions.get(id) === revision && $('message-input').value === text) $('message-input').value = '';
-  });
 };
 $('interrupt').onclick = () => {
   const id = activeSessionId();

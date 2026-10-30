@@ -200,6 +200,75 @@ async function stopOwnEmptyService(directory) {
   try { await client.call('shutdown'); if (!client.socket.destroyed) await new Promise(resolve => client.socket.once('close', resolve)); }
   finally { client.close(); }
 }
+test('normal service bootstrap retains backend runtime paths across restarts without changing another profile', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-runtime-bootstrap-'));
+  const key = 'backends/' + 'a'.repeat(20), retained = path.join(directory, key), ordinary = path.join(directory, 'ordinary');
+  const old = { version: process.env.NAW_APP_VERSION, config: process.env.NAW_RUNTIME_CONFIG };
+  const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+  fs.mkdirSync(retained, { recursive: true, mode: 0o700 }); fs.mkdirSync(ordinary, { mode: 0o700 });
+  writeLayout(directory, { format: 1, entries: ['.', key], active: '.' });
+  const globalFile = path.join(directory, 'runtime-locations.json'), localFile = path.join(retained, 'runtime-locations.json');
+  fs.writeFileSync(globalFile, JSON.stringify({ codex: '/usr/bin/true' }), { mode: 0o600 });
+  fs.writeFileSync(localFile, JSON.stringify({ codex: '/usr/bin/false' }), { mode: 0o600 });
+  const launcher = path.join(directory, 'owned-node-launcher'), receipt = path.join(directory, 'launch-receipt');
+  // Record only this one configuration key, then boot the real daemon. No
+  // provider program, environment dump, model or person's profile is used.
+  fs.writeFileSync(launcher, '#!/bin/sh\nprintf "%s" "$NAW_RUNTIME_CONFIG" > ' + quote(receipt) + '\nexec ' + quote(process.execPath) + ' "$@"\n', { mode: 0o700 });
+  process.env.NAW_RUNTIME_CONFIG = globalFile; process.env.NAW_APP_VERSION = 'runtime-path-fixture';
+  try {
+    for (let i = 0; i < 2; i++) {
+      await ensureService(directory, launcher, key);
+      assert.equal(fs.readFileSync(receipt, 'utf8'), localFile);
+      const client = await connect(retained, 'runtime-path-test');
+      try { const state = await client.call('initial'); assert.equal(state.sessions.length, 0); assert.equal(state.diagnostics.dispatches, 0); }
+      finally { client.close(); }
+      await stopOwnEmptyService(retained);
+    }
+    await ensureService(ordinary, launcher);
+    assert.equal(fs.readFileSync(receipt, 'utf8'), globalFile);
+    assert.equal(process.env.NAW_RUNTIME_CONFIG, globalFile);
+    assert.deepEqual(JSON.parse(fs.readFileSync(globalFile)), { codex: '/usr/bin/true' });
+  } finally {
+    await stopOwnEmptyService(retained); await stopOwnEmptyService(ordinary);
+    if (old.version === undefined) delete process.env.NAW_APP_VERSION; else process.env.NAW_APP_VERSION = old.version;
+    if (old.config === undefined) delete process.env.NAW_RUNTIME_CONFIG; else process.env.NAW_RUNTIME_CONFIG = old.config;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+test('an invalid backend runtime override stops before launching a replacement daemon', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-runtime-invalid-'));
+  const local = path.join(directory, 'runtime-locations.json'), marker = path.join(directory, 'unexpected-launch');
+  const launcher = path.join(directory, 'must-not-run');
+  const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+  fs.writeFileSync(launcher, '#!/bin/sh\ntouch ' + quote(marker) + '\nexit 99\n', { mode: 0o700 });
+  try {
+    for (const kind of ['unsafe-mode', 'invalid-json', 'dangling-link', 'directory']) {
+      fs.rmSync(local, { recursive: true, force: true });
+      if (kind === 'dangling-link') fs.symlinkSync(path.join(directory, 'missing'), local);
+      else if (kind === 'directory') fs.mkdirSync(local);
+      else fs.writeFileSync(local, kind === 'invalid-json' ? '{invalid' : '{}', { mode: kind === 'unsafe-mode' ? 0o644 : 0o600 });
+      await assert.rejects(ensureService(directory, launcher), /后台程序位置配置无法读取/);
+      assert.equal(fs.existsSync(marker), false, kind + ' must never launch a replacement');
+      assert.equal(fs.existsSync(path.join(directory, 'services.lock')), false);
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+test('a damaged global Settings file still allows the root backend to open for repair', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-global-runtime-repair-'));
+  const config = path.join(directory, 'runtime-locations.json'), oldConfig = process.env.NAW_RUNTIME_CONFIG;
+  fs.writeFileSync(config, '{}', { mode: 0o644 }); process.env.NAW_RUNTIME_CONFIG = config;
+  let client;
+  try {
+    await ensureService(directory, process.execPath);
+    client = await connect(directory, 'repair-settings');
+    assert.equal((await client.call('initial')).sessions.length, 0);
+    assert.equal(fs.statSync(config).mode & 0o777, 0o644, 'Opening the app does not silently rewrite Settings');
+  } finally {
+    client?.close(); await stopOwnEmptyService(directory);
+    if (oldConfig === undefined) delete process.env.NAW_RUNTIME_CONFIG; else process.env.NAW_RUNTIME_CONFIG = oldConfig;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 test('updates reuse an ended slot, keep its records, and retire it only after explicit record removal', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-slot-'));
   const key = `backends/${'a'.repeat(20)}`, oldVersion = process.env.NAW_APP_VERSION;
