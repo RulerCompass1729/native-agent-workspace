@@ -4,6 +4,12 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.140 integrates optional committed work copies and recoverable
+space snapshots. All 1806 combined source checks pass without skips; source
+integration has independent review. Signed and installed qualification is pending.
+Linked selected paths are unsupported for automatic copies; existing-directory
+mode remains available. No active native backend is migrated by this candidate.
+
 Current daily GUI: alpha.139, committed build source `c9800cc`. Fourteen signed
 installed groups cover multiple spaces, membership views, independent drafts,
 scoped delivery and same-profile reopening. Three more cover the existing

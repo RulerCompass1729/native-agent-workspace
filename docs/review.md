@@ -1327,3 +1327,26 @@ delivery, physical input, original cold recovery and the full dogfood goal remai
 unqualified. Notification clicks may reveal a window that is not displaying the
 session; no task content enters the notification. The approved later space-merge
 journey is not part of this batch.
+
+### Committed work copies and recoverable space snapshots (alpha.140 candidate)
+
+Two independently reviewed component commits are integrated: optional committed
+Git work copies for new sessions, and recoverable snapshots when combining
+selected collaboration spaces. The integration retains both capability gates,
+room-scoped routes and runtime-copy lists. A test fixture had captured unrelated
+new-space handlers after the create handler; narrowing that boundary fixes its
+two failures. All 1806 combined source checks then pass without skips.
+
+Work copies refuse linked selected paths, including benign aliases; existing
+directory mode remains available. A synthetic container-link regression verifies
+refusal before target metadata access. This is not OS filesystem isolation.
+Copies omit dirty/untracked work, retain partial paths and branches after failure,
+and start native transport only after preparation is saved and checkout succeeds.
+
+Snapshot source GUI evidence covers eight journeys with retained native IDs and
+positive drafts; work-copy source GUI evidence covers four. These use synthetic
+transports and intercepted native dialogs. Source reviews retain nonblocking
+findings: repeated archive errors, recovery timeline wording, a partly clipped
+list row, and validation limits for locally edited merge metadata. Signed/Main
+acceptance and real OS chooser/clipboard/confirmation remain separate gates;
+these source records do not close the dogfood goal.

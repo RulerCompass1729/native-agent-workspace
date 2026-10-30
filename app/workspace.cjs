@@ -10,6 +10,7 @@ const addressed = require('./addressed-handoffs.cjs');
 const { nativeApprovalPolicy, ApprovalQueue } = require('./approval-policy.js');
 const { NativeHistory, claudeMetadata, nativeId, codexVersionInfo } = require('./native-history.cjs');
 const spaces = require('./collaboration-spaces.cjs');
+const gitWorktree = require('./git-worktree.cjs');
 
 const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error(`请输入有效文字；一次最多 ${max.toLocaleString('en-US')} 个字符。`);
@@ -69,6 +70,13 @@ class Workspace extends EventEmitter {
       if (stored.version !== 1 || !Array.isArray(stored.rooms) || stored.rooms.some(r => !r || !spaces.roomId(r.id) || r.id === 'shared' || !Array.isArray(r.messages) || !Number.isSafeInteger(r.revision) || r.revision < 0) || new Set(stored.rooms.map(r => r.id)).size !== stored.rooms.length) throw Error('Invalid room records');
       for (const saved of stored.rooms) {
         const room = { ...saved, run: saved.run ? { ...saved.run, awaiting: null, ...(saved.run.status === 'running' ? { status: 'paused', reason: '运行服务曾中断；未重发任务，请核对原生结果。' } : {}) } : null };
+        const imported = room.messages.filter(message => message.snapshotBatch !== undefined);
+        if (imported.length || room.snapshotBatches !== undefined) {
+          if (!Array.isArray(room.snapshotBatches) || room.snapshotBatches.some(marker => !marker || !spaces.roomId(marker.operationId) || marker.operationId === 'shared' || !/^[a-f0-9]{64}$/u.test(marker.binding)) ||
+              new Set(room.snapshotBatches.map(marker => marker.operationId)).size !== room.snapshotBatches.length ||
+              imported.some(message => !room.snapshotBatches.some(marker => marker.operationId === message.snapshotBatch))) throw Error('Invalid snapshot records');
+          require('./space-merge.cjs').captureSource({ id: room.id, name: '快照记录', revision: 0, metadataRevision: 0, notes: '', files: [], events: [], messages: imported }, []);
+        }
         if (room.run?.kind === 'cross-service' && (room.run.pausePending || saved.run.status === 'running')) Object.assign(room.run, { pausePending: false, pauseUnconfirmed: true });
         for (const m of room.messages) {
           if (['streaming', 'running'].includes(m.status)) { m.status = 'unconfirmed'; m.sharingStopped = '运行连接曾中断，未重发任务'; }
@@ -148,17 +156,24 @@ class Workspace extends EventEmitter {
     return { terminal: terminal?.observe ? await terminal.observe() : null,
       progress: this.progress.get(id)?.snapshot() || { items: [], revision: 0, truncated: false } };
   }
-  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory } = {}) {
+  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory, gitWorktree: worktreePlan } = {}) {
     if (!['chat', 'terminal'].includes(view)) throw new Error('未知视图。');
     if (skipPermissions != null && skipPermissions !== true) throw new Error('无效的权限选项。');
     if (fork != null && (fork !== 'picker' || provider !== 'claude')) throw new Error('无效的分支请求。');
     if (newDirectory != null && newDirectory !== true) throw new Error('无效的新建目录选项。');
     if (fork && newDirectory) throw new Error('从历史会话分支前，请选择原工作目录。');
+    if (worktreePlan != null && (fork || newDirectory)) throw new Error('Git 工作副本不能同时新建空目录或接管历史会话。');
     // The native session picker that chooses what to branch needs the terminal.
     if (fork) view = 'terminal';
     if (!['claude', 'codex'].includes(provider) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new Error('请选择可用 agent 和工作目录。');
     const sessionName = name ? cleanText(name, 60) : `${provider === 'claude' ? 'Claude' : 'Codex'} ${[...this.sessions.values()].filter(s => s.provider === provider).length + 1}`;
-    if (newDirectory) {
+    if (worktreePlan != null) {
+      if (this.closed || this.storageWarning) throw new Error('后台或本地保存暂不可用，未准备 Git 工作副本。');
+      if (cwd !== worktreePlan?.source) throw new Error('Git 仓库选择已变化，请重新预览。');
+      worktreePlan = await gitWorktree.validate(worktreePlan);
+      if (this.closed || this.storageWarning) throw new Error('后台或本地保存已变化，未准备 Git 工作副本。');
+      cwd = worktreePlan.cwd;
+    } else if (newDirectory) {
       const leaf = path.basename(cwd), root = this.newWorkspaceRoot;
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(leaf) || cwd !== path.join(root, leaf)) throw new Error('独立目录路径已变化，请重新打开新建窗口。');
       try {
@@ -180,14 +195,36 @@ class Workspace extends EventEmitter {
     const now = Date.now();
     const record = { id, nativeId: provider === 'claude' ? randomUUID() : null, name: sessionName, createdAt: now, lastActivityAt: now, ...(name ? {} : { autoName: true }), ...(skipPermissions ? { skipPermissions: true, ...(provider === 'claude' ? { nativePermissionMode: 'bypassPermissions' } : {}) } : {}), provider, cwd, roomId: null, memberRevision: 0, controlRevision: 0, owner, view, state: 'starting', messages: [], fleet: [], background: null, scheduled: null, model: '原生默认', usage: null, pendingTag: null, activity: '', approval: null, pid: null };
     if (fork) record.forkPicker = true;
+    if (worktreePlan) {
+      record.worktreePreparation = { ...worktreePlan, status: 'preparing' };
+      record.activity = '正在准备 Git 工作副本；原生会话尚未启动。';
+    }
     this.sessions.set(id, record); this.changed();
     let runtime;
+    const currentPreparation = () => this.sessions.get(id) === record && record.state === 'starting';
     try {
+      if (worktreePlan) {
+        // Reserve a recoverable row before the first branch/path mutation.
+        if (!currentPreparation()) throw new Error('准备记录已变化或已取消，未开始 Git 操作。');
+        this.persist();
+        if (this.storageWarning || this.closed) throw new Error('准备信息未能安全保存，未开始 Git 操作。');
+        record.cwd = await gitWorktree.prepare(worktreePlan);
+        record.worktreePreparation.status = 'ready';
+        if (currentPreparation()) record.activity = '';
+        this.persist();
+        if (this.storageWarning || this.closed) throw new Error('副本已准备，但后台或保存已变化，未启动原生会话。');
+        if (!currentPreparation()) throw new Error('准备记录已变化或已取消，未启动原生会话。');
+      }
       runtime = this.host.create(record); this.runtimes.set(id, runtime); this.bind(record, runtime);
       if (runtime.start) await runtime.start();
       return id;
     } catch (error) {
-      if (!runtime || this.runtimes.get(id) === runtime) { record.state = 'error'; record.activity = error.message; this.changed(); }
+      if (worktreePlan) {
+        if (record.worktreePreparation.status !== 'ready') record.worktreePreparation.status = 'unconfirmed';
+        error.message += `\n工作副本：${worktreePlan.target}\n分支：${worktreePlan.branch}。未删除或自动重试；检查后可选择已有目录。`;
+      }
+      if ((!runtime && (!worktreePlan || currentPreparation())) || (runtime && this.runtimes.get(id) === runtime)) { record.state = 'error'; record.activity = error.message; this.changed(); }
+      if (worktreePlan) this.persist();
       throw error;
     }
   }
@@ -573,6 +610,26 @@ class Workspace extends EventEmitter {
     if (!room && create) { room = { id, revision: 0, run: null, messages: [] }; this.rooms.set(id, room); }
     if (!room) throw Error('找不到这个协作空间的后台记录。');
     return room;
+  }
+  mergeSnapshot(batch) {
+    const { validateBatch, materializeBatch } = require('./space-merge.cjs');
+    validateBatch(batch);
+    if (this.storageWarning) throw Error(this.storageWarning);
+    const expected = materializeBatch(batch), existing = this.rooms.get(batch.targetId);
+    const operation = [...this.rooms.values()].flatMap(room => (room.snapshotBatches || []).map(marker => ({ room, marker })))
+      .find(({ marker }) => marker.operationId === batch.operationId);
+    if (operation) {
+      if (operation.room.id !== batch.targetId || operation.marker.binding !== batch.binding ||
+          JSON.stringify(operation.room.messages.filter(message => message.snapshotBatch === batch.operationId)) !== JSON.stringify(expected)) throw Error('已保存的合并批次与这次确认不一致；原记录保留，没有重放。');
+      return { operationId: batch.operationId, binding: batch.binding, persisted: true };
+    }
+    if (existing) throw Error('目标空间已有独立记录；不会覆盖，请重新预览新空间。');
+    const room = { id: batch.targetId, revision: 0, run: null, messages: expected,
+      snapshotBatches: [{ operationId: batch.operationId, binding: batch.binding }] };
+    this.rooms.set(room.id, room); this.persist();
+    if (this.storageWarning) { this.rooms.delete(room.id); this.emit('change'); throw Error(this.storageWarning); }
+    this.emit('change');
+    return { operationId: batch.operationId, binding: batch.binding, persisted: true };
   }
   messageLists(s) { return [s.messages, ...[...this.rooms.values()].map(r => r.messages)]; }
   sharedMessage(id) { for (const room of this.rooms.values()) { const m = room.messages.find(m => m.id === id); if (m) return m; } }
@@ -1055,6 +1112,11 @@ class Workspace extends EventEmitter {
     if (this.stops.has(id)) return this.stops.get(id);
     const s = this.get(id);
     if (['ended', 'background'].includes(s.state)) return Promise.resolve();
+    if (s.worktreePreparation && s.state === 'starting' && !this.runtimes.has(id)) {
+      s.state = 'ended'; s.owner = null; s.controlRevision++;
+      s.activity = `已取消原生会话启动。已开始的 Git 准备可能仍完成；路径和分支不会删除。\n工作副本：${s.worktreePreparation.target}\n分支：${s.worktreePreparation.branch}`;
+      this.changed(); this.persist(); return Promise.resolve();
+    }
     if (s.externalHistory && s.recovering && s.state === 'starting' && !this.runtimes.has(id)) {
       s.connectionRevision = (s.connectionRevision || 0) + 1; s.recovering = false; s.state = 'recoverable';
       s.activity = '已取消连接，原生历史保持原样。'; this.changed(); return Promise.resolve();
@@ -1074,6 +1136,7 @@ class Workspace extends EventEmitter {
   }
   async resume(id, owner) {
     const s = this.get(id);
+    if (s.worktreePreparation && s.worktreePreparation.status !== 'ready') throw new Error(`Git 副本准备结果尚未确认，未恢复或重新准备。\n工作副本：${s.worktreePreparation.target}\n分支：${s.worktreePreparation.branch}。请先检查保留路径。`);
     if (s.nativeContextPending) throw Error('原生上下文已变化，但新身份尚未确认。请在原生终端核对；没有恢复旧上下文或重发任务。');
     const retained = this.runtimes.get(id);
     if ((s.state === 'disconnected' || (s.state === 'error' && retained?.transportDisconnected)) && s.provider === 'codex' && retained?.reconnect && !retained.backendExitConfirmed && !this.stops.has(id)) {

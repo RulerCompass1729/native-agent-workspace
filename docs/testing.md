@@ -3296,3 +3296,16 @@ Clean source66463d9 builds127; version-only b3a8d8a builds128. Independent sourc
 Installed acceptance: selected-recipient edit/delivery9 groups, exact routing-error recovery4, Claude accepted-image/compact-room/order6. Actual312 CLI Read uses2 local fixed responses, preserves native ID/PID and matches cached accepted bytes to displayed pixels. Initial preflight/default314 mismatch and owned-folder preview errors make no model calls; the corrected312 trial passes. Physical clipboard/IME/drag and314 media are not certified.
 
 Real127→128 permission acceptance uses two certificate-signed bundles with59 identical runtime sources,105 unchanged dependencies and distinct CDHashes. After one initial127 Desktop consent, a single live debug-level TCC recording spans the128 update and native read/cleanup:5258 lines, no prompt/notification records, exact head-process Desktop authorization allowed, README/Git reads successful. Four local fixed responses total across A/B, zero paid product inference; Git has no separately observed TCC request. Strict signatures pass after native testing; one daily app remains indexed. Original10 native identities/live process starts/owners/drafts and12 saved view drafts survive both ordinary visible updates. Raw failures, screenshots, request/protocol records, TCC metadata and cleanup evidence remain private. Main/secretary118 and four120 backends are still pending controlled migration; these results do not close the full dogfood goal.
+
+### alpha.140 integration candidate
+
+Combined work-copy and space-snapshot source: 1806 passed, zero skipped. The
+first run had two fixture extraction failures (1804 passed); the repaired fixture
+executes only the actual create handler. Build and syntax checks pass.
+
+Signed acceptance is planned with at most two launches of one merge profile
+(and one intentional second window), then one work-copy profile launch. Use
+synthetic native transport, two fixed shared-message seeds, no provider/model
+calls or OS clipboard actions. Copy and clear-confirmation retain the reviewed
+source-fixture scope; real OS chooser and original active-backend refresh are
+unqualified. Installed results will be recorded after execution.

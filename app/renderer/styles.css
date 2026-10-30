@@ -483,3 +483,17 @@ header h1, header p { overflow-wrap: anywhere; }
 .naw[data-collapsed="true"] .session-view-switch,.naw[data-collapsed="true"] .session-space-badges,.naw[data-collapsed="true"] .session-space-group h3,.naw[data-collapsed="true"] #new-space{display:none}
 @media(prefers-reduced-motion:no-preference){.session-row{transition:opacity .1s ease}}
 .session-link .label small{white-space:normal;overflow-wrap:anywhere}
+#git-worktree-preview,#create-error{white-space:pre-line;overflow-wrap:anywhere}
+#git-worktree-option{display:flex;align-items:center;gap:8px;margin:0}
+#git-worktree-option[hidden]{display:none}
+#git-worktree-option input{width:auto;margin:0}
+#space-merge-dialog{width:min(760px,calc(100vw - 48px));max-height:85vh;overflow:auto}
+#space-merge-dialog fieldset{min-width:0;margin:12px 0;border:1px solid var(--border);border-radius:8px;padding:10px}
+#space-merge-dialog .merge-option{display:flex;align-items:flex-start;gap:8px;margin:8px 0;overflow-wrap:anywhere}
+#space-merge-dialog .merge-option input{flex:none;width:auto;margin-top:4px}
+#space-merge-dialog pre,#space-snapshot-materials pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto}
+#space-merge-dialog .dialog-actions{position:sticky;bottom:0;background:var(--bg,#fff);padding-top:12px;flex-wrap:wrap}
+#space-merge-name{width:100%;margin:8px 0}
+#space-snapshot-materials{padding:10px 16px;border-bottom:1px solid var(--border);font-size:13px}
+#space-snapshot-materials .snapshot-origin{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.snapshot-source{font-size:12px;color:var(--muted);background:transparent;border:0;padding:0 4px;text-align:left}

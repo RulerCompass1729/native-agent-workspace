@@ -5,6 +5,17 @@ const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const roomId = value => value === DEFAULT_ROOM_ID || typeof value === 'string' && UUID.test(value);
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 const invalid = () => Error('协作空间成员记录无法核对；原记录已保留，没有更改成员或共享授权。');
+function completedSharedRecord(message) {
+  if (!message || message.incomplete || message.kind === 'gap') return false;
+  if (message.role === 'human') {
+    const deliveries = message.deliveries;
+    if (deliveries !== undefined && (!Array.isArray(deliveries) || deliveries.some(delivery => !delivery || typeof delivery !== 'object' || Array.isArray(delivery) || delivery.status !== 'submitted'))) return false;
+    return message.status === 'submitted' || message.status === undefined && !message.deliveryTracked ||
+      [undefined, 'complete'].includes(message.status) && Boolean(deliveries?.length);
+  }
+  if (message.role === 'system' && message.status === undefined) return true;
+  return ['complete', 'failed', 'interrupted'].includes(message.status);
+}
 
 function membership(session) {
   if (!session || typeof session !== 'object' || Array.isArray(session)) throw invalid();
@@ -52,7 +63,7 @@ function withMembership(session, id, joined) {
   };
 }
 
-const contract = { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, withMembership };
+const contract = { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, withMembership, completedSharedRecord };
 if (typeof module !== 'undefined' && module.exports) module.exports = contract;
 else target.nativeWorkspaceSpaces = contract;
 })(typeof window === 'undefined' ? globalThis : window);
