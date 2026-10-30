@@ -936,3 +936,28 @@ and the production reader matches the executable-bound private installation reco
 The developer session's native goal is unchanged by this update. The single-agent
 dogfood milestone, actual default viewer, physical input, native error activation,
 exact footer availability and historical process gaps remain open or unqualified.
+
+
+### Local refresh and dialog lifecycle: source checkpoint
+
+The existing refresh shows busy, completion time or a local read error and prevents
+duplicate requests. Native usage timestamps and unknown reasons remain intact; a
+local refresh does not claim every retained backend or provider reported new data.
+The existing twelve HTML dialogs reuse Chromium light dismissal. Cancellation
+clears transient edits, preserves authoritative saved data and never approves a
+native request. Accepted operations continue; late replies cannot close, refill or
+change the selection of a newer dialog. Busy native-history import retains its
+existing cancellation veto.
+
+Integrated validation passes 27 affected checks and twelve complete source GUI
+journeys, including both providers' scoped usage, cancellation, delayed outcomes
+and reopening. Native output and delayed IPC are synthetic; no real provider or
+product model runs by construction. Installed acceptance and physical IME/VoiceOver
+are not certified here. Earlier CL-DF24/B46 usage-display GUI reuse ends at this
+change; the new scoped checks replace it rather than carrying that approval forward.
+
+Known limits: a local refresh failure replaces its previous completion label,
+and a file chosen while another modal is open is discarded. The twelve source
+journeys ran at alpha.132 before the version-only bump; the independent 27-check
+rerun covers alpha.133. Native OS choosers, the OS clipboard and live providers
+remain unqualified.

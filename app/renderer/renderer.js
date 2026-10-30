@@ -728,14 +728,33 @@ function nativeVersionText(s) {
   if (status === 'unverified') return `Codex ${s.nativeVersion || '版本未确认'} · 此版本尚未验证：工作中追加、原生上下文切换和历史同步请在终端核对`;
   return 'Codex 原生版本未报告';
 }
-let trustScope = null, trustRevision = 0;
+// A late acknowledgement belongs to the opening that submitted it.
+const dialogTickets = new WeakMap();
+function openTransientDialog(id) {
+  const dialog = $(id), ticket = { dialog }; dialogTickets.set(dialog, ticket);
+  if (!dialog.open) dialog.showModal(); return ticket;
+}
+function currentDialogTicket(ticket) {
+  return Boolean(ticket && ticket.dialog.isConnected && ticket.dialog.open && dialogTickets.get(ticket.dialog) === ticket);
+}
+let trustScope = null, trustRevision = 0, trustLoading = false;
 async function showTrust(options) {
-  const dialog = $('privacy-dialog'), wasOpen = dialog.open, scroll = dialog.scrollTop, revision = selectionRevision, generation = ++trustRevision;
+  const dialog = $('privacy-dialog'), wasOpen = dialog.open, scroll = dialog.scrollTop, revision = selectionRevision;
+  if (wasOpen && trustLoading) return;
+  const generation = ++trustRevision;
   const scope = options?.usageScope || (wasOpen ? trustScope : null);
-  const snapshot = await api.initial();
-  if (generation !== trustRevision || scope && revision !== selectionRevision) return;
   trustScope = scope; dialog.dataset.mode = scope ? 'usage' : 'privacy';
   dialog.querySelector('h2').textContent = scope ? `${scope.name} · 用量` : '隐私与用量';
+  if (!wasOpen) dialog.showModal();
+  trustLoading = true;
+  $('refresh-trust').disabled = true; $('refresh-trust').textContent = '正在刷新…';
+  $('trust-refresh-status').textContent = '正在读取本机状态…';
+  dialog.setAttribute('aria-busy', 'true');
+  const fresh = () => dialog.isConnected && dialog.open && generation === trustRevision;
+  try {
+  const snapshot = await api.initial();
+  if (!fresh()) return;
+  if (scope && revision !== selectionRevision) { $('trust-refresh-status').textContent = '查看范围已变化，请关闭后重新查看。'; return; }
   const content = $('trust-status'); content.replaceChildren();
   const section = (title, text) => { const item = node('section'); item.append(node('h3', title), node('p', text)); content.append(item); return item; };
   if (!scope) {
@@ -760,14 +779,31 @@ async function showTrust(options) {
   section('后台与权限', `${snapshot.sessions.filter(s => !['ended', 'recoverable'].includes(s.state)).length} 个会话尚未确认结束。关闭窗口仍可能继续执行。原生进程、团队状态与权限请在终端核对；此处未测量 CPU、内存或完整网络出口。`);
   section('版本与核查', `应用 ${snapshot.appVersion || '未报告'} · 新会话后台 ${snapshot.runtimeVersion || '未报告'}。${snapshot.services?.length > 1 ? `另保留 ${snapshot.services.length - 1} 个后台连接原有会话；没有复制原生会话。` : ''}可查看本机数据和公开实现。本地版本号不是签名验证；独立安全审计、完整流量与费用对账尚未完成。`);
   }
-  if (!wasOpen) dialog.showModal(); else dialog.scrollTop = scroll;
+  dialog.scrollTop = wasOpen ? scroll : 0;
+  $('trust-refresh-status').textContent = '已刷新本机状态 · ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch (error) {
+    if (fresh()) $('trust-refresh-status').textContent = '读取本机状态失败：' + (error.message || '请重试。');
+  } finally {
+    if (fresh()) {
+      trustLoading = false; $('refresh-trust').disabled = false; $('refresh-trust').textContent = '刷新状态';
+      dialog.removeAttribute('aria-busy');
+    }
+  }
 }
+$('privacy-dialog').addEventListener('close', event => {
+  const dialog = event.currentTarget; if (dialog.open || !dialog.isConnected) return;
+  trustRevision++; trustScope = null; trustLoading = false;
+  $('trust-status').replaceChildren(); $('trust-refresh-status').textContent = '';
+  $('refresh-trust').disabled = false; $('refresh-trust').textContent = '刷新状态';
+  dialog.querySelector('h2').textContent = '隐私与用量'; dialog.scrollTop = 0; dialog.removeAttribute('aria-busy');
+  for (const detail of dialog.querySelectorAll('details')) detail.open = false;
+});
 
 function openCreate(provider = 'claude') {
   if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
   $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false;
-  resetCreateDirectory(); $('create-error').textContent = ''; createReadiness(); $('create-dialog').showModal();
+  resetCreateDirectory(); $('create-error').textContent = ''; openTransientDialog('create-dialog'); createReadiness();
 }
 function resetCreateDirectory() {
   newDirectory = state.capabilities?.includes('newSessionDirectory') && typeof state.newWorkspaceRoot === 'string';
@@ -776,6 +812,7 @@ function resetCreateDirectory() {
 }
 let historySearch = '', historyRows = [], historyCursor = null, historySelected = null, historyLoading = false, historyImporting = false, historyGeneration = 0;
 function renderNativeHistory() {
+  if (!$('native-history-dialog').open) return;
   const list = $('native-history-list'); list.replaceChildren();
   for (const row of historyRows) {
     const label = node('label', undefined, 'native-history-row'), input = document.createElement('input');
@@ -788,6 +825,7 @@ function renderNativeHistory() {
   updateNativeHistoryControls();
 }
 function updateNativeHistoryControls() {
+  if (!$('native-history-dialog').open) return;
   const row = historyRows.find(r => r.nativeId === historySelected), busy = historyLoading || historyImporting;
   $('confirm-native-history').disabled = busy || !row || row.existingIds?.length > 1;
   $('confirm-native-history').textContent = historyImporting ? '正在连接…' : row?.existingIds?.length ? '查看已有会话' : '继续所选会话';
@@ -796,7 +834,7 @@ function updateNativeHistoryControls() {
   $('close-native-history').disabled = historyImporting;
 }
 async function loadNativeHistory(more = false) {
-  if (historyLoading || historyImporting) return;
+  if (historyLoading || historyImporting || !$('native-history-dialog').open) return;
   const generation = ++historyGeneration; historyLoading = true;
   if (!more) { historySearch = $('native-history-search').value; historyRows = []; historySelected = null; historyCursor = null; }
   renderNativeHistory(); $('native-history-status').textContent = '正在读取本机原生索引…';
@@ -805,20 +843,28 @@ async function loadNativeHistory(more = false) {
     if (generation !== historyGeneration || !$('native-history-dialog').open) return;
     const seen = new Set(historyRows.map(r => r.nativeId)); historyRows.push(...result.data.filter(r => !seen.has(r.nativeId))); historyCursor = result.nextCursor;
     $('native-history-status').textContent = historyRows.length ? `已显示 ${historyRows.length} 个会话` : '没有找到会话。可修改名称重试；这里只读取原生索引，不修复或扫描历史文件。';
-  } catch (error) { if (generation === historyGeneration) $('native-history-status').textContent = error.message; }
+  } catch (error) { if (generation === historyGeneration && $('native-history-dialog').open) $('native-history-status').textContent = error.message; }
   finally { if (generation === historyGeneration) { historyLoading = false; renderNativeHistory(); } }
 }
 $('open-native-history').onclick = () => {
   // Claude has no history API: its own session picker opens in the new row's
   // terminal, and the chosen session is forked while the original stays as is.
   if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
+    const ticket = dialogTickets.get($('create-dialog')), revision = selectionRevision;
+    if (!currentDialogTicket(ticket) || creatingSession) return;
     if (newDirectory) throw Error('从历史会话分支或接管前，请先选择原工作目录。');
     const nativeId = $('claude-history-id').value.trim();
     if (nativeId && !state.capabilities?.includes('claudeHistory')) throw Error('当前后台尚不支持 Claude 接管；保留输入，请先连接新版后台。');
+    creatingSession = true; createReadiness();
+    try {
     const id = nativeId ? await api.importHistory(nativeId, { provider: 'claude', cwd: folder, name: $('session-name').value, skipPermissions: $('skip-permissions').checked })
       : await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker', skipPermissions: $('skip-permissions').checked || undefined });
-    state = await api.initial(); $('create-dialog').close(); await select(id, 'terminal');
+    updateState(await api.initial()); render();
+    if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, 'terminal'); }
+    else toast('此前请求的会话已保留在侧栏。');
+    } finally { creatingSession = false; createReadiness(); }
   });
+  if (historyImporting) return;
   $('create-dialog').close(); historyRows = []; historySelected = null; historyCursor = null; historyLoading = false;
   $('native-history-search').value = ''; $('native-history-dialog').showModal(); loadNativeHistory();
 };
@@ -826,15 +872,22 @@ $('native-history-search-form').onsubmit = event => { event.preventDefault(); lo
 $('more-native-history').onclick = () => loadNativeHistory(true);
 $('close-native-history').onclick = () => $('native-history-dialog').close();
 $('native-history-dialog').addEventListener('cancel', event => { if (historyImporting) event.preventDefault(); });
-$('native-history-dialog').addEventListener('close', () => { historyGeneration++; historyLoading = false; });
+$('native-history-dialog').addEventListener('close', () => {
+  if ($('native-history-dialog').open) return;
+  historyGeneration++; historyLoading = false; historyRows = []; historySelected = null; historyCursor = null; historySearch = '';
+  $('native-history-list').replaceChildren(); $('native-history-search').value = ''; $('native-history-status').textContent = '';
+});
 $('confirm-native-history').onclick = async () => {
-  if (historyImporting || historyLoading || !historyRows.some(r => r.nativeId === historySelected)) return;
+  if (!$('native-history-dialog').open || historyImporting || historyLoading || !historyRows.some(r => r.nativeId === historySelected)) return;
+  const generation = historyGeneration, revision = selectionRevision;
+  const fresh = () => $('native-history-dialog').open && generation === historyGeneration;
   historyImporting = true; renderNativeHistory(); $('native-history-status').textContent = '正在连接所选原生历史；不会重发旧任务。';
   try {
-    const id = await api.importHistory(historySelected); state = await api.initial();
-    $('native-history-dialog').close(); await select(id, 'chat');
+    const id = await api.importHistory(historySelected); updateState(await api.initial()); render();
+    if (fresh() && revision === selectionRevision) { $('native-history-dialog').close(); await select(id, 'chat'); }
+    else toast('此前连接的原会话已保留在侧栏。');
     if (state.sessions.find(s => s.id === id)?.archived) toast('这是已归档的原会话；可从“归档”恢复，没有创建副本。');
-  } catch (error) { $('native-history-status').textContent = error.message; }
+  } catch (error) { if (fresh()) $('native-history-status').textContent = error.message; else toast(error.message); }
   finally { historyImporting = false; renderNativeHistory(); }
 };
 function openRename(id, origin) {
@@ -1079,6 +1132,7 @@ function renderSessions() {
   });
 }
 function createReadiness() {
+  if (!$('create-dialog').open) return;
   const historyProvider = document.querySelector('input[name="provider"]:checked').value;
   $('open-native-history').hidden = !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
@@ -1088,7 +1142,8 @@ function createReadiness() {
   $('open-native-history').disabled = creatingSession || (historyProvider === 'claude' && newDirectory);
   if (historyProvider === 'claude' && newDirectory) $('open-native-history').textContent = '选择原目录后分支或接管…';
   $('new-folder').hidden = !state.capabilities?.includes('newSessionDirectory');
-  $('new-folder').disabled = $('choose-folder').disabled = $('cancel-create').disabled = creatingSession;
+  $('new-folder').disabled = $('choose-folder').disabled = creatingSession;
+  $('cancel-create').disabled = false;
   // Only Codex starts differently: either this app or its TUI creates the native thread.
   // A Claude session opens in the last-used tab; both views stay available.
   $('initial-view').hidden = $('initial-view-label').hidden = historyProvider !== 'codex';
@@ -1147,7 +1202,11 @@ async function restoreArchivedRoom() {
   } });
 }
 async function showSetup() {
-  state.preflight = await api.preflight();
+  const ticket = openTransientDialog('setup-dialog');
+  $('setup-status').replaceChildren(node('p', '正在检查本机程序…'));
+  try {
+  const preflight = await api.preflight(); if (!currentDialogTicket(ticket)) return;
+  state.preflight = preflight;
   const entries = [['claude', 'Claude Code', 'https://code.claude.com/docs/en/setup'], ['codex', 'Codex CLI', 'https://developers.openai.com/codex/cli/'], ['python', 'Python 3', 'https://www.python.org/downloads/macos/']];
   $('setup-status').replaceChildren(...entries.map(([key, label, url]) => {
     const setting = key === 'python' ? 'python3' : key;
@@ -1156,13 +1215,14 @@ async function showSetup() {
     const location = state.preflight.paths?.[key] || state.preflight.configured?.[setting];
     if (location) row.append(node('p', location, 'program-path'));
     const actions = node('div', undefined, 'actions');
-    actions.append(button('安装说明', () => api.openExternal(url)), button('选择已有程序…', async () => { await api.runtimeLocation(setting); await showSetup(); }));
-    if (state.preflight.configured?.[setting]) actions.append(button('自动查找', async () => { await api.runtimeLocation(setting, true); await showSetup(); }));
+    actions.append(button('安装说明', () => api.openExternal(url)), button('选择已有程序…', async () => { await api.runtimeLocation(setting); if (currentDialogTicket(ticket)) await showSetup(); }));
+    if (state.preflight.configured?.[setting]) actions.append(button('自动查找', async () => { await api.runtimeLocation(setting, true); if (currentDialogTicket(ticket)) await showSetup(); }));
     row.append(actions); return row;
   }));
   if (state.preflight.error) $('setup-status').append(node('p', state.preflight.error));
   $('version-info').textContent = `应用 ${state.appVersion || '开发版'} · 后台 ${state.runtimeVersion || '旧版（会话保留中）'}。这里只检查程序文件，不代表已登录或版本兼容。已有会话保留原进程；Codex 后台已运行时，更换程序位置需先结束原会话并完全退出后台。`;
-  createReadiness(); if (!$('setup-dialog').open) $('setup-dialog').showModal();
+  createReadiness();
+  } catch (error) { if (currentDialogTicket(ticket)) $('setup-status').replaceChildren(node('p', '检查失败：' + (error.message || '请重试。'))); }
 }
 function populateSelect(el, items) {
   const old = el.value;
@@ -1284,7 +1344,7 @@ function dropTarget(element, join) {
 }
 function openNotes() {
   notesRevision = state.room.metadataRevision;
-  $('room-notes-text').value = state.room.notes || ''; $('notes-error').hidden = true; $('notes-dialog').showModal();
+  $('room-notes-text').value = state.room.notes || ''; $('notes-error').hidden = true; $('save-notes').disabled = false; openTransientDialog('notes-dialog');
 }
 function openContext() {
   const s = sharedSurface() ? null : current();
@@ -1294,7 +1354,7 @@ function openContext() {
   // Solo drafts are owned by the native session's active window. Copying lets
   // the person paste into that window without racing a concurrent takeover.
   $('context-error').hidden = true; $('insert-context').hidden = Boolean(s);
-  $('context-dialog').showModal();
+  openTransientDialog('context-dialog');
 }
 function appendedDraft(input, text, room) {
   if (room && roomRecipient() && !nativeWorkspaceMentions.body(roomMention, input.value).trim()) return input.value + (/\s$/u.test(input.value) ? '' : ' ') + text;
@@ -1365,9 +1425,10 @@ function chooseMention(id) {
 function share(text) {
   if (!members().length) return toast('先把接收方加入共同工作，再分享选定内容。');
   shareRevision++;
-  $('share-text').value = text; populateSelect($('share-recipient'), members()); updateSharingControls(); $('share-dialog').showModal();
+  $('share-text').value = text; populateSelect($('share-recipient'), members()); $('share-dialog').showModal(); updateSharingControls();
 }
 function updateSharingControls() {
+  if (!$('share-dialog').open) return;
   const target = members().find(s => s.id === $('share-recipient').value);
   $('confirm-share').disabled = Boolean(sharePending) || !$('share-text').value.trim() || !target || interruptPending(target) || target.nativeInputRequired || target.shareAvailable === false || target.chatAvailable === false || disconnected;
   $('confirm-share').textContent = sharePending ? '发送中…' : '发送这段内容';
@@ -2230,24 +2291,24 @@ $('rename-form').onsubmit = async event => {
   } catch (error) { if (renameTarget === target) { showRenameError(error.message || '名称未能保存，请重试。'); if (mayRestoreFocus()) $('rename-name').focus({ preventScroll: true }); } }
   finally { renaming = false; if (renameTarget === target) renderRename(); }
 };
-$('choose-folder').onclick = () => attempt(async () => { const value = await api.chooseFolder(); if (value) { folder = value; newDirectory = false; $('chosen-folder').textContent = folder; createReadiness(); } });
+$('choose-folder').onclick = () => attempt(async () => { const ticket = dialogTickets.get($('create-dialog')); const value = await api.chooseFolder(); if (value && currentDialogTicket(ticket)) { folder = value; newDirectory = false; $('chosen-folder').textContent = folder; createReadiness(); } });
 $('new-folder').onclick = () => { if (!creatingSession) { resetCreateDirectory(); createReadiness(); } };
 $('create-form').onsubmit = event => { event.preventDefault();
-  if (creatingSession) return;
+  const ticket = dialogTickets.get($('create-dialog')), revision = selectionRevision;
+  if (creatingSession || !currentDialogTicket(ticket)) return;
   if (document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim()) { $('open-native-history').click(); return; }
   attempt(async () => {
   creatingSession = true; $('create-error').textContent = ''; createReadiness();
   const submittedFolder = folder, priorIds = new Set(state.sessions.map(s => s.id));
-  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, ...(newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); state = await api.initial(); $('create-dialog').close(); await select(id, view); }
+  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: folder, name: $('session-name').value, view, ...(newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); updateState(await api.initial()); render(); if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, view); } else toast('此前创建的会话已保留在侧栏。'); }
   catch (error) {
-    try { state = await api.initial(); } catch {}
+    try { updateState(await api.initial()); render(); } catch {}
     const created = state.sessions.find(s => s.cwd === submittedFolder && !priorIds.has(s.id));
     const message = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。${error.message}` : error.message;
-    $('create-error').textContent = message;
-    if (!$('create-dialog').open) toast(message);
+    if (currentDialogTicket(ticket)) $('create-error').textContent = message; else toast(message);
     // A failed/uncertain start may already own the displayed path. Preserve
     // that record and any files; a new explicit submit gets a fresh preview.
-    if (newDirectory) resetCreateDirectory();
+    if (currentDialogTicket(ticket) && newDirectory) resetCreateDirectory();
   }
   finally { creatingSession = false; createReadiness(); }
 }); };
@@ -2287,6 +2348,7 @@ $('terminal-display').onclick = () => { $('terminal-font-size').value = terminal
 $('terminal-more').onclick = () => openHeaderMenu($('terminal-more'), true);
 $('terminal-more').onpointerdown = event => { if (sessionMenu?.anchor === $('terminal-more')) event.stopPropagation(); };
 const saveTerminalDisplay = () => attempt(async () => {
+  if (!$('terminal-display-dialog').open) return;
   const fontSize = Number($('terminal-font-size').value);
   if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 24) throw new Error('字号请设为 10–24。');
   terminalDisplay = { fontSize, palette: $('terminal-palette').value }; applyTerminalDisplay(); await persistView();
@@ -2307,8 +2369,9 @@ async function openLocalFile(room = false) {
   try {
     const preview = await api.openLocalFile(target.id || null);
     if (!preview) return;
+    if (document.querySelector('dialog[open]')) { await api.closeLocalFile(preview.token); return; }
     fileTarget = target;
-    if (!fileTargetMatches()) { await api.closeLocalFile(preview.token); return; }
+    if (!fileTargetMatches()) { fileTarget = null; await api.closeLocalFile(preview.token); return; }
     filePreview = preview;
     $('file-title').textContent = preview.name;
     $('file-info').textContent = `${preview.size} 字节 · 当前文件快照 · 支持 UTF-8 文本，最多 256 KB`;
@@ -2323,8 +2386,11 @@ $('session-files').onclick = () => attempt(() => openLocalFile(false));
 $('room-files').onclick = () => attempt(() => openLocalFile(true));
 $('close-file').onclick = () => $('file-dialog').close();
 $('file-dialog').addEventListener('close', () => {
+  if ($('file-dialog').open) return;
   if (filePreview) attempt(() => api.closeLocalFile(filePreview.token));
-  filePreview = null; fileTarget = null; $('file-content').textContent = '';
+  filePreview = null; fileTarget = null;
+  for (const id of ['file-title', 'file-info', 'file-content', 'file-error']) $(id).textContent = '';
+  $('file-error').hidden = true; $('save-file').disabled = false;
 });
 $('insert-file').onclick = async () => {
   try {
@@ -2346,10 +2412,10 @@ $('insert-file').onclick = async () => {
 };
 $('save-file').onclick = async () => {
   if (!filePreview) return;
-  $('save-file').disabled = true;
-  try { if (await api.saveLocalFile(filePreview.token)) toast('已保存预览副本。'); }
-  catch (error) { $('file-error').textContent = error.message; $('file-error').hidden = false; }
-  finally { $('save-file').disabled = false; }
+  const preview = filePreview; $('save-file').disabled = true;
+  try { if (await api.saveLocalFile(preview.token)) toast('已保存预览副本。'); }
+  catch (error) { if (filePreview === preview && $('file-dialog').open) { $('file-error').textContent = error.message; $('file-error').hidden = false; } else toast(error.message); }
+  finally { if (filePreview === preview && $('file-dialog').open) $('save-file').disabled = false; }
 };
 $('interrupt').onclick = () => {
   const id = activeSessionId();
@@ -2520,6 +2586,7 @@ $('run-button').onclick = () => {
   runPreview = { text: nativeWorkspaceMentions.body(roomMention, $('shared-input').value), recipient, revision: roomDraftRevision, selectionRevision,
     members: members().map(s => [s.id, s.memberRevision, s.name, s.nativeId]), identities: Object.fromEntries(members().map(s => [s.id, s.peerIdentity])), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
   $('run-preview').textContent = runPreview.text;
+  $('run-mode').value = 'replies'; $('run-limit').value = '3';
   $('run-consent').checked = false; $('run-error').hidden = true; renderRunChoices();
   $('run-dialog').showModal();
 };
@@ -2547,14 +2614,22 @@ $('cancel-reply').onclick = () => { roomReplyTo = ''; roomThread = ''; roomDraft
 $('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString() : '时间未记录'} · ${roomMessageLabel(m)}\n${m.text}`).join('\n\n')));
 $('room-notes').onclick = openNotes; $('cancel-notes').onclick = () => $('notes-dialog').close();
 $('notes-form').onsubmit = async event => {
-  event.preventDefault(); $('save-notes').disabled = true;
-  try { await api.roomNotes($('room-notes-text').value, notesRevision); $('notes-dialog').close(); }
-  catch (error) { $('notes-error').textContent = error.message; $('notes-error').hidden = false; }
-  finally { $('save-notes').disabled = false; }
+  event.preventDefault(); const ticket = dialogTickets.get($('notes-dialog'));
+  if (!currentDialogTicket(ticket) || $('save-notes').disabled) return;
+  $('save-notes').disabled = true; $('notes-error').hidden = true;
+  try {
+    await api.roomNotes($('room-notes-text').value, notesRevision);
+    if (currentDialogTicket(ticket)) $('notes-dialog').close(); else toast('此前提交的笔记已保存。');
+  } catch (error) {
+    if (currentDialogTicket(ticket)) { $('notes-error').textContent = error.message; $('notes-error').hidden = false; }
+    else toast('此前提交的笔记未能保存：' + error.message);
+  } finally { if (currentDialogTicket(ticket)) $('save-notes').disabled = false; }
 };
 $('attach-context').onclick = () => { $('room-advanced').open = false; openContext(); }; $('close-context').onclick = () => $('context-dialog').close();
 $('copy-context').onclick = () => attempt(async () => { await api.copy($('context-text').value); toast('已复制，尚未发送给 agent。'); });
 $('insert-context').onclick = () => attempt(async () => {
+  const ticket = dialogTickets.get($('context-dialog')), revision = selectionRevision;
+  if (!currentDialogTicket(ticket)) return;
   const target = contextTarget, text = $('context-text').value;
   if (!target?.room || selected !== 'room') throw Error('当前视图已变化，请重新打开协作背景。');
   const input = $('shared-input');
@@ -2562,7 +2637,7 @@ $('insert-context').onclick = () => attempt(async () => {
   if (next.length > 16000) { $('context-error').textContent = '合并后的草稿超过 16000 字符，请先缩短。'; $('context-error').hidden = false; return; }
   input.value = next;
   roomDraftRevision++; await persistView();
-  $('context-dialog').close(); render(); input.focus();
+  if (currentDialogTicket(ticket) && revision === selectionRevision) { $('context-dialog').close(); render(); input.focus(); }
 });
 $('share-recipient').onchange = $('share-text').oninput = () => { shareRevision++; updateSharingControls(); };
 $('pause-button').onclick = () => attempt(async () => {
@@ -2590,24 +2665,34 @@ function openInvite(anchor) {
   if (disconnected || state.room.archived || $('invite-dialog').open) return;
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
   inviteOrigin = { anchor, revision: selectionRevision };
+  const ticket = openTransientDialog('invite-dialog'), revision = selectionRevision;
   $('invite-list').replaceChildren(...state.sessions.filter(s => !s.roomId && !s.archived && s.state !== 'ended').map(s => {
     const entry = button(`加入 ${participantLabel(s, state.sessions)}`, async () => {
       const current = state.sessions.find(record => record.id === s.id);
       if (!current || current.roomId || current.archived || current.state === 'ended' || current.memberRevision !== s.memberRevision || current.nativeId !== s.nativeId) throw new Error('会话已变化，请关闭并重新打开邀请。');
-      await api.join(s.id, true); $('invite-dialog').close();
+      if (!currentDialogTicket(ticket) || entry.disabled) return;
+      entry.disabled = true;
+      try { await api.join(s.id, true); if (currentDialogTicket(ticket) && revision === selectionRevision) $('invite-dialog').close(); }
+      finally { if (currentDialogTicket(ticket)) entry.disabled = false; }
     });
     entry.dataset.inviteSession = s.id; return entry;
   }));
   if (!$('invite-list').children.length) $('invite-list').append(node('p', '先创建一个独立会话。'));
-  $('invite-dialog').showModal();
 }
 $('invite-dialog').addEventListener('close', () => {
+  if ($('invite-dialog').open) return;
+  $('invite-list').replaceChildren();
   const origin = inviteOrigin; inviteOrigin = null;
   if (origin?.revision === selectionRevision && selected === 'room') focusMemberAction(origin.anchor);
 });
 $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
-$('share-dialog').onclose = () => { shareRevision++; };
+$('share-dialog').onclose = () => {
+  if ($('share-dialog').open) return;
+  shareRevision++; $('share-text').value = ''; $('share-help').textContent = '';
+  const recipient = $('share-recipient'); recipient.replaceChildren(); recipient.title = '';
+  delete recipient.dataset.signature; delete recipient.dataset.hadChoices;
+};
 $('confirm-share').onclick = () => attempt(async () => {
   updateSharingControls();
   if ($('confirm-share').disabled) return;
@@ -2628,7 +2713,7 @@ $('privacy-button').onclick = $('refresh-trust').onclick = () => attempt(showTru
 $('privacy-source').onclick = () => attempt(() => api.openExternal('https://github.com/RulerCompass1729/native-agent-workspace/blob/main/docs/privacy.md'));
 $('data-directory').onclick = () => attempt(() => api.dataDirectory());
 $('clear-shared-history').onclick = () => attempt(() => { if (!state.capabilities?.includes('clearSharedHistory')) throw new Error('后台仍在保留旧版会话；结束它们并重开应用后可使用此功能。'); return api.clearSharedHistory(); });
-$('close-privacy').onclick = () => { trustRevision++; trustScope = null; $('privacy-dialog').close(); focusTerminal(); };
+$('close-privacy').onclick = () => { $('privacy-dialog').close(); focusTerminal(); };
 $('reconnect-button').onclick = () => attempt(async () => { $('reconnect-button').disabled = true; try { await api.reconnect(); } finally { $('reconnect-button').disabled = false; } });
 $('retry-save').onclick = () => attempt(async () => {
   $('retry-save').disabled = true;
@@ -2639,8 +2724,6 @@ $('search-button').onclick = () => openSearch();
 $('close-search').onclick = () => $('search-dialog').close();
 $('search-preview-back').onclick = renderSearch;
 $('search-dialog').addEventListener('close', finishSearch);
-$('search-dialog').onpointerdown = event => { searchOutsidePointer = searchOutside(event); };
-$('search-dialog').onclick = event => { const outside = searchOutsidePointer && searchOutside(event); searchOutsidePointer = false; if (outside) { event.preventDefault(); event.stopPropagation(); $('search-dialog').close(); } };
 $('search-input').oninput = event => { clearTimeout(searchTimer); if (!event.isComposing) searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
 $('search-input').oncompositionend = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { searchLimit = 60; renderSearch(); }, 100); };
 $('search-input').onkeydown = searchInputKey;
@@ -2649,6 +2732,37 @@ $('search-scope').onchange = $('search-archived').onchange = () => { searchLimit
 $('search-more').onclick = () => { searchLimit += 60; renderSearch(); };
 $('return-reading').onclick = () => attempt(returnToReading);
 document.addEventListener('keydown', searchKey);
+// Electron's native light dismiss keeps an inside-origin drag from cancelling.
+// Escape during composition commits/cancels the IME, not the surrounding dialog.
+for (const dialog of document.querySelectorAll('dialog')) {
+  dialog.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && (event.isComposing || event.keyCode === 229)) { event.preventDefault(); event.stopPropagation(); }
+  });
+  dialog.addEventListener('close', () => {
+    if (dialog.open) return; // A queued old close must not clear a new opening.
+    dialogTickets.delete(dialog); dialog.scrollTop = 0;
+    if (dialog.id === 'create-dialog') {
+      for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
+      for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note']) $(id).textContent = '';
+      $('skip-permissions').checked = false; folder = ''; newDirectory = false;
+      $('initial-view').value = '';
+      for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
+    } else if (dialog.id === 'setup-dialog') {
+      $('setup-status').replaceChildren(); $('version-info').textContent = '';
+    } else if (dialog.id === 'notes-dialog') {
+      $('room-notes-text').value = ''; $('notes-error').textContent = ''; $('notes-error').hidden = true;
+    } else if (dialog.id === 'context-dialog') {
+      contextTarget = null; $('context-text').value = ''; $('context-error').textContent = ''; $('context-error').hidden = true;
+    } else if (dialog.id === 'run-dialog') {
+      runPreview = null; $('run-consent').checked = false; $('confirm-run').disabled = true;
+      $('run-mode').value = 'replies'; $('run-limit').value = '3'; $('run-participants').replaceChildren();
+      for (const id of ['run-preview', 'run-order', 'run-mode-help', 'run-error']) $(id).textContent = '';
+      $('run-error').hidden = true;
+    } else if (dialog.id === 'terminal-display-dialog') {
+      $('terminal-font-size').value = ''; $('terminal-palette').value = '';
+    }
+  });
+}
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
