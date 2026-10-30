@@ -384,3 +384,23 @@ header h1, header p { overflow-wrap: anywhere; }
 .native-question label small{color:var(--muted)}
 .native-question input[type=text]{width:100%}
 .question-form>button{justify-self:start}
+
+/* The root collaboration view reuses its existing status, nav and layout tools. */
+#header.compact-room{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto) auto;align-items:center;gap:5px 8px;min-height:0;padding:6px 12px}
+.compact-room .header-identity{display:flex;align-items:center;gap:8px;min-width:0}
+.compact-room h1{min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.compact-room #subtitle{flex:none;margin:0;font-size:11px}
+.compact-room.reveal-room-title h1{max-width:none;white-space:normal;overflow-wrap:anywhere}
+.compact-room h1:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.compact-room .room-status-bar{grid-column:2;grid-row:1;min-width:0;gap:6px;margin:0;padding:0;border:0;background:transparent;font-size:11px}
+.compact-room .room-status-bar button{padding:3px 6px;min-height:26px}
+.compact-room #header-actions{grid-column:3;grid-row:1;gap:4px}
+.compact-room #header-actions button{padding:3px 6px;min-height:26px}
+.compact-room #header-actions>.header-secondary{display:none}
+.compact-room #room-tabs{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:0;border:0;min-width:0}
+.compact-room #room-tabs button{font-size:12px;line-height:18px;padding:3px 6px;min-height:26px;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.compact-room .collaboration-toolbar{display:contents}
+.compact-room .collaboration-layout-controls{gap:2px}
+.compact-room #room-tabs .collaboration-layout-controls [aria-pressed="true"],.compact-room #room-tabs .collaboration-toolbar>[aria-pressed="true"]{background:var(--green);color:white}
+.compact-room .collaboration-toolbar>button:last-child{margin-left:0}
+.compact-room #manage-members{margin-left:auto}

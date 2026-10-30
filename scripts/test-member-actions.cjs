@@ -103,7 +103,9 @@ async function run() {
   const passive = await fixture('stats'), owners = (await snapshot()).sessions.map(s => [s.id, s.owner, s.view, s.controlRevision]);
   await more(b).focus(); await page.keyboard.press('Shift+F10');
   await page.getByRole('menuitem', { name: '脱出协作', exact: true }).waitFor();
-  assert.equal(await page.getByRole('menuitem').count(), 2); assert.equal(await more(b).getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.getByRole('menuitem').count(), 4);
+  for (const name of ['脱出协作', '复制完整 NAW ID', '上移', '下移']) assert.equal(await page.getByRole('menuitem', { name, exact: true }).count(), 1);
+  assert.equal(await more(b).getAttribute('aria-expanded'), 'true');
   await visibleStates([a, b, c, d], true); await capture('02-member-menu-below-status-band');
   await page.getByRole('menuitem', { name: '复制完整 NAW ID', exact: true }).click();
   assert.equal(await app.evaluate(() => globalThis.memberCopies.at(-1)), b);
@@ -151,7 +153,7 @@ async function run() {
   await page.locator('#room-record').click(); await more(c).click(); await visibleStates([a, b, c], true); await page.keyboard.press('Escape');
   await page.locator('#room-overview').click();
   await app.browserWindow(page).then(win => win.evaluate(win => win.setSize(680, 860)));
-  await page.locator('#collaboration-overview').getByRole('button', { name: '简化信息', exact: true }).click();
+  await page.getByRole('button', { name: '简化信息', exact: true }).click();
   await more(b).click(); await visibleStates([a, b, c], true); await capture('03-narrow-brief-menu'); await page.keyboard.press('Escape');
   const ids = identity(await snapshot()); await app.close(); app = null; await launch();
   await header(b).waitFor(); assert.deepEqual(identity(await snapshot()), ids); await visibleStates([a, b, c]);

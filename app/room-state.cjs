@@ -2,13 +2,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { validateName } = require('./session-labels.cjs');
+const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
+const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
 
 // One desktop-profile writer, independent of retained provider services.
 // This is human-readable local context, never a provider memory injection.
 class RoomState {
   constructor(directory) {
     this.file = path.join(directory, 'room-state.json');
-    this.value = { version: 1, name: '共同工作', notes: '', revision: 0, events: [], archived: false, archivedSessions: [], restoreMembers: [] };
+    this.value = { version: 1, name: '共同工作', notes: '', revision: 0, events: [], archived: false, archivedSessions: [], restoreMembers: [], memberOrder: [] };
     this.warning = '';
     this.queue = Promise.resolve();
     this.gates = new Set();
@@ -20,7 +22,8 @@ class RoomState {
       for (const e of data.events) if (!e || typeof e.id !== 'string' || e.role !== 'system' || typeof e.text !== 'string' || !Number.isFinite(e.time) || (e.sessionId !== undefined && typeof e.sessionId !== 'string')) throw Error('Invalid event');
       for (const key of ['archivedSessions', 'restoreMembers']) if (data[key] !== undefined && (!Array.isArray(data[key]) || data[key].some(id => typeof id !== 'string' || !id || id.length > 100))) throw Error('Invalid archive');
       if (data.archived !== undefined && typeof data.archived !== 'boolean') throw Error('Invalid archive');
-      this.value = { ...this.value, ...data };
+      // A damaged display preference must never block native input or sharing.
+      this.value = { ...this.value, ...data, memberOrder: memberOrder(data.memberOrder) };
     } catch (error) { if (error.code !== 'ENOENT') this.warning = '协作资料暂时无法读取；原文件已保留，请检查本机数据后重开。'; }
   }
   commit(next) {
@@ -45,6 +48,24 @@ class RoomState {
     if (typeof text !== 'string' || text.length > 8000 || /\u0000/.test(text)) throw Error('共享笔记最多 8000 个字符，不能包含空字符。');
     if (revision !== this.value.revision) throw Error('协作资料已在另一个窗口更新。请先复制你的修改，再重新打开核对。');
     if (text !== this.value.notes) this.update({ notes: text }, { kind: 'notes', text: text ? `更新了共享笔记（尚未发送给 agent）\n${text}` : '清空了共享笔记（不会撤回已经发送的内容）' });
+  }
+  moveMember(change, records) {
+    if (!change || ![Object.prototype, null].includes(Object.getPrototypeOf(change)) || !orderId(change.id) || !orderId(change.target) || typeof change.after !== 'boolean') throw Error('无效成员顺序。');
+    const people = records.filter(s => s.roomId === 'shared' && !s.archived);
+    for (const id of [change.id, change.target]) {
+      this.assertAvailable(id, true);
+      if (!people.some(s => s.id === id)) throw Error('成员已变化，顺序未更改。');
+    }
+    if (change.id === change.target) return;
+    const ids = new Set(records.map(s => s.id)), order = this.value.memberOrder.filter(id => ids.has(id));
+    for (const id of ids) if (!order.includes(id)) order.push(id);
+    if (order.length > 10000 || order.some(id => !orderId(id))) throw Error('成员顺序过长或无效。');
+    order.splice(order.indexOf(change.id), 1);
+    order.splice(order.indexOf(change.target) + Number(change.after), 0, change.id);
+    if (JSON.stringify(order) === JSON.stringify(this.value.memberOrder)) return;
+    // Presentation changes neither invalidate notes/clear confirmations nor
+    // create membership events, pause routing, or touch a native session.
+    this.commit({ ...this.value, memberOrder: order });
   }
   // Register human intervention immediately, then serialize membership changes
   // across windows. Record only acknowledged state transitions, not drag intent.
@@ -119,7 +140,7 @@ class RoomState {
     this.update({ notes: '', events: [] });
   }
   apply(snapshot) {
-    return { ...snapshot, sessions: snapshot.sessions.map(s => ({ ...s, archived: this.value.archivedSessions.includes(s.id) })), roomStorageWarning: this.warning, room: { ...snapshot.room, name: this.value.name, notes: this.value.notes, metadataRevision: this.value.revision, events: this.value.events, archived: this.value.archived } };
+    return { ...snapshot, sessions: snapshot.sessions.map(s => ({ ...s, archived: this.value.archivedSessions.includes(s.id) })), roomStorageWarning: this.warning, room: { ...snapshot.room, name: this.value.name, notes: this.value.notes, metadataRevision: this.value.revision, events: this.value.events, archived: this.value.archived, memberOrder: [...this.value.memberOrder] } };
   }
 }
 module.exports = { RoomState };

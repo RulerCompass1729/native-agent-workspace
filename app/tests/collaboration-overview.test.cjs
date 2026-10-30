@@ -40,6 +40,22 @@ test('no observed lifecycle is unknown; a task-completed event is not a child in
   }
 });
 
+test('compact facts omit empty rows without treating unobserved or partial children as complete', () => {
+  const record = { state: 'idle', nativeId: 'compact-native', fleet: [] };
+  const empty = statusFacts(record, true, 10000);
+  assert.equal(empty.compactChild, ''); assert.equal(empty.freshnessReported, false);
+  assert.equal(empty.child, '子任务：未报告'); assert.equal(empty.freshness, '更新时间未报告');
+  record.fleet = [1, 2, 3].map(id => ({ event: 'thread/started', id: 'compact-child-' + id, stale: false }));
+  const partial = statusFacts(record, true, 10000);
+  assert.equal(partial.compactChild, '3 未知 · 部分观察');
+  assert.match(partial.child, /3 项状态未知（部分观察）/); assert.equal(partial.state, '会话就绪');
+  assert.equal(statusFacts(record, false, 10000).freshnessReported, true, 'Disconnection remains visible even without a timestamp');
+  record.nativeActivity = { nativeId: record.nativeId, observedAt: 1000 };
+  assert.equal(statusFacts(record, true, 10000).freshnessReported, true, 'Stale observed time remains visible');
+  record.nativeActivity.observedAt = 9999;
+  assert.equal(statusFacts(record, true, 10000).freshnessReported, true, 'Real current updates are retained');
+});
+
 test('native context uncertainty and blocking/nonblocking questions retain their actual meanings', () => {
   const record = { state: 'idle', fleet: [], nativeContextPending: { reason: 'resume' } };
   assert.equal(statusFacts(record).state, '原生上下文待核对');
