@@ -312,7 +312,16 @@ class Workspace extends EventEmitter {
       }
     });
     on('nativeBlock', item => { if (item.kind === 'gap') { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生观察连接出现缺口；请核对后重新授权。', s.id); this.pauseParticipant(s.id, '原生观察连接出现缺口，请核对后重新授权。'); } if (applyNativeBlock(s, item, this.dataDir)) { this.sharedReplies.record(s, s.messages.find(m => m.id === `native:${item.nativeId}:${item.id}`)); this.changed(); } });
-    on('replyBound', identity => { this.sharedReplies.bind(s, identity.tag, identity); this.changed(); });
+    on('replyBound', identity => {
+      // An accepted native receipt can annotate its exact existing input for
+      // reading. This metadata grants no new sharing or execution authority.
+      const input = s.messages.find(m => m.id === identity.tag && m.role === 'user');
+      if (input && identity.nativeId === s.nativeId && typeof identity.turnId === 'string' && identity.turnId &&
+        (!input.nativeId || input.nativeId === identity.nativeId) && (!input.turnId || input.turnId === identity.turnId)) {
+        input.nativeId = identity.nativeId; input.turnId = identity.turnId;
+      }
+      this.sharedReplies.bind(s, identity.tag, identity); this.changed();
+    });
     on('contextEnd', info => this.endNativeContext(s, runtime, info));
     on('contextClear', info => this.clearNativeContext(s, runtime, info));
     on('background', info => { if (this.runtimes.get(s.id) !== runtime || info.nativeId !== s.nativeId) return;
@@ -399,7 +408,7 @@ class Workspace extends EventEmitter {
       wake.human(this, s.id); this.pause('真人在原生终端输入'); s.controlRevision++;
       runtime.workspaceMcpCalls?.clear();
       if (item?.turnId && item.turnId === runtime.turnId) wake.nativeStart(this, runtime, { nativeId: s.nativeId, turnId: item.turnId });
-      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native' });
+      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native', time: Date.now() });
       this.changed();
     });
     on('nativeInputImages', event => { if (require('./native-images.cjs').applyInputImages(s, event)) this.changed(); });
@@ -573,7 +582,7 @@ class Workspace extends EventEmitter {
     if (wakeTicket) wakeTicket.tag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     const clearedDraft = !wakeTicket && !route && !forward && typeof draft === 'string' && draft.trim() === text;
-    s.messages.push({ id: tag, role: 'user', text, ...(wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native' });
+    s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native' });
     if (forward) {
       this.forwards.set(tag, { ...forward, control });
       sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
@@ -638,7 +647,7 @@ class Workspace extends EventEmitter {
     // Like a native TUI queue, the recorded message leaves the composer at once.
     const clearedDraft = !shared && typeof draft === 'string' && draft.trim() === text;
     runtime.pendingQueue = tag;
-    const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'queue' };
+    const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'queue', time: Date.now() };
     if (shared) {
       const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, text, status: 'awaiting-native', inputMode: 'queue', time: Date.now(), deliveryTracked: true,
         ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };
@@ -682,7 +691,7 @@ class Workspace extends EventEmitter {
       (!shared || (s.roomId === 'shared' && s.memberRevision === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed));
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     runtime.pendingSteer = tag;
-    const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId };
+    const message = { id: tag, role: 'user', text, origin: 'human', status: 'awaiting-native', inputMode: 'steer', turnId: expectedTurnId, time: Date.now() };
     if (shared) {
       const source = { id: tag, role: 'human', recipientId: id, name: `你 → ${s.name}`, text, status: 'awaiting-native', inputMode: 'steer', time: Date.now(), deliveryTracked: true,
         ...(replyTo ? { replyTo } : {}), deliveries: [{ id: tag, recipientId: id, recipientName: s.name, text, status: 'awaiting-native', time: Date.now() }] };

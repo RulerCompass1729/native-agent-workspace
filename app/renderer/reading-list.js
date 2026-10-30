@@ -1,6 +1,64 @@
 // Per-window reading state. Only IDs and geometry are persisted, never selection.
 const messageViews = new Map();
 let readingPositions = {};
+let readingPayloadId = 0;
+function readingMessageClock(message, now = Date.now()) {
+  const important = ['user', 'human'].includes(message.role) || message.role === 'assistant' &&
+    (!message.kind || message.kind === 'response') && message.phase !== 'commentary' && message.status !== 'streaming';
+  if (!important || !Number.isFinite(message.time) || Math.abs(message.time) > 8640000000000000) return null;
+  const date = new Date(message.time), today = new Date(now);
+  const sameDay = date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  return { text: (sameDay ? '' : date.toLocaleDateString() + ' ') + time, dateTime: date.toISOString(), full: date.toLocaleString([], { hourCycle: 'h23' }) };
+}
+function readingActionLabel(message, author) {
+  return message.toolKind === 'commandExecution' || message.title === 'Bash' ? '这条命令的输出'
+    : ['user', 'human'].includes(message.role) ? `${author}的输入`
+    : message.role === 'assistant' && (!message.kind || message.kind === 'response') ? `${author}的回复`
+    : message.kind === 'summary' ? `${author}的思考摘要` : message.role === 'tool' ? '这条工具记录' : '这条记录';
+}
+async function copyReadingMessage(entry) {
+  const text = entry.displayText ?? entry.message.text, label = entry.actionLabel;
+  await api.copy(text);
+  toast('已复制：' + label);
+}
+// Visual boundaries do not wrap rows or expand paging spans. A page can begin
+// inside one native turn; that is a continuation, never a fabricated new input.
+function readingTurnMarks(messages, room = false, originals = messages) {
+  const counts = new Map(), marks = new Map(), positions = new Map();
+  for (const m of originals) counts.set(m.id, (counts.get(m.id) || 0) + 1);
+  const identity = m => {
+    if (counts.get(m.id) !== 1 || typeof m.nativeId !== 'string' || !m.nativeId || typeof m.turnId !== 'string' || !m.turnId ||
+      m.kind === 'gap' || m.kind === 'context' || m.incomplete || m.sharingStopped) return null;
+    if (room && (!m.sharedStream || !m.sessionId || !m.nativeMessageId || !m.sourceTag || !Number.isFinite(m.time) || Math.abs(m.time) > 8640000000000000)) return null;
+    return JSON.stringify([m.nativeId, m.turnId, room ? m.sessionId : null, room ? m.sourceTag : null, room ? m.replyTo : null]);
+  };
+  let previous;
+  originals.forEach((m, index) => {
+    const key = identity(m);
+    if (key) marks.set(m.id, { start: key !== previous, continuation: false, key });
+    positions.set(m.id, index);
+    previous = m.status === 'interrupted' || m.kind === 'turn' && ['complete', 'failed'].includes(m.status) ? null : key;
+  });
+  const visible = new Map(); let priorIndex;
+  for (const m of messages) {
+    const mark = marks.get(m.id), index = positions.get(m.id);
+    if (mark) visible.set(m.id, { ...mark, continuation: !mark.start && index !== priorIndex + 1 });
+    priorIndex = index;
+  }
+  return visible;
+}
+function readingTurnFooter(message, now = Date.now()) {
+  if (message.kind !== 'turn' || !message.nativeId || !message.turnId || !(message.nativeBlock || message.sharedStream) ||
+    !['complete', 'failed', 'interrupted'].includes(message.status)) return null;
+  let duration = '';
+  if (Number.isSafeInteger(message.nativeDurationMs) && message.nativeDurationMs >= 0) {
+    const seconds = Math.floor(message.nativeDurationMs / 1000), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
+    duration = hours ? `${hours}h ${minutes}m ${seconds % 60}s` : minutes ? `${minutes}m ${seconds % 60}s` : seconds ? `${seconds}s` : '<1s';
+  }
+  const clock = readingMessageClock({ role: 'user', time: message.nativeCompletedAt }, now);
+  return duration || clock ? { duration, clock } : null;
+}
 // Pages contain original records, without spacers for unloaded history. Native
 // group plans supply atomic spans and aliases for saved process:<id> anchors.
 function readingPageData(messages, plans = []) {
@@ -432,7 +490,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   const intent = { position: readingPositions[key] || { top: 0, follow: true, anchor: '', offset: 0 } };
   view.intent = intent;
   let rows = []; const retained = new Set(), days = new Set(), originals = room ? state.room.messages : session?.messages || messages;
-  messages = messages.filter(m => !(m.kind === 'turn' && !nativeCompletionText(m)?.trim()) &&
+  messages = messages.filter(m => !(m.kind === 'turn' && !nativeCompletionText(m)?.trim() && !readingTurnFooter(m)) &&
     !(m.kind === 'summary' && !m.text?.trim() && !m.incomplete && !['failed', 'interrupted'].includes(m.status)));
   const explorations = commandExplorations(messages, room, originals), groups = nativeProcessGroups(messages, room, originals, room ? state.sessions : session ? [session] : [], explorations); let lastDay = '';
   view.paged = !room;
@@ -444,6 +502,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   // frame. It is layout, not a human scroll that revokes the follow/anchor.
   if (!room && (view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId)) view.pageChanging = true;
   view.pageRange = range; view.pageRequest = null;
+  const turnMarks = readingTurnMarks(messages.slice(range.start, range.end), room, originals);
   view.reload = () => { if (view.key === key && el.isConnected) messageList(el, sourceMessages, room, key, context); };
   view.loadMessage = id => {
     if (view.key !== key || !el.isConnected || view.loadingPage || !view.pageData.indices.has(id)) return false;
@@ -456,7 +515,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   };
   for (const m of messages.slice(range.start, range.end)) {
     if (room) {
-      const day = Number.isFinite(m.time) ? new Date(m.time).toLocaleDateString() : '时间未记录';
+      const day = Number.isFinite(m.time) && Math.abs(m.time) <= 8640000000000000 ? new Date(m.time).toLocaleDateString() : '时间未记录';
       if (day !== lastDay) {
         let divider = view.days.get(day); if (!divider) { divider = node('div', day, 'timeline-day'); view.days.set(day, divider); }
         rows.push(divider); days.add(day); lastDay = day;
@@ -465,6 +524,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     let entry = view.entries.get(m.id);
     if (!entry) {
       const item = node('article'), heading = node('div', undefined, 'message-heading'), body = node('div', undefined, 'message-body'), actions = node('div', undefined, 'message-actions');
+      body.id = `reading-payload-${++readingPayloadId}`;
       item.dataset.messageId = m.id; item.append(heading, body, actions);
       entry = { item, heading, body, actions }; view.entries.set(m.id, entry);
       if ((m.role === 'tool' || m.kind === 'summary') && !(Array.isArray(m.images) && m.images.length)) {
@@ -491,8 +551,16 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
           entry.expectedOpen = undefined; rememberFold();
         });
       }
-      entry.copyText = button('复制', () => api.copy(entry.displayText ?? entry.message.text)); actions.append(entry.copyText);
+      entry.copyText = button('复制', () => copyReadingMessage(entry)); actions.append(entry.copyText);
       entry.share = button('选择并分享', () => share(entry.message.text)); actions.append(entry.share);
+      for (const action of [entry.copyText, entry.share]) {
+        action.setAttribute('aria-controls', body.id);
+        const highlight = () => body.classList.add('copy-payload');
+        const clear = () => { if (!actions.matches(':hover') && !actions.contains(document.activeElement)) body.classList.remove('copy-payload'); };
+        action.addEventListener('pointerenter', highlight); action.addEventListener('focus', highlight);
+        action.addEventListener('pointerleave', clear); action.addEventListener('blur', clear);
+      }
+      actions.addEventListener('pointerleave', () => { if (!actions.contains(document.activeElement)) body.classList.remove('copy-payload'); });
       if (room) {
         entry.reply = button('回复', () => openThread(entry.message.id)); actions.append(entry.reply);
         entry.delivery = node('details', undefined, 'message-delivery');
@@ -522,13 +590,13 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     }
     entry.message = m; entry.exploration = explorations.get(m.id); retained.add(m.id); rows.push(entry.item);
     entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
-    entry.item.classList.toggle('native-notice', m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id)));
+    entry.item.classList.toggle('native-notice', Boolean(m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id))));
     const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
     let name = room ? roomMessageLabel(m) : m.name;
     if (m.nativeBlock && m.kind === 'input' && m.inputMode === 'native-inline') name = '原生会话';
     name ||= m.role === 'user' ? '你' : session?.provider === 'claude' ? 'Claude' : 'Codex';
     if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
-    const messageTime = room && m.kind !== 'turn' ? m.time : undefined;
+    const messageTime = readingMessageClock(m);
     const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped]);
     if (entry.headingKey !== headingKey) {
       const authorId = room && (m.sessionId || m.recipientId);
@@ -539,7 +607,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
       if (m.volatile && !entry.disclosure) entry.heading.append(node('span', (m.nativeMessageId || m.id || '').startsWith(`native:${m.nativeId}:tool:`) ? '工具记录' : '本次运行记录'));
       if (m.sharingStopped) entry.heading.append(node('span', `共享已停止 · ${m.sharingStopped}`));
-      if (Number.isFinite(messageTime)) { const time = node('time', new Date(messageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = new Date(messageTime).toISOString(); time.title = new Date(messageTime).toLocaleString(); entry.heading.append(time); }
+      if (messageTime) { const time = node('time', messageTime.text); time.dateTime = messageTime.dateTime; time.title = messageTime.full; time.setAttribute('aria-label', messageTime.full); entry.heading.append(time); }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
       // Only Claude rows take queued input; native sends it once the agent is idle.
@@ -551,6 +619,12 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (m.toolKind === 'commandExecution' && !entry.exploration && m.exitCode) entry.heading.append(node('span', 'exit ' + m.exitCode));
       if (entry.preview) entry.heading.append(entry.preview);
     }
+    entry.actionLabel = readingActionLabel(m, name);
+    entry.copyText.setAttribute('aria-label', '复制：' + entry.actionLabel);
+    entry.share.setAttribute('aria-label', '选择并分享：' + entry.actionLabel);
+    // Keep tools' original disclosure and source IDs. The toolbar belongs to
+    // this heading, rather than floating over the next record's content.
+    if (m.role !== 'system' && entry.actions.parentElement !== entry.heading) entry.heading.append(entry.actions);
     if (entry.disclosure) {
       const error = entry.exploration ? entry.exploration.error : m.incomplete ? 'incomplete' : ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status) ? m.status : '';
       entry.error = error;
@@ -633,6 +707,26 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (m.role === 'assistant') ui.markdown(entry.body, m.text, entry.streaming, () => { if (view.key === key) scheduleReading(view); });
       else entry.body.textContent = displayText;
     }
+    const footer = readingTurnFooter(m);
+    entry.item.classList.toggle('native-metadata-only', m.kind === 'turn' && !displayText);
+    entry.heading.hidden = entry.body.hidden = m.kind === 'turn' && !displayText;
+    if (footer) {
+      if (!entry.footer) { entry.footer = node('footer', undefined, 'reading-turn-footer'); entry.item.append(entry.footer); }
+      const finals = originals.filter(other => other.role === 'assistant' && (other.finalReply || ['final_answer', 'finalAnswer'].includes(other.phase)) &&
+        other.nativeId === m.nativeId && other.turnId === m.turnId && (!room || other.sessionId === m.sessionId && other.sourceTag === m.sourceTag));
+      const repeatedClock = finals.length === 1 && footer.clock && readingMessageClock(finals[0])?.text === footer.clock.text;
+      const footerKey = JSON.stringify([footer, repeatedClock]);
+      if (entry.footerKey !== footerKey) {
+        entry.footer.replaceChildren();
+        if (footer.duration) entry.footer.append(node('span', footer.duration));
+        // The footer is native turn metadata, not the local receipt clock used
+        // by ordinary message headings. Missing fields stay absent.
+        if (footer.clock && !repeatedClock) { const time = node('time', footer.clock.text); time.dateTime = footer.clock.dateTime; time.title = footer.clock.full; time.setAttribute('aria-label', footer.clock.full); entry.footer.append(time); }
+        const description = [footer.duration && '用时 ' + footer.duration, footer.clock && '完成时间 ' + footer.clock.full].filter(Boolean).join(' · ');
+        entry.footer.title = description; entry.footer.setAttribute('aria-label', description);
+        entry.footerKey = footerKey;
+      }
+    } else if (entry.footer) { entry.footer.remove(); delete entry.footer; delete entry.footerKey; }
     const hasImages = Array.isArray(m.images) && m.images.length > 0;
     if (hasImages && entry.disclosure) {
       // A late image reference is explicit native content. Keep its original
@@ -660,7 +754,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     entry.images?.update(m.images || [], { kind: room ? 'room' : 'session', sessionId: room ? m.sessionId : session?.id,
       nativeId: m.nativeId, messageId: m.id }, room ? m.name || name : session?.name || name, m.status);
     if (entry.inputBody && hasImages && m.toolKind === 'imageView') entry.inputBody.hidden = true;
-    if (entry.copyText) { entry.copyText.hidden = hasImages && !m.text; entry.copyText.textContent = hasImages ? '复制文字' : '复制'; }
+    if (entry.copyText) { entry.copyText.hidden = hasImages && !m.text || m.kind === 'turn' && !displayText; entry.copyText.textContent = hasImages ? '复制文字' : '复制'; }
     entry.share.hidden ||= hasImages && !m.text;
     entry.share.textContent = hasImages ? '选择并分享文字' : '选择并分享';
   }
@@ -675,6 +769,12 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   }
   for (let i = rows.length - 1; i >= 0; i--) if (nested.has(rows[i])) rows.splice(i, 1);
   rows = processGroupRows(view, rows, groups, explorations, room, key);
+  for (const row of rows) {
+    const firstId = groups.get(row.dataset.processGroup)?.messages[0]?.id || row.dataset.messageId, mark = turnMarks.get(firstId);
+    row.classList.toggle('reading-turn-start', mark?.start === true);
+    if (mark) { row.dataset.readingTurnStart = String(mark.start); row.dataset.readingTurnContinuation = String(mark.continuation); }
+    else { delete row.dataset.readingTurnStart; delete row.dataset.readingTurnContinuation; }
+  }
   if (!sourceMessages.length) {
     const s = session;
     const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对上方请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
