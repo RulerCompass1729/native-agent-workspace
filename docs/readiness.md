@@ -11,8 +11,10 @@ remaining unknown. They use the actual adapter with synthetic native responses,
 zero provider/model calls, and preserve identity and draft. The retained reader's
 same response projection passes Unix WebSocket checks; original native recovery
 is not newly qualified. The ordinary visible update retains all ten saved native
-IDs, live process starts and owners. Draft hashes remain unchanged in both scopes:
-two saved view drafts contain text; the ten session drafts are empty. Six older native backends
+IDs, live process starts and owners. The ten session draft hashes and twelve saved
+view draft records are unchanged. A later shape check corrects the earlier
+non-empty count: both saved private draft objects contain empty text. One shared
+draft contains text and matches its pre-update hash. Six older native backends
 remain deliberately unchanged. The existing reader path reuses six signed alpha.137
 flows that verify local wheel reading of oversized read-only native grids,
 ordinary xterm history and an empty reader following native approval state.

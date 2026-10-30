@@ -1268,9 +1268,12 @@ non-passes. The cumulative reviewer list equivalent is recorded privately, not
 reported as an invoice or summed across resumes.
 
 The ordinary visible 137-to-138 update preserves ten saved native IDs, live
-process starts and owners. Draft hashes are unchanged in both scopes: two of the
-twelve saved view drafts contain text; the ten session drafts and ten other view
-drafts are empty. Only the
+process starts and owners. The ten session draft hashes and twelve saved view
+draft records are unchanged. A follow-up shape check corrects the initial
+inference from non-null objects: both saved private draft objects have empty
+text, and the ten session drafts are empty. One shared draft has text and still
+matches its pre-update hash. The initial operator did not separately compare
+shared-draft namespaces; the next update adds that check. Only the
 GUI and empty active backend update; six retained backends keep their earlier
 versions and process starts. Strict signature and ordinary launch arguments pass.
 The original Main goal keeps its UUID, objective, creation time and active status.
