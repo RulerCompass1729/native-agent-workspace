@@ -2129,7 +2129,12 @@ async function ensureTerminal(id, explicit = false) {
     if (Math.abs(event.deltaX) > Math.abs(event.deltaY) && surface.scrollWidth > surface.clientWidth) { event.stopPropagation(); return; }
     // These paths scroll inside the native program. Prepare the same guarded
     // view as a click; ordinary local scrollback needs no native input/control.
-    if (event.deltaY && (['vt200', 'drag', 'any'].includes(term.modes.mouseTrackingMode) || term.buffer.active.type === 'alternate')) claimTerminalFocus();
+    if (event.deltaY && (['vt200', 'drag', 'any'].includes(term.modes.mouseTrackingMode) || term.buffer.active.type === 'alternate')) {
+      // Another window owns this native grid. Read its oversized frame locally;
+      // xterm would otherwise consume the wheel even with native input disabled.
+      if (state?.sessions.find(s => s.id === id)?.owner !== owner && surface.scrollHeight > surface.clientHeight) { event.stopPropagation(); return; }
+      claimTerminalFocus();
+    }
   }, { capture: true, passive: true });
   bindImageInput(surface, id);
   surface.addEventListener('paste', event => { if (imageFiles(event.clipboardData).length) return; event.preventDefault(); event.stopPropagation(); attempt(() => { pasteTerminal(event.clipboardData?.getData('text/plain') || '', id); }); }, true);
