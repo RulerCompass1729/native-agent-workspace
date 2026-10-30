@@ -4,13 +4,24 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.140 integrates optional committed work copies and recoverable
-space snapshots. All 1806 combined source checks pass without skips; source
-integration has independent review. Signed and installed qualification is pending.
-Linked selected paths are unsupported for automatic copies; existing-directory
-mode remains available. No active native backend is migrated by this candidate.
+Current daily GUI: alpha.140, committed build source `3305174`. Eight signed GUI
+journeys cover recoverable space snapshots, independent drafts, partial failures,
+explicit recovery, undo and reopening. Three work-copy checks cover non-mutating
+preview, committed checkout and the resulting GUI status/draft. Positive work-copy
+creation uses backend setup; the real OS chooser and positive GUI create path
+remain source-fixture-only. Native transports are synthetic; no product inference
+runs. All 1806 source checks pass without skips, and source, signed evidence and
+visible-update operation pass independent review.
 
-Current daily GUI: alpha.139, committed build source `c9800cc`. Fourteen signed
+The visible update preserves ten native IDs, eleven live process starts, owners,
+settings and all twelve saved view draft scopes. Private drafts are empty; one
+shared draft contains text. The original Main goal remains active and unchanged.
+Only the GUI and empty active backend update; six nonempty backends stay at their
+previous versions. Real OS clipboard/clear confirmation, native trust, physical input and the
+full dogfood milestone remain unqualified. Automatic work copies refuse linked
+selected paths; existing-directory mode remains available.
+
+The earlier alpha.139 build, source `c9800cc`, remains the evidence for unchanged paths. Fourteen signed
 installed groups cover multiple spaces, membership views, independent drafts,
 scoped delivery and same-profile reopening. Three more cover the existing
 tool-silence status, progress and completion. These use stand-in native runtimes;

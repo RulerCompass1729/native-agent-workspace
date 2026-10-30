@@ -3297,15 +3297,22 @@ Installed acceptance: selected-recipient edit/delivery9 groups, exact routing-er
 
 Real127→128 permission acceptance uses two certificate-signed bundles with59 identical runtime sources,105 unchanged dependencies and distinct CDHashes. After one initial127 Desktop consent, a single live debug-level TCC recording spans the128 update and native read/cleanup:5258 lines, no prompt/notification records, exact head-process Desktop authorization allowed, README/Git reads successful. Four local fixed responses total across A/B, zero paid product inference; Git has no separately observed TCC request. Strict signatures pass after native testing; one daily app remains indexed. Original10 native identities/live process starts/owners/drafts and12 saved view drafts survive both ordinary visible updates. Raw failures, screenshots, request/protocol records, TCC metadata and cleanup evidence remain private. Main/secretary118 and four120 backends are still pending controlled migration; these results do not close the full dogfood goal.
 
-### alpha.140 integration candidate
+### alpha.140 integrated and installed
 
-Combined work-copy and space-snapshot source: 1806 passed, zero skipped. The
-first run had two fixture extraction failures (1804 passed); the repaired fixture
-executes only the actual create handler. Build and syntax checks pass.
+Combined source: 1806 passed, zero skipped. The first run had two fixture
+extraction failures; bounding the actual create handler fixes both. Build,
+committed-source packaging and strict signature checks pass.
 
-Signed acceptance is planned with at most two launches of one merge profile
-(and one intentional second window), then one work-copy profile launch. Use
-synthetic native transport, two fixed shared-message seeds, no provider/model
-calls or OS clipboard actions. Copy and clear-confirmation retain the reviewed
-source-fixture scope; real OS chooser and original active-backend refresh are
-unqualified. Installed results will be recorded after execution.
+Signed acceptance passes eight merge GUI journeys and three work-copy checks.
+Copy and clear OS steps reuse source-fixture evidence. Positive work-copy creation
+uses backend RPC; the installed GUI checks status and a positive draft, without
+qualifying the real chooser or positive GUI create path. Four owned Electron launches comprise two merge launches, one refused work-copy
+profile and its corrected launch. There is also one intentional second window. All
+recorded processes/profiles and GUI leases are cleaned. Native transports are
+synthetic; product provider inference and OS clipboard actions are zero.
+
+The ordinary visible update preserves ten native IDs, eleven live process starts,
+settings and twelve saved view draft scopes. Only the empty active backend
+updates; retained nonempty backends remain unchanged. The same original goal is
+active. Independent review accepts the source, installed evidence and update
+operator; whole-dogfood and physical-input acceptance remain open.

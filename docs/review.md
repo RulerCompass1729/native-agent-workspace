@@ -1328,7 +1328,7 @@ unqualified. Notification clicks may reveal a window that is not displaying the
 session; no task content enters the notification. The approved later space-merge
 journey is not part of this batch.
 
-### Committed work copies and recoverable space snapshots (alpha.140 candidate)
+### Committed work copies and recoverable space snapshots (alpha.140)
 
 Two independently reviewed component commits are integrated: optional committed
 Git work copies for new sessions, and recoverable snapshots when combining
@@ -1350,3 +1350,28 @@ findings: repeated archive errors, recovery timeline wording, a partly clipped
 list row, and validation limits for locally edited merge metadata. Signed/Main
 acceptance and real OS chooser/clipboard/confirmation remain separate gates;
 these source records do not close the dogfood goal.
+
+Signed `3305174` matches all 64 runtime files and 105 production dependencies.
+Eight installed merge journeys and three work-copy checks pass with synthetic
+transport. Work-copy preview and creation are set up through backend RPC; its GUI
+check verifies ready status and a positive saved draft. The real chooser and
+positive GUI create path are not newly qualified. Copy and clear-confirmation
+reuse the reviewed source fixture, rather than claiming signed OS interaction.
+
+Two harness failures are retained: a missing launch authorization stopped before
+any profile, backend or GUI; a later work-copy profile used valid JSON with an unsafe file
+mode. The existing view-store correctly refused it without overwriting. Source
+inspection confirms that the view-store rejects group/other access bits; one
+explicitly recorded extra launch with a 0600 record fixes only that fixture. Total: four owned GUI starts, three synthetic
+daemons, five synthetic native creations and two local Git preparations. Recorded
+processes, profiles and exact GUI leases are cleaned; strict signature passes.
+
+The ordinary visible 139-to-140 update preserves ten native IDs, eleven live
+process start identities, owners, settings and all twelve saved view draft scopes.
+Private drafts are empty; one shared draft is positive. Only the empty active
+backend updates; six retained backends keep their earlier versions and starts.
+The original Main goal stays active with the same identity, objective and creation
+time. One ordinary application is indexed. Source integration, signed evidence
+and the bounded update operator pass independent review. This does not certify
+real OS chooser/clipboard/clear interaction, original cold recovery or the full
+dogfood goal.
