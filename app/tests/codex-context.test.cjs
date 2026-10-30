@@ -149,18 +149,91 @@ function capacityFixture(t) {
  const f=fixture(t);f.s.roomId=null;f.s.view='chat';f.r.chatAvailable=true;f.host.rpc.nativeVersion='0.164.0';f.calls=[];f.goalReads=[];
  f.host.rpc.call=async(method,params)=>{if(method==='thread/goal/get'){f.goalReads.push(params);return {goal:f.goal??null};}f.calls.push({method,params});return {turn:{id:'automatic-'+f.calls.length}};};
  f.start=id=>f.r.event({method:'turn/started',params:{threadId:f.s.nativeId,turn:{id}}});
- f.end=(id,code='serverOverloaded',status='failed')=>f.r.event({method:'turn/completed',params:{threadId:f.s.nativeId,turn:{id,status,error:status==='failed'?{message:'NATIVE ORIGINAL',codexErrorInfo:code}:null}}});
- f.fail=(id='original',code='serverOverloaded')=>{f.start(id);f.end(id,code);};return f;
+ f.end=(id,code='serverOverloaded',status='failed',message='NATIVE ORIGINAL')=>f.r.event({method:'turn/completed',params:{threadId:f.s.nativeId,turn:{id,status,error:status==='failed'?{message,codexErrorInfo:code}:null}}});
+ f.fail=(id='original',code='serverOverloaded',message='NATIVE ORIGINAL')=>{f.start(id);f.end(id,code,'failed',message);};return f;
 }
 const capacityTick=()=>new Promise(resolve=>setImmediate(resolve));
+const routingError='workspace routing discovery timed out';
+for(const version of ['0.164.0','0.165.0'])for(const cause of ['capacity','routing'])test('qualified native '+version+' recovers only the exact terminal transient cause: '+cause,async t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion=version;
+ const error={message:cause==='routing'?routingError:'NATIVE ORIGINAL',codexErrorInfo:cause==='routing'?'other':'serverOverloaded'};
+ f.start('live');f.r.event({method:'error',params:{threadId:f.s.nativeId,turnId:'live',willRetry:true,error}});
+ assert.equal(f.w.capacityStatus(f.s.id),null,'Intermediate native retries remain native');
+ f.end('live',error.codexErrorInfo,'failed',error.message);
+ const recovery=f.w.capacityStatus(f.s.id);assert.ok(recovery);assert.equal(recovery.reason,cause);assert.ok(recovery.due-Date.now()>119000);
+ f.w.tickCapacity(recovery.due);await capacityTick();assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].params.input,[{type:'text',text:'继续',text_elements:[]}]);
+ assert.ok(f.s.messages.some(m=>m.kind==='notice'&&m.text===error.message),'Original native error retained');
+ assert.ok(f.s.messages.some(m=>m.name==='NAW'&&m.text.includes(cause==='routing'?'路由发现超时':'模型满载')));
+});
+for(const [label,code,message,status] of [
+ ['other message','other','An unrelated failure','failed'],['prefix','other','prefix '+routingError,'failed'],
+ ['suffix','other',routingError+'.','failed'],['wrong case','other','Workspace routing discovery timed out','failed'],
+ ['missing message','other',null,'failed'],['wrong enum','Other',routingError,'failed'],
+ ['code absent',null,routingError,'failed'],['text-only error','badRequest',routingError,'failed'],
+ ['interrupted','other',routingError,'interrupted'],['completed','other',routingError,'completed']
+])test('routing recovery rejects '+label,t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.start('live');f.end('live',code,status,message);
+ assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.calls.length,0);
+});
+for(const version of ['0.163.0','0.166.0',undefined])test('unqualified native version has no recovery: '+version,t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion=version;f.fail('overload');assert.equal(f.w.capacityStatus(f.s.id),null);
+ f.fail('routing','other',routingError);assert.equal(f.w.capacityStatus(f.s.id),null);
+});
+test('terminal-only native error retains exact message and details without requiring an intermediate notification',t=>{
+ const f=capacityFixture(t);f.start('live');
+ f.r.event({method:'turn/completed',params:{threadId:f.s.nativeId,turn:{id:'live',status:'failed',error:{message:routingError,codexErrorInfo:'other',additionalDetails:'Native exact details'}}}});
+ assert.equal(f.s.messages.filter(m=>m.kind==='notice'&&m.text===routingError+'\n\nNative exact details').length,1);
+});
+for(const different of [false,true])test('terminal native error deduplicates an identical notice and preserves a different retry error: '+different,t=>{
+ const f=capacityFixture(t);f.start('live');
+ f.r.event({method:'error',params:{threadId:f.s.nativeId,turnId:'live',willRetry:true,error:{message:different?'Earlier native retry':routingError,codexErrorInfo:'other'}}});
+ f.end('live','other','failed',routingError);
+ assert.equal(f.s.messages.filter(m=>m.kind==='notice'&&m.text===routingError).length,1);
+ if(different)assert.ok(f.s.messages.some(m=>m.text==='Earlier native retry'));
+});
+test('malformed completed turn without its required thread ID cannot arm recovery',t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.start('live');
+ f.r.event({method:'turn/completed',params:{turn:{id:'live',status:'failed',error:{message:routingError,codexErrorInfo:'other'}}}});
+ assert.equal(f.w.capacityStatus(f.s.id),null);assert.equal(f.calls.length,0);
+});
+test('routing history, foreign and duplicate terminal events cannot arm or renew recovery',t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.end('old','other','failed',routingError);assert.equal(f.w.capacityStatus(f.s.id),null);
+ f.r.event({method:'turn/started',params:{threadId:'foreign',turn:{id:'other'}}});f.end('other','other','failed',routingError);assert.equal(f.w.capacityStatus(f.s.id),null);
+ f.fail('live','other',routingError);const scheduled=f.w.capacityStatus(f.s.id);f.end('live','other','failed',routingError);assert.deepEqual(f.w.capacityStatus(f.s.id),scheduled);
+});
+test('routing and capacity failures share the same bounded three-attempt budget',async t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.fail('original','other',routingError);
+ for(let n=1;n<=3;n++){
+  const recovery=f.w.capacityStatus(f.s.id);assert.equal(recovery.attempt,n-1);assert.ok(recovery.due-Date.now()>[120000,300000,600000][n-1]-1000);
+  f.w.tickCapacity(recovery.due);await capacityTick();assert.equal(f.calls.length,n);
+  f.start('automatic-'+n);f.end('automatic-'+n,n===1?'serverOverloaded':'other','failed',n===1?'NATIVE ORIGINAL':routingError);
+ }
+ assert.equal(f.w.capacityStatus(f.s.id).status,'exhausted');assert.equal(f.w.capacityStatus(f.s.id).reason,'routing');
+ f.w.tickCapacity(Date.now()+86400000);assert.equal(f.calls.length,3);
+});
+for(const stop of ['draft','cancel','paused goal','goal read pending'])test('routing recovery preserves the existing human/goal boundary: '+stop,async t=>{
+ const f=capacityFixture(t);f.host.rpc.nativeVersion='0.165.0';f.fail('original','other',routingError);
+ const due=f.w.capacityStatus(f.s.id).due;let release;
+ if(stop==='draft')f.w.setDraft(f.s.id,'Human unsent draft','window');
+ if(stop==='cancel')await f.w.interrupt(f.s.id,'window');
+ if(stop==='paused goal')f.goal={threadId:f.s.nativeId,status:'paused',objective:'Human paused this',tokenBudget:42};
+ if(stop==='goal read pending')f.host.rpc.call=async()=>new Promise(resolve=>{release=resolve;});
+ f.w.tickCapacity(due);
+ if(stop==='goal read pending'){await f.w.interrupt(f.s.id,'window');release({goal:null});}
+ await capacityTick();assert.equal(f.calls.length,0);assert.equal(f.w.capacityStatus(f.s.id),null);
+ if(stop==='draft')assert.equal(f.w.drafts.get(f.s.id),'Human unsent draft');
+ if(stop==='paused goal')assert.equal(f.goal.status,'paused');
+});
 for(const member of [false,true])test('automatic capacity continuation only pauses collaboration containing its session: '+member,async t=>{
  const f=capacityFixture(t),{w,s}=f;f.fail();
  const ids=member?[s.id,'other']:['other','peer'];
  const run=w.room.run={id:'existing-run',ids,status:'running',deadline:Date.now()+600000};
  const {PeerLeases}=require('../peer-handoffs.cjs');w.peerLeases=new PeerLeases(w);
  const grant={id:'existing-grant',ids,status:'running',client:{}};w.peerLeases.leases.set(grant.id,grant);
+ const wake=require('../session-wake.cjs'),boundary=wake.boundary(w);
  w.tickCapacity(w.capacityStatus(s.id).due);await capacityTick();
  assert.equal(f.calls.length,1);assert.equal(f.calls[0].method,'turn/start');
+ assert.equal(wake.boundary(w),boundary,'Automatic recovery never creates a human global wake boundary');
  assert.deepEqual(f.calls[0].params.input,[{type:'text',text:'继续',text_elements:[]}]);
  assert.equal(run.status,member?'paused':'running');assert.equal(grant.status,member?'paused':'running');
  assert.equal(w.room.messages.some(m=>m.text.includes('模型满载自动继续')),member);

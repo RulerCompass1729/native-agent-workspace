@@ -205,7 +205,7 @@ async function nativeCommand(command){
   if(capacityTrial==='cancel'){
    await page.getByRole('button',{name:'取消自动继续',exact:true}).click();await until(async()=>!(await snapshot()).sessions[0].capacityRecovery,'Explicit GUI action cancels recovery');await page.locator('#message-input').fill('Human draft after cancelling automatic continuation');await sleep(1500);
    assert.equal(calls,1);assert.equal((await snapshot()).sessions[0].liveDraft,'Human draft after cancelling automatic continuation');assert.deepEqual(errors,[]);
-   console.log(JSON.stringify({checks:['Actual164 typed overload schedules a visible two-minute continuation; the GUI cancel action cancels it without native interruption or another request, and a later human draft is retained'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+   console.log(JSON.stringify({checks:[`Actual${nativeVersion} typed overload schedules a visible two-minute continuation; the GUI cancel action cancels it without native interruption or another request, and a later human draft is retained`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
   }
   fs.writeFileSync(path.join(base,'capacity-before.json'),JSON.stringify(await snapshot(),null,2));const observer=await connect(profile,'owned-capacity-observer');
   try{
@@ -220,7 +220,7 @@ async function nativeCommand(command){
   app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],env:{...process.env,NAW_DATA_DIR:profile,NAW_WORKSPACE:cwd,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});page=await app.firstWindow();await page.locator('#new-session').waitFor();
   await until(async()=>(await snapshot()).sessions[0].messages.some(m=>m.text==='CONTEXT_TASK_2'),'Completed continuation is in the reopened reader');assert.deepEqual(errors,[]);assert.equal(calls,2);
   if(process.env.NAW_EVIDENCE_DIR)await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,'capacity-continued.png')});
-  console.log(JSON.stringify({checks:['Actual164 terminal overload preserves native error and two-minute schedule; one new continue runs while the window is closed on the same native server/thread; reader result and explicit NAW provenance survive reopen without original-task replay'],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
+  console.log(JSON.stringify({checks:[`Actual${nativeVersion} terminal overload preserves native error and two-minute schedule; one new continue runs while the window is closed on the same native server/thread; reader result and explicit NAW provenance survive reopen without original-task replay`],nativeVersion,localResponses:calls,nativeTitleResponses:titles,paidModelCalls:0,evidence:base}));return;
  }
  if(skipPermissions){
   assert.equal(before.skipPermissions,true);
