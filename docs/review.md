@@ -881,3 +881,21 @@ Validation: 279 affected checks and eight signed installed reading journeys pass
 The replay-clock repair leaves first-seen replayed observations undated while retaining their text and existing recorded clocks. This adapter repair applies to the new 131 backend; retained older backends still run their own code. The ordinary visible update preserved all 10 native IDs, live native process starts, owners and both draft scopes. Six backend records stayed identical; only the empty active backend's PID/version changed. Strict signature passes, one application copy is indexed, and the installed production reader matches the actual build-bound installation record. The split is 131×1 active/empty, 129×1, 120×4, 118×1. The developer session's native goal is unchanged by this update. The single-agent dogfood milestone remains open.
 
 Headless Fable source, replay-clock delta, signed candidate/operator and actual daily-update reviews pass. Whole native shell-command ingestion and Claude native-clock correlation remain open.
+
+
+### Original local material links: integrated source checkpoint
+
+The pinned Markdown file-link delegate now carries the original message/session
+context into the existing local file opener. Relative paths require a provable
+original working directory; stale contexts fail without guessing. File guards
+reject scripts, executable files, symlink leaves and special files. Errors stay
+with the originating message; an OS dispatch acknowledgement is not proof that
+another application displayed the document. No dependency or panel is added.
+
+Integration retains the metadata-before-fresh-state startup repair and the
+recorded-time reader. A test probe was narrowed to its actual Markdown block,
+and the source GUI uses the current contextual copy name; no assertions were
+removed. 58 affected checks and five complete source GUI journeys pass. These
+use synthetic native output and intercepted OS openers/clipboard; installed and
+actual default-viewer acceptance remain pending. Native error activation, exact
+footer availability and historical process gaps are separate open findings.

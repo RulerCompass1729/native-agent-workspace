@@ -701,10 +701,17 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     }
     const displayText = nativeCompletionText(m);
     entry.displayText = displayText;
-    if (entry.text !== displayText || entry.role !== m.role || entry.streaming !== (m.status === 'streaming')) {
+    const fileSession = room ? state.sessions.find(s => s.id === m.sessionId) : session;
+    const fileCwdKnown = fileSession && !fileSession.nativeContextPending && (m.nativeId
+      ? m.nativeId === fileSession.nativeId && !fileSession.nativeContexts?.some(c => c.nativeId === m.nativeId)
+      : !fileSession.nativeContexts?.length);
+    const fileSource = { kind: room ? 'room' : 'session', sessionId: room ? m.sessionId : session?.id,
+      messageId: m.id, nativeId: m.nativeId || null, cwd: fileCwdKnown ? fileSession.cwd || null : null };
+    const fileSourceKey = m.role === 'assistant' ? JSON.stringify(fileSource) : null;
+    if (entry.text !== displayText || entry.role !== m.role || entry.streaming !== (m.status === 'streaming') || m.role === 'assistant' && entry.fileSourceKey !== fileSourceKey) {
       if (entry.role && entry.role !== m.role) ui.clearMarkdown(entry.body);
-      entry.text = displayText; entry.role = m.role; entry.streaming = m.status === 'streaming';
-      if (m.role === 'assistant') ui.markdown(entry.body, m.text, entry.streaming, () => { if (view.key === key) scheduleReading(view); });
+      entry.text = displayText; entry.role = m.role; entry.streaming = m.status === 'streaming'; entry.fileSourceKey = fileSourceKey;
+      if (m.role === 'assistant') ui.markdown(entry.body, m.text, entry.streaming, () => { if (view.key === key) scheduleReading(view); }, fileSource);
       else entry.body.textContent = displayText;
     }
     const footer = readingTurnFooter(m);
