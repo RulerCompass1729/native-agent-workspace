@@ -4,22 +4,25 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.131, committed build source `6c4d043`. Reading actions
-stay with their original messages; quiet recorded clocks and known native-turn
-boundaries preserve original text and 50-record paging. 279 affected checks and
-eight signed installed reading journeys pass, using synthetic provider output.
-Installed physical clipboard, IME and VoiceOver remain unqualified.
+Current daily GUI: alpha.132, committed build source `c31f367`. Original local
+material links retain their targets and source context; stale relative paths fail
+without guessing a new working directory. 58 affected checks, five integrated
+source journeys and five signed installed guard/context/reload journeys pass.
+Valid OS dispatch and copy payload proof is reused from the integrated source
+run. The actual OS viewer, physical clipboard, IME and VoiceOver are unqualified.
+The recorded clocks, known native-turn boundaries and 50-record paging remain.
 
 The ordinary visible update retained all 10 native IDs, live process starts,
-owners and both draft scopes. Only the empty active backend restarted on 131;
-six retained backend records are unchanged: 129×1, 120×4, 118×1. The replay-clock
-adapter fix applies to the new 131 backend, not these retained older processes.
+owners and both draft scopes. Only the empty active backend restarted on 132;
+six retained backend records are unchanged: 129×1, 120×4, 118×1. The earlier
+replay-clock adapter fix applies to new backends, not these retained processes.
 The actual production reader matches the build-bound installation record.
 The developer session's native goal is unchanged by this update. The single-agent
 dogfood milestone remains open: full-day use, window-only lifecycle, external-terminal
-escape, Claude's active goal, native shell-command ingestion and Claude native-clock
-correlation are not certified. See the
-alpha.129–131 acceptance records in [review](review.md).
+escape, Claude's active goal, native shell-command ingestion, Claude native clocks,
+native error activation, exact footer availability and historical process gaps
+are not certified. See the
+alpha.129–132 acceptance records in [review](review.md).
 
 Local builds now use the existing named signing certificate and verify its
 certificate-bound designated requirement; a missing identity stops the build.
