@@ -4,15 +4,21 @@ As of 2026-10-29. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.126, committed source `126fc54`. The normal-visible update preserves all10 original native IDs/live process starts/owners/drafts and12 saved view drafts. The backend split is126×1(active, no live sessions),120×4,118×2. Earlier per-session mapping identifies Main and the active secretary on118. The earlier I70 refresh
-refused to retire Main when its native goal started another turn. Native identity,
-known settings and drafts were reconciled; this is a partial update, not a
-successful Main recovery or a completed dogfood milestone.
+Current daily GUI: alpha.128, committed source `b3a8d8a`. Both normal-visible
+updates preserve all10 original native IDs/live process starts/owners/drafts and12
+saved view drafts. The backend split is128×1(active, no live sessions),120×4,
+118×2. Per the earlier mapping and unchanged process identities, Main and the
+active secretary remain on118. This is a GUI update,
+not a successful Main recovery or a completed dogfood milestone.
 
-On the preceding real-work run, repository file reads stopped completing while
-native processes and the GUI remained alive. Today an owned repository probe
-passed read/write/fsync/rename/delete. The cause and behavior across the next
-upgrade remain unverified; process survival alone is not a continuity pass.
+Local builds now use the existing named signing certificate and verify its
+certificate-bound designated requirement; a missing identity stops the build.
+The first certificate update required one Desktop consent. The next real update
+kept the same requirement with a different CDHash: actual native README/Git reads
+pass, and a continuous TCC capture spanning update through cleanup shows no new
+prompt and an allowed Desktop read. This is one verified permission-continuity
+case, not a guarantee against every filesystem stall. No Full Disk Access or
+system-trust change was made.
 
 ## Current priority: a dependable single conversation
 
@@ -31,6 +37,10 @@ responses. Physical system clipboard/IME coverage is separate.
 | --- | --- | --- |
 | Address one task to an idle existing agent | Signed126/126fc54 actual312 Claude to165 Codex to312 Claude completes one original MCP roundtrip after normal sender completions; identities, live processes and the receiver draft remain unchanged. Global/per-agent off switches and bounded one-time transfer use existing controls | Fixed local responses prove protocol/control, not model judgement. Claude terminal-typed initiating turns, Codex164 MCP and retained older backends are not qualified |
 | Read native Codex local images and keep working through member changes | Signed126 checks actual pixel decode/expand/reload and current view/drafts/identities through detach/archive/restore and explicit navigation; source checks retain private/shared authority and reject changed files | Local file identity at observation, not immutable pixels previously read by a model. Claude images, physical clipboard/IME and older backend retrofit remain separate |
+| Edit and deliver a selected recipient | Signed127/b3-equivalent runtime passes atomic partial deletion, native Undo/Redo, caret reopening and8 existing delivery/queue flows; recipient/body and native identity remain exact | Source intercepted-clipboard cases are reused; physical clipboard/IME remain unqualified |
+| Continue after the native routing error | Signed127 passes4 flows: exact original error, cancel without input, one same-thread continue, and reopen without replay | Actual165 two-minute local-response evidence is reused; unrelated native errors are not silently retried |
+| Read accepted native Claude images | Signed127 and byte-identical128 receiver render original accepted pixels, retain partial-image slots and report missing caches honestly. Actual312 CLI Read produces the accepted bytes displayed by the installed GUI, with unchanged native ID/PID | Two fixed local responses prove the tool/plugin/display path, not model judgement. Default314 detected separately; native media remains unqualified there |
+| Use compact shared readers and member order | Signed127/128-equivalent runtime passes Grid/List, keyboard/menu order, ordinary owned reopening and original IDs/private/shared drafts | Source delayed-IPC/clipboard/failure evidence reused. Physical drag qualification remains open; keyboard/menu alternatives pass |
 | Continue after upgrading Codex to 0.165 | Isolated signed123/beacc47 recovers an owned mid-goal server loss on a new PID with the same thread, full objective/budget/creation time, model/provider/effort/permissions and draft; native continuation executes repository-tree file IO and completes. 143 related unit checks pass; independent integrated review passes | Exact protocol gate only; old daily backends remain unqualified until migrated. Overload auto-continue and legacy shared replies retain their older version gates. Full TUI menus and the earlier real-work file-access cause remain unverified |
 | Create sessions in separate folders | Signed122/e920cef previews each new private directory, creates it only on submit, retains files/name on collision, and keeps existing identities/drafts; unchanged folder-picker/start-failure cases reuse signed121 proof | Folder trust remains native; no OS isolation or automatic Git worktree. Existing sessions keep their original directories |
 | Resize sidebar sections and read native process groups | Six installed122 task flows pass pointer/keyboard resizing, folds, exact tool originals, native completion, manual expansion and GUI reopen with identity/draft/preferences retained; narrow/wide member notices remain readable | Synthetic native transport,0models/providers; OS clipboard, physical input and screen readers not newly certified |
