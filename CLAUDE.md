@@ -144,6 +144,15 @@ or start paid model runs as a side effect of editing documents.
 - Treat personal, financial, identity, health, customer, employer, and native
   session data as private. Use synthetic fixtures; do not reuse private research
   or real user conversations in examples, screenshots, or test artifacts.
+- Scope agent and reviewer file searches to explicit project or evidence roots.
+  Do not enumerate, scan or read other apps' containers under
+  `~/Library/Containers` or `~/Library/Group Containers`, including links into
+  them. Prune those trees before traversal; filtering results still accesses
+  them. If a task needs a specific app container, record the reason and exact
+  app/path in the private task row and obtain explicit user approval first.
+  A denied read does not authorize retries through elevated access or changes
+  to macOS privacy permissions. This instruction is not an OS access control;
+  include it in reviewer briefs and verify active clients load the updated rule.
 - Never upload private task content for analytics or error reporting by default.
 - Keep provider credentials under their native authentication mechanisms.
 - Before adding a dependency or network destination, inspect its telemetry,

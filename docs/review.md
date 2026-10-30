@@ -1202,3 +1202,20 @@ HEAD, installed version and delegation fields require separate verification;
 a checkpoint archive alone does not prove release or power-loss durability.
 Actual delegated READY merge, signed installation and return acceptance remain
 open with Main and the secretary. Whole fallback and dogfood goals remain open.
+
+### Author and reviewer filesystem search boundary
+
+An independently reviewed nine-line project rule limits file searches to explicit
+project and evidence roots. Other applications' containers, including links into
+them, must be excluded before traversal. A specific exception requires explicit
+user approval; a denied read does not authorize elevated retries or privacy changes.
+This instruction is not an OS sandbox, and existing clients loading it remains
+a separate verification. New review briefs carry the same boundary.
+
+The investigation found an earlier reviewer command that searched Library without
+pruning containers, followed by its original stop receipt. Later sandboxd attribution
+errors are a separate observation; their timestamps do not establish that command
+as the source of the photographed prompt. The accessing process and target app
+remain unknown. No container read, prompt replay, permission change, provider test
+or installed-app change is justified by this partial diagnosis. The incident stays
+open; its next checkpoint needs naturally available attribution evidence.
