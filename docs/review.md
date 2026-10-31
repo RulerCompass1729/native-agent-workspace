@@ -1565,19 +1565,27 @@ original-fork lifecycle and full-day use remain open.
 
 ### Recovery links after action relocation (2026-10-30)
 
-The existing recovery buttons moved into message headings while their always
-visible style still matched the former direct-child location. Exact released
-selectors add the heading path, preserving the original path and declarations.
-The original contrast-1.00 source failure is retained. Seven corrected source
-journeys pass, with links at 5.80 light and 12.11 dark against the unchanged 4.5
-floor. Main verifies 189 sealed artifacts and the exact two-file feature; 63
-related source checks and the build pass. Signed recovery-task acceptance and
-independent review remain pending. No new control, framework or runtime path.
+Recovery buttons moved into message headings while their always-visible style
+still matched the former direct-child location. Two existing selector lists now
+also cover that heading path, retaining the original path and declarations.
+The original source contrast-1.00 failure is retained. Main verifies the 189-file
+sealed feature; 63 related and 20 archive checks pass without skips and build.
 
-Preflight review accepts the selector scope but catches a stale failure-receipt
-function in the unrun private recipe. The corrected recipe records fake native
-counts on failure, labels its owner/deadline correctly and retains the original
-finite wait limits. Source inspection confirms archive detaches room membership
-without stopping native work, while explicit restore does not rejoin. All 20
-existing archive checks pass. The capped initial review remains a non-pass;
-corrected-recipe review and installed acceptance are still pending.
+Independent preflight review accepts the product fix and catches two unrun
+private-recipe defects: a stale failure-receipt function and an assumed retained
+recipient after successful submission clears the composer. Both are corrected;
+the recipe explicitly chooses the recipient and records positive raw draft/body
+and recipient evidence. The capped initial review remains a non-pass. The same
+reviewer accepts corrected inputs, actual signed evidence and the daily operator.
+
+Four complete signed groups pass with two synthetic identities, private results,
+explicit approval, read-only archive/restore, positive private/shared drafts and
+one process reopen. Links exceed the unchanged 4.5 contrast floor in both themes.
+Native frames are synthetic; this is not real provider permission or native-process
+recovery proof. Copy/share/notes and selected API guards reuse source evidence.
+All three owned processes, profile, endpoint and GUI lease are gone; signature
+and source/CDHash remain correct after daemon exit. The authorized ordinary
+visible alpha.145 update preserves ten original IDs, eleven live process starts,
+twelve draft scopes and the same original active goal. Six nonempty backends
+retain PID/start/version. The overall milestone, physical input, original-fork
+lifecycle, native cursor and full-day use remain open.

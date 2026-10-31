@@ -4,11 +4,20 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.145 repairs the existing recovery-link styles at their current
-message-heading location. All 63 relevant source checks pass; signed installed
-recovery acceptance and independent review remain pending. Daily stays alpha.144.
+Current daily GUI: alpha.145, committed build source `e348db4`. Existing recovery
+buttons remain readable after moving into message headings. Source checks pass
+(63 related and 20 archive checks, no skips); four signed installed groups pass.
+Directed and paused links measure 5.80 light and 12.11 dark, above the 4.5 floor.
+Private results, explicit approval, read-only archive/restore and one owned process
+reopen retain two synthetic identities, histories and private/shared drafts with
+the explicit recipient. No real provider or product inference runs. The accepted
+ordinary visible update preserves ten original IDs, eleven live process starts,
+twelve draft scopes and the same active goal. Six nonempty backends remain on
+their previous versions. Physical input, real provider permissions, native-process
+recovery, original-fork lifecycle and full-day development remain open.
 
-Current daily GUI: alpha.144, committed build source `91ef94d`. Fresh/reset
+The earlier alpha.144 build, source `91ef94d`, remains evidence for unchanged paths.
+Fresh/reset
 terminal text uses 13-point type and line height 1, preserving valid saved fonts.
 The existing theme callback covers the viewport's fit remainder. All 74 related
 source checks and four signed GUI groups pass, with 20 sampled pixels across ten

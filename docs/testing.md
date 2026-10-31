@@ -3437,11 +3437,29 @@ original active identity, objective and creation. Original-fork lifecycle and
 full-day development remain open.
 
 
-### Visible recovery actions - alpha.145 candidate
+### Visible recovery actions - alpha.145
 
-Two existing selector lists also target actions moved into message headings.
-Main integration passes 63 relevant checks without skips and builds. The sealed
-source journey passes seven groups after retaining its original contrast-1.00
-failure; directed and paused links exceed the existing 4.5 floor in both themes.
-That is source evidence, including a memory-only copy, not new installed proof.
-A bounded installed recovery task and independent review remain pending.
+Two existing selector lists cover actions moved into message headings. The 63
+related checks and 20 archive checks pass without skips; the build succeeds.
+The earlier source seven-group journey retains its original contrast-1.00 failure
+and qualifies unchanged copying, sharing and notes only at source-fixture level.
+
+Clean committed `e348db4` passes one four-group signed installed run: directed
+private-result recovery, permission pause, read-only archive/explicit restore,
+and one owned process reopen. Directed and paused links measure 5.80 light and
+12.11 dark without hover. Keyboard focus reaches the original request and one
+explicit fake approval. Two synthetic/native ID pairs, complete saved histories,
+a private draft and the exact shared mention/recipient survive restore/reopen;
+restoring the archived member does not rejoin it. The shared composer fields are
+captured while hidden after reopening, not a new visible composer walkthrough.
+Three fake sends, one fake terminal byte and one fake approval occur; no real
+provider, product inference, native CLI or OS clipboard operation runs. Three
+owned processes, profile, exact endpoint and lease are gone; post-daemon strict
+signature and source/CDHash match. Twelve PNGs are captured; four receive direct
+Main visual review. Source-only guards and unchanged copy/share/note paths retain
+their earlier limits. Independent review accepts the actual task and operator.
+
+The ordinary visible daily update preserves ten original native IDs, eleven live
+process starts, twelve view draft scopes and the same original active goal. Six
+nonempty backends retain PID/start/version. Physical input, real permissions,
+native process death/recovery, the original fork and full-day use remain open.
