@@ -1778,7 +1778,9 @@ coordinator preview, locale, OSC8 snapshot addresses, original fork lifecycle,
 full-day use, whole T53 and the shared milestone remain open.
 
 
-### Native hyperlink snapshot targets (2026-10-31 candidate)
+### Native hyperlink snapshot targets (2026-10-31)
+
+Source handoff record, before Main installed acceptance:
 
 T79 native OSC8 snapshot reconstruction and same-cell hover
 
@@ -1796,4 +1798,32 @@ Its 77 terminal plus nine distinct metadata checks and actual UI build pass.
 A static duplicate declaration in the first private port is corrected before any
 launch; a full-run setup check reaches a guarded fake-fork boundary with the
 original fingerprint and false runtime paths, creating no process or GUI. The
-signed port and installed delivery remain pending; no whole T79 or goal claim.
+fresh independent checkpoint accepts the source and one finite signed trial.
+It also checks twelve additional round-trip counterexamples. Two low findings
+remain bounded: the expansion cap counts opens but the full JSON budget catches
+closes; randomized wire IDs make snapshot bytes unsuitable for future byte-based
+deduplication. Private API/source pins require requalification on upstream change.
+
+The actual signed alpha.150 run from clean `6ef55cf` passes all four groups,
+with six exact hover URIs, eight production snapshots, seven outputs, two producer
+checkpoints, three renderer-shutdown reopens and two observer reloads. Full-cell
+digests and original identities/owners remain equal without output reinjection;
+anonymous continuation underlines exactly LABELNEXT. Main views normal-restored
+and anonymous PNGs; the reviewer reads raw/DOM evidence without viewing PNGs.
+The recipe asserts two positive drafts online; the independent signed review
+does not separately verify their values. Main IPC/OS counters are uninstrumented,
+with source proof reused rather than claimed as installed zero counters. No real
+provider or product inference runs. All 43 files match the seal; six owned
+principal/duplicate PIDs, profile, endpoint and exact token are gone before offline
+review, with strict post-daemon signature. The reviewer accepts actual scope and
+conditionally accepts the existing visible GUI/empty-backend update operator.
+
+The ordinary visible daily update retains ten native IDs, eleven live process
+starts, twelve draft scopes and settings. Separate goal reads retain the original
+UUID/objective/creation/active status; the operator does not read the goal. Six
+nonempty backends retain PID/start/version and older code. One existing registered
+app remains; own temporary app copies are gone and rollback archives remain.
+The former pending statements were accurate at source commit and are replaced
+with these actual results. No whole T79, original lifecycle, full-day or shared
+goal claim is made; the source boundaries above remain open beyond this signed
+synthetic integration. Existing native sessions do not yet load this serializer.

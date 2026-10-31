@@ -3601,7 +3601,7 @@ gate's initial null-versus-absent-field error is corrected against the same raw
 result, without another GUI run. The shared milestone remains open.
 
 
-### Native hyperlink snapshots - alpha.150 candidate
+### Native hyperlink snapshots - alpha.150
 
 Seventy-seven affected terminal checks and nine distinct build-info checks total
 86 passes without skips. The actual UI builds. Three original snapshot writers,
@@ -3616,7 +3616,27 @@ full-cell URI/group/style/cursor digests, eight snapshots, seven output frames,
 three owned close/activate reopens and two observer reloads. One failed earlier
 whole trial remains. The final test-only change follows that GUI without changing
 production or its four recipes. Main's finite signed port uses renderer-only CDP
-and three renderer-shutdown/duplicate-launch reopens; actual integration is pending.
-No provider inference or real native producer is planned. Row resizing does not
-qualify the separately open column-reflow cursor defect. Existing old backends,
-physical/default-viewer behavior and full T79 remain unqualified.
+and three renderer-shutdown/duplicate-launch reopens.
+
+The fresh signed integration passes all four groups: six real hover targets,
+eight production snapshots, seven output frames, output and row-resize producer
+checkpoints, and two observer reloads. Canonical full-cell digests match before,
+during and after hover; the anonymous continued underline is exactly LABELNEXT.
+Reconstruction injects no output. All 43 raw files match their seal. Six owned
+principal/duplicate PIDs, profile and endpoint are gone; the exact slot is released
+before offline work, and strict signature is checked after daemon exit. Main
+views two relevant PNGs. The reviewer reads raw/DOM evidence, not PNGs. The recipe
+asserts positive drafts online; the independent signed review does not separately
+verify their values. Main IPC/OS counters are not instrumented; source guards
+are reused, with actual renderer requests/dialogs and fake commands checked.
+No real provider, native CLI, product inference or OS clipboard is used.
+
+The ordinary visible alpha.150 update from clean `6ef55cf` retains ten original
+IDs, eleven live process starts, twelve view/draft scopes and native settings.
+Separate before/after goal reads retain the original UUID, objective, creation and
+active status; the operator does not read that goal. Six nonempty backends retain
+PID/start/version and their older serializer. One existing registered app remains;
+own candidate/rollback app copies are gone, with rollback archives retained.
+Row resizing does not qualify the separately open column-reflow cursor defect.
+Saved-pen, stationary-hover, real-native-producer, physical/default-viewer and
+original-fork/full-day/shared-goal requirements remain open. Full T79 is not done.
