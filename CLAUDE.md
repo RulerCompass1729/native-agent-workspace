@@ -65,8 +65,10 @@ or start paid model runs as a side effect of editing documents.
 
   ```sh
   claude -p --session-id "$NAW_REVIEW_ID" --model fable \
-    --permission-mode bypassPermissions --output-format json \
-    --disallowedTools Edit Write NotebookEdit "Bash(git commit *)" "Bash(git push *)" \
+    --permission-mode bypassPermissions --output-format stream-json --verbose \
+    --tools "Read,Grep,Glob" --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+    --disallowedTools Bash Agent Task Skill Workflow ToolSearch ScheduleWakeup \
+      ListAgents ReportFindings Edit Write NotebookEdit \
     < "$BRIEF" > "$OUT" 2> "$OUT.err"
   ```
 
@@ -76,10 +78,16 @@ or start paid model runs as a side effect of editing documents.
   default. For the next few checkpoints, retain the reported cost and findings
   to check this choice. A nonzero exit or `"is_error": true` is not a pass.
   Give the reviewer the scope, commit range and raw
-  evidence paths, not your verdict. It may run existing no-model checks
-  (rebuilding gitignored output is fine) and write scratch files only outside
-  the repository; confirm `git rev-parse HEAD` and `git status --porcelain` are
-  unchanged after each review. Reproduce and record its findings in
+  evidence paths, not your verdict. Expose only Read, Grep and Glob, with
+  no MCP servers, and explicitly deny non-read tools. Verify the CLI initialization
+  tool inventory for each invocation; stop if it differs. A fresh session may be
+  needed after changing tool scope. The reviewer cannot run shell commands, write files or clean
+  temporary directories. Main runs any requested bounded no-model probe and
+  returns its complete output; label that author-run evidence distinctly from
+  an independent rerun. This restriction follows an actual reviewer deletion
+  of unrelated temporary files. Never identify ownership by a filename or sweep
+  a temporary-directory wildcard. Confirm that HEAD, the index and the worktree
+  remain unchanged after each review. Reproduce and record its findings in
   `docs/review.md`, fix them, then send only the delta to the same session. If
   Claude is unavailable, keep the checkpoint open rather than self-approving.
   Reuse relevant evidence and avoid frequent handoffs.

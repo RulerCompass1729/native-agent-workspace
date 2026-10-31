@@ -31,7 +31,16 @@ function createTerminalSerializeAddon() {
     if (source.split(marker).length !== 2) throw Error('Unqualified serializer boundary');
     const Module = require('node:module'), isolated = new Module(file, module);
     isolated.filename = file; isolated.paths = Module._nodeModulePaths(path.dirname(file));
-    isolated._compile(source.replace(marker, marker + ';(' + installLinks.toString() + ')(u,t.SerializeAddon);'), file);
+    // A zero C/D distance means one column; omit it when no move is needed.
+    let snapshotSource = source;
+    for (const [before, after] of [
+      ["s+=`\u001b[${e.length-this._nullCellCount}C`", "e.length>this._nullCellCount&&(s+=`\u001b[${e.length-this._nullCellCount}C`)"],
+      ["s+=`\u001b[${e.length-this._nullCellCount}D`", "e.length>this._nullCellCount&&(s+=`\u001b[${e.length-this._nullCellCount}D`)"]
+    ]) {
+      if (snapshotSource.split(before).length !== 2) throw Error('Unqualified serializer cursor boundary');
+      snapshotSource = snapshotSource.replace(before, after);
+    }
+    isolated._compile(snapshotSource.replace(marker, marker + ';(' + installLinks.toString() + ')(u,t.SerializeAddon);'), file);
     Candidate = isolated.exports.SerializeAddon;
   } catch {
     // Preserve service availability; the build and semantic tests reject this
@@ -61,6 +70,13 @@ function createTerminalSerializeAddon() {
     let context;
     const serialize = Addon.prototype.serialize, next = Handler.prototype._nextCell;
     const diff = Handler.prototype._diffStyle, rowEnd = Handler.prototype._rowEnd;
+    // Correct a relative move from pending wrap; preserve other cursor bytes.
+    const format = Handler.prototype._serializeString;
+    Handler.prototype._serializeString = function (excludeFinalCursorPosition) {
+      const content = format.call(this, excludeFinalCursorPosition), x = this._buffer.cursorX;
+      if (excludeFinalCursorPosition || x >= this._terminal.cols || this._lastCursorCol < this._terminal.cols || this._terminal.modes.originMode) return content;
+      return content + "\u001b[" + (this._buffer.cursorY + 1) + ';' + (x + 1) + 'H';
+    };
     const close = '\x1b]8;;\x1b\\';
     const osc = (id, data) => {
       // Anonymous links need a snapshot-local wire id to preserve grouping

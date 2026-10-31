@@ -3744,3 +3744,27 @@ this is not Spotlight or physical search. Temporary app copies are gone and
 rollback archives remain. Initial wide snapshots, saved pen, owner echo transients,
 old/native producers, physical input, original lifecycle, full-day use, whole T77
 and the shared goal remain open.
+
+
+### Native observation and list identity - alpha.154 candidate
+
+One hundred seventy-eight affected terminal, collaboration, sidebar, build-info
+and scratch checks pass without skips, and the UI builds. Ten added snapshot
+checks cover actual producer and two journal checkpoint writers, continuation,
+styled links, erased lines, alternate history, pending margins and qualified
+fallbacks. Historical lane full-suite runs retain one old census failure; this
+does not establish a current full-suite pass.
+
+The list-name source handoff has passing settled name/anchor core checks but an
+incomplete whole GUI regression: its old control was ineffective. The corrected
+inline control and final Grid/list/four-reader stages were not run there. Main
+signed acceptance must cover the whole path before delivery.
+
+The new GUI entry's raw-result write could skip cleanup. Three existing finalizer
+outcomes pass and the write-failure control fails with zero cleanup calls; a
+minimal try/finally guard makes all four pass. These execute the actual finalizer
+with controlled filesystem/lease outcomes, not the whole GUI. The initial check
+omitted its VM import and is retained as an invalid non-pass. The old allocator
+census remains heuristic; the new alias-based entry has explicit regression
+coverage. Signed integration, original native lifecycle and the shared goal remain
+open; no mobile candidate is included.

@@ -93,6 +93,8 @@
 .compact-room-surface .collaboration-member-name::after{flex:none}
 .compact-room-surface .collaboration-member-name.is-revealed{flex-wrap:wrap;white-space:normal}
 .compact-room-surface .collaboration-member-name.is-revealed .collaboration-name-text{flex-basis:100%;overflow:visible;overflow-wrap:anywhere}
+/* Let a revealed list name and its identity suffix share the same text flow. */
+.compact-room-surface .collaboration-overview[data-list-units="true"] .collaboration-member-name.is-revealed{display:block}
 .compact-room-surface .collaboration-member-more{min-height:18px;padding:0 4px;line-height:16px}
 .compact-room-surface .collaboration-member-state{font-size:11px;line-height:16px}
 .compact-room-surface .collaboration-member-child-compact:not(:empty){display:inline;font-size:11px;line-height:16px;color:var(--muted)}
