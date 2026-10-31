@@ -128,8 +128,11 @@ function saveReading(view, position) {
   else delete position.folds;
   readingPositions[view.key] = position;
   // Bound metadata even when old sessions have been removed or archived.
-  const keys = Object.keys(readingPositions);
-  for (const key of keys.slice(0, Math.max(0, keys.length - 128))) delete readingPositions[key];
+  if (window.nativeWorkspacePanorama) readingPositions = window.nativeWorkspacePanorama.pruneReading(readingPositions, activeReturnReadingKeys());
+  else {
+    const keys = Object.keys(readingPositions);
+    for (const key of keys.slice(0, Math.max(0, keys.length - 128))) delete readingPositions[key];
+  }
 }
 function captureReading(view) {
   const el = view.el;

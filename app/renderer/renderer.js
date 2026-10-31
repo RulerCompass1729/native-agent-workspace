@@ -22,6 +22,8 @@ let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPr
 let latestViewStorage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSurface = 'overview', roomOverview;
+let panorama, panoramaOrigin, roomReturnReading;
+let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', sidebarSpaceFilter = '', hoverSpace = '';
 let roomViews = Object.create(null);
 const roomHistories = new Map(), spaceRows = new Map(), sidebarGroups = new Map();
@@ -354,6 +356,11 @@ function orderedMembers(id = spaceId) {
 }
 function focusRoomMember(id, previous, originKey) {
   if (selected !== 'room' || id && !members().some(s => s.id === id)) return;
+  if (id && !previous && readingPositions[originKey]) roomReturnReading = { spaceId, key: originKey, position: structuredClone(readingPositions[originKey]) };
+  if (!id && roomReturnReading?.spaceId === spaceId) {
+    readingPositions[roomReturnReading.key] = structuredClone(roomReturnReading.position);
+    roomReturnReading = null;
+  }
   const leaving = terminals.get(activeSessionId()); cancelViewInput(leaving);
   if (leaving?.composing) leaving.term.blur();
   selectionRevision++;
@@ -361,6 +368,55 @@ function focusRoomMember(id, previous, originKey) {
   roomSurface = 'overview'; roomSession = id; mode = 'chat';
   activateSoloComposer(id);
   lastMessages = ''; render(); attempt(persistView);
+}
+function activeReturnReadingKeys() {
+  const keys = [];
+  if (selected === 'panorama' || panoramaView.returning) keys.push('panorama');
+  if (selected === 'room' && roomSession && roomReturnReading?.spaceId === spaceId) keys.push(roomReturnReading.key);
+  return keys;
+}
+function rememberPanoramaOrigin() {
+  panoramaOrigin = panorama.captureOrigin();
+  panoramaView = { ...panoramaOrigin.view, focusId: panoramaOrigin.focusId, returning: true };
+}
+async function openPanorama() {
+  if (panoramaView.returning) return returnToPanorama();
+  roomReturnReading = null;
+  return select('panorama', 'chat', roomSession, true);
+}
+async function returnToPanorama() {
+  const point = panoramaOrigin || { view: { ...panoramaView }, focusId: panoramaView.focusId || '' };
+  panoramaView.returning = false;
+  await select('panorama', 'chat', roomSession, true);
+  panorama.restoreOrigin(point);
+  panoramaOrigin = null;
+  await persistView();
+}
+function renderPanorama() {
+  if (!panorama) panorama = window.nativeWorkspacePanorama.create({
+    host: $('panorama-view'), view: panoramaView,
+    label: s => participantLabel(s, state.sessions),
+    onChange: next => {
+      if (selected !== 'panorama' || panoramaView.returning) return;
+      panoramaView = { ...next, returning: false };
+      readingPositions.panorama = { top: next.top, follow: false, anchor: '', offset: 0 };
+      readingPositions = window.nativeWorkspacePanorama.pruneReading(readingPositions, activeReturnReadingKeys());
+      attempt(() => api.readingState(readingPositions, panoramaView));
+    },
+    onSession: (id, source) => attempt(async () => {
+      const record = state.sessions.find(s => s.id === id && !s.archived);
+      if (!record) throw Error('原会话已不可用，没有改为打开同名会话。');
+      rememberPanoramaOrigin();
+      await select(id, 'chat', roomSession, true);
+      if (source && !pointToMessage($('messages'), id, source.messageId)) toast('原文已不在当前保留记录中，没有打开其他消息。');
+    }),
+    onSpace: id => attempt(async () => {
+      if (!spaceRecord(id) || spaceRecord(id).archived) throw Error('原空间已不可用，没有改为打开其他空间。');
+      rememberPanoramaOrigin(); await selectSpace(id);
+    }),
+    onReadingLost: () => toast('原文已变化，原选区没有替换成其他内容。'),
+  });
+  panorama.update(state, !disconnected);
 }
 function restoreOverviewReading() {
   for (const view of messageViews.values()) {
@@ -647,7 +703,7 @@ function projectSpace(next) {
     return { ...s, peerIdentity: { ...identity, ...(spaceId === 'shared' ? {} : { roomId: spaceId, roomMemberRevision: pairRevision(s) }) }, sharedActivity: s.sharedActivities?.[spaceId] || (spaceId === 'shared' ? s.sharedActivity : null) };
   }), room: room || { id: spaceId, name: '空间资料未能读取', archived: true, unavailable: true, messages: [], events: [], notes: '', files: [], memberOrder: [] } };
 }
-function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarSpaceFilter, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
+function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarSpaceFilter, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 async function selectSpace(id, filter = false) {
   if (!spaceRecord(id)) throw Error('这个空间的资料尚不可用，草稿保留。');
   if (filter) sidebarSpaceFilter = sidebarSpaceFilter === id ? '' : id;
@@ -810,7 +866,7 @@ function openSpaceRegionMenu(point, anchor = $('new-space')) {
   roomMenu = ui.menu({ items: [{ id: 'create', label: '新建协作空间…' }, { id: 'merge', label: '合并协作空间…', disabled: allSpaces().filter(room => !room.archived).length < 2 }], getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(), onSelect: action => action === 'merge' ? openSpaceMerge() : openSpaceCreate(), onClose: () => { roomMenu = null; if (anchor.isConnected) anchor.focus({ preventScroll: true }); } });
 }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
-async function select(id, requestedMode, member = roomSession) {
+async function select(id, requestedMode, member = roomSession, passive = false) {
   captureReadingViews(); suspendColumnInputs();
   const revision = ++selectionRevision;
   const leaving = terminals.get(activeSessionId());
@@ -832,7 +888,7 @@ async function select(id, requestedMode, member = roomSession) {
     if (row.top < viewport.top) list.scrollTop -= viewport.top - row.top;
     else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
   }
-  if (mode === 'chat' && !chatInput().readOnly && inputFocusAllowed()) chatInput().focus();
+  if (!passive && mode === 'chat' && !chatInput().readOnly && inputFocusAllowed()) chatInput().focus();
   if (s && mode === 'terminal' && (switchedAway(s) || !['ended', 'background', 'stopping', 'disconnected', 'recoverable'].includes(s.state))) attempt(async () => { await ensureTerminal(s.id, true); focusTerminal(s.id); });
   if (selected === 'room' && mode === 'terminal' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {
     const revision = selectionRevision;
@@ -2259,6 +2315,7 @@ const nativeActivityClock = setInterval(() => {
   if (!state) return;
   renderNativeActivity(current());
   if (selected === 'room') roomOverview?.refresh();
+  if (selected === 'panorama') panorama?.refresh();
   if (state.sessions.some(s => s.sharedActivity && !nativeStatusFresh(s.sharedActivity) || s.nativeApproval && !nativeStatusFresh(s.nativeApproval))) render();
 }, 1000);
 function render() {
@@ -2275,7 +2332,7 @@ function render() {
       removedRoomFocus = { origin: document.activeElement, index: cards.findIndex(el => el.dataset.memberId === id) };
       focusRoomMember('', id, roomOverview?.key(id));
     }
-    const s = current(); const inRoom = selected === 'room', memberFocus = focusedRoomMember();
+    const s = current(); const inRoom = selected === 'room', memberFocus = focusedRoomMember(), inPanorama = selected === 'panorama';
     activateSoloComposer(s?.id);
     if (!inRoom) for (const binding of sessionComposers.values()) if (binding.column && binding.visible) removeColumnInput(binding.id);
     const slot = inRoom ? $('room-session') : $('solo-session');
@@ -2296,7 +2353,11 @@ function render() {
     $('chat-tab').parentElement.hidden = inRoom && !memberFocus;
     $('session-files').hidden = inRoom && !memberFocus;
     document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
-    $('welcome').hidden = Boolean(s || inRoom); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
+    $('welcome').hidden = Boolean(s || inRoom || inPanorama); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
+    $('panorama-view').hidden = !inPanorama;
+    $('panorama-nav').classList.toggle('active', inPanorama);
+    $('panorama-nav').setAttribute('aria-pressed', String(inPanorama));
+    $('return-panorama').hidden = !panoramaView.returning || inPanorama;
     $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
     const warning = [disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' '), state.viewStorageWarning].filter(Boolean).join(' ');
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
@@ -2310,6 +2371,11 @@ function render() {
       if (record) entry.textContent = `加入 ${participantLabel(record, state.sessions)}`;
     }
     renderHeader(s, inRoom);
+    if (inPanorama || panoramaView.returning) renderPanorama();
+    if (inPanorama) {
+      $('title').textContent = '全部空间'; $('subtitle').textContent = '';
+      document.title = '全部空间 — Native Agent Workspace';
+    }
     if (!s) renderNativeActivity(null);
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
@@ -2894,6 +2960,8 @@ $('workspace-toggle').addEventListener('keydown', event => { if (event.key === '
 for (const [id, view] of [['sessions-flat', 'flat'], ['sessions-grouped', 'grouped']]) $(id).onclick = () => { sidebarView = view; sessionMenu?.close(); render(); attempt(persistView); $(id).focus(); };
 $('clear-space-filter').onclick = () => { sidebarSpaceFilter = ''; render(); attempt(persistView); $('sessions-flat').focus(); };
 $('room-nav').onclick = () => attempt(() => selectSpace('shared', true));
+$('panorama-nav').onclick = () => attempt(openPanorama);
+$('return-panorama').onclick = () => attempt(returnToPanorama);
 $('room-more').onclick = () => openRoomMenu(undefined, $('room-more'), 'shared');
 $('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
 $('room-nav').oncontextmenu = event => { event.preventDefault(); event.stopPropagation(); openRoomMenu({ x: event.clientX, y: event.clientY }, $('room-more'), 'shared'); };
@@ -3410,6 +3478,7 @@ attempt(async () => {
   terminalLayout = ['hidden', 'split', 'maximized'].includes(state.viewState.terminalLayout) ? state.viewState.terminalLayout : 'split';
   terminalSplit = Number.isFinite(state.viewState.terminalSplit) && state.viewState.terminalSplit >= 0.2 && state.viewState.terminalSplit <= 0.8 ? state.viewState.terminalSplit : 0.5; applySplit();
   readingPositions = state.viewState.readingPositions || {};
+  if (state.viewState.panorama) panoramaView = structuredClone(state.viewState.panorama);
   roomSession = typeof savedRoomView.roomSession === 'string' ? savedRoomView.roomSession : '';
   const display = state.viewState.terminalDisplay;
   if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;

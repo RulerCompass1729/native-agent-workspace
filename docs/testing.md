@@ -3554,3 +3554,18 @@ their files remain. Spotlight returned no result and supplies no separate proof.
 OSC8 addresses still disappear after snapshot reconstruction. Actual old binaries,
 physical focus/blink, iTerm parity, ordinary-close geometry, original fork lifecycle,
 full-day use, full T77 and the shared milestone remain unqualified by this batch.
+
+
+### Cross-space panorama - alpha.149 candidate
+
+Eighty-five affected no-model checks pass without skips, covering panorama and
+member projections, reading metadata, views/drafts, source records, capacity
+notification initialization and terminal cursor/background build repairs. The UI
+build passes. An adjacent initialization conflict retains the current notification
+handler and adds only the released reading-state/panorama handler. Existing
+source evidence passes five groups with 100 synthetic sessions, ten spaces and
+118 memberships. It is not installed or real-fleet evidence. The finite signed
+port preserves those five user paths and uses renderer-only CDP with two owned
+GUI starts. Main IPC/WCP/OS guard instrumentation is unavailable there; source
+refusal evidence is reused and fake-backend counters/identities are checked.
+Current installed results remain pending. No real provider inference is planned.

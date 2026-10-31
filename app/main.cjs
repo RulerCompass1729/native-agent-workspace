@@ -572,7 +572,14 @@ async function boot() {
     notifyCapacity(display, c.win);
     return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, preflight: preflight() };
   });
-  register('readingState', (c, positions) => { c.view.readingPositions = readingState(positions); return saveReadingSoon(); });
+  register('readingState', (c, positions, panorama) => {
+    const checked = readingState(positions);
+    if (panorama !== undefined && !validViews([{ owner: c.view.owner, panorama }])) throw Error('全景阅读记录无效；原记录已保留。');
+    const presentation = panorama === undefined ? undefined : structuredClone(panorama);
+    c.view.readingPositions = checked;
+    if (presentation !== undefined) c.view.panorama = presentation;
+    return saveReadingSoon();
+  });
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
     if (next.terminalLayout !== undefined && !['hidden', 'split', 'maximized'].includes(next.terminalLayout)) throw new Error('无效终端布局。');
@@ -586,7 +593,7 @@ async function boot() {
     if (next.roomMention !== undefined && next.roomMention !== null && !require('./room-mention.js').validView(next.roomMention, next.sharedDraft, next.roomRecipient)) throw new Error('无效协作提及。');
     if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw new Error('无效终端显示设置。');
     if (!validViews([{ ...c.view, ...next }])) throw Error('空间界面记录无效；草稿没有覆盖。');
-    for (const key of ['spaceId', 'sidebarView', 'sidebarSpaceFilter', 'roomViews']) if (next[key] !== undefined) c.view[key] = structuredClone(next[key]);
+    for (const key of ['spaceId', 'sidebarView', 'sidebarSpaceFilter', 'roomViews', 'panorama']) if (next[key] !== undefined) c.view[key] = structuredClone(next[key]);
     // Retained UI rollback must still see only the original shared draft.
     if (next.roomViews) for (const key of ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo']) next[key] = next.roomViews.shared?.[key] ?? (key === 'roomMention' ? null : '');
     const positions = next.readingPositions === undefined ? undefined : readingState(next.readingPositions);

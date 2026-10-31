@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="collaboration-overview.css">
+  <link rel="stylesheet" href="collaboration-panorama.css">
   <link rel="stylesheet" href="sidebar-layout.css">
 </head>
 <body>
@@ -25,6 +26,7 @@
       <section class="sidebar-group" id="workspace-group" aria-labelledby="workspace-group-label">
         <h2 class="nav-label"><button id="workspace-toggle" class="group-toggle" type="button" aria-expanded="true" aria-controls="workspace-group-body"><span class="group-chevron" aria-hidden="true">▾</span><span id="workspace-group-label">协作空间</span><small id="workspace-group-summary"></small></button></h2>
         <div id="workspace-group-body" class="sidebar-group-body">
+        <button id="panorama-nav" class="room-nav" type="button" aria-label="全部协作空间" title="全部协作空间"><span class="rail-icon" aria-hidden="true">◎</span><span class="rail-label">全部空间</span></button>
         <button id="new-space" class="subtle" type="button" aria-label="新建协作空间">＋ 新建空间</button>
         <div class="room-row"><button class="room-nav" id="room-nav" aria-label="共同工作" title="共同工作"><span class="rail-icon" aria-hidden="true">◉</span><span class="rail-label" id="room-nav-name">◉ 共同工作</span><span id="member-count">0</span></button><button id="room-more" class="session-more" aria-label="工作区操作" aria-haspopup="menu" aria-expanded="false">⋯</button></div>
         <p class="drop-hint">拖入空间会加入 · 原空间归属保留</p>
@@ -49,6 +51,8 @@
     <button id="reconnect-button" hidden>重新连接本机服务</button>
     <button id="retry-save" hidden>重试保存</button>
     <button id="return-reading" class="reading-return subtle" hidden>返回查找前的位置</button>
+    <button id="return-panorama" class="reading-return subtle" type="button" hidden>← 返回全部空间</button>
+    <section id="panorama-view" aria-label="全部空间的成员与工作" hidden></section>
     <section id="welcome">
       <div class="welcome-icon" aria-hidden="true">◒</div><p class="eyebrow">按你的方式工作</p><h2>一个人提问，<br>也可以一起完成。</h2>
       <p class="welcome-copy">Claude 和 Codex 各自保留原来的会话。<br>需要协作时，再选择分享什么。</p>
@@ -141,6 +145,7 @@
   <script src="search-view.js"></script>
   <script src="session-composer.js"></script>
   <script src="collaboration-overview.js"></script>
+  <script src="collaboration-panorama.js"></script>
   <script src="sidebar-layout.js"></script>
   <script src="renderer.js"></script>
 </body>
