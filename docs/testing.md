@@ -3640,3 +3640,15 @@ own candidate/rollback app copies are gone, with rollback archives retained.
 Row resizing does not qualify the separately open column-reflow cursor defect.
 Saved-pen, stationary-hover, real-native-producer, physical/default-viewer and
 original-fork/full-day/shared-goal requirements remain open. Full T79 is not done.
+
+
+### Selected-space collaboration background - alpha.151 candidate
+
+Eighty-six related no-model checks pass without skips, and the actual integrated
+UI builds. Module, actual extracted handlers, existing dialog lifecycle, mention,
+view/draft and current panorama behavior are covered. The exact seven-file source
+release preserves current cursor/link/panorama work. Its source GUI passes six
+synthetic groups with three sessions, three spaces and five memberships. Main's
+finite signed integration is pending. The signed plan reuses two source
+intercepted-copy cases and checks exact preview/copy-only controls without
+invoking OS clipboard. It makes no signed Main IPC/OS zero-counter claim.

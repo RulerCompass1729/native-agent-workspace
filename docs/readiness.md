@@ -4,6 +4,14 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.151 extends the existing editable collaboration background to
+explicitly selected spaces. Original selected shared notes and bounded membership/
+status facts can be reviewed and appended to the existing draft; editing freezes
+scope and combined-limit refusal preserves both edits. Private histories, native
+drafts and unselected space text are excluded. Eighty-six related checks and the
+UI build pass; signed acceptance is pending. Daily remains alpha.150. Native-fleet,
+physical and full collaboration/dogfood requirements remain open.
+
 Current daily GUI: alpha.150, committed build source `6ef55cf`. Native OSC8
 targets survive ordinary snapshots and output/row-resize checkpoints through an
 isolated, pinned serializer extension. Eighty-six affected checks, the UI build

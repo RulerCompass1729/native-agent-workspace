@@ -19,7 +19,7 @@ const palette = css.match(/:root\{([^}]*)\}/)[1];
 css = css.replace(/:root\{[^}]*\}/, '').replace(/body\{[^}]*\}/, '');
 css = `.naw{${palette};font-size:14px;height:100%;min-height:0;overflow:hidden;${css}}\n.naw>.sidebar{width:100%;height:100%}.naw>main{height:100%}`;
 const bootstrap = read('app/dsh/bootstrap.js');
-const renderer = read('app/collaboration-spaces.cjs') + '\n' + read('app/room-mention.js') + '\n' + read('app/native-usage.js') + '\n' + read('app/room-threads.js') + '\n' + read('app/approval-policy.js') + '\n' + ['sidebar-layout.js', 'fleet-observation.js', 'local-search.js', 'native-images.js', 'reading-list.js', 'search-view.js', 'session-composer.js', 'collaboration-overview.js', 'collaboration-panorama.js', 'context-menu.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
+const renderer = read('app/collaboration-spaces.cjs') + '\n' + read('app/room-mention.js') + '\n' + read('app/native-usage.js') + '\n' + read('app/room-threads.js') + '\n' + read('app/approval-policy.js') + '\n' + ['sidebar-layout.js', 'fleet-observation.js', 'local-search.js', 'native-images.js', 'reading-list.js', 'search-view.js', 'session-composer.js', 'collaboration-overview.js', 'coordinator-context.js', 'collaboration-panorama.js', 'context-menu.js', 'renderer.js'].map(name => read(`app/renderer/${name}`)).join('\n');
 const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\n*/\n${read(`node_modules/${name}/${entry}`)}`;
 // xterm 6.0 keeps wider alternate-screen backing cells when columns shrink.
 // DomRendererRowFactory must stop at the active grid, including link-hover

@@ -1816,14 +1816,50 @@ function openNotes(id = spaceId) {
   $('room-notes-text').value = room.notes || ''; $('notes-heading').textContent = `共享笔记 · ${room.name}`; $('notes-error').hidden = true; $('save-notes').disabled = false;
   const ticket = openTransientDialog('notes-dialog'); ticket.roomId = id;
 }
+let contextSnapshot = null;
+function contextEdited() { return Boolean(contextSnapshot && $('context-text').value && $('context-text').value !== contextSnapshot.text); }
+function contextProblem(text) { $('context-error').textContent = text; $('context-error').hidden = false; }
+function updateContextControls() {
+  const text = $('context-text').value, edited = contextEdited();
+  $('context-spaces').disabled = edited;
+  $('context-scope-note').textContent = edited ? '这份背景已编辑，空间选择已固定。内容仍可继续修改；加入草稿或取消后可重新选择。' : '';
+  $('context-scope-note').hidden = !edited;
+  $('context-text').disabled = !contextSnapshot;
+  const unavailable = !contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed();
+  $('copy-context').disabled = unavailable; $('insert-context').disabled = unavailable;
+}
+function generateContextPreview() {
+  if (contextEdited()) {
+    for (const check of $('context-space-choices').querySelectorAll('input')) check.checked = contextSnapshot.spaceIds.includes(check.dataset.contextSpace);
+    updateContextControls(); return;
+  }
+  const ids = [...$('context-space-choices').querySelectorAll('input:checked')].map(check => check.dataset.contextSpace);
+  try {
+    contextSnapshot = window.nativeWorkspaceContextSnapshot.build(state, ids, { connected: !disconnected });
+    $('context-text').value = contextSnapshot.text;
+    $('context-error').textContent = ''; $('context-error').hidden = true;
+  } catch (error) {
+    contextSnapshot = null; $('context-text').value = ''; contextProblem(error.message || '背景快照未生成。');
+  }
+  updateContextControls();
+}
 function openContext() {
+  if ($('context-dialog').open) { $('context-text').focus(); return; }
   const s = sharedSurface() ? null : current();
   contextTarget = s ? { id: s.id, mode } : { room: true, roomId: spaceId };
-  const roster = members().map(m => `${m.name} (${m.provider}, ${sessionShortId(m.id)})`).join('、') || '暂无成员';
-  $('context-text').value = `协作背景：${state.room.name}\n当前参与会话：${roster}\n${s ? (inSpace(s) ? `本会话仍参与该工作区。` : '本会话已独立使用，不再接收该工作区的新任务。') : '本条消息仅交给界面选定的接收者；其他成员不会自动收到。'}\n以真人当前指示为准，成员变化不代表新的执行指令。${state.room.notes ? `\n\n共享笔记：\n${state.room.notes}` : ''}`;
+  contextSnapshot = null;
+  const rooms = allSpaces().filter(room => !room.archived && !room.unavailable);
+  $('context-space-choices').replaceChildren(...rooms.map(room => {
+    const row = node('div', undefined, 'run-person'), label = node('label'), check = document.createElement('input');
+    check.type = 'checkbox'; check.dataset.contextSpace = room.id; check.checked = room.id === spaceId;
+    const duplicate = rooms.some(other => other.id !== room.id && other.name === room.name);
+    label.append(check, document.createTextNode(room.name + (duplicate ? ' · ' + room.id : '')));
+    check.onchange = generateContextPreview; row.append(label); return row;
+  }));
   // Solo drafts are owned by the native session's active window. Copying lets
   // the person paste into that window without racing a concurrent takeover.
   $('context-error').hidden = true; $('insert-context').hidden = Boolean(s);
+  generateContextPreview();
   openTransientDialog('context-dialog');
 }
 function appendedDraft(input, text, room) {
@@ -3309,12 +3345,18 @@ $('notes-form').onsubmit = async event => {
   } finally { if (currentDialogTicket(ticket)) $('save-notes').disabled = false; }
 };
 $('attach-context').onclick = () => { $('room-advanced').open = false; openContext(); }; $('close-context').onclick = () => $('context-dialog').close();
-$('copy-context').onclick = () => attempt(async () => { await api.copy($('context-text').value); toast('已复制，尚未发送给 agent。'); });
+$('context-text').addEventListener('input', updateContextControls);
+$('copy-context').onclick = () => attempt(async () => {
+  const text = $('context-text').value;
+  if (!contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed()) return contextProblem('请先核对背景文字与所选空间。');
+  await api.copy(text); toast('已复制，尚未发送给 agent。');
+});
 $('insert-context').onclick = () => attempt(async () => {
   const ticket = dialogTickets.get($('context-dialog')), revision = selectionRevision;
   if (!currentDialogTicket(ticket)) return;
   const target = contextTarget, text = $('context-text').value;
-  if (!target?.room || target.roomId !== spaceId || selected !== 'room') throw Error('当前视图已变化，请重新打开协作背景。');
+  if (!contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed()) return contextProblem('请先核对背景文字与所选空间。');
+  if (!target?.room || target.roomId !== spaceId || selected !== 'room') return contextProblem('当前视图已变化，请重新打开协作背景。');
   const input = $('shared-input');
   const next = appendedDraft(input, text, true);
   if (next.length > 16000) { $('context-error').textContent = '合并后的草稿超过 16000 字符，请先缩短。'; $('context-error').hidden = false; return; }
@@ -3448,7 +3490,11 @@ for (const dialog of document.querySelectorAll('dialog')) {
     } else if (dialog.id === 'notes-dialog') {
       $('room-notes-text').value = ''; $('notes-error').textContent = ''; $('notes-error').hidden = true;
     } else if (dialog.id === 'context-dialog') {
-      contextTarget = null; $('context-text').value = ''; $('context-error').textContent = ''; $('context-error').hidden = true;
+      contextTarget = null; contextSnapshot = null;
+      $('context-space-choices').replaceChildren(); $('context-spaces').disabled = false;
+      $('context-scope-note').textContent = ''; $('context-scope-note').hidden = true;
+      $('context-text').value = ''; $('context-text').disabled = false; $('context-error').textContent = ''; $('context-error').hidden = true;
+      $('copy-context').disabled = false; $('insert-context').disabled = false;
     } else if (dialog.id === 'run-dialog') {
       runPreview = null; $('run-consent').checked = false; $('confirm-run').disabled = true;
       $('run-mode').value = 'replies'; $('run-limit').value = '3'; $('run-participants').replaceChildren();
