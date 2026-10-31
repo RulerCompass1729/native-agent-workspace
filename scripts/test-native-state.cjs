@@ -134,9 +134,12 @@ async function run(){
  console.log(JSON.stringify({checks,errors,providerCalls:0,dispatches:1,profile},null,2));
 }
 const cleanup=testScratch.cleanup(async()=>{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close();}else if(child.exitCode===null)child.kill('SIGTERM');if(child.connected)child.disconnect();await until(()=>child.exitCode!==null,'Owned fixture exits');});
-run().catch(async e=>{failure=e.stack;console.error(failure);process.exitCode=1;await capture('failed').catch(()=>{});}).finally(async()=>{
- fs.mkdirSync(evidence,{recursive:true});
- fs.writeFileSync(path.join(evidence,'result.json'),JSON.stringify({checks,failure,errors,profile,ownedNodePid:child.pid,ownedGuiPids:guiPids,guards:guardSamples,currentGuards:app?await app.evaluate(()=>globalThis.stateGuards).catch(()=>null):null,fixture:child.connected?await fixture('stats').catch(()=>null):null},null,2));
- await cleanup();assert.equal(JSON.parse(fs.readFileSync(path.join(slot,'owner.json'))).token,token);fs.unlinkSync(path.join(slot,'owner.json'));fs.rmdirSync(slot);
- fs.writeFileSync(path.join(evidence,'released.json'),JSON.stringify({token,releasedAt:new Date().toISOString(),ownedProfileGone:!fs.existsSync(profile)}));
+run().catch(async e=>{failure=e.stack;console.error(failure);process.exitCode=1;await capture('failed').catch(()=>{});}).finally(async () => {
+  try {
+   fs.mkdirSync(evidence,{recursive:true});
+   fs.writeFileSync(path.join(evidence,'result.json'),JSON.stringify({checks,failure,errors,profile,ownedNodePid:child.pid,ownedGuiPids:guiPids,guards:guardSamples,currentGuards:app?await app.evaluate(()=>globalThis.stateGuards).catch(()=>null):null,fixture:child.connected?await fixture('stats').catch(()=>null):null},null,2));
+  } finally {
+   await cleanup();assert.equal(JSON.parse(fs.readFileSync(path.join(slot,'owner.json'))).token,token);fs.unlinkSync(path.join(slot,'owner.json'));fs.rmdirSync(slot);
+   fs.writeFileSync(path.join(evidence,'released.json'),JSON.stringify({token,releasedAt:new Date().toISOString(),ownedProfileGone:!fs.existsSync(profile)}));
+  }
 });

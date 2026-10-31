@@ -248,8 +248,11 @@ const cleanup = testScratch.cleanup(async () => {
   await until(() => child.exitCode !== null, 'Owned fixture daemon exits');
 });
 run().catch(async error => { failure = error.stack; console.error(failure); await capture('failed').catch(() => {}); process.exitCode = 1; }).finally(async () => {
-  fs.mkdirSync(evidence, { recursive: true });
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, metrics, failure, errors, profile, ownedNodePid: child.pid, ownedGuiPids: guiPids, guards: guardSamples, currentGuards: application ? await application.evaluate(() => globalThis.compactGuards).catch(() => null) : null, fixture: child.connected ? await fixture().catch(() => null) : null }, null, 2));
-  await cleanup(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
-  fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedProfileGone: !fs.existsSync(profile) }));
+  try {
+    fs.mkdirSync(evidence, { recursive: true });
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, metrics, failure, errors, profile, ownedNodePid: child.pid, ownedGuiPids: guiPids, guards: guardSamples, currentGuards: application ? await application.evaluate(() => globalThis.compactGuards).catch(() => null) : null, fixture: child.connected ? await fixture().catch(() => null) : null }, null, 2));
+  } finally {
+    await cleanup(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
+    fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedProfileGone: !fs.existsSync(profile) }));
+  }
 });

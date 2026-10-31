@@ -289,8 +289,11 @@ const cleanup = testScratch.cleanup(async () => {
   if (child.connected) child.disconnect(); await until(() => child.exitCode !== null, 'Owned fixture exits');
 });
 run().catch(async e => { failure = e.stack; console.error(failure); process.exitCode = 1; await shot('failure').catch(() => {}); }).finally(async () => {
-  fs.mkdirSync(evidence, { recursive: true });
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, failure, errors, profile, fullStarts, ownedNodePid: child.pid, ownedGuiPids: guiPids, guards: guardSamples, currentGuards: app ? await app.evaluate(() => globalThis.followthroughGuards).catch(() => null) : null, copyBatches: [...copyBatches, app ? await app.evaluate(() => global.copyValues).catch(() => []) : []], fixture: child.connected ? await native().catch(() => null) : null }, null, 2));
-  await cleanup(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
-  fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedProfileGone: !fs.existsSync(profile) }));
+  try {
+    fs.mkdirSync(evidence, { recursive: true });
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, failure, errors, profile, fullStarts, ownedNodePid: child.pid, ownedGuiPids: guiPids, guards: guardSamples, currentGuards: app ? await app.evaluate(() => globalThis.followthroughGuards).catch(() => null) : null, copyBatches: [...copyBatches, app ? await app.evaluate(() => global.copyValues).catch(() => []) : []], fixture: child.connected ? await native().catch(() => null) : null }, null, 2));
+  } finally {
+    await cleanup(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
+    fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedProfileGone: !fs.existsSync(profile) }));
+  }
 });
