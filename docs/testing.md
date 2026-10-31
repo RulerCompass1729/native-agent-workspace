@@ -3676,7 +3676,7 @@ app copies are gone and rollback archives remain. Whole T53 and the shared goal
 remain open.
 
 
-### Live native hyperlink hover - alpha.152 candidate
+### Live native hyperlink hover - alpha.152
 
 Ninety-six affected terminal and build-info checks pass without skips, and the
 current UI builds. The old hyperlink tests remain intact; ten appended cases
@@ -3684,6 +3684,27 @@ cover actual compiled linkifier/provider behavior, stock stale-target control,
 listener lifetime, row overlap, scrolling, fast paths and build refusal. The
 source's 58 and 81-check results overlap these checks and are not additive.
 Its four source GUI groups pass with ten outputs, four snapshots, one owned
-reopen and two reloads. Main's finite signed integration remains pending.
+reopen and two reloads. One fresh signed integration passes all four groups with
+the same counts: gap-to-new-target, active replacement/erasure and fast paths,
+wrapped alternate target/normal return, then reconstructed current target. Full
+canonical/rendered cell digests agree; synthetic IDs, owners, positive drafts,
+epochs and sequences persist without output reinjection. This is Page.close
+renderer shutdown plus ordinary duplicate launch, not ordinary close or original
+native lifecycle qualification. All 32 raw artifacts match their seal. Three owned
+principal PIDs, candidate processes, profile, endpoint and lease are gone before
+offline work; release takes 9.580 seconds and post-daemon signature is strict.
+Main views gap and reconstructed PNGs; independent review reads raw metrics,
+not PNGs. Real providers, product inference, native input and link activation are
+not used. Main IPC/OS counters are uninstrumented; request observation covers
+only example.invalid. The fixed no-move flag is not physical proof; partial
+multi-row ranges remain headless-only, and this run uses a steady cursor.
+
+The ordinary visible alpha.152 update from clean `1c67a70` preserves ten original
+native IDs, eleven positive before-live process starts, twelve view/draft scopes
+and reported settings. Separate goal reads retain UUID/objective/creation/active
+status. Six nonempty old backends retain PID/start/version. One existing registered app is found by LaunchServices metadata and path
+existence, not Spotlight or physical search. Two initial empty metadata parses
+were non-passes and were corrected; temporary app copies are gone and rollback archives remain. Whole
+T79 and the shared goal remain open.
 The baseline census failure in that source run is fixed separately by the
 47-check test-only finalizer repair; no current whole-suite pass is claimed.

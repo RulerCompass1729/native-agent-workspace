@@ -1903,7 +1903,7 @@ If saving and cleanup both fail, cleanup's error can mask the earlier save error
 the token remains held and the run still fails. These are accepted limits.
 
 
-### Live native hyperlink hover (2026-10-31 candidate)
+### Live native hyperlink hover (2026-10-31)
 
 Source handoff record, before Main installed acceptance:
 
@@ -1923,5 +1923,37 @@ P1 census failure is addressed by the separate test-only finalizer repair and
 port uses the existing renderer launcher, preserves reentry viewport dimensions,
 and replaces ordinary source close/activate with renderer-shutdown/duplicate
 reopen. Main IPC/OS counters are not instrumented; source guard proof is reused.
-Request observation covers the synthetic target host only. Installed acceptance
-and delivery remain pending; whole T79 and the shared goal remain open.
+Request observation covers the synthetic target host only. The initial source
+review hits its turn cap and is a non-pass; a same-session closure accepts the
+source and conditionally permits one signed trial. The following actual review
+also reads the previously unreviewed prefix, generator and fingerprint/payload
+gates and recomputes both source digests.
+
+The single signed trial passes four groups with ten output frames, four snapshots,
+two fake workers, one renderer shutdown/reentry and two reloads. Full cell digests,
+synthetic identities, owners, positive drafts, epochs and sequences agree without
+reinjection. All 32 raw files match their seal. Three owned principal PIDs,
+candidate processes, profile, endpoint and token are gone before offline work;
+release takes 9.580 seconds and strict post-daemon signing passes. Main views the
+gap and reconstructed PNGs; the reviewer reads raw metrics without viewing PNGs.
+No provider, product inference, native input, link activation or clipboard action
+is used. Main IPC/OS counters remain uninstrumented. The script's fixed no-move
+flag does not prove physical stationarity; its steady cursor does not qualify
+physical blink. Partial multi-row ranges remain headless-only. The reviewer
+accepts the actual signed result and the visible GUI/empty-backend operator.
+
+Low/informational source limits: rendering a hovered gap causes one synchronous
+row-provider query; inherited scrolled row-zero mapping may over-query; the old
+cache-disposable array is empty but harmless; a URI changing between press and
+release cancels activation. None blocks this bounded repair. Pre-render and
+asynchronous-provider behavior remain outside its qualification.
+
+The ordinary visible daily alpha.152 update from clean `1c67a70` preserves ten
+original native IDs, eleven positive before-live process starts, twelve view/
+draft scopes and reported settings. Separate goal reads retain original UUID,
+objective, creation and active status; the operator does not read the goal. Six
+nonempty old backends retain PID/start/version and old code. One existing registered app is found by LaunchServices metadata and path
+existence, not Spotlight or physical search. Two initial empty metadata parses
+were non-passes and were corrected; temporary apps are gone and rollback archives remain.
+Physical input, native producers, original lifecycle, full-day use, whole T79
+and the shared goal remain open.
