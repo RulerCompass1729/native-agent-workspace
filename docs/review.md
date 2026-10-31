@@ -1492,6 +1492,21 @@ qualify the exercised header path, not every shared helper caller.
 
 Main integrates only the released display feature and process-reading test
 maintenance. Compact-member predicates/toolbar and other lanes' work remain
-intact. Current affected checks, independent source review and a finite signed
-installed workflow are pending; physical input, actual provider frames and the
-original forks' lifecycle milestone are not implied.
+intact. All 70 affected checks pass without skips. Fresh independent source review
+accepts the exact released feature; the first max-turn review remains a non-pass.
+Review of the private recipe found a lock-owner mismatch and risky selectors;
+these and an author-found cleanup scope error were repaired before any trial.
+The same reviewer accepts the corrected bounded recipe, the actual four signed
+GUI groups and the ported visible-update operator. Three owned GUI starts and
+one fake daemon are cleaned, including the exact endpoint; strict signature is
+checked after daemon exit. Source-only guards and simulated save failure remain
+source evidence. The nonmodal form covers the toolbar's right edge until
+it is dismissed; access after dismissal is exercised. Other menu-helper callers
+remain source-reviewed rather than newly runtime-qualified.
+
+The actual ordinary visible alpha.143 update preserves ten original native IDs,
+eleven live process starts and twelve view draft scopes; private view drafts
+are empty and one shared draft contains text. Six nonempty old backends retain
+their PID/start/version. Before/after read-only witnesses retain the original
+goal identity, objective, creation and active status. Physical input, actual
+provider frames, original-fork lifecycle and the whole milestone remain open.

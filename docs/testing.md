@@ -3391,7 +3391,19 @@ menu host reuses its fixed zero-size styling on both body and dialog paths to
 avoid changing document height and the native grid. The seven actual menu
 callers are source-reviewed; runtime evidence is bounded to exercised routes.
 The earlier author source GUI passes its four complete groups with synthetic
-transports. Main affected checks and the committed signed candidate acceptance
-remain pending. No real providers or product inference are required. The
+transports. Main's 70 affected checks pass without skips; the committed `dc7a578` signed
+build passes four complete installed groups with no page errors. Opening and
+closing retain the native grid and resize count; valid font/palette values save,
+invalid or stale hidden values do not replace them. Compact viewport and 320px
+split checks exercise actual scrollbar overlap, hit testing and reset/done access.
+Two owned process reopenings preserve three synthetic IDs and positive drafts.
+Three GUI processes, one fake daemon, the profile and exact endpoint are gone;
+post-daemon strict signature and source/CDHash match. No real provider, native
+input, model send or product inference runs. Membership setup uses the preload
+API; source API-refusal/save-failure and render-key checks are not new installed
+proof. The ordinary visible daily update preserves ten original IDs, eleven live
+process starts and twelve draft scopes; six nonempty backends
+keep their versions. Both read-only goal witnesses retain the original active
+goal. These are bounded display tests, not original-fork lifecycle qualification. The
 maintained process-reading script retains eleven groups and its explicit
 isolated source-only gate; it is not installed or real-provider evidence.
