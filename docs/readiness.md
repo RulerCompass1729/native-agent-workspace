@@ -4,6 +4,10 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.142 repairs the focused-member compact terminal using existing
+card, toolbar and split styles. Six source GUI groups pass, including maximize
+and restore in three responsive bands; signed acceptance remains pending.
+
 Current daily GUI: alpha.141, committed build source `8a023aa`. Six signed GUI
 groups cover compact per-session version notices, unique-session counts, guarded
 update choices and the collapsed sidebar. Seven synthetic identities and positive
