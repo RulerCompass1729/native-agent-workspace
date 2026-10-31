@@ -434,7 +434,8 @@ function restoreOverviewReading() {
   }
 }
 function renderRoomOverview() {
-  const origin = document.activeElement, oldHeader = origin?.closest('.collaboration-member-status');
+  const origin = document.activeElement, oldReader = origin?.closest('.collaboration-messages, .collaboration-brief, .collaboration-resize')?.closest('.collaboration-member-reader');
+  const oldHeader = origin?.closest('.collaboration-member-status') || (oldReader && [...$('collaboration-overview').querySelectorAll('.collaboration-member-status')].find(header => header.dataset.memberId === oldReader.dataset.memberId));
   const oldIndex = oldHeader ? [...$('collaboration-overview').querySelectorAll('.collaboration-member-status')].indexOf(oldHeader) : -1;
   const removedFocus = oldHeader && !members().some(s => s.id === oldHeader.dataset.memberId);
   if (!roomOverview) roomOverview = window.nativeWorkspaceCollaboration.create({
