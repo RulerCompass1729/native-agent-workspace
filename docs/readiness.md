@@ -4,15 +4,19 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.149 adds a passive cross-space reading view. Each original
-session is counted once and retains every space reference; search, filter and
-list/grid changes grant no sharing or input ownership. Return to the original
-member/source preserves reading context and separate space drafts. Eighty-five
-affected checks and the actual UI build pass. Signed acceptance is pending;
-daily remains alpha.148. Synthetic source scale is not real native-fleet proof.
-Coordinator context preview, original lifecycle and the shared goal stay open.
+Current daily GUI: alpha.149, committed build source `0b0e031`. The new passive
+cross-space reader counts each nonarchived original session once while preserving
+all space references, status uncertainty and observation age. Exact source/member
+return retains reading context and distinct space drafts. Eighty-five affected
+checks and five signed synthetic flows pass; two owned GUI starts retain 100
+synthetic identities and drafts. This is not native-fleet scale or physical input
+proof. One earlier pre-daemon test-script failure remains recorded. The ordinary
+visible update preserves ten original IDs, eleven live process starts, twelve
+draft scopes and the original active goal; six old backends retain their versions.
+Coordinator preview, locale, OSC8 snapshot addresses, original lifecycle, full-day
+use and the shared goal remain open.
 
-Current daily GUI: alpha.148, committed build source `3006825`. Snapshots that
+The prior alpha.148 task, source `3006825`, remains qualified. Snapshots that
 advertise `cursorModesVersion: 1` now use the adopted steady fallback; explicit
 native cursor controls retain precedence, including during live link hover.
 Unadvertised or unknown frames keep prior defaults. Thirty-eight affected checks
