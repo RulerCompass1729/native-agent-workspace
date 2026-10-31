@@ -3487,15 +3487,33 @@ the old serializer. Completed controls only: incomplete sequences, other resets,
 physical input, original-fork lifecycle and full-day use remain unqualified.
 
 
-### Exhausted automatic continuation - alpha.147 candidate
+### Exhausted automatic continuation - alpha.147
 
 Eight new production-function cases plus existing fleet/context checks total 118
-passes, zero skips. The descriptor, current-episode identity, state and archive
-guards, live/initial wiring, delayed-repeat deduplication, Notification reference
-lifetime and sidebar-only labeling are covered with synthetic transport. Prior
-source GUI passes four groups using two synthetic identities, four fake sends
-and three fake goal reads; notification and window reveal were intercepted there.
-That proves neither native OS delivery nor the signed default entry. A finite
-signed rehearsal will use existing native lifecycle logging and no Main inspector
-or production test hook. Permission approval and real notification clicks are
-outside the rehearsal. Actual installed results remain pending.
+passes without skips. One signed default-entry run passes four groups using two
+synthetic native identities, four fake sends and three fake goal reads. The
+visible retry cue remains inside its clipping box while B is selected with its
+positive draft. Repeated state and one renderer-shutdown reopen in the same Main
+do not repeat the notification request. A is positively exhausted immediately
+before its human draft is edited; that edit clears recovery and the settled cue,
+retains B's draft and causes no fifth send. The original error body stays raw.
+Five PNGs are captured; Main directly reviews two and the independent reviewer
+views the return-to-A frame. Real providers, product inference, native CLI/input,
+OS clipboard and native-goal mutations do not run; fake result zeros alone are
+not process measurements. Fake-host/process guards and typed receipts supply
+the qualification.
+
+Documented Electron lifecycle logging records exactly one created notification
+ID. The same log reports OS authorization refusal, then scheduled/displayed API
+callbacks. Those callbacks are not independent evidence of a visible banner.
+The bundle ID is shared with daily; its actual permission was not inspected.
+No permission was approved, no real notification click was made, and no retry
+attempted to bypass refusal. A generic test notice may remain in system history.
+All 28 raw files are sealed; three owned processes, profile, endpoint and exact
+lease are cleaned, scoped temporary count stays 0 to 0, and the post-daemon strict
+signature/source/CDHash match. Independent review accepts the actual cue/request
+batch and the finite daily operator. The ordinary visible update preserves ten
+native IDs, eleven live starts, twelve view draft scopes and the same active goal.
+Six nonempty backends retain PID/start/version. Visible OS delivery, native atomic
+goal restore, full Main restart, all-windows-closed delivery, real clicks, locale,
+mobile, physical input and full-day use remain unqualified.
