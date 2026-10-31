@@ -3556,16 +3556,46 @@ physical focus/blink, iTerm parity, ordinary-close geometry, original fork lifec
 full-day use, full T77 and the shared milestone remain unqualified by this batch.
 
 
-### Cross-space panorama - alpha.149 candidate
+### Cross-space panorama - alpha.149
 
-Eighty-five affected no-model checks pass without skips, covering panorama and
-member projections, reading metadata, views/drafts, source records, capacity
-notification initialization and terminal cursor/background build repairs. The UI
-build passes. An adjacent initialization conflict retains the current notification
-handler and adds only the released reading-state/panorama handler. Existing
-source evidence passes five groups with 100 synthetic sessions, ten spaces and
-118 memberships. It is not installed or real-fleet evidence. The finite signed
-port preserves those five user paths and uses renderer-only CDP with two owned
-GUI starts. Main IPC/WCP/OS guard instrumentation is unavailable there; source
-refusal evidence is reused and fake-backend counters/identities are checked.
-Current installed results remain pending. No real provider inference is planned.
+Eighty-five affected no-model checks pass without skips, and the integrated UI
+builds. The adjacent initialization merge preserves current capacity notification
+handling while adding the released panorama reading-state handler. The prior
+source evidence has five groups with 100 synthetic sessions and 118 memberships.
+The installed run qualifies the current integrated client, without copying its
+old compiled output or importing the author's later coordinator work.
+
+The first signed attempt fails before daemon/GUI launch: a local variable shadows
+the source fingerprint, then cleanup incorrectly requires an endpoint that was
+never created. The profile is removed; the exact token is released only after its
+driver exits. Correcting the variable reference and the no-daemon cleanup branch
+leaves all product bytes unchanged. The offline setup check initially lacks a
+sandbox helper; after that dependency is supplied, it reproduces the old failure
+and reaches a guarded fake-fork boundary with the fix, creating no process or GUI.
+Both earlier failures remain non-passes. The same independent session accepts the
+changed recipe before one corrective installed run.
+
+That run passes all five paths with 100 synthetic logical sessions, ten spaces,
+118 memberships, two full owned GUI starts and one fake backend. Original 16-char
+selections return under another stream; an edited source clears selection and
+shows the notice. Two distinct same-member room drafts and a private draft remain.
+Controlled geometry pressure retains active keys within 128 entries; nonzero
+member return is 1400 to 1400. The second start retains identities, owners, list,
+scroll and drafts. Forty raw files match their seal; four principal owned PIDs,
+all exact-candidate bundle processes, profile, endpoint and token are gone, with
+strict signature checked after daemon exit.
+
+There is one scripted takeover click and exactly one observed owner change.
+Fake-backend inputs, sends, interruptions, pending and waiting lists are empty.
+Main IPC/WCP/OS guards are not instrumented in the signed host; their source proof
+is reused rather than presented as signed counters. Product inference and real
+providers are not used. Native-fleet scale, busy parity, physical accessibility,
+original fork lifecycle, I70, full-day use and whole T53 remain unqualified.
+
+The ordinary visible alpha.149 update from clean `0b0e031` preserves ten original
+IDs, eleven live process starts, twelve draft scopes, settings and the active
+goal checked separately before and after. Six nonempty backends retain old
+PID/start/version. One existing application registration remains; own candidate
+and rollback app copies are gone and rollback archives remain. The offline daily
+gate's initial null-versus-absent-field error is corrected against the same raw
+result, without another GUI run. The shared milestone remains open.
