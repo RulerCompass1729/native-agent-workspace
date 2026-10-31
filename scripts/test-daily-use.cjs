@@ -189,10 +189,13 @@ const cleanup = testScratch.cleanup(async () => {
   if (app) await app.close(); if (client) { const state = await client.call('initial'); for (const s of state.sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } if (child.connected) child.disconnect();
 });
 run().catch(async e => { failure = e.stack; console.error(failure); if (page) await capture('failed').catch(() => {}); process.exitCode = 1; }).finally(async () => {
-  fs.mkdirSync(evidence, { recursive: true });
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed, failure, errors, profile, ownedNodePid: child.pid, ownedGuiPids: guiPids, ownedDuplicatePids: duplicatePids, fullStarts, guards: guardSamples, currentGuards: app ? await app.evaluate(() => globalThis.dailyGuards).catch(() => null) : null, fixture: child.connected ? await fixture().catch(() => null) : null }, null, 2));
-  await cleanup(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
-  fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedProfileGone: !fs.existsSync(profile) }));
+  try {
+    fs.mkdirSync(evidence, { recursive: true });
+    fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed, failure, errors, profile, ownedNodePid: child.pid, ownedGuiPids: guiPids, ownedDuplicatePids: duplicatePids, fullStarts, guards: guardSamples, currentGuards: app ? await app.evaluate(() => globalThis.dailyGuards).catch(() => null) : null, fixture: child.connected ? await fixture().catch(() => null) : null }, null, 2));
+  } finally {
+    await cleanup(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
+    fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedProfileGone: !fs.existsSync(profile) }));
+  }
 });
 
 async function chooseRecipient(id) { await inlineRecipient(page, id); }

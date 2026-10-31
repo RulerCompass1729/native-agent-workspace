@@ -30,8 +30,38 @@ test('explicit export retains success and failure originals outside temporary pr
 });
 test('all temporary-profile test entry points use the shared allocator and finalizer', () => {
   const dir=path.resolve(__dirname,'../../scripts');let count=0;
-  for(const file of fs.readdirSync(dir).filter(n=>/^test-.*\.cjs$/.test(n))){const source=fs.readFileSync(path.join(dir,file),'utf8');assert.doesNotMatch(source,/\bfs\.mkdtempSync\(/,file);if(source.includes('testScratch.directory(')){count++;assert.ok(/\.finally\(testScratch\.cleanup\(/.test(source)||/const cleanup = testScratch\.cleanup\(/.test(source)&&/\.finally\(async \(\) => \{\s*try \{ await cleanup\(\)/.test(source),file);}}
+  for(const file of fs.readdirSync(dir).filter(n=>/^test-.*\.cjs$/.test(n))){
+    const source=fs.readFileSync(path.join(dir,file),'utf8');assert.doesNotMatch(source,/\bfs\.mkdtempSync\(/,file);
+    if(source.includes('testScratch.directory(')){
+      count++;
+      const registered=/const\s+cleanup\s*=\s*testScratch\.cleanup\(/.test(source);
+      const cleanupFirst=/\.finally\(async \(\) => \{\s*try \{ await cleanup\(\)/.test(source);
+      const saveThenCleanup=/\.finally\(async \(\) => \{\s*try \{[\s\S]*?\}\s*finally \{\s*await cleanup\(\)/.test(source);
+      assert.ok(/\.finally\(testScratch\.cleanup\(/.test(source)||registered&&(cleanupFirst||saveThenCleanup),file);
+    }
+  }
   assert.ok(count>=57,'Census must cover all existing test profiles');
+});
+
+const recordsFirstEntries=['test-compact-reading.cjs','test-daily-use.cjs','test-graphical-followthrough.cjs','test-native-state.cjs','test-progress-reading.cjs','test-selection-sharing.cjs','test-share-preview.cjs'];
+for (const entry of recordsFirstEntries) for (const mode of ['saved', 'result-write-failed', 'cleanup-unconfirmed', 'owner-replaced']) test('recording finalizer preserves cleanup and lease ownership: ' + entry + ' / ' + mode, () => {
+  const outer=fs.mkdtempSync(path.join(os.tmpdir(),'finalizer-evidence-'));
+  const slot=path.join(outer,'slot'),evidence=path.join(outer,'evidence');fs.mkdirSync(slot);
+  fs.writeFileSync(path.join(slot,'owner.json'),JSON.stringify({token:'owned-fixture'}));
+  const source=fs.readFileSync(path.resolve(__dirname,'../../scripts',entry),'utf8');
+  const match=[...source.matchAll(/\.finally\(async\s*\(\)\s*=>\s*\{/g)].at(-1),end=source.lastIndexOf('\n});');assert.ok(match&&end>match.index);
+  const finalizer=source.slice(match.index+match[0].length,end);
+  const r=probe(`(async()=>{const vm=require('node:vm'),assert=require('node:assert/strict');const slot=${JSON.stringify(slot)},evidence=${JSON.stringify(evidence)},mode=${JSON.stringify(mode)};let calls=0,failure=null;
+    const scopedFS={...fs,writeFileSync(file,...args){if(mode==='result-write-failed'&&file===path.join(evidence,'result.json'))throw Error('Synthetic result write failure');return fs.writeFileSync(file,...args);}};
+    const cleanup=async()=>{calls++;if(mode==='cleanup-unconfirmed')throw Error('Synthetic cleanup unconfirmed');await scratch.release();if(mode==='owner-replaced')fs.writeFileSync(path.join(slot,'owner.json'),JSON.stringify({token:'another-fixture'}));};
+    try{await vm.runInNewContext('(async()=>{'+${JSON.stringify(finalizer)}+'})()',{fs:scopedFS,path,assert,evidence,slot,token:'owned-fixture',profile:root,checks:[],metrics:[],failure:null,errors:[],child:{pid:0,connected:false},guiPids:[],guardSamples:[],application:null,app:null,passed:[],previews:[],copyBatches:[],duplicatePids:[],fullStarts:1,cleanup});}catch(e){failure=e.message;}
+    console.log(JSON.stringify({calls,failure,profileExists:fs.existsSync(root),slotExists:fs.existsSync(slot),owner:fs.existsSync(slot)?JSON.parse(fs.readFileSync(path.join(slot,'owner.json'))).token:null,released:fs.existsSync(path.join(evidence,'released.json'))}));})().catch(e=>{console.error(e);process.exitCode=1;});`);
+  try {
+    assert.equal(r.status,0,r.stderr);const result=JSON.parse(r.stdout.trim().split('\n').at(-1));assert.equal(result.calls,1);
+    if(mode==='cleanup-unconfirmed'){assert.match(result.failure,/cleanup unconfirmed/);assert.equal(result.profileExists,true);assert.equal(result.owner,'owned-fixture');assert.equal(result.released,false);}
+    else if(mode==='owner-replaced'){assert.ok(result.failure);assert.equal(result.profileExists,false);assert.equal(result.owner,'another-fixture');assert.equal(result.released,false);}
+    else {assert.equal(result.profileExists,false);assert.equal(result.slotExists,false);assert.equal(result.released,true);if(mode==='result-write-failed')assert.equal(result.failure,'Synthetic result write failure');else assert.equal(result.failure,null);}
+  } finally {fs.rmSync(outer,{recursive:true,force:true});fs.rmSync(r.root,{recursive:true,force:true});}
 });
 test('a replaced directory is never removed or exported as owned evidence', () => {
   const r=probe("fs.rmSync(root,{recursive:true});fs.mkdirSync(root);fs.writeFileSync(path.join(root,'replacement.txt'),'untouched');Promise.resolve().finally(scratch.cleanup(async()=>{}));");

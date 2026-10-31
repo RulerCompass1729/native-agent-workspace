@@ -1876,3 +1876,28 @@ nonempty backends retain PID/start/version and old code. One existing registered
 app remains; own temporary app copies are gone and rollback archives remain.
 Native-fleet completeness, physical input, actual OS clipboard, locale, original
 lifecycle, full-day use, whole T53 and the shared goal remain open.
+
+
+### Test evidence-write failure cleanup (2026-10-31)
+
+A baseline scratch census failure exposes seven existing test finalizers that
+save evidence before awaiting cleanup. Executing their actual callbacks with a
+failed result write reproduces skipped cleanup and a retained owned test slot;
+this is not a product UI regression or merely a census formatting mismatch.
+Recording now runs inside try/finally, so confirmed owned cleanup and token
+release still happen after a save failure. Unconfirmed cleanup or a replaced
+owner retains the token. The census recognizes this guarded form without
+removing allocator, registration or entry-count checks.
+
+Forty-seven related checks pass without skips. Four modes execute each of the
+seven actual callbacks: normal save, failed result write, unconfirmed cleanup and
+replaced owner. Earlier red runs remain evidence. All GUI journey prefixes and
+all 64 installed product payloads are unchanged, with strict alpha.151 signature
+verified. Its installed GUI evidence is reused; no GUI rerun, model call, version
+bump or daily restart is needed for these test-only changes. Setup failures before
+finalizer registration and other test-entry forms are not newly qualified.
+The probes supply the cleanup callback and invoke the real shared release helper;
+they do not rerun each script's original GUI/daemon teardown body. The census is
+a structural heuristic; the behavior probes provide the failure-path evidence.
+If saving and cleanup both fail, cleanup's error can mask the earlier save error;
+the token remains held and the run still fails. These are accepted limits.
