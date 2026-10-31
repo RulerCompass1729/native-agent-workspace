@@ -1561,3 +1561,23 @@ caveat is covered by recorded user standing authorization for accepted visible
 updates; no deferred backend is migrated. Physical input, other terminal hosts,
 padding-ring colors under native OSC backgrounds, native cursor snapshots,
 original-fork lifecycle and full-day use remain open.
+
+
+### Recovery links after action relocation (2026-10-30)
+
+The existing recovery buttons moved into message headings while their always
+visible style still matched the former direct-child location. Exact released
+selectors add the heading path, preserving the original path and declarations.
+The original contrast-1.00 source failure is retained. Seven corrected source
+journeys pass, with links at 5.80 light and 12.11 dark against the unchanged 4.5
+floor. Main verifies 189 sealed artifacts and the exact two-file feature; 63
+related source checks and the build pass. Signed recovery-task acceptance and
+independent review remain pending. No new control, framework or runtime path.
+
+Preflight review accepts the selector scope but catches a stale failure-receipt
+function in the unrun private recipe. The corrected recipe records fake native
+counts on failure, labels its owner/deadline correctly and retains the original
+finite wait limits. Source inspection confirms archive detaches room membership
+without stopping native work, while explicit restore does not rejoin. All 20
+existing archive checks pass. The capped initial review remains a non-pass;
+corrected-recipe review and installed acceptance are still pending.

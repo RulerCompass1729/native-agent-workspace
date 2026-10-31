@@ -1,22 +1,45 @@
+// Existing seven-group graphical followthrough journey, isolated source GUI and synthetic providers only.
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const assert = require('node:assert/strict'), { execFileSync } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
+const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
+const plan = { task: 'T33 current graphical followthrough source GUI', fullGuiStarts: 2, ownedSyntheticDaemons: 1, syntheticSessions: 2, syntheticSends: 5, syntheticTerminalInputBytes: 1, syntheticApprovalDecisions: 1, nativeCliCalls: 0, productModels: 0, realProviders: 0, osClipboard: 0, maxRunMs: 300000 };
+if (process.argv.includes('--plan')) { console.log(JSON.stringify(plan, null, 2)); process.exit(0); }
+assert.equal(process.env.NAW_T33_FOLLOWTHROUGH_GUI_AUTHORIZED, '1', 'Record the finite source GUI plan before running');
+assert.ok(!process.env.NAW_EXPECT_NAVIGATION_GAP, 'Whole-journey qualification excludes the legacy early-return diagnostic');
+assert.ok(!process.env.NAW_APP_EXECUTABLE && path.resolve(code) === root, 'This recipe qualifies source only; Main owns installed acceptance');
+const evidence = process.env.NAW_EVIDENCE_DIR;
+assert.ok(evidence && path.isAbsolute(evidence), 'Private outside-repository evidence is required');
+const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
+const slot = path.resolve(common, '..', '.local/gui-test-slot.lock'), token = randomUUID();
+let existing = evidence;
+while (!fs.existsSync(existing)) existing = path.dirname(existing);
+const destination = path.resolve(fs.realpathSync(existing), path.relative(existing, evidence));
+for (const repo of [fs.realpathSync(root), fs.realpathSync(path.resolve(slot, '../..'))]) assert.ok(destination !== repo && !destination.startsWith(repo + path.sep), 'Evidence must be outside both repositories');
+try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('OCCUPIED: no profile, daemon or GUI started'); process.exit(75); }
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex 3', task: plan.task, token, pid: process.pid, time: new Date().toISOString() }));
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { fork } = testScratch.childProcess;
+const { _electron } = testScratch.playwright(require('playwright'));
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
-// Actual Electron interface, native adapters/workspace and persisted records.
-// Controlled provider events prove UI behavior, not model reasoning or OS IME.
-const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const assert = require('node:assert/strict'), { fork } = testScratch.childProcess;
-const { _electron } = testScratch.playwright(require('playwright'));
-const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
+const env = additions => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('NAW_') && !key.startsWith('ELECTRON_') && !['NODE_OPTIONS', 'NODE_PATH'].includes(key))), ...additions });
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-graphical-followthrough-'));
-const evidence = process.env.NAW_EVIDENCE_DIR;
-if (evidence) fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
-const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
-  execArgv: ['--require', path.join(__dirname, 'fixtures/daily-native.cjs')],
-  env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code },
-  stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
-});
-let app, page, client, sequence = 0;
+const entry = path.join(profile, 'entry'); fs.mkdirSync(entry);
+fs.writeFileSync(path.join(entry, 'package.json'), JSON.stringify({ name: 'naw-owned-followthrough-gui', version: require('../package.json').version, main: 'main.cjs' }));
+fs.writeFileSync(path.join(entry, 'main.cjs'), `const cp=require('node:child_process'),path=require('node:path'),e=require('electron');
+globalThis.followthroughGuards={clipboard:0,external:0,dialogs:0,maintenance:0,replacement:0};
+const spawn=cp.spawn;cp.spawn=function(bin,args,...rest){if(Array.isArray(args)&&args.some(arg=>typeof arg==='string'&&path.basename(arg)==='daemon.cjs')){globalThis.followthroughGuards.replacement++;throw Error('Replacement backend prohibited');}return spawn.call(this,bin,args,...rest);};
+for(const name of ['readText','writeText','readImage','writeImage','read','write','readBuffer','writeBuffer','clear'])e.clipboard[name]=()=>{globalThis.followthroughGuards.clipboard++;throw Error('OS clipboard prohibited');};
+e.shell.openPath=e.shell.openExternal=async()=>{globalThis.followthroughGuards.external++;throw Error('External action prohibited');};
+e.dialog.showOpenDialog=e.dialog.showMessageBox=async()=>{globalThis.followthroughGuards.dialogs++;throw Error('OS dialog prohibited');};
+const {WorkspaceClient}=require(${JSON.stringify(path.join(root, 'app/workspace-client.cjs'))});WorkspaceClient.prototype.maintainService=function(){globalThis.followthroughGuards.maintenance++;throw Error('Backend update prohibited');};
+require(${JSON.stringify(path.join(root, 'app/main.cjs'))});`);
+const executablePath = require('electron'), args = [entry];
+const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/daily-native.cjs')], env: env({ NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }), stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+let app, page, client, sequence = 0, failure, fullStarts = 0;
+const guiPids = [], guardSamples = [], copyBatches = [], started = Date.now();
 const checks = [], errors = [], delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let n = 0; n < 200; n++) { if (await fn()) return; await delay(50); } throw Error(label); }
 function native(method = 'stats', payload = {}) {
@@ -28,22 +51,40 @@ function native(method = 'stats', payload = {}) {
   });
 }
 const snapshot = () => page.evaluate(() => workspace.initial());
-const shot = async name => { if (evidence) await page.screenshot({ path: path.join(evidence, name + '.png') }); };
+const shot = async name => {
+  if (!page || page.isClosed()) return;
+  fs.mkdirSync(evidence, { recursive: true });
+  await page.screenshot({ path: path.join(evidence, name + '.png') });
+  fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(await snapshot(), null, 2));
+  const ui = await page.evaluate(() => ({ privateDraft: document.querySelector('#message-input').value, sharedDraft: document.querySelector('#shared-input').value, shareOpen: document.querySelector('#share-dialog').open, shareText: document.querySelector('#share-text').value, shareRecipient: document.querySelector('#share-recipient').value, filter: document.querySelector('#room-filter').value, search: document.querySelector('#room-search').value }));
+  fs.writeFileSync(path.join(evidence, name + '.ui.json'), JSON.stringify(ui, null, 2));
+};
+async function guards() { const values = await app.evaluate(() => globalThis.followthroughGuards); assert.deepEqual(values, { clipboard: 0, external: 0, dialogs: 0, maintenance: 0, replacement: 0 }); guardSamples.push(values); }
+async function check(text) { assert.ok(Date.now() - started < plan.maxRunMs, 'Five-minute stage-entry budget'); checks.push(text); console.log('PASS:', text); await shot('stage-' + String(checks.length).padStart(2, '0')); }
+async function openSearchScope(scope) { await page.locator('#search-button').click(); await page.locator('#search-options > summary').click(); await page.locator('#search-scope').selectOption(scope); }
+async function selectSession(id) {
+  const row = page.locator(`#session-list .session-link[data-session-id="${id}"]`);
+  if (!(await row.isVisible()) && (await snapshot()).viewState.sidebarSpaceFilter) await page.locator('#clear-space-filter').click();
+  await row.click();
+}
 async function launch() {
-  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'),
-    args: process.env.NAW_APP_EXECUTABLE ? [] : [root],
-    env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  assert.ok(fullStarts++ < plan.fullGuiStarts, 'At most the two planned full GUI starts');
+  app = await _electron.launch({ executablePath, args, env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }), timeout: 70000 }); guiPids.push(app.process().pid);
   page = await app.firstWindow(); page.setDefaultTimeout(12000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').waitFor();
   // Leave the person's clipboard untouched; capture only this app's copy calls.
   await app.evaluate(({ clipboard }) => { global.copyValues = []; clipboard.writeText = text => global.copyValues.push(text); });
+  await guards();
 }
 async function create(provider, name) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check();
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.chatAvailable), 'Native attachment ready');
   const s = (await snapshot()).sessions.find(s => s.name === name);
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); return s.id;
+  const shared = (await snapshot()).rooms.find(room => room.id === 'shared');
+  await page.locator(`[data-session-menu="${s.id}"]`).click();
+  await page.getByRole('menuitem', { name: `加入「${shared.name}」`, exact: true }).click();
+  await until(async () => (await snapshot()).sessions.find(row => row.id === s.id).roomIds?.includes('shared'), 'Visible membership acknowledged'); return s.id;
 }
 async function room() { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
 async function readableAction(button, label) {
@@ -84,7 +125,7 @@ async function readableAction(button, label) {
 async function findReply(id, text) {
   // Opening a session deliberately keeps its reading position. Use the same
   // local search a person can use, then verify the answer actually enters view.
-  await page.locator('#search-button').click(); await page.locator('#search-scope').selectOption('current');
+  await openSearchScope('current');
   await page.locator('#search-input').fill(text.split('\n')[0]);
   const message = (await snapshot()).sessions.find(s => s.id === id).messages.find(m => m.text === text);
   assert.ok(message); await page.locator(`[data-search-key="message:${id}:${message.id}"]`).click();
@@ -97,6 +138,7 @@ async function findReply(id, text) {
 async function run() {
   console.log('Profile:', profile);
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'followthrough-observer');
+  const backend = await client.call('initial'); assert.equal(backend.servicePid, child.pid); assert.equal(backend.runtimeVersion, require('../package.json').version); assert.equal(backend.sessions.length, 0);
   await launch(); const a = await create('claude', '预算整理'), b = await create('codex', '预算核查');
   const identities = (await snapshot()).sessions.map(s => [s.id, s.nativeId]);
   await room(); await inlineRecipient(page, b);
@@ -107,7 +149,7 @@ async function run() {
   assert.ok(request); assert.equal(request.recipientId, b);
   const command = 'printf "午餐54，交通21，合计75，人均25"';
   await native('event', { target: b, value: { id: 11, method: 'item/commandExecution/requestApproval', params: { command, cwd: '/synthetic', reason: '合成预算检查，不执行命令' } } });
-  await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
+  await selectSession(b); await page.locator('#chat-tab').click();
   await page.locator('#approval').getByText(command, { exact: true }).waitFor();
   assert.equal(await page.locator('#send-button').isDisabled(), true);
   const draft = '明天再讨论行程安排，先不发送。'; await page.locator('#message-input').fill(draft);
@@ -132,10 +174,10 @@ async function run() {
   const answer = page.locator('#messages article').filter({ has: page.locator('.message-body', { hasText: result }) });
   await answer.waitFor(); assert.equal(await page.locator('#message-input').inputValue(), draft);
   assert.equal((await native()).sends.length, 1); await shot('private-result-found');
-  checks.push('Directed budget task → native confirmation → terminal intervention → private result is reachable from its shared record; same identity/draft, no automatic re-sharing');
+  await check('Directed budget task → native confirmation → terminal intervention → private result is reachable from its shared record; same identity/draft, no automatic re-sharing');
   // Reuse the existing preview, selecting only what this next recipient needs.
   // Message actions appear while the pointer is over the message, as for a person.
-  await answer.hover(); await answer.getByRole('button', { name: '选择并分享', exact: true }).click();
+  await answer.hover(); await answer.getByRole('button', { name: '选择并分享：Codex的回复', exact: true }).click();
   const selected = '已核查：合计 75 元，人均 25 元。请整理成一句可发给同行人的结论。';
   await page.locator('#share-text').fill(selected); await page.locator('#share-recipient').selectOption(a);
   assert.equal((await native()).sends.length, 1); await page.locator('#confirm-share').click();
@@ -145,7 +187,7 @@ async function run() {
   await native('release', { text: summary }); await room();
   await until(async () => (await snapshot()).room.messages.some(m => m.text === summary), 'Explicit reply shared');
   assert.equal((await snapshot()).room.messages.some(m => m.text.includes('私人备注')), false);
-  checks.push('Explicit preview edits and exact recipient share only selected result; private note/history never enters shared records or the other session');
+  await check('Explicit preview edits and exact recipient share only selected result; private note/history never enters shared records or the other session');
   await page.locator('#room-filter').selectOption(a); await page.locator('#room-search').fill('出游预算已核对');
   await until(async () => await page.locator('#room-messages article').count() === 1, 'Exact result filter');
   await page.locator('#copy-timeline').click(); const copied = await app.evaluate(() => global.copyValues.at(-1));
@@ -153,11 +195,11 @@ async function run() {
   await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('已确认预算\n' + summary); await page.locator('#save-notes').click();
   await until(async () => (await snapshot()).room.notes === '已确认预算\n' + summary, 'Local note saved');
   const noteId = (await snapshot()).room.events.find(e => e.kind === 'notes').id;
-  await page.locator('#search-button').click(); await page.locator('#search-scope').selectOption('room'); await page.locator('#search-input').fill('已确认预算');
+  await openSearchScope('room'); await page.locator('#search-input').fill('已确认预算');
   await page.locator(`[data-search-key="shared:${noteId}"]`).click();
   await page.locator(`#room-messages [data-message-id="${noteId}"]`).waitFor();
   assert.equal((await native()).sends.length, 2); await shot('local-result-note');
-  checks.push('Filter/copy the result, save shared notes and find the saved decision locally: zero additional model submissions');
+  await check('Filter/copy the result, save shared notes and find the saved decision locally: zero additional model submissions');
   await page.locator('#room-search').fill(''); await page.locator('#room-filter').selectOption('');
   // A finite exchange has no directed-send row. Its pause record must keep the
   // exact waiting session reachable without turning private output into sharing.
@@ -193,18 +235,18 @@ async function run() {
   assert.equal((await snapshot()).room.run.status, 'paused'); assert.equal((await native()).sends.length, 4);
   assert.equal(await page.locator('#message-input').inputValue(), draft);
   await shot('paused-exchange-private-result');
-  checks.push('Finite two-session exchange → permission pause → exact original session → one visible approval → locate private result with existing search; result enters viewport, system authorship and invalid sharing stay intact');
+  await check('Finite two-session exchange → permission pause → exact original session → one visible approval → locate private result with existing search; result enters viewport, system authorship and invalid sharing stay intact');
   // A new explicit share is independent of the paused automatic authorization.
   // Preview/cancel is observation only; confirmation delivers only this selection.
   const checkedMessage = (await snapshot()).sessions.find(s => s.id === b).messages.find(m => m.text === checked);
   const checkedRow = page.locator(`#messages [data-message-id="${checkedMessage.id}"]`);
-  await checkedRow.hover(); await checkedRow.getByRole('button', { name: '选择并分享', exact: true }).click();
+  await checkedRow.hover(); await checkedRow.getByRole('button', { name: '选择并分享：Codex的回复', exact: true }).click();
   await page.locator('#share-text').fill('核验结果：合计 75 元，人均 25 元。');
   await page.locator('#share-recipient').selectOption(a);
   await page.locator('#cancel-share').click();
   assert.equal((await native()).sends.length, 4);
   assert.equal((await snapshot()).room.run.status, 'paused');
-  await checkedRow.hover(); await checkedRow.getByRole('button', { name: '选择并分享', exact: true }).click();
+  await checkedRow.hover(); await checkedRow.getByRole('button', { name: '选择并分享：Codex的回复', exact: true }).click();
   const selectedCheck = '核验结果：合计 75 元，人均 25 元。请确认这一结论。';
   await page.locator('#share-text').fill(selectedCheck);
   await page.locator('#share-recipient').selectOption(a);
@@ -217,7 +259,7 @@ async function run() {
   assert.equal((await snapshot()).room.run.status, 'paused');
   assert.equal((await snapshot()).room.messages.some(m => m.text === checked), false);
   assert.equal(await page.locator('#message-input').inputValue(), draft);
-  checks.push('Cancel then explicitly share a selected private result after permission pause: one exact new delivery, no revival of the old exchange or automatic full-result disclosure');
+  await check('Cancel then explicitly share a selected private result after permission pause: one exact new delivery, no revival of the old exchange or automatic full-result disclosure');
   await page.locator(`[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).archived, 'Session archived');
   await room();
@@ -227,22 +269,28 @@ async function run() {
   await page.getByRole('button', { name: '恢复会话', exact: true }).click();
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b).archived, 'Explicit session restore');
   assert.equal(await page.locator('#message-input').inputValue(), draft);
-  checks.push('Private result remains accessible after archive as read-only; explicit restore retains its draft and identity without sending or automatically rejoining');
-  await room(); const before = await snapshot(); await app.close(); app = null; await launch();
+  await check('Private result remains accessible after archive as read-only; explicit restore retains its draft and identity without sending or automatically rejoining');
+  await room(); const before = await snapshot(); await guards(); copyBatches.push(await app.evaluate(() => global.copyValues)); await app.close(); app = null; await launch();
   const after = await snapshot();
   assert.deepEqual(after.sessions.map(s => [s.id, s.nativeId]), identities);
   assert.deepEqual(after.sessions.map(s => s.messages), before.sessions.map(s => s.messages));
   assert.deepEqual(after.room.messages, before.room.messages); assert.equal(after.room.notes, before.room.notes);
-  await page.locator(`[data-session-id="${b}"]`).click(); await page.locator('#chat-tab').click();
+  await selectSession(b); await page.locator('#chat-tab').click();
   assert.equal(await page.locator('#message-input').inputValue(), draft);
-  const log = await native(); assert.equal(log.sends.length, 5); assert.equal(log.modelCalls, 0); assert.deepEqual(errors, []);
+  const log = await native(); assert.equal(log.sends.length, 5); assert.equal(log.modelCalls, 0); assert.deepEqual(log.inputs, [{ id: b, data: '\r' }]); assert.deepEqual(log.decisions, [{ id: 12, result: { decision: 'accept' } }]); assert.deepEqual(errors, []); await guards(); assert.equal(copyBatches.flat().length + (await app.evaluate(() => global.copyValues)).length, 1, 'Only the explicit filtered copy used the in-memory clipboard');
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
-  checks.push('Close/reopen retains history, local decision, private draft and native identities; one hidden non-focusable window, five authorized synthetic submissions and no model calls');
+  await check('Close/reopen retains history, local decision, private draft and native identities; one hidden non-focusable window, five authorized synthetic submissions and no model calls');
   console.log(JSON.stringify({ checks, errors, syntheticDispatches: log.sends.length, modelCalls: log.modelCalls, nativeProcesses: log.nativeProcesses, windows, profile }, null, 2));
 }
-run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) await shot('failure').catch(() => {}); process.exitCode = 1; }).finally(testScratch.cleanup(async () => {
+const cleanup = testScratch.cleanup(async () => {
   if (app) await app.close();
-  if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); }
-  if (child.connected) child.disconnect();
-}));
+  if (client) { for (const s of (await client.call('initial')).sessions) await client.call('stop', s.id); await client.call('shutdown'); client.close(); } else if (child.exitCode === null) child.kill('SIGTERM');
+  if (child.connected) child.disconnect(); await until(() => child.exitCode !== null, 'Owned fixture exits');
+});
+run().catch(async e => { failure = e.stack; console.error(failure); process.exitCode = 1; await shot('failure').catch(() => {}); }).finally(async () => {
+  fs.mkdirSync(evidence, { recursive: true });
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, failure, errors, profile, fullStarts, ownedNodePid: child.pid, ownedGuiPids: guiPids, guards: guardSamples, currentGuards: app ? await app.evaluate(() => globalThis.followthroughGuards).catch(() => null) : null, copyBatches: [...copyBatches, app ? await app.evaluate(() => global.copyValues).catch(() => []) : []], fixture: child.connected ? await native().catch(() => null) : null }, null, 2));
+  await cleanup(); assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
+  fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedProfileGone: !fs.existsSync(profile) }));
+});

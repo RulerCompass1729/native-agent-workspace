@@ -4,6 +4,10 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.145 repairs the existing recovery-link styles at their current
+message-heading location. All 63 relevant source checks pass; signed installed
+recovery acceptance and independent review remain pending. Daily stays alpha.144.
+
 Current daily GUI: alpha.144, committed build source `91ef94d`. Fresh/reset
 terminal text uses 13-point type and line height 1, preserving valid saved fonts.
 The existing theme callback covers the viewport's fit remainder. All 74 related

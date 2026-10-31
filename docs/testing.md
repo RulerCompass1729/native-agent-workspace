@@ -3435,3 +3435,13 @@ eleven live process starts and twelve view draft scopes. Six nonempty backends
 keep their PID/start/version. Before/after goal witnesses retain the same
 original active identity, objective and creation. Original-fork lifecycle and
 full-day development remain open.
+
+
+### Visible recovery actions - alpha.145 candidate
+
+Two existing selector lists also target actions moved into message headings.
+Main integration passes 63 relevant checks without skips and builds. The sealed
+source journey passes seven groups after retaining its original contrast-1.00
+failure; directed and paused links exceed the existing 4.5 floor in both themes.
+That is source evidence, including a memory-only copy, not new installed proof.
+A bounded installed recovery task and independent review remain pending.
