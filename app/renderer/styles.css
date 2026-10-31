@@ -47,8 +47,15 @@ header { min-height: 74px; padding: 14px 24px; }
 #terminal-area { margin: 0; padding: 12px 16px; border-radius: 0; }
 .terminal-surface { height: 100%; width: 100%; overflow: auto; }
 .terminal-loading { color: #e6e8eb; padding: 8px; }
-#terminal-display-dialog { width: 370px; }
-#terminal-display-dialog select { width: 100%; }
+#native-pane { position: relative; }
+#terminal-display-dialog { position: absolute; inset: 8px 8px auto auto; z-index: 12; width: min(340px, calc(100% - 16px)); max-width: none; max-height: calc(100% - 16px); margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 14px #0002; overflow: auto; }
+#terminal-display-dialog[open] { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px; }
+#terminal-display-dialog h2, #terminal-display-dialog p, #terminal-display-dialog .dialog-actions { grid-column: 1 / -1; margin: 0; }
+#terminal-display-dialog h2 { font-size: 12px; }
+#terminal-display-dialog p { font-size: 11px; }
+#terminal-display-dialog label { margin: 0; }
+#terminal-display-dialog input, #terminal-display-dialog select { min-width: 0; width: 100%; margin: 0; padding: 5px 6px; min-height: 26px; }
+#terminal-display-dialog .dialog-actions { flex-wrap: wrap; gap: 6px; }
 #privacy-dialog { width: 650px; max-height: 88vh; overflow: auto; }
 #privacy-dialog summary { cursor: pointer; padding: 10px 0; font-size: 13px; }
 #privacy-dialog .dialog-actions { flex-wrap: wrap; margin-top: 14px; }

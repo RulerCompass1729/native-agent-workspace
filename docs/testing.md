@@ -3380,3 +3380,18 @@ and after goal reads preserve the thread, objective reference, creation time and
 active status. Twelve extracted proof-gate checks cover success and missing,
 partial or mismatched signed evidence before any daily quit. Physical input, old
 native migration, full-day use and the whole goal stay open.
+
+
+### Existing terminal display workflow — alpha.143 candidate
+
+The existing form, validation, palette, save and reset callbacks are retained.
+It opens without a modal backdrop in the original native pane, dismisses on
+focus/navigation changes, and removes its document listener on unmount. The DSH
+menu host reuses its fixed zero-size styling on both body and dialog paths to
+avoid changing document height and the native grid. The seven actual menu
+callers are source-reviewed; runtime evidence is bounded to exercised routes.
+The earlier author source GUI passes its four complete groups with synthetic
+transports. Main affected checks and the committed signed candidate acceptance
+remain pending. No real providers or product inference are required. The
+maintained process-reading script retains eleven groups and its explicit
+isolated source-only gate; it is not installed or real-provider evidence.
