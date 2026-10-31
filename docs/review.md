@@ -1376,7 +1376,7 @@ and the bounded update operator pass independent review. This does not certify
 real OS chooser/clipboard/clear interaction, original cold recovery or the full
 dogfood goal.
 
-### Compact connection versions (alpha.141 candidate)
+### Compact connection versions (alpha.141)
 
 The reviewed version-notice component is integrated without its later lane work.
 The preload conflict retains both work-copy preview and the readonly version
@@ -1390,9 +1390,34 @@ one service previously appeared as “4 旧后台”. The summary now names sess
 service choices still deduplicate the owning service. The GUI fixture derives
 its newer report from the application version instead of a fixed alpha suffix.
 The earlier full 1816-check run is reused for unchanged JavaScript paths; 17
-relevant checks pass after the version metadata change. Signed installation is
-pending. The one-line collapsed-sidebar selector repair is also integrated: it
+relevant checks pass after the version metadata change. The one-line collapsed-sidebar selector repair is also integrated: it
 restores the existing hiding rules on the actual sidebar root. Its 18 related
 checks and four source GUI groups pass, and the combined client builds. The first
 rail GUI startup failure remains recorded; it used a fixture version mismatch,
 not a failing product-layout verdict.
+
+Signed `8a023aa` matches 64 runtime files and 105 production dependencies. Six
+installed GUI groups pass with seven synthetic identities and positive private
+and shared drafts. The expanded sidebar also restores seven visible membership
+badges. The one GUI, two synthetic daemons, profile, socket directories and exact
+lease are cleaned. Strict signature passes after testing. OS cancellation and
+clipboard use source-proof reuse; update API counters are not instrumented, and
+window sizing is renderer emulation. No actual provider or old-binary compatibility
+is newly qualified.
+
+Independent review found two pre-quit operator gaps: normal bootstrap could
+replace another all-ended backend or act on a pending activation. Retention and
+pending-layout guards now refuse those cases before quitting; nine extracted
+retention checks pass. The same reviewer accepts the fixes and bounded operation.
+A concurrent native exit between precheck and bootstrap remains a limit; the
+postcheck detects any changed retained backend rather than promising atomicity.
+
+The actual ordinary visible 140-to-141 update preserves ten native IDs, eleven
+live process starts, reported model/effort/permission fields and twelve saved view
+draft scopes. Private drafts
+are empty; one shared draft is positive. Six retained nonempty backends keep
+their versions and starts; only the empty active backend updates. The original
+Main goal check after the update shows the original thread, creation time and
+active status; its native session keeps the same ID and live process identity. One
+ordinary app is indexed, with no debug/background launch arguments. The full
+dogfood milestone remains open.

@@ -4,14 +4,18 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.141 integrates compact per-session version notices and guarded
-readonly update choices and the existing collapsed-sidebar selector repair.
+Current daily GUI: alpha.141, committed build source `8a023aa`. Six signed GUI
+groups cover compact per-session version notices, unique-session counts, guarded
+update choices and the collapsed sidebar. Seven synthetic identities and positive
+private/shared drafts remain intact. Native transports are synthetic; no product
+inference runs. OS cancel and clipboard checks reuse source-fixture evidence;
+window sizing is renderer emulation. Actual old-backend updates remain unqualified.
 Earlier full source checks are reused for unchanged paths; 17 relevant checks
-pass after metadata changes, with 18 related rail checks and four source GUI
-groups. Signed acceptance and active-backend refresh remain pending. Session counts are labeled as
-sessions, while update choices deduplicate the owning service.
+pass after metadata changes, with 18 related rail checks and four source GUI groups.
+The ordinary visible update and signed evidence pass independent review.
 
-Current daily GUI: alpha.140, committed build source `3305174`. Eight signed GUI
+The earlier alpha.140 build, source `3305174`, remains evidence for unchanged paths.
+Eight signed GUI
 journeys cover recoverable space snapshots, independent drafts, partial failures,
 explicit recovery, undo and reopening. Three work-copy checks cover non-mutating
 preview, committed checkout and the resulting GUI status/draft. Positive work-copy
@@ -21,8 +25,9 @@ runs. All 1806 source checks pass without skips, and source, signed evidence and
 visible-update operation pass independent review.
 
 The visible update preserves ten native IDs, eleven live process starts, owners,
-settings and all twelve saved view draft scopes. Private drafts are empty; one
-shared draft contains text. The original Main goal remains active and unchanged.
+reported native setting fields and all twelve saved view draft scopes. Private drafts are empty; one
+shared draft contains text. A read-only goal check after the update shows the original thread and creation
+time still active.
 Only the GUI and empty active backend update; six nonempty backends stay at their
 previous versions. Real OS clipboard/clear confirmation, native trust, physical input and the
 full dogfood milestone remain unqualified. Automatic work copies refuse linked
