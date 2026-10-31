@@ -1320,8 +1320,21 @@ function compactAppVersion(value) {
 function backendVersionNotice(record, applicationVersion) {
   const backend = versionValue(record.runtimeVersion), application = versionValue(applicationVersion);
   if (backend && backend === application) return null;
-  return backend ? { label: '后台 ' + backend.replace(/^0\.1\.0-/, ''), title: `后台 ${backend} · 应用 ${application || '版本未报告'}；后台仅报告版本号。` }
-    : { label: '后台版本未知', title: '这个会话的后台未报告版本，不能用新会话后台的版本代替。' };
+  const alpha = value => value?.match(/^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-alpha\.(0|[1-9]\d*)$/);
+  const from = alpha(backend), to = alpha(application);
+  const old = from && to && from[1] === to[1] && Number.isSafeInteger(Number(from[2])) && Number.isSafeInteger(Number(to[2])) && Number(from[2]) < Number(to[2]);
+  return backend ? { kind: old ? 'old' : 'different', label: old ? '旧后台' : '版本不同', title: `后台 ${backend} · 应用 ${application || '版本未报告'}；${old ? '更新这个会话的后台后使用新版。' : '不能据此判断后台较旧。'}后台仅报告版本号。` }
+    : { kind: 'unknown', label: '版本未知', title: '这个会话的后台未报告版本，不能用新会话后台的版本代替。' };
+}
+function backendVersionSummary(records, applicationVersion) {
+  const unique = new Map(records.filter(record => !record.archived).map(record => [record.id, record]));
+  const result = { old: 0, different: 0, unknown: 0, count: 0, label: '' };
+  for (const record of unique.values()) {
+    const notice = backendVersionNotice(record, applicationVersion);
+    if (notice) { result[notice.kind]++; result.count++; }
+  }
+  result.label = [result.old && `${result.old} 个旧后台会话`, result.different && `${result.different} 个版本不同`, result.unknown && `${result.unknown} 个版本未知`].filter(Boolean).join(' · ');
+  return result;
 }
 function appVersionReport(snapshot) {
   const version = versionValue(snapshot.appVersion) || '未报告', commit = snapshot.appBuild?.commit;
@@ -1342,8 +1355,44 @@ function renderVersions() {
   $('app-version-compact').textContent = compactAppVersion(state.appVersion);
   control.setAttribute('aria-label', `应用 ${version}，复制版本信息`);
   control.title = `应用 ${version} · 点击复制版本信息`;
+  const summary = backendVersionSummary(state.sessions, state.appVersion), action = $('backend-version-summary');
+  action.hidden = summary.count === 0;
+  if (!summary.count || disconnected) { backendVersionTicket++; backendVersionMenu?.(); backendVersionMenu = null; }
+  if (!checkingBackendVersions) action.textContent = summary.old ? `${summary.old} 旧版会话${summary.count > summary.old ? ` +${summary.count - summary.old}` : ''}` : `${summary.count} 会话待核对`;
+  action.title = `${summary.label}；按未归档的独立会话计数。核对后仅能更新已结束的连接，其他原会话继续保留。`;
+  action.setAttribute('aria-label', action.title); action.disabled = disconnected;
+  action.setAttribute('aria-disabled', String(disconnected || checkingBackendVersions)); action.setAttribute('aria-busy', String(checkingBackendVersions));
 }
 $('app-version').onclick = () => { if (state) return ui.copyCode(appVersionReport(state)).catch(() => {}); };
+let checkingBackendVersions = false, backendVersionMenu, backendVersionTicket = 0;
+async function openBackendVersions() {
+  const control = $('backend-version-summary');
+  if (checkingBackendVersions || disconnected || !state) return;
+  backendVersionMenu?.(); backendVersionMenu = null;
+  const ticket = ++backendVersionTicket, revision = selectionRevision;
+  checkingBackendVersions = true; control.setAttribute('aria-disabled', 'true'); control.setAttribute('aria-busy', 'true'); control.textContent = '正在核对后台…';
+  try {
+    const options = await api.connectionUpdates();
+    if (ticket !== backendVersionTicket || revision !== selectionRevision || disconnected || !control.isConnected || document.activeElement !== control || document.querySelector('dialog[open]')) return;
+    if (!options.length) return toast('当前没有需要核对的旧后台连接。');
+    backendVersionMenu = ui.menu({
+      items: options.map((option, index) => ({ id: String(index), label: `${versionValue(option.version) || '版本未知'} · ${option.count} 个会话 · ${option.ready ? '核对并更新连接…' : '保留连接，查看原因'}` })),
+      getAnchorRect: () => control.getBoundingClientRect(),
+      onClose: () => { backendVersionMenu = null; if (revision === selectionRevision && control.isConnected && !control.hidden) control.focus({ preventScroll: true }); },
+      onSelect: key => {
+        const option = options[Number(key)];
+        if (!option || ticket !== backendVersionTicket) return;
+        if (!option.ready) return toast(option.reason);
+        attempt(async () => {
+          const updated = await api.continueConnection(option.id, { backendKey: option.backendKey, nativeId: option.nativeId, version: option.version });
+          if (updated) toast('这个后台的连接已更新；原生任务没有自动重发。');
+        });
+      },
+    });
+  } finally { checkingBackendVersions = false; renderVersions(); }
+}
+$('backend-version-summary').onclick = () => attempt(openBackendVersions);
+$('backend-version-summary').addEventListener('keydown', event => { if (event.key === 'Escape') { backendVersionTicket++; backendVersionMenu?.(); } });
 function sessionShortId(id) {
   let length = Math.min(6, id.length);
   while (length < id.length && state.sessions.some(s => s.id !== id && s.id.startsWith(id.slice(0, length)))) length++;
@@ -1411,7 +1460,7 @@ function renderSessions() {
       const link = button('', () => select(record.id), 'session-link'); link.dataset.sessionId = record.id;
       draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group);
       const label = node('span', undefined, 'label'), name = node('span'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), badges = node('span', undefined, 'session-space-badges'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
-      version.setAttribute('aria-hidden', 'true'); label.append(name, shortId, badges, status, version); link.append(icon(record.provider), label, dot);
+      version.setAttribute('aria-hidden', 'true'); label.append(name, version, shortId, badges, status); link.append(icon(record.provider), label, dot);
       const more = button('⋯', () => openSessionMenu(record.id, undefined, key), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       more.addEventListener('pointerdown', event => { if (sessionMenu?.rowKey === key) event.stopPropagation(); });

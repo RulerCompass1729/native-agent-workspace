@@ -4,6 +4,13 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.141 integrates compact per-session version notices and guarded
+readonly update choices and the existing collapsed-sidebar selector repair.
+Earlier full source checks are reused for unchanged paths; 17 relevant checks
+pass after metadata changes, with 18 related rail checks and four source GUI
+groups. Signed acceptance and active-backend refresh remain pending. Session counts are labeled as
+sessions, while update choices deduplicate the owning service.
+
 Current daily GUI: alpha.140, committed build source `3305174`. Eight signed GUI
 journeys cover recoverable space snapshots, independent drafts, partial failures,
 explicit recovery, undo and reopening. Three work-copy checks cover non-mutating

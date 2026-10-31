@@ -199,6 +199,26 @@ async function openWindow(saved) {
 function hasSavedSpaceDraft(records, targetId) {
   return Boolean(targetId && records.some(view => view.roomViews?.[targetId]?.sharedDraft || view.spaceId === targetId && view.sharedDraft));
 }
+function connectionUpdateOptions(client, applicationVersion, profile) {
+  const alpha = value => typeof value === 'string' && value.match(/^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-alpha\.(0|[1-9]\d*)$/);
+  const current = alpha(applicationVersion), seen = new Set(), options = [];
+  const visibleIds = profile ? new Set(profile.apply(client.snapshot()).sessions.filter(record => !record.archived).map(record => record.id)) : null;
+  for (const entry of client.entries) {
+    if (seen.has(entry.key)) continue; seen.add(entry.key);
+    const visible = entry.state.sessions.filter(record => visibleIds ? visibleIds.has(record.id) : !record.archived);
+    if (!visible.length || entry.state.runtimeVersion === applicationVersion) continue;
+    const record = visible.find(value => value.nativeId) || visible[0], version = entry.state.runtimeVersion, reported = alpha(version);
+    const old = reported && current && reported[1] === current[1] && Number.isSafeInteger(Number(reported[2])) && Number.isSafeInteger(Number(current[2])) && Number(reported[2]) < Number(current[2]);
+    const status = continuationStatus(entry.state, record.id);
+    const unavailable = entry.closed || entry.closing || client.closing || client.control?.maintenance.has(entry.key);
+    const effectiveActive = entry.state.sessions.some(value => (client.sessionState?.(value) || value.state) !== 'ended');
+    options.push({ backendKey: entry.key, id: record.id, nativeId: record.nativeId || null, version: version || null,
+      count: visible.length, ready: Boolean(old && status.ready && !unavailable && !effectiveActive),
+      reason: unavailable ? '这个后台连接正在更新或已断开，原会话继续保留。' : !old ? '版本未知、较新或无法比较，不能把它当作旧后台自动更新。原连接保留。'
+        : effectiveActive ? status.reason || '原生会话尚未确认结束；原连接保留，不会自动安排重启。' : status.reason || '' });
+  }
+  return options;
+}
 function register(name, handler) {
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
     const context = windows.get(event.sender.id);
@@ -425,9 +445,16 @@ async function boot() {
     const client = await connect(dataDir, c.view.owner), old = c.client;
     c.client = client; bindClient(c); old.close(); await c.win.reload();
   });
-  register('continueConnection', async (c, id) => {
+  register('connectionUpdates', async c => {
+    await c.client.refresh();
+    return connectionUpdateOptions(c.client, app.getVersion(), roomState);
+  });
+  register('continueConnection', async (c, id, expected) => {
     await c.client.refresh();
     const target = c.client.route(id), status = continuationStatus(target.state, id);
+    const guard = c.client.operationGuard(target), nativeId = target.state.sessions.find(record => record.id === id)?.nativeId, version = target.state.runtimeVersion;
+    const matches = value => value && value.backendKey === target.key && value.nativeId === nativeId && value.version === version;
+    if (expected !== undefined && (!matches(expected) || !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option)))) throw Error('后台身份、版本或更新资格已变化；原连接保留，请重新核对。');
     if (!status.ready) {
       await dialog.showMessageBox(c.win, { type: 'info', message: '保留原会话，等待原生工作结束', detail: status.reason, buttons: ['知道了'] });
       return false;
@@ -438,6 +465,10 @@ async function boot() {
       buttons: ['保留原连接', '已核对，更新连接'], defaultId: 0, cancelId: 0,
     });
     if (answer.response !== 1) return false;
+    guard(); await c.client.refresh(); guard();
+    const current = c.client.route(id), record = current.state.sessions.find(value => value.id === id), fresh = continuationStatus(current.state, id);
+    if (current !== target || current.state.runtimeVersion !== version || record?.nativeId !== nativeId || !fresh.ready ||
+        expected !== undefined && !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option))) throw Error('核对期间后台或原生工作已变化；原连接保留，没有更新。');
     const finishMaintenance = c.client.maintainService(target.key);
     try {
     const { key } = await continueService(dataDir, process.execPath, id);

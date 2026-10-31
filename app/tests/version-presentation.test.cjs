@@ -7,11 +7,11 @@ const plain = value => value === null ? null : JSON.parse(JSON.stringify(value))
 test('a backend version is compared only to the application, with no other backend fallback', () => {
   const current = '0.1.0-alpha.128';
   assert.equal(context.backendVersionNotice({ runtimeVersion: current }, current), null);
-  assert.deepEqual(plain(context.backendVersionNotice({}, current)), { label: '后台版本未知', title: '这个会话的后台未报告版本，不能用新会话后台的版本代替。' });
-  assert.equal(context.backendVersionNotice({ runtimeVersion: '0.1.0-alpha.114' }, current).label, '后台 alpha.114');
-  assert.equal(context.backendVersionNotice({ runtimeVersion: 'development' }, current).label, '后台 development');
+  assert.deepEqual(plain(context.backendVersionNotice({}, current)), { kind: 'unknown', label: '版本未知', title: '这个会话的后台未报告版本，不能用新会话后台的版本代替。' });
+  assert.equal(context.backendVersionNotice({ runtimeVersion: '0.1.0-alpha.114' }, current).label, '旧后台');
+  assert.equal(context.backendVersionNotice({ runtimeVersion: 'development' }, current).label, '版本不同');
   assert.match(context.backendVersionNotice({ runtimeVersion: '0.1.0-alpha.129' }, current).title, /后台 0.1.0-alpha.129 · 应用 0.1.0-alpha.128/);
-  assert.equal(context.backendVersionNotice({ runtimeVersion: current }, undefined).label, '后台 alpha.128');
+  assert.equal(context.backendVersionNotice({ runtimeVersion: current }, undefined).label, '版本不同');
 });
 test('the rail alpha shorthand is derived only from an exact numeric alpha version', () => {
   for (const [value, expected] of [['0.1.0-alpha.128', 'α128'], ['2.3.4-alpha.7', 'α7'], ['0.1.0-alpha.128-extra', '0.1.0-alpha.128-extra'], ['1.0.0', '1.0.0'], ['development', 'development'], [null, '?']]) assert.equal(context.compactAppVersion(value), expected);
