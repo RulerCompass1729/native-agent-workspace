@@ -2782,6 +2782,7 @@ async function ensureTerminal(id, explicit = false) {
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
       entry.keyboardFlags = snapshot.keyboardFlags || 0;
       if (terminals.get(id) !== entry) return;
+      entry.observationIndex = Number.isSafeInteger(snapshot.observationIndex) && snapshot.observationIndex >= 0 && Number.isSafeInteger(snapshot.sequence) && snapshot.sequence >= 0 && typeof snapshot.epoch === 'string' && snapshot.epoch ? snapshot.observationIndex : undefined;
       entry.sequence = snapshot.sequence; entry.ready = true;
       for (const event of entry.queued) writeTerminal(entry, event);
       entry.queued = []; loading.remove(); surface.hidden = false; surface.inert = false;
@@ -2831,7 +2832,9 @@ function fitTerminal(id) {
     });
   });
 }
-function writeTerminal(entry, event) { if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => { if (document.activeElement === entry.term.textarea) revealTerminalCursor(entry); }); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; } }
+// Follow the producer's journal order, including resizes with no new output.
+// Keep legacy payloads; an unindexed event withdraws the optional ordering hint.
+function writeTerminal(entry, event) { const indexed = Number.isSafeInteger(entry.observationIndex) && entry.observationIndex >= 0; if (indexed) { if (event.epoch !== entry.epoch || !Number.isSafeInteger(event.sequence) || event.sequence < 0) return; if (!(event.index === undefined && event.kind !== 'resize' && typeof event.data === 'string' && event.sequence > entry.sequence)) { if (!Number.isSafeInteger(event.index) || event.index <= entry.observationIndex) return; if (event.kind === 'resize') { if (event.sequence < entry.sequence || !Number.isInteger(event.cols) || event.cols < 20 || event.cols > 400 || !Number.isInteger(event.rows) || event.rows < 5 || event.rows > 200 || terminals.get(event.id) !== entry) return; entry.observationIndex = event.index; entry.term.write('', () => { if (terminals.get(event.id) === entry && event.epoch === entry.epoch) entry.term.resize(event.cols, event.rows); }); return; } if (typeof event.data !== 'string' || event.sequence <= entry.sequence) return; } } if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => { if (document.activeElement === entry.term.textarea) revealTerminalCursor(entry); }); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; if (indexed) entry.observationIndex = event.index; } }
 const disposers = [
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),

@@ -4,6 +4,13 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.153 follows native resize events in a second read-only terminal
+view even when no new output sequence arrives. It reuses the existing journal
+index and parser barrier, retaining legacy unindexed output. One hundred three
+affected checks and the integrated build pass. Signed integration is pending;
+daily remains alpha.152. Initial wide snapshot reconstruction, saved pen, old
+backends, real native producers, physical input and the shared goal remain open.
+
 Current daily GUI: alpha.152, committed build source `1c67a70`. Native OSC
 hover targets follow rendered row replacement or erasure, preserving unrelated-row
 and same-cell fast paths. Ninety-six related checks, the UI build and four signed
