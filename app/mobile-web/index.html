@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>NAW · 手机</title>
+  <link rel="stylesheet" href="/mobile/style.css">
+  <script src="/mobile/client.js" defer></script>
+</head>
+<body>
+  <header><h1>NAW</h1><button id="logout" type="button">撤销此手机访问</button></header>
+  <p id="notice" role="status" aria-live="polite">正在检查配对状态…</p>
+  <nav id="sessions" aria-label="已授权会话"></nav>
+  <main>
+    <section aria-labelledby="member-title">
+      <div class="heading"><h2 id="member-title">请选择会话</h2><button id="refresh" type="button">刷新原文</button></div>
+      <p id="member-state"></p>
+      <div id="messages" aria-label="最近原文"></div>
+      <p id="omissions"></p>
+    </section>
+    <section id="questions" aria-label="原生会话的问题"></section>
+    <form id="compose">
+      <label for="draft">给当前会话的消息</label>
+      <textarea id="draft" rows="5" maxlength="16000" autocomplete="off" spellcheck="false"></textarea>
+      <p id="draft-status">草稿只保存在此浏览器，不同步 Mac 的草稿。</p>
+      <button id="send" type="submit">发送</button>
+    </form>
+    <section aria-labelledby="receipts-title">
+      <h2 id="receipts-title">发送回执</h2>
+      <div id="receipts"></div>
+    </section>
+  </main>
+  <footer>只显示 Mac 明确授权的会话。权限批准、工具详情和更多原文请回到 Mac。</footer>
+</body>
+</html>

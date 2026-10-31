@@ -132,6 +132,71 @@ function updateApplicationMenu() {
 }
 
 function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, show: !backgroundTest && !backgroundLaunch, focusable: !backgroundTest, minWidth: Math.min(850, view.bounds?.width || 850), minHeight: Math.min(600, view.bounds?.height || 600), backgroundColor: '#f8f8f5', webPreferences: { additionalArguments: [`--naw-ui-locale=${JSON.stringify({ ...localeSnapshot, startupLanguage: localeProvisional })}`], ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
+let mobileBroker;
+let mobileListener, mobileOpening = false, mobileGeneration = 0, mobileStopped = Promise.resolve(true);
+function appMobileBroker() {
+  if (!primary || quitting || !dataDir) throw Error('The local mobile entry is unavailable.');
+  if (!mobileBroker) mobileBroker = new (require('./mobile-broker.cjs').MobileBroker)(dataDir, { exclusive: () => primary && !quitting });
+  return mobileBroker;
+}
+function stopAppMobileListener() {
+  const entry = mobileListener; mobileListener = null;
+  if (!entry) return;
+  mobileStopped = new Promise(resolve => {
+    let clean = true;
+    try { entry.controller.abort(); } catch { clean = false; }
+    try { entry.server.close(error => resolve(clean && (!error || error.code === 'ERR_SERVER_NOT_RUNNING'))); }
+    catch { clean = false; resolve(false); }
+    // Only this explicitly enabled app-owned HTTP server is affected. Native
+    // services and work already committed through Unix are independent.
+    try { entry.server.closeAllConnections(); } catch { clean = false; resolve(false); }
+  });
+}
+async function beginAppMobile(options) {
+  const keys = ['actor', 'origin', 'selection', 'replace', 'port', 'carrierConfirmed'];
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).length !== keys.length || keys.some(key => !Object.hasOwn(options, key)) ||
+      options.carrierConfirmed !== true || !Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65535 || options.port !== 0 && options.port < 1024 || mobileOpening) throw Error('Mobile setup is unavailable or incomplete.');
+  const broker = appMobileBroker(), handler = require('./mobile-http.cjs').createMobileHandler({ broker, origin: options.origin, actor: options.actor });
+  const generation = ++mobileGeneration; mobileOpening = true; let authorityChanged = false;
+  try {
+    const challenge = await broker.beginPairing({ actor: options.actor, origin: options.origin, selection: options.selection, replace: options.replace });
+    authorityChanged = true;
+    if (generation !== mobileGeneration || quitting) throw Error('Mobile setup cancelled.');
+    stopAppMobileListener();
+    if (!await mobileStopped || generation !== mobileGeneration || quitting) throw Error('Previous mobile listener close is unconfirmed.');
+    const controller = new AbortController(), server = require('node:http').createServer({ maxHeaderSize: 8192 }, handler);
+    const entry = { server, controller, ready: false }; mobileListener = entry;
+    server.maxConnections = 8; server.maxRequestsPerSocket = 16;
+    server.headersTimeout = 5000; server.requestTimeout = 5000; server.keepAliveTimeout = 1000;
+    server.on('error', () => { if (entry.ready && mobileListener === entry) revokeAppMobile(); });
+    await new Promise((resolve, reject) => {
+      const failed = () => reject(Error('Mobile listener unavailable.')), closed = () => reject(Error('Mobile listener cancelled.'));
+      server.once('error', failed); server.once('close', closed);
+      try { server.listen({ host: '127.0.0.1', port: options.port, exclusive: true, signal: controller.signal }, resolve); }
+      catch (error) { reject(error); }
+    });
+    if (generation !== mobileGeneration || quitting || mobileListener !== entry || controller.signal.aborted) throw Error('Mobile setup cancelled.');
+    const address = server.address();
+    if (!address || address.address !== '127.0.0.1' || !Number.isSafeInteger(address.port)) throw Error('Mobile listener binding unconfirmed.');
+    entry.ready = true;
+    return { ...challenge, localAddress: `http://127.0.0.1:${address.port}/mobile/` };
+  } catch {
+    // A newer explicit revoke owns the newer state; never revoke its successor.
+    if (authorityChanged && generation === mobileGeneration) revokeAppMobile();
+    throw Error('Mobile pairing was not confirmed. Check the private carrier and revoke access if necessary.');
+  } finally { mobileOpening = false; }
+}
+function revokeAppMobile() {
+  mobileGeneration++;
+  let result = { authorizationRevoked: true, connectionClosed: true, committedWorkMayContinue: false };
+  if (mobileBroker) {
+    try { result = mobileBroker.revoke(); }
+    catch { result = { authorizationRevoked: false, connectionClosed: false, committedWorkMayContinue: true }; }
+  }
+  // A transport-close fault must never skip durable authorization revocation.
+  try { stopAppMobileListener(); } catch { mobileStopped = Promise.resolve(false); }
+  return result;
+}
 function createWindow(view) {
   const win = new BrowserWindow(windowOptions(view));
   if (visibleTest) win.once('ready-to-show', () => win.showInactive());
@@ -1171,6 +1236,8 @@ async function boot() {
     if (!c.background) notifyCapacity(display, c.win);
     return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
   });
+  register('mobilePairing', (_c, selection) => beginAppMobile(selection));
+  register('mobileRevoke', () => revokeAppMobile());
   register('readingState', (c, positions, panorama) => {
     const checked = readingState(positions);
     if (panorama !== undefined && !validViews([{ owner: c.view.owner, panorama }])) throw uiError("error.panoramaReadingInvalid");
@@ -1380,7 +1447,7 @@ app.on('before-quit', event => {
   } else { quitting = true; dsh?.stop(); }
 });
 // Deliberately no native shutdown here: GUI lifecycle is independent of sessions.
-app.on('will-quit', () => { queueDispatcher?.close(); });
+app.on('will-quit', () => { queueDispatcher?.close(); revokeAppMobile(); });
 // A session rotation is announced to the person; the space record and log keep the ids.
 function notifyRotation(outcome, record) {
   const keys = { done: 'os.rotationDoneBody', saved: 'os.rotationSavedBody', kept: 'os.rotationKeptBody', keptUnsaved: 'os.rotationKeptUnsavedBody', failed: 'os.rotationFailedBody' };

@@ -29,6 +29,7 @@ const sessionStatus = (record, recoveryBadge = false) => {
   return status + recoveryStatusSuffix(recoveryBadge && exhaustedRecovery(record));
 };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
+const mobileSetup = window.nativeWorkspaceMobileSetup.bind({ container: $('mobile-setup'), document, api, getSessions: () => state?.sessions || [] });
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
 let latestViewStorage, latestViewStorageUiMessage;
@@ -2771,6 +2772,7 @@ function renderSetupPrograms(localeOnly = false) {
 }
 async function showSetup() {
   const ticket = setupTicket = openTransientDialog('setup-dialog');
+  mobileSetup.open();
   setupLoading = true; setupFailure = null;
   renderInterfaceLanguage(); renderSetupPrograms();
   try {
@@ -4270,6 +4272,7 @@ function writeTerminal(entry, event) {
   if (indexed) entry.observationIndex = event.index;
 }
 const disposers = [
+  () => mobileSetup.dispose(),
   disposeToastKeyboard,
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
@@ -5303,6 +5306,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
       $('initial-view').value = '';
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
     } else if (dialog.id === 'setup-dialog') {
+      mobileSetup.close();
       $('setup-status').replaceChildren(); $('version-info').textContent = '';
     } else if (dialog.id === 'notes-dialog') {
       $('room-notes-text').value = ''; ui.display.unbind($('notes-error')); $('notes-error').textContent = ''; $('notes-error').hidden = true;
