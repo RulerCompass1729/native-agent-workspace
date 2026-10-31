@@ -3316,3 +3316,17 @@ settings and twelve saved view draft scopes. Only the empty active backend
 updates; retained nonempty backends remain unchanged. The same original goal is
 active. Independent review accepts the source, installed evidence and update
 operator; whole-dogfood and physical-input acceptance remain open.
+
+### alpha.141 version-notice candidate
+
+The earlier full source run passed 1816 without skips; 17 affected checks passed
+after the metadata bump. The component's six source
+GUI groups cover seven synthetic identities, positive drafts, grouping/filter
+counts, keyboard menu access, synthetic version reports and one intercepted
+cancel. They do not qualify actual old binaries, native transport, real OS
+confirmation or updates. Signed acceptance is pending; no active daily backend
+is retired as part of this source integration.
+
+The collapsed-sidebar repair adds one selector-scope change. Its 18 related
+checks and four source GUI groups pass; the combined client builds. Signed
+coverage will distinguish viewport emulation from the source window-size test.

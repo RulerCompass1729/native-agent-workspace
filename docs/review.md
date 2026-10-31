@@ -1375,3 +1375,24 @@ time. One ordinary application is indexed. Source integration, signed evidence
 and the bounded update operator pass independent review. This does not certify
 real OS chooser/clipboard/clear interaction, original cold recovery or the full
 dogfood goal.
+
+### Compact connection versions (alpha.141 candidate)
+
+The reviewed version-notice component is integrated without its later lane work.
+The preload conflict retains both work-copy preview and the readonly version
+query. Source GUI evidence covers six groups with seven synthetic identities
+and positive drafts; native backend updates and the OS confirmation are not
+qualified. Working, unknown or newer connections remain preserved; only an
+explicitly confirmed ended connection is eligible for the existing update path.
+
+One integration correction clarifies the count unit: four outdated sessions on
+one service previously appeared as “4 旧后台”. The summary now names sessions;
+service choices still deduplicate the owning service. The GUI fixture derives
+its newer report from the application version instead of a fixed alpha suffix.
+The earlier full 1816-check run is reused for unchanged JavaScript paths; 17
+relevant checks pass after the version metadata change. Signed installation is
+pending. The one-line collapsed-sidebar selector repair is also integrated: it
+restores the existing hiding rules on the actual sidebar root. Its 18 related
+checks and four source GUI groups pass, and the combined client builds. The first
+rail GUI startup failure remains recorded; it used a fixture version mismatch,
+not a failing product-layout verdict.
