@@ -3407,3 +3407,24 @@ keep their versions. Both read-only goal witnesses retain the original active
 goal. These are bounded display tests, not original-fork lifecycle qualification. The
 maintained process-reading script retains eleven groups and its explicit
 isolated source-only gate; it is not installed or real-provider evidence.
+
+
+### Terminal readability and saved display preferences — alpha.144 candidate
+
+Fresh displays use 13-point text and line height 1; reset uses 13. Saved 14, 20
+and manually selected 13 remain valid, with cursor blinking defaults unchanged.
+The existing pinned theme callback also colors the legacy viewport, including
+its fit remainder, for palettes and native OSC background changes. It adds no
+listener, parser, dependency or display setting. The build refuses a missing or
+ambiguous pinned callback. Source integration passes 74 related checks without
+skips and builds successfully. Earlier source GUI evidence is reused for its
+qualified density and background groups; Main signed acceptance remains pending.
+
+Three source-only regression scripts retain selection provenance, exact sharing
+previews and native phase/permission flows. Their recorded original assertions
+and limits are retained. The former native-state test's expectation that private
+approval content appears automatically in shared reading is not counted as a
+pass: the approved member-focus interaction exposes the member's waiting status
+first, then its local permission panel when explicitly opened. Its earlier automatic
+body expectation remains unqualified; this is a test-scope correction, not a
+product change or permission-provenance relaxation.

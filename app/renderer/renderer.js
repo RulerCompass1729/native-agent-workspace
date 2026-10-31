@@ -75,7 +75,7 @@ async function addToSpace(id, destination) {
 let sidebarLayout;
 let inviteOrigin;
 let headerControls, advancedControls;
-let terminalDisplay = { fontSize: 14, palette: 'dark' };
+let terminalDisplay = { fontSize: 13, palette: 'dark' };
 const terminalThemes = {
   // The maintainer's iTerm2 default profile, dark-mode colours (user request, T-14).
   // Native programs' own truecolour output is drawn as sent, never remapped.
@@ -2507,7 +2507,7 @@ async function ensureTerminal(id, explicit = false) {
   $('terminal-area').style.backgroundColor = theme.background;
   const loading = node('p', '正在连接原生终端…', 'terminal-loading'); loading.setAttribute('role', 'status');
   const surface = node('div', undefined, 'terminal-surface'); surface.hidden = true; surface.inert = true; element.append(loading, surface);
-  const term = new Terminal({ fontFamily: '"MesloLGS NF", Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
+  const term = new Terminal({ fontFamily: '"MesloLGS NF", Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
   const intent = selectionRevision;
   const entry = { element, term, fit, generation, nativeId: record?.nativeId, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: record?.messages.some(message => message.role === 'assistant') }; terminals.set(id, entry); syncTerminalMount(id);
@@ -2938,7 +2938,7 @@ const saveTerminalDisplay = () => attempt(async () => {
   terminalDisplay = { fontSize, palette: $('terminal-palette').value }; applyTerminalDisplay(); await persistView();
 });
 $('terminal-font-size').onchange = $('terminal-palette').onchange = saveTerminalDisplay;
-$('reset-terminal-display').onclick = () => { $('terminal-font-size').value = 14; $('terminal-palette').value = 'dark'; saveTerminalDisplay(); };
+$('reset-terminal-display').onclick = () => { $('terminal-font-size').value = 13; $('terminal-palette').value = 'dark'; saveTerminalDisplay(); };
 $('close-terminal-display').onclick = () => { $('terminal-display-dialog').close(); focusTerminal(); };
 let filePreview = null, fileTarget = null, fileChoosing = false, filesSpace = '';
 function openSpaceFiles() {

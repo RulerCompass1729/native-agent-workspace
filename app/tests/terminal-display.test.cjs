@@ -96,8 +96,8 @@ test('close rejects late blur and reopening reads the accepted setting', async (
 });
 test('restore default still uses the existing reset and save behavior', async () => {
   const f = fixture(); f.open(); f.$('reset-terminal-display').onclick();
-  await Promise.resolve(); assert.deepEqual(f.value(), { fontSize: 14, palette: 'dark' });
-  assert.deepEqual(f.writes, [{ fontSize: 14, palette: 'dark' }]);
+  await Promise.resolve(); assert.deepEqual(f.value(), { fontSize: 13, palette: 'dark' });
+  assert.deepEqual(f.writes, [{ fontSize: 13, palette: 'dark' }]);
 });
 test('the single existing form is inside the original native pane with an accessible heading', () => {
   const pane = html.indexOf('<section id="native-pane"'), form = html.indexOf('<dialog closedby="any" id="terminal-display-dialog"');
@@ -147,4 +147,29 @@ for (const inDialog of [false, true]) test(`the original DSH menu host stays out
   const menu = rendered[0].type();
   assert.equal(menu.props.portal, !inDialog);
   close(); close(); assert.equal(closes.length, 1); assert.equal(removed.length, 1);
+});
+
+
+test('fresh density defaults preserve valid saved fonts and reject invalid saved display values', () => {
+  const initial = source.match(/^let terminalDisplay = .+;$/m)[0];
+  const themes = source.match(/^const terminalThemes = \{[\s\S]*?^\};/m)[0];
+  const restore = source.match(/^  const display = state\.viewState\.terminalDisplay;\n  if \(display.+terminalDisplay = display;$/m)[0];
+  const construct = source.match(/^  const term = new Terminal\(.+\);$/m)[0];
+  for (const [saved, expectedFont, expectedPalette] of [
+    [undefined, 13, 'dark'],
+    [{ fontSize: 14, palette: 'dark' }, 14, 'dark'],
+    [{ fontSize: 20, palette: 'green' }, 20, 'green'],
+    [{ fontSize: 13, palette: 'green' }, 13, 'green'],
+    [{ fontSize: 400, palette: 'dark' }, 13, 'dark'],
+    [{ fontSize: 13.5, palette: 'dark' }, 13, 'dark'],
+    [{ fontSize: 14, palette: 'missing' }, 13, 'dark'],
+  ]) {
+    const context = vm.createContext({ state: { viewState: { terminalDisplay: saved } },
+      Terminal: class { constructor(options) { this.options = options; } } });
+    vm.runInContext(`${initial}\n${themes}\n${restore}\nconst theme = terminalThemes[terminalDisplay.palette];\n${construct}`, context);
+    assert.equal(vm.runInContext('term.options.fontSize', context), expectedFont);
+    assert.equal(vm.runInContext('term.options.lineHeight', context), 1);
+    assert.equal(vm.runInContext('term.options.cursorBlink', context), true);
+    assert.equal(vm.runInContext('terminalDisplay.palette', context), expectedPalette);
+  }
 });

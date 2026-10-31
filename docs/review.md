@@ -1523,3 +1523,45 @@ boundary; overflow and error/timeout refusal remain. All 26 publication checks
 pass, and independent review accepts the finite capacity repair. At this source
 checkpoint the actual complete-history rerun remains pending. The accepted installed alpha.143
 payload is unchanged; no additional application release or restart is required.
+
+
+### Terminal density, fit remainder and regression scope (2026-10-30)
+
+The released appearance changes adjust only fresh/reset font defaults to 13,
+line height to 1, and the existing pinned viewport theme callback. Valid saved
+fonts and cursor defaults remain. The black strip below the fitted grid was
+reproduced in prior screenshots: only the newer scrolling layer received the
+background. The same callback now colors the existing legacy viewport as well.
+Exact-source build guards reject missing or ambiguous callback matches. No
+third-party source file, dependency, listener, panel or protocol is added.
+
+The selection, sharing-preview and native-state test maintenance preserves its
+raw request and private-data guards. One former native-state assertion expected
+private approval text automatically in the shared reader. That legacy G3
+expectation is not newly qualified. The approved passive member-focus behavior
+supersedes it: waiting status remains visible and its local permission panel opens via
+the member. The updated positive path and revoked-sharing checks do not imply
+the old automatic-body case passed; no runtime repair or sharing waiver is made.
+
+All 74 affected source checks pass without skips; the build succeeds. Independent
+source review and the signed appearance workflow remain pending. Native cursor
+mode snapshots, other terminal hosts, padding under native OSC backgrounds,
+physical input and original-fork lifecycle retain their earlier limits.
+
+Independent preflight review found that the signed test's CDP page shutdown
+skips the cancellable native window-close/geometry-save handler. The recipe
+now calls this a renderer-shutdown reopen and gives it no ordinary-close or
+geometry credit. Before any lock or launch it also binds canonical Main and
+the exact candidate location, rechecks all 64 source/payload files and 105
+production dependency identities, removes the duplicate-launch Node override,
+and uses an isolated absolute Python with the existing pinned Pillow reader.
+The first capped review is retained as a non-pass. Supplementary review of the
+three maintained regression scripts and actual signed acceptance remain pending.
+
+Supplementary review accepts the source integration and retained superseded-test
+limits. It caught an incorrect parent-directory assertion and a self-generated
+fingerprint that did not bind the runner to the reviewed inputs. Both are fixed:
+the runner now compares against a frozen source/recipe digest record, and the
+bundle path and strict signature are checked before loading candidate code.
+The shared member-focus assertion qualifies its local permission panel, not a
+new installed private-request-body check. Signed acceptance is still pending.

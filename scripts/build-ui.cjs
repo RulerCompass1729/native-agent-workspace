@@ -34,6 +34,11 @@ for (const [before, after] of columnFix) {
   if (xterm.split(before).length !== 2) throw Error('Pinned terminal DOM source changed; requalify the column fix.');
   xterm = xterm.replace(before, after);
 }
+// The legacy viewport fills the fit remainder below the newer scrolling layer.
+// Reuse the same theme update so palette and native OSC backgrounds both apply.
+const viewportBackground = 'this._scrollableElement.getDomNode().style.backgroundColor=n.colors.background.css';
+if (xterm.split(viewportBackground).length !== 2) throw Error('Pinned terminal viewport source changed; requalify background coverage.');
+xterm = xterm.replace(viewportBackground, viewportBackground + ',e.querySelector(".xterm-viewport").style.backgroundColor=n.colors.background.css');
 const terminal = xterm + '\n' + licensed('@xterm/addon-fit', 'lib/addon-fit.js');
 const source = bootstrap
   .replace('/* SIDEBAR_TEMPLATE */', () => JSON.stringify(sidebar))
