@@ -3317,16 +3317,28 @@ updates; retained nonempty backends remain unchanged. The same original goal is
 active. Independent review accepts the source, installed evidence and update
 operator; whole-dogfood and physical-input acceptance remain open.
 
-### alpha.141 version-notice candidate
+### alpha.141 version notices installed
 
 The earlier full source run passed 1816 without skips; 17 affected checks passed
-after the metadata bump. The component's six source
-GUI groups cover seven synthetic identities, positive drafts, grouping/filter
-counts, keyboard menu access, synthetic version reports and one intercepted
-cancel. They do not qualify actual old binaries, native transport, real OS
-confirmation or updates. Signed acceptance is pending; no active daily backend
-is retired as part of this source integration.
+after the metadata bump. Eighteen rail checks and four source GUI groups cover
+the selector repair. These are scoped reuse, not a new combined full-suite run.
 
-The collapsed-sidebar repair adds one selector-scope change. Its 18 related
-checks and four source GUI groups pass; the combined client builds. Signed
-coverage will distinguish viewport emulation from the source window-size test.
+Six signed GUI groups pass: compact notices, unique counts across grouping and
+filtering, keyboard menu access, working/ended choices, unknown/newer/current
+reports and the collapsed rail. Seven synthetic identities and positive drafts
+remain. The rail checks both hidden badges when collapsed and seven visible
+badges after expansion. One GUI and two synthetic daemons, their profile/socket
+directories and exact lease are cleaned. Source hashes stay unchanged; strict
+signature passes. OS confirmation/cancel and clipboard are source-proof reuse;
+no ready update is selected. Update API counters are not instrumented. Viewport
+emulation does not qualify physical resizing or actual old-binary/native updates.
+Product provider inference is zero.
+
+The independently reviewed visible update preserves ten native IDs, eleven live
+process starts, reported native setting fields and twelve saved view draft scopes. Only the
+empty active backend changes; the six nonempty backends retain versions and
+starts. A read-only check after the update shows the original goal still active, with
+the same thread and creation time. Pre-quit retention and
+pending-activation guards refuse broader bootstrap changes; nine extracted
+retention cases pass. A native exit during the precheck/bootstrap gap remains a
+limit caught by the postcheck. Full-day use and the whole dogfood goal stay open.
