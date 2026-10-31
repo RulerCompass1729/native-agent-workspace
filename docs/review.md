@@ -1421,3 +1421,15 @@ Main goal check after the update shows the original thread, creation time and
 active status; its native session keeps the same ID and live process identity. One
 ordinary app is indexed, with no debug/background launch arguments. The full
 dogfood milestone remains open.
+
+### Current daily-use test maintenance
+
+The existing regression now uses visible member actions and bounded history
+pages instead of removed tabs. All five groups pass on signed alpha.141 without
+product changes: history identities, exact synthetic deliveries, independent
+drafts and same-profile identity survive the complete journey. The signed test
+uses renderer-only access; source API interception is not claimed for the newer
+binary. Preflight review required post-daemon signature verification, accurate
+lease ownership and narrower evidence labels; those fixes are in the actual run.
+Owned processes, profile, socket directory and token are cleaned. Physical input,
+real native edit-line persistence and the whole dogfood milestone remain open.
