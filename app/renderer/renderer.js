@@ -2276,6 +2276,7 @@ function render() {
     $('room-record-view').hidden = false;
     $('room-scope').hidden = !inRoom || !s;
     const terminalVisible = Boolean(s && terminalLayout !== 'hidden' && (!memberFocus || mode === 'terminal'));
+    if ($('terminal-display-dialog').open && (!terminalVisible || terminalDisplayKey !== headerMenuKey())) $('terminal-display-dialog').close();
     $('native-pane').hidden = !terminalVisible;
     $('room-layout').classList.toggle('has-terminal', inRoom && terminalVisible);
     $('room-layout').classList.toggle('terminal-maximized', inRoom && terminalVisible && terminalLayout === 'maximized');
@@ -2914,7 +2915,20 @@ for (const input of [$('shared-input')]) input.addEventListener('focus', () => {
 $('take-control').onclick = () => attempt(() => switchMode(mode, true));
 $('terminal-copy').onclick = () => attempt(() => copyTerminalContext());
 $('terminal-paste').onclick = () => attempt(() => pasteTerminalContext());
-$('terminal-display').onclick = () => { $('terminal-font-size').value = terminalDisplay.fontSize; $('terminal-palette').value = terminalDisplay.palette; $('terminal-display-dialog').showModal(); };
+let terminalDisplayKey;
+$('terminal-display').onclick = () => {
+  if (!current() || $('native-pane').hidden) return;
+  const dialog = $('terminal-display-dialog');
+  terminalDisplayKey = headerMenuKey();
+  $('terminal-font-size').value = terminalDisplay.fontSize; $('terminal-palette').value = terminalDisplay.palette;
+  dialog.show();
+};
+const dismissTerminalDisplayOnFocus = event => {
+  const dialog = $('terminal-display-dialog');
+  if (dialog.open && !dialog.contains(event.target)) dialog.close();
+};
+document.addEventListener('focusin', dismissTerminalDisplayOnFocus, true);
+disposers.push(() => document.removeEventListener('focusin', dismissTerminalDisplayOnFocus, true));
 $('terminal-more').onclick = () => openHeaderMenu($('terminal-more'), true);
 $('terminal-more').onpointerdown = event => { if (sessionMenu?.anchor === $('terminal-more')) event.stopPropagation(); };
 const saveTerminalDisplay = () => attempt(async () => {

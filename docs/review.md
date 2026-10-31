@@ -1477,3 +1477,21 @@ the finite-deadline/input contract pass all 26 local publication checks.
 Independent review accepts the finite repair with the historical deadline
 wording corrected; the actual complete-history rerun remains pending. This is a publication repair,
 not a new product release or evidence for native-session recovery.
+
+
+### Existing terminal display without blocking work (2026-10-30)
+
+A modal display editor blocked the rest of the workspace. The existing form is
+now positioned in the native pane and opens nonmodally; its controls and save
+callbacks remain. Navigation, native identity/owner changes or a hidden pane
+dismiss stale edits; unmount removes the focus listener. A reproduced body-menu
+host added document height, changing the native grid from 53 to 52 columns and
+back. Reusing the existing fixed zero-size host repairs that source finding.
+All seven actual callers were inspected; the author's four source GUI groups
+qualify the exercised header path, not every shared helper caller.
+
+Main integrates only the released display feature and process-reading test
+maintenance. Compact-member predicates/toolbar and other lanes' work remain
+intact. Current affected checks, independent source review and a finite signed
+installed workflow are pending; physical input, actual provider frames and the
+original forks' lifecycle milestone are not implied.

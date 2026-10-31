@@ -87,7 +87,8 @@ window.__ModuleLoader__.load({
             const host = document.createElement('div'); (modal || document.body).append(host);
             // A body portal is inert beneath a modal dialog. Keep the same DSH
             // menu inline in that dialog; no second menu implementation.
-            if (modal) Object.assign(host.style, { position: 'fixed', left: '0px', top: '0px', width: '0px', height: '0px', zIndex: '1000' });
+            // A body portal host must not add document height or resize the terminal.
+            Object.assign(host.style, { position: 'fixed', left: '0px', top: '0px', width: '0px', height: '0px', zIndex: '1000' });
             const root = ReactDOM.createRoot(host); let closed = false;
             const position = () => {
               const menu = modal && host.querySelector('[role="menu"]');
