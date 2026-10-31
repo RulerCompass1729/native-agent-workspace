@@ -4,13 +4,16 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.146 preserves completed native cursor controls in snapshots.
-Current-component reproduction confirms the old loss; 18 affected checks pass.
-Signed mode-state acceptance and independent review remain pending. Daily stays
-alpha.145; nonempty retained backends keep their prior serializer until a safe
-update. No new rendered-bar, temporal-blink or physical-input claim.
+Current daily GUI: alpha.146, committed build source `5874b29`. Completed
+native cursor controls survive snapshots and four renderer-shutdown reopens in
+four signed mode-state groups. Eighteen affected checks pass without skips.
+Public xterm observers feed the three existing snapshot writers; no new parser,
+panel or dependency is added. The ordinary visible update preserves ten original
+IDs, eleven live process starts, twelve draft scopes and the same active goal.
+Six nonempty backends retain their old serializer until a safe update. This is
+control-state proof, not visible bar shape, blink timing or physical-input proof.
 
-Current daily GUI: alpha.145, committed build source `e348db4`. Existing recovery
+The earlier alpha.145 recovery task, source `e348db4`, remains qualified. Its
 buttons remain readable after moving into message headings. Source checks pass
 (63 related and 20 archive checks, no skips); four signed installed groups pass.
 Directed and paused links measure 5.80 light and 12.11 dark, above the 4.5 floor.
