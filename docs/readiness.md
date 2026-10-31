@@ -1,19 +1,22 @@
 # Readiness and next gates
 
-As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
+As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.148 uses a steady default only when a snapshot advertises
-`cursorModesVersion: 1`. Completed native blink/style controls retain precedence;
-unadvertised and unknown frames keep prior defaults. A guarded patch to pinned
-xterm 6 also preserves native cursor overrides during live link hover/leave.
-Thirty-eight affected checks pass without skips; signed acceptance is pending.
-Daily remains alpha.147. Existing backends keep their old code, including prior
-defaults on alpha.146/147 frames. Snapshot OSC8 link-address loss remains open;
-this candidate does not repair or qualify reconstructed hyperlink interaction.
+Current daily GUI: alpha.148, committed build source `3006825`. Snapshots that
+advertise `cursorModesVersion: 1` now use the adopted steady fallback; explicit
+native cursor controls retain precedence, including during live link hover.
+Unadvertised or unknown frames keep prior defaults. Thirty-eight affected checks
+and four signed synthetic-transport groups pass without product inference. Four
+renderer-shutdown reopens and two observer reloads preserve mode state, identities
+and positive drafts. This is not physical blink timing or iTerm parity proof.
+The ordinary visible update preserves ten native IDs, eleven live process starts,
+twelve draft scopes and the original active goal. Six nonempty backends keep
+old code and defaults. Snapshot OSC8 address loss remains open; reconstructed
+hyperlink interaction, original-fork lifecycle and the whole milestone are open.
 
-Current daily GUI: alpha.147, committed build source `19ced47`. The existing
+The prior alpha.147 task, source `19ced47`, remains qualified. The existing
 three-attempt recovery now has a specific sidebar cue and a guarded desktop
 notification request. All 118 affected checks and four signed groups pass with
 synthetic transport and no product inference. Another selected session and its

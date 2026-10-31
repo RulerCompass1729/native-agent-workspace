@@ -3519,20 +3519,38 @@ goal restore, full Main restart, all-windows-closed delivery, real clicks, local
 mobile, physical input and full-day use remain unqualified.
 
 
-### Native cursor default and hover precedence - alpha.148 candidate
+### Native cursor default and hover precedence - alpha.148
 
-Thirty-eight affected checks pass without skips, including actual Terminal
-snapshots, exact version-hint hydration, queued controls, stale identity/epoch,
-legacy defaults and pinned xterm hover/leave painter counterexamples. Existing
-column bounds and background repairs remain checked. A test-only build-info
-fixture now extracts the complete multiline initial registration; its metadata
-cache/fresh snapshot assertions remain intact. The actual UI build passes.
+Thirty-eight affected checks pass without skips, and the actual UI builds. Actual
+Terminal snapshots, exact version-hint hydration, queued controls, stale identity
+and epoch, legacy defaults and both directions of pinned link-painter precedence
+are covered. Existing column bounds and background repairs remain checked. The
+build-info fixture now extracts the complete multiline initial registration while
+retaining the original metadata-cache and fresh-snapshot assertions.
 
-Incoming source GUI uses two production Terminals with fake workers, four groups,
-eight snapshots and seven planned output frames, with four owned close/activate
-reopens and two observer reloads. A failed first trial is retained. Live links
-must have positive OSC8 URI metadata before hover; subsequent native output may
-write fresh links, but reconstruction injects no output. Snapshot URL loss stays
-open. A finite signed port uses renderer-only CDP focus emulation, four renderer
-shutdown/duplicate-launch reopens and the same four groups. Neither mode classes
-nor PNGs prove physical blink timing or iTerm parity. Installed results pending.
+One signed installed run passes four groups using two actual production Terminals
+with fake workers: seven planned output frames, eight snapshots, twelve captures,
+nine PNGs, four renderer-shutdown/duplicate-launch reopens and two observer reloads.
+Qualified unset, native 5q/6q, DEC12 on/off with shape reset and unadvertised fallback
+are checked with actual cursor DOM classes, RGB, positive drafts and stable IDs.
+Live hover first requires the real OSC8 URI; button-free hover/leave changes the
+underline without activating a URL. Reconstruction injects no output. No real
+provider, product inference, native CLI, typed terminal input or OS clipboard is
+used. Main API counters are not instrumented; fake-worker records and source
+refusal proof are the applicable evidence. This does not prove physical blink.
+
+All forty raw files match their seal. Seven owned processes, profile, endpoint and
+exact slot are gone; strict source/CDHash signature is checked after daemon exit.
+The scoped temporary prefix is empty afterward; its prior count was not observed,
+so no before/after aggregate leak claim is made. The offline daily-proof gate first
+rejected normal constructor envelopes; checking their exact synthetic argv/cwd/PWD
+and then typed resizes fixes that harness without another GUI run.
+
+The ordinary visible alpha.148 update from clean `3006825` preserves ten native
+IDs, eleven live process starts, twelve view/draft scopes, settings and the same
+active goal. Six nonempty backends retain PID/start/version. One existing NAW
+registration remains after unregistering four historical copies already in Trash;
+their files remain. Spotlight returned no result and supplies no separate proof.
+OSC8 addresses still disappear after snapshot reconstruction. Actual old binaries,
+physical focus/blink, iTerm parity, ordinary-close geometry, original fork lifecycle,
+full-day use, full T77 and the shared milestone remain unqualified by this batch.
