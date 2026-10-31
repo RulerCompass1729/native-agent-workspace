@@ -61,6 +61,7 @@ const primary = app.requestSingleInstanceLock();
 if (!primary) app.quit();
 const windows = new Map();
 const toolWaitNotifications = new Map();
+const capacityNotifications = new Map();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
 let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, views = [], quitting = false;
@@ -95,6 +96,37 @@ function notifyToolWait(snapshot, win) {
     } catch { /* The existing in-app status remains available if OS delivery fails. */ }
   }
 }
+function notifyCapacity(snapshot, win) {
+  if (win.isDestroyed()) return;
+  for (const s of snapshot.sessions || []) {
+    const recovery = s.capacityRecovery;
+    if (typeof s.id !== 'string' || !s.id || typeof s.nativeId !== 'string' || !s.nativeId ||
+        s.archived || s.backendUnavailable || s.transportDisconnected || s.nativeContextPending ||
+        s.approval || s.approvalOverflow || s.claudeQuestion || s.nativeApproval || s.nativeInputRequired ||
+        !['idle', 'error'].includes(s.state) || recovery?.nativeId !== s.nativeId ||
+        typeof recovery.turnId !== 'string' || !recovery.turnId || recovery.status !== 'exhausted' ||
+        recovery.attempt !== 3 || !['capacity', 'routing'].includes(recovery.reason)) continue;
+    const key = JSON.stringify([recovery.nativeId, recovery.turnId]);
+    let notices = capacityNotifications.get(s.id);
+    if (!notices) capacityNotifications.set(s.id, notices = { seen: new Set(), active: new Set() });
+    if (notices.seen.has(key)) continue;
+    // Remember the episode before delivery: repeated or delayed state snapshots
+    // must never retry an unsupported/failed OS notification or replay an alert.
+    notices.seen.add(key);
+    let notification;
+    try {
+      if (!Notification.isSupported()) continue;
+      notification = new Notification({ title: 'NAW · 自动继续已达上限', body: '会话已自动继续 3 次，仍需处理。请在侧栏检查标记的会话。' });
+      notices.active.add(notification);
+      notification.once('close', () => notices.active.delete(notification));
+      notification.once('click', () => { if (!win.isDestroyed()) win.show(); });
+      notification.show();
+    } catch {
+      if (notification) notices.active.delete(notification);
+      // The original sidebar status remains available without OS delivery.
+    }
+  }
+}
 function bindClient(context) {
   const { win, client } = context;
   // Rechecked by the router after awaited pauses as well as at IPC entry.
@@ -105,7 +137,10 @@ function bindClient(context) {
     }
   };
   const send = (channel, data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, data); };
-  client.on('state', data => { if (context.client === client && !win.isDestroyed()) { send('workspace:state', displayState(data, context)); notifyToolWait(data, win); } });
+  client.on('state', data => { if (context.client === client && !win.isDestroyed()) {
+    const display = displayState(data, context);
+    send('workspace:state', display); notifyToolWait(data, win); notifyCapacity(display, win);
+  } });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
   client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
@@ -531,7 +566,12 @@ async function boot() {
     openPath: target => shell.openPath(target),
     isCurrent: () => !c.win.isDestroyed() && windows.get(c.win.webContents.id) === c,
   }, source, file, options));
-  register('initial', async c => { const appBuild = await (applicationBuild ||= appBuildInfo(app, dataDir)); return { ...displayState(await c.client.call('initial'), c), viewState: c.view, appVersion: app.getVersion(), appBuild, preflight: preflight() }; });
+  register('initial', async c => {
+    const appBuild = await (applicationBuild ||= appBuildInfo(app, dataDir));
+    const display = displayState(await c.client.call('initial'), c);
+    notifyCapacity(display, c.win);
+    return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, preflight: preflight() };
+  });
   register('readingState', (c, positions) => { c.view.readingPositions = readingState(positions); return saveReadingSoon(); });
   register('viewState', (c, next) => {
     if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');

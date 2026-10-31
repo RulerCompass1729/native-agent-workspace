@@ -6,7 +6,16 @@ const button = (text, action, cls) => { const el = node('button', text, cls); el
 const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', background: '已转到后台运行', error: '需要检查' };
 // An unfollowed native /resume leaves the process running in another session.
 const switchedAway = record => record.state === 'stopping' && record.nativeContextPending?.reason === 'resume';
-const sessionStatus = record => window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
+const sessionStatus = (record, recoveryBadge = false) => {
+  const status = window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
+  const recovery = record.capacityRecovery;
+  if (!recoveryBadge || disconnected || record.archived || record.backendUnavailable || record.transportDisconnected ||
+      record.nativeContextPending || record.approval || record.approvalOverflow || record.claudeQuestion || record.nativeApproval || record.nativeInputRequired ||
+      !['idle', 'error'].includes(record.state) || typeof record.nativeId !== 'string' || !record.nativeId ||
+      recovery?.nativeId !== record.nativeId || typeof recovery.turnId !== 'string' || !recovery.turnId ||
+      recovery.status !== 'exhausted' || recovery.attempt !== 3 || !['capacity', 'routing'].includes(recovery.reason)) return status;
+  return status + ' · ' + (recovery.reason === 'routing' ? '路由超时停下' : '满载停下') + ' · 已重试 ' + recovery.attempt + ' 次';
+};
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
@@ -1469,7 +1478,7 @@ function renderSessions() {
       element.append(link, more); row = { element, link, more, name, shortId, badges, status, dot, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
     }
     const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = memberships.map(r => r.name).join('、');
-    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sessionStatus(record)}`;
+    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sessionStatus(record, true)}`;
     const association = memberships.length ? `所属空间：${membershipNames}` : '独立会话';
     const occurrence = grouped && memberships.length > 1 ? ' · 同一会话在多个空间显示，原生身份相同' : '';
     const version = backendVersionNotice(record, state.appVersion);
@@ -1484,7 +1493,7 @@ function renderSessions() {
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
     row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}${group ? ` · ${spaceRecord(group)?.name}` : ''}`); row.more.title = row.more.getAttribute('aria-label'); row.more.disabled = disconnected || renameTarget?.id === record.id;
-    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = `${sessionStatus(record)} · ${sessionActivityTime(record)}`; row.dot.className = `state-dot ${record.state}`;
+    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = `${sessionStatus(record, true)} · ${sessionActivityTime(record)}`; row.dot.className = `state-dot ${record.state}`;
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
   }
   highlightSpace(hoverSpace);

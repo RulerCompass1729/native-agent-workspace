@@ -274,7 +274,7 @@ class Workspace extends EventEmitter {
   // restored from history or disk, and the original task is never replayed.
   capacityStatus(id) {
     const r = this.capacityRecoveries.get(id);
-    return r ? { status: r.status, attempt: r.attempt, due: r.due, reason: r.reason } : null;
+    return r ? { status: r.status, attempt: r.attempt, due: r.due, reason: r.reason, nativeId: r.nativeId, turnId: r.turnId } : null;
   }
   tickToolWait() {
     if (this.closed) return;
