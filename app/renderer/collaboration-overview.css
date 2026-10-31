@@ -61,6 +61,7 @@
 .collaboration-overview[data-list-units="true"] .collaboration-member-child,.collaboration-overview[data-list-units="true"] .collaboration-member-freshness{font-size:11px;line-height:13px}
 .collaboration-overview[data-list-units="true"] .collaboration-member-reader{border:0;border-radius:0 0 7px 7px}
 .collaboration-overview[data-list-units="true"] .collaboration-messages{padding:0 6px;overscroll-behavior:auto}
+.compact-room-surface .collaboration-overview[data-list-units="true"] .jump-bar{bottom:0}
 .collaboration-overview[data-list-units="true"] .collaboration-messages>.message:last-of-type{margin-bottom:0}
 .collaboration-overview[data-list-units="true"] .collaboration-brief{padding:0 6px}
 .collaboration-overview[data-list-units="true"] .collaboration-brief>strong{display:none}
