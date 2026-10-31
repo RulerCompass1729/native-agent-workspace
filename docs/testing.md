@@ -3517,3 +3517,22 @@ native IDs, eleven live starts, twelve view draft scopes and the same active goa
 Six nonempty backends retain PID/start/version. Visible OS delivery, native atomic
 goal restore, full Main restart, all-windows-closed delivery, real clicks, locale,
 mobile, physical input and full-day use remain unqualified.
+
+
+### Native cursor default and hover precedence - alpha.148 candidate
+
+Thirty-eight affected checks pass without skips, including actual Terminal
+snapshots, exact version-hint hydration, queued controls, stale identity/epoch,
+legacy defaults and pinned xterm hover/leave painter counterexamples. Existing
+column bounds and background repairs remain checked. A test-only build-info
+fixture now extracts the complete multiline initial registration; its metadata
+cache/fresh snapshot assertions remain intact. The actual UI build passes.
+
+Incoming source GUI uses two production Terminals with fake workers, four groups,
+eight snapshots and seven planned output frames, with four owned close/activate
+reopens and two observer reloads. A failed first trial is retained. Live links
+must have positive OSC8 URI metadata before hover; subsequent native output may
+write fresh links, but reconstruction injects no output. Snapshot URL loss stays
+open. A finite signed port uses renderer-only CDP focus emulation, four renderer
+shutdown/duplicate-launch reopens and the same four groups. Neither mode classes
+nor PNGs prove physical blink timing or iTerm parity. Installed results pending.

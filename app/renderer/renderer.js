@@ -2676,6 +2676,7 @@ async function ensureTerminal(id, explicit = false) {
       if (snapshot.epoch && live?.epoch && snapshot.epoch !== live.epoch) throw new Error('终端画面已变化，请重新选择这个视图。');
       entry.epoch = snapshot.epoch;
       term.resize(snapshot.cols || 100, snapshot.rows || 30);
+      if (snapshot.cursorModesVersion === 1) term.options.cursorBlink = false;
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
       entry.keyboardFlags = snapshot.keyboardFlags || 0;
       if (terminals.get(id) !== entry) return;
