@@ -4,12 +4,19 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.143 keeps the existing terminal display form in its native pane,
-using its existing controls without blocking the conversation. Source checks
-and signed installed acceptance are in progress; the daily app is still alpha.142.
-The process-reading regression is maintained without changing product behavior.
+Current daily GUI: alpha.143, committed build source `dc7a578`. The existing
+terminal display form opens inside its native pane without a modal backdrop.
+Seventy related checks and four signed GUI groups pass, including grid stability,
+validation, compact control layering and two owned process reopenings with
+positive drafts. Native transport is synthetic and viewport sizing is emulated;
+render-key guards, API refusals and simulated save failure reuse source evidence.
+The ordinary visible update preserves ten native IDs, eleven live process starts
+and twelve saved view draft scopes. Six nonempty backends remain unchanged.
+Read-only goal witnesses preserve the original identity, objective, creation
+and active status. Real native frames, physical input, original-fork window-only
+recovery and the complete dogfood milestone remain open.
 
-Current daily GUI: alpha.142, committed build source `632e7d1`. Six source and
+The earlier alpha.142 build, source `632e7d1`, remains evidence for unchanged paths. Six source and
 six signed GUI groups pass for the compact member terminal, including maximize
 and restore in three responsive bands, permission focus, ended frames and draft
 recovery. It reuses existing card, toolbar and split styles. Signed sizing matches
