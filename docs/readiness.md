@@ -4,12 +4,21 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.144 combines denser fresh-terminal defaults with the existing
-palette callback repair for the viewport's bottom remainder. Valid saved fonts
-remain unchanged. Source integration checks pass; independent review and signed
-installed acceptance are pending. The daily app is still alpha.143.
+Current daily GUI: alpha.144, committed build source `91ef94d`. Fresh/reset
+terminal text uses 13-point type and line height 1, preserving valid saved fonts.
+The existing theme callback covers the viewport's fit remainder. All 74 related
+source checks and four signed GUI groups pass, with 20 sampled pixels across ten
+layouts. Saved 14, 20 and manual 13, native synthetic colors and actual mouse
+selection remain correct. Three renderer-shutdown reopens preserve one synthetic
+identity and positive draft; they do not qualify ordinary close, geometry or
+native snapshots. Independent review accepts the bounded installed workflow.
+The ordinary visible daily update preserves ten original IDs, eleven live
+process starts and twelve draft scopes, plus the same active goal. Six nonempty
+backends retain their earlier versions. Physical input, native cursor snapshots,
+original-fork lifecycle and full-day development remain open.
 
-Current daily GUI: alpha.143, committed build source `dc7a578`. The existing
+The earlier alpha.143 build, source `dc7a578`, remains evidence for unchanged paths.
+The existing
 terminal display form opens inside its native pane without a modal backdrop.
 Seventy related checks and four signed GUI groups pass, including grid stability,
 validation, compact control layering and two owned process reopenings with
