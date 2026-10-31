@@ -1,6 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const { spawnSync, spawn } = require('node:child_process');
+const vm = require('node:vm');
 const helper = path.resolve(__dirname, '../../scripts/fixtures/test-scratch.cjs');
 function probe(body, options = {}) {
   const source = (options.prelude || '') + `const scratch=require(${JSON.stringify(helper)}),fs=require('node:fs'),os=require('node:os'),path=require('node:path');const root=scratch.directory(path.join(os.tmpdir(),'naw-scratch-check-'));console.log(JSON.stringify({root}));` + body;
@@ -126,4 +127,49 @@ test('owned process exit during final identity read does not turn successful tea
   const prelude=`const cp=require('node:child_process'),original=cp.execFileSync,kill=process.kill;let target,armed=false,raced=false;cp.execFileSync=(file,args,options)=>{if(armed&&!raced&&file==='/bin/ps'&&args[1]===String(target)&&args.includes('lstart=')){raced=true;kill(target,'SIGKILL');original('/bin/sleep',['0.1']);throw Error('exited during identity lookup');}return original(file,args,options);};`;
   const r=probe(`const child=scratch.childProcess.spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});target=child.pid;Promise.resolve().finally(scratch.cleanup(async()=>{armed=true;})).then(()=>console.log(JSON.stringify({raced}))).catch(error=>{console.error(error.message);process.exitCode=1;});`,{prelude});
   try{assert.equal(r.status,0,r.stderr);assert.equal(JSON.parse(r.stdout.trim().split('\n').at(-1)).raced,true);assert.equal(fs.existsSync(r.root),false);}finally{fs.rmSync(r.root,{recursive:true,force:true});}
+});
+
+
+for (const mode of ['saved', 'result-write-failed', 'cleanup-unconfirmed', 'owner-replaced']) test('list-name harness finalizer always cleans or retains exact ownership: ' + mode, async () => {
+  const entry = fs.readFileSync(path.resolve(__dirname, '../../scripts/test-collaboration-list-name.cjs'), 'utf8');
+  const start = entry.lastIndexOf('finally{clearTimeout(timer);stopped=true;');
+  const end = entry.lastIndexOf('\n})().catch');
+  assert.ok(start > 0 && end > start);
+  const actual = entry.slice(start + 'finally{'.length, end).trim().slice(0, -1);
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), 'finalizer-list-name-'));
+  const profile = path.join(outer, 'profile'), slot = path.join(outer, 'slot'), out = path.join(outer, 'evidence');
+  fs.mkdirSync(profile); fs.mkdirSync(slot); fs.mkdirSync(out);
+  fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token: 'owned-fixture' }));
+  let calls = 0, failure = null;
+  const scopedFS = Object.create(fs);
+  scopedFS.writeFileSync = (file, ...args) => {
+    if (mode === 'result-write-failed' && path.basename(file) === 'gui-result.json') throw Error('Synthetic result write failure');
+    return fs.writeFileSync(file, ...args);
+  };
+  const context = { fs: scopedFS, path, assert, clearTimeout, timer: undefined, stopped: false, child: null,
+    out, picture: out, profile, slot, token: 'owned-fixture', stage: 'controlled', failure: null,
+    checks: [], measurements: [], errors: [], guiPID: undefined, daemonPID: undefined,
+    runPromise: Promise.resolve(), process: { exitCode: 0 }, console: { log() {}, error() {} },
+    scratch: { release: async () => {
+      calls++;
+      if (mode === 'cleanup-unconfirmed') throw Error('Synthetic cleanup unconfirmed');
+      fs.rmSync(profile, { recursive: true });
+      if (mode === 'owner-replaced') fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token: 'another-fixture' }));
+    } } };
+  try {
+    try { await vm.runInNewContext('(async()=>{' + actual + '})()', context); }
+    catch (error) { failure = error.message; }
+    assert.equal(calls, 1);
+    if (mode === 'cleanup-unconfirmed' || mode === 'owner-replaced') {
+      assert.equal(fs.existsSync(slot), true);
+      assert.equal(fs.existsSync(profile), mode === 'cleanup-unconfirmed');
+      assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))).token, mode === 'owner-replaced' ? 'another-fixture' : 'owned-fixture');
+      assert.equal(fs.existsSync(path.join(out, 'gui-released.json')), false);
+      assert.equal(context.process.exitCode, 1);
+    } else {
+      assert.equal(fs.existsSync(profile), false); assert.equal(fs.existsSync(slot), false);
+      assert.equal(fs.existsSync(path.join(out, 'gui-released.json')), true);
+      assert.equal(failure, mode === 'result-write-failed' ? 'Synthetic result write failure' : null);
+    }
+  } finally { fs.rmSync(outer, { recursive: true, force: true }); }
 });

@@ -2036,3 +2036,80 @@ the source regression checks the final state, not absence of that transient.
 Initial wide snapshots, saved pen, old/native producers, physical input, original
 lifecycle, full-day use, whole T77 and the shared goal remain open. The separate
 mobile qualification failure is retained above and does not qualify that feature.
+
+
+### Signed mobile qualification remains pending (2026-10-31)
+
+The isolated signed mobile candidate launched and created its first synthetic Codex session. The test script then tried to choose a view for a Claude session, and the app intentionally hides that choice for Claude, so the run stopped before any mobile flow group. No pairing or local mobile listener started. This is neither a product pass nor a reproduced product regression. All nine raw files are retained and their seal verifies. The owned processes, profile, Unix endpoint and test lease were removed; release took 15.601 seconds, and the strict signature check after the daemon ran passed. No pairing credential existed before the failure, and the log contains no credential markers. The temporary app was removed; its signed archives and the clean private source checkpoint remain. Main was not merged and the daily app was not updated. A provider-aware correction to the test script is prepared but has not run. Any new attempt needs a fresh, independently reviewed plan on the current base. The original source-launch failures remain unexplained. Browser, private HTTPS carrier, phone and full mobile use remain unverified; core fixes take priority.
+
+
+### Native snapshot cursor placement near a full row
+
+A rich snapshot of a valid normal-grid screen could rebuild its cursor one cell short when the serialized row ended in pending wrap. Subsequent text then overwrote the wrong cell. Correct only that relative-restoration case with standard absolute positioning; keep healthy frame bytes unchanged. Also omit zero-distance cursor moves that previously left a filler '-' after an erased wrapped row. The original serializer version/hash and unique source anchors remain guarded; its shared stock module, plain fallback, frame schema and source reflow policy are unchanged. These are local fixes, not a claim of an upstream commit backport.
+
+The new real-production factory tests first had four behavioral failures (direct snapshot, ghost, output checkpoint, resize checkpoint) plus one newly required anchor-control failure. All10 focused tests now pass within109 related tests, zero skipped. The first related run exposed one old byte-identity regression; narrowing the correction fixed it while leaving the old test unchanged. Full suite:1927 pass/1 fail/0 skipped of1928, solely the old compact-reading allocator/finalizer census on this lane base. Preserve Main's I121 fix at integration; this is not full-suite PASS. Output and resize checkpoints were decoded by fresh empty headless receivers resized to each checkpoint's own dimensions before writing; no production GUI journal-checkpoint consumer was qualified.
+
+One isolated source Electron run passed all4 journeys with full source/owner/watcher cell-style-width-wrap-cursor-URI/group digests and cursor modes. A rich program row was produced at118 columns, shrunk to57, then reconstructed in a new read-only window with actual OSC8 content. It hit the repair: watcher x56 at57 columns, cursor row entirelyA, and57<91<118. NEXT and a fresh rich snapshot stayed aligned. Healthy plain and an already pending ASCII margin snapshot also reconstructed and continued correctly; NEXT wrapped from the pending edge. Four PNGs were viewed. Cursor position evidence comes from the JSON capture, not the images. Seven program output frames, six real snapshots, two synthetic sessions/two production Terminals/two fakeworkers, two intentional windows, four reloads (one instrumentation and three checked watcher hydrations), one Electron/one fake backend. Watcher IPC positively observed initial13/snapshot4 and zero resize/input/send/claim. Owned IDs, native IDs, owner, model, permission fields and positive unsent drafts stayed equal within the fixture; source epoch stayed equal and reloads did not reinject output.
+
+Exact owned processes and active profile were gone before the canonical token was released after4356ms, before offline review. Raw scratch exports may remain private. No provider/product-model/native CLI/PTY/input/OSclipboard/link activation/daily or original native author/goal/settings/parent/draft operations. The only request observation is for the synthetic target host, not global network telemetry. Source UI stamp142 is this isolated lane package, not the installed daily app.
+
+Limits: GUI covered rich/plain/pending reconstruction and continuation; ghost and regrow-after-rebuild were headless-only. Malformed wide/source-layout and alternate full-body failures, saved pen, origin-mode ordering, plain fallback cursor/ghost, source shrink policy, older backends, real native producers, physical/VoiceOver/IME/iTerm and installed behavior remain open. The9/13 private matrix preceded the final byte-preserving refinement; it was not rerun after that refinement. Its remaining4 failures are retained, and no broad native-fidelity claim follows from the109 passing checks. The rejected uniform-width projection is not included. Main alone takes this exact2file commit after70a, records this entry, preserves C2/C3/I121, qualifies signed/newbackend/installed behavior, installs and pushes. Source plus isolated GUI is not fullT77/X1 or global-goal completion.
+
+
+# T91 list-name source repair: qualified handoff, complete regression still open
+
+As of 2026-10-31. User outcome: four list members retain their own nearby identity and readable original content, including when the sidebar is open and keyboard Next focuses a long duplicate name. This is author-source evidence, not Main, installed or daily acceptance.
+
+The source change is one display property, scoped to compact List names while revealed. Full raw name, provider/ID suffix and arrow use ordinary inline flow. DOM, accessible text, state, actions, input, native ownership and reading-position storage are unchanged. Grid is excluded by the selector. There is no new panel, dependency, model or backend mechanism.
+
+Earlier qualification evidence is retained. Its first followup stops before Archive because the operator placed a message row at minus four pixels while its first body glyph was 50.5 pixels below that row. The second followup reaches sidebar expansion and keyboard Next, with unchanged second-message anchor/offset. A focused long-name header reaches 75 pixels, leaving 8.203 pixels for a 16.5-pixel text line. That frame is still transitioning: it is not called a measured settled failure. Source explains the extra suffix row and the final sidebar does not become wider. Both qualification launches and all earlier caps remain recorded.
+
+Actual changed-source GUI: one owned synthetic profile, four sessions, two short duplicate names and two duplicate 60-character Chinese names, three native message items per reader, positive own/shared unsent drafts. It waits for the sidebar animation marker to clear, finite animations to end and geometry to stabilize. Archive expansion and actual Tab/Tab/Enter to Next pass. The focused full raw name and suffix fit inside their own header. Both selected second-message original FIRST lines pass geometry and paint checks at every character; their saved anchors, minus42.4375 offsets, follow=false and scrollTop587 survive. The focused header is57 pixels and its reader26.203 pixels. Screenshot was visually inspected. The selected original line is shorter than the earlier qualification text; its font/16.5-pixel height is unchanged. The name/suffix rectangle assertions ran before the later failure, but their rectangle list was not separately saved.
+
+The whole script exits1 after6.087014 seconds. It subsequently tries to restore the original computed flex value with a head stylesheet, but the app's compiled CSS is nested under .naw and wins the cascade. Computed display stays block, so that negative control never applies. This is a calibration failure, not a product-fix failure or a passing regression. Effective negative control, control removal, Grid/List return, the final automated all-four-line assertion and the final in-script identity assertion are NOT RUN. The test-only correction now sets and restores the exact owned button's prior inline display value/priority. It passes syntax checking and is NOT RERUN. Product CSS is unchanged from the actual settled GUI. Grid exclusion is source evidence, not a new successful Grid journey. No second source GUI is permitted in this checkpoint. Main owns a later independently necessary complete signed acceptance using the corrected entry.
+
+Postfailure raw before/failure snapshots match all four IDs, native IDs, owners, cwd, positive private drafts, selected scope and shared draft. Final synthetic counters actually show no inputs, sends or interruptions; four pending fake hosts demonstrate the fixture existed. Snapshot dispatches and shell-model calls are zero. Real providers, product inference, real native input and OS clipboard writes are not used. This does not instrument all IPC or all OS/network effects. Paid independent Fable review is separate from zero product inference; reported cumulative list cost is not an invoice and must not be added across resumes.
+
+Exact owned GUI/daemon PIDs, profile, operator cache and token are cleaned before offline work. No other lease is released. One author wrapper error is retained: a shell preflight detected a newly added Main coordination row, but without fail-fast shell behavior the next launcher command still ran. That row was a read-only proposal explicitly preserving this QA slot, and the canonical mutex was held exclusively by this owned test. It did not operate Main or daily. Future batches use fail-fast execution and the private launcher checks coordination before any subprocess. This static guard correction was not tested by another launch.
+
+Independent review accepts a QUALIFIED SOURCE HANDOFF with the complete regression still open. It visually checks the screenshots, reads actual source and compares raw before/failure state. Test stage labels are corrected statically so a future control failure is not attributed to keyboard Next.
+
+Additional visual finding: the focused member's Jump to latest pill is partly cut off by the header/status in both actual images. It does not cover the checked original line. Clickability and assistive-technology announcement are UNTESTED. This remains an open T91 issue for Main's regression acceptance; it is not silently classified as fixed or a new regression. Main alone owns the public review ledger; this sanitized record is supplied for that integration.
+
+Disposition: QUALIFIED SOURCE HANDOFF only. The core changed-source user journey is measured, the complete regression is OPEN, and whole T91/installed/native/physical/VoiceOver/OS clipboard remain unqualified. Main is the next full-regression/installed owner. No version, public ledger, installation, push, original author UUID, goal, model, settings, permission, parent or draft operation is performed.
+
+
+Main integrates only the released two-file commits from each source. Installed
+acceptance and delivery are pending; no phone candidate is adopted.
+
+
+Main preserves the existing snapshot journal index, cursor-mode, hyperlink,
+panorama, context and I121 changes. The integrated 178-check set and UI build
+pass without skips; the incoming counts overlap and are not additive. A newly
+imported GUI script could bypass cleanup if its result write failed. A direct
+control reproduces zero cleanup calls; a minimal try/finally repair passes all
+four actual-finalizer filesystem/lease controls. Its initial missing-VM control
+is an invalid non-pass, retained privately. The existing allocator census does
+not recognize this script alias, so explicit regression coverage protects it;
+no broad census redesign is claimed. Signed list-name regression must exercise
+the effective inline negative control and all Grid/list/four-reader stages.
+Installed acceptance remains pending; no phone implementation is adopted.
+
+
+During independent source review, a scratch cleanup matched generic filenames
+and deleted unrelated temporary directories. This violated the declared scope.
+Nine historical test logs were restored byte-for-byte from preserved copies.
+Another synthetic image-probe scratch directory's original files were not
+recovered; its observable transcript remains. The source and the current sealed
+core evidence are unchanged. A resumed session still reported shell tools after
+read-only flags were added. A fresh invocation's actual CLI initialization lists
+only Read, Grep and Glob, with no MCP servers. Subsequent review wrappers verify
+that inventory and explicitly deny non-read tools; otherwise they stop. Any further probe runs through Main with exact ownership and its raw
+output. This does not establish zero data loss or close the missing-scratch record.
+
+The fresh read-only reviewer also read the complete reformatted test finalizer
+and accepted source, commit and private packaging, conditional on both signed
+flows. Its CLI reported only Read/Grep/Glob and no MCP servers. The latest
+cumulative list-price estimate is $0.6931322, not an invoice or a sum of runs.
+The four result-write/cleanup regressions pass with no skips; Main separately
+checked the whole script syntax. Signed execution remains pending.
