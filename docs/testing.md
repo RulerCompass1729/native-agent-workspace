@@ -3463,3 +3463,14 @@ The ordinary visible daily update preserves ten original native IDs, eleven live
 process starts, twelve view draft scopes and the same original active goal. Six
 nonempty backends retain PID/start/version. Physical input, real permissions,
 native process death/recovery, the original fork and full-day use remain open.
+
+
+### Native cursor controls in snapshots - alpha.146 candidate
+
+A current-component baseline restores a reported steady bar as unknown cursor
+mode under the receiving blink default. The exact released feature tracks native
+requests with public xterm callbacks and feeds all three existing snapshot writers
+through one serializer. All 18 affected checks pass without skips and the build
+succeeds. Prior source GUI mode-state evidence is bounded to its actual Terminal
+with a fake worker; signed acceptance is pending. Visible bar shape, temporal
+blink, physical input and retained old backends remain unqualified.

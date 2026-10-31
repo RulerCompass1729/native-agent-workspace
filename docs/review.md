@@ -1589,3 +1589,16 @@ visible alpha.145 update preserves ten original IDs, eleven live process starts,
 twelve draft scopes and the same original active goal. Six nonempty backends
 retain PID/start/version. The overall milestone, physical input, original-fork
 lifecycle, native cursor and full-day use remain open.
+
+
+### Completed native cursor controls in snapshots (2026-10-30)
+
+The existing serializer omits explicit cursor mode; Main reproduces a steady
+bar becoming unknown with receiving blink defaults. The exact released change
+adds public-parser observers beside the existing keyboard-mode observer, then
+unifies the three production snapshot writers. Observers leave native parsing
+and device replies to xterm; receiving defaults are retained when unreported.
+Eighteen related checks pass without skips. The sealed source GUI qualifies
+control state only, with a fake worker and no reinjection after reopening. Main
+signed acceptance and independent review remain pending. Retained backends are
+not migrated by this candidate; visible-bar and temporal-blink proof stay open.
