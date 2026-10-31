@@ -24,6 +24,15 @@ function validViews(views) {
     if (view.spaceId !== undefined && !roomId(view.spaceId)) return false;
     if (view.sidebarView !== undefined && !['flat', 'grouped'].includes(view.sidebarView)) return false;
     if (view.sidebarSpaceFilter !== undefined && view.sidebarSpaceFilter !== '' && !roomId(view.sidebarSpaceFilter)) return false;
+    if (view.panorama !== undefined) {
+      const p = view.panorama;
+      if (!object(p) || Object.keys(p).some(key => !['layout', 'query', 'spaceId', 'top', 'returning', 'focusId'].includes(key)) ||
+          !['grid', 'list'].includes(p.layout) || !text(p.query, 1000) ||
+          p.spaceId !== '' && !roomId(p.spaceId) ||
+          !Number.isFinite(p.top) || p.top < 0 || p.top > 1e9 ||
+          p.returning !== undefined && typeof p.returning !== 'boolean' ||
+          p.focusId !== undefined && !text(p.focusId, 100)) return false;
+    }
     if (view.roomViews !== undefined && (!object(view.roomViews) || Object.entries(view.roomViews).some(([id, value]) => !roomId(id) || !validRoomView(value)))) return false;
     for (const key of ['selected', 'roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo'])
       if (view[key] !== undefined && !text(view[key], 100)) return false;

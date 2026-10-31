@@ -1715,3 +1715,35 @@ Native mode classes under CDP focus do not prove physical blink timing, actual O
 focus, iTerm parity or actual old binary behavior. Main API counters are not
 instrumented. Ordinary close/geometry, full Main restart, original fork lifecycle,
 full-day use, full T77 and the whole shared milestone remain open.
+
+
+### Cross-space panorama (2026-10-31 candidate)
+
+One primary reading view projects each existing session once with its original
+space references, status uncertainty and observation age. Search, scope and
+list/grid are passive. Opening an exact member or message and returning preserves
+reading context; same-member drafts in different spaces remain distinct. Bounded
+presentation metadata uses the existing reading-state path and stores no selected
+source text. The released ten-file source is integrated without the author's
+later coordinator work. An adjacent initialization conflict preserves the current
+notification initializer and adds only the panorama reading-state handler.
+Eighty-five affected checks and the actual UI build pass; signed results pending.
+
+Incoming source qualification passes five GUI groups with 100 synthetic logical
+sessions, ten spaces, 118 memberships, two full Electron starts and one fake
+backend. Unchanged-source selection return, edited-source invalidation/notice,
+other-member streaming, two scoped drafts, controlled geometry pressure and
+nonzero scroll return are checked. This is source alpha.139 evidence only.
+The retained short browser selection gesture uses controlled floored start
+coordinates; that does not identify a physical-input or upstream root cause.
+F10 independently reproduces an older pointer-release timer erasing a newer
+reading snapshot; checking the exact pending identity fixes it. The earlier GUI
+toast failure has no unique retrospective attribution. Its corrected negative
+case waits for actual edited text; all earlier failures remain recorded.
+
+The proposed signed port keeps the five user paths and exact public mention
+helper, with two owned installed GUI starts and synthetic transport. Main IPC,
+WCP and OS guards are not instrumented; their source evidence cannot be presented
+as signed counters. Native fleet scale, busy/queue parity, physical input,
+accessibility, original edit-line/children, I70 retirement, coordinator context
+preview, whole T53 and the shared milestone remain open.

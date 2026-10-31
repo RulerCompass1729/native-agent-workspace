@@ -1,0 +1,24 @@
+.collaboration-panorama{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.collaboration-panorama[hidden]{display:none}
+.panorama-tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 16px;border-bottom:1px solid var(--border)}
+.panorama-tools input{flex:1;min-width:140px;max-width:360px}
+.panorama-tools select{max-width:min(230px,100%)}
+.panorama-tools .quiet{flex:1 1 100%;min-width:0;white-space:normal;overflow-wrap:anywhere;font-size:12px}
+.panorama-members{min-height:0;overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain;padding:12px 16px;display:grid;align-content:start;gap:8px}
+.panorama-member{min-width:0;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--surface)}
+.panorama-member[hidden]{display:none}
+.panorama-member-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 12px}
+.panorama-member-heading>button{border:0;padding:0;text-align:left;white-space:normal;overflow-wrap:anywhere;font-size:14px;color:var(--ink)}
+.panorama-state{margin-left:auto;font-size:12px}
+.panorama-member[data-stale="true"] .panorama-state{color:var(--muted)}
+.panorama-spaces{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0;font-size:11px;color:var(--muted)}
+.panorama-spaces button{padding:1px 5px;font-size:11px;white-space:normal;overflow-wrap:anywhere}
+.panorama-observation{margin:4px 0;font-size:11px}
+.panorama-member blockquote{margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6;user-select:text;-webkit-user-select:text}
+.panorama-source{padding:0;border:0;font-size:12px;color:var(--green)}
+.collaboration-panorama[data-layout="grid"] .panorama-members{grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr))}
+.collaboration-panorama[data-layout="list"] .panorama-members{grid-template-columns:minmax(0,1fr)}
+#panorama-nav{width:100%;text-align:left;margin-bottom:4px}
+#header:has(~#panorama-view:not([hidden])){min-height:54px;padding:12px 24px}
+#header:has(~#panorama-view:not([hidden])) #subtitle:empty{display:none}
+@media(prefers-reduced-motion:reduce){.collaboration-panorama{scroll-behavior:auto}}
