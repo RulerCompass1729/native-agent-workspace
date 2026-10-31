@@ -60,7 +60,7 @@ silently turn off this guard's secret scan.
 
 At this preparation stage, database/export/log files, credentials, screenshots,
 archives, external symlinks, submodules, and non-UTF-8/binary content are blocked.
-The current finite limits are 2 MiB per scanned item and 192 MiB per scan;
+The current finite limits are 2 MiB per scanned item and 256 MiB per scan;
 exceeding either blocks rather than skips. On 2026-10-24, complete history reached
 67,690,301 bytes across 110 commits and 1,860 unique blobs, exceeding the old
 64 MiB total. On 2026-10-28, 301 reachable commits contained 2,691 unique
@@ -79,6 +79,14 @@ not produce a secret-scan pass. The current tool deadline is 120 seconds, with a
 135-second outer process limit. These finite deadlines change no byte limit,
 ref, tree, historical patch, message, identity or secret-check coverage. Tool
 failures and either timeout still block publication.
+Later on 2026-10-30, complete history exceeded the 192 MiB aggregate bound and
+publication was blocked without silently skipping content. The current aggregate
+bound is 256 MiB; only that finite bound changes. Tests place clean content,
+private data and a default-rule secret beyond the former 192 MiB boundary, and
+retain the new-bound overflow and per-item refusal checks. Ref, tree, historical
+patch, identity, message and secret coverage are unchanged. The 120-second tool
+and 135-second outer deadlines remain finite; a successful full scan must still
+be observed before publication.
 A future asset or larger repository requires another reviewed handling decision,
 not an unbounded scan, skipped history or publication bypass.
 

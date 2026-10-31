@@ -16,7 +16,7 @@ import sys
 import tempfile
 
 MAX_BLOB = 2 * 1024 * 1024
-MAX_SCAN = 192 * 1024 * 1024
+MAX_SCAN = 256 * 1024 * 1024
 CONFIG_KEY = "privacyGuard.privatePatternsFile"
 HOOKS = ("pre-commit", "commit-msg", "pre-push")
 BLOCKED_DIRS = {".git", ".local", ".scratch", ".runtime", ".claude", ".codex",
