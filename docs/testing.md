@@ -3356,3 +3356,14 @@ inference runs. Viewport sizing is emulated; API interception evidence covers
 the earlier source build only, with no signed clipboard/dialog/update counter
 certification. Native edit-line persistence, physical input and full-day use are
 not qualified by this synthetic journey. This test-only change needs no new build.
+
+### alpha.142 compact-member candidate
+
+All six original compact-reading groups pass on source, with 29 related checks
+and 17 checks after the metadata change. The GUI run includes original-frame
+alignment, minimum reading and native areas, maximize/restore in three sizes,
+permission focus, ended-frame/reload accuracy and three persisted draft copies.
+Two actual source trials comprise one retained failure and one full pass; a
+separate occupied attempt exited before launch. No task, terminal input or
+permission choice was submitted. The injected approval session records zero
+permission replies. Signed acceptance is pending; physical input and the full goal stay open.

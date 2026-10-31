@@ -1906,7 +1906,7 @@ function renderHeaderLayout(s, inRoom) {
   const moving = compactRoom !== header.classList.contains('compact-room') || roomOverview && (roomOverview.toolbar.parentElement === tabs) !== compactRoom;
   if (moving) { captureReadingViews(); restoreOverviewReading(); }
   header.classList.toggle('compact-room', compactRoom);
-  $('room-view').classList.toggle('compact-room-surface', compactRoom);
+  $('room-view').classList.toggle('compact-room-surface', inRoom);
   const relocate = (element, parent, before = null) => {
     if (element.parentElement === parent) return;
     const active = element.contains(document.activeElement) ? document.activeElement : null;
@@ -2279,8 +2279,8 @@ function render() {
     $('native-pane').hidden = !terminalVisible;
     $('room-layout').classList.toggle('has-terminal', inRoom && terminalVisible);
     $('room-layout').classList.toggle('terminal-maximized', inRoom && terminalVisible && terminalLayout === 'maximized');
-    $('session-layout').classList.toggle('has-terminal', !inRoom && terminalVisible);
-    $('session-layout').classList.toggle('terminal-maximized', !inRoom && terminalVisible && terminalLayout === 'maximized');
+    $('session-layout').classList.toggle('has-terminal', (!inRoom || memberFocus) && terminalVisible);
+    $('session-layout').classList.toggle('terminal-maximized', (!inRoom || memberFocus) && terminalVisible && terminalLayout === 'maximized');
     $('session-layout').classList.toggle('native-only', inRoom && !memberFocus);
     $('conversation-pane').hidden = inRoom && !memberFocus;
     $('chat-tab').parentElement.hidden = inRoom && !memberFocus;

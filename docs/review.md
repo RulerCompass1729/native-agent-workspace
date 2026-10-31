@@ -1433,3 +1433,15 @@ binary. Preflight review required post-daemon signature verification, accurate
 lease ownership and narrower evidence labels; those fixes are in the actual run.
 Owned processes, profile, socket directory and token are cleaned. Physical input,
 real native edit-line persistence and the whole dogfood milestone remain open.
+
+### Focused-member compact terminal (alpha.142 candidate)
+
+Focused members missed the existing compact-card and nested-split conditions.
+The repair reuses those styles and the existing compact toolbar declarations;
+it adds no panel or header relocation. Independent preflight found a related
+maximize regression; pairing that condition and testing three responsive bands
+addresses it. The first actual source trial still failed at 196.5px; the corrected
+whole six-group journey passes at 203.5px without lowering the 200px native area
+or 96px conversation-content floors. An earlier occupied lease started nothing.
+The failed evidence is retained and owned processes/profiles/tokens are cleaned.
+Signed installation remains pending; these are synthetic native transports.
