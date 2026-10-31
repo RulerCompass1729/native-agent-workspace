@@ -3342,3 +3342,17 @@ the same thread and creation time. Pre-quit retention and
 pending-activation guards refuse broader bootstrap changes; nine extracted
 retention cases pass. A native exit during the precheck/bootstrap gap remains a
 limit caught by the postcheck. Full-day use and the whole dogfood goal stay open.
+
+### Current daily-use regression on alpha.141
+
+The maintained daily-use script passes all five installed GUI groups on the
+unchanged signed `8a023aa` build. Bounded pages reach all 105 history identities;
+three exact synthetic deliveries, both drafts, names, recipients, membership,
+detach, duplicate launch and same-profile reopening retain their expected data.
+Two full GUI starts, one intentional duplicate and one synthetic daemon are
+cleaned, including the profile, socket directory and exact lease. Strict signature
+and source pins pass again after daemon exit. No real provider or product
+inference runs. Viewport sizing is emulated; API interception evidence covers
+the earlier source build only, with no signed clipboard/dialog/update counter
+certification. Native edit-line persistence, physical input and full-day use are
+not qualified by this synthetic journey. This test-only change needs no new build.
