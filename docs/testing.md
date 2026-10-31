@@ -3409,22 +3409,29 @@ maintained process-reading script retains eleven groups and its explicit
 isolated source-only gate; it is not installed or real-provider evidence.
 
 
-### Terminal readability and saved display preferences — alpha.144 candidate
+### Terminal readability and saved display preferences — alpha.144
 
-Fresh displays use 13-point text and line height 1; reset uses 13. Saved 14, 20
-and manually selected 13 remain valid, with cursor blinking defaults unchanged.
-The existing pinned theme callback also colors the legacy viewport, including
-its fit remainder, for palettes and native OSC background changes. It adds no
-listener, parser, dependency or display setting. The build refuses a missing or
-ambiguous pinned callback. Source integration passes 74 related checks without
-skips and builds successfully. Earlier source GUI evidence is reused for its
-qualified density and background groups; Main signed acceptance remains pending.
+All 74 related source checks pass without skips, and the build succeeds. Three
+source-only regression scripts retain selection, preview and permission guards.
+The former automatic private-approval-body expectation remains unqualified;
+approved member focus qualifies its local permission panel instead.
 
-Three source-only regression scripts retain selection provenance, exact sharing
-previews and native phase/permission flows. Their recorded original assertions
-and limits are retained. The former native-state test's expectation that private
-approval content appears automatically in shared reading is not counted as a
-pass: the approved member-focus interaction exposes the member's waiting status
-first, then its local permission panel when explicitly opened. Its earlier automatic
-body expectation remains unqualified; this is a test-scope correction, not a
-product change or permission-provenance relaxation.
+Clean committed `91ef94d` passes one bounded signed installed run: four complete
+groups, ten screenshots and 20 opaque background sample matches. Fresh 13/line
+height 1, saved 14 dark/20 green/manual 13 green, reset 13 dark, split/maximize/
+narrow layouts, synthetic OSC 11/111 colors, native truecolor, steady cursor mode
+and actual row-five mouse selection pass. One fake native identity and positive
+draft survive three renderer-shutdown reopens. Frames are reinjected: ordinary
+close, geometry, snapshots, physical sizing, padding-ring colors, other hosts and
+real-provider input remain unqualified. Main-process API counters reuse source
+evidence. No real provider, product inference, native input, send, interruption
+or OS clipboard operation occurs. Five owned processes, profile, exact endpoint
+and GUI lease are gone; strict source/CDHash verification follows daemon exit.
+Seven screenshots were viewed across author and reviewer; the other three retain
+pixel/geometry evidence. Independent review accepts this bounded workflow.
+
+The actual ordinary visible daily update preserves ten original native IDs,
+eleven live process starts and twelve view draft scopes. Six nonempty backends
+keep their PID/start/version. Before/after goal witnesses retain the same
+original active identity, objective and creation. Original-fork lifecycle and
+full-day development remain open.
