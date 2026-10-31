@@ -4,13 +4,21 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.147 adds a specific exhausted-retry sidebar cue and uses the
-existing desktop notification path. Current descriptor identity and state guards
-prevent stale or unavailable rows from requesting an alert. All 118 affected
-checks pass without skips; signed installed acceptance is pending. Daily remains
-alpha.146. Native goal restoration, OS delivery and locale remain unqualified.
+Current daily GUI: alpha.147, committed build source `19ced47`. The existing
+three-attempt recovery now has a specific sidebar cue and a guarded desktop
+notification request. All 118 affected checks and four signed groups pass with
+synthetic transport and no product inference. Another selected session and its
+draft survive exhaustion, repeated state and one renderer-shutdown reopen;
+editing the original draft cancels recovery without another send. One native
+notification request is logged, alongside an OS authorization refusal. API
+scheduled/displayed callbacks do not prove visual delivery. The daily app shares
+the bundle identifier; permission was not inspected, so it may also be affected.
+The ordinary visible update preserves ten IDs, eleven live process starts,
+twelve draft scopes and the original active goal. Six nonempty old backends
+retain their versions and generic status. Native atomic goal restore, locale,
+visible notification delivery/click and the whole milestone remain open.
 
-Current daily GUI: alpha.146, committed build source `5874b29`. Completed
+The earlier alpha.146 task, source `5874b29`, remains qualified. Completed
 native cursor controls survive snapshots and four renderer-shutdown reopens in
 four signed mode-state groups. Eighteen affected checks pass without skips.
 Public xterm observers feed the three existing snapshot writers; no new parser,

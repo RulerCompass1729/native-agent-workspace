@@ -1619,38 +1619,46 @@ Visible bar shape, blink timing, incomplete-control/reset cases, physical input,
 original-fork lifecycle, full-day use and the overall milestone remain open.
 
 
-### Exhausted automatic-continuation awareness (2026-10-30 candidate)
+### Exhausted automatic-continuation awareness (2026-10-30)
 
-After the existing three attempts fail, the sidebar should identify the stopped
-session while another selected session and its draft stay intact. Four released
-files add descriptor provenance, a guarded native-notification request and the
-existing sidebar/accessible status cue. Native content, fleet status, selected
-header, retry policy and native goals are unchanged. Eight new cases plus existing
-fleet/context checks give 118 passes without skips; signed acceptance is pending.
+The released four-file change consumes the existing exhausted state, adding
+current native/turn provenance, a sidebar/accessible cue and one guarded native
+notification request. Native text, fleet status, selected header, retry policy
+and native goals are unchanged. All 118 affected checks pass without skips.
 
-Incoming independent review reproduces R1 (rejected fixture actions were not
-recorded), R2 (missing cue passed vacuously), S1 (inferred Notification lifetime
-risk), G1 (unsettled history attachment) and G2 (the source recipe bound the
-Electron-module argument as the session ID). Recorded attempt guards, mandatory
-visible cue checks, strong notification references, an actual attachment wait
-and the corrected callback address these findings. Two earlier GUI failures
-remain non-passes. The final source GUI passes four groups with fake transport;
-OS notification and window reveal are intercepted. Its click reveals the first
-still-live claiming window, which need not display the failed session. The reopen
-uses an owned close and programmatic activate, not an original-fork lifecycle test.
+Incoming review identifies R1 (unrecorded rejected fixture actions), R2 (an absent
+cue passed vacuously), S1 (inferred Notification lifetime risk), G1 (readonly
+attachment precondition) and G2 (a source-harness callback bound the Electron
+module as the session ID). Attempt guards, required visible cue checks, strong
+references, an actual attachment wait and corrected arguments address them.
+Two earlier source GUI failures stay non-passes; the final four groups use fake
+notification/window reveal. A click reveals the first still-live claiming window,
+which need not show the failed session; this is source-only click evidence.
 
-Main's extra pre-request approval gate was unnecessary: the original task already
-authorizes an installed synthetic notification rehearsal. That gate is withdrawn.
-The Electron source does request OS authorization; this is distinct from approving
-it. The signed recipe must keep any unresolved system decision unverified and
-never approve permission. Current native identity is required; old backends stay
-generic, full Main restart can notify again, and a destroyed claiming window has
-no click fallback. Native atomic goal restoration, locale, actual OS visibility
-and click, all-windows-closed delivery, mobile and full-day use remain open.
+The independent Main-checkpoint reviewer accepts source but blocks the first
+signed recipe on F1: draft cancellation lacked a positive exhausted precondition.
+F2 fixes the port's missing failure screenshot helper; F3 adds a final log-bound
+check. The same reviewer accepts these corrections, then the actual four signed
+groups and daily operator. Main's extra pre-request approval gate is withdrawn:
+the task already authorizes an installed synthetic notification request. Requesting
+OS permission does not authorize approving it.
 
-Main preflight accepts the source but blocks its signed recipe on F1: human-draft
-cancellation could pass without a still-exhausted precondition. Main adds that
-positive assertion. F2 fixes a missing failure-screenshot helper in the port;
-F3 checks log truncation at final deduplication. Existing source GUI confirms the
-positive exhausted state before editing. No product behavior changes; the same
-reviewer must recheck this private-recipe delta before any signed run.
+The actual signed run retains B's selected identity and draft, displays the full
+retry cue, suppresses duplicate requests across state/reopen, then positively
+checks A exhausted before a human edit clears recovery without another send.
+Two synthetic identities, four fake sends, three fake goal reads and five PNGs
+are recorded. The reopen is renderer shutdown in the same Main, not ordinary
+window lifecycle or original-fork proof. One native notification ID is created;
+the same log contains authorization refusal plus scheduled/displayed callbacks.
+No visual delivery is claimed. Daily shares the bundle ID, so the refusal cannot
+be assumed isolated to the test copy; its actual permission remains unverified.
+No OS permission approval, real click, setting change or bypass retry occurs.
+
+All 28 raw files match their seal; three owned processes, profile, endpoint and
+exact lease are cleaned, scoped temporary count stays 0 to 0, and strict signature
+and source/CDHash match after daemon exit. The ordinary visible alpha.147 update
+from clean `19ced47` preserves ten original native IDs, eleven live process starts,
+twelve draft scopes and the same active goal. Six nonempty backends keep their
+old PID/start/version and generic status. Old backends, locale, visible OS delivery
+and clicks, full Main restart, all-windows-closed delivery, mobile, physical input,
+native atomic goal restoration, original-fork/full-day use and full T111 remain open.
