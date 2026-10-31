@@ -4,11 +4,18 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.142 repairs the focused-member compact terminal using existing
-card, toolbar and split styles. Six source GUI groups pass, including maximize
-and restore in three responsive bands; signed acceptance remains pending.
+Current daily GUI: alpha.142, committed build source `632e7d1`. Six source and
+six signed GUI groups pass for the compact member terminal, including maximize
+and restore in three responsive bands, permission focus, ended frames and draft
+recovery. It reuses existing card, toolbar and split styles. Signed sizing matches
+the source CSS viewport; physical input and real native migration remain open.
+The ordinary visible update preserves ten native IDs, eleven live process starts
+and twelve saved view draft scopes. Six nonempty backends keep their earlier
+versions. Read-only before/after witnesses preserve the original goal's thread,
+objective reference, creation time and active status.
 
-Current daily GUI: alpha.141, committed build source `8a023aa`. Six signed GUI
+The earlier alpha.141 build, source `8a023aa`, remains evidence for unchanged paths.
+Six signed GUI
 groups cover compact per-session version notices, unique-session counts, guarded
 update choices and the collapsed sidebar. Seven synthetic identities and positive
 private/shared drafts remain intact. Native transports are synthetic; no product
