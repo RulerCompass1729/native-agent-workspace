@@ -3357,7 +3357,7 @@ the earlier source build only, with no signed clipboard/dialog/update counter
 certification. Native edit-line persistence, physical input and full-day use are
 not qualified by this synthetic journey. This test-only change needs no new build.
 
-### alpha.142 compact-member candidate
+### alpha.142 compact-member installed
 
 All six original compact-reading groups pass on source, with 29 related checks
 and 17 checks after the metadata change. The GUI run includes original-frame
@@ -3366,4 +3366,17 @@ permission focus, ended-frame/reload accuracy and three persisted draft copies.
 Two actual source trials comprise one retained failure and one full pass; a
 separate occupied attempt exited before launch. No task, terminal input or
 permission choice was submitted. The injected approval session records zero
-permission replies. Signed acceptance is pending; physical input and the full goal stay open.
+permission replies. Six signed groups pass on committed `632e7d1`, matching all
+64 runtime files and 105 dependencies. CSS viewports match the source's measured
+content dimensions; physical window sizing is not newly qualified. Signed API
+and window-flag counters are not instrumented. One signed GUI, one synthetic
+daemon, their profile/socket and exact lease are cleaned; strict signing passes
+after daemon exit.
+
+The reviewed ordinary visible update preserves ten native IDs, eleven live starts,
+reported native fields and twelve saved view draft scopes. Only the empty active
+backend changes; six nonempty backends retain their versions and starts. Before
+and after goal reads preserve the thread, objective reference, creation time and
+active status. Twelve extracted proof-gate checks cover success and missing,
+partial or mismatched signed evidence before any daily quit. Physical input, old
+native migration, full-day use and the whole goal stay open.

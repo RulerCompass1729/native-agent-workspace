@@ -1434,7 +1434,7 @@ lease ownership and narrower evidence labels; those fixes are in the actual run.
 Owned processes, profile, socket directory and token are cleaned. Physical input,
 real native edit-line persistence and the whole dogfood milestone remain open.
 
-### Focused-member compact terminal (alpha.142 candidate)
+### Focused-member compact terminal (alpha.142)
 
 Focused members missed the existing compact-card and nested-split conditions.
 The repair reuses those styles and the existing compact toolbar declarations;
@@ -1444,4 +1444,22 @@ addresses it. The first actual source trial still failed at 196.5px; the correct
 whole six-group journey passes at 203.5px without lowering the 200px native area
 or 96px conversation-content floors. An earlier occupied lease started nothing.
 The failed evidence is retained and owned processes/profiles/tokens are cleaned.
-Signed installation remains pending; these are synthetic native transports.
+Six signed groups also pass with the same 203.5px native area and CSS viewport.
+These are synthetic native transports; signed API/window-flag counters reuse
+source proof, and viewport sizing is emulated.
+
+The signed build matches all 64 runtime files and 105 production dependencies.
+One signed GUI and one synthetic daemon exit; their profile, socket directory
+and exact token are cleaned, and strict signature/source pins pass after daemon
+exit. Independent review accepts the source, signed evidence and update operator.
+The operator now requires the actual signed exit/result, cleanup and matching
+post-daemon signature before any daily quit; twelve proof-gate cases pass.
+
+The actual visible 141-to-142 update preserves ten native IDs, eleven live process
+starts, reported native fields and twelve saved view draft scopes. Private drafts
+are empty and one shared draft is positive. Six nonempty backends retain their
+versions and starts; only the empty active backend updates. Before/after goal
+witnesses preserve its thread, objective reference, creation time and active
+status; normal usage counters still advance. One app is indexed, with a normal
+visible launch and no debug/background arguments. Old native recovery, physical
+input, both full real workdays and the whole goal remain open.
