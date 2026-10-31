@@ -4,16 +4,19 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.150 restores native OSC8 targets across snapshots and output/
-row-resize checkpoints, with a guarded same-cell reentry repair. It extends an
-isolated copy of the pinned serializer; source/version checks and finite budgets
-retain the stock text path when unqualified. Such fallbacks still lose link
-addresses. Eighty-six affected checks and the UI build pass; signed integration
-acceptance is pending. Daily remains alpha.149. Existing old backends keep their
-old serializer until a safe update. Column-reflow cursor, saved-pen and stationary
-pointer cases, actual native producers and full T79 remain open.
+Current daily GUI: alpha.150, committed build source `6ef55cf`. Native OSC8
+targets survive ordinary snapshots and output/row-resize checkpoints through an
+isolated, pinned serializer extension. Eighty-six affected checks, the UI build
+and four signed synthetic flows pass. Six hover targets retain their original
+URIs across three renderer-shutdown reopens and two observer reloads. Finite
+fallbacks preserve stock text but still lose addresses. The ordinary visible
+update preserves ten original IDs, eleven live process starts, twelve draft
+scopes, settings and the separately checked original active goal. Six nonempty
+backends keep old code until a safe update; this fix is not loaded there yet.
+Column-reflow cursor, saved-pen and stationary-pointer cases, actual native
+producers, physical input and full T79 remain open, as does the shared goal.
 
-Current daily GUI: alpha.149, committed build source `0b0e031`. The new passive
+The prior alpha.149 task, source `0b0e031`, remains qualified. The new passive
 cross-space reader counts each nonarchived original session once while preserving
 all space references, status uncertainty and observation age. Exact source/member
 return retains reading context and distinct space drafts. Eighty-five affected
