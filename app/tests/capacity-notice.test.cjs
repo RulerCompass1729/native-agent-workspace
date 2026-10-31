@@ -15,7 +15,7 @@ function section(start, end) {
 }
 function harness() {
   const notifications = [], delivered = [], sent = [], callbacks = new Map();
-  let supported = true, failDelivery = false, shows = 0, destroyed = false;
+  let supported = true, failDelivery = false, shows = 0, destroyed = false, activations = 0;
   class Notification extends EventEmitter {
     static isSupported() { return supported; }
     constructor(options) { super(); this.options = options; notifications.push(this); }
@@ -24,7 +24,7 @@ function harness() {
   const client = new EventEmitter(), win = { isDestroyed: () => destroyed, show: () => shows++,
     webContents: { send: (...args) => sent.push(args) } };
   const context = { client, win };
-  const sandbox = { Notification, capacityNotifications: new Map(), context,
+  const sandbox = { Notification, capacityNotifications: new Map(), context, quitting: false, focusOrOpen: () => activations++,
     roomState: { assertAvailable() {} }, displayState: value => value,
     notifyToolWait() {}, register: (name, callback) => callbacks.set(name, callback),
     applicationBuild: null, appBuildInfo: async () => ({}), app: { getVersion: () => 'synthetic' },
@@ -38,7 +38,7 @@ function harness() {
     fire(sessions) { client.emit('state', { sessions }); },
     initial: value => { client.call = async method => { assert.equal(method, 'initial'); return value; }; return callbacks.get('initial')(context); },
     set supported(value) { supported = value; }, set failDelivery(value) { failDelivery = value; },
-    set destroyed(value) { destroyed = value; }, get shows() { return shows; } };
+    set destroyed(value) { destroyed = value; }, get shows() { return shows; }, get activations() { return activations; } };
 }
 function status(row, badge = true, connected = true) {
   const prefix = renderer.slice(0, renderer.indexOf('\nlet state, owner,'));
@@ -68,7 +68,7 @@ test('actual state and initial wiring notify each exhausted native episode once,
   assert.equal(JSON.stringify(first), before);
   assert.ok(h.sent.some(([channel]) => channel === 'workspace:state'));
   h.notifications[0].emit('click'); assert.equal(h.shows, 1);
-  h.destroyed = true; h.notifications[1].emit('click'); assert.equal(h.shows, 1);
+  h.destroyed = true; h.notifications[1].emit('click'); assert.equal(h.shows, 1); assert.equal(h.activations, 1, 'A stale origin delegates only to normal UI activation');
 });
 test('actual initial and live wiring both use the archive display projection', async () => {
   for (const initial of [false, true]) {
