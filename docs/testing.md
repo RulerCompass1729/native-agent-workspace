@@ -3674,3 +3674,16 @@ status; the operator does not read the goal. Six nonempty old backends keep thei
 PID/start/version. One existing registered app remains; own candidate/rollback
 app copies are gone and rollback archives remain. Whole T53 and the shared goal
 remain open.
+
+
+### Live native hyperlink hover - alpha.152 candidate
+
+Ninety-six affected terminal and build-info checks pass without skips, and the
+current UI builds. The old hyperlink tests remain intact; ten appended cases
+cover actual compiled linkifier/provider behavior, stock stale-target control,
+listener lifetime, row overlap, scrolling, fast paths and build refusal. The
+source's 58 and 81-check results overlap these checks and are not additive.
+Its four source GUI groups pass with ten outputs, four snapshots, one owned
+reopen and two reloads. Main's finite signed integration remains pending.
+The baseline census failure in that source run is fixed separately by the
+47-check test-only finalizer repair; no current whole-suite pass is claimed.

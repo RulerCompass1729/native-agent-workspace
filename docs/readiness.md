@@ -4,6 +4,13 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.152 refreshes native OSC hover targets after a program changes
+or erases the rendered row while the pointer stays in the pane. It reuses one
+pinned xterm callback for the terminal lifetime, preserving unrelated-row and
+same-cell fast paths. Ninety-six related checks and the build pass; signed
+integration is pending. Daily remains alpha.151. This is the synchronous OSC
+path after rendering; pre-render and asynchronous-provider limits remain open.
+
 Current daily GUI: alpha.151, committed build source `64420d2`. The existing
 collaboration background preview now supports selected spaces. Bounded original
 shared notes and membership/status facts can be edited and explicitly appended

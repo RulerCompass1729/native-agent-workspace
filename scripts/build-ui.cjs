@@ -32,6 +32,28 @@ if (JSON.parse(read('node_modules/@xterm/xterm/package.json')).version !== '6.0.
 const linkLeave = 'this._isMouseOut=!0,this._clearCurrentLink()';
 if (xterm.split(linkLeave).length !== 2) throw Error('Requalify native link reentry for this terminal source.');
 xterm = xterm.replace(linkLeave, 'this._isMouseOut=!0,this._lastBufferCell=void 0,this._activeLine=-1,this._clearCurrentLink()');
+// Cached row replies also survive a gap hover. Keep the existing render
+// callback for the Linkifier lifetime so output refreshes the current target
+// even while no link is hovered. There is still one render listener per pane.
+const cachedLinkRender = 'this._linkCacheDisposables.push(this._renderService.onRenderedViewportChange((e=>{if(!this._currentLink)return;const t=0===e.start?0:e.start+1+this._bufferService.buffer.ydisp,i=this._bufferService.buffer.ydisp+1+e.end;if(this._currentLink.link.range.start.y>=t&&this._currentLink.link.range.end.y<=i&&(this._clearCurrentLink(t,i),this._lastMouseEvent)){const e=this._positionFromMouseEvent(this._lastMouseEvent,this._element,this._mouseService);e&&this._askForLink(e,!1)}})))';
+const linkResizeRegistration = 'this._register(this._bufferService.onResize((()=>{this._clearCurrentLink(),this._wasResized=!0})))';
+const liveLinkRender = `this._register(this._renderService.onRenderedViewportChange(event => {
+  const start = event.start === 0 ? 0 : event.start + 1 + this._bufferService.buffer.ydisp;
+  const end = this._bufferService.buffer.ydisp + 1 + event.end;
+  const overlaps = link => link.range.start.y <= end && link.range.end.y >= start;
+  const cachedOverlap = [...(this._activeProviderReplies?.values() || [])].some(reply => reply?.some(value => overlaps(value.link)));
+  if (!(this._activeLine >= start && this._activeLine <= end) && !cachedOverlap && !(this._currentLink && overlaps(this._currentLink.link))) return;
+  this._lastBufferCell = undefined;
+  this._activeLine = -1;
+  this._clearCurrentLink();
+  if (this._isMouseOut || !this._lastMouseEvent) return;
+  const position = this._positionFromMouseEvent(this._lastMouseEvent, this._element, this._mouseService);
+  if (position) this._askForLink(position, false);
+}))`;
+for (const marker of [cachedLinkRender, linkResizeRegistration]) {
+  if (xterm.split(marker).length !== 2) throw Error('Pinned terminal link lifecycle changed; requalify live link refresh.');
+}
+xterm = xterm.replace(cachedLinkRender, 'void 0').replace(linkResizeRegistration, linkResizeRegistration + ',' + liveLinkRender);
 const columnFix = [
   ['createRow(e,t,i,s,r,a,l,c,u,f,g){', 'createRow(e,t,i,s,r,a,l,c,u,f,g,nawColumns=Infinity){'],
   ['let b,C=e.getNoBgTrimmedLength();', 'let b,C=Math.min(e.getNoBgTrimmedLength(),nawColumns);'],
