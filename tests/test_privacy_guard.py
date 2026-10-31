@@ -139,7 +139,7 @@ from scripts.privacy_guard import Scanner, Blocked
 scan = Scanner()
 scan.add(b'safe fixture\\n', 'synthetic record')
 try:
-    with patch('scripts.privacy_guard.subprocess.run', side_effect=subprocess.TimeoutExpired('synthetic scanner', 75)):
+    with patch('scripts.privacy_guard.subprocess.run', side_effect=subprocess.TimeoutExpired('synthetic scanner', 135)):
         scan.finish()
 except Blocked as error:
     print('BLOCKED privacy guard: ' + str(error), file=sys.stderr)
@@ -148,6 +148,23 @@ except Blocked as error:
         result = self.call(sys.executable, '-c', code, ok=False)
         self.blocked(result)
         self.assertIn('gitleaks unavailable or timed out', result.stderr)
+
+    def test_complete_history_scanner_keeps_a_finite_tool_and_process_deadline(self):
+        code = """
+import subprocess
+from unittest.mock import patch
+from scripts.privacy_guard import Scanner
+scan = Scanner()
+scan.add(b'safe fixture\\n', 'synthetic record')
+with patch('scripts.privacy_guard.subprocess.run', return_value=subprocess.CompletedProcess([], 0, b'', b'')) as invoke:
+    scan.finish()
+arguments, options = invoke.call_args
+assert arguments[0][arguments[0].index('--timeout') + 1] == '120'
+assert options['timeout'] == 135
+assert options['input'] == b'safe fixture\\n'
+"""
+        result = self.call(sys.executable, '-c', code)
+        self.assertIn('PASS privacy guard', result.stdout)
 
     def test_missing_gitleaks_blocks(self):
         bins = self.base / "limited-bin"

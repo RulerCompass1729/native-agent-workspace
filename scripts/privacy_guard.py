@@ -187,9 +187,9 @@ class Scanner:
             try:
                 p = subprocess.run([self.gitleaks, "stdin", "--no-banner", "--redact",
                                     "--config", str(config), "--gitleaks-ignore-path", str(ignore),
-                                    "--ignore-gitleaks-allow", "--timeout", "60"],
+                                    "--ignore-gitleaks-allow", "--timeout", "120"],
                                    input=b"\n".join(self.parts), stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, cwd=tmp, env=env, timeout=75)
+                                   stderr=subprocess.PIPE, cwd=tmp, env=env, timeout=135)
             except (OSError, subprocess.TimeoutExpired):
                 raise Blocked("gitleaks unavailable or timed out") from None
             if p.returncode:
