@@ -90,7 +90,7 @@ function notifyToolWait(snapshot, win) {
       const notification = record.notification = new Notification({ title: 'NAW · 工具等待提醒', body: '原生工具较长时间未返回。请检查原生界面或系统权限提示；任务没有自动重发。' });
       // A notification is an observation of that past turn, never a session-only
       // interrupt action that could accidentally target its replacement.
-      notification.once('click', () => { if (!win.isDestroyed()) win.show(); });
+      notification.once('click', () => { if (!win.isDestroyed()) win.show(); else if (!quitting) focusOrOpen(); });
       notification.once('close', () => { if (record.notification === notification) delete record.notification; });
       notification.show();
     } catch { /* The existing in-app status remains available if OS delivery fails. */ }
@@ -119,7 +119,7 @@ function notifyCapacity(snapshot, win) {
       notification = new Notification({ title: 'NAW · 自动继续已达上限', body: '会话已自动继续 3 次，仍需处理。请在侧栏检查标记的会话。' });
       notices.active.add(notification);
       notification.once('close', () => notices.active.delete(notification));
-      notification.once('click', () => { if (!win.isDestroyed()) win.show(); });
+      notification.once('click', () => { if (!win.isDestroyed()) win.show(); else if (!quitting) focusOrOpen(); });
       notification.show();
     } catch {
       if (notification) notices.active.delete(notification);
@@ -710,7 +710,12 @@ function focusOrOpen() {
   backgroundLaunch = false;
   const win = startupWindow && !startupWindow.isDestroyed() ? startupWindow : windows.values().next().value?.win;
   if (win) { if (!backgroundTest) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } }
-  else if (!starting && !quitting) { if (dsh && wired) openWindow(views.at(-1)).catch(() => start()); else start(); }
+  else if (!starting && !quitting) {
+    if (dsh && wired) {
+      starting = true;
+      openWindow(views.at(-1)).finally(() => { starting = false; }).catch(() => start());
+    } else start();
+  }
 }
 app.on('activate', focusOrOpen);
 app.on('second-instance', (_event, argv) => { if (!argv?.includes('--background')) focusOrOpen(); });
