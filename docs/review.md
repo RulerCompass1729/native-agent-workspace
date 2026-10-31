@@ -1957,3 +1957,7 @@ existence, not Spotlight or physical search. Two initial empty metadata parses
 were non-passes and were corrected; temporary apps are gone and rollback archives remain.
 Physical input, native producers, original lifecycle, full-day use, whole T79
 and the shared goal remain open.
+
+### Approved Option help (2026-10-31)
+
+T41 approved Option-key help: the existing interaction paragraph now names Option+Left/Right for word movement, keeps normal Mac character/accent input and leaves native bindings authoritative. No keyboard behavior or settings changed. Three existing isolated CSI-u mode/stack checks pass, zero skipped; these are not physical Option-key or native word-movement proof. Independent doc review accepted the exact paragraph. Only docs/interaction.md was committed; unrelated mobile source WIP was preserved. Main alone integrates/publishes; no GUI/provider/native/clipboard/daily operation occurred.
