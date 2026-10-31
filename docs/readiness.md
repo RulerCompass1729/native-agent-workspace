@@ -4,6 +4,11 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.144 combines denser fresh-terminal defaults with the existing
+palette callback repair for the viewport's bottom remainder. Valid saved fonts
+remain unchanged. Source integration checks pass; independent review and signed
+installed acceptance are pending. The daily app is still alpha.143.
+
 Current daily GUI: alpha.143, committed build source `dc7a578`. The existing
 terminal display form opens inside its native pane without a modal backdrop.
 Seventy related checks and four signed GUI groups pass, including grid stability,
