@@ -195,7 +195,7 @@ class Terminal extends EventEmitter {
       this.emit('data', { ...observation, sequence: this.sequence });
     });
   }
-  snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serializeBuffer(), sequence: this.sequence, epoch: this.journal.epoch, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid, keyboardFlags: this.keyboardModes.flags, cursorModesVersion: 1 }))); }
+  snapshot() { return new Promise(resolve => this.screen.write('', () => resolve({ buffer: this.serializeBuffer(), sequence: this.sequence, epoch: this.journal.epoch, observationIndex: this.journal.index, cols: this.screen.cols, rows: this.screen.rows, pid: this.pid, keyboardFlags: this.keyboardModes.flags, cursorModesVersion: 1 }))); }
   observe() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.journal.snapshot(), alive: this.alive }))); }
   stop(timeout = 5000) {
     if (this.stopPending) return this.stopPending;

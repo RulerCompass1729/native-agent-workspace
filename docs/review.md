@@ -1961,3 +1961,48 @@ and the shared goal remain open.
 ### Approved Option help (2026-10-31)
 
 T41 approved Option-key help: the existing interaction paragraph now names Option+Left/Right for word movement, keeps normal Mac character/accent input and leaves native bindings authoritative. No keyboard behavior or settings changed. Three existing isolated CSI-u mode/stack checks pass, zero skipped; these are not physical Option-key or native word-movement proof. Independent doc review accepted the exact paragraph. Only docs/interaction.md was committed; unrelated mobile source WIP was preserved. Main alone integrates/publishes; no GUI/provider/native/clipboard/daily operation occurred.
+
+### Mobile setup GUI qualification pending (2026-10-31)
+
+The frozen mobile candidate is not GUI-qualified or installed. A zero-model
+source trial first failed on a missing private fixture dependency before the
+daemon main or Electron. Actual preload-envelope and production-Terminal fixture
+controls then exposed and corrected private test incompatibilities; product
+source was not changed to fit the fixture. The one corrected attempt failed
+at Electron launch according to Playwright, although an Electron process
+started. The exact underlying cause is unknown, window creation was not observed,
+and none of the four planned interface flows ran. Neither attempt is a product pass or proof of a product regression.
+
+Both failures are retained. The corrected runner exited on an unhandled
+Playwright launch rejection, so its own cleanup and result recording did not run.
+The scratch helper retained its profile; manual cleanup followed ownership checks.
+The three known corrected-trial processes are gone;
+the exact owned profile, Unix endpoint, cookie-matched browser socket directory
+and test token were removed after ownership checks. No third attempt, permission
+widening, fuse change or environment workaround was made. On the first failure,
+the conservative helper retained its token after a child exited before creating
+an endpoint; its cleanup backstop waited ninety seconds even though nothing
+remained running. These are test-harness limits, not native lifecycle evidence.
+Real Main authentication/listening, phone/proxy, signed installed behavior and
+the shared milestone remain unverified. Continue the ready terminal work; mobile
+qualification needs a separately reviewed test path.
+
+### Read-only native views follow live terminal resizing
+
+A second window watching an existing native session could keep its old grid when the controlling window resized: resize events shared the last output sequence and were discarded. Capture the existing journal index in the production snapshot, initialize the optional renderer hint, and consume later resize events behind the parser barrier. Reject stale epochs, invalid dimensions and retired entries; keep legacy unindexed output and withdraw its optional hint. No new event, controller, dependency or UI.
+
+Validation: 10 actual-producer/renderer regressions pass, including wide CJK/RGB/OSC links and owner fit echoes; the related set is 99 passing with zero skipped (counts overlap). The pre-fix run was 4 pass/6 fail; only those six failures demonstrate the repair. Full suite before the final test-fixture strengthening was 1917 pass/1 fail/0 skipped of1918: the existing temporary-profile finalizer census remains a failure on this lane base. Preserve Main's I121 fix at integration; this is not full-suite PASS.
+
+One isolated source Electron trial passed all four whole journeys: live57→118-column resize with the same output sequence plus continuation; parked watcher resize/output and return without a fresh primary snapshot; real production snapshot captured at index9/sequence4 between owner resizes, with exactly57×42 hydration then118×42 post-capture resize; watcher viewport resizing without altering the source grid. Full source/owner/watcher text, cell styles, widths, wrap, cursor and URI/group digests matched. Two synthetic IDs, native IDs, owner, model, permission fields and positive unsent drafts stayed equal within the owned fixture. Watcher IPC positively observed initial/snapshot traffic and zero resize/input/send/claim. One Electron, one fake backend, two production Terminals/two fakeworkers, seven output frames, five snapshots, two owned windows and two reloads (one instrumentation, one checked hydration); four PNGs. Exact owned processes/profile were gone before the canonical slot was released after5067ms, before offline work. Raw scratch exports may remain privately; no daily/original native session operations.
+
+The watcher attached before the wide output; none of the five GUI snapshots contained wide or link content, so hydrating wide/RGB/OSC8 content from a snapshot is covered only by the headless regressions.
+
+In the GUI, row breaks were identical at 57 and 118 columns, so wrapped-line reflow was not exercised there; reflow of wide content under passive resize is headless-only.
+
+Limits: alternate-buffer return is headless-only in this batch. The snapshot queue GUI deliberately resets to short ASCII; it does not qualify initial wide snapshot reconstruction after a shrink. That X1 defect, owner pre-service/rapid-echo transient sizes, older unindexed backends, physical/VoiceOver/IME/iTerm/native producers and installed qualification remain open. The generic unexpected timeout-receipt-write failure path was not fault-injected; the reviewer identifies a fails-safe retained-lease boundary, which was not triggered here. The source UI stamp142 is this isolated lane's package, not the daily installed version. Target-host request observation is not global network telemetry. Main alone integrates this exact commit, publishes this entry, preserves I121 and C2/C3 changes, qualifies new runtimes/installed behavior and installs/pushes. Source plus isolated GUI is not the whole T77 task or global goal completion.
+
+Main integrates only the released three-file commit. Existing cursor, serializer,
+hyperlink, panorama, context and I121 finalizer behavior are preserved. The current
+103 affected checks and integrated build pass; no current full-suite pass is
+claimed. Signed integration and daily delivery remain pending. The separate mobile
+qualification failure is retained above and does not qualify that feature.

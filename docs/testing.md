@@ -3708,3 +3708,15 @@ were non-passes and were corrected; temporary app copies are gone and rollback a
 T79 and the shared goal remain open.
 The baseline census failure in that source run is fixed separately by the
 47-check test-only finalizer repair; no current whole-suite pass is claimed.
+
+### Read-only terminal live resize - alpha.153 candidate
+
+One hundred three affected terminal/build-info checks pass without skips, and the
+integrated UI builds. Ten actual producer/renderer regressions cover captured
+journal ordering, same-sequence resize, queued output, stale epochs, malformed
+sizes, retired entries, legacy unindexed output, keyboard/focus state and owner
+echoes. The source's 99 related checks overlap these checks. Its historical full
+suite remains 1917 passes and one baseline census failure, not a full-suite pass;
+Main preserves the independently verified I121 finalizer repair. The source's
+four isolated GUI flows are not signed installed evidence. Main signed acceptance
+is pending; initial wide hydration, old producers and physical input stay open.
