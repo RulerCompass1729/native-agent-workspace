@@ -3,6 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
+// Runtime retains the stock serializer on an unqualified pin; builds must fail.
+if (JSON.parse(read('node_modules/@xterm/headless/package.json')).version !== '6.0.0' ||
+    JSON.parse(read('node_modules/@xterm/addon-serialize/package.json')).version !== '0.14.0' ||
+    require('node:crypto').createHash('sha256').update(read('node_modules/@xterm/addon-serialize/lib/addon-serialize.js')).digest('hex') !== '65d8dd7c2b3b37a77f583ea5e0d14a23bbcc846e4ae0d6bb534ae12a380aea0d') throw Error('Requalify native hyperlink snapshots for this terminal serializer.');
 const html = read('app/renderer/index.html');
 const body = html.split('<body>')[1].split('<script')[0];
 const sidebarEnd = body.indexOf('</aside>') + '</aside>'.length;
@@ -23,6 +27,11 @@ const licensed = (name, entry) => `/*!\n${read(`node_modules/${name}/LICENSE`)}\
 // A retained double-width cell straddling the edge cannot be drawn completely.
 let xterm = licensed('@xterm/xterm', 'lib/xterm.js');
 if (JSON.parse(read('node_modules/@xterm/xterm/package.json')).version !== '6.0.0') throw Error('Requalify the terminal DOM column fix for this xterm version.');
+// Returning to the same cell must resolve the current buffer's link. Leaving
+// clears hover, but upstream keeps both the last cell and the old line cache.
+const linkLeave = 'this._isMouseOut=!0,this._clearCurrentLink()';
+if (xterm.split(linkLeave).length !== 2) throw Error('Requalify native link reentry for this terminal source.');
+xterm = xterm.replace(linkLeave, 'this._isMouseOut=!0,this._lastBufferCell=void 0,this._activeLine=-1,this._clearCurrentLink()');
 const columnFix = [
   ['createRow(e,t,i,s,r,a,l,c,u,f,g){', 'createRow(e,t,i,s,r,a,l,c,u,f,g,nawColumns=Infinity){'],
   ['let b,C=e.getNoBgTrimmedLength();', 'let b,C=Math.min(e.getNoBgTrimmedLength(),nawColumns);'],

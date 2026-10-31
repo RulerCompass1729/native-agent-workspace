@@ -3599,3 +3599,24 @@ PID/start/version. One existing application registration remains; own candidate
 and rollback app copies are gone and rollback archives remain. The offline daily
 gate's initial null-versus-absent-field error is corrected against the same raw
 result, without another GUI run. The shared milestone remains open.
+
+
+### Native hyperlink snapshots - alpha.150 candidate
+
+Seventy-seven affected terminal checks and nine distinct build-info checks total
+86 passes without skips. The actual UI builds. Three original snapshot writers,
+explicit and anonymous grouping, wide/style text, open-pen continuation, stock
+byte identity without links, finite metadata expansion, JSON budget fallback,
+unqualified-pin fallback/build refusal and the real leave/move/hover callbacks
+are covered. The test-only follow-up builds its hover regression in memory, so a
+clean checkout needs no generated asset. Its 48-case subset overlaps 86; do not add.
+
+The released source GUI passes four groups with six positive hover targets,
+full-cell URI/group/style/cursor digests, eight snapshots, seven output frames,
+three owned close/activate reopens and two observer reloads. One failed earlier
+whole trial remains. The final test-only change follows that GUI without changing
+production or its four recipes. Main's finite signed port uses renderer-only CDP
+and three renderer-shutdown/duplicate-launch reopens; actual integration is pending.
+No provider inference or real native producer is planned. Row resizing does not
+qualify the separately open column-reflow cursor defect. Existing old backends,
+physical/default-viewer behavior and full T79 remain unqualified.
