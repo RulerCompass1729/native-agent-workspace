@@ -1829,7 +1829,7 @@ goal claim is made; the source boundaries above remain open beyond this signed
 synthetic integration. Existing native sessions do not yet load this serializer.
 
 
-### Selected-space collaboration background (2026-10-31 candidate)
+### Selected-space collaboration background (2026-10-31)
 
 Source handoff record, before Main installed acceptance:
 
@@ -1844,8 +1844,35 @@ Limits: source alpha139 synthetic GUI qualification, not current installed accep
 Main integrates only the exact seven-file release, preserving the existing
 panorama, native cursor, hyperlink and notification work. Eighty-six related
 checks and the current build pass. The signed recipe reuses the approved renderer
-launcher and finite cleanup. It checks the existing editable preview, explicit
-append and refusal paths; copy bytes reuse two source intercepted-copy cases,
-while the installed run will check preview text and copy-only controls without
-calling OS clipboard. Main IPC/OS counters are not instrumented. Installed
-acceptance and delivery remain pending; whole T53 and the shared goal stay open.
+launcher and finite cleanup. Source and finite recipe review pass. Before the single installed run, recipe
+wording is narrowed and the solo preview assertions are strengthened; no product
+bytes change. The actual signed run passes six renderer groups: selected A/B
+scope/privacy, stable multiline editing/cancel under another stream, explicit
+append retaining A mention/recipient and B/private U drafts/owners, visible 16000
+refusal preserving both edits, solo scoped-preview/copy-only controls, and renderer
+reload retaining identities/drafts while resetting transient choices. Copy bytes
+reuse the source's two intercepted copies; signed copy is not invoked. Main IPC/
+WCP/OS counters are not instrumented. Raw check 6's zero-claim shorthand denotes
+scripted actions/source proof and an empty held/pending list; that list is not a
+complete Main claim inventory. No signed zero-total-claim guarantee is made.
+
+All 41 raw files match their seal; three owned principal PIDs, exact-candidate
+processes, profile, endpoint and token are gone before offline work, with strict
+post-daemon signature. Main views stage 1 and 4 PNGs; the reviewer reads raw/DOM
+without viewing PNGs. The same reviewer accepts actual signed scope and the
+existing visible GUI/empty-backend update operator. An incidental ten-millisecond
+operator settle-delay increase is reviewed as harmless.
+
+Source limits remain recorded: stored room/member names containing newlines can
+imitate preview lines (Low); the dated snapshot stays fixed while open (Low);
+and the current space is preselected for the person's confirmation (Info).
+The preview is human-reviewed context, not an automatically delivered instruction.
+
+The ordinary visible daily alpha.151 update from clean `64420d2` preserves ten
+original native IDs, eleven live process starts, twelve view/draft scopes and
+reported native settings. Separate before/after goal reads preserve its original
+UUID/objective/creation/active status; the operator never reads the goal. Six
+nonempty backends retain PID/start/version and old code. One existing registered
+app remains; own temporary app copies are gone and rollback archives remain.
+Native-fleet completeness, physical input, actual OS clipboard, locale, original
+lifecycle, full-day use, whole T53 and the shared goal remain open.

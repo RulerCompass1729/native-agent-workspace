@@ -4,15 +4,18 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.151 extends the existing editable collaboration background to
-explicitly selected spaces. Original selected shared notes and bounded membership/
-status facts can be reviewed and appended to the existing draft; editing freezes
-scope and combined-limit refusal preserves both edits. Private histories, native
-drafts and unselected space text are excluded. Eighty-six related checks and the
-UI build pass; signed acceptance is pending. Daily remains alpha.150. Native-fleet,
-physical and full collaboration/dogfood requirements remain open.
+Current daily GUI: alpha.151, committed build source `64420d2`. The existing
+collaboration background preview now supports selected spaces. Bounded original
+shared notes and membership/status facts can be edited and explicitly appended
+to the existing draft. Editing freezes scope; combined-limit refusal preserves
+both texts. Eighty-six related checks, the build and six signed renderer flows
+pass. Copy bytes reuse source evidence; signed checks cover preview and controls.
+The ordinary visible update preserves ten IDs, eleven live process starts,
+twelve draft scopes, reported settings and the separately checked active goal.
+Six nonempty backends retain their old PID/start/version. Native fleet, physical
+input, locale, original lifecycle, full-day use and the shared goal remain open.
 
-Current daily GUI: alpha.150, committed build source `6ef55cf`. Native OSC8
+The prior alpha.150 task, source `6ef55cf`, remains qualified. Native OSC8
 targets survive ordinary snapshots and output/row-resize checkpoints through an
 isolated, pinned serializer extension. Eighty-six affected checks, the UI build
 and four signed synthetic flows pass. Six hover targets retain their original

@@ -3642,13 +3642,35 @@ Saved-pen, stationary-hover, real-native-producer, physical/default-viewer and
 original-fork/full-day/shared-goal requirements remain open. Full T79 is not done.
 
 
-### Selected-space collaboration background - alpha.151 candidate
+### Selected-space collaboration background - alpha.151
 
-Eighty-six related no-model checks pass without skips, and the actual integrated
-UI builds. Module, actual extracted handlers, existing dialog lifecycle, mention,
-view/draft and current panorama behavior are covered. The exact seven-file source
-release preserves current cursor/link/panorama work. Its source GUI passes six
-synthetic groups with three sessions, three spaces and five memberships. Main's
-finite signed integration is pending. The signed plan reuses two source
-intercepted-copy cases and checks exact preview/copy-only controls without
-invoking OS clipboard. It makes no signed Main IPC/OS zero-counter claim.
+Eighty-six related no-model checks pass without skips, and the current UI builds.
+The exact seven-file source release preserves cursor/link/panorama behavior.
+Module, actual handler, dialog, mention, view/draft and panorama paths are covered.
+The original source GUI has six groups with three sessions, three spaces and
+five memberships; its two intercepted-copy cases remain the copy-byte evidence.
+
+One fresh signed integration passes six renderer groups: selected A/B notes and
+three unique members/four selected memberships, private/unselected exclusion and
+empty-scope refusal; exact multiline editing under another stream and cancellation;
+explicit append preserving original A prefix/mention/recipient, B/private U drafts
+and owners; visible 16000 combined-limit refusal preserving both edits; solo
+scoped preview/copy-only controls; renderer reload retaining identities/drafts and
+resetting transient choices. Copy is not invoked in the signed run. All 41 files
+match their seal. Three owned principal PIDs, all exact-candidate processes,
+profile, endpoint and token are gone before offline work; strict signature is
+checked after daemon exit. Main views stage 1 and 4 PNGs; independent review uses
+raw/DOM evidence without viewing PNGs. There is no real provider or product inference.
+
+Main IPC/WCP/OS counters are not instrumented; source proof is reused. The fake
+held/pending-claim list is not a complete Main claim inventory. Raw check 6's
+shorter label does not establish zero total Main claims. No OS clipboard-byte,
+full app/native recovery, physical-input, locale or native-fleet claim follows.
+
+The ordinary visible alpha.151 update from clean `64420d2` preserves ten original
+IDs, eleven live process starts, twelve view/draft scopes and reported native
+settings. Separate goal reads preserve the original UUID/objective/creation/active
+status; the operator does not read the goal. Six nonempty old backends keep their
+PID/start/version. One existing registered app remains; own candidate/rollback
+app copies are gone and rollback archives remain. Whole T53 and the shared goal
+remain open.
