@@ -71,9 +71,14 @@ ref, tree, historical patch, message, identity and secret check remains required
 Tests beyond 128 MiB cover clean input and late private/secret matches;
 the new total bound, per-item bound and tool error/timeout remain fail-closed.
 The measured full scan was 134,559,842 bytes (128.33 MiB), and gitleaks took
-40.2 seconds on that machine. Its independent 60-second deadline remains; a
+40.2 seconds on that machine. At that time the tool deadline was 60 seconds; a
 192 MiB capacity bound is not proof that a scan near that size finishes in time.
-Timeouts continue to block publication.
+Timeouts continue to block publication. On 2026-10-30, the complete-history
+scan reached that 60-second tool deadline (`context deadline exceeded`); it did
+not produce a secret-scan pass. The current tool deadline is 120 seconds, with a
+135-second outer process limit. These finite deadlines change no byte limit,
+ref, tree, historical patch, message, identity or secret-check coverage. Tool
+failures and either timeout still block publication.
 A future asset or larger repository requires another reviewed handling decision,
 not an unbounded scan, skipped history or publication bypass.
 

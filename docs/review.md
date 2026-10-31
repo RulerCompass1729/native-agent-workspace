@@ -1463,3 +1463,17 @@ witnesses preserve its thread, objective reference, creation time and active
 status; normal usage counters still advance. One app is indexed, with a normal
 visible launch and no debug/background arguments. Old native recovery, physical
 input, both full real workdays and the whole goal remain open.
+
+
+### Publication deadline during compact-member delivery (2026-10-30)
+
+The complete-history guard refused publication. A retained diagnostic of the
+unchanged guard reports gitleaks exit 1 with `context deadline exceeded`; no
+secret-scan pass was issued. The finite tool deadline changes from 60 to 120
+seconds and its outer process limit from 75 to 135 seconds. All ref/tree/patch,
+message/identity, private-pattern, generic and default gitleaks checks remain,
+as do the 192 MiB aggregate and 2 MiB item limits. Timeout/error blocking and
+the finite-deadline/input contract pass all 26 local publication checks.
+Independent review accepts the finite repair with the historical deadline
+wording corrected; the actual complete-history rerun remains pending. This is a publication repair,
+not a new product release or evidence for native-session recovery.
