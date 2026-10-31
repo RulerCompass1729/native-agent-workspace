@@ -1664,27 +1664,54 @@ and clicks, full Main restart, all-windows-closed delivery, mobile, physical inp
 native atomic goal restoration, original-fork/full-day use and full T111 remain open.
 
 
-### Native cursor default and live-link painter (2026-10-30 candidate)
+### Native cursor default and live-link painter (2026-10-31)
 
-Exact released fixture and feature commits add an optional snapshot property,
-`cursorModesVersion: 1`, and select the adopted steady fallback only after
-identity/epoch checks, before native replay. Constructor defaults remain intact
-for old, absent, malformed and unknown hints. Native DEC12/DECSCUSR and queued
-controls retain precedence. This is an optional DTO addition, not an inference
-from terminal bytes or a forced backend migration. Existing alpha.146/147 and
-older backends retain their prior fallback until naturally replaced.
+Exact released fixture and feature commits add the optional snapshot property
+`cursorModesVersion: 1`. After identity/epoch checks and before native replay,
+qualified frames use the adopted steady fallback. Old, absent, malformed and
+unknown hints retain the constructor default. Native DEC12/DECSCUSR and queued
+controls retain precedence. This optional DTO addition neither infers capability
+from bytes nor migrates backends. Existing alpha.146/147 and older backends retain
+their prior fallback until naturally replaced.
 
-The pinned xterm 6 build gains one guarded replacement: its live link hover/leave
-row painter now uses native overrides as ordinary rendering already does.
-Existing width/background repairs and license notice remain. Thirty-eight
-related checks and the real UI build pass. The separate test-only metadata
-fixture repair handles the existing multiline initial handler without product
-behavior change. Source GUI uses fake workers and CDP focus on an owned hidden
-page; it is not installed, physical temporal-blink or old-binary proof.
+One guarded pinned xterm 6 replacement makes the live link hover/leave row painter
+honor native cursor overrides, matching ordinary rendering. Existing width and
+background repairs and license notice remain. Thirty-eight related checks and
+the actual UI build pass. The test-only build-info fixture repair extracts the
+existing multiline registration and retains cache/fresh-snapshot assertions.
 
-OPEN G1: actual snapshots lose OSC8 URL metadata while keeping glyphs and SGR
-underline. Live hover is proven only after a positive URI precondition; later
-planned native link events are not snapshot repair. Reconstruction injects no
-output, but post-reconstruction hyperlink interaction remains unqualified.
-The first whole GUI failure is retained. Main's signed port and delivery review
-are pending; full T77 and the original shared milestone remain open.
+The first Main review hits its finite cap and is a non-pass. The same independent
+session then accepts unchanged source and the conditional signed recipe, followed
+by the actual four signed groups and proposed daily operator. No product fix is
+made after source approval. The signed run uses two production Terminals with fake
+workers, seven output frames, eight snapshots, twelve captures, nine PNGs, four
+renderer-shutdown reopens and two observer reloads. Qualified/default/native states,
+RGB, identities and positive drafts remain intact. Both live hover directions
+require positive URI metadata and expose real underline/cursor classes. Later
+repaint can affect after-leave samples; uniquely isolating that paint is not claimed.
+Main views two hover screenshots; the reviewer reads DOM/raw evidence, not PNGs.
+
+OPEN G1: reconstructed snapshots lose OSC8 URL metadata while glyphs and underline
+remain. This batch confirms that loss; it does not repair or qualify reconstructed
+link interaction. Later planned live link events supply fresh metadata, never
+reconstruction reinjection. The incoming first source GUI failure remains recorded.
+An offline daily-proof gate initially mistakes two constructor envelopes for invalid
+commands. Source and raw records establish exact synthetic argv/cwd/PWD envelopes,
+then typed resizes; the corrected gate passes the same sealed evidence with no GUI
+retry. The independent reviewer accepts this correction and daily operator.
+
+All forty raw files match the seal. Seven owned PIDs, profile, endpoint and exact
+slot are gone, with strict signature rechecked after daemon exit. The prior temporary
+count was not observed. The ordinary visible alpha.148 update from clean `3006825`
+preserves ten IDs, eleven live process starts, twelve draft scopes and native
+settings. Separate native-goal reads verify the original UUID/objective/creation/
+active status; the GUI update operator itself does not inspect that goal. Six
+nonempty backends retain PID/start/version and prior defaults. Application-search
+verification distinguishes one existing registration from missing historical paths;
+four old Trash copies are unregistered without deleting their files. Spotlight's
+empty result is not evidence of unique indexing.
+
+Native mode classes under CDP focus do not prove physical blink timing, actual OS
+focus, iTerm parity or actual old binary behavior. Main API counters are not
+instrumented. Ordinary close/geometry, full Main restart, original fork lifecycle,
+full-day use, full T77 and the whole shared milestone remain open.
