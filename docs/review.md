@@ -1593,12 +1593,27 @@ lifecycle, native cursor and full-day use remain open.
 
 ### Completed native cursor controls in snapshots (2026-10-30)
 
-The existing serializer omits explicit cursor mode; Main reproduces a steady
-bar becoming unknown with receiving blink defaults. The exact released change
-adds public-parser observers beside the existing keyboard-mode observer, then
-unifies the three production snapshot writers. Observers leave native parsing
-and device replies to xterm; receiving defaults are retained when unreported.
-Eighteen related checks pass without skips. The sealed source GUI qualifies
-control state only, with a fake worker and no reinjection after reopening. Main
-signed acceptance and independent review remain pending. Retained backends are
-not migrated by this candidate; visible-bar and temporal-blink proof stay open.
+Main reproduces steady-bar loss in the existing serializer. The released feature
+uses public xterm parser observers beside keyboard-mode tracking and unifies the
+three existing snapshot writers; xterm still owns parsing and device replies.
+Eighteen affected checks and the build pass. The capped initial independent
+review remains a non-pass; the same reviewer subsequently accepts source, finite
+recipe, actual signed evidence and the update operator.
+
+Four signed groups pass with one fake worker, five frames/snapshots, nine mode
+records and four renderer-shutdown reopens without reinjection. The reviewer
+finds the group name overclaims selection persistence: selection occurs after a
+reopen, then clears on the next one. No selection-persistence claim is retained.
+PNGs show content/RGB only; mode evidence comes from renderer state. DEC12-on
+matches the receiving default and is regression-only; the tracker marker alone
+is insufficient. Both defaults have positive unit coverage. All 37 raw files
+match their seal; six owned processes, profile, endpoint and exact lease are
+cleaned, with strict signature/source/CDHash verified after daemon exit.
+
+The ordinary visible alpha.146 update from clean committed `5874b29` preserves
+ten native IDs, eleven live process starts, twelve draft scopes and the original
+active goal. Six nonempty backends retain PID/start/version and their old
+serializer. No real provider, product inference or native input runs. Mature
+unchanged helper evidence is reused rather than represented as fresh review.
+Visible bar shape, blink timing, incomplete-control/reset cases, physical input,
+original-fork lifecycle, full-day use and the overall milestone remain open.

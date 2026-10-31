@@ -3465,12 +3465,23 @@ nonempty backends retain PID/start/version. Physical input, real permissions,
 native process death/recovery, the original fork and full-day use remain open.
 
 
-### Native cursor controls in snapshots - alpha.146 candidate
+### Native cursor controls in snapshots - alpha.146
 
-A current-component baseline restores a reported steady bar as unknown cursor
-mode under the receiving blink default. The exact released feature tracks native
-requests with public xterm callbacks and feeds all three existing snapshot writers
-through one serializer. All 18 affected checks pass without skips and the build
-succeeds. Prior source GUI mode-state evidence is bounded to its actual Terminal
-with a fake worker; signed acceptance is pending. Visible bar shape, temporal
-blink, physical input and retained old backends remain unqualified.
+The baseline loses a reported steady bar when restoring under receiving defaults.
+All 18 affected checks pass without skips; one signed installed run passes four
+groups using the production Terminal with a fake worker. Nine renderer-state
+records verify reported modes, RGB and one epoch/owner/native identity through
+four renderer-shutdown reopens without reinjection. DEC12-off differs from the
+receiving default; DEC12-on only provides a default-matching regression check.
+Both receiving defaults have positive unit coverage. Selection is made after the
+steady-bar reopen, not preserved through a subsequent reopen; the original group
+name overstates this. The PNGs qualify content/RGB, not visible cursor shape or
+blink timing. No real provider, product inference or native input runs.
+
+All 37 raw files are sealed; six owned processes, profile, endpoint and exact
+lease are cleaned. The signature and source/CDHash still match after daemon exit.
+Independent review accepts the actual evidence and finite update operator. The
+ordinary visible daily update preserves ten IDs, eleven live process starts,
+twelve draft scopes and the original active goal. The six nonempty backends keep
+the old serializer. Completed controls only: incomplete sequences, other resets,
+physical input, original-fork lifecycle and full-day use remain unqualified.
