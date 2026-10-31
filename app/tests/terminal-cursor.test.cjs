@@ -1,6 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), Module = require('node:module');
 const cp = require('node:child_process');
+const vm = require('node:vm');
 const { EventEmitter, once } = require('node:events');
 const { Terminal: Screen } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
@@ -115,6 +116,7 @@ for (const route of ['direct snapshot', 'output rollover', 'resize rollover']) t
     const snapshot = await terminal.snapshot(); buffer = snapshot.buffer;
     assert.equal(snapshot.sequence, 1); assert.equal(snapshot.epoch, epoch);
     assert.equal(snapshot.keyboardFlags, 5);
+    assert.equal(snapshot.cursorModesVersion, 1, 'Only the completed cursor snapshot contract is advertised');
   } else {
     if (route === 'resize rollover') {
       terminal.journal.maxEvents = 0;
@@ -129,4 +131,145 @@ for (const route of ['direct snapshot', 'output rollover', 'resize rollover']) t
   await verifyFrame(buffer, terminal.screen);
   assert.equal((await terminal.snapshot()).keyboardFlags, 5);
   assert.equal(commands.filter(command => command.type === 'input').length, 0);
+});
+
+const renderer = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
+const hydrationStart = '      const snapshot = await api.terminalSnapshot(id);';
+const hydrationEnd = '      entry.queued = []; loading.remove(); surface.hidden = false; surface.inert = false;';
+assert.equal(renderer.split(hydrationStart).length, 2);
+assert.equal(renderer.split(hydrationEnd).length, 2);
+const hydration = renderer.slice(renderer.indexOf(hydrationStart), renderer.indexOf(hydrationEnd));
+const eventWriter = renderer.match(/^function writeTerminal\(entry, event\) \{.+\}$/m)[0];
+async function hydrate(frame, { queued = [], retired = false, staleEpoch = false } = {}) {
+  const term = new Screen({ allowProposedApi: true, cursorBlink: true, cols: 40, rows: 10 });
+  const entry = { term, queued }, state = { sessions: [{ id: 'synthetic', terminalState: { alive: true, epoch: staleEpoch ? 'another-epoch' : frame.epoch } }] };
+  const context = { term, entry, state, id: 'synthetic', terminals: new Map([['synthetic', retired ? {} : entry]]),
+    api: { terminalSnapshot: async () => frame, initial: async () => state }, document: { activeElement: null },
+    revealTerminalCursor() { throw Error('No DOM focus or input in this headless replay'); } };
+  context.updateState = next => { context.state = next; };
+  vm.createContext(context);
+  try {
+    await vm.runInContext(eventWriter + '\n(async()=>{' + hydration + '})()', context);
+    await write(term, '');
+    return { term, entry };
+  } catch (error) { term.dispose(); throw error; }
+}
+test('the actual renderer selects a steady default only for qualified snapshots before native replay', async t => {
+  assert.ok(renderer.includes('lineHeight: 1, cursorBlink: true,'), 'Legacy constructor default is retained');
+  const nativeCases = ['', '\x1b[5 q', '\x1b[6 q', '\x1b[?12h\x1b[0 q', '\x1b[?12l\x1b[0 q',
+    '\x1b[?12h\x1b[6 q\x1bc', '\x1b[?12h\x1b[6 q\x1b[!p'];
+  for (const data of nativeCases) {
+    const { terminal, output, commands } = actualTerminal(t);
+    await output(data + '\x1b[38;2;12;145;231mPOSITIVE');
+    const frame = await terminal.snapshot();
+    assert.equal(frame.cursorModesVersion, 1);
+    for (const version of [undefined, 1, '1', true, 0, 2, null]) {
+      const descriptor = { ...frame, cursorModesVersion: version }, { term, entry } = await hydrate(descriptor);
+      try {
+        const explicitFallback = data.includes('\x1b[?12');
+        assert.equal(term.options.cursorBlink, explicitFallback ? terminal.screen.options.cursorBlink : version !== 1,
+          'Native DEC12 is replayed after the qualified default: ' + JSON.stringify([data, version]));
+        assert.deepEqual(nativeCursor(term), nativeCursor(terminal.screen));
+        assert.equal(term.cols, frame.cols); assert.equal(term.rows, frame.rows);
+        assert.equal(entry.epoch, frame.epoch); assert.equal(entry.sequence, frame.sequence);
+        assert.equal(entry.keyboardFlags, frame.keyboardFlags); assert.equal(entry.ready, true);
+        assert.equal(term.buffer.active.getLine(0).translateToString(true), 'POSITIVE');
+        assert.equal(term.buffer.active.getLine(0).getCell(0).getFgColor(), 0x0c91e7);
+      } finally { term.dispose(); }
+    }
+    assert.equal(commands.filter(command => command.type === 'input').length, 0);
+  }
+});
+test('qualified hydration preserves queued native overrides and ignores retired or stale displays', async t => {
+  const { terminal, output, commands } = actualTerminal(t);
+  await output('POSITIVE'); const frame = await terminal.snapshot();
+  assert.equal(frame.cursorModesVersion, 1);
+  const events = [
+    { epoch: frame.epoch, sequence: frame.sequence + 1, data: '\x1b[5 q', keyboardFlags: 5 },
+    { epoch: 'old-epoch', sequence: frame.sequence + 2, data: '\x1b[6 q' },
+    { epoch: frame.epoch, sequence: frame.sequence + 1, data: '\x1b[6 q' },
+  ];
+  const { term, entry } = await hydrate(frame, { queued: events });
+  try {
+    assert.equal(term.options.cursorBlink, false); assert.deepEqual(nativeCursor(term), { style: 'bar', blink: true });
+    assert.equal(entry.sequence, frame.sequence + 1); assert.equal(entry.keyboardFlags, 5);
+  } finally { term.dispose(); }
+  const retired = await hydrate(frame, { retired: true });
+  try { assert.equal(retired.term.options.cursorBlink, true); assert.equal(retired.entry.ready, undefined); }
+  finally { retired.term.dispose(); }
+  await assert.rejects(hydrate(frame, { staleEpoch: true }), /终端画面已变化/);
+  assert.equal(commands.filter(command => command.type === 'input').length, 0);
+});
+test('a bare legacy serialized native blink request cannot justify changing its receiving default', async t => {
+  const { terminal, output } = actualTerminal(t); await output('\x1b[5 qPOSITIVE');
+  const frame = await terminal.snapshot(), legacy = terminal.serialize.serialize();
+  const old = await hydrate({ ...frame, buffer: legacy, cursorModesVersion: undefined });
+  try {
+    assert.equal(old.term.options.cursorBlink, true); assert.equal(nativeCursor(old.term).blink, undefined);
+    assert.equal(old.term.buffer.active.getLine(0).translateToString(true), 'POSITIVE');
+  } finally { old.term.dispose(); }
+  const naive = new Screen({ allowProposedApi: true, cursorBlink: false });
+  try { await write(naive, legacy); assert.equal(naive.options.cursorBlink, false); assert.equal(nativeCursor(naive).blink, undefined); }
+  finally { naive.dispose(); }
+});
+
+const root = path.resolve(__dirname, '../..');
+const rawHover = 'c=this._optionsService.rawOptions.cursorBlink,d=this._optionsService.rawOptions.cursorStyle,';
+function builtTerminal(transform = text => text) {
+  let output;
+  const files = Object.create(fs);
+  files.readFileSync = (file, ...args) => {
+    const value = fs.readFileSync(file, ...args);
+    return file === path.join(root, 'node_modules/@xterm/xterm/lib/xterm.js') ? transform(value) : value;
+  };
+  files.writeFileSync = (file, value) => { assert.equal(file, path.join(root, 'app/dsh/client.js')); output = value; };
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'scripts/build-ui.cjs'), 'utf8'), {
+    __dirname: path.join(root, 'scripts'), console: { log() {} },
+    require(name) { return name === 'node:fs' ? files : require(name); },
+  });
+  assert.equal(typeof output, 'string'); return output;
+}
+function underlineMethod(source) {
+  const signature = '_setCellUnderline(e,t,i,s,r,n){', start = source.indexOf(signature);
+  assert.ok(start >= 0); let depth = 0;
+  for (let i = start + signature.length - 1; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}' && !--depth) return vm.runInNewContext('({' + source.slice(start, i + 1) + '})._setCellUnderline');
+  }
+  assert.fail('Actual pinned underline method is incomplete');
+}
+test('the actual bundled link hover and leave painter keep native cursor precedence and existing bounds', () => {
+  const built = builtTerminal(), paint = underlineMethod(built);
+  assert.equal(built.includes(rawHover), false);
+  for (const text of [
+    'createRow(e,t,i,s,r,a,l,c,u,f,g,nawColumns=Infinity){',
+    'let b,C=Math.min(e.getNoBgTrimmedLength(),nawColumns);',
+    'if(x+C>nawColumns)continue;const W=this._isCellInSelection(x,t),H=i&&x===a,K=P&&x>=f&&x<=g;',
+    'this._rowFactory.createRow(h,e,e===s,o,a,r,n,this.dimensions.css.cell.width,this._widthCache,-1,-1,this._bufferService.cols)',
+    'this._rowFactory.createRow(p,_,_===l,d,u,h,c,this.dimensions.css.cell.width,this._widthCache,n?o===i?e:0:-1,n?(o===s?t:r)-1:-1,this._bufferService.cols)',
+    'this._scrollableElement.getDomNode().style.backgroundColor=n.colors.background.css,e.querySelector(".xterm-viewport").style.backgroundColor=n.colors.background.css',
+  ]) assert.equal(built.split(text).length, 2, 'Existing pinned DOM/background repair remains unique');
+  for (const enabled of [true, false]) for (const [raw, blink, style] of [
+    [false, true, 'bar'], [true, false, 'bar'], [false, true, 'underline'],
+    [true, false, 'underline'], [true, undefined, undefined], [false, undefined, undefined],
+  ]) {
+    const calls = [], fixture = {
+      _bufferService: { rows: 1, cols: 5, buffer: { x: 0, y: 0, ybase: 0, ydisp: 0, lines: { get: () => ({}) } } },
+      _optionsService: { rawOptions: { cursorBlink: raw, cursorStyle: 'block', cursorInactiveStyle: 'outline' } },
+      _coreService: { decPrivateModes: { cursorBlink: blink, cursorStyle: style } },
+      _rowElements: [{ replaceChildren() {} }], _rowFactory: { createRow(...args) { calls.push(args); return []; } },
+      dimensions: { css: { cell: { width: 10 } } }, _widthCache: {},
+    };
+    paint.call(fixture, 0, 2, 0, 0, 50, enabled); assert.equal(calls.length, 1);
+    const args = calls[0]; assert.equal(args[2], true); assert.equal(args[3], style ?? 'block');
+    assert.equal(args[6], blink ?? raw); assert.equal(args[9], enabled ? 0 : -1);
+    assert.equal(args[10], enabled ? 1 : -1); assert.equal(args[11], 5);
+    assert.equal(fixture._optionsService.rawOptions.cursorBlink, raw, 'Painting never rewrites native/default state');
+  }
+});
+test('a changed native cursor hover fragment fails the actual pinned build', () => {
+  assert.throws(() => builtTerminal(text => text.replace(rawHover, rawHover.replace('cursorBlink', 'anotherValue'))), /Pinned terminal DOM source changed/);
+});
+test('an ambiguous native cursor hover fragment fails the actual pinned build', () => {
+  assert.throws(() => builtTerminal(text => text + '\n/* ' + rawHover + ' */'), /Pinned terminal DOM source changed/);
 });

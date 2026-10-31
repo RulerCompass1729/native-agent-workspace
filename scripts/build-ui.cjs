@@ -29,6 +29,8 @@ const columnFix = [
   ['const W=this._isCellInSelection(x,t),H=i&&x===a,K=P&&x>=f&&x<=g;', 'if(x+C>nawColumns)continue;const W=this._isCellInSelection(x,t),H=i&&x===a,K=P&&x>=f&&x<=g;'],
   ['this._rowFactory.createRow(h,e,e===s,o,a,r,n,this.dimensions.css.cell.width,this._widthCache,-1,-1)', 'this._rowFactory.createRow(h,e,e===s,o,a,r,n,this.dimensions.css.cell.width,this._widthCache,-1,-1,this._bufferService.cols)'],
   ['this._rowFactory.createRow(p,_,_===l,d,u,h,c,this.dimensions.css.cell.width,this._widthCache,n?o===i?e:0:-1,n?(o===s?t:r)-1:-1)', 'this._rowFactory.createRow(p,_,_===l,d,u,h,c,this.dimensions.css.cell.width,this._widthCache,n?o===i?e:0:-1,n?(o===s?t:r)-1:-1,this._bufferService.cols)'],
+  // Link hover and leave must keep native cursor overrides, as ordinary rows do.
+  ['c=this._optionsService.rawOptions.cursorBlink,d=this._optionsService.rawOptions.cursorStyle,', 'c=this._coreService.decPrivateModes.cursorBlink??this._optionsService.rawOptions.cursorBlink,d=this._coreService.decPrivateModes.cursorStyle??this._optionsService.rawOptions.cursorStyle,'],
 ];
 for (const [before, after] of columnFix) {
   if (xterm.split(before).length !== 2) throw Error('Pinned terminal DOM source changed; requalify the column fix.');

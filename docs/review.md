@@ -1662,3 +1662,29 @@ twelve draft scopes and the same active goal. Six nonempty backends keep their
 old PID/start/version and generic status. Old backends, locale, visible OS delivery
 and clicks, full Main restart, all-windows-closed delivery, mobile, physical input,
 native atomic goal restoration, original-fork/full-day use and full T111 remain open.
+
+
+### Native cursor default and live-link painter (2026-10-30 candidate)
+
+Exact released fixture and feature commits add an optional snapshot property,
+`cursorModesVersion: 1`, and select the adopted steady fallback only after
+identity/epoch checks, before native replay. Constructor defaults remain intact
+for old, absent, malformed and unknown hints. Native DEC12/DECSCUSR and queued
+controls retain precedence. This is an optional DTO addition, not an inference
+from terminal bytes or a forced backend migration. Existing alpha.146/147 and
+older backends retain their prior fallback until naturally replaced.
+
+The pinned xterm 6 build gains one guarded replacement: its live link hover/leave
+row painter now uses native overrides as ordinary rendering already does.
+Existing width/background repairs and license notice remain. Thirty-eight
+related checks and the real UI build pass. The separate test-only metadata
+fixture repair handles the existing multiline initial handler without product
+behavior change. Source GUI uses fake workers and CDP focus on an owned hidden
+page; it is not installed, physical temporal-blink or old-binary proof.
+
+OPEN G1: actual snapshots lose OSC8 URL metadata while keeping glyphs and SGR
+underline. Live hover is proven only after a positive URI precondition; later
+planned native link events are not snapshot repair. Reconstruction injects no
+output, but post-reconstruction hyperlink interaction remains unqualified.
+The first whole GUI failure is retained. Main's signed port and delivery review
+are pending; full T77 and the original shared milestone remain open.
