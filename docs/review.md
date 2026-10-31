@@ -1776,3 +1776,24 @@ composer but does not claim or send. Native-fleet scale, busy/queue parity,
 physical input/IME/VoiceOver, original edit-line/children, I70 retirement,
 coordinator preview, locale, OSC8 snapshot addresses, original fork lifecycle,
 full-day use, whole T53 and the shared milestone remain open.
+
+
+### Native hyperlink snapshot targets (2026-10-31 candidate)
+
+T79 native OSC8 snapshot reconstruction and same-cell hover
+
+Native hyperlink labels previously survived reconstruction without their targets. The existing serializeBuffer meeting point now emits OSC8 for ordinary snapshots and output/row-resize checkpoints. A separate loaded copy of pinned MIT SerializeAddon 0.14.0 uses a full source SHA and headless 6.0.0 guard around its private cell/link interfaces. These interfaces and the minified handler name require requalification whenever xterm, headless or the serializer changes. Original explicit ids survive; originally anonymous links receive per-serialization wire ids (reconstructed terminals see them as explicit ids; canonical cells are unchanged) so wrapped ranges and a mid-buffer open pen retain membership during later output. Canonical native cells and original session identity are not rewritten. This is a local runtime transformation, with unchanged shared package exports/cache, rather than an upstream released fix.
+
+The runtime retains the stock serializer with a generic diagnostic when the pin is unqualified; builds reject that pin before output. A finite expanded-link cap and the journal JSON budget retain stock whole text when link metadata would make a previously available checkpoint unavailable. Those fallbacks retain baseline URI loss. A guarded patch to the existing xterm 6.0.0 mouseleave callback invalidates its last cell and line cache, so returning to the same position resolves the current buffer's target. This is a second local vendor patch; no listener, frame field or menu was added.
+
+The hover regression builds the actual client in memory, so clean checkouts need no generated asset. Validation: 86 no-model checks, build and diff checks pass. One retained GUI failure stopped on normal-buffer return hover; its exact runtime cause was not captured; actual compiled callback regressions were red before the minimal correction. The corrected exact-source trial completes four whole groups: original target/style/wide text across reconstruction; scrollback and output checkpoint reconnect; alternate buffer and row-resize checkpoint/reconstruction/normal return; anonymous mid-buffer open context across observer reconnect and NEXT. Six actual hover targets match their original URIs, and the continued underline is exactly LABELNEXT. Full normal/active-alternate cell text/style/wrap/cursor/URI/membership digests, original synthetic ids/owners and positive drafts remain equal, with no reconstruction output injection. Producer checkpoints have separate headless full-cell coverage; the GUI reconnect uses ordinary snapshots. Two GUI trials used 20.557 s of owned slot time, each cleaned before immediate release. Product sends/input/model/provider, link activation, OSclipboard and daily operations are zero.
+
+Boundaries: X1 column-reflow cursor offset, X2 saved-cursor/hidden-link revival after SGR, X3 dynamic same-row cache while the pointer never leaves, and B1 the unread duplicate-issue target remain separate open items. Current resize acceptance changes rows. Physical/VoiceOver/IME/default-viewer/installed/real-native-producer/retained older backend behavior is unqualified. Main must land this record and qualify integration/newly booted installed code; source and isolated-GUI evidence does not complete the whole T79 task.
+
+Main integrates only the exact feature and test-only follow-up commits, preserving
+the existing cursor/width/background fixes and current panorama module imports.
+Its 77 terminal plus nine distinct metadata checks and actual UI build pass.
+A static duplicate declaration in the first private port is corrected before any
+launch; a full-run setup check reaches a guarded fake-fork boundary with the
+original fingerprint and false runtime paths, creating no process or GUI. The
+signed port and installed delivery remain pending; no whole T79 or goal claim.

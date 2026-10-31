@@ -4,6 +4,15 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.150 restores native OSC8 targets across snapshots and output/
+row-resize checkpoints, with a guarded same-cell reentry repair. It extends an
+isolated copy of the pinned serializer; source/version checks and finite budgets
+retain the stock text path when unqualified. Such fallbacks still lose link
+addresses. Eighty-six affected checks and the UI build pass; signed integration
+acceptance is pending. Daily remains alpha.149. Existing old backends keep their
+old serializer until a safe update. Column-reflow cursor, saved-pen and stationary
+pointer cases, actual native producers and full T79 remain open.
+
 Current daily GUI: alpha.149, committed build source `0b0e031`. The new passive
 cross-space reader counts each nonarchived original session once while preserving
 all space references, status uncertainty and observation age. Exact source/member

@@ -9,12 +9,111 @@ const crypto = require('node:crypto');
 const WebSocket = require('ws');
 const { CODEX_WEBSOCKET_MAX_PAYLOAD } = require('./codex-terminal-bridge.cjs');
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
-const { SerializeAddon } = require('@xterm/addon-serialize');
+const SerializeAddon = createTerminalSerializeAddon();
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
 const { codexTurnBlock } = require('./native-blocks.cjs');
+
+// The pinned MIT-licensed addon omits OSC8. Extend an isolated copy so other
+// consumers keep the stock module. Private xterm interfaces and the minified
+// class name require full source/version requalification when either changes.
+function createTerminalSerializeAddon() {
+  const { SerializeAddon: Stock } = require('@xterm/addon-serialize');
+  let Candidate = Stock;
+  try {
+    const file = require.resolve('@xterm/addon-serialize'), source = fs.readFileSync(file, 'utf8');
+    if (require('@xterm/addon-serialize/package.json').version !== '0.14.0' ||
+        require('@xterm/headless/package.json').version !== '6.0.0' ||
+        crypto.createHash('sha256').update(source).digest('hex') !== '65d8dd7c2b3b37a77f583ea5e0d14a23bbcc846e4ae0d6bb534ae12a380aea0d') throw Error('Unqualified serializer');
+    const marker = 't.HTMLSerializeHandler=h';
+    if (source.split(marker).length !== 2) throw Error('Unqualified serializer boundary');
+    const Module = require('node:module'), isolated = new Module(file, module);
+    isolated.filename = file; isolated.paths = Module._nodeModulePaths(path.dirname(file));
+    isolated._compile(source.replace(marker, marker + ';(' + installLinks.toString() + ')(u,t.SerializeAddon);'), file);
+    Candidate = isolated.exports.SerializeAddon;
+  } catch {
+    // Preserve service availability; the build and semantic tests reject this
+    // degraded path. Never print native text, addresses, ids or error payloads.
+    console.warn('Native hyperlink snapshot extension unavailable; using the stock terminal serializer.');
+  }
+  return class extends Candidate {
+    activate(terminal) { super.activate(terminal); this.snapshotTerminal = terminal; }
+    serialize(options) {
+      try { return super.serialize(options); }
+      catch (error) {
+        if (error.code !== 'NAW_LINK_SNAPSHOT_BUDGET') throw error;
+        this.warnLinkFallback(); return this.serializePlain(options);
+      }
+    }
+    serializePlain(options) {
+      const plain = new Stock(); plain.activate(this.snapshotTerminal);
+      try { return plain.serialize(options); } finally { plain.dispose(); }
+    }
+    warnLinkFallback() {
+      if (!this.linkFallbackWarned) console.warn('Native hyperlink metadata exceeds the snapshot budget; preserving the stock text snapshot.');
+      this.linkFallbackWarned = true;
+    }
+  };
+
+  function installLinks(Handler, Addon) {
+    let context;
+    const serialize = Addon.prototype.serialize, next = Handler.prototype._nextCell;
+    const diff = Handler.prototype._diffStyle, rowEnd = Handler.prototype._rowEnd;
+    const close = '\x1b]8;;\x1b\\';
+    const osc = (id, data) => {
+      // Anonymous links need a snapshot-local wire id to preserve grouping
+      // across rows and the open pen's later output, including mid-buffer pens.
+      const wireId = data.id === undefined ? context.prefix + '-' + id : data.id;
+      const bytes = Buffer.byteLength(wireId) + Buffer.byteLength(data.uri) + 12;
+      if (context.bytes + bytes > 4 * 1024 * 1024) {
+        const error = Error('Native hyperlink snapshot budget exceeded'); error.code = 'NAW_LINK_SNAPSHOT_BUDGET'; throw error;
+      }
+      context.bytes += bytes;
+      return `\x1b]8;id=${wireId};${data.uri}\x1b\\`;
+    };
+    Addon.prototype.serialize = function (options) {
+      const previous = context;
+      context = { prefix: 'naw-snapshot-' + require('node:crypto').randomUUID(), bytes: 0 };
+      try {
+        const content = serialize.call(this, options);
+        const pen = this._terminal._core._inputHandler._curAttrData;
+        const id = pen.hasExtendedAttrs() ? pen.extended.urlId : 0;
+        const data = this._terminal._core._oscLinkService.getLinkData(id);
+        return content + (data ? osc(id, data) : '');
+      } finally { context = previous; }
+    };
+    const withoutLink = cell => {
+      if (!cell.hasExtendedAttrs() || !cell.extended.urlId) return cell;
+      const copy = cell.clone(); copy.extended.urlId = 0; copy.updateExtended(); return copy;
+    };
+    Handler.prototype._diffStyle = function (cell, old) {
+      return diff.call(this, withoutLink(cell), withoutLink(old));
+    };
+    Handler.prototype._nextCell = function (cell, old, row, col) {
+      if (cell.getWidth()) {
+        // Reused cells retain stale extended fields when HAS_EXTENDED is clear.
+        const id = cell.hasExtendedAttrs() ? cell.extended.urlId : 0;
+        if (id !== this.snapshotSourceLink) {
+          this.snapshotSourceLink = id;
+          const data = this._terminal._core._oscLinkService.getLinkData(id);
+          if (this.snapshotWrittenLink) this._currentRow += close;
+          if (data) this._currentRow += osc(id, data);
+          this.snapshotWrittenLink = data ? id : 0;
+        }
+      }
+      return next.call(this, cell, old, row, col);
+    };
+    Handler.prototype._rowEnd = function (row, last) {
+      // Keep close inside this row even when the addon trims empty tail rows;
+      // its forced-wrap filler must not acquire a hyperlink.
+      if (this.snapshotWrittenLink) this._currentRow += close;
+      this.snapshotWrittenLink = 0; this.snapshotSourceLink = undefined;
+      return rowEnd.call(this, row, last);
+    };
+  }
+}
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const quote = value => `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -76,7 +175,17 @@ class Terminal extends EventEmitter {
     this.worker.stdin.write(JSON.stringify(message) + '\n');
   }
   input(data) { this.command({ type: 'input', data }); }
-  serializeBuffer() { return this.serialize.serialize() + this.cursorModes.snapshot(); }
+  serializeBuffer() {
+    const cursor = this.cursorModes.snapshot();
+    let buffer = this.serialize.serialize() + cursor;
+    if (Buffer.byteLength(JSON.stringify(buffer)) > this.journal.maxCheckpointBytes) {
+      const plain = this.serialize.serializePlain() + cursor;
+      if (Buffer.byteLength(JSON.stringify(plain)) <= this.journal.maxCheckpointBytes) {
+        this.serialize.warnLinkFallback(); buffer = plain;
+      }
+    }
+    return buffer;
+  }
   resize(cols, rows) {
     cols = Math.max(20, Math.min(400, cols)); rows = Math.max(5, Math.min(200, rows));
     if (this.alive) this.screen.write('', () => {
