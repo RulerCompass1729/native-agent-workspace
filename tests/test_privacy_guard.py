@@ -244,7 +244,7 @@ assert options['input'] == b'safe fixture\\n'
         self.assert_remote_empty()
 
     def scan_many_parts(self, ending):
-        # Exercise real private rules/gitleaks after the old aggregate limit.
+        # Exercise real private rules/gitleaks after the former 192 MiB limit.
         # Only this owned subprocess supplies scanner inputs directly; native Git
         # traversal and actual hooks are covered by the other disposable repos.
         code = """
@@ -253,7 +253,7 @@ from scripts.privacy_guard import Scanner, Blocked, MAX_BLOB, MAX_SCAN
 scan = Scanner()
 part = b'safe fixture line\\n' * ((MAX_BLOB - 1) // 18)
 try:
-    while scan.size <= 128 * 1024 * 1024:
+    while scan.size <= 192 * 1024 * 1024:
         scan.add(part, 'synthetic history')
 """ + ending + """
 except Blocked as error:

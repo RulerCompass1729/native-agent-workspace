@@ -1510,3 +1510,16 @@ are empty and one shared draft contains text. Six nonempty old backends retain
 their PID/start/version. Before/after read-only witnesses retain the original
 goal identity, objective, creation and active status. Physical input, actual
 provider frames, original-fork lifecycle and the whole milestone remain open.
+
+
+### Complete-history capacity during display delivery (2026-10-30)
+
+The preliminary complete-history scan of the committed display candidate refused
+publication at the 192 MiB aggregate limit. The bounded aggregate capacity is
+raised to 256 MiB, retaining the 2 MiB per-item limit, finite tool/process
+deadlines, and every ref/tree/patch/message/identity/private/generic/default
+secret check. Three existing late-input tests now cross the former 192 MiB
+boundary; overflow and error/timeout refusal remain. All 26 publication checks
+pass, and independent review accepts the finite capacity repair. At this source
+checkpoint the actual complete-history rerun remains pending. The accepted installed alpha.143
+payload is unchanged; no additional application release or restart is required.
