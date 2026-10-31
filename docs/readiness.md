@@ -4,6 +4,12 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.146 preserves completed native cursor controls in snapshots.
+Current-component reproduction confirms the old loss; 18 affected checks pass.
+Signed mode-state acceptance and independent review remain pending. Daily stays
+alpha.145; nonempty retained backends keep their prior serializer until a safe
+update. No new rendered-bar, temporal-blink or physical-input claim.
+
 Current daily GUI: alpha.145, committed build source `e348db4`. Existing recovery
 buttons remain readable after moving into message headings. Source checks pass
 (63 related and 20 archive checks, no skips); four signed installed groups pass.
