@@ -3485,3 +3485,17 @@ ordinary visible daily update preserves ten IDs, eleven live process starts,
 twelve draft scopes and the original active goal. The six nonempty backends keep
 the old serializer. Completed controls only: incomplete sequences, other resets,
 physical input, original-fork lifecycle and full-day use remain unqualified.
+
+
+### Exhausted automatic continuation - alpha.147 candidate
+
+Eight new production-function cases plus existing fleet/context checks total 118
+passes, zero skips. The descriptor, current-episode identity, state and archive
+guards, live/initial wiring, delayed-repeat deduplication, Notification reference
+lifetime and sidebar-only labeling are covered with synthetic transport. Prior
+source GUI passes four groups using two synthetic identities, four fake sends
+and three fake goal reads; notification and window reveal were intercepted there.
+That proves neither native OS delivery nor the signed default entry. A finite
+signed rehearsal will use existing native lifecycle logging and no Main inspector
+or production test hook. Permission approval and real notification clicks are
+outside the rehearsal. Actual installed results remain pending.

@@ -1617,3 +1617,40 @@ serializer. No real provider, product inference or native input runs. Mature
 unchanged helper evidence is reused rather than represented as fresh review.
 Visible bar shape, blink timing, incomplete-control/reset cases, physical input,
 original-fork lifecycle, full-day use and the overall milestone remain open.
+
+
+### Exhausted automatic-continuation awareness (2026-10-30 candidate)
+
+After the existing three attempts fail, the sidebar should identify the stopped
+session while another selected session and its draft stay intact. Four released
+files add descriptor provenance, a guarded native-notification request and the
+existing sidebar/accessible status cue. Native content, fleet status, selected
+header, retry policy and native goals are unchanged. Eight new cases plus existing
+fleet/context checks give 118 passes without skips; signed acceptance is pending.
+
+Incoming independent review reproduces R1 (rejected fixture actions were not
+recorded), R2 (missing cue passed vacuously), S1 (inferred Notification lifetime
+risk), G1 (unsettled history attachment) and G2 (the source recipe bound the
+Electron-module argument as the session ID). Recorded attempt guards, mandatory
+visible cue checks, strong notification references, an actual attachment wait
+and the corrected callback address these findings. Two earlier GUI failures
+remain non-passes. The final source GUI passes four groups with fake transport;
+OS notification and window reveal are intercepted. Its click reveals the first
+still-live claiming window, which need not display the failed session. The reopen
+uses an owned close and programmatic activate, not an original-fork lifecycle test.
+
+Main's extra pre-request approval gate was unnecessary: the original task already
+authorizes an installed synthetic notification rehearsal. That gate is withdrawn.
+The Electron source does request OS authorization; this is distinct from approving
+it. The signed recipe must keep any unresolved system decision unverified and
+never approve permission. Current native identity is required; old backends stay
+generic, full Main restart can notify again, and a destroyed claiming window has
+no click fallback. Native atomic goal restoration, locale, actual OS visibility
+and click, all-windows-closed delivery, mobile and full-day use remain open.
+
+Main preflight accepts the source but blocks its signed recipe on F1: human-draft
+cancellation could pass without a still-exhausted precondition. Main adds that
+positive assertion. F2 fixes a missing failure-screenshot helper in the port;
+F3 checks log truncation at final deduplication. Existing source GUI confirms the
+positive exhausted state before editing. No product behavior changes; the same
+reviewer must recheck this private-recipe delta before any signed run.

@@ -4,6 +4,12 @@ As of 2026-10-30. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.147 adds a specific exhausted-retry sidebar cue and uses the
+existing desktop notification path. Current descriptor identity and state guards
+prevent stale or unavailable rows from requesting an alert. All 118 affected
+checks pass without skips; signed installed acceptance is pending. Daily remains
+alpha.146. Native goal restoration, OS delivery and locale remain unqualified.
+
 Current daily GUI: alpha.146, committed build source `5874b29`. Completed
 native cursor controls survive snapshots and four renderer-shutdown reopens in
 four signed mode-state groups. Eighteen affected checks pass without skips.
