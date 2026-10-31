@@ -3709,7 +3709,7 @@ T79 and the shared goal remain open.
 The baseline census failure in that source run is fixed separately by the
 47-check test-only finalizer repair; no current whole-suite pass is claimed.
 
-### Read-only terminal live resize - alpha.153 candidate
+### Read-only terminal live resize - alpha.153
 
 One hundred three affected terminal/build-info checks pass without skips, and the
 integrated UI builds. Ten actual producer/renderer regressions cover captured
@@ -3718,5 +3718,29 @@ sizes, retired entries, legacy unindexed output, keyboard/focus state and owner
 echoes. The source's 99 related checks overlap these checks. Its historical full
 suite remains 1917 passes and one baseline census failure, not a full-suite pass;
 Main preserves the independently verified I121 finalizer repair. The source's
-four isolated GUI flows are not signed installed evidence. Main signed acceptance
-is pending; initial wide hydration, old producers and physical input stay open.
+four isolated GUI flows are separate from the fresh signed integration. The signed
+run passes four groups with two intentional windows, two production Terminals/two
+synthetic workers, seven outputs, five snapshots and two reloads. Full source,
+owner and watcher cell/style/width/wrap/cursor/URI-group digests agree after live
+same-sequence resize and continuation, parked return without a fresh primary
+snapshot, captured-snapshot/queued-resize hydration, and a read-only CSS viewport
+change that keeps the source grid. All five GUI snapshots are ASCII without
+links; the queued snapshot deliberately uses short ASCII. Wide/RGB/link hydration
+and wrapped reflow are headless-only. This is not native OS frame resizing.
+
+All 26 raw files match their seal. Owned principal and candidate processes,
+profile, endpoint and lease are gone before offline work; release takes 9.770
+seconds and the post-daemon signature is strict. Main views PNGs 1/3, independent
+review views 2/4 and checks the raw results. Product inference and real providers
+are not used. Main IPC/per-sender/OS counters are uninstrumented; the source
+watcher proof is reused. Network observation covers only the synthetic test host.
+
+The ordinary visible alpha.153 update from clean `0d59d3d` preserves ten original
+native IDs, eleven positive before-live process starts, twelve view/draft scopes
+and reported settings. Separate goal reads retain original UUID, objective,
+creation and active status. Six nonempty old backends retain PID/start/version.
+LaunchServices metadata plus path existence finds one existing registered app;
+this is not Spotlight or physical search. Temporary app copies are gone and
+rollback archives remain. Initial wide snapshots, saved pen, owner echo transients,
+old/native producers, physical input, original lifecycle, full-day use, whole T77
+and the shared goal remain open.
