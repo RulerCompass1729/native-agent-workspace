@@ -1901,3 +1901,27 @@ they do not rerun each script's original GUI/daemon teardown body. The census is
 a structural heuristic; the behavior probes provide the failure-path evidence.
 If saving and cleanup both fail, cleanup's error can mask the earlier save error;
 the token remains held and the run still fails. These are accepted limits.
+
+
+### Live native hyperlink hover (2026-10-31 candidate)
+
+Source handoff record, before Main installed acceptance:
+
+Native hyperlink hover now follows the rendered terminal contents when a program replaces or erases a row while the pointer remains in the pane. The pinned xterm 6 callback is registered once for the Linkifier lifetime, replacing its former per-hover registration. Affected row and wrapped-link caches are invalidated and the synchronous OSC target is resolved afresh. Unrelated-row and same-cell fast paths remain. Existing cursor, column, background and mouseleave fixes are unchanged.
+
+The headless compiled baseline reproduced the old URI (4 passes and 4 failures); there was no stock-control GUI run. The repair passes 58 checks (56 plus 2 negative build guards, within the 81-check selected run), with no skips. The full suite has 1907 passes and one existing failure in the compact-reading scratch-finalizer census, also reproduced with unchanged HEAD inputs. That failure remains open for Main at integration; this is not a full-suite pass.
+
+One isolated source GUI trial passed four complete flows: row replacement without another scripted pointer move, replacement/erase, wrapped alternate-screen update and normal return, and owned window reconstruction/reload. Actual hover targets, native underlines, stable provider-query counts, full cell digests and synthetic identities/owners/positive drafts/epoch/sequence were checked. Ten synthetic program frames, four snapshots, one owned window reopen, two page reloads (one instrumentation reload and one checked reconstruction) and six screenshots were recorded. Owned processes and the active temporary profile were removed and the GUI slot released after 4.998 seconds, before offline work. The scratch export is retained privately under the owned evidence raw folder. No link was activated and no product model, native provider, terminal input or OS clipboard action occurred.
+
+The GUI wrapping case uses single-row OSC ranges; clearing a partly overlapped multi-row link range was checked only headlessly with a custom provider. This qualifies the synchronous OSC path after its rendered frame. The pre-render transient, existing asynchronous-provider race, column-reconstruction and saved-pen limits remain open. It is a CDP-driven source result; physical, VoiceOver, installed, native-producer and retained-backend qualification remain pending. Requalify the pinned vendor callback before dependency changes. Main must retain the existing census failure in the integration ledger and qualify the signed installed build.
+
+Main integrates only the released two-file commit, preserving existing native
+cursor, width, background, serializer, mouseleave, panorama and context behavior.
+Ninety-six related checks and the integrated build pass. The source's historical
+P1 census failure is addressed by the separate test-only finalizer repair and
+47 related passes; no whole-current-suite pass is claimed. The proposed signed
+port uses the existing renderer launcher, preserves reentry viewport dimensions,
+and replaces ordinary source close/activate with renderer-shutdown/duplicate
+reopen. Main IPC/OS counters are not instrumented; source guard proof is reused.
+Request observation covers the synthetic target host only. Installed acceptance
+and delivery remain pending; whole T79 and the shared goal remain open.

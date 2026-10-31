@@ -246,3 +246,144 @@ test('leaving and reentering the same terminal cell requests its current link af
   assert.deepEqual(requests, [{ x: 1, y: 1, useCache: false }], 'A buffer may change while the pointer is outside; reuse neither the old cell nor its provider reply');
   move.call(state, event); assert.equal(requests.length, 1, 'Repeated movement within the current cell keeps the existing fast path');
 });
+
+// Exercise the real compiled Linkifier and OSC provider with real terminal
+// cells. Only DOM/mouse/render event wiring is synthetic; no page is opened.
+let hoverUpdateClasses;
+function hoverUpdateCompiledClasses(stock = false) {
+  const vm = require('node:vm'), root = path.resolve(__dirname, '../..');
+  let source;
+  if (stock) source = fs.readFileSync(require.resolve('@xterm/xterm'), 'utf8');
+  else {
+    vm.runInNewContext(fs.readFileSync(path.join(root, 'scripts/build-ui.cjs'), 'utf8'), {
+      require: name => name === 'node:fs' ? { ...fs, writeFileSync(file, value) {
+        assert.equal(file, path.join(root, 'app/dsh/client.js')); source = value;
+      } } : require(name), __dirname: path.join(root, 'scripts'), console: { log() {} },
+    });
+    assert.equal(typeof source, 'string');
+  }
+  const oldListenerRegistrations = source.split('_linkCacheDisposables.push(').length - 1;
+  const map = '//# sourceMappingURL=xterm.js.map';
+  assert.equal(source.split(map).length, 2);
+  source = source.slice(0, source.indexOf(map));
+  // Expose the existing module loader without starting the browser terminal.
+  const startup = 'var s={};return(()=>{var e=s;';
+  assert.equal(source.split(startup).length, 2);
+  source = source.replace(startup, 'var s={};globalThis.probeRequire=i;return false&&(()=>{var e=s;');
+  const context = { module: { exports: {} }, exports: {}, document: {},
+    navigator: { platform: 'MacIntel', userAgent: 'NAW-synthetic-test', language: 'en-US', maxTouchPoints: 0 },
+    URL, console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask, performance };
+  vm.createContext(context); vm.runInContext(source, context);
+  function exported(name) {
+    const prefix = source.slice(0, source.indexOf('t.' + name + '=void 0'));
+    const modules = [...prefix.matchAll(/(?:^|},)(\d+):(?:function|\(e,t)/g)];
+    assert.ok(modules.length); return context.probeRequire(Number(modules.at(-1)[1]))[name];
+  }
+  return { Linkifier: exported('Linkifier'), OscLinkProvider: exported('OscLinkProvider'), oldListenerRegistrations };
+}
+function hoverUpdateFixture(t, { stock = false, wrapped = false } = {}) {
+  const { Linkifier, OscLinkProvider, oldListenerRegistrations } = stock ? hoverUpdateCompiledClasses(true) :
+    (hoverUpdateClasses ||= hoverUpdateCompiledClasses());
+  const screen = new Screen({ cols: 40, rows: 5, scrollback: 5000, allowProposedApi: true });
+  const listeners = new Map(), rendered = new Set(), requests = [], hovered = [], left = [], activations = [];
+  const names = new Set(['xterm']);
+  const element = { classList: { contains: n => names.has(n), add: n => names.add(n),
+    remove: n => names.delete(n), toggle: (n, v) => v ? names.add(n) : names.delete(n) },
+    addEventListener(n, fn) { listeners.set(n, fn); }, removeEventListener(n, fn) { if (listeners.get(n) === fn) listeners.delete(n); } };
+  const handler = { activate(e, uri) { activations.push(uri); }, hover(e, uri) { hovered.push(uri); }, leave(e, uri) { left.push(uri); } };
+  const native = new OscLinkProvider(screen._core._bufferService, { rawOptions: { linkHandler: handler } }, screen._core._oscLinkService);
+  let wrappedUri = 'https://example.invalid/wrapped-old';
+  const provider = { provideLinks(y, callback) {
+    requests.push(y);
+    if (!wrapped) return native.provideLinks(y, callback);
+    callback([{ text: wrappedUri, range: { start: { x: 1, y: 1 }, end: { x: 4, y: 3 } },
+      activate: handler.activate, hover: handler.hover, leave: handler.leave }]);
+  } };
+  const linkifier = new Linkifier(element, { getCoords: e => [e.x, e.y] }, {
+    onRenderedViewportChange(fn) { rendered.add(fn); return { dispose() { rendered.delete(fn); } }; },
+  }, screen._core._bufferService, { linkProviders: [provider] });
+  t.after(() => { linkifier.dispose(); screen.dispose(); assert.equal(activations.length, 0); });
+  return { screen, linkifier, rendered, requests, hovered, left, activations, oldListenerRegistrations,
+    move(x, y = 1) { listeners.get('mousemove')({ x, y, composedPath: () => [element] }); },
+    leave() { listeners.get('mouseleave')(); },
+    render(start, end) { for (const fn of [...rendered]) fn({ start, end }); },
+    output: data => write(screen, data), setWrappedUri(uri) { wrappedUri = uri; } };
+}
+const hoverOld = 'https://example.invalid/old-row', hoverNew = 'https://example.invalid/current-row';
+async function hoverUpdateGapJourney(h) {
+  await h.output('    ' + open(hoverOld) + 'FIRST' + close); h.move(1);
+  await h.output('\x1b[H' + open(hoverNew) + 'SECOND-LABEL' + close);
+  h.render(0, 0); h.move(1); h.move(6);
+}
+test('T79 render stock control reproduces the stale URI after a row changes', async t => {
+  const h = hoverUpdateFixture(t, { stock: true }); await hoverUpdateGapJourney(h);
+  assert.equal(h.linkifier.currentLink.link.text, hoverOld);
+  assert.equal(h.requests.length, 1);
+});
+test('T79 render changing a cached gap refreshes the actual OSC URI without mouseleave', async t => {
+  const h = hoverUpdateFixture(t); await hoverUpdateGapJourney(h);
+  assert.equal(h.linkifier.currentLink.link.text, hoverNew);
+  assert.deepEqual(h.hovered, [hoverNew]); assert.equal(h.requests.length, 2);
+  assert.equal(h.rendered.size, 1);
+});
+test('T79 render owns one listener through hovers and none after disposal', async t => {
+  const h = hoverUpdateFixture(t); assert.equal(h.rendered.size, 1);
+  assert.equal(h.oldListenerRegistrations, 0, 'Remove the old per-hover listener');
+  await h.output(open(hoverOld) + 'LINK' + close); h.move(2);
+  for (let i = 0; i < 3; i++) h.render(0, 0);
+  assert.equal(h.rendered.size, 1); h.linkifier.dispose(); assert.equal(h.rendered.size, 0);
+});
+test('T79 render unrelated rows and same-cell movement retain the query fast path', async t => {
+  const h = hoverUpdateFixture(t); await hoverUpdateGapJourney(h);
+  const cell = h.linkifier._lastBufferCell, count = h.requests.length;
+  h.render(1, 1); assert.equal(h.requests.length, count); assert.equal(h.linkifier._lastBufferCell, cell);
+  h.move(6); assert.equal(h.requests.length, count);
+});
+test('T79 render overlapping updates leave once, hover once, and erase the old target', async t => {
+  const h = hoverUpdateFixture(t); await h.output(open(hoverOld) + 'FIRST' + close); h.move(2);
+  await h.output('\x1b[H' + open(hoverNew) + 'SECOND' + close); h.render(0, 0);
+  assert.deepEqual(h.left, [hoverOld]); assert.deepEqual(h.hovered, [hoverOld, hoverNew]);
+  assert.equal(h.linkifier.currentLink.link.text, hoverNew);
+  await h.output('\x1b[H\x1b[2K'); h.render(0, 0);
+  assert.equal(h.linkifier.currentLink, undefined); assert.deepEqual(h.left, [hoverOld, hoverNew]);
+  const count = h.requests.length; h.move(2); assert.equal(h.requests.length, count);
+});
+test('T79 render after mouseleave makes no provider request', async t => {
+  const h = hoverUpdateFixture(t); await h.output(open(hoverOld) + 'FIRST' + close); h.move(2); h.leave();
+  const count = h.requests.length; await h.output('\x1b[H' + open(hoverNew) + 'SECOND' + close); h.render(0, 4);
+  assert.equal(h.requests.length, count); assert.equal(h.linkifier.currentLink, undefined); assert.equal(h.rendered.size, 1);
+});
+test('T79 render scroll and full refresh resolve the current visible cell', async t => {
+  const h = hoverUpdateFixture(t); await h.output('a\r\nb\r\nc\r\nd\r\n' + open(hoverOld) + 'FIRST' + close); h.move(2, 5);
+  assert.equal(h.linkifier.currentLink.link.text, hoverOld);
+  await h.output('\r\n' + open(hoverNew) + 'BOTTOM' + close); h.render(0, 4);
+  assert.equal(h.screen.buffer.active.baseY, 1); assert.equal(h.linkifier.currentLink.link.text, hoverNew);
+  assert.equal(h.requests.length, 2);
+});
+test('T79 render partly overlapping wrapped links are cleared before refresh', t => {
+  const h = hoverUpdateFixture(t, { wrapped: true }); h.move(2, 2);
+  h.setWrappedUri(hoverNew); h.render(0, 0);
+  assert.deepEqual(h.left, ['https://example.invalid/wrapped-old']);
+  assert.deepEqual(h.hovered, ['https://example.invalid/wrapped-old', hoverNew]);
+  assert.equal(h.linkifier.currentLink.link.text, hoverNew); assert.equal(h.rendered.size, 1);
+});
+
+function rejectHoverUpdateSource(transform) {
+  const vm = require('node:vm'), root = path.resolve(__dirname, '../..'); let writes = 0;
+  const files = { ...fs, readFileSync(file, ...args) {
+    const value = fs.readFileSync(file, ...args);
+    return file === require.resolve('@xterm/xterm') ? transform(value) : value;
+  }, writeFileSync() { writes++; } };
+  assert.throws(() => vm.runInNewContext(fs.readFileSync(path.join(root, 'scripts/build-ui.cjs'), 'utf8'), {
+    __dirname: path.join(root, 'scripts'), console: { log() {} },
+    require: name => name === 'node:fs' ? files : require(name),
+  }), /Pinned terminal link lifecycle changed/);
+  assert.equal(writes, 0);
+}
+test('T79 render changed old listener source refuses the real build', () => {
+  rejectHoverUpdateSource(text => text.replace('_linkCacheDisposables.push(', '_linkCacheDisposables.unshift('));
+});
+test('T79 render ambiguous constructor source refuses the real build', () => {
+  const marker = 'this._register(this._bufferService.onResize((()=>{this._clearCurrentLink(),this._wasResized=!0})))';
+  rejectHoverUpdateSource(text => text.replace(marker, marker + ',' + marker));
+});
