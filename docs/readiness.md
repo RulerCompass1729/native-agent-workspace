@@ -4,14 +4,17 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.153 follows native resize events in a second read-only terminal
-view even when no new output sequence arrives. It reuses the existing journal
-index and parser barrier, retaining legacy unindexed output. One hundred three
-affected checks and the integrated build pass. Signed integration is pending;
-daily remains alpha.152. Initial wide snapshot reconstruction, saved pen, old
-backends, real native producers, physical input and the shared goal remain open.
+Current daily GUI: alpha.153, committed build source `0d59d3d`. Read-only
+terminal views consume live resize events even when the output sequence does not
+change. One hundred three affected checks, the UI build and four signed renderer
+flows pass. The ordinary visible update preserves ten native IDs, eleven positive
+before-live process starts, twelve view/draft scopes, reported settings and the
+separately checked original active goal. Six nonempty old backends retain their
+PID/start/version. Initial wide snapshot reconstruction, saved pen, owner echo
+transients, old backends, real native producers, physical input, original lifecycle,
+full-day use and the shared goal remain open.
 
-Current daily GUI: alpha.152, committed build source `1c67a70`. Native OSC
+The prior alpha.152 task, source `1c67a70`, remains qualified. Native OSC
 hover targets follow rendered row replacement or erasure, preserving unrelated-row
 and same-cell fast paths. Ninety-six related checks, the UI build and four signed
 renderer flows pass. One renderer shutdown/reentry and two reloads preserve full

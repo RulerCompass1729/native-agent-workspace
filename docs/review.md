@@ -2004,5 +2004,35 @@ Limits: alternate-buffer return is headless-only in this batch. The snapshot que
 Main integrates only the released three-file commit. Existing cursor, serializer,
 hyperlink, panorama, context and I121 finalizer behavior are preserved. The current
 103 affected checks and integrated build pass; no current full-suite pass is
-claimed. Signed integration and daily delivery remain pending. The separate mobile
-qualification failure is retained above and does not qualify that feature.
+claimed. The initial source review reaches its turn cap and is not a pass; the
+same session closes source findings and verifies the committed signed binding.
+One signed trial then passes four groups, seven output frames, five snapshots,
+two workers, two intentional windows and two reloads. Full canonical/owner/watcher
+cell digests agree across same-sequence resizing, parked return, queued snapshot
+hydration and read-only CSS viewport changes. All 26 raw files match their seal;
+owned processes/profile/endpoint/token are gone before offline work, with release
+at 9.770 seconds and strict post-daemon signing. Main views PNGs 1/3; the reviewer
+views 2/4, re-hashes the raw seal and accepts the actual result and conditional
+visible GUI/empty-active-backend operator.
+
+No product inference or real provider is used. Main IPC/per-sender/OS counters
+remain uninstrumented, not measured zero; source proof is reused. Target-host
+request observation is not global network telemetry. All GUI snapshots are ASCII
+without links and the queue control is deliberately short ASCII; wide/RGB/link
+hydration and wrapped reflow are headless-only. CSS viewport resizing is not a
+native window-frame test. Model, permission and positive draft equality is
+asserted inside the script, not a separate raw baseline.
+
+The ordinary visible alpha.153 update from clean `0d59d3d` preserves ten original
+native IDs, eleven positive before-live process starts, twelve view/draft scopes
+and reported settings. Separate goal reads preserve original UUID, objective,
+creation and active status. Six nonempty old backends retain PID/start/version;
+no original native process or parent is migrated. LaunchServices metadata and
+path existence find one existing registered app, not Spotlight or physical search.
+Temporary app copies are gone; rollback archives remain. The operator's archive
+check uses the correct prior version despite stale informational wording in its
+failure message. Owner fit/old-service echoes can still briefly show a stale size;
+the source regression checks the final state, not absence of that transient.
+Initial wide snapshots, saved pen, old/native producers, physical input, original
+lifecycle, full-day use, whole T77 and the shared goal remain open. The separate
+mobile qualification failure is retained above and does not qualify that feature.
