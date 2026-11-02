@@ -2357,6 +2357,19 @@ post-provider signature check on the daily app, checkpoint 2, and the untested
 2.1.316 modes.
 
 
+### Sidebar compaction and per-group folding (T-125)
+
+Codex 2's sidebar row compaction and per-group folding were rebuilt on main
+without the language catalogue. The lane's fresh reviewer first found that the
+merge dropped the background-work status shown with an interrupted or
+questioning session; the delta review passed. While repairing stale GUI scripts
+the author then found three regressions from this change and fixed them in two
+follow-up commits: the session menu closed whenever its facts changed, a tall
+menu covered its own button, and the version script checked removed text. The
+same reviewer passed the follow-ups. Open: in the flat view any session added,
+removed or reordered still closes an open menu.
+
+
 ### Wakes survive unrelated human input (T-100 checkpoint 2)
 
 Codex 2's T-100 scope decision R3 required any human input to void every agent's

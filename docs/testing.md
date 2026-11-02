@@ -4012,3 +4012,17 @@ The notification rule was checked against the format of fifteen real
 notifications in the author's own native record and one hidden-window check,
 which predates the last change to how task IDs are kept; it has not run on a
 real hook. The overview script's native-fallback branch has never run.
+
+Two follow-up commits from Claude 2 fix regressions the sidebar change brought:
+the session menu closed whenever a fact changed, such as a working session
+becoming ready, so a click could land on nothing; a tall menu covered its own
+button, so a second click could not close it; and the version script still
+looked for the old inline version text. Both are integrated with identical
+changed lines. On main after them the unit suite again passes 2,121 checks, and
+sidebar density, version info and compact versions exit 0. The session menu
+script passes its first section, including the button closing the menu, then
+stops at an assertion written before the wake menu item was added; the sidebar
+script stops waiting for a member tab strip that the overview hid earlier. Both
+are stale scripts already listed for repair. In the lane the follow-ups passed
+the session menu script with its pending repair and a check at 850 by 600 with
+the sidebar collapsed.

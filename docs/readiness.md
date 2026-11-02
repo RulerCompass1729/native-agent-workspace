@@ -8,13 +8,14 @@ Candidate alpha.159 carries six reviewed changes. Sidebar rows take two lines,
 with the name and version mark first and space badges, a short status and the
 activity time below; each space group, independent sessions included, folds on
 its own and keeps that choice after a reload; and the session menu lists the
-session's facts before its actions. A person's action now voids only the staged
-agent wakes whose sender or receiver it touches; the explicit pause of all
-follow-up handoffs, turning wakes off and a backend upgrade still withdraw every
-wake, and moving the pointer over a fullscreen terminal no longer counts as a
-person operating it. Terminal text can be selected again: native snapshots keep
-the mouse encoding, so a drag in a rebuilt view reaches Claude, which selects
-and copies; views that cannot send input, and views of older backends, select
+session's facts before its actions, updates them in place while it stays open
+and opens beside its button. A person's action now voids only the staged agent
+wakes whose sender or receiver it touches; the explicit pause of all follow-up
+handoffs, turning wakes off and a backend upgrade still withdraw every wake, and
+moving the pointer over a fullscreen terminal no longer counts as a person
+operating it. Terminal text can be selected again: native snapshots keep the
+mouse encoding, so a drag in a rebuilt view reaches Claude, which selects and
+copies; views that cannot send input, and views of older backends, select
 locally and copy with Cmd+C; Option-click no longer types arrow keys. In the
 old-sessions menu, an old backend whose sessions are all idle offers 结束并更新…:
 after one confirmation NAW ends those sessions, restarts that backend on the
@@ -58,8 +59,10 @@ relay. Selection was tested on Claude Code 2.1.316 only; Codex, the space member
 column, and right-click and wheel in old-backend views are untested. Each change
 was reviewed in its author lane and is integrated with identical changed lines;
 the one textual conflict was resolved by keeping both sides. The full unit suite
-passes 2,121 checks and ten GUI scripts exit 0. Daily delivery remains pending;
-current daily remains alpha.158.
+passes 2,121 checks. Ten GUI scripts exit 0 on the batch before two sidebar
+follow-up fixes; after them, sidebar density, compact versions and version info
+exit 0, and the session menu and sidebar scripts stop at assertions that predate
+this batch. Daily delivery remains pending; current daily remains alpha.158.
 
 Current daily GUI: alpha.158, committed build source `403f6b6e`. It lets an
 enlarged member card return to the whole space, which completes the maximize
