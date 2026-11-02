@@ -941,9 +941,10 @@ class Claude extends EventEmitter {
           entering.prompts.add(event.prompt_id || null);
           if (entering === this.queued) this.emit('state', 'working');
         } else if (!this.pending || event.prompt !== this.pending.text || event.prompt_id !== this.pending.promptId) {
+          const superseded = Boolean(this.queued || this.pending);
           if (this.queued) this.queued.superseded = true;
           this.pending = null; this.emit('state', 'working');
-          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: `claude-prompt-${event.prompt_id}`, ...(this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}) } : undefined);
+          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: `claude-prompt-${event.prompt_id}`, ...(this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);
         }
         break;
       }
@@ -1012,7 +1013,9 @@ class Claude extends EventEmitter {
         const scheduled = Array.isArray(event.session_crons) ? event.session_crons.length : null;
         // Type labels only; task descriptions and commands stay in the native session.
         const kinds = background ? event.background_tasks.slice(0, 50).map(t => ['shell', 'subagent', 'monitor', 'workflow'].includes(t?.type) ? t.type : 'other') : null;
-        this.emit('background', { count: background, scheduled, kinds });
+        // Opaque task IDs only, kept in memory: a later notification turn for one of them is machine input.
+        const ids = background ? event.background_tasks.slice(0, 50).map(t => typeof t?.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(t.id) ? t.id : null).filter(Boolean) : [];
+        this.emit('background', { count: background, scheduled, kinds, ids });
         this.emit('state', 'idle');
         // Observed child hooks cannot certify that all descendants are idle.
         this.emit('complete', { messageId: displayConfirmed ? proof?.messageId : undefined, tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
