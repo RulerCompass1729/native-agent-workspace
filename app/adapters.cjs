@@ -70,12 +70,108 @@ function createTerminalSerializeAddon() {
     let context;
     const serialize = Addon.prototype.serialize, next = Handler.prototype._nextCell;
     const diff = Handler.prototype._diffStyle, rowEnd = Handler.prototype._rowEnd;
-    // Correct a relative move from pending wrap; preserve other cursor bytes.
+    // Restore per-buffer regions before mode flags, retaining pending wrap when possible.
+    let snapshotOptions, legacyCursorState = false;
+    const originalOptions = () => snapshotOptions?.range || snapshotOptions?.excludeModes || snapshotOptions?.excludeAltBuffer || snapshotOptions?.scrollback !== undefined || legacyCursorState;
+    const coreBuffer = (terminal, buffer) => terminal._core._bufferService.buffers[buffer.type === 'alternate' ? 'alt' : 'normal'];
+    const erasedRow = (terminal, line) => {
+      if (!line || line.length !== terminal.cols) return null;
+      const cell = line.getCell(terminal.cols - 1);
+      if (!cell || cell.getChars() || cell.getWidth() !== 1 || cell.fg !== 0 || (cell.bg & 0xFC000000) || cell.hasExtendedAttrs()) return null;
+      for (let col = 0; col < terminal.cols; col++) {
+        const blank = line.getCell(col);
+        if (!blank || blank.getChars() || blank.getWidth() !== 1 || blank.fg !== 0 || blank.bg !== cell.bg || blank.hasExtendedAttrs()) return null;
+      }
+      return cell;
+    };
+    const pendingCell = (terminal, buffer) => {
+      if (buffer.cursorX !== terminal.cols) return null;
+      const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+      let x = terminal.cols - 1, cell = line?.getCell(x);
+      if (cell?.getWidth() === 0) cell = line?.getCell(--x);
+      if (!cell || x + cell.getWidth() !== terminal.cols) return null;
+      if (cell.getChars()) return { cell, x };
+      const erased = erasedRow(terminal, line);
+      return erased ? { cell: erased, x, erased: true, wrapped: line.isWrapped } : null;
+    };
+    const cursor = (terminal, buffer, origin) => {
+      const b = coreBuffer(terminal, buffer), e = String.fromCharCode(27), row = buffer.cursorY - (origin ? b.scrollTop : 0) + 1;
+      const cup = col => e + '[' + row + ';' + (col + 1) + 'H';
+      if (buffer.cursorX < terminal.cols) return cup(buffer.cursorX);
+      const pending = pendingCell(terminal, buffer);
+      if (!pending) return null;
+      const { cell, x } = pending;
+      const pen = terminal._core._inputHandler._curAttrData;
+      const style = (to, from) => {
+        const codes = diff.call(null, withoutLink(to), withoutLink(from));
+        return codes.length ? e + '[' + codes.join(';') + 'm' : '';
+      };
+      // Absolute styles: a relative SGR 22 would clear both bold and dim.
+      const defaults = buffer.getNullCell(), reset = e + '[0m';
+      if (pending.erased) {
+        return cup(x) + reset + style(cell, defaults) + ' ' + e + (pending.wrapped ? '[1K' : '[2K') + reset + style(pen, defaults);
+      }
+      const id = cell.hasExtendedAttrs() ? cell.extended.urlId : 0, data = id ? terminal._core._oscLinkService.getLinkData(id) : null;
+      return cup(x) + reset + style(cell, defaults) + (data ? osc(id, data) : '') + cell.getChars() + (data ? close : '') + reset + style(pen, defaults);
+    };
     const format = Handler.prototype._serializeString;
     Handler.prototype._serializeString = function (excludeFinalCursorPosition) {
+      if (!excludeFinalCursorPosition && !originalOptions()) {
+        for (let index = 0; index + 1 < this._allRows.length; index++) {
+          const row = this._firstRow + index, line = this._buffer.getLine(row), nextLine = this._buffer.getLine(row + 1);
+          if (!line || !nextLine || line.length !== this._terminal.cols || nextLine.length !== this._terminal.cols ||
+              !nextLine.isWrapped || this._allRowSeparators[index] !== '') continue;
+          const first = nextLine.getCell(0), last = line.getCell(this._terminal.cols - 1);
+          if (!first || first.getChars() || first.getWidth() !== 1 || first.fg !== 0 || first.hasExtendedAttrs() ||
+              !last || (!last.getChars() && last.getWidth() !== 0) || (first.bg & 0x3FFFFFF) !== (last.bg & 0x3FFFFFF)) continue;
+          // A leading null cannot trigger the wrap; use the existing forced-wrap sequence.
+          this._allRowSeparators[index] = '-' + String.fromCharCode(27) + '[1D' + String.fromCharCode(27) + '[1X';
+          if (this._lastContentCursorRow < row + 1) {
+            this._lastContentCursorRow = row + 1; this._lastContentCursorCol = 0;
+          }
+        }
+        const firstScroll = this._terminal.rows;
+        if (this._allRows.length > firstScroll) {
+          const previous = this._buffer.getLine(this._firstRow + firstScroll - 1), line = this._buffer.getLine(this._firstRow + firstScroll);
+          const before = previous?.getCell(this._terminal.cols - 1), tail = line?.getCell(this._terminal.cols - 1);
+          if (previous?.length === this._terminal.cols && line?.length === this._terminal.cols &&
+              before && (before.bg & 0x3FFFFFF) && tail && !tail.getChars() && tail.getWidth() === 1 &&
+              tail.fg === 0 && tail.bg === 0 && !tail.hasExtendedAttrs()) {
+            // The first replay scroll inherits the previous row's BCE colour.
+            this._allRows[firstScroll] += String.fromCharCode(27) + '[' + this._terminal.cols + 'X';
+          }
+        }
+        if (this._buffer.length - this._firstRow <= this._terminal.rows) {
+          for (let index = this._allRows.length - 1; this._firstRow + index > this._lastContentCursorRow; index--) {
+            const row = this._firstRow + index, blank = erasedRow(this._terminal, this._buffer.getLine(row));
+            if (blank && blank.bg && this._allRows[index]) {
+              // The row's BCE erase paints cells even though it prints no glyph.
+              this._lastContentCursorRow = row; this._lastContentCursorCol = 0; break;
+            }
+          }
+        }
+      }
       const content = format.call(this, excludeFinalCursorPosition), x = this._buffer.cursorX;
-      if (excludeFinalCursorPosition || x >= this._terminal.cols || this._lastCursorCol < this._terminal.cols || this._terminal.modes.originMode) return content;
-      return content + "\u001b[" + (this._buffer.cursorY + 1) + ';' + (x + 1) + 'H';
+      if (excludeFinalCursorPosition) return content;
+      const move = x >= this._terminal.cols || this._lastCursorCol < this._terminal.cols ? content :
+        content + String.fromCharCode(27) + '[' + (this._buffer.cursorY + 1) + ';' + (x + 1) + 'H';
+      const legacy = this._terminal.modes.originMode ? content : move;
+      if (originalOptions()) return legacy;
+      const b = coreBuffer(this._terminal, this._buffer);
+      if (b.scrollTop || b.scrollBottom !== this._terminal.rows - 1) {
+        const position = cursor(this._terminal, this._buffer, false);
+        return position === null ? legacy : content + String.fromCharCode(27) + '[' + (b.scrollTop + 1) + ';' + (b.scrollBottom + 1) + 'r' + position;
+      }
+      if (x >= this._terminal.cols && pendingCell(this._terminal, this._buffer)?.erased) return content + cursor(this._terminal, this._buffer, false);
+      // Content precedes the origin flag, so this absolute move is still valid.
+      return move;
+    };
+    const modes = Addon.prototype._serializeModes;
+    Addon.prototype._serializeModes = function (terminal) {
+      const content = modes.call(this, terminal);
+      if (originalOptions() || !terminal.modes.originMode) return content;
+      const position = cursor(terminal, terminal.buffer.active, true);
+      return position === null ? content : content + position;
     };
     const close = '\x1b]8;;\x1b\\';
     const osc = (id, data) => {
@@ -127,6 +223,21 @@ function createTerminalSerializeAddon() {
       if (this.snapshotWrittenLink) this._currentRow += close;
       this.snapshotWrittenLink = 0; this.snapshotSourceLink = undefined;
       return rowEnd.call(this, row, last);
+    };
+    const beforeOptions = Addon.prototype.serialize;
+    Addon.prototype.serialize = function (options) {
+      const previousOptions = snapshotOptions, previousLegacy = legacyCursorState;
+      try {
+        snapshotOptions = options;
+        const terminal = this._terminal;
+        if (!terminal) return beforeOptions.call(this, options);
+        const buffers = [terminal.buffer.normal];
+        if (terminal.buffer.active.type === 'alternate') buffers.push(terminal.buffer.alternate);
+        // Preserve legacy bytes for pending rows that cannot be reconstructed.
+        legacyCursorState = buffers.some(buffer => buffer.cursorX >= terminal.cols && !pendingCell(terminal, buffer));
+        return beforeOptions.call(this, options);
+      }
+      finally { snapshotOptions = previousOptions; legacyCursorState = previousLegacy; }
     };
   }
 }

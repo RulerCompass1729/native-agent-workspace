@@ -72,12 +72,18 @@ for(const [name,data]of[['ASCII','A'.repeat(40)],['wide','A'.repeat(38)+'中']])
   const plain=new Stock();plain.activate(p.terminal.screen);try{assert.equal((await p.terminal.snapshot()).buffer,plain.serialize()+p.terminal.cursorModes.snapshot());}finally{plain.dispose();}
   const view=await receiver(t,await p.terminal.snapshot());assert.deepEqual(capture(view),capture(p.terminal.screen));await p.output('NEXT');await write(view,'NEXT');assert.deepEqual(capture(view),capture(p.terminal.screen));
 });
-test('origin and explicit range preserve legacy byte behavior',async t=>{
-  const p=producer(t);await p.resize(40);await p.output('\x1b[2;4r\x1b[?6hORIGIN');
+for(const [name,input] of [['origin region','\x1b[2;4r\x1b[?6hORIGIN'],['erased pending region','\x1b[2;4r\x1b[44m'+'P'.repeat(40)+'\x1b[2K\x1b[0m'],
+  ['blank-led wrap','A'.repeat(40)+'B\x1b[D\x1b[X\x1b[CC'],['trailing background erase','\x1b[44m\x1b[2J\x1b[H']])
+test('explicit range, excluded modes and alternate, and scrollback preserve legacy byte behavior: '+name,async t=>{
+  const p=producer(t);await p.resize(40);await p.output(input);
   const plain=new Stock();plain.activate(p.terminal.screen);
-  try{assert.equal((await p.terminal.snapshot()).buffer,plain.serialize()+p.terminal.cursorModes.snapshot());const options={range:{start:0,end:1}};assert.equal(p.terminal.serialize.serialize(options),plain.serialize(options));}
+  try{
+    // These inputs change complete default snapshots, so equal option bytes are not vacuous.
+    // Each leaves the cursor after its last content, so HEAD adds no absolute move either.
+    assert.notEqual(p.terminal.serialize.serialize(),plain.serialize());
+    for(const options of [{range:{start:0,end:1}},{excludeModes:true},{excludeAltBuffer:true},{scrollback:0},{scrollback:5}])assert.equal(p.terminal.serialize.serialize(options),plain.serialize(options));
+  }
   finally{plain.dispose();}
-  // Byte compatibility is not origin-mode fidelity qualification.
 });
 
 for(const fault of ['anchor','hash'])test('unqualified serializer '+fault+' uses existing stock fallback and generic warning',async t=>{
@@ -95,3 +101,167 @@ for(const fault of ['anchor','hash'])test('unqualified serializer '+fault+' uses
   assert.deepEqual(warnings,['Native hyperlink snapshot extension unavailable; using the stock terminal serializer.']);
   assert.equal(data,addon.serializePlain());
 });
+
+
+// Default snapshots preserve each buffer's origin/region and pending continuation.
+{
+  const esc = String.fromCharCode(27), open = esc + ']8;id=origin;https://example.invalid/origin' + esc + '\\', close = esc + ']8;;' + esc + '\\';
+  const history = Array.from({ length: 12 }, (_, i) => 'ROW' + i + '\r\n').join('');
+  function originCapture(term) {
+    const value = capture(term), attr = term._core._inputHandler._curAttrData;
+    const id = attr.hasExtendedAttrs() ? attr.extended.urlId : 0;
+    value.modes = term.modes;
+    value.pen = { fg: attr.fg, bg: attr.bg, extended: attr.hasExtendedAttrs() ? attr.extended.ext : 0,
+      uri: id ? term._core._oscLinkService.getLinkData(id)?.uri : null };
+    for (const name of Object.keys(value.buffers)) {
+      const buffer = term._core._bufferService.buffers[name === 'normal' ? 'normal' : 'alt'];
+      value.buffers[name].region = [buffer.scrollTop, buffer.scrollBottom];
+    }
+    return value;
+  }
+  function originWitness(term) {
+    const value = { current: originCapture(term), stored: {} };
+    for (const name of ['normal', 'alternate']) {
+      const buffer = term.buffer[name], core = term._core._bufferService.buffers[name === 'normal' ? 'normal' : 'alt'];
+      value.stored[name] = { savedX: core.savedX, savedY: core.savedY, region: [core.scrollTop, core.scrollBottom],
+        lines: Array.from({ length: buffer.length }, (_, y) => {
+          const line = buffer.getLine(y);
+          return { wrapped: line.isWrapped, cells: Array.from({ length: line.length }, (_, x) => {
+            const cell = line.getCell(x); return [cell.getChars(), cell.getWidth(), cell.fg, cell.bg, cell.extended.ext, cell.extended.urlId];
+          }) };
+        }) };
+    }
+    return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  }
+  const erasedCases = [];
+  for (const origin of [false, true]) {
+    const base = esc + '[2;4r' + (origin ? esc + '[?6h' : '');
+    for (const [label, erase] of [['EL2', '[2K'], ['EL1', '[1K'], ['ED2', '[2J']]) {
+      erasedCases.push(['erased-' + label + '-origin=' + origin, base + esc + '[44m' + 'P'.repeat(40) + esc + erase + esc + '[0m']);
+    }
+    for (const [label, mode] of [['no-wrap', '[?7l'], ['insert', '[4h']]) {
+      erasedCases.push(['erased-' + label + '-origin=' + origin, base + esc + '[44m' + 'P'.repeat(40) + esc + '[2K' + esc + '[0m' + esc + mode]);
+    }
+    erasedCases.push(['erased-wrapped-EL1-origin=' + origin, base + esc + '[44m' + 'P'.repeat(80) + esc + '[1K' + esc + '[0m']);
+    erasedCases.push(['erased-RGB-and-open-pen-origin=' + origin,
+      base + esc + '[48;2;14;123;91m' + 'P'.repeat(40) + esc + '[2K' + esc + '[0;38;2;177;42;99m' +
+      esc + ']8;id=erased-pen;https://example.invalid/erased-pen' + esc + '\\']);
+  }
+  for (const [label, erase] of [['EL2', '[2K'], ['ED2', '[2J']]) {
+    erasedCases.push(['erased-default-region-' + label, esc + '[44m' + 'P'.repeat(40) + esc + erase + esc + '[0m']);
+  }
+  const cases=[
+   ['originDefault',esc+'[?6hORIGIN'],
+   ['originRegion',esc+'[2;4r'+esc+'[?6hORIGIN'],
+   ['absoluteRegion',esc+'[2;4r'+esc+'[3;4HABS'],
+   ['originLinked',esc+'[2;4r'+esc+'[?6h'+esc+'[38;2;12;145;231m'+open+'ORIGIN'],
+   ['originHistory',history+esc+'[2;4r'+esc+'[?6hORIGIN'],
+   ['originAlternate','NORMAL'+esc+'[?1049h'+esc+'[2;4r'+esc+'[?6hALT'],
+   ['inactiveNormalRegion',esc+'[2;4rNORMAL'+esc+'[?1049h'+esc+'[?6hALT'],
+   ['originPendingAscii',esc+'[2;4r'+esc+'[?6h'+'A'.repeat(40)],
+   ['originPendingWide',esc+'[2;4r'+esc+'[?6h'+'A'.repeat(38)+'中'],
+   ['absoluteRegionPending',esc+'[2;4r'+'P'.repeat(40)],
+   ['healthyPlain','HEALTHY PLAIN'],
+   ['healthyLinked',esc+'[38;2;12;145;231m'+open+'HEALTHY'+close],
+   ['healthyPending','A'.repeat(40)],
+   ['originPendingStyledLink',esc+'[2;4r'+esc+'[?6h'+esc+'[38;2;12;145;231m'+open+'L'.repeat(40)+close+esc+'[0m'],
+   ['originPendingAnonymousWide',esc+'[2;4r'+esc+'[?6h'+esc+'[1;3;4;35m'+esc+']8;;https://example.invalid/wide'+esc+'\\'+'A'.repeat(38)+'中'+close+esc+'[0;32m'],
+   ['absolutePendingCurrentPen',esc+'[2;4r'+open+'P'.repeat(40)+close+esc+']8;id=hidden;https://example.invalid/pen'+esc+'\\'+esc+'[0;34m'],
+   ['alternatePendingOrigin','NORMAL'+esc+'[?1049h'+esc+'[2;4r'+esc+'[?6h'+'P'.repeat(40)],
+   ['inactiveNormalPendingRegion',esc+'[2;4r'+'P'.repeat(40)+esc+'[?1049hALT'],
+   ['originDefaultPending',esc+'[?6h'+'P'.repeat(40)],
+   ['originInsertPending',esc+'[2;4r'+esc+'[?6h'+esc+'[4h'+'P'.repeat(40)],
+   // SGR 22 clears bold and dim together; the reprinted cell and pen must keep each one.
+   ['pendingBoldCellDimPen',esc+'[2;4r'+esc+'[1m'+'P'.repeat(40)+esc+'[0;2m'],
+   ['pendingDimCellBoldDimPen',esc+'[2;4r'+esc+'[2m'+'P'.repeat(40)+esc+'[1m'],
+   ['originPendingDimCellBoldDimPen',esc+'[2;4r'+esc+'[?6h'+esc+'[2m'+'P'.repeat(40)+esc+'[1m'],
+   ['inactiveNormalOriginMovedFromFullRow',esc+'[?6h'+'A'.repeat(40)+esc+'[1;5H'+esc+'[?1049hALT'],
+   ...erasedCases
+  ];
+  for (const [name, input] of cases) test('origin and region whole snapshot journey: ' + name, async t => {
+    const p = producer(t); await p.resize(40); await p.output(input);
+    const before = originWitness(p.terminal.screen), frame = await p.terminal.snapshot();
+    assert.equal(originWitness(p.terminal.screen), before, 'Snapshot cannot change source cells, state or saved positions');
+    const view = await receiver(t, frame);
+    assert.deepEqual(originCapture(view), originCapture(p.terminal.screen));
+    await p.output('NEXT'); await write(view, 'NEXT');
+    assert.deepEqual(originCapture(view), originCapture(p.terminal.screen));
+    const scroll = esc + '[99;1HSCROLL\r\nEND'; await p.output(scroll); await write(view, scroll);
+    assert.deepEqual(originCapture(view), originCapture(p.terminal.screen));
+    const beforeAgain = originWitness(p.terminal.screen), again = await receiver(t, await p.terminal.snapshot());
+    assert.equal(originWitness(p.terminal.screen), beforeAgain);
+    assert.deepEqual(originCapture(again), originCapture(p.terminal.screen));
+    for (const cols of [25, 30, 40]) {
+      await p.resize(cols); for (const term of [view, again]) { term.resize(cols, 5); await write(term); }
+      for (const term of [view, again]) assert.deepEqual(originCapture(term), originCapture(p.terminal.screen));
+    }
+    if (p.terminal.screen.buffer.active.type === 'alternate') {
+      const leave = esc + '[?1049l'; await p.output(leave); for (const term of [view, again]) await write(term, leave);
+      for (const term of [view, again]) assert.deepEqual(originCapture(term), originCapture(p.terminal.screen));
+      await p.output('AFTER'); for (const term of [view, again]) await write(term, 'AFTER');
+      for (const term of [view, again]) assert.deepEqual(originCapture(term), originCapture(p.terminal.screen));
+    }
+    assert.ok(!p.commands.some(command => ['input', 'stop'].includes(command.type)));
+  });
+  for (const kind of ['output', 'resize']) test('origin ' + kind + ' journal checkpoint uses the same complete formatter', async t => {
+    const p = producer(t); await p.resize(40);
+    await p.output(esc + '[2;4r' + esc + '[?6h' + esc + '[38;2;12;145;231m' + open + 'P'.repeat(40));
+    p.terminal.journal.maxEvents = 0;
+    const event = kind === 'output' ? await p.output('NEXT') : await p.resize(40, 6);
+    assert.equal(event.checkpointRequired, true);
+    const frame = p.terminal.journal.checkpoint; assert.equal(frame.index, event.index);
+    const view = await receiver(t, frame); assert.deepEqual(originCapture(view), originCapture(p.terminal.screen));
+    await p.output('MORE'); await write(view, 'MORE'); assert.deepEqual(originCapture(view), originCapture(p.terminal.screen));
+  });
+
+for (const origin of [false, true]) test('erased pending cursor restores full native state and all three snapshot entry points settle; origin=' + origin, async t => {
+  const p = producer(t); await p.resize(40);
+  const input = '\x1b[2;4r' + (origin ? '\x1b[?6h' : '') + 'P'.repeat(40) + '\x1b[2K';
+  await p.output(input);
+  assert.equal(p.terminal.screen.buffer.active.cursorX, 40, 'Actual erase retains the pending cursor');
+  const cell = p.terminal.screen.buffer.active.getLine(p.terminal.screen.buffer.active.baseY + p.terminal.screen.buffer.active.cursorY).getCell(39);
+  assert.equal(cell.getChars(), '');
+  const waitFrame = async promise => {
+    let timer;
+    try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Snapshot did not settle after pending erase')), 1000); })]); }
+    finally { clearTimeout(timer); }
+  };
+  const frame = await waitFrame(p.terminal.snapshot());
+  const initial = await receiver(t, frame); assert.deepEqual(originCapture(initial), originCapture(p.terminal.screen));
+  p.terminal.journal.maxEvents = 0;
+  const output = await waitFrame(p.output('\x1b[0m'));
+  assert.equal(output.checkpointRequired, true); assert.equal(p.terminal.journal.checkpoint.index, output.index); const outputView = await receiver(t, p.terminal.journal.checkpoint); assert.deepEqual(originCapture(outputView), originCapture(p.terminal.screen));
+  const resized = await waitFrame(p.resize(40, 6));
+  assert.equal(resized.checkpointRequired, true); assert.equal(p.terminal.journal.checkpoint.index, resized.index);
+  // Real Buffer.resize clamps x and resets regions; this checkpoint needs the qualified path.
+  assert.equal(p.terminal.screen.buffer.active.cursorX, 39);
+  assert.equal(p.terminal.screen._core._bufferService.buffer.scrollTop, 0);
+  assert.equal(p.terminal.screen._core._bufferService.buffer.scrollBottom, 5);
+  const view = await receiver(t, p.terminal.journal.checkpoint);
+  assert.deepEqual(originCapture(view), originCapture(p.terminal.screen));
+  assert.ok(!p.commands.some(command => ['input', 'stop'].includes(command.type)));
+});
+
+for (const location of ['normal', 'alternate', 'inactive-normal', 'above-background-erase']) test('nonuniform selectively erased pending row preserves legacy bytes: ' + location, async t => {
+  const p = producer(t); await p.resize(40);
+  const selective = esc + '[2;4r' + esc + '[44m' + esc + '[1"qQ' + esc + '[0"q' + 'P'.repeat(39) + esc + '[?2K' + esc + '[0m';
+  // Rows erased with a background would otherwise move the content cursor away from the pending row.
+  await p.output(location === 'alternate' ? 'NORMAL' + esc + '[?1049h' + selective :
+    (location === 'above-background-erase' ? esc + '[44m' + esc + '[2J' + esc + '[0m' : '') +
+    selective + (location === 'inactive-normal' ? esc + '[?1049h' + esc + '[HALT' : ''));
+  const buffer = location === 'inactive-normal' ? p.terminal.screen.buffer.normal : p.terminal.screen.buffer.active;
+  assert.equal(buffer.cursorX, 40);
+  assert.equal(buffer.getLine(buffer.baseY + buffer.cursorY).getCell(0).getChars(), 'Q');
+  assert.equal(buffer.getLine(buffer.baseY + buffer.cursorY).getCell(39).getChars(), '');
+  const plain = new Stock(); plain.activate(p.terminal.screen); t.after(() => plain.dispose());
+  const before = originWitness(p.terminal.screen), frame = await p.terminal.snapshot();
+  assert.equal(originWitness(p.terminal.screen), before);
+  assert.equal(frame.buffer, plain.serialize() + p.terminal.cursorModes.snapshot());
+  p.terminal.journal.maxEvents = 0;
+  const event = await p.output(esc + '[0m'); assert.equal(event.checkpointRequired, true);
+  assert.equal(p.terminal.journal.checkpoint.index, event.index);
+  assert.equal(p.terminal.journal.checkpoint.buffer, plain.serialize() + p.terminal.cursorModes.snapshot());
+  assert.ok(!p.commands.some(command => ['input', 'stop'].includes(command.type)));
+});
+
+}
