@@ -3963,3 +3963,18 @@ Correction to the alpha.157 injected-turn label: Claude Code 2.1.316 builds the
 prompt-submit hook input without the source field, so the label never applies to
 real input. Its tests used simulated hook input. Without a source the display is
 unchanged.
+
+The committed alpha.158 tree passes the same 2,068 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap, its daemon from the private runtime copy, created a space, and kept
+its strict signature and CDHash; no session or provider started. The first daily
+update attempt stopped before quitting because the shared GUI test slot was
+held; after the slot was released the operator ran once. The daily's active
+backend had no sessions, so it was replaced in place; the operator rechecked
+after the GUI quit that it was still empty and that no shared relay was running,
+and compared the installed CDHash after reopening. The ordinary visible update
+kept fourteen session records, archived ones included, with their native IDs,
+live process starts and drafts; the seven other backends kept PID, start time
+and version. No 2.1.316 session has yet started on the new backend, so the
+bridge binding, a real wake and the post-provider signature check are unverified
+in the daily app.
