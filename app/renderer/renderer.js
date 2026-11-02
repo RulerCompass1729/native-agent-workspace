@@ -1478,10 +1478,12 @@ function renderVersions() {
   control.setAttribute('aria-label', `应用 ${version}，复制版本信息`);
   control.title = `应用 ${version} · 点击复制版本信息`;
   const summary = backendVersionSummary(state.sessions, state.appVersion), action = $('backend-version-summary');
-  action.hidden = summary.count === 0;
-  if (!summary.count || disconnected) { backendVersionTicket++; backendVersionMenu?.(); backendVersionMenu = null; }
-  if (!checkingBackendVersions) action.textContent = summary.old ? `${summary.old} 旧版会话${summary.count > summary.old ? ` +${summary.count - summary.old}` : ''}` : `${summary.count} 会话待核对`;
-  action.title = `${summary.label}；按未归档的独立会话计数。核对后仅能更新已结束的连接，其他原会话继续保留。`;
+  // Sessions an unfinished move ended keep the control reachable even with no old backend left.
+  const ended = Array.isArray(state.switchEnded) ? state.switchEnded.length : 0;
+  action.hidden = summary.count === 0 && !ended;
+  if ((!summary.count && !ended) || disconnected) { backendVersionTicket++; backendVersionMenu?.(); backendVersionMenu = null; }
+  if (!checkingBackendVersions) action.textContent = summary.old ? `${summary.old} 旧版会话${summary.count > summary.old ? ` +${summary.count - summary.old}` : ''}` : summary.count ? `${summary.count} 会话待核对` : `${ended} 会话待接回`;
+  action.title = summary.count ? `${summary.label}；按未归档的独立会话计数。空闲的会话可结束并更新到新版后台，其他会话等空闲后再更新。` : `上次更新后台时结束了 ${ended} 个会话，还没有接回。`;
   action.setAttribute('aria-label', action.title); action.disabled = disconnected;
   action.setAttribute('aria-disabled', String(disconnected || checkingBackendVersions)); action.setAttribute('aria-busy', String(checkingBackendVersions));
 }
@@ -1494,17 +1496,24 @@ async function openBackendVersions() {
   const ticket = ++backendVersionTicket, revision = selectionRevision;
   checkingBackendVersions = true; control.setAttribute('aria-disabled', 'true'); control.setAttribute('aria-busy', 'true'); control.textContent = '正在核对后台…';
   try {
-    const options = await api.connectionUpdates();
+    const [options, settings] = await Promise.all([api.connectionUpdates(), api.backendSwitchSettings()]);
     if (ticket !== backendVersionTicket || revision !== selectionRevision || disconnected || !control.isConnected || document.activeElement !== control || document.querySelector('dialog[open]')) return;
-    if (!options.length) return toast('当前没有需要核对的旧后台连接。');
+    const interrupted = settings.interrupted.length ? `上次更新时结束了 ${settings.interrupted.join('、')}，可在会话里点“继续原生会话”接回` : '';
+    if (!options.length && !interrupted) return toast('当前没有需要核对的旧后台连接。');
     backendVersionMenu = ui.menu({
-      items: options.map((option, index) => ({ id: String(index), label: `${versionValue(option.version) || '版本未知'} · ${option.count} 个会话 · ${option.ready ? '核对并更新连接…' : '保留连接，查看原因'}` })),
+      items: [...options.map((option, index) => ({ id: String(index), label: `${versionValue(option.version) || '版本未知'} · ${option.count} 个会话 · ${option.ready ? '核对并更新连接…' : option.switch?.ready ? '结束并更新…' : '保留连接，查看原因'}` })),
+        ...(interrupted ? [{ id: 'interrupted', label: interrupted }] : []),
+        { id: 'auto', label: settings.auto ? '空闲时自动更新：开（点此关闭）' : '空闲时自动更新：关（点此打开）' }],
       getAnchorRect: () => control.getBoundingClientRect(),
       onClose: () => { backendVersionMenu = null; if (revision === selectionRevision && control.isConnected && !control.hidden) control.focus({ preventScroll: true }); },
       onSelect: key => {
+        if (ticket !== backendVersionTicket) return;
+        if (key === 'interrupted') return toast(interrupted);
+        if (key === 'auto') return attempt(async () => { const next = await api.backendSwitchSettings(!settings.auto); toast(next.auto ? '已打开：旧后台上的会话确认空闲后会自动更新并接回。' : '已关闭自动更新；旧后台上的会话保持原样。'); });
         const option = options[Number(key)];
-        if (!option || ticket !== backendVersionTicket) return;
-        if (!option.ready) return toast(option.reason);
+        if (!option) return;
+        if (!option.ready && option.switch?.ready) return attempt(async () => { const result = await api.switchBackend({ backendKey: option.backendKey, switch: option.switch }); if (result) toast(backendSwitchedText(result)); });
+        if (!option.ready) return toast(option.switch?.reason && !option.switch.ready ? option.switch.reason : option.reason);
         attempt(async () => {
           const updated = await api.continueConnection(option.id, { backendKey: option.backendKey, nativeId: option.nativeId, version: option.version });
           if (updated) toast('这个后台的连接已更新；原生任务没有自动重发。');
@@ -1512,6 +1521,12 @@ async function openBackendVersions() {
       },
     });
   } finally { checkingBackendVersions = false; renderVersions(); }
+}
+function backendSwitchedText(result) {
+  if (result.error) return '自动更新旧后台没有完成：' + result.error;
+  const left = Array.isArray(result.left) ? result.left.length : Number(result.left) || 0;
+  const reconnect = result.reconnectFailed ? '窗口没能自动重新连接，请关闭后重新打开窗口。' : '';
+  return (left ? `后台已更新；${left} 个会话没能自动接回，请在会话里点“继续原生会话”。` : '后台已更新，会话已按原身份接回；NAW 没有向它们发送任何内容。') + reconnect;
 }
 $('backend-version-summary').onclick = () => attempt(openBackendVersions);
 $('backend-version-summary').addEventListener('keydown', event => { if (event.key === 'Escape') { backendVersionTicket++; backendVersionMenu?.(); } });
@@ -2962,6 +2977,7 @@ const disposers = [
   api.onDisconnected(message => { disconnected = true; for (const s of state?.sessions || []) freezeLegacyProgress(s); render(); toast(message); }),
   api.onViewStorage(warning => { latestViewStorage = warning; if (state) { state.viewStorageWarning = warning; render(); } }),
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
+  api.onBackendSwitched(notice => toast(backendSwitchedText(notice))),
   api.onNew(() => openCreate()),
 ];
 sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), onError: error => toast(error.message || '未能保存侧栏高度。') });

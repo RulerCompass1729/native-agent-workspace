@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
+const backendSwitch = require('./backend-switch.cjs');
 const { startDsh, resetUiAuthentication } = require('./dsh-host.cjs');
 const { startupMessage } = require('./ui-errors.cjs');
 const { preflight, appBuildInfo } = require('./preflight.cjs');
@@ -148,7 +149,8 @@ function bindClient(context) {
 function displayState(snapshot, context) {
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
-  return { ...display, sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning };
+  return { ...display, sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning,
+    switchEnded: endedByMove(display.sessions) };
 }
 function reportViewStorage(warning) {
   if (viewStorageWarning === warning) return;
@@ -247,12 +249,21 @@ function connectionUpdateOptions(client, applicationVersion, profile) {
     const status = continuationStatus(entry.state, record.id);
     const unavailable = entry.closed || entry.closing || client.closing || client.control?.maintenance.has(entry.key);
     const effectiveActive = entry.state.sessions.some(value => (client.sessionState?.(value) || value.state) !== 'ended');
+    // Moving idle sessions too (T-122): automatic only where the runtime proves nothing would be lost.
+    const plan = old && !unavailable && entry !== client.active ? backendSwitch.backendPlan(entry.state, value => client.sessionState?.(value) || value.state, runningRelays(client)) : null;
     options.push({ backendKey: entry.key, id: record.id, nativeId: record.nativeId || null, version: version || null,
+      switch: plan && plan.stops.length ? { ready: plan.ready, auto: plan.auto, reason: plan.reason, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
       count: visible.length, ready: Boolean(old && status.ready && !unavailable && !effectiveActive),
       reason: unavailable ? '这个后台连接正在更新或已断开，原会话继续保留。' : !old ? '版本未知、较新或无法比较，不能把它当作旧后台自动更新。原连接保留。'
         : effectiveActive ? status.reason || '原生会话尚未确认结束；原连接保留，不会自动安排重启。' : status.reason || '' });
   }
   return options;
+}
+// Sessions in a running relay in any backend, including cross-backend relays.
+function runningRelays(client) {
+  const ids = new Set();
+  for (const entry of client.entries) for (const room of [entry.state.room, ...(Array.isArray(entry.state.rooms) ? entry.state.rooms : [])]) if (room?.run?.status === 'running') for (const id of room.run.ids || []) ids.add(id);
+  return ids;
 }
 function register(name, handler) {
   ipcMain.handle(`workspace:${name}`, async (event, ...args) => {
@@ -262,6 +273,59 @@ function register(name, handler) {
     catch (error) { return { ok: false, error: error.message || '操作未完成。' }; }
   });
 }
+async function replaceBackendSockets(key) {
+  // Replace only the updated backend's sockets. Other live transports and every
+  // renderer DOM/IME stay intact; reopening a window is unnecessary.
+  const replacements = [];
+  try {
+    for (const context of windows.values()) if (!context.win.isDestroyed()) {
+      const client = await connectService(path.join(dataDir, key), context.view.owner);
+      const replacement = { context, client }; replacements.push(replacement);
+      replacement.state = await client.call('initial');
+    }
+  } catch (error) { for (const replacement of replacements) replacement.client.close(); throw error; }
+  for (const { context, client, state } of replacements) {
+    context.client.replaceService(key, client, state);
+    if (!context.client.socket.destroyed && !context.win.isDestroyed()) context.win.webContents.send('workspace:reconnected', displayState(await context.client.refresh(), context));
+  }
+}
+let backendSwitching = null, switchRecords = {};
+const autoSwitchFailed = new Set();
+// Sessions a move ended (or left disconnected or in error) that are still not live with the same native
+// identity; reconnected or archived ones drop out.
+const notReconnected = (sessions, value) => sessions.some(s => s.id === value.id && s.nativeId === value.nativeId && !s.archived && !['idle', 'working', 'approval', 'starting'].includes(s.state));
+function endedByMove(sessions) {
+  return Object.entries(switchRecords).filter(([key]) => key !== backendSwitching).flatMap(([, record]) => record.sessions
+    .filter(value => notReconnected(sessions, value)).map(value => ({ id: value.id, name: value.name })));
+}
+async function runBackendSwitch(c, option, requireAuto = false) {
+  if (backendSwitching) throw Error('另一个后台正在更新，请稍候。');
+  backendSwitching = option.backendKey;
+  let finishMaintenance;
+  try {
+    finishMaintenance = c.client.maintainService(option.backendKey);
+    const result = await backendSwitch.switchBackend({ dataDir, key: option.backendKey, executablePath: process.execPath, expected: option.switch, requireAuto,
+      ensure: ensureService, owner: c.view.owner, sessionState: value => c.client.sessionState?.(value) || value.state, running: () => runningRelays(c.client) });
+    // The move itself is done; a window that cannot reconnect is a separate problem.
+    try { await replaceBackendSockets(option.backendKey); } catch { result.reconnectFailed = true; }
+    return result;
+  } finally { finishMaintenance?.(); backendSwitching = null; switchRecords = backendSwitch.readRecords(dataDir); broadcastRoom().catch(() => {}); }
+}
+// Automatic moves run only for plans the runtime proved, one backend at a time.
+async function autoBackendSwitch() {
+  if (quitting || backendSwitching || !backendSwitch.readSettings(dataDir).auto) return;
+  const c = [...windows.values()].find(context => !context.win.isDestroyed() && !context.client.closing && !context.client.socket.destroyed);
+  if (!c) return;
+  await c.client.refresh();
+  const option = connectionUpdateOptions(c.client, app.getVersion(), roomState).find(value => value.switch?.ready && value.switch.auto && !autoSwitchFailed.has(value.backendKey));
+  if (!option) return;
+  let notice;
+  try { const result = await runBackendSwitch(c, option, true); notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed }; }
+  // A failed automatic move is not retried in this app run; the person can still click.
+  catch (error) { autoSwitchFailed.add(option.backendKey); notice = { error: error.message || '后台更新未完成。' }; }
+  for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:backend-switched', notice);
+}
+let backendSwitchTimer;
 async function boot() {
   dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.chmodSync(dataDir, 0o700);
   sessionLabels = new SessionLabels(dataDir);
@@ -270,6 +334,7 @@ async function boot() {
   views = viewStore.load();
   process.env.NAW_RUNTIME_CONFIG = path.join(dataDir, 'runtime-locations.json');
   await ensureService(dataDir, process.execPath);
+  switchRecords = backendSwitch.readRecords(dataDir);
   if (quitting) return;
   dsh = await startDsh(dataDir); entry = dsh.url;
   if (quitting) { dsh.stop(); return; }
@@ -484,6 +549,31 @@ async function boot() {
     await c.client.refresh();
     return connectionUpdateOptions(c.client, app.getVersion(), roomState);
   });
+  register('backendSwitchSettings', async (c, auto) => {
+    const settings = typeof auto === 'boolean' ? backendSwitch.writeSettings(dataDir, auto) : backendSwitch.readSettings(dataDir);
+    // A record not belonging to a move in progress names sessions a move ended, including after a quit
+    // mid-move; a record whose sessions all run again is cleared.
+    await c.client.refresh(); const live = c.client.snapshot().sessions;
+    for (const [key, record] of Object.entries(backendSwitch.readRecords(dataDir))) if (key !== backendSwitching && !record.sessions.some(value => notReconnected(live, value))) backendSwitch.clearRecord(dataDir, key);
+    switchRecords = backendSwitch.readRecords(dataDir);
+    return { auto: settings.auto, interrupted: endedByMove(live).map(value => value.name) };
+  });
+  register('switchBackend', async (c, expected) => {
+    await c.client.refresh();
+    const option = connectionUpdateOptions(c.client, app.getVersion(), roomState).find(value => value.backendKey === expected?.backendKey);
+    const same = value => value && JSON.stringify(value.stops.map(s => [s.id, s.nativeId])) === JSON.stringify((expected?.switch?.stops || []).map(s => [s.id, s.nativeId]));
+    if (!option?.switch?.ready || !same(option.switch)) throw Error('后台或会话状态已变化；没有结束任何会话，请重新核对。');
+    const names = option.switch.stops.map(value => value.name).join('、');
+    const answer = await dialog.showMessageBox(c.win, {
+      type: 'warning', message: `结束并更新这个后台的 ${option.switch.stops.length} 个会话？`,
+      detail: `会先正常结束：${names}，用新版后台在原记录上重开，再按原身份接回。历史、草稿、名字和协作空间都保留；接回时 NAW 不发送任何内容，也不恢复 goal。` +
+        (option.switch.endsCodex ? '\n\n这个后台里的 Codex 程序会被结束：Codex 会话的后台终端和子 agent 也会结束。' : '') +
+        (option.switch.reason ? `\n\n无法自动确认的部分：${option.switch.reason}。请先在原生终端核对：没有没发出的字，也没有在跑的后台任务；继续会结束它们。` : ''),
+      buttons: ['保留原连接', '已核对，结束并更新'], defaultId: 0, cancelId: 0,
+    });
+    if (answer.response !== 1) return false;
+    return runBackendSwitch(c, option);
+  });
   register('continueConnection', async (c, id, expected) => {
     await c.client.refresh();
     const target = c.client.route(id), status = continuationStatus(target.state, id);
@@ -507,20 +597,7 @@ async function boot() {
     const finishMaintenance = c.client.maintainService(target.key);
     try {
     const { key } = await continueService(dataDir, process.execPath, id);
-    // Replace only the ended backend's sockets. Other live transports and every
-    // renderer DOM/IME stay intact; reopening a window is unnecessary.
-    const replacements = [];
-    try {
-      for (const context of windows.values()) if (!context.win.isDestroyed()) {
-        const client = await connectService(path.join(dataDir, key), context.view.owner);
-        const replacement = { context, client }; replacements.push(replacement);
-        replacement.state = await client.call('initial');
-      }
-    } catch (error) { for (const replacement of replacements) replacement.client.close(); throw error; }
-    for (const { context, client, state } of replacements) {
-      context.client.replaceService(key, client, state);
-      if (!context.client.socket.destroyed && !context.win.isDestroyed()) context.win.webContents.send('workspace:reconnected', displayState(await context.client.refresh(), context));
-    }
+    await replaceBackendSockets(key);
     return true;
     } finally { finishMaintenance(); }
   });
@@ -693,7 +770,10 @@ async function start() {
   if (starting || quitting) return; starting = true;
   if (!startupWindow || startupWindow.isDestroyed()) { startupWindow = createWindow(); await startupWindow.loadFile(startupFile); }
   startupWindow.webContents.send('workspace:startup', { title: '正在打开你的工作空间', detail: '连接本机服务，恢复上次的界面…', retry: false });
-  try { await boot(); }
+  try {
+    await boot();
+    if (!backendSwitchTimer) { backendSwitchTimer = setInterval(() => autoBackendSwitch().catch(() => {}), (testRequested && Number(process.env.NAW_TEST_BACKEND_SWITCH_MS)) || 60000); backendSwitchTimer.unref?.(); }
+  }
   catch (error) {
     dsh?.stop();
     for (const c of [...windows.values()]) { c.failed = true; c.client.close(); c.win.destroy(); }
