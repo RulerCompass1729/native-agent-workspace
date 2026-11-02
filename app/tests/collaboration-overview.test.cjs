@@ -104,3 +104,11 @@ test('column resizing conserves neighboring area and clamps minimum without movi
   assert.deepEqual(adjustedWidths(original, 2, 10, 900), original);
   assert.deepEqual(adjustedWidths(original, 0, Infinity, 900), original);
 });
+
+test('a member whose turn ended with reported background work is not shown as ready', () => {
+  const record = { id: 'fixture-member', nativeId: 'fixture-native', state: 'idle', fleet: [], background: 1, backgroundKinds: ['subagent'], backgroundAt: 100 };
+  assert.equal(statusFacts(record, true, 10000).state, '后台任务在跑 · 1 项（子 agent）');
+  assert.equal(statusFacts({ ...record, background: 0 }, true, 10000).state, '会话就绪');
+  assert.equal(statusFacts(record, false, 10000).state, '连接状态待核对');
+  assert.equal(statusFacts({ ...record, backgroundStale: true }, true, 10000).state, '后台状态待核对');
+});

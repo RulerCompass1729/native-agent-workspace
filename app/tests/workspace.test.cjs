@@ -600,6 +600,43 @@ for (const activity of ['background', 'fleet']) test(`actual Claude hook sequenc
   assert.equal(w.versions.dispatches, 1);
   assert.equal(w.room.messages.filter(m => m.role === 'assistant').at(-1).text, 'authorized reply');
 });
+test('turn-end background reports follow native-typed and task-notification turns, and a new native process starts unreported', async t => {
+  const { workspace: w, ids } = await fixture(t, 1);
+  const { Claude } = require('../adapters.cjs'), { fleetStatus, workTone } = require('../renderer/fleet-observation.js');
+  const bindRuntime = () => {
+    const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+    runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
+    runtime.submission = { request: async () => ({ promptId: 'unused' }) }; runtime.terminal = { input() {} };
+    w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime); return runtime;
+  };
+  let runtime = bindRuntime(); const s = w.get(ids[0]), nativeId = s.nativeId;
+  const turn = (id, prompt, tasks) => {
+    runtime.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: id, session_id: nativeId, prompt });
+    runtime.hook({ hook_event_name: 'Stop', prompt_id: id, session_id: nativeId, last_assistant_message: 'reply', background_tasks: tasks, session_crons: [], stop_hook_active: false });
+  };
+  turn('typed-in-terminal', 'start a review', [{ id: 'job', type: 'shell', status: 'running', description: 'PRIVATE_DESCRIPTION', command: 'PRIVATE_COMMAND' }]);
+  await tick();
+  assert.equal(s.state, 'idle'); assert.equal(s.background, 1); assert.deepEqual(s.backgroundKinds, ['shell']);
+  assert.equal(fleetStatus(s, '就绪'), '后台任务在跑 · 1 项（命令）'); assert.equal(workTone(s), 'bg-work');
+  assert.ok(!JSON.stringify(s).includes('PRIVATE_'), 'Task description and command stay native');
+  turn('task-notification', '<task-notification><task-id>job</task-id><status>completed</status></task-notification>', []);
+  await tick();
+  assert.equal(s.background, 0); assert.equal(fleetStatus(s, '就绪'), '就绪'); assert.equal(workTone(s), '');
+  // An interrupted turn ends without a turn-end report: the previous report is no longer current.
+  runtime.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: 'interrupted', session_id: nativeId, prompt: 'start and stop' });
+  assert.equal(s.state, 'working'); assert.equal(s.backgroundStale, true);
+  runtime.rootTurn = { id: 'interrupted-turn', status: 'idle', promptId: 'interrupted' }; runtime.finishInterrupted('interrupted-turn'); await tick();
+  assert.equal(s.state, 'idle'); assert.equal(fleetStatus(s, '就绪'), '后台状态待核对'); assert.equal(workTone(s), 'bg-unknown');
+  turn('typed-again', 'another review', [{ id: 'job2', type: 'shell' }]); await tick(); assert.equal(s.background, 1); assert.equal(s.backgroundStale, false);
+  // /clear keeps the same native process: earlier background work is unconfirmed, not "nothing reported".
+  s.nativeContextPending = { nativeId, reason: 'clear' };
+  runtime.emit('contextClear', { previousId: nativeId, nativeId: 'cleared-native-id', model: 'fixture', reason: 'clear' }); runtime.emit('state', 'idle'); await tick();
+  assert.equal(s.nativeId, 'cleared-native-id'); assert.equal(s.background, null); assert.equal(s.backgroundStale, true);
+  assert.equal(fleetStatus(s, '就绪'), '后台状态待核对'); assert.equal(workTone(s), 'bg-unknown');
+  s.scheduled = 1; runtime = bindRuntime();
+  assert.equal(s.background, null); assert.equal(s.scheduled, null); assert.equal(s.backgroundKinds, null); assert.equal(s.backgroundAt, null); assert.equal(s.backgroundStale, false);
+  assert.equal(fleetStatus(s, '就绪'), '就绪', 'A new native process starts unreported, not unconfirmed');
+});
 test('unknown or active native work pauses routing without losing the reply or blocking explicit sharing', async t => {
   const clear = { background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false };
   const cases = [

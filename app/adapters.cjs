@@ -1010,7 +1010,9 @@ class Claude extends EventEmitter {
         if (this.pending === pending) this.pending = null;
         const background = Array.isArray(event.background_tasks) ? event.background_tasks.length : null;
         const scheduled = Array.isArray(event.session_crons) ? event.session_crons.length : null;
-        this.emit('background', { count: background, scheduled });
+        // Type labels only; task descriptions and commands stay in the native session.
+        const kinds = background ? event.background_tasks.slice(0, 50).map(t => ['shell', 'subagent', 'monitor', 'workflow'].includes(t?.type) ? t.type : 'other') : null;
+        this.emit('background', { count: background, scheduled, kinds });
         this.emit('state', 'idle');
         // Observed child hooks cannot certify that all descendants are idle.
         this.emit('complete', { messageId: displayConfirmed ? proof?.messageId : undefined, tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });

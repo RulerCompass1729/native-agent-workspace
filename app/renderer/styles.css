@@ -521,3 +521,6 @@ header h1, header p { overflow-wrap: anywhere; }
 #space-snapshot-materials{padding:10px 16px;border-bottom:1px solid var(--border);font-size:13px}
 #space-snapshot-materials .snapshot-origin{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .snapshot-source{font-size:12px;color:var(--muted);background:transparent;border:0;padding:0 4px;text-align:left}
+/* Idle with reported background work, or with an unconfirmed report. */
+.state-dot.bg-work{background:#5b7fa6}
+.state-dot.bg-unknown{background:transparent;box-shadow:inset 0 0 0 1.5px #747b6f}
