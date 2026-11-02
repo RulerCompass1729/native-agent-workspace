@@ -210,6 +210,28 @@ for (const version of ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2
   assert.equal(f.r.nativeBlocks === true, version !== '2.1.313');
   assert.equal(f.r.nativeAbortAvailable === true, ['2.1.310', '2.1.311', '2.1.312'].includes(version));
 });
+test('native 2.1.316 binds the root so a main-turn workspace message reaches the service', async () => {
+  // Root binding and native blocks give the turn identity a wake needs; the
+  // other per-version controls stay off until they are qualified separately.
+  const tool = 'mcp__native_workspace__workspace_message', staged = [];
+  const f = await mod({ version: '2.1.316', toolReader: async () => [{ name: tool }], requestHandler: async (url, options, body, r) => {
+    if (url.endsWith('/addressed-capability')) { r.addressedSendAvailable = body.available && r.nativeBlocks === true && !r.retainedReader; return { ok: true, text: '{}' }; }
+    if (url.endsWith('/addressed-message')) { staged.push(body); return { ok: true, text: JSON.stringify({ status: 'staged' }) }; }
+  } });
+  assert.equal(f.r.nativeBlocks, true);
+  for (const flag of ['nativeQueue', 'nativeAbortAvailable', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia']) assert.notEqual(f.r[flag], true, flag);
+  for (const fn of f.clock.splice(0).filter(fn => fn.delay === 500)) await fn();
+  assert.equal(f.r.addressedSendAvailable, true);
+  const promptId = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
+  await f.invoke('turn.start', { turnId: 'turn-316' });
+  const args = { recipient_id: 'peer-session', message: 'Continue from the task board.' };
+  const execute = async () => ({ text: JSON.stringify({ approved: true, ...args }) }); execute.origin = { plugin: 'engine' };
+  const result = await f.invoke('tool.call', { tool, tool_use_id: 'call-316', ...args }, execute);
+  assert.equal(result.deny, undefined);
+  assert.equal(staged.length, 1);
+  assert.deepEqual({ turnId: staged[0].turnId, promptId: staged[0].promptId, callId: staged[0].callId, arguments: staged[0].arguments }, { turnId: 'turn-316', promptId, callId: 'call-316', arguments: args });
+});
 test('the retained compatibility hook keeps unverified 2.1.311/312 blocks off', async () => {
   for (const version of ['2.1.311', '2.1.312']) {
     const f = await mod({ version, legacy: true });

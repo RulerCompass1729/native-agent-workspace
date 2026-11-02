@@ -862,8 +862,10 @@ export function register(on) {
     nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(nativeVersion);
     nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(nativeVersion);
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
-      : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(nativeVersion);
-    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(nativeVersion);
+      : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316'].includes(nativeVersion);
+    // 2.1.316 is qualified for root binding and native blocks only (turn identity
+    // for workspace messages); queue, inline input, abort, media, model and usage stay off.
+    contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
