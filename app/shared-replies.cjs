@@ -97,6 +97,7 @@ class SharedReplies {
       if (!this.valid(g)) { this.close(g.tag); this.boundary(g, message); continue; }
       if (g.requiredInputTag && message.inputTag !== g.requiredInputTag) continue;
       if (!['assistant', 'tool'].includes(message.role) && message.kind !== 'turn') continue;
+      if (message.commandSource === 'userShell') continue; // the person's own command is never the agent's reply
       if (s.provider === 'claude' && message.role === 'assistant' && message.promptId !== g.promptId) continue;
       let row = g.rows.get(message.id);
       if (!row) {
