@@ -64,3 +64,18 @@ test('native footer uses exact native metadata, never the local receipt time or 
   assert.equal(r.readingTurnFooter({...end,nativeDurationMs:500}).duration,'<1s');
   assert.equal(r.readingTurnFooter({...end,nativeDurationMs:3661000}).duration,'1h 1m 1s');
 });
+test('a linked terminal prompt or ! command heads its turn; an unlinked one keeps the old boundary', () => {
+  const r = reader();
+  const typed = {id:'claude-prompt-p',role:'user',origin:'native',status:'submitted',text:'typed',nativeId:'N',turnId:'T'};
+  const shell = native('shell',{role:'tool',kind:'tool',title:'Bash',toolKind:'commandExecution',commandSource:'userShell',input:'git status',text:'clean'});
+  const turn = [native('bash',{role:'tool',kind:'tool',title:'Bash',input:'{"command":"ls"}'}),native('read',{role:'tool',kind:'tool',title:'Read'}),native('answer'),native('end',{role:'system',kind:'turn',text:''})];
+  const linked = [native('before'),native('before-end',{role:'system',kind:'turn',turnId:'S',text:''}),typed,shell,...turn];
+  const marks = r.readingTurnMarks(linked);
+  assert.equal(marks.get('claude-prompt-p').start,true); assert.equal(marks.get('shell').start,false); assert.equal(marks.get('answer').start,false);
+  // The person's command is never folded into the turn's own process group.
+  const groups = plain([...r.nativeProcessGroups(linked,false,linked).values()]);
+  assert.ok(groups.some(g => g.messages.some(m => m.id === 'bash')));
+  assert.ok(groups.every(g => g.messages.every(m => m.id !== 'shell')));
+  const unlinked = r.readingTurnMarks([native('before'),native('before-end',{role:'system',kind:'turn',turnId:'S',text:''}),{...typed,nativeId:undefined,turnId:undefined},...turn]);
+  assert.equal(unlinked.has('claude-prompt-p'),false); assert.equal(unlinked.get('bash').start,true);
+});

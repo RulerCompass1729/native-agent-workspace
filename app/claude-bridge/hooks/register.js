@@ -132,6 +132,16 @@ function heartbeat($, binding, ownGeneration) {
 const displayTurns = new Map();
 const promptTurns = new Map(), displayTurnLinks = new Map();
 let rootPrompt = null;
+// Turn records (2.1.316 only): the person's `!` commands, the inputs that start
+// a root turn and that turn's own clock. Order is the only link: an input taken
+// while no root turn runs belongs to the next root turn.start, and a turn this
+// mod's own submission started claims nothing (its shared reply stays its own).
+// Anything taken during a root turn is dropped at that turn's end.
+let rootIdle = true;
+let shellInput = null;
+let turnTriggers = [];
+let shellTurn = null;
+let expectPrompt = null; // a root prompt went on: its own row is next, never a `!` command
 function trimLinks(map) { while (map.size > 64) map.delete(map.keys().next().value); }
 function displayTurn(id, binding) {
   let turn = displayTurns.get(id);
@@ -148,9 +158,59 @@ function publishFailure($, turnId, turn, binding) {
   if (turn.ended && turn.endReason === 'error' && turn.failedPrompt && turn.failure) {
     const detail = failureText(turn);
     enqueueBlock($, { id: `turn:${turnId}`, turnId, kind: 'turn', status: 'failed',
-      text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous), failedRequest: true,
+      text: turn.endingText + (detail ? `\n${detail}` : ''), incomplete: Boolean(turn.failureAmbiguous), failedRequest: true, ...turn.clock,
       ...(!turn.failureAmbiguous ? { errorMessageId: turn.failure.uuid } : {}) }, binding);
   }
+}
+function rowText(content) {
+  return typeof content === 'string' ? content : Array.isArray(content)
+    ? content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
+}
+// The two rows processBashCommand appends, on door `command`: its input, then
+// stdout+stderr, or stderr alone (failed to start or not run). Any other shape
+// is left unshown, as before; an ambiguous separator is never guessed apart.
+function shellOutput(value) {
+  const separator = '</bash-stdout><bash-stderr>', end = '</bash-stderr>';
+  if (value.startsWith('<bash-stdout>') && value.endsWith(end) && value.split(separator).length === 2) {
+    const [out, err] = value.slice('<bash-stdout>'.length, -end.length).split(separator);
+    return { text: out && err ? `${out.replace(/\n$/, '')}\n${err}` : out || err, status: 'complete' };
+  }
+  if (value.startsWith('<bash-stderr>') && value.indexOf(end) === value.length - end.length && value.indexOf('<bash-stderr>', 1) === -1) {
+    return { text: value.slice('<bash-stderr>'.length, -end.length), status: 'failed' };
+  }
+  return null;
+}
+function triggerTurn(trigger, binding) {
+  if (!binding?.nativeTurnRecords || binding !== rootBinding) return;
+  turnTriggers = [...turnTriggers.filter(t => t.binding === binding), { ...trigger, binding }].slice(-8);
+}
+function publishShell($, pending, output) {
+  const id = `tool:shell-${pending.uuid}`;
+  enqueueBlock($, { id, kind: 'tool', title: 'Bash', userShell: true, input: pending.command,
+    text: output ? output.text : '', status: output ? output.status : 'complete', ...(output ? {} : { incomplete: true }) }, pending.binding);
+  triggerTurn({ row: id }, pending.binding);
+}
+function flushShell($) {
+  const pending = shellInput; shellInput = null;
+  if (pending && !pending.unproven) publishShell($, pending, null);
+}
+function observeShell($, e, result, binding) {
+  const pending = shellInput; shellInput = null;
+  const message = result.message;
+  // A typed prompt that merely looks like `<bash-input>` is filed on door
+  // `command` too; it follows its own UserPromptSubmit, which `!` never raises.
+  // Such a row counts only if its output pairs with it, as only `!` output does.
+  const typed = expectPrompt === binding && message?.type === 'user' && !message.isMeta && ['prompt', 'command'].includes(e.door);
+  if (typed) expectPrompt = null;
+  const value = message?.type === 'user' && !message.isMeta && e.door === 'command' ? rowText(message.content) : null;
+  if (pending) {
+    // Only the very next root append can be its output.
+    const output = pending.binding === binding && value !== null ? shellOutput(value) : null;
+    if (output || !pending.unproven) publishShell($, pending, output);
+    if (output) return;
+  }
+  const input = value === null ? null : /^<bash-input>([\s\S]*)<\/bash-input>$/.exec(value);
+  if (input && !input[1].includes('</bash-input>')) shellInput = { binding, uuid: result.uuid, command: input[1], ...(typed ? { unproven: true } : {}) };
 }
 const observations = [];
 let observing = false;
@@ -188,6 +248,7 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
   if ((!contextTransitions && !nativeBlocks) || !binding || stopped || rootBinding !== binding || e.agentId ||
     result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
   const message = result.message;
+  if (nativeBlocks && binding.nativeTurnRecords) observeShell($, e, result, binding);
   if (!message || message.isMeta || !Array.isArray(message.content)) return;
   const text = blocks => typeof blocks === 'string' ? blocks : Array.isArray(blocks)
     ? blocks.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
@@ -507,12 +568,14 @@ async function bindRoot($, ownGeneration) {
     nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativeMedia: version === '2.1.312',
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
-    nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302' }, binding);
+    nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
+    nativeTurnRecords: !legacyOnly && version === '2.1.316' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
     nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
-    nativeMedia: nativeBlocks && version === '2.1.312' && result.nativeMedia === true };
+    nativeMedia: nativeBlocks && version === '2.1.312' && result.nativeMedia === true,
+    nativeTurnRecords: nativeBlocks && !legacyOnly && version === '2.1.316' && result.nativeTurnRecords === true };
   nativeReadImages.clear();
   heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
@@ -553,7 +616,8 @@ async function syncRoot($) {
       rootEnds.delete(rootBinding.sessionId);
       rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
         nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
-        nativeMedia: nativeBlocks && rootBinding.nativeMedia && result.nativeMedia === true };
+        nativeMedia: nativeBlocks && rootBinding.nativeMedia && result.nativeMedia === true,
+        nativeTurnRecords: nativeBlocks && rootBinding.nativeTurnRecords === true && result.nativeTurnRecords === true };
       nativeReadImages.clear();
       observationGap = false; observationGapRevision++;
       rootTransitions.shift();
@@ -720,9 +784,16 @@ export function register(on) {
         if (!link && prompt?.binding === binding && !prompt.ambiguous) {
           link = prompt; displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
         }
+        // A `!` command's turn raises no UserPromptSubmit, so its display names
+        // an unknown prompt. Only while that root turn runs (shellTurn clears at
+        // its end) is the text read as its own, for reading; it never proves a
+        // final reply for sharing.
+        if (!link && !prompt && shellTurn?.binding === binding && shellTurn.turnId === activeTurn) {
+          link = { binding, turnId: activeTurn, promptId: e.prompt_id, shell: true }; displayTurnLinks.set(key, link); trimLinks(displayTurnLinks);
+        }
         const turnId = link?.turnId || `display:${e.turn_id}`;
         const turn = displayTurn(turnId, binding);
-        if (!link || link.promptId !== e.prompt_id) turn.incomplete = true;
+        if (!link || link.promptId !== e.prompt_id || link.shell) turn.incomplete = true;
         let block = turn.blocks.get(e.message_id);
         if (!block) { block = { raw: '', index: -1 }; turn.blocks.set(e.message_id, block); }
         if (block.index + 1 !== e.index || turn.ended) turn.incomplete = true;
@@ -741,7 +812,12 @@ export function register(on) {
     if (!e.agentId) {
       activeTurn = e.turnId;
       lastPhase = null;
-      enqueueBlock($, { id: 'control:turn-start', kind: 'control', turnId: e.turnId, promptId: rootPrompt?.id, status: 'running' });
+      flushShell($);
+      const triggers = rootIdle && !collecting && rootBinding?.nativeTurnRecords ? turnTriggers.filter(t => t.binding === rootBinding) : [];
+      turnTriggers = []; rootIdle = false; expectPrompt = null;
+      shellTurn = triggers.length && !triggers.some(t => t.prompt) ? { binding: rootBinding, turnId: e.turnId } : null;
+      enqueueBlock($, { id: 'control:turn-start', kind: 'control', turnId: e.turnId, promptId: rootPrompt?.id, status: 'running',
+        ...(triggers.length ? { triggers: { prompts: triggers.filter(t => t.prompt).map(t => t.prompt), rows: triggers.filter(t => t.row).map(t => t.row) } } : {}) });
       // Native contract: root turn.start follows UserPromptSubmit. Repeated
       // starts for the same prompt are ambiguous, never a sharing authority.
       if (rootPrompt?.binding === rootBinding) {
@@ -770,8 +846,13 @@ export function register(on) {
   }).catch(async function* ($, e, next) { return yield* next(e); });
   on('turn.complete', async ($, e, next) => {
     const binding = rootBinding;
+    // The turn's own end, read before later hooks (Stop hooks can take seconds).
+    let endedAt;
+    if (!e.agentId && binding?.nativeTurnRecords) try { endedAt = await $.clock.now(); } catch { /* clock is optional */ }
     const result = await next(e);
     try {
+      // Flush first: an unpaired `!` from inside this turn is shown, never claimed later.
+      if (!e.agentId) { flushShell($); rootIdle = true; turnTriggers = []; shellTurn = null; expectPrompt = null; }
       if (!e.agentId && binding === rootBinding) {
         observeUsage($);
         const turn = displayTurn(e.turnId, binding), final = turn.blocks.get(turn.last);
@@ -782,7 +863,9 @@ export function register(on) {
           typeof e.answer === 'string' && final.raw.trimEnd() === e.answer.trimEnd() ? `display:${turn.last}` : undefined;
         turn.ended = true; turn.endReason = e.reason;
         turn.endingText = '';
-        enqueueBlock($, { id: `turn:${e.turnId}`, turnId: e.turnId, kind: 'turn', finalDisplayId,
+        turn.clock = binding?.nativeTurnRecords ? { ...(Number.isSafeInteger(e.durationMs) && e.durationMs >= 0 ? { nativeDurationMs: e.durationMs } : {}),
+          ...(Number.isFinite(endedAt) ? { nativeCompletedAt: endedAt } : {}) } : {};
+        enqueueBlock($, { id: `turn:${e.turnId}`, turnId: e.turnId, kind: 'turn', finalDisplayId, ...turn.clock,
           text: turn.endingText + (e.reason === 'error' && failureText(turn) ? `\n${failureText(turn)}` : ''),
           status: e.reason === 'aborted' ? 'interrupted' : e.reason === 'answer' ? 'complete' : 'failed',
           failedRequest: e.reason === 'error' && turn.failedPrompt === true,
@@ -841,7 +924,11 @@ export function register(on) {
     return next(e);
   });
   on('classic.UserPromptSubmit', async ($, e, next) => {
-    if (!e.agent_id && e.session_id === rootBinding?.sessionId && /^[a-f0-9-]{36}$/i.test(e.prompt_id || '')) rootPrompt = { id: e.prompt_id, binding: rootBinding };
+    const root = !e.agent_id && e.session_id === rootBinding?.sessionId && /^[a-f0-9-]{36}$/i.test(e.prompt_id || ''), binding = rootBinding;
+    if (root) {
+      rootPrompt = { id: e.prompt_id, binding: rootBinding };
+      if (shellInput?.binding === binding) shellInput = null; // a typed lookalike, not a `!` command
+    }
     const candidate = collecting;
     if (candidate) {
       // Count all events, including malformed/unknown identities. Filtering
@@ -849,7 +936,15 @@ export function register(on) {
       if (candidate.events.length < 2) candidate.events.push(e);
       else candidate.invalid = true;
     }
-    try { return await next(e); }
+    try {
+      const result = await next(e);
+      // Only a prompt that goes on can head a turn; a blocked one never does.
+      if (root && binding === rootBinding && result?.block === undefined && !result?.preventContinuation) {
+        triggerTurn({ prompt: e.prompt_id }, binding);
+        if (binding?.nativeTurnRecords) expectPrompt = binding;
+      }
+      return result;
+    }
     catch (error) { if (candidate) candidate.invalid = true; throw error; }
   }).catch(async ($, e, next) => {
     if (collecting) collecting.invalid = true;
@@ -857,6 +952,7 @@ export function register(on) {
   });
   on('session.start', async ($, e, next) => {
     if (collecting) collecting.invalid = true;
+    rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null;
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
     nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(nativeVersion);

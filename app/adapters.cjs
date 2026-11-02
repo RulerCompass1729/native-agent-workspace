@@ -347,6 +347,15 @@ const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 // Claude's generated title is native metadata with no API: scan a bounded
 // transcript tail and extract the newest matching ai-title row.
+// The inputs a root turn.start claims: native prompt ids and this mod's own
+// `!` command rows, both taken while no root turn ran. Bounded, exact shapes.
+function nativeTurnTriggers(value) {
+  const uuid = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(k => ['prompts', 'rows'].includes(k)) &&
+    Array.isArray(value.prompts) && Array.isArray(value.rows) && value.prompts.length + value.rows.length > 0 && value.prompts.length + value.rows.length <= 8 &&
+    value.prompts.every(id => typeof id === 'string' && new RegExp(`^${uuid}$`, 'i').test(id)) &&
+    value.rows.every(id => typeof id === 'string' && new RegExp(`^tool:shell-${uuid}$`, 'i').test(id)));
+}
 function claudeGeneratedTitle(file, nativeId) {
   if (typeof file !== 'string' || !path.isAbsolute(file) || path.basename(file) !== `${nativeId}.jsonl`) return null;
   let fd;
@@ -538,8 +547,10 @@ class Claude extends EventEmitter {
     this.nativeAbortAvailable = message.nativeAbort === true && !this.retainedReader;
     this.addressedSendAvailable = this.nativeBlocks && message.addressedTool === true && !this.retainedReader;
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
+    // Native `!` commands, turn-start inputs and the turn's own clock (T-99).
+    this.nativeTurnRecords = this.nativeBlocks && message.nativeTurnRecords === true && !this.retainedReader;
     this.displayProofs = new Map(); this.displayGap = false;
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeBlocks: this.nativeBlocks, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords };
   }
   validRootBinding(message) {
     return Boolean(this.rootLease && !this.rootEnding && message.lease === this.rootLease && message.sessionId === this.record.nativeId);
@@ -593,7 +604,17 @@ class Claude extends EventEmitter {
         (message.incomplete !== undefined && typeof message.incomplete !== 'boolean') ||
         (message.turnId !== undefined && (typeof message.turnId !== 'string' || !/^[a-zA-Z0-9_:-]{1,160}$/.test(message.turnId)))
         : !this.retainedReader || message.inputMode !== undefined)) ||
-      !['text', 'delta', 'input', 'title'].every(k => message[k] === undefined || (typeof message[k] === 'string' && message[k].length <= 500000))) throw Error('Invalid native block');
+      !['text', 'delta', 'input', 'title'].every(k => message[k] === undefined || (typeof message[k] === 'string' && message[k].length <= 500000)) ||
+      // A person's `!` command: only this mod's own id namespace, never a model tool.
+      (message.userShell !== undefined || /^tool:shell-/.test(message.id)) && (!this.nativeTurnRecords || message.userShell !== true || message.kind !== 'tool' ||
+        !/^tool:shell-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(message.id) || message.title !== 'Bash' ||
+        typeof message.input !== 'string' || typeof message.text !== 'string' || !['complete', 'failed'].includes(message.status) ||
+        message.incomplete !== undefined && message.incomplete !== true ||
+        Object.keys(message).some(key => !['id', 'kind', 'title', 'userShell', 'input', 'text', 'status', 'incomplete', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'replayed'].includes(key))) ||
+      ['nativeDurationMs', 'nativeCompletedAt'].some(k => message[k] !== undefined) && (!this.nativeTurnRecords || message.kind !== 'turn' ||
+        message.nativeDurationMs !== undefined && !(Number.isSafeInteger(message.nativeDurationMs) && message.nativeDurationMs >= 0) ||
+        message.nativeCompletedAt !== undefined && !(Number.isFinite(message.nativeCompletedAt) && Math.abs(message.nativeCompletedAt) <= 8640000000000000)) ||
+      message.triggers !== undefined && (!this.nativeTurnRecords || message.id !== 'control:turn-start' || !nativeTurnTriggers(message.triggers))) throw Error('Invalid native block');
     const usage = message.id === 'control:usage' ? claudeUsage(message.usage) : null;
     if (message.id === 'control:usage' && (!usage || message.kind !== 'control' || message.status !== 'complete')) throw Error('Invalid native usage');
     this.rootObservation = { lease: message.lease, sequence: message.sequence };
@@ -617,6 +638,7 @@ class Claude extends EventEmitter {
           while (this.seenRootTurns.size > 256) this.seenRootTurns.delete(this.seenRootTurns.values().next().value);
           this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
           if (this.rootTurn) this.emit('nativeTurnStart', { nativeId: this.record.nativeId, turnId: message.turnId });
+          if (message.triggers) this.emit('nativeTurnTriggers', { nativeId: this.record.nativeId, turnId: message.turnId, prompts: message.triggers.prompts, rows: message.triggers.rows });
           this.liveTurn = this.rootTurn ? { id: message.turnId, promptId: message.promptId, phase: 'requesting', label: 'requesting' } : null;
           this.livePermissions.clear();
           if (this.rootTurn) { this.nativeInputRequired = false; this.emit('inputRequired', false); }
@@ -662,7 +684,7 @@ class Claude extends EventEmitter {
       this.emit('capability'); return { observed: true };
     }
     const { id, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete } = message;
-    if (kind === 'tool' && !message.replayed && !message.gap && this.liveTurn?.id === turnId) {
+    if (kind === 'tool' && !message.replayed && !message.gap && turnId && this.liveTurn?.id === turnId) {
       this.liveTurn.toolProgressAt = Date.now();
     }
     const freshInline = inline && !message.replayed && !this.record.messages?.some(row => row.id === `native:${this.record.nativeId}:${id}`);
@@ -696,7 +718,9 @@ class Claude extends EventEmitter {
     }
     this.emit('nativeBlock', { id, nativeId: this.record.nativeId, kind, turnId, displayTurnId, promptId, text, delta, index, title, status, input, incomplete, inputTag, replayed: message.replayed === true,
       ...(inline || nativePrompt ? { inputMode: message.inputMode } : {}), ...(message.mediaOnly ? { imagePayload: message.imagePayload } : {}),
-      ...(message.imageCount !== undefined ? { imageCount: message.imageCount } : {}) });
+      ...(message.imageCount !== undefined ? { imageCount: message.imageCount } : {}),
+      ...(message.userShell === true ? { toolKind: 'commandExecution', commandSource: 'userShell' } : {}),
+      ...(kind === 'turn' ? Object.fromEntries(['nativeDurationMs', 'nativeCompletedAt'].filter(k => message[k] !== undefined).map(k => [k, message[k]])) : {}) });
     if (kind === 'turn' && this.rootTurn?.id === turnId && !this.rootTurn.completed && ['working', 'error', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
       this.rootTurn.status = status === 'interrupted' ? 'idle' : status === 'failed' && message.failedRequest === true ? 'error' : null;
       this.rootTurn.completed = status === 'complete';
@@ -810,7 +834,7 @@ class Claude extends EventEmitter {
     const previous = this.lastRootTransition;
     if (previous && previous.lease === message.lease && previous.sessionId === message.sessionId &&
       previous.nextSessionId === message.nextSessionId && this.record.nativeId === message.nextSessionId) {
-      return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia }; // Lost metadata ACK, never a second clear.
+      return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords === true }; // Lost metadata ACK, never a second clear.
     }
     if (!this.rootLease || message.lease !== this.rootLease || this.rootEnding?.sessionId !== message.sessionId ||
       !FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] || FOLLOWED_ROOT_TRANSITIONS[this.rootEnding.reason] !== message.source || this.rootEnding.unfollowed || message.agentId ||
@@ -829,7 +853,7 @@ class Claude extends EventEmitter {
     const observed = (this.contextEvents || []).filter(e => e.session_id === change.nativeId);
     this.contextEvents = (this.contextEvents || []).filter(e => e.session_id !== change.nativeId);
     for (const event of observed) this.hook(event);
-    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia };
+    return { lease: this.rootLease, observationEpoch: this.observationEpoch, nativeInlineInput: this.nativeInlineInput, nativePromptInput: this.nativePromptInput, nativeMedia: this.nativeMedia, nativeTurnRecords: this.nativeTurnRecords === true };
   }
   hook(event) {
     // A new root can already be receiving human input while its identity is

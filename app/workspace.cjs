@@ -434,6 +434,35 @@ class Workspace extends EventEmitter {
     on('nativeControlBoundary', reason => { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id); });
     on('capability', () => this.changed());
     on('nativeTurnStart', info => wake.nativeStart(this, runtime, info, s));
+    // Reading only: the inputs a native turn started from head its group. A row
+    // gains a missing turn; it is never moved, and it grants no sharing. A typed
+    // prompt's row comes from the settings hook on its own socket and can land
+    // after its turn start: that link waits, bounded, for the row.
+    const pendingPrompts = new Map();
+    const linkTurn = (m, turnId) => {
+      if (!m || m.turnId || m.nativeId && m.nativeId !== s.nativeId) return false;
+      m.nativeId = s.nativeId; m.turnId = turnId; return true;
+    };
+    const typedRow = id => s.messages.find(m => m.id === `claude-prompt-${id}` && m.role === 'user' && m.origin === 'native');
+    on('nativeTurnTriggers', info => {
+      if (info.nativeId !== s.nativeId) return;
+      let linked = false;
+      for (const id of info.prompts) {
+        const m = typedRow(id);
+        if (m) linked = linkTurn(m, info.turnId) || linked;
+        else { pendingPrompts.set(id, { nativeId: s.nativeId, turnId: info.turnId }); while (pendingPrompts.size > 16) pendingPrompts.delete(pendingPrompts.keys().next().value); }
+      }
+      const rows = new Set(info.rows.map(id => `native:${s.nativeId}:${id}`));
+      for (const m of s.messages) if (rows.has(m.id) && m.commandSource === 'userShell') linked = linkTurn(m, info.turnId) || linked;
+      if (linked) this.changed();
+    });
+    on('nativeInput', (text, item) => {
+      const id = /^claude-prompt-(.+)$/.exec(item?.id || '')?.[1], pending = id && pendingPrompts.get(id);
+      if (!pending) return;
+      pendingPrompts.delete(id);
+      // Runs after the input's own handler has stored its row.
+      queueMicrotask(() => { if (pending.nativeId === s.nativeId && linkTurn(typedRow(id), pending.turnId)) this.changed(); });
+    });
     on('nativeTurnEnd', info => {
       try { wake.complete(this, s, runtime, info); } catch { this.changed(); }
       const qualified = s.provider === 'codex' ? ['0.164.0', '0.165.0'].includes(runtime.host?.rpc?.nativeVersion) : s.provider === 'claude' && runtime.nativeAbortAvailable && !runtime.retainedReader;

@@ -250,3 +250,13 @@ test('authorized command actions retain exact metadata/output through sharing an
   const reopened = new Workspace({ binaries: {}, close() {} }, directory); t.after(() => reopened.close());
   assert.deepEqual(reopened.room.messages.find(m => m.id === row.id).commandActions, command.commandActions); assert.equal(reopened.sharedReplies.grants.size, 0);
 });
+test('a person\'s own ! command is never copied into a shared reply, even on the shared turn', async t => {
+  const { w, ids, bind, block } = await fixture(t);
+  await w.forward(ids[0], 'A task', 'owner'); bind(0);
+  block(0, { id: 'tool:shell-11111111-1111-4111-8111-111111111111', kind: 'tool', title: 'Bash', input: 'cat notes.txt', text: 'PRIVATE_SHELL_OUTPUT', status: 'complete', toolKind: 'commandExecution', commandSource: 'userShell' });
+  block(0, { id: 'tool:toolu_model', kind: 'tool', title: 'Bash', input: '{"command":"ls"}', text: 'model tool output', status: 'complete' });
+  block(0, { id: 'display:answer', kind: 'response', index: 0, delta: 'shared answer', status: 'complete' });
+  const shared = JSON.stringify(w.room.messages);
+  assert.ok(shared.includes('model tool output') && shared.includes('shared answer'), 'the agent\'s own turn is still shared');
+  assert.ok(!shared.includes('PRIVATE_SHELL_OUTPUT') && !shared.includes('cat notes.txt'));
+});

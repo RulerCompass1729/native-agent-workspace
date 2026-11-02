@@ -11,7 +11,7 @@ function adapter() {
   r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
   r.bindRoot({ sessionId: r.record.nativeId }); return r;
 }
-async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader, toolReader, usageReader, turnAbort } = {}) {
+async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = false, requestHandler, promptSubmit, modelReader, toolReader, usageReader, turnAbort, now } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', `const legacyOnly = ${legacy};`);
   const { register, testObserveModel, testObserveUsage } = await import('data:text/javascript;base64,' + Buffer.from(source + '\nexport { observeModel as testObserveModel, observeUsage as testObserveUsage };\n//' + randomUUID()).toString('base64'));
   const r = runtime || adapter(), clock = [], hooks = new Map(), requests = [];
@@ -20,7 +20,7 @@ async function mod({ version = '2.1.306', fetchObservation, runtime, legacy = fa
   const $ = { session: { id: async () => native, version: async () => ({ version }), ...(modelReader ? { model: modelReader } : {}), ...(usageReader ? { usage: usageReader } : {}) },
     env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? (legacy ? undefined : '/fixture/socket') : key === 'NAW_HOOK_SOCKET' ? '/fixture/hooks.sock' : 'fixture-token' },
     fs: { read: async () => JSON.stringify({ sessionId: native, socketPath: '/fixture/gui-submit.sock', token, compat: true, nativeBlocks: true }) },
-    clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; } },
+    clock: { after: (delay, fn) => { fn.delay = delay; clock.push(fn); return { cancel() { const i = clock.indexOf(fn); if (i >= 0) clock.splice(i, 1); } }; }, ...(now ? { now } : {}) },
     tool: { list: toolReader || (async () => []) },
     turn: { abort: turnAbort || (async () => { throw Error('No native control requested'); }) },
     prompt: { read: async () => ({ text: '' }), submit: promptSubmit || (async () => { throw Error('Observation must never submit'); }) },
@@ -1080,4 +1080,72 @@ test('replayed native display content stays readable without acquiring a current
   const before = Date.now();
   r.observeRoot({ ...base, sequence: 2, id: 'display:new', delta: 'Original live text' });
   assert.ok(r.record.messages[1].time >= before && r.record.messages[1].time <= Date.now());
+});
+
+// T-99. Rows as Claude Code 2.1.316 builds them: processBashCommand appends the
+// input and then its output, and its append classifier files both on door `command`.
+const shellRow = (value, extra = {}) => ({ uuid: randomUUID(), door: 'command', origin: { kind: 'composer' }, message: { type: 'user', role: 'user', content: [{ type: 'text', text: value }] }, ...extra });
+test('native 2.1.316 shows a ! command, heads each turn with its inputs and keeps the turn clock', async () => {
+  const ended = Date.UTC(2026, 10, 2, 5, 27), f = await mod({ version: '2.1.316', now: async () => ended }), rows = [], links = [];
+  assert.equal(f.r.nativeTurnRecords, true);
+  f.r.on('nativeBlock', row => rows.push(row)); f.r.on('nativeTurnTriggers', info => links.push(info));
+  const input = shellRow('<bash-input>brew pin peekaboo</bash-input>');
+  await f.append(input); await f.append(shellRow('<bash-stdout>pinned</bash-stdout><bash-stderr></bash-stderr>'));
+  await f.invoke('turn.start', { turnId: 'shell-turn' });
+  await f.invoke('turn.complete', { turnId: 'shell-turn', reason: 'answer', answer: '', durationMs: 30400 });
+  const promptId = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'typed' });
+  await f.invoke('turn.start', { turnId: 'typed-turn' });
+  while (f.clock.length) await f.clock.shift()();
+  const shell = rows.find(row => row.id === `tool:shell-${input.uuid}`);
+  assert.deepEqual({ kind: shell.kind, title: shell.title, input: shell.input, text: shell.text, status: shell.status, toolKind: shell.toolKind, commandSource: shell.commandSource, turnId: shell.turnId },
+    { kind: 'tool', title: 'Bash', input: 'brew pin peekaboo', text: 'pinned', status: 'complete', toolKind: 'commandExecution', commandSource: 'userShell', turnId: undefined });
+  const turn = rows.find(row => row.id === 'turn:shell-turn');
+  assert.equal(turn.nativeDurationMs, 30400); assert.equal(turn.nativeCompletedAt, ended);
+  assert.deepEqual(links.map(l => [l.turnId, l.prompts, l.rows]), [['shell-turn', [], [`tool:shell-${input.uuid}`]], ['typed-turn', [promptId], []]]);
+  const session = { nativeId: f.r.record.nativeId, messages: [] };
+  for (const row of rows) require('../native-blocks.cjs').applyNativeBlock(session, row);
+  const stored = session.messages.find(m => m.id.endsWith(`tool:shell-${input.uuid}`)), end = session.messages.find(m => m.id.endsWith('turn:shell-turn'));
+  assert.equal(stored.commandSource, 'userShell'); assert.equal(stored.input, 'brew pin peekaboo');
+  assert.equal(end.nativeDurationMs, 30400); assert.equal(end.nativeCompletedAt, ended);
+});
+test('the adapter accepts ! rows, triggers and turn clocks only as agreed and in their exact shape', () => {
+  const plain = Object.create(Claude.prototype); EventEmitter.call(plain); plain.record = { nativeId: randomUUID() }; plain.terminal = { alive: true }; plain.submission = new SubmissionChannel();
+  plain.bindRoot({ sessionId: plain.record.nativeId, nativeBlocks: true });
+  const agreed = Object.create(Claude.prototype); EventEmitter.call(agreed); agreed.record = { nativeId: randomUUID() }; agreed.terminal = { alive: true }; agreed.submission = new SubmissionChannel();
+  assert.equal(agreed.bindRoot({ sessionId: agreed.record.nativeId, nativeBlocks: true, nativeTurnRecords: true }).nativeTurnRecords, true);
+  let sequence = 0;
+  const frame = (r, row) => ({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: ++sequence, ...row });
+  const shell = { id: `tool:shell-${randomUUID()}`, kind: 'tool', title: 'Bash', userShell: true, input: 'ls', text: 'a', status: 'complete' };
+  const clock = { id: 'turn:t1', kind: 'turn', turnId: 't1', text: '', status: 'complete', nativeDurationMs: 5, nativeCompletedAt: 1 };
+  const start = { id: 'control:turn-start', kind: 'control', turnId: 't2', status: 'running', triggers: { prompts: [randomUUID()], rows: [shell.id] } };
+  for (const row of [shell, clock, start]) assert.throws(() => plain.observeRoot(frame(plain, row)), /Invalid native block/, 'not agreed: ' + row.id);
+  const links = []; agreed.on('nativeTurnTriggers', info => links.push(info));
+  for (const row of [shell, clock, start]) agreed.observeRoot(frame(agreed, row));
+  assert.deepEqual(links, [{ nativeId: agreed.record.nativeId, turnId: 't2', prompts: start.triggers.prompts, rows: [shell.id] }]);
+  for (const row of [
+    { ...shell, id: 'tool:shell-not-a-uuid' }, { ...shell, id: 'tool:toolu_model' }, { ...shell, userShell: undefined }, { ...shell, turnId: 't1' },
+    { ...shell, status: 'running' }, { ...shell, title: 'Read' }, { ...shell, input: undefined }, { ...shell, kind: 'response', index: 0, delta: '' },
+    { ...shell, delta: ' appended' }, { ...shell, index: 0 }, { ...shell, promptId: 'p' }, { ...shell, displayTurnId: 'd' }, { ...shell, incomplete: false }, { ...shell, incomplete: 'yes' },
+    { id: 'tool:toolu_model', kind: 'tool', title: 'Bash', userShell: true, input: 'ls', text: '', status: 'complete' },
+    { ...clock, nativeDurationMs: -1 }, { ...clock, nativeDurationMs: 1.5 }, { ...clock, nativeCompletedAt: 9e15 },
+    { id: 'tool:toolu_model', kind: 'tool', title: 'Bash', text: '', status: 'complete', nativeDurationMs: 5 },
+    { ...start, triggers: { prompts: [], rows: [] } }, { ...start, triggers: { prompts: Array.from({ length: 9 }, () => randomUUID()), rows: [] } },
+    { ...start, triggers: { prompts: ['not-an-id'], rows: [] } }, { ...start, triggers: { prompts: [], rows: ['tool:toolu_model'] } },
+    { ...start, triggers: { prompts: [], rows: [], extra: [] } }, { ...start, triggers: [shell.id] },
+    { id: 'control:input', kind: 'control', status: 'complete', triggers: start.triggers },
+  ]) assert.throws(() => agreed.observeRoot(frame(agreed, row)), /Invalid native/, JSON.stringify(row).slice(0, 120));
+  assert.equal(links.length, 1);
+});
+test('a prompt a settings hook blocked or stopped never heads the next turn (engine result shape)', async () => {
+  for (const verdict of [{ block: 'blocked by a settings hook' }, { block: '' }, { preventContinuation: true, stopReason: 'stop' }]) {
+    const f = await mod({ version: '2.1.316' }), links = [];
+    f.r.on('nativeTurnTriggers', info => links.push(info));
+    const blocked = randomUUID(), input = shellRow('<bash-input>ls</bash-input>');
+    await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: blocked, prompt: 'blocked text' }, async () => verdict);
+    await f.append(input); await f.append(shellRow('<bash-stdout>a</bash-stdout><bash-stderr></bash-stderr>'));
+    await f.invoke('turn.start', { turnId: 'shell-turn' });
+    while (f.clock.length) await f.clock.shift()();
+    assert.deepEqual(links.map(l => [l.prompts, l.rows]), [[[], [`tool:shell-${input.uuid}`]]], JSON.stringify(verdict));
+  }
 });
