@@ -15,6 +15,7 @@
 .collaboration-member-name[data-order-handle="true"]{cursor:grab}
 .collaboration-member-name[data-order-handle="true"]:active{cursor:grabbing}
 .collaboration-member-name[data-order-handle="true"]::before{content:"⠿";flex:none;align-self:center;margin-right:4px;color:var(--muted);font-weight:400;user-select:none;pointer-events:none}
+.collaboration-member-name[aria-pressed="true"]::after{content:" ↙"}
 .collaboration-member-state{font-size:13px;font-weight:600;overflow-wrap:anywhere}
 .collaboration-member-child,.collaboration-member-freshness{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 .collaboration-member-child-compact{display:none}

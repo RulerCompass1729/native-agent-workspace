@@ -147,7 +147,8 @@
     }
     function makePane(record) {
       const header = el('section', undefined, 'collaboration-member-status'); header.dataset.memberId = record.id;
-      const name = button('', () => focus(record.id), 'collaboration-member-name');
+      // The enlarged member's own card control toggles back to the whole space.
+      const name = button('', () => focus(focused === record.id ? '' : record.id), 'collaboration-member-name');
       const nameText = el('span', undefined, 'collaboration-name-text'), nameSuffix = el('span', undefined, 'collaboration-name-suffix'); name.append(nameText, nameSuffix);
       const revealName = reveal => {
         if (name.classList.contains('is-revealed') === reveal) return;

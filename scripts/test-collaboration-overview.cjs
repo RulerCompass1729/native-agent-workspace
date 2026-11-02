@@ -183,10 +183,10 @@ async function run() {
   assert.equal(await page.locator('#shared-input').inputValue(), rawDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
   await unchangedNative(before, stateBefore); await capture('03-focused-member');
   await page.locator('#messages').hover(); await page.mouse.wheel(0, 140); await delay(120);
-  const focusedTop = await page.locator('#messages').evaluate(el => el.scrollTop);
-  await header(b).locator('.collaboration-member-name').click(); await delay(100);
-  assert.ok(Math.abs(await page.locator('#messages').evaluate(el => el.scrollTop) - focusedTop) < 3, 'Clicking the already-focused member must not reset reading');
-  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  // Since T-121 the enlarged member's own card returns to the whole space, like ← 返回共同工作.
+  // Not yet run: this script still stops earlier at the removed "加入协作" menu.
+  await header(b).locator('.collaboration-member-name').click();
+  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).waitFor({ state: 'hidden' });
   assert.ok(Math.abs(await reader(b).evaluate(el => el.scrollTop) - positionBeforeFocus) < 3);
   assert.equal(await page.locator('#shared-input').inputValue(), rawDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
   await unchangedNative(before, stateBefore);
