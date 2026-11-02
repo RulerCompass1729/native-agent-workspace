@@ -273,3 +273,17 @@ test('a changed native cursor hover fragment fails the actual pinned build', () 
 test('an ambiguous native cursor hover fragment fails the actual pinned build', () => {
   assert.throws(() => builtTerminal(text => text + '\n/* ' + rawHover + ' */'), /Pinned terminal DOM source changed/);
 });
+
+test('a snapshot keeps the native mouse report encoding, so a rebuilt view reports SGR like the live one', async () => {
+  // T-126: fullscreen Claude turns on ?1003h with ?1006h; X10 drags from a rebuilt view were ignored.
+  for (const [data, expected] of [['\x1b[?1003h\x1b[?1006h', 'SGR'], ['\x1b[?1002h\x1b[?1016h', 'SGR_PIXELS'], ['\x1b[?1003h\x1b[?1006h\x1b[?1006l', 'DEFAULT'], ['\x1b[?1000h', 'DEFAULT']]) {
+    const screen = new Screen({ allowProposedApi: true }), modes = trackCursorModes(screen), serializer = new SerializeAddon(); screen.loadAddon(serializer);
+    const target = new Screen({ allowProposedApi: true });
+    try {
+      await write(screen, data + 'POSITIVE');
+      await write(target, serializer.serialize() + modes.snapshot());
+      assert.equal(target._core.coreMouseService.activeEncoding, expected, JSON.stringify(data));
+      assert.equal(target.modes.mouseTrackingMode, screen.modes.mouseTrackingMode);
+    } finally { modes.dispose(); screen.dispose(); target.dispose(); }
+  }
+});
