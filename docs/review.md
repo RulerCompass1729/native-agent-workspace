@@ -2174,3 +2174,14 @@ Claude 3; only a retry on the daily app can settle it. The main session sits on
 an older backend and cannot join until that backend is updated, which ends its
 sessions; that is a separate user decision.
 
+The same reviewer then rejected the first daily update operator. The active
+backend was no longer empty, so the update would take a path the daily had not
+taken under a reviewed operator, which adds a new backend and pauses every old
+one, cancelling pending automatic messages and relays; the operator only checked
+the shared room. It also dropped the signed-launch gate. The operator now
+refuses unless every backend is quiet, and an isolated signed-launch check was
+added and bound to the same CDHash. The reviewer accepted one run. Remaining:
+the short window between the last quiet check and the pause, unverified
+peer-runner visibility, no clean automatic rollback once the new backend is
+active, and evidence files not hash-pinned.
+
