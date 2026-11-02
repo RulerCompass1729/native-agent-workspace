@@ -2517,3 +2517,23 @@ shared working directory is also loaded, and its hook of the same name always
 refuses. A sender without it staged a wake that ran. T-100 remains open; a wake
 from 2.1.316 to 2.1.312 has not run. The integration reviewer also noted that
 the agent's own background wait blocks moving its backend.
+
+
+### Integrated alpha.160 delivery
+
+A fresh read-only reviewer accepted the integration with no blocking findings
+and asked for three ledger corrections before commit and recommended two more:
+an agent's own background wait blocks moving its backend, a press outside a
+notice still reaches its own control, the explanation order and turn clock
+wording, terminal responsiveness as unmeasured, and the Codex label and
+shared-reply changes; the delta and two optional wordings were accepted. It
+accepted the update operator as a substitution of the alpha.159 one, reasoning
+that the app's own check is never less strict than the precheck, that the
+terminal-input record is cleared only when NAW starts a new native process for a
+new session or an explicit resume, and that any idle Codex session blocks the
+move. The operator ran once. Open: a real `!` command, a real multi-step turn
+and terminal responsiveness on an alpha.160 backend, in a new Claude 2.1.316
+session there or in the secretary's and main session's sessions after their
+backends are moved again; the installed signature check after a provider starts
+from the alpha.160 bundle; and Claude 2's pending fixes for the refused wake and
+for `!` turns.

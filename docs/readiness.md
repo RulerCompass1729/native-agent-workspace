@@ -4,41 +4,47 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.160 carries six reviewed changes. For Claude Code 2.1.316
-sessions, the conversation view shows Claude's explanations between steps, which
-2.1.316 records as thinking blocks and the terminal draws as text, where the
-terminal shows them; it shows a `!` command typed in the terminal, with its
-output, as the person's command; the turn divider sits above the terminal input
-that started the turn; and each turn ends with the duration Claude reports and
-the time it ended. A notice with a button still stays until dismissed, but a
-press anywhere outside its buttons now clears it, without reaching the control
-underneath. A paste from the text-field menu that arrives after the person
-switched away and back is dropped. When a backend is older, the session's own ⋯
-menu offers 结束并更新这个后台… first, and the old-sessions menu names up to three
-sessions for each backend. Four stale GUI scripts run to the end again.
+Current daily GUI: alpha.160, committed build source `0f3a541a`. It carries six
+reviewed changes. For Claude Code 2.1.316 sessions, the conversation view shows
+Claude's explanations between steps, which 2.1.316 records as thinking blocks
+and the terminal draws as text, where the terminal shows them; it shows a `!`
+command typed in the terminal, with its output, as the person's command; the
+turn divider sits above the terminal input that started the turn; and each turn
+ends with the duration Claude reports and the time it ended. A notice with a
+button still stays until dismissed, but a press anywhere outside its buttons now
+clears it, without reaching the control underneath. A paste from the text-field
+menu that arrives after the person switched away and back is dropped. When a
+backend is older, the session's own ⋯ menu offers 结束并更新这个后台… first, and the
+old-sessions menu names up to three sessions for each backend. Four stale GUI
+scripts run to the end again.
 
 The explanation, `!` command, turn head and clock changes run in the bridge
 plugin and the backend, so they reach only 2.1.316 sessions started on an
-alpha.160 backend. After this update that is only the empty active backend; the
-secretary's and the main session's backends run alpha.159 and record terminal
-input, and the main session's backend also holds a Codex session, so neither
-moves automatically and each needs the click again; the click is refused while a
-Claude session there has a background task or scheduled wakeup, including an
-agent's own background wait, so that agent must end its wait first. The menus,
-notices and paste guard are window code and apply to every session, and Codex
-rows that read You ran are labelled 你 in session views; on alpha.160 backends
-shared replies also leave out every provider's own-command rows, Codex included.
-Unverified: none of the 2.1.316 changes has run on a real `!` command or a real
-multi-step turn; their checks used the real plugin with synthetic engine events
-and no model. The cost of the new drawing hook to terminal responsiveness is
-unmeasured. Explanations are not shown in spaces or for turns the terminal does
-not draw, and earlier turns are not filled in; messages inserted while Claude
-works are still not shown on 2.1.316. Each change was reviewed in its author
-lane and is integrated with identical changed lines. The full unit suite passes
-2,144 checks, and eleven GUI scripts exit 0, the column input script in all four
-of its cases. Daily delivery remains pending; current daily remains alpha.159.
+alpha.160 backend. After this update that is only the empty active backend,
+which was replaced in place; the secretary's and the main session's backends run
+alpha.159 and record terminal input, and the main session's backend also holds a
+Codex session, so neither moves automatically and each needs the click again;
+the click is refused while a Claude session there has a background task or
+scheduled wakeup, including an agent's own background wait, so that agent must
+end its wait first. The menus, notices and paste guard are window code and apply
+to every session, and Codex rows that read You ran are labelled 你 in session
+views; on alpha.160 backends shared replies also leave out every provider's
+own-command rows, Codex included. Unverified: none of the 2.1.316 changes has
+run on a real `!` command or a real multi-step turn; their checks used the real
+plugin with synthetic engine events and no model. The cost of the new drawing
+hook to terminal responsiveness is unmeasured. Explanations are not shown in
+spaces or for turns the terminal does not draw, and earlier turns are not filled
+in; messages inserted while Claude works are still not shown on 2.1.316. Each
+change was reviewed in its author lane and is integrated with identical changed
+lines. The full unit suite passes 2,144 checks, and eleven GUI scripts exit 0,
+the column input script in all four of its cases. The signed bundle passed one
+isolated launch. The ordinary visible update kept fourteen session records with
+their native IDs, live processes and drafts; the seven other backends kept PID,
+start time and version, also 150 seconds later, long enough for two
+automatic-move checks, with no move started. None of this batch's behaviours has
+yet been used or checked in the daily app.
 
-Current daily GUI: alpha.159, committed build source `cc2c4f5c`. It carries six
+The prior alpha.159 task, source `cc2c4f5c`, remains qualified. It carries six
 reviewed changes. Sidebar rows take two lines, with the name and version mark
 first and space badges, a short status and the activity time below; each space
 group, independent sessions included, folds on its own and keeps that choice
@@ -73,9 +79,9 @@ snapshot mouse encoding, the notification rule and the input record that
 automatic moves rely on run in the backend, so they reach only sessions on an
 alpha.159 backend. A wake also survives unrelated input only once every backend
 in the profile runs alpha.159: until then, any input or native prompt in a
-session on an older backend still cancels every staged wake. Every daily backend
-that holds sessions still runs older code, which cannot prove the move
-conditions, so no move is automatic and each needs the click; on the main
+session on an older backend still cancels every staged wake. At delivery every
+daily backend that held sessions ran older code, which cannot prove the move
+conditions, so no move was automatic and each needed the click; on the main
 session's backend that click also ends and reconnects Codex · NAW 开发, and that
 backend will keep needing the click on later updates while it holds an idle
 Codex session. From the next update on, other alpha.159 backends can move
@@ -103,8 +109,9 @@ fourteen session records, archived ones included, with their native IDs, live
 processes and drafts; the empty active backend was replaced in place, and the
 seven other backends kept PID, start time and version, also 150 seconds later,
 long enough for two automatic-move checks, with no move started. Apart from no
-automatic move during that wait, none of this batch's behaviours has yet been
-used or checked in the daily app.
+automatic move during that wait, none of this batch's behaviours had been used
+or checked in the daily app at delivery; since then the person moved the
+secretary's and the main session's backends to alpha.159 with the click.
 
 The prior alpha.158 task, source `403f6b6e`, remains qualified. It lets an
 enlarged member card return to the whole space, which completes the maximize
