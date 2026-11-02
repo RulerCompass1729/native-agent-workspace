@@ -4065,3 +4065,21 @@ multi-step turn has run on an alpha.160 backend. The notice change passed a
 hidden-window check and multispace; the update-menu change passed a
 hidden-window check and compact versions; the paste fix passed the context menu,
 column input and member header menu scripts.
+
+The committed alpha.160 tree passes the same 2,144 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. Two retained backends now run alpha.159 and report the automatic-move
+conditions; before quitting, the operator required that none qualified. An
+author-run read of their saved records, not kept as a file, showed that both had
+recorded terminal input and that one also holds Codex sessions. The active
+backend had no sessions and was replaced in place. The ordinary visible update
+kept fourteen session records with their native IDs, live process starts and
+drafts, and the seven other backends kept PID, start time and version; 150
+seconds later, long enough for two automatic-move checks, they and all sixteen
+live native processes were unchanged and no move record existed. An earlier
+author-run check, transcribed afterwards rather than saved, reported that after
+the person moved the secretary's and main session's backends to alpha.159 and
+providers ran there, the installed alpha.159 bundle kept its strict signature
+and CDHash and the moved sessions kept their native IDs. No provider has yet
+started from the alpha.160 bundle.
