@@ -2185,3 +2185,65 @@ the short window between the last quiet check and the pause, unverified
 peer-runner visibility, no clean automatic rollback once the new backend is
 active, and evidence files not hash-pinned.
 
+
+### Native snapshot scroll regions, origin cursor and erased pending rows (T-77)
+
+Read-only terminal views lost scroll regions (DECSTBM) and origin mode (DECOM)
+when rebuilt from a snapshot, so later output scrolled or landed on the wrong
+rows. Default snapshots now restore each buffer's region, the origin-relative
+cursor, a pending-wrap cursor (by reprinting the last glyph with absolute
+styles) and uniformly background-erased pending rows. Three content fix-ups
+support this: a forced wrap for blank-led wrapped rows, an ECH so the first
+replay scroll does not inherit the previous row's background, and keeping
+trailing background-erased rows. Explicit serialize options and
+non-reconstructable pending rows keep the previous bytes.
+
+A fresh read-only reviewer first required changes: the glyph reprint used
+relative SGR, and SGR 22 dropped bold and dim on the cell and pen, a regression
+from the previous bytes. It was fixed with absolute styles. A pre-existing
+one-column error for the inactive normal buffer in origin mode was also fixed,
+and the whole-call legacy guard gained a failing control. The delta review
+passed. Known gaps shared with the previous bytes: an origin-mode cursor outside
+the region is restored at the region bottom (source row 4, restored 3, stock 0);
+the alternate screen's first cells assume a default pen (foreground 1 against
+the source's default); the saved-cursor slot is not reproduced. Not verified:
+browser rendering, graphemes and combining reprints, charsets, underline style
+and colour, and the installed app.
+
+
+### Native confirmation test port (T-34)
+
+The confirmation GUI script was ported to the current same-screen interface
+without restoring the removed progress panel. A fresh read-only reviewer passed
+it with three low findings, all fixed and re-reviewed. It changes no product
+file.
+
+
+### Full-width punctuation drift in terminal rows (T-77)
+
+The user reported terminal display problems with Chinese text. Ordinary CJK
+glyphs leave a gap inside their two cells, as in the user's iTerm2; that is not
+a defect. The lane's independent reviewer found a NAW-only defect the author had
+missed: after each full-width punctuation mark the rest of the row moved right
+by about 0.8 of a cell, so punctuation-heavy rows lost their last glyphs at the
+right edge. Chromium's default text-spacing-trim compresses adjacent full-width
+punctuation, and xterm measured those marks at half width. The fix sets
+text-spacing-trim to space-all on the terminal; the delta review passed.
+Follow-ups: a per-step drift check for long rows, and code-point column mapping
+for captured input. Not verified: the installed app; input methods, VoiceOver
+and selection, reasoned from source only; the shipped 13px default, covered only
+by the probe; more than one green GUI run per checkout; and the right-edge cut
+reported earlier, pending an installed check.
+
+
+### Maximize buttons show a restore graphic (T-119)
+
+The user reported that the maximize buttons kept the same glyph after
+maximizing. Both buttons now carry one inline graphic with outward corners to
+maximize and inward corners to restore, set in the same pass as the accessible
+name. The lane's independent reviewer found that a focused member's conversation
+tab offered "放大对话" while the conversation already filled the pane, so the first
+click did nothing; the button now follows whether the terminal is shown. The
+delta review passed. The member-card enlarge link is a separate user question
+(T-121). Not verified: the DSH host runtime, forced-colors mode, the maximized
+then focused-member then restore path, and the installed app.
