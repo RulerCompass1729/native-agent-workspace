@@ -3838,3 +3838,41 @@ starts and drafts, and all seven existing backends kept their PID, start time
 and version. The installed bundle's signature has not yet been rechecked after
 a provider runs on the new backend.
 
+
+### Snapshot regions, punctuation, maximize graphic and confirmation test - alpha.156
+
+Default native snapshots now restore each buffer's scroll region,
+origin-relative cursor, pending-wrap cursor (reprinting the last glyph with
+absolute styles) and uniformly background-erased pending rows, for every
+terminal view that hydrates from them. Explicit serialize options and rows that
+cannot be rebuilt keep the previous bytes. In the author lane 61 focused checks
+pass and 45 of them fail on the previous source; the pre-fix candidate fails
+four new cases, three from the relative-style reprint and one from the inactive
+normal buffer's origin move, and removing the legacy guard fails one. The test
+receiver mirrors the renderer's hydration on the same xterm core. Browser
+rendering, graphemes, combining reprints, charsets and underline styles are
+unverified.
+
+The native confirmation GUI script now matches confirmation headings by session
+and state, reads per-request progress through the observation API instead of the
+removed panel, keeps session folders inside the test profile and starts the GUI
+from the daemon's code root. After integration the full unit suite passes 2,043
+checks without skips; the ported confirmation script and the read-only terminal
+scroll script pass with synthetic transport and no provider. Both serve
+synthetic snapshots, so neither covers the new snapshot bytes in a browser.
+Other stale native scripts under T-34 remain.
+
+Full-width punctuation no longer drifts: the terminal sets text-spacing-trim to
+space-all, so xterm measures those marks at full width. The terminal-redraw
+script now asserts per-glyph column alignment and the loaded style and pins its
+14px design font; in the author lane it failed by 6.74 px before the change and
+passed within 0.5 px after. On integrated main it passes with drift under 0.5
+px; the same script failed before this batch, at its old grid-width wait. Both
+maximize buttons now share one inline graphic that turns to restore once
+maximized, and a focused member's conversation button follows whether the
+terminal is shown. On integrated main the member-header GUI script passes; the
+compact-header script passes its maximize groups and then stops at line 124 on a
+join label removed with independent spaces, in the author lane and on main, so
+its 850x600 group is unverified. Two earlier main runs of those two scripts
+exited at once because the outer test-slot lease blocked them; no GUI started.
+The T-116 join regression still passes all six checks.
