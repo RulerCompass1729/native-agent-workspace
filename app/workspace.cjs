@@ -382,6 +382,8 @@ class Workspace extends EventEmitter {
     catch { stop('自动继续的接收结果未确认；已停止自动发送，请核对原生终端。'); }
   }
   bind(s, runtime) {
+    // In-flight work belongs to the native process that reported it; a new process starts unreported.
+    s.background = null; s.scheduled = null; s.backgroundKinds = null; s.backgroundAt = null; s.backgroundStale = false;
     runtime.addressedCall = (identity, args) => addressed.accept(this, s, runtime, identity, args);
     runtime.addressedFailed = identity => addressed.failed(this, s, runtime, identity);
     const on = (event, handler) => runtime.on(event, (...args) => {
@@ -442,6 +444,8 @@ class Workspace extends EventEmitter {
     on('nativeTitle', title => { const clean = String(title).replace(/[\x00-\x1f\x7f]/g, ' ').trim(); const name = clean && `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${clean}`.slice(0, 60); if (s.autoName && name && (name !== s.name || s.nameSource !== 'native')) { s.name = name; s.nameSource = 'native'; this.changed(); } });
     on('state', state => {
       if (this.stops.has(s.id) && !['ended', 'recoverable', 'error', 'disconnected'].includes(state)) return;
+      // A new Claude turn may start or stop background work; the previous turn-end report no longer confirms it.
+      if (state === 'working' && s.provider === 'claude') s.backgroundStale = true;
       if (state !== s.state) { runtime.toolWaitQuietResetAt = Date.now(); runtime.toolWaitNotice = null; }
       if (['approval', 'ended', 'background', 'recoverable', 'disconnected'].includes(state) || state === 'working' && this.capacityRecoveries.get(s.id)?.status === 'scheduled') this.cancelCapacity(s.id);
       s.state = state;
@@ -468,7 +472,7 @@ class Workspace extends EventEmitter {
     });
     on('activity', text => { s.activity = text; this.changed(); });
     on('background', info => {
-      s.background = info.count; s.scheduled = info.scheduled;
+      s.background = info.count; s.scheduled = info.scheduled; s.backgroundKinds = Array.isArray(info.kinds) ? info.kinds : null; s.backgroundAt = Date.now(); s.backgroundStale = false;
       if ([info.count, info.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) this.nativeWorkObserved(s.id, '原生报告仍有后台或定时工作，请核对后再交接。');
       this.changed();
     });
@@ -594,6 +598,8 @@ class Workspace extends EventEmitter {
       s.nativeContexts.push({ nativeId: info.previousId, endedAt: time, boundaryId, reason: info.reason || 'clear' });
       s.messages.push({ id: boundaryId, role: 'system', kind: 'context', name: '原生上下文', text: info.reason === 'terminal-switch' ? '已跟随原生终端切换上下文。上方记录仅作为本机历史保留，旧共享授权已停止。草稿保留，发送前请核对。' : info.reason === 'branch' ? '已在原生终端分支出新会话。上方记录是分支前的历史，旧共享授权已停止。草稿保留，发送前请核对。' : '已在原生终端清空上下文。上方记录仅作为本机历史保留，不会自动发给新上下文。草稿保留，发送前请核对。', nativeId: info.nativeId, time });
       s.nativeId = info.nativeId; s.model = info.model; s.nativeSettings = null; s.background = null; s.scheduled = null; s.usage = null;
+      // Same native process: work started before the switch is not confirmed either way until the next turn-end report.
+      s.backgroundStale = s.provider === 'claude';
       if (info.reason === 'terminal-switch' && typeof info.cwd === 'string' && path.isAbsolute(info.cwd)) s.cwd = info.cwd;
     } else if (s.nativeId !== info.nativeId || s.nativeContexts?.at(-1)?.nativeId !== info.previousId) return;
     // Identity, old-context references and the boundary are one saved snapshot.

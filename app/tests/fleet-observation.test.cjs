@@ -1,5 +1,5 @@
 const test = require('node:test'), assert = require('node:assert/strict');
-const { observedFleet, fleetStatus } = require('../renderer/fleet-observation.js');
+const { observedFleet, fleetStatus, backgroundWork, workTone } = require('../renderer/fleet-observation.js');
 const event = (kind, rest = {}) => ({ event: 'subAgentActivity', nativeId: 'child-a', name: '/root/check', kind, stale: false, ...rest });
 const record = fleet => ({ state: 'idle', fleet });
 
@@ -57,4 +57,57 @@ test('actual Codex start/completed envelope describes the activity, not child co
   } });
   assert.equal(progress.length, 2); assert.ok(progress.every(p => p.status === 'observed' && p.title.includes('started')));
   assert.equal(fleet.length, 1); assert.equal(fleet[0].active, true);
+});
+
+test('a turn-end report of in-flight background work replaces ready and the green dot', () => {
+  const s = { state: 'idle', fleet: [], background: 1, backgroundKinds: ['shell'], backgroundAt: 100 };
+  assert.equal(fleetStatus(s, '就绪'), '后台任务在跑 · 1 项（命令）'); assert.equal(workTone(s), 'bg-work');
+  Object.assign(s, { background: 3, backgroundKinds: ['shell', 'subagent', 'shell'] });
+  assert.equal(fleetStatus(s, '就绪'), '后台任务在跑 · 3 项（命令 2、子 agent 1）');
+  Object.assign(s, { background: 2, backgroundKinds: ['other', 'rm -rf PRIVATE'] });
+  assert.equal(fleetStatus(s, '就绪'), '后台任务在跑 · 2 项（其他）', 'Unknown types never show raw text');
+  Object.assign(s, { background: 1, backgroundKinds: null });
+  assert.equal(fleetStatus(s, '就绪'), '后台任务在跑 · 1 项');
+  Object.assign(s, { background: 0, backgroundKinds: null, backgroundAt: 200 });
+  assert.equal(fleetStatus(s, '就绪'), '就绪'); assert.equal(workTone(s), '', 'An empty report is truly idle');
+});
+test('reported work only describes an idle live root; other states keep their own label', () => {
+  const work = { fleet: [], background: 2, backgroundKinds: ['shell', 'shell'], backgroundAt: 100 };
+  assert.equal(fleetStatus({ ...work, state: 'working' }, '正在工作'), '正在工作'); assert.equal(workTone({ ...work, state: 'working' }), '');
+  for (const s of [{ ...work, state: 'recoverable' }, { ...work, state: 'idle', transportDisconnected: true }, { ...work, state: 'idle', backendUnavailable: true }])
+    assert.equal(backgroundWork(s).count, 0);
+  for (const background of [null, undefined, -1, 1.5, '1', NaN]) assert.equal(backgroundWork({ ...work, state: 'idle', background }).reported, false);
+});
+test('a later turn-end report settles only unconfirmed child records, never a running child', () => {
+  const child = (time, rest = {}) => ({ event: 'SubagentStart', id: 'native-child', name: 'check', stale: false, time, ...rest });
+  const s = { state: 'idle', fleet: [child(50)], background: null };
+  assert.equal(fleetStatus(s, '就绪'), '主会话就绪 · 1 个子任务进行中'); assert.equal(workTone(s), 'bg-work', 'A running child is not idle');
+  Object.assign(s, { background: 0, backgroundAt: 100 });
+  assert.equal(fleetStatus(s, '就绪'), '主会话就绪 · 1 个子任务进行中', 'A teammate may be absent from the report; running is never inferred finished');
+  assert.equal(workTone(s), 'bg-work');
+  s.fleet.push(child(60, { event: 'SubagentStop' }));
+  assert.equal(fleetStatus(s, '就绪'), '主会话就绪'); assert.equal(workTone(s), '');
+});
+test('unconfirmed child records are not shown as idle until a native report arrives', () => {
+  const s = { state: 'idle', fleet: [{ event: 'SubagentStart', id: 'native-child', stale: true, time: 50 }], background: null };
+  assert.equal(fleetStatus(s, '就绪'), '主会话就绪 · 子任务状态待核对'); assert.equal(workTone(s), 'bg-unknown');
+  Object.assign(s, { background: 0, backgroundAt: 100 });
+  assert.equal(fleetStatus(s, '就绪'), '就绪', 'The settled record no longer changes the wording'); assert.equal(workTone(s), '');
+  s.fleet.push({ event: 'SubagentStart', id: 'later-child', stale: true, time: 150 });
+  assert.equal(fleetStatus(s, '就绪'), '主会话就绪 · 子任务状态待核对'); assert.equal(workTone(s), 'bg-unknown');
+  assert.equal(workTone({ state: 'idle', fleet: [] }), '', 'No observation and no report keeps the ordinary idle dot');
+});
+test('a Claude turn that ended without a report is unconfirmed, not ready', () => {
+  const s = { state: 'idle', fleet: [], background: 0, backgroundAt: 100, backgroundStale: true };
+  assert.equal(fleetStatus(s, '就绪'), '后台状态待核对'); assert.equal(workTone(s), 'bg-unknown');
+  Object.assign(s, { background: 1, backgroundKinds: ['shell'] });
+  assert.equal(fleetStatus(s, '就绪'), '后台状态待核对', 'An older count is not shown as current'); assert.equal(backgroundWork(s).count, 0);
+  s.fleet.push({ event: 'SubagentStart', id: 'native-child', stale: false, time: 150 });
+  assert.equal(fleetStatus(s, '就绪'), '后台状态待核对 · 1 个子任务进行中'); assert.equal(workTone(s), 'bg-work');
+  assert.equal(fleetStatus({ ...s, state: 'working' }, '正在工作'), '正在工作 · 1 个子任务进行中');
+});
+test('type detail is shown only when it accounts for every reported item; Codex dots are unchanged', () => {
+  assert.equal(fleetStatus({ state: 'idle', fleet: [], background: 3, backgroundKinds: ['shell', 'shell'], backgroundAt: 1 }, '就绪'), '后台任务在跑 · 3 项');
+  for (const fleet of [[{ event: 'thread/started', id: 'codex-child', stale: false, time: 1 }], [{ event: 'subAgentActivity', nativeId: 'codex-child', kind: 'started', stale: false, time: 1 }]])
+    assert.equal(workTone({ provider: 'codex', state: 'idle', fleet, background: null }), '');
 });

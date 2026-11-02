@@ -1558,6 +1558,7 @@ function renderSessions() {
     row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}${group ? ` · ${spaceRecord(group)?.name}` : ''}`); row.more.title = row.more.getAttribute('aria-label'); row.more.disabled = disconnected || renameTarget?.id === record.id;
     row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = `${sessionStatus(record, true)} · ${sessionActivityTime(record)}`; row.dot.className = `state-dot ${record.state}`;
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
+    const tone = window.nativeWorkspaceFleet.workTone(record, !disconnected); if (tone) row.dot.classList.add(tone);
   }
   highlightSpace(hoverSpace);
 }

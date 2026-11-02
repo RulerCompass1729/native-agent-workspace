@@ -17,14 +17,15 @@
     const age = latest ? Math.max(0, Math.floor((now - latest.observedAt) / 1000)) : null;
     const stale = !live || latest?.stale === true || age !== null && age > 5;
     const time = age === null ? '更新时间未报告' : age < 5 ? '刚更新' : age < 60 ? `${age} 秒前更新` : `${Math.floor(age / 60)} 分钟前更新`;
-    const children = fleet.observedFleet(record, live);
+    const children = fleet.currentFleet(record, live);
     let child = '子任务：未报告';
     if (children.children.length) {
       child = children.running || children.unknown
         ? `子任务：${children.running ? `${children.running} 项进行中` : ''}${children.running && children.unknown ? ' · ' : ''}${children.unknown ? `${children.unknown} 项状态未知` : ''}（部分观察）`
         : `子任务：已观察到的 ${children.children.length} 项已结束（部分观察）`;
     }
-    const base = Object.hasOwn(labels, record.state) ? labels[record.state] : '状态未报告';
+    const work = fleet.backgroundWork(record, live);
+    const base = record.state === 'idle' && (work.count || work.unconfirmed) ? work.text : Object.hasOwn(labels, record.state) ? labels[record.state] : '状态未报告';
     const question = record.approval?.method === 'item/tool/requestUserInput';
     const state = !live ? '连接状态待核对' : record.nativeContextPending ? '原生上下文待核对' : record.claudeQuestion || question && record.approval.params?.isBlocking !== false
       ? '等待回答' : question ? `${base} · 有待回答问题` : base;
