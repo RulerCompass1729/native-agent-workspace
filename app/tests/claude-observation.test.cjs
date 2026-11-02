@@ -1149,3 +1149,128 @@ test('a prompt a settings hook blocked or stopped never heads the next turn (eng
     assert.deepEqual(links.map(l => [l.prompts, l.rows]), [[[], [`tool:shell-${input.uuid}`]]], JSON.stringify(verdict));
   }
 });
+// T-130. Claude Code 2.1.316 draws a thinking block it classifies as narration through
+// ui.render AssistantMessage with isSummary, keyed by the stored row's uuid.
+const thinkingRow = (text, extra = {}) => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' },
+  message: { type: 'assistant', role: 'assistant', content: [{ type: 'thinking', thinking: text, signature: 'opaque-signature' }] }, ...extra });
+const toolUseRow = id => ({ uuid: randomUUID(), door: 'response', origin: { kind: 'model', model: 'synthetic' },
+  message: { type: 'assistant', role: 'assistant', content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: '/fixture/a.txt' } }] } });
+const engineDraw = async () => ({ type: 'Text', props: {}, children: [] }); engineDraw.origin = { plugin: 'engine', tier: 'core' };
+const drawn = (requestId, text, props = {}) => ({ component: 'AssistantMessage', surface: 'terminal', requestId, props: { text, isFirstOfReply: true, isSummary: true, ...props } });
+async function narrationFixture(options = {}) {
+  const f = await mod({ version: '2.1.316', ...options }), rows = [];
+  f.r.on('nativeBlock', row => rows.push(row));
+  const flush = async () => { while (f.clock.length) await f.clock.shift()(); };
+  const session = () => { const s = { nativeId: f.r.record.nativeId, messages: [] }; for (const row of rows) require('../native-blocks.cjs').applyNativeBlock(s, row); return s; };
+  return { ...f, rows, flush, session, narrations: () => rows.filter(row => row.id.startsWith('narration:')) };
+}
+test('native 2.1.316 shows the explanation the terminal drew, in its place, as the turn\'s commentary', async () => {
+  const f = await narrationFixture();
+  assert.equal(f.r.nativeNarration, true);
+  await f.invoke('turn.start', { turnId: 'work-turn' });
+  const said = thinkingRow('stored text with <memory-tag>hidden</memory-tag>');
+  await f.append(said);
+  await f.append(toolUseRow('toolu_read'));          // the next block lands before the terminal's next frame
+  await f.invoke('ui.render', drawn(said.uuid, '我先读一下这个文件。'), engineDraw);
+  await f.invoke('ui.render', drawn(said.uuid, '我先读一下这个文件。'), engineDraw); // a redraw
+  await f.flush();
+  assert.deepEqual(f.narrations().map(row => [row.kind, row.phase, row.turnId, row.text, row.beforeId]),
+    [['response', 'commentary', 'work-turn', '我先读一下这个文件。', 'tool:toolu_read']]);
+  const s = f.session(), order = s.messages.map(m => m.id.split(':').slice(2).join(':'));
+  assert.deepEqual(order, [`narration:${said.uuid}`, 'tool:toolu_read']);
+  const row = s.messages[0];
+  assert.deepEqual([row.role, row.kind, row.phase, row.turnId, row.text], ['assistant', 'response', 'commentary', 'work-turn', '我先读一下这个文件。']);
+  // Drawn before the next row: no reordering needed.
+  const later = thinkingRow('second');
+  await f.append(later); await f.invoke('ui.render', drawn(later.uuid, '读完了，接着改。'), engineDraw); await f.append(toolUseRow('toolu_edit')); await f.flush();
+  assert.equal(f.narrations().at(-1).beforeId, undefined);
+  assert.deepEqual(f.session().messages.map(m => m.id.split(':').slice(2).join(':')), [`narration:${said.uuid}`, 'tool:toolu_read', `narration:${later.uuid}`, 'tool:toolu_edit']);
+});
+test('only the terminal\'s own narration drawing of a root row from a running turn is shown', async () => {
+  const f = await narrationFixture();
+  await f.invoke('turn.start', { turnId: 'earlier-turn' });
+  await f.invoke('turn.complete', { turnId: 'earlier-turn', reason: 'answer', answer: '', durationMs: 5 });
+  const idle = thinkingRow('after that turn ended');
+  await f.append(idle);
+  await f.invoke('turn.start', { turnId: 'work-turn' });
+  const child = thinkingRow('child', { agentId: 'a1b2c3' }), plain = thinkingRow('real thinking'), own = thinkingRow('own');
+  await f.append(child); await f.append(plain); await f.append(own);
+  const pluginDraw = async () => ({}); pluginDraw.origin = { plugin: 'another-plugin', tier: 'user' };
+  await f.invoke('ui.render', drawn(idle.uuid, 'idle text'), engineDraw);           // not appended during a root turn
+  await f.invoke('ui.render', drawn(child.uuid, 'child text'), engineDraw);         // a subagent's row
+  await f.invoke('ui.render', drawn(plain.uuid, 'not narration', { isSummary: undefined }), engineDraw); // drawn as plain text, not a summary
+  await f.invoke('ui.render', drawn(randomUUID(), 'history remount'), engineDraw);  // never appended here
+  await f.invoke('ui.render', drawn(own.uuid, 'not the engine'), pluginDraw);       // another plugin's call
+  await f.invoke('ui.render', drawn(own.uuid, '   '), engineDraw);                  // nothing to show
+  await f.flush();
+  assert.deepEqual(f.narrations(), []);
+  assert.equal(f.requests.some(row => row.kind === 'narration'), false, 'nothing was even sent');
+});
+test('an adapter that did not agree to narration gets no narration frames and no gap', async () => {
+  const f = await narrationFixture({ requestHandler: async (url, options, body, r) => {
+    if (!url.endsWith('/root-bind')) return;
+    const result = await r.bindRoot({ ...body, nativeNarration: undefined });
+    return { ok: true, text: JSON.stringify(result) };
+  } });
+  assert.notEqual(f.r.nativeNarration, true);
+  await f.invoke('turn.start', { turnId: 'work-turn' });
+  const said = thinkingRow('x'); await f.append(said);
+  await f.invoke('ui.render', drawn(said.uuid, 'explanation'), engineDraw); await f.flush();
+  assert.deepEqual(f.narrations(), []); assert.equal(f.requests.some(row => row.gap), false);
+  assert.equal(f.requests.some(row => row.kind === 'narration'), false, 'the bridge sends nothing the adapter did not agree to');
+});
+test('the adapter accepts a narration frame only as agreed and in its exact shape', () => {
+  const make = narration => { const r = Object.create(Claude.prototype); EventEmitter.call(r); r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
+    r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true, nativeNarration: narration }); return r; };
+  const plain = make(undefined), agreed = make(true); let sequence = 0;
+  const frame = (r, row) => ({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: ++sequence, ...row });
+  const good = { id: `narration:${randomUUID()}`, kind: 'narration', turnId: 't1', text: 'explanation', status: 'complete', order: 1, beforeId: 'tool:toolu_x' };
+  assert.throws(() => plain.observeRoot(frame(plain, good)), /Invalid native block/);
+  const rows = []; agreed.on('nativeBlock', row => rows.push(row)); agreed.observeRoot(frame(agreed, good));
+  assert.deepEqual(rows.map(r => [r.kind, r.phase, r.text, r.beforeId]), [['response', 'commentary', 'explanation', 'tool:toolu_x']]);
+  for (const row of [{ ...good, id: 'narration:not-a-uuid' }, { ...good, text: ' ' }, { ...good, text: 1 }, { ...good, turnId: undefined }, { ...good, status: 'streaming' },
+    { ...good, beforeId: 'narration:x' }, { ...good, beforeId: 'control:input' }, { ...good, order: undefined }, { ...good, order: -1 }, { ...good, order: 1.5 }, { ...good, index: 0 }, { ...good, delta: 'x' }, { ...good, promptId: 'p' },
+    { ...good, kind: 'response', index: 0, delta: 'x' }, { id: 'display:x', kind: 'narration', turnId: 't1', text: 'x', status: 'complete' }])
+    assert.throws(() => agreed.observeRoot(frame(agreed, row)), /Invalid native/, JSON.stringify(row).slice(0, 100));
+  assert.equal(rows.length, 1);
+});
+test('an explanation drawn before its row is stored still appears, in its own place', async () => {
+  const f = await narrationFixture();
+  await f.invoke('turn.start', { turnId: 'work-turn' });
+  const said = thinkingRow('stored');
+  await f.invoke('ui.render', drawn(said.uuid, '先确认一下配置。'), engineDraw);   // the terminal drew it first
+  await f.append(said); await f.append(toolUseRow('toolu_read')); await f.flush();
+  assert.deepEqual(f.narrations().map(r => [r.text, r.beforeId]), [['先确认一下配置。', undefined]]);
+  assert.deepEqual(f.session().messages.map(m => m.id.split(':').slice(2).join(':')), [`narration:${said.uuid}`, 'tool:toolu_read']);
+  // A drawing held for a row that never comes in this turn is dropped at its end.
+  const ghost = randomUUID();
+  await f.invoke('ui.render', drawn(ghost, 'never stored'), engineDraw);
+  await f.invoke('turn.complete', { turnId: 'work-turn', reason: 'answer', answer: '', durationMs: 5 });
+  await f.invoke('turn.start', { turnId: 'next-turn' });
+  await f.append({ ...thinkingRow('late'), uuid: ghost }); await f.flush();
+  assert.equal(f.narrations().length, 1);
+});
+test('explanations drawn out of order keep the order their rows were stored in', async () => {
+  for (const later of [true, false]) {
+    const f = await narrationFixture();
+    await f.invoke('turn.start', { turnId: 'work-turn' });
+    const a = thinkingRow('a'), b = thinkingRow('b');
+    await f.append(a); await f.append(b);
+    if (later) await f.append(toolUseRow('toolu_next'));     // both drawings arrive after a later row
+    await f.invoke('ui.render', drawn(b.uuid, '第二段'), engineDraw);
+    await f.invoke('ui.render', drawn(a.uuid, '第一段'), engineDraw);
+    await f.flush();
+    const order = f.session().messages.map(m => m.id.split(':').slice(2).join(':'));
+    assert.deepEqual(order, [`narration:${a.uuid}`, `narration:${b.uuid}`, ...(later ? ['tool:toolu_next'] : [])], String(later));
+  }
+});
+test('only the terminal\'s drawing counts, and only explanation rows can be placed early', async () => {
+  const f = await narrationFixture();
+  await f.invoke('turn.start', { turnId: 'work-turn' });
+  const said = thinkingRow('x'); await f.append(said);
+  await f.invoke('ui.render', { ...drawn(said.uuid, 'a remote surface'), surface: 'desktop' }, engineDraw); await f.flush();
+  assert.deepEqual(f.narrations(), []);
+  const s = { nativeId: 'N', messages: [{ id: 'native:N:tool:a', role: 'tool', kind: 'tool', nativeId: 'N' }] };
+  require('../native-blocks.cjs').applyNativeBlock(s, { id: 'display:x', nativeId: 'N', kind: 'response', turnId: 't', text: 'reply', status: 'complete', beforeId: 'tool:a', index: 0 });
+  assert.deepEqual(s.messages.map(m => m.id), ['native:N:tool:a', 'native:N:display:x']);
+});

@@ -142,6 +142,22 @@ let shellInput = null;
 let turnTriggers = [];
 let shellTurn = null;
 let expectPrompt = null; // a root prompt went on: its own row is next, never a `!` command
+// Narration (2.1.316 only): the engine itself decides which thinking blocks are
+// the model's running explanation, and draws exactly those as AssistantMessage
+// summaries keyed by the stored row's uuid. NAW shows what the terminal drew,
+// never re-deciding from the block. A drawing joins only a root thinking row
+// appended during a root turn; its place is that row's place in the stream.
+const narrationSources = new Map(), pendingDrawings = new Map();
+const emittedRows = new Set(), rootRows = [];
+let rootRowSeq = 0, narrationOrder = 0;
+function publishNarration($, uuid, source, text) {
+  source.published = true;
+  // Drawn a frame after its row landed: if a later row already went out,
+  // place the explanation before it, as the terminal does.
+  const before = rootRows.find(row => row.seq > source.seq)?.id;
+  enqueueBlock($, { id: `narration:${uuid}`, kind: 'narration', turnId: source.turnId, text, status: 'complete', order: source.order,
+    ...(before ? { beforeId: before } : {}) }, source.binding);
+}
 function trimLinks(map) { while (map.size > 64) map.delete(map.keys().next().value); }
 function displayTurn(id, binding) {
   let turn = displayTurns.get(id);
@@ -241,6 +257,10 @@ function enqueueBlock($, row, binding = rootBinding) {
     observations.shift(); markObservationGap(binding);
   }
   observations.push({ row: { ...row, block: true, sequence: ++binding.observationSequence, epoch: binding.observationEpoch }, binding });
+  if (row.kind !== 'control' && row.kind !== 'narration' && !row.mediaOnly && !emittedRows.has(row.id)) {
+    emittedRows.add(row.id); if (emittedRows.size > 512) emittedRows.delete(emittedRows.values().next().value);
+    rootRows.push({ seq: ++rootRowSeq, id: row.id }); if (rootRows.length > 64) rootRows.shift();
+  }
   if (!observing) { observing = true; $.clock.after(0, () => flushObservations($)); }
 }
 
@@ -285,6 +305,14 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
     // Display IDs and saved transcript IDs are different namespaces. Text is
     // collected from MessageDisplay only, not guessed equal to an append/Stop.
     if (e.door === 'response' && e.origin?.kind === 'model' && message.type === 'assistant') {
+      if (binding.nativeNarration && !rootIdle && turnId && message.content.some(b => b?.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim())) {
+        const source = { binding, turnId, seq: rootRowSeq, order: ++narrationOrder };
+        narrationSources.set(result.uuid, source);
+        while (narrationSources.size > 64) narrationSources.delete(narrationSources.keys().next().value);
+        // The terminal can draw a row before its append resolves here.
+        const drawn = pendingDrawings.get(result.uuid);
+        if (drawn?.binding === binding) { pendingDrawings.delete(result.uuid); publishNarration($, result.uuid, source, drawn.text); }
+      }
       // Engine-generated API failures bypass MessageDisplay. Classify the
       // inspected native stand-in, but keep only the downstream stored text.
       // A failed prompt and error turn boundary must independently agree.
@@ -569,13 +597,15 @@ async function bindRoot($, ownGeneration) {
     nativeMedia: version === '2.1.312',
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
-    nativeTurnRecords: !legacyOnly && version === '2.1.316' }, binding);
+    nativeTurnRecords: !legacyOnly && version === '2.1.316',
+    nativeNarration: !legacyOnly && version === '2.1.316' }, binding);
   if (stopped || generation !== ownGeneration || typeof result.lease !== 'string') return;
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
     nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
     nativeMedia: nativeBlocks && version === '2.1.312' && result.nativeMedia === true,
-    nativeTurnRecords: nativeBlocks && !legacyOnly && version === '2.1.316' && result.nativeTurnRecords === true };
+    nativeTurnRecords: nativeBlocks && !legacyOnly && version === '2.1.316' && result.nativeTurnRecords === true,
+    nativeNarration: nativeBlocks && !legacyOnly && version === '2.1.316' && result.nativeNarration === true };
   nativeReadImages.clear();
   heartbeat($, rootBinding, ownGeneration);
   // Native MCP connection may finish just after session.start. One early
@@ -617,7 +647,8 @@ async function syncRoot($) {
       rootBinding = { ...rootBinding, sessionId: transition.nextSessionId, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
         nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
         nativeMedia: nativeBlocks && rootBinding.nativeMedia && result.nativeMedia === true,
-        nativeTurnRecords: nativeBlocks && rootBinding.nativeTurnRecords === true && result.nativeTurnRecords === true };
+        nativeTurnRecords: nativeBlocks && rootBinding.nativeTurnRecords === true && result.nativeTurnRecords === true,
+        nativeNarration: nativeBlocks && rootBinding.nativeNarration === true && result.nativeNarration === true };
       nativeReadImages.clear();
       observationGap = false; observationGapRevision++;
       rootTransitions.shift();
@@ -745,6 +776,23 @@ export function register(on) {
     }
     return next(e);
   }).catch(($, e, next) => next(e));
+  // The retained compatibility copy (legacyOnly) never shows narration.
+  if (!legacyOnly) on('ui.render', { component: 'AssistantMessage' }, ($, e, next) => {
+    const result = next(e); // the drawing is never changed or delayed
+    try {
+      if (e.surface === 'terminal' && e.props?.isSummary === true && next.origin?.plugin === 'engine' && next.origin?.tier === 'core' &&
+        typeof e.requestId === 'string' && typeof e.props.text === 'string' && e.props.text.trim()) {
+        const source = narrationSources.get(e.requestId);
+        if (source) { if (!source.published && source.binding === rootBinding) publishNarration($, e.requestId, source, e.props.text); }
+        else if (!rootIdle && rootBinding?.nativeNarration && !pendingDrawings.has(e.requestId)) {
+          // Drawn before its row was stored: wait, bounded, for that root row.
+          pendingDrawings.set(e.requestId, { binding: rootBinding, text: e.props.text });
+          while (pendingDrawings.size > 16) pendingDrawings.delete(pendingDrawings.keys().next().value);
+        }
+      }
+    } catch { /* reading only */ }
+    return result;
+  }).catch(($, e, next) => next(e));
   on('classic.PermissionRequest', ($, e, next) => {
     // Ordered with display observations, before native permission handling.
     // No permission decision or tool payload is copied into the shared room.
@@ -852,7 +900,7 @@ export function register(on) {
     const result = await next(e);
     try {
       // Flush first: an unpaired `!` from inside this turn is shown, never claimed later.
-      if (!e.agentId) { flushShell($); rootIdle = true; turnTriggers = []; shellTurn = null; expectPrompt = null; }
+      if (!e.agentId) { flushShell($); rootIdle = true; turnTriggers = []; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); }
       if (!e.agentId && binding === rootBinding) {
         observeUsage($);
         const turn = displayTurn(e.turnId, binding), final = turn.blocks.get(turn.last);
@@ -952,7 +1000,7 @@ export function register(on) {
   });
   on('session.start', async ($, e, next) => {
     if (collecting) collecting.invalid = true;
-    rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null;
+    rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null; pendingDrawings.clear();
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
     nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(nativeVersion);
