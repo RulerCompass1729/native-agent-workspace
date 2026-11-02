@@ -111,3 +111,9 @@ test('type detail is shown only when it accounts for every reported item; Codex 
   for (const fleet of [[{ event: 'thread/started', id: 'codex-child', stale: false, time: 1 }], [{ event: 'subAgentActivity', nativeId: 'codex-child', kind: 'started', stale: false, time: 1 }]])
     assert.equal(workTone({ provider: 'codex', state: 'idle', fleet, background: null }), '');
 });
+
+test('a mixed observed fleet retains running and unknown facts together in the shared status', () => {
+  const s = record([event('started'), event('interacted', { nativeId: 'child-b' })]);
+  assert.equal(observedFleet(s).running, 1); assert.equal(observedFleet(s).unknown, 1);
+  assert.equal(fleetStatus(s, '就绪'), '主会话就绪 · 1 个子任务进行中 · 子任务状态待核对');
+});

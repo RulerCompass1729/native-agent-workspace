@@ -24,6 +24,7 @@ function validViews(views) {
     if (view.spaceId !== undefined && !roomId(view.spaceId)) return false;
     if (view.sidebarView !== undefined && !['flat', 'grouped'].includes(view.sidebarView)) return false;
     if (view.sidebarSpaceFilter !== undefined && view.sidebarSpaceFilter !== '' && !roomId(view.sidebarSpaceFilter)) return false;
+    if (view.sidebarCollapsedGroups !== undefined && (!Array.isArray(view.sidebarCollapsedGroups) || view.sidebarCollapsedGroups.length > 1000 || view.sidebarCollapsedGroups.some(id => id !== 'independent' && !roomId(id)) || new Set(view.sidebarCollapsedGroups).size !== view.sidebarCollapsedGroups.length)) return false;
     if (view.panorama !== undefined) {
       const p = view.panorama;
       if (!object(p) || Object.keys(p).some(key => !['layout', 'query', 'spaceId', 'top', 'returning', 'focusId'].includes(key)) ||

@@ -58,7 +58,8 @@
   }
   function fleetStatus(record, base, connected = true) {
     const fleet = currentFleet(record, connected), idle = record.state === 'idle';
-    const children = fleet.running ? ` · ${fleet.running} 个子任务进行中` : fleet.unknown ? ' · 子任务状态待核对' : '';
+    // A mixed fleet keeps both facts: running children never hide unknown ones.
+    const children = (fleet.running ? ` · ${fleet.running} 个子任务进行中` : '') + (fleet.unknown ? ' · 子任务状态待核对' : '');
     if (idle && fleet.work.count) return fleet.work.text;
     if (idle && fleet.work.unconfirmed) return fleet.work.text + children;
     if (!fleet.observed || fleet.settled && !fleet.children.length) return base;

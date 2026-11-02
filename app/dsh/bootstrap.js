@@ -151,7 +151,7 @@ window.__ModuleLoader__.load({
           return React.createElement('div', { ref, className: 'naw', 'data-native-surface': kind, 'data-collapsed': Boolean(collapsed), style: collapsed ? { overflow: 'hidden' } : undefined });
         }
         ctx.effect(() => {
-          const style = document.createElement('style'); style.textContent = styles; document.head.append(style);
+          const style = document.createElement('style'); style.textContent = styles + '\n.naw-session-menu [role="presentation"]{white-space:pre-line;overflow-wrap:anywhere;max-width:min(380px,calc(100vw - 40px))}'; document.head.append(style);
           return () => { cleanup?.(); for (const root of markdownRoots.values()) root.unmount(); markdownRoots.clear(); style.remove(); };
         });
         ctx.slots.inject('sidebar', () => ctx.slots.register({ name: 'sidebar' }, props => React.createElement(Surface, { kind: 'sidebar', collapsed: props.collapsed })));

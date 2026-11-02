@@ -118,12 +118,13 @@ test('only a current eligible exhausted descriptor adds the sidebar notice or OS
   }
   assert.equal(status(original, true, false), status(original, false, false), 'Disconnected display does not advertise stale recovery');
 });
-test('sidebar and accessible labels opt in while selected header and native fleet observations remain intact', () => {
+test('capacity opt-in preserves native fleet facts and selected-header scope', () => {
   const row = record({ state: 'idle', fleet: [{ event: 'subAgentActivity', nativeId: 'child', kind: 'started', stale: false }] });
   const normal = status(row, false), notice = status(row);
   assert.ok(notice.startsWith(normal)); assert.ok(notice.length > normal.length);
   const routing = record({ capacityRecovery: { ...row.capacityRecovery, reason: 'routing' } });
   assert.notEqual(status(routing), status(routing, false));
-  assert.equal((renderer.match(/sessionStatus\(record, true\)/g) || []).length, 2, 'Existing sidebar text and aria caller only');
+  // Sidebar recovery text now comes from sidebarPresentation (sidebar-presentation.test.cjs);
+  // literal call-site counts are not the user-facing recovery contract.
   assert.ok(renderer.includes('sessionStatus(s)')); assert.ok(!renderer.includes('sessionStatus(s, true)'));
 });

@@ -38,7 +38,8 @@ function project(target, value) {
 }
 const snapshot = () => page.evaluate(() => workspace.initial());
 const row = id => page.locator(`[data-session-row="${id}"]`);
-const status = id => row(id).locator('small');
+// T114 rows keep the activity time in its own element on the shared second line.
+const status = id => row(id).locator('.session-time');
 async function launch() {
   app = await _electron.launch({ executablePath: require('electron'), args: [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_WORKSPACE: cwd, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', error => errors.push(error.message)); await page.locator('#new-session').waitFor();
