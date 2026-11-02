@@ -71,8 +71,11 @@ function setPolicy(w, id, value) {
   return true;
 }
 function snapshot(w) { try { return { enabled: enabled(w), ...(w.wakeGuardFailure ? { warning: w.wakeGuardFailure } : {}) }; } catch { return { enabled: false, unavailable: true, warning: w.wakeGuardFailure || '自动消息守卫暂不可用；人工操作仍可使用。' }; } }
-function nativeStart(w, r, info) {
-  try { r.wakeTurn = { nativeId: info.nativeId, turnId: info.turnId, boundary: boundary(w) }; }
+// The sender's human-control state when its turn started. A person taking over,
+// typing, queueing or steering later in that turn withdraws the turn's wake authority.
+const humanProof = s => s ? JSON.stringify([s.owner ?? null, s.controlRevision || 0, s.connectionRevision || 0]) : null;
+function nativeStart(w, r, info, s) {
+  try { r.wakeTurn = { nativeId: info.nativeId, turnId: info.turnId, boundary: boundary(w), human: humanProof(s) }; }
   catch { r.wakeTurn = null; }
 }
 function identity(s) { return require('./peer-handoffs.cjs').identity(s); }
@@ -88,7 +91,7 @@ function validateArgs(args) {
     typeof args.message !== 'string' || !args.message.trim() || args.message.length > 6000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(args.message)) throw Error('请提供准确的接收者 ID 和不超过 6000 字符的完整消息。');
 }
 function stage(w, s, r, native, args) {
-  if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false) throw Error('真人操作已撤销本回合的自动消息授权。');
+  if (r.wakeTurn?.boundary !== boundary(w) || native?.valid?.() === false || r.wakeTurn.human !== humanProof(s)) throw Error('真人操作已撤销本回合的自动消息授权。');
   const pending = r.wakeStagePending;
   if (pending?.turnId === native?.turnId && pending.nativeId === native?.nativeId) {
     if (pending.callId === native.callId && pending.recipient === args?.recipient_id && pending.body === args?.message) return pending.promise.then(result => { const row = s.messages.find(m => m.id === result.id); return row?.wake?.status === 'staged' ? result : { status: 'unconfirmed', id: result.id, message: '原登记已经撤销或结果未确认；不会重发。' }; });

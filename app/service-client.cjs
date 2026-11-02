@@ -133,7 +133,7 @@ async function ensureService(dataDir, executablePath, endedServiceKey = null) {
       if (version && next.runtimeVersion !== version) throw new Error('新版后台未就绪；旧会话未改动。');
       for (const old of layout.entries) {
         const client = await connectService(path.join(dataDir, old), 'upgrade');
-        try { await client.call('pause'); } finally { client.close(); }
+        try { await client.call('pause', { withdrawWakes: true }); } finally { client.close(); }
       }
       if (!layout.entries.includes(key)) layout.entries.push(key);
       layout.active = key; delete layout.pending; writeLayout(dataDir, layout); states.set(key, next);

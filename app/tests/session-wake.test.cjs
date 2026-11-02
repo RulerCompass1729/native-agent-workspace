@@ -58,13 +58,36 @@ test('native explicit wake is staged durably, transfers once across backends, an
   assert.equal(source.get(a).messages.find(m => m.wake)?.wake.status, 'submitted');
   assert.equal(target.get(b).messages.find(m => m.origin === 'agent-wake').status, 'submitted');
 });
-test('human input on an unrelated backend invalidates both staged and late intent from the old source turn', async t => {
+test('the person pausing all follow-up handoffs on another backend invalidates both staged and late intent from the old source turn', async t => {
   const { source, target, a, b, call, finish, writes } = await fixture(t);
-  await call(); target.pause('真人输入优先'); await finish(); assert.equal(writes.length, 0);
+  await call(); target.pauseAll('你暂停了后续交接'); await finish(); assert.equal(writes.length, 0);
   assert.notEqual(source.get(a).messages.find(m => m.wake)?.wake.status, 'submitted');
   assert.match(source.get(a).messages.find(m => m.wake).text, /Continue one bounded task\./);
   await assert.rejects(async () => call('A late new call.', 'call-two'), /真人|回合|授权/);
   assert.equal(target.get(b).owner, 'target-owner');
+});
+test('a person typing to an unrelated session neither cancels a staged wake nor blocks a later one', async t => {
+  // T-100: one person talks to several agents; input to C must not void A's wake to B.
+  const f = await fixture(t), other = await f.target.create('codex', f.root, 'other-owner', 'Unrelated');
+  await f.call();
+  await f.target.send(other, 'The person talks to an unrelated agent.', 'other-owner');
+  f.target.runtimes.get(other).emit('nativeInput', 'Native input in another session', { id: 'native-input-elsewhere' });
+  assert.equal(f.writes.length, 1, 'Only the human message to the unrelated session was written');
+  await f.finish();
+  const delivered = f.writes.filter(w => w.text.includes('Continue one bounded task.'));
+  assert.equal(delivered.length, 1, 'The staged wake is delivered once');
+  assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted');
+});
+test('a person acting on the sender or the receiver still cancels that wake', async t => {
+  for (const act of ['sender-input', 'receiver-send', 'receiver-native-input']) {
+    const f = await fixture(t); await f.call();
+    if (act === 'sender-input') f.ra.emit('nativeInput', 'The person types into the sender', { id: 'sender-native-input' });
+    else if (act === 'receiver-send') await f.target.send(f.b, 'The person talks to the receiver.', 'target-owner');
+    else f.rb.emit('nativeInput', 'The person types into the receiver', { id: 'receiver-native-input' });
+    await f.finish();
+    assert.equal(f.writes.filter(w => w.text.includes('Continue one bounded task.')).length, 0, act);
+    assert.notEqual(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted', act);
+  }
 });
 test('target busy, permission wait, or immediate global/session off prevents any native write', async t => {
   for (const boundary of ['busy', 'permission', 'global', 'session']) {
@@ -137,7 +160,7 @@ test('wake payload preserves the complete native argument including trailing whi
 });
 test('same-backend human revocation keeps the cancelled original message readable', async t => {
   const f = await fixture(t); await f.call('Keep this exact cancelled message.');
-  f.source.pause('真人输入优先');
+  f.source.pauseAll('你暂停了后续交接');
   const row = f.source.get(f.a).messages.find(m => m.wake); assert.equal(row.wake.status, 'cancelled'); assert.ok(row.text.endsWith(row.wake.body));
 });
 
@@ -173,6 +196,7 @@ test('automatic owner restoration does not reset the receiving wake budget', asy
 test('failed revocation storage disables automatic messages without blocking the human send', async t => {
   const f = await fixture(t); await f.call();
   t.mock.method(fs, 'renameSync', () => { throw Object.assign(Error('Synthetic disk full'), { code: 'ENOSPC' }); });
+  assert.doesNotThrow(() => f.target.pauseAll('你暂停了后续交接'));
   await assert.doesNotReject(f.target.send(f.b, 'Human input still works.', 'target-owner'));
   assert.equal(f.writes.length, 1); assert.equal(f.writes[0].text, 'Human input still works.');
   assert.equal(require('../session-wake.cjs').snapshot(f.target).enabled, false);
@@ -184,4 +208,32 @@ test('a non-file guard marker cannot block human controls or permit an automatic
   await assert.doesNotReject(f.target.send(f.b, 'Human control with an invalid marker.', 'target-owner'));
   assert.equal(f.writes.length, 1); assert.equal(require('../session-wake.cjs').snapshot(f.target).enabled, false);
   await f.finish(); assert.equal(f.writes.length, 1);
+});
+test('a person acting on the sender mid-turn withdraws that turn\'s later wake', async t => {
+  // Review F1: the sender's owner/control/connection at turn start bound its wake authority.
+  for (const act of ['claim', 'terminal-input']) {
+    const f = await fixture(t);
+    if (act === 'claim') f.source.claim(f.a, 'another-window');
+    else { f.source.get(f.a).view = 'terminal'; f.ra.terminal = { alive: true, input() {} }; f.source.input(f.a, 'x', 'source-owner'); }
+    await assert.rejects(async () => f.call(), /真人|授权|回合/, act);
+    await f.finish(); assert.equal(f.writes.length, 0, act);
+  }
+});
+test('a native control boundary without a person still lets the turn stage its wake', async t => {
+  const f = await fixture(t); f.ra.emit('nativeControlBoundary', 'synthetic permission boundary');
+  await f.call(); await f.finish();
+  assert.equal(f.writes.filter(w => w.text.includes('Continue one bounded task.')).length, 1);
+});
+test('pointer hover over a terminal is not human input; a press still is', async t => {
+  // Fullscreen Claude turns on any-event mouse tracking, so hovering sends motion reports.
+  const f = await fixture(t); f.target.get(f.b).view = 'terminal'; const sent = []; f.rb.terminal = { alive: true, input: d => sent.push(d) };
+  await f.call(); const control = f.target.get(f.b).controlRevision;
+  f.target.input(f.b, '\x1b[<35;10;5M\x1b[<35;11;5M', 'target-owner');
+  assert.equal(f.target.get(f.b).controlRevision, control, 'Hover does not count as a human operation');
+  assert.equal(sent.length, 1, 'Hover still reaches the native program');
+  await f.finish(); assert.equal(f.writes.filter(w => w.text.includes('Continue one bounded task.')).length, 1, 'A staged wake survives hovering over the receiver');
+  const g = await fixture(t); g.target.get(g.b).view = 'terminal'; g.rb.terminal = { alive: true, input() {} };
+  await g.call(); g.target.input(g.b, '\x1b[<0;10;5M', 'target-owner');
+  assert.notEqual(g.target.get(g.b).controlRevision, control, 'A press is a human operation');
+  await g.finish(); assert.equal(g.writes.filter(w => w.text.includes('Continue one bounded task.')).length, 0);
 });

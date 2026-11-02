@@ -78,7 +78,7 @@ async function run() {
   assert.equal((await stateFor(b)).liveDraft, 'Newer unsent human draft');
   assert.ok((await stateFor(a)).messages.find(m => m.wake?.callId === 'gui-native-call-two').text.includes('This must be cancelled by the human.'));
   await capture('human-priority');
-  checks.push('Actual user send in the other original view revokes the pending wake globally; late source completion preserves the newer draft and never dispatches');
+  checks.push('Actual user send to the receiver in its other original view revokes the pending wake to it; late source completion preserves the newer draft and never dispatches');
   await fixture('release', b, 'Human task completed.');
   await globalMenu('关闭所有 agent 自动消息'); await until(async () => (await snapshot()).wakePolicy.enabled === false, 'Global off');
   await send(page, 'A task while automatic messages are off.');

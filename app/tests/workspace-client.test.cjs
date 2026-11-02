@@ -770,3 +770,30 @@ test('Claude history routes canonical provider/options to the active backend onc
   const options = { provider: 'claude', cwd: '/synthetic', skipPermissions: false };
   assert.equal(await c.call('importHistory', id, options), 'new-claude'); assert.equal(next.calls.filter(([m]) => m === 'importHistory').length, 1); assert.deepEqual(next.calls.find(([m]) => m === 'importHistory'), ['importHistory', id, options]); assert.equal(old.calls.some(([m]) => m === 'importHistory'), false); c.close();
 });
+
+test('a person acting on one session leaves other agents\' wakes alone; pausing all follow-up handoffs withdraws them', async t => {
+  // T-100: the session's backend records the action in that session's revisions; only
+  // the explicit global pause rotates the shared wake boundary.
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), wake = require('../session-wake.cjs');
+  const { next, c } = fixture(), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'client-wake-'));
+  t.after(() => { c.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  next.real.capabilities.push('agentWakeV1'); await c.refresh(); c.scope = dir;
+  wake.revoke({ dataDir: dir, sessions: new Map() });
+  const boundary = () => fs.readFileSync(path.join(dir, 'agent-wake-boundary'), 'utf8'), before = boundary();
+  await c.call('claim', 'new', 'chat');
+  assert.ok(next.calls.some(([method]) => method === 'claim'), 'The person\'s takeover reached the backend');
+  assert.equal(boundary(), before, 'One session\'s human action does not void every agent\'s wake');
+  await c.call('pause');
+  assert.notEqual(boundary(), before, 'Pausing all follow-up handoffs withdraws every staged wake');
+});
+
+test('only the explicit pause asks a backend to withdraw every staged wake; the implicit pause before ordinary input does not', async t => {
+  // Review F2: an armed collaboration run makes ordinary input pause other backends first.
+  const { next, c } = fixture(); t.after(() => c.close());
+  const entry = c.entries.find(e => e.key === next.key);
+  c.control.armed.set(entry.key, { entry, roomId: 'shared' });
+  await c.pauseExcept(null);
+  assert.deepEqual(next.calls.filter(([method]) => method === 'pause'), [['pause']]);
+  await c.pauseEntry(entry, true);
+  assert.deepEqual(next.calls.filter(([method]) => method === 'pause').at(-1), ['pause', { withdrawWakes: true }]);
+});
