@@ -24,7 +24,9 @@ async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready'); client = await connect(profile, 'redraw-observer');
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   await app.context().addInitScript(() => { window.redrawTerms = new Map(); let constructor; Object.defineProperty(window, 'Terminal', { configurable: true, get: () => constructor, set: value => { constructor = value; const open = value.prototype.open; value.prototype.open = function (element, ...args) { window.redrawTerms.set(element.closest('[data-terminal-id]').dataset.terminalId, this); return open.call(this, element, ...args); }; } }); });
-  page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor(); await page.reload(); await page.locator('#new-session').waitFor();
+  page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
+  // The 53/111-column geometry below was designed for a 14px terminal font; pin it so the 13px default does not move the grid.
+  await page.evaluate(() => workspace.viewState({ selected: '', mode: 'chat', terminalDisplay: { fontSize: 14, palette: 'dark' } })); await page.reload(); await page.locator('#new-session').waitFor();
   await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check(); await page.locator('#session-name').fill('Native redraw'); await createIn(page, 'chat');
   const id = (await snapshot()).sessions[0].id; await until(async () => (await fixture()).pending.includes(id), 'Native snapshot'); await fixture('release', id); await page.locator('.terminal-surface').waitFor();
   const win = await app.browserWindow(page); await win.evaluate(w => w.setSize(1250, 850)); await delay(200);
@@ -60,17 +62,28 @@ async function run() {
     await delay(100);
     const detail = await page.evaluate(id => {
       const t = window.redrawTerms.get(id), surface = t.element.parentElement.getBoundingClientRect();
+      const screen = t.element.querySelector('.xterm-screen').getBoundingClientRect(), cell = screen.width / t.cols;
       const lines = [...t.element.querySelectorAll('.xterm-rows > div')].map((row, index) => {
         let maxRight = -Infinity; const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT); let text;
         while (text = walker.nextNode()) { if (!text.textContent.trim()) continue; const r = document.createRange(); r.selectNodeContents(text); maxRight = Math.max(maxRight, r.getBoundingClientRect().right); }
         const line = t.buffer.active.getLine(t.buffer.active.viewportY + index);
-        return { dom: row.textContent.replace(/\u00a0/g, ' ').trimEnd(), visible: line.translateToString(true, 0, t.cols), retained: line.translateToString(true), backingLength: line.length, maxRight };
+        // Each glyph must start at its own column; drift after one mark shifts the rest of the row.
+        const left = row.getBoundingClientRect().left, glyphs = document.createTreeWalker(row, NodeFilter.SHOW_TEXT); let drift = 0, col = 0;
+        for (let node; (node = glyphs.nextNode());) for (let k = 0; k < node.data.length; k++) {
+          while (col < t.cols && line.getCell(col)?.getWidth() === 0) col++;
+          if (node.data[k].trim()) { const r = document.createRange(); r.setStart(node, k); r.setEnd(node, k + 1); drift = Math.max(drift, Math.abs(r.getBoundingClientRect().left - left - col * cell)); }
+          col += line.getCell(col)?.getWidth() || 1;
+        }
+        return { dom: row.textContent.replace(/\u00a0/g, ' ').trimEnd(), visible: line.translateToString(true, 0, t.cols), retained: line.translateToString(true), backingLength: line.length, maxRight, drift };
       });
-      return { buffer: t.buffer.active.type, cols: t.cols, rows: t.rows, paneRight: surface.right, screenRight: t.element.querySelector('.xterm-screen').getBoundingClientRect().right, maxGlyphRight: Math.max(...lines.map(l => l.maxRight)), lines };
+      return { buffer: t.buffer.active.type, cols: t.cols, rows: t.rows, cell, spacingTrim: getComputedStyle(t.element).textSpacingTrim, paneRight: surface.right, screenRight: screen.right, maxGlyphRight: Math.max(...lines.map(l => l.maxRight)), maxDrift: Math.max(...lines.map(l => l.drift)), lines };
     }, id);
     observations.push({ stage, ...detail }); await capture(stage, detail);
-    console.log(JSON.stringify({ stage, cols: detail.cols, paneRight: detail.paneRight, screenRight: detail.screenRight, maxGlyphRight: detail.maxGlyphRight, first: detail.lines[0] }));
+    console.log(JSON.stringify({ stage, cols: detail.cols, paneRight: detail.paneRight, screenRight: detail.screenRight, maxGlyphRight: detail.maxGlyphRight, maxDrift: detail.maxDrift, spacingTrim: detail.spacingTrim, first: detail.lines[0] }));
     assert.ok(detail.maxGlyphRight <= detail.paneRight + 1, 'Every original rendered glyph fits the visible right edge');
+    // Chromium's default trimming halves xterm's measured width of full-width punctuation such as 。
+    assert.ok(detail.maxDrift <= 1, `Every glyph starts at its own column after full-width punctuation (drift ${detail.maxDrift}px)`);
+    assert.equal(detail.spacingTrim, 'space-all', 'The loaded terminal style disables CJK punctuation trimming');
     for (const line of detail.lines) assert.equal(line.dom, line.visible.trimEnd(), 'Every DOM row preserves its active visible text, without old wider-screen tails');
     if (stage === 'maximized') {
       await output('\x1b[2;1H' + 'a'.repeat(52) + '中\x1b[K\x1b[1;1H');
