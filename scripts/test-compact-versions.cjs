@@ -110,9 +110,11 @@ async function run() {
   await group('04 newer and unknown reports remain honest; matching all versions naturally removes both marker and summary', async () => {
     const newerVersion = initial.appVersion.replace(/^(.*-alpha\.)(\d+)$/, (_match, base, n) => base + String(Number(n) + 1));
     assert.notEqual(newerVersion, initial.appVersion, 'Owned fixture requires an alpha application version');
-    for (const [value, label, name] of [[newerVersion, '版本不同', '04-newer'], ['?', '版本未知', '04-unknown']]) {
+    // Rows show compact marks (T114); the full honest wording stays in the mark's title.
+    for (const [value, label, name, title] of [[newerVersion, '≠', '04-newer', '不能据此判断后台较旧'], ['?', '?', '04-unknown', '未报告版本']]) {
       await fixture(trials[0], 'version', value);
       await until(async () => (await rows().locator('.session-backend-version:visible').first().innerText()) === label, name);
+      assert.ok((await rows().locator('.session-backend-version:visible').first().getAttribute('title')).includes(title), name + ' title');
       assert.equal(await page.locator('#backend-version-summary').innerText(), '4 会话待核对'); await capture(name);
     }
     await fixture(trials[0], 'version', initial.appVersion); await until(() => page.locator('#backend-version-summary').isHidden(), 'All versions match');

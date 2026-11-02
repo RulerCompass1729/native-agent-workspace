@@ -497,6 +497,10 @@ header h1, header p { overflow-wrap: anywhere; }
 .space-badge-more{color:var(--muted);background:var(--raised)}
 .session-row.space-dim{opacity:.4}.session-row.space-highlight{background:var(--raised);box-shadow:inset 3px 0 var(--green)}
 .session-space-group{margin:2px 0 10px}.session-space-group h3{font-size:11px;font-weight:600;margin:3px 8px}
+.session-space-group h3{display:flex;align-items:center;gap:2px}
+.session-space-toggle{flex:none;min-width:24px;min-height:24px;padding:0;border:0;background:transparent;color:var(--muted)}
+.session-space-group .session-space-heading{flex:1;min-width:0;overflow-wrap:anywhere}
+.session-space-attention{flex:none;font-size:11px;color:var(--ink)}
 .session-space-heading{color:var(--space-ink,var(--muted));font-size:11px;font-weight:600;padding:4px 2px;text-align:left}
 .room-nav.space-filtered{box-shadow:inset 3px 0 var(--space-ink)}
 #new-space{margin:2px 8px 6px;font-size:12px;text-align:left}
@@ -524,3 +528,29 @@ header h1, header p { overflow-wrap: anywhere; }
 /* Idle with reported background work, or with an unconfirmed report. */
 .state-dot.bg-work{background:#5b7fa6}
 .state-dot.bg-unknown{background:transparent;box-shadow:inset 0 0 0 1.5px #747b6f}
+
+/* Existing sidebar rows: normal facts share two text lines; long actionable
+   states wrap above one shared membership/time row. No hidden state or new pane. */
+.sidebar-state-marker{display:none}
+&[data-native-surface="sidebar"]:not([data-collapsed="true"]){
+  .session-row .session-link{padding:6px 7px;gap:7px}
+  .session-link .label{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:4px;row-gap:2px;align-items:baseline}
+  .session-link .label>.session-title{grid-column:1;grid-row:1;display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .session-link .label>.session-backend-version{grid-column:2;grid-row:1;font-size:11px;line-height:1.4}
+  .session-link .label>.session-short-id{display:none}
+  .session-link .label>.session-metadata{grid-column:1/-1;display:grid;grid-template-columns:minmax(min-content,48px) max-content minmax(0,66px);gap:4px;min-width:0;align-items:baseline}
+  .session-link .session-space-badges{grid-column:1;display:flex;flex-wrap:nowrap;gap:2px;margin:0;min-width:min-content;overflow:hidden}
+  .session-space-badges .space-badge{flex:1 1 0;min-width:0;width:0}
+  .session-space-badges .space-badge-more{flex:0 0 auto;width:auto}
+  .session-link .label small{grid-column:2;min-width:0;white-space:nowrap;margin:0;font-size:11px;line-height:1.5}
+  .session-time{grid-column:3;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:10px;color:var(--muted);line-height:1.5}
+  .has-status-detail .session-link .label>.session-metadata{grid-template-columns:minmax(0,1fr) minmax(0,66px);row-gap:1px}
+  .has-status-detail .session-link .label small{grid-column:1/-1;grid-row:1;white-space:normal;overflow-wrap:anywhere}
+  .has-status-detail .session-space-badges{grid-column:1;grid-row:2;max-width:72px}
+  .has-status-detail .session-time{grid-column:2;grid-row:2;text-align:right}
+}
+&[data-native-surface="sidebar"][data-collapsed="true"]{
+  .session-row .session-link{position:relative}
+  .session-backend-version::before{content:attr(data-marker)}
+  .sidebar-state-marker{display:inline-flex;position:absolute;top:0;right:0;align-items:center;justify-content:center;min-width:12px;height:12px;font:11px/1 ui-monospace,monospace;pointer-events:none}
+}

@@ -6,15 +6,21 @@ const button = (text, action, cls) => { const el = node('button', text, cls); el
 const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', background: '已转到后台运行', error: '需要检查' };
 // An unfollowed native /resume leaves the process running in another session.
 const switchedAway = record => record.state === 'stopping' && record.nativeContextPending?.reason === 'resume';
-const sessionStatus = (record, recoveryBadge = false) => {
-  const status = window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
+function exhaustedRecovery(record) {
   const recovery = record.capacityRecovery;
-  if (!recoveryBadge || disconnected || record.archived || record.backendUnavailable || record.transportDisconnected ||
+  if (disconnected || record.archived || record.backendUnavailable || record.transportDisconnected ||
       record.nativeContextPending || record.approval || record.approvalOverflow || record.claudeQuestion || record.nativeApproval || record.nativeInputRequired ||
       !['idle', 'error'].includes(record.state) || typeof record.nativeId !== 'string' || !record.nativeId ||
       recovery?.nativeId !== record.nativeId || typeof recovery.turnId !== 'string' || !recovery.turnId ||
-      recovery.status !== 'exhausted' || recovery.attempt !== 3 || !['capacity', 'routing'].includes(recovery.reason)) return status;
-  return status + ' · ' + (recovery.reason === 'routing' ? '路由超时停下' : '满载停下') + ' · 已重试 ' + recovery.attempt + ' 次';
+      recovery.status !== 'exhausted' || recovery.attempt !== 3 || !['capacity', 'routing'].includes(recovery.reason)) return null;
+  return recovery;
+}
+function recoveryStatusSuffix(recovery, prefix = true) {
+  return recovery ? (prefix ? ' · ' : '') + (recovery.reason === 'routing' ? '路由超时停下' : '满载停下') + ' · 已重试 ' + recovery.attempt + ' 次' : '';
+}
+const sessionStatus = (record, recoveryBadge = false) => {
+  const status = window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
+  return status + recoveryStatusSuffix(recoveryBadge && exhaustedRecovery(record));
 };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let newDirectory = false, creatingSession = false;
@@ -25,6 +31,7 @@ let roomSurface = 'overview', roomOverview;
 let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', sidebarSpaceFilter = '', hoverSpace = '';
+let sidebarCollapsedGroups = new Set();
 let roomViews = Object.create(null);
 const roomHistories = new Map(), spaceRows = new Map(), sidebarGroups = new Map();
 const inSpace = (s, id = spaceId) => window.nativeWorkspaceSpaces.isMember(s, id);
@@ -710,7 +717,7 @@ function projectSpace(next) {
     return { ...s, peerIdentity: { ...identity, ...(spaceId === 'shared' ? {} : { roomId: spaceId, roomMemberRevision: pairRevision(s) }) }, sharedActivity: s.sharedActivities?.[spaceId] || (spaceId === 'shared' ? s.sharedActivity : null) };
   }), room: room || { id: spaceId, name: '空间资料未能读取', archived: true, unavailable: true, messages: [], events: [], notes: '', files: [], memberOrder: [] } };
 }
-function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarSpaceFilter, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
+function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarSpaceFilter, sidebarCollapsedGroups: [...sidebarCollapsedGroups], roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 async function selectSpace(id, filter = false) {
   if (!spaceRecord(id)) throw Error('这个空间的资料尚不可用，草稿保留。');
   if (filter) sidebarSpaceFilter = sidebarSpaceFilter === id ? '' : id;
@@ -1306,7 +1313,7 @@ function openRoomMenu(point, anchor, id = spaceId) {
   roomMenu.key = key; roomMenu.anchor = anchor; roomMenu.roomId = id;
 }
 function openSessionMenu(id, point, rowKey = id) {
-  contentMenu?.close(); if (disconnected || !state.sessions.some(s => s.id === id)) return;
+  contentMenu?.close(); if (!state.sessions.some(s => s.id === id)) return;
   if (!point && sessionMenu?.rowKey === rowKey && !sessionMenu.anchor) { sessionMenu.close(); return; }
   sessionMenu?.close(); roomMenu?.();
   const row = sessionRows.get(rowKey) || sessionRow(id); if (!row) return;
@@ -1315,10 +1322,13 @@ function openSessionMenu(id, point, rowKey = id) {
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
   const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: `${inSpace(record, r.id) ? '离开' : '加入'}「${r.name}」` }));
   const close = ui.menu({
-    items: [{ id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), ...roomItems, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: record.wakeDisabled ? '允许其他 agent 叫醒' : '禁止其他 agent 叫醒' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }],
+    // Read-only facts first (full name, IDs, status, spaces, times, versions), then the original actions.
+    items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text })), { type: 'separator', id: 'session-facts-actions' },
+      ...[{ id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), ...roomItems, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: record.wakeDisabled ? '允许其他 agent 叫醒' : '禁止其他 agent 叫醒' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }].map(item => ({ ...item, disabled: disconnected || item.disabled }))],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : row.more.getBoundingClientRect(),
     onClose: () => { sessionMenu = null; row.more.setAttribute('aria-expanded', 'false'); if (row.more.isConnected && row.more.getClientRects().length) row.more.focus({ preventScroll: true }); else focusSessionAction(id); },
     onSelect: action => {
+      if (disconnected || !state.sessions.some(s => s.id === id)) return;
       if (action.startsWith('membership:')) {
         const destination = action.slice(11), person = state.sessions.find(s => s.id === id);
         attempt(() => inSpace(person, destination) ? detach(id, destination) : addToSpace(id, destination));
@@ -1331,7 +1341,7 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); });
     },
   });
-  sessionMenu = { id, rowKey, close };
+  sessionMenu = { id, rowKey, close, kind: 'session', factsKey: sidebarFactsKey(record) };
 }
 
 function memberMenuKey(id) {
@@ -1407,6 +1417,46 @@ function backendVersionSummary(records, applicationVersion) {
   }
   result.label = [result.old && `${result.old} 个旧后台会话`, result.different && `${result.different} 个版本不同`, result.unknown && `${result.unknown} 个版本未知`].filter(Boolean).join(' · ');
   return result;
+}
+// Presentation only: existing native observation facts remain the source of truth.
+// The background work Claude reports at turn end (T-117) keeps its own text and dot.
+function sidebarPresentation(record) {
+  const live = Object.hasOwn(states, record.state) && !disconnected && !record.backendUnavailable && !record.transportDisconnected &&
+    !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
+  const facts = window.nativeWorkspaceCollaboration.statusFacts(record, !disconnected, Date.now());
+  const fleet = window.nativeWorkspaceFleet.currentFleet(record, !disconnected), work = fleet.work, recovery = exhaustedRecovery(record);
+  const workTone = window.nativeWorkspaceFleet.workTone(record, !disconnected);
+  const waiting = Boolean(record.approval || record.approvalOverflow || record.claudeQuestion || record.nativeApproval?.requests?.length || record.nativeInputRequired);
+  const question = Boolean(record.claudeQuestion || record.approval?.method === 'item/tool/requestUserInput');
+  const reported = record.state === 'idle' && (work.count > 0 || work.unconfirmed);
+  let base = switchedAway(record) ? '原生已切换会话' : facts.state;
+  if (live && !record.nativeContextPending) {
+    if (record.nativeInputRequired) base = '原生输入';
+    else if (waiting && !question) base = '等待确认';
+  }
+  // An interrupt or a question can coincide with reported or unconfirmed background work; keep both facts.
+  if (reported && work.text && !base.includes(work.text)) base += ' · ' + work.text;
+  const childrenActive = fleet.running > 0 || fleet.unknown > 0;
+  const compact = recovery ? (reported ? work.text + ' · ' : '') + recoveryStatusSuffix(recovery, false) : (record.state === 'idle' && childrenActive && !reported && !waiting && live && !record.nativeContextPending
+    ? facts.compactChild : base + (childrenActive ? ' · ' + facts.compactChild : '')) + recoveryStatusSuffix(recovery);
+  const root = record.state === 'idle' && !reported && fleet.observed && live && !record.nativeContextPending && !waiting ? '主会话就绪' : base;
+  const full = [root, facts.child, record.provider === 'claude' && record.nativeInputRequired && 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；这里的草稿保留，不会自动发送。'].filter(Boolean).join(' · ') + recoveryStatusSuffix(recovery);
+  const tone = !live || record.nativeContextPending ? 'disconnected' : waiting || recovery || fleet.unknown || record.state === 'error'
+    ? 'approval' : fleet.running || ['working', 'starting', 'background'].includes(record.state) ? 'working' : record.state === 'idle' ? 'idle' : record.state || 'disconnected';
+  // An idle row with reported or unconfirmed background work is not plain ready.
+  const marker = tone === 'approval' || tone === 'disconnected' || workTone === 'bg-unknown' ? '!' : tone === 'working' || workTone === 'bg-work' ? '…' : '○';
+  return { compact, full, tone, workTone, marker,
+    detail: Boolean(waiting || childrenActive || reported || recovery || !['idle', 'working', 'starting'].includes(record.state) || !live || record.nativeContextPending || record.nativeInputRequired) };
+}
+function sidebarDetails(record) {
+  const memberships = allSpaces().filter(room => !room.archived && inSpace(record, room.id));
+  const notice = backendVersionNotice(record, state.appVersion), provider = record.provider === 'claude' ? 'Claude' : 'Codex';
+  return [record.name, provider, 'NAW ' + record.id, provider + ' ' + (record.nativeId || '正在建立'), sidebarPresentation(record).full,
+    memberships.length ? '所属空间：' + memberships.map(room => room.name).join('、') : '独立会话', sessionTimes(record),
+    notice?.title || `后台 ${versionValue(record.runtimeVersion) || '未报告'} · 应用 ${versionValue(state.appVersion) || '未报告'}；后台仅报告版本号，未报告提交号。`];
+}
+function sidebarFactsKey(record) {
+  return JSON.stringify([disconnected, sidebarDetails(record)]);
 }
 function appVersionReport(snapshot) {
   const version = versionValue(snapshot.appVersion) || '未报告', commit = snapshot.appBuild?.commit;
@@ -1491,8 +1541,23 @@ function renderSidebarGroups() {
   }
   sidebarLayout?.update(state.sidebar);
 }
+// Each grouped-view section (space or independent) folds on its own; the choice is saved with the view.
+function toggleSidebarGroup(id) {
+  const key = id || 'independent';
+  if (sidebarCollapsedGroups.has(key)) sidebarCollapsedGroups.delete(key);
+  else {
+    if (sidebarCollapsedGroups.size >= 1000) { toast('已记住 1000 个收起的分组。先展开一个分组，再收起这里。'); return; }
+    sidebarCollapsedGroups.add(key);
+  }
+  renderSessions(); attempt(persistView);
+}
 function renderSessions() {
   renderVersions(); renderSidebarGroups();
+  // An open session menu shows a fact snapshot; close it rather than show stale facts.
+  if (sessionMenu?.kind === 'session') {
+    const current = state.sessions.find(record => record.id === sessionMenu.id);
+    if (!current || sessionMenu.factsKey !== sidebarFactsKey(current)) sessionMenu.close();
+  }
   const visible = sidebarSessions().filter(s => !sidebarSpaceFilter || inSpace(s, sidebarSpaceFilter));
   const grouped = sidebarView === 'grouped', occurrences = [], containers = new Map();
   const list = $('session-list');
@@ -1506,12 +1571,29 @@ function renderSessions() {
       let entry = sidebarGroups.get(group.id);
       if (!entry) {
         const element = node('section', undefined, 'session-space-group'), heading = node('h3'), body = node('div');
-        const title = group.id ? button('', () => selectSpace(group.id, true)) : node('span'); heading.append(title); element.append(heading, body); element.dataset.sessionGroup = group.id || 'independent';
+        const title = group.id ? button('', () => selectSpace(group.id, true)) : node('span');
+        const toggle = button('▾', () => toggleSidebarGroup(group.id), 'session-space-toggle'), attention = node('span', undefined, 'session-space-attention');
+        body.id = `session-space-members-${crypto.randomUUID()}`; attention.id = `${body.id}-attention`;
+        toggle.setAttribute('aria-controls', body.id); heading.append(toggle, title, attention); element.append(heading, body); element.dataset.sessionGroup = group.id || 'independent';
         if (group.id) { bindSpaceHighlight(element, group.id); dropTarget(element, true, group.id); }
-        entry = { element, title, body }; sidebarGroups.set(group.id, entry);
+        entry = { element, title, body, toggle, attention }; sidebarGroups.set(group.id, entry);
       }
       entry.title.textContent = `${group.name} · ${group.people.length}`; entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
       if (group.id) entry.title.setAttribute('aria-label', `打开协作空间「${group.name}」`);
+      // A folded group hides only its own rows; its name, count and any rows needing attention stay visible.
+      const closed = sidebarCollapsedGroups.has(group.id || 'independent');
+      const menuRow = sessionMenu?.kind === 'session' && sessionRows.get(sessionMenu.rowKey);
+      const closeMenu = closed && sessionMenu?.kind === 'session' && entry.body.contains(menuRow?.element || sessionMenu.anchor);
+      const hiddenFocus = closed && (entry.body.contains(document.activeElement) || closeMenu);
+      entry.body.hidden = closed; entry.toggle.textContent = closed ? '▸' : '▾'; entry.toggle.setAttribute('aria-expanded', String(!closed));
+      entry.toggle.setAttribute('aria-label', `${closed ? '展开' : '折叠'}${group.name}`); entry.toggle.setAttribute('title', `${closed ? '展开' : '折叠'}${group.name}`);
+      const attention = group.people.map(record => ({ record, presentation: sidebarPresentation(record) })).filter(item => item.presentation.marker === '!');
+      entry.attention.hidden = !closed || !attention.length; entry.attention.textContent = attention.length ? `!${attention.length}` : '';
+      const attentionText = `${attention.length} 个会话需要处理或核对状态: ${attention.map(item => `${item.record.name} · ${item.presentation.full}`).join('; ')}`;
+      entry.attention.setAttribute('aria-label', attentionText); entry.attention.setAttribute('title', attentionText);
+      if (entry.attention.hidden) entry.toggle.removeAttribute('aria-describedby'); else entry.toggle.setAttribute('aria-describedby', entry.attention.id);
+      if (closeMenu) sessionMenu.close();
+      if (hiddenFocus) entry.toggle.focus({ preventScroll: true });
       const slot = list.children[index]; if (slot !== entry.element) list.insertBefore(entry.element, slot || null);
       containers.set(group.id, entry.body);
       for (const record of group.people) occurrences.push({ record, key: `group:${group.id || 'independent'}:${record.id}`, group: group.id, container: entry.body });
@@ -1531,34 +1613,43 @@ function renderSessions() {
       const element = node('div', undefined, 'session-row'); element.dataset.sessionRow = record.id; element.dataset.occurrence = key;
       const link = button('', () => select(record.id), 'session-link'); link.dataset.sessionId = record.id;
       draggableSession(link, record.id, true, group || ''); sidebarDropRow(element, record.id, group);
-      const label = node('span', undefined, 'label'), name = node('span'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), badges = node('span', undefined, 'session-space-badges'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
-      version.setAttribute('aria-hidden', 'true'); label.append(name, version, shortId, badges, status); link.append(icon(record.provider), label, dot);
+      const label = node('span', undefined, 'label'), name = node('span', undefined, 'session-title'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), badges = node('span', undefined, 'session-space-badges'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
+      const metadata = node('span', undefined, 'session-metadata'), time = node('time', undefined, 'session-time'), marker = node('span', undefined, 'sidebar-state-marker');
+      version.setAttribute('aria-hidden', 'true'); dot.setAttribute('aria-hidden', 'true'); marker.setAttribute('aria-hidden', 'true');
+      metadata.append(badges, status, time); label.append(name, version, shortId, metadata); link.append(icon(record.provider), label, dot, marker);
       const more = button('⋯', () => openSessionMenu(record.id, undefined, key), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       more.addEventListener('pointerdown', event => { if (sessionMenu?.rowKey === key) event.stopPropagation(); });
       element.addEventListener('contextmenu', event => { if (event.target.closest('#rename-editor')) return; event.preventDefault(); openSessionMenu(record.id, { x: event.clientX, y: event.clientY }, key); });
       element.addEventListener('keydown', event => { if (event.target.closest('#rename-editor')) return; if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); openSessionMenu(record.id, undefined, key); } });
-      element.append(link, more); row = { element, link, more, name, shortId, badges, status, dot, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
+      element.append(link, more); row = { element, link, more, name, shortId, badges, status, dot, marker, time, version, sessionId: record.id, spaceId: group }; sessionRows.set(key, row);
     }
     const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = memberships.map(r => r.name).join('、');
-    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sessionStatus(record, true)}`;
+    const presentation = sidebarPresentation(record);
+    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${presentation.full}`;
     const association = memberships.length ? `所属空间：${membershipNames}` : '独立会话';
     const occurrence = grouped && memberships.length > 1 ? ' · 同一会话在多个空间显示，原生身份相同' : '';
     const version = backendVersionNotice(record, state.appVersion);
     row.link.disabled = false; row.link.setAttribute('aria-label', `${label} · ${association}${occurrence} · ${sessionTimes(record)}${version ? ' · ' + version.title : ''}`); row.link.title = `${label}\n${association}${occurrence}\n${sessionTimes(record)}${version ? '\n' + version.title : ''}`;
     const badgeKey = JSON.stringify(memberships.map(r => [r.id, r.name]));
     if (row.badgeKey !== badgeKey) {
-      row.badges.replaceChildren(...memberships.slice(0, 2).map(r => { const badge = node('span', r.name.length > 6 ? r.name.slice(0, 6) + '…' : r.name, `space-badge ${roomTone(r.id)}`); badge.title = r.name; return badge; }));
-      if (memberships.length > 2) { const more = node('span', `+${memberships.length - 2}`, 'space-badge space-badge-more'); more.title = membershipNames; row.badges.append(more); }
+      // One badge plus a count keeps membership on the shared second line; the full list is in the title and details.
+      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', r.name.length > 6 ? r.name.slice(0, 6) + '…' : r.name, `space-badge ${roomTone(r.id)}`); badge.title = r.name; return badge; }));
+      if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); more.title = membershipNames; row.badges.append(more); }
       row.badges.setAttribute('aria-label', association); row.badgeKey = badgeKey;
     }
-    row.version.textContent = version?.label || ''; row.version.title = version?.title || ''; row.version.hidden = !version;
+    // Compact version marks keep the three cases apart: older alpha, different, unreported.
+    const versionMark = version ? { old: '↑', different: '≠', unknown: '?' }[version.kind] : '';
+    row.version.textContent = versionMark; row.version.dataset.marker = versionMark; row.version.title = version?.title || ''; row.version.hidden = !version;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
-    row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}${group ? ` · ${spaceRecord(group)?.name}` : ''}`); row.more.title = row.more.getAttribute('aria-label'); row.more.disabled = disconnected || renameTarget?.id === record.id;
-    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = `${sessionStatus(record, true)} · ${sessionActivityTime(record)}`; row.dot.className = `state-dot ${record.state}`;
+    row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}${group ? ` · ${spaceRecord(group)?.name}` : ''}`); row.more.title = row.more.getAttribute('aria-label'); row.more.disabled = renameTarget?.id === record.id;
+    row.more.setAttribute('aria-description', sidebarDetails(record).join(' · '));
+    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = presentation.compact;
+    row.time.textContent = sessionActivityTime(record); row.time.title = sessionTimes(record);
+    row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; row.dot.title = presentation.full; row.dot.dataset.nativeState = record.state;
+    row.marker.textContent = presentation.marker; row.marker.title = presentation.full; row.element.classList.toggle('has-status-detail', presentation.detail);
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
-    const tone = window.nativeWorkspaceFleet.workTone(record, !disconnected); if (tone) row.dot.classList.add(tone);
   }
   highlightSpace(hoverSpace);
 }
@@ -3551,6 +3642,7 @@ attempt(async () => {
   roomViews = state.viewState.roomViews || Object.create(null);
   if (!roomViews.shared) roomViews.shared = Object.fromEntries(roomViewFields.filter(k => state.viewState[k] !== undefined).map(k => [k, state.viewState[k]]));
   spaceId = state.viewState.spaceId || 'shared'; sidebarView = state.viewState.sidebarView || 'flat'; sidebarSpaceFilter = state.viewState.sidebarSpaceFilter || '';
+  sidebarCollapsedGroups = new Set(state.viewState.sidebarCollapsedGroups || []);
   state = projectSpace(state); const savedRoomView = roomViews[spaceId] || {};
   owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;
   terminalLayout = ['hidden', 'split', 'maximized'].includes(state.viewState.terminalLayout) ? state.viewState.terminalLayout : 'split';

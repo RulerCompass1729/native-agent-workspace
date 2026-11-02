@@ -93,3 +93,13 @@ test('inline recipient metadata round-trips only with exact draft range and iden
     assert.equal(fs.readFileSync(store.file, 'utf8'), before);
   }
 });
+
+test('grouped-session disclosures round-trip stable space IDs and the independent group without losing archived choices or drafts', t => {
+  const { store, dir } = setup(t), views = saved(), id = '11111111-1111-4111-8111-111111111111';
+  store.load(); views[0].sidebarCollapsedGroups = ['shared', id, 'independent']; store.save(views);
+  assert.deepEqual(new ViewStore(dir).load(), views);
+  for (const value of [{}, [''], [null], ['independent', 'independent'], ['untrusted-id'], Array(1001).fill(id)]) {
+    const before = fs.readFileSync(store.file, 'utf8'); assert.throws(() => store.save([{ ...views[0], sidebarCollapsedGroups: value }]));
+    assert.equal(fs.readFileSync(store.file, 'utf8'), before);
+  }
+});

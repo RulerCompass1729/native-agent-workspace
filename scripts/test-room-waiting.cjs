@@ -71,7 +71,7 @@ async function run() {
   const rowLink = page.locator(`[data-session-id="${a}"]`);
   // Same locale clock as the shared record's message times.
   const clock = '\\d{1,2}:\\d{2}(?: [AP]M)?';
-  assert.match(await rowLink.locator('small').innerText(), new RegExp(`· ${clock}$`));
+  assert.match(await rowLink.locator('.session-time').innerText(), new RegExp(`^${clock}$`));
   assert.match(await rowLink.getAttribute('title'), new RegExp(`\\n创建 ${clock} · 最后活动 ${clock}$`));
   checks.push('Session rows show the last activity time and, on hover, the creation and last activity times');
   const c = await create('claude', '私人学习');
