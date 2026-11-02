@@ -637,35 +637,66 @@ test('turn-end background reports follow native-typed and task-notification turn
   assert.equal(s.background, null); assert.equal(s.scheduled, null); assert.equal(s.backgroundKinds, null); assert.equal(s.backgroundAt, null); assert.equal(s.backgroundStale, false);
   assert.equal(fleetStatus(s, '就绪'), '就绪', 'A new native process starts unreported, not unconfirmed');
 });
-test('machine-injected native turns keep their place and side effects but are not shown as the person', async t => {
+test('machine-injected native turns keep their place, are not shown as the person, and do not count as a person interrupting', async t => {
   const { workspace: w, ids } = await fixture(t, 1);
   const { Claude } = require('../adapters.cjs');
   const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
   runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
   runtime.submission = { request: async () => ({ promptId: 'unused' }) }; runtime.terminal = { input() {} };
   w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
-  const s = w.get(ids[0]), nativeId = s.nativeId;
+  const s = w.get(ids[0]), nativeId = s.nativeId, pauses = [], pause = w.pause.bind(w);
+  w.pause = reason => { pauses.push(reason); return pause(reason); };
   const notice = (id, summary) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>${summary}</summary>\n</task-notification>`;
   const submit = (id, prompt, source) => { runtime.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: id, session_id: nativeId, prompt, ...(source ? { source } : {}) }); return s.messages.find(m => m.id === 'claude-prompt-' + id); };
-  let revision = s.controlRevision;
-  const raw = notice('job', 'Background command "Run review" completed (exit code 0)'), one = submit('n1', raw, 'system');
-  assert.deepEqual([one.role, one.name, one.displayText, one.inputSource], ['user', '后台任务通知', 'Background command "Run review" completed (exit code 0)', 'system']);
+  // A turn-end report belongs to the latest prompt; reports for older prompts are ignored.
+  const stop = (id, tasks) => runtime.hook({ hook_event_name: 'Stop', prompt_id: runtime.lastPromptId || id, session_id: nativeId, last_assistant_message: 'reply', background_tasks: tasks, session_crons: [], stop_hook_active: false });
+  const effects = () => [s.controlRevision, s.wakeHumanRevision || 0, pauses.length];
+  const unchanged = (before, why) => assert.deepEqual(effects(), before, why);
+  const human = (before, why) => { assert.deepEqual(effects(), [before[0] + 1, before[1] + 1, before[2] + 1], why); assert.equal(pauses.at(-1), '真人在原生终端输入'); };
+  // Claude 2.1.316 sends no source: the turn-end report's task IDs identify the notification.
+  stop('p0', [{ id: 'job', type: 'shell', status: 'running', description: 'PRIVATE', command: 'PRIVATE' }, { id: 'agent-1', type: 'subagent', status: 'running' }]);
+  let before = effects(); const raw = notice('job', 'Background command "Run review" completed (exit code 0)'), one = submit('n1', raw);
+  assert.deepEqual([one.role, one.name, one.displayText, one.inputSource], ['user', '后台任务通知', 'Background command "Run review" completed (exit code 0)', 'task-notification']);
   assert.equal(one.text, raw, 'The original native text is kept for search and history');
-  assert.equal(s.controlRevision, revision + 1, 'Existing native-input side effects are unchanged'); assert.equal(s.state, 'working'); assert.equal(s.backgroundStale, true);
-  const two = submit('n2', notice('a', 'First done') + '\n' + notice('b', 'Second failed'), 'system');
-  assert.equal(two.name, '后台任务通知'); assert.equal(two.displayText, 'First done\nSecond failed'); assert.match(two.text, /<task-id>a<\/task-id>[\s\S]*<task-id>b<\/task-id>/);
-  const typed = submit('u1', notice('fake', 'typed by a person'), 'user');
-  assert.equal(typed.name, undefined, 'The same text typed by a person stays the person\'s input'); assert.equal(typed.displayText, undefined); assert.equal(typed.text, notice('fake', 'typed by a person'));
-  const sdk = submit('s1', notice('sdk', 'from -p'), 'sdk'); assert.deepEqual([sdk.name, sdk.displayText, sdk.inputSource], [undefined, undefined, undefined], 'sdk input is a person or caller, not a machine turn');
-  const unknown = submit('u2', notice('old', 'no source field'));
-  assert.equal(unknown.name, undefined, 'An older payload without source keeps the existing display'); assert.equal(unknown.inputSource, undefined);
-  const wake = submit('w1', 'check the build', 'loop_wakeup'); assert.deepEqual([wake.name, wake.text, wake.displayText], ['定时唤醒', 'check the build', undefined]);
+  unchanged(before, 'A reported task finishing is not a person: no pause, no handoff invalidation, no human wake');
+  assert.equal(s.state, 'working'); assert.equal(s.backgroundStale, true);
+  before = effects(); const replay = submit('n2', raw); assert.equal(replay.name, undefined, 'A reported ID is used once'); human(before, 'A repeat of a used notification counts as a person');
+  before = effects(); const unknown = submit('n3', notice('never-reported', 'x')); assert.equal(unknown.name, undefined); human(before, 'An unreported task ID counts as a person');
+  before = effects(); const mixedIds = submit('n4', notice('agent-1', 'a') + notice('never-reported', 'b')); assert.equal(mixedIds.name, undefined); human(before, 'Every block must be a reported task');
+  // A task listed in flight at one turn end and finished during a later turn is no longer listed at that turn's end.
+  stop('p1', [{ id: 'agent-2', type: 'subagent' }, { id: 'later', type: 'shell' }]); submit('t1', 'next typed turn'); stop('p1b', []);
+  before = effects(); const late = submit('n5', notice('later', 'Finished during the typed turn'));
+  assert.equal(late.name, '后台任务通知'); unchanged(before, 'Still recognised after a later turn end that no longer lists it');
+  assert.ok(runtime.backgroundTaskIds.has('agent-2'));
+  before = effects(); const typed = submit('u1', notice('agent-2', 'typed by a person'), 'user');
+  assert.equal(typed.name, undefined, 'A user source stays the person even with a reported ID'); human(before, 'User source keeps every side effect');
+  before = effects(); const text = submit('u2', 'please continue'); assert.equal(text.name, undefined); human(before, 'Ordinary typed input still pauses and invalidates');
+  // Builds that do send source.
+  before = effects(); const sourced = submit('s1', notice('a', 'First done') + '\n' + notice('b', 'Second failed'), 'system');
+  assert.deepEqual([sourced.name, sourced.displayText, sourced.inputSource], ['后台任务通知', 'First done\nSecond failed', 'system']); unchanged(before, 'A system source is machine input');
+  const sdk = submit('s2', notice('sdk', 'from -p'), 'sdk'); assert.deepEqual([sdk.name, sdk.displayText, sdk.inputSource], [undefined, undefined, undefined], 'sdk input is a person or caller, not a machine turn');
+  before = effects(); const wake = submit('w1', 'check the build', 'loop_wakeup'); assert.deepEqual([wake.name, wake.text, wake.displayText], ['定时唤醒', 'check the build', undefined]); unchanged(before);
   const cron = submit('w2', 'daily check', 'schedule_wakeup'); assert.deepEqual([cron.name, cron.inputSource], ['定时唤醒', 'schedule_wakeup']);
-  const poll = submit('p1', 'event body', 'poll_event'); assert.deepEqual([poll.name, poll.inputSource], ['原生自动输入', 'poll_event']);
+  const poll = submit('p2', 'event body', 'poll_event'); assert.deepEqual([poll.name, poll.inputSource], ['原生自动输入', 'poll_event']);
   const bare = '<task-notification><task-id>x</task-id><status>killed</status></task-notification>', noSummary = submit('b1', bare, 'system');
   assert.deepEqual([noSummary.name, noSummary.text, noSummary.displayText], ['原生自动输入', bare, undefined], 'A block without a summary keeps its original text');
   const mixed = submit('m1', 'peer: ' + notice('c', 'done'), 'system'); assert.deepEqual([mixed.name, mixed.text, mixed.displayText], ['原生自动输入', 'peer: ' + notice('c', 'done'), undefined]);
-  assert.equal(s.messages.filter(m => m.role === 'user').length, 10, 'Every input keeps its own record');
+  // A machine turn that displaces a desktop send still stops the relay, with its own reason.
+  stop('p3', [{ id: 'late', type: 'shell' }]); runtime.pending = { text: 'handoff text', promptId: null, replies: new Set(), prompts: new Set() };
+  before = effects(); const displaced = submit('d1', notice('late', 'Late job done'));
+  assert.equal(displaced.name, '后台任务通知'); assert.deepEqual(effects(), [before[0] + 1, before[1], before[2] + 1]);
+  assert.equal(pauses.at(-1), '原生自动输入抢在交接发送之前开始；请核对后再继续。'); assert.equal(runtime.pending, null);
+  // What the decision changes at collaboration level: a relay elsewhere keeps running; a relay this session is in
+  // still stops, because an unexpected turn started (not because a person typed).
+  stop('p4', [{ id: 'r1', type: 'shell' }, { id: 'r2', type: 'shell' }]);
+  w.room.run = { id: 'elsewhere', status: 'running', ids: ['other-a', 'other-b'], awaiting: null };
+  submit('r1n', notice('r1', 'done')); assert.equal(w.room.run.status, 'running', 'A machine turn does not pause a relay it is not in');
+  submit('r1h', 'a person typing'); assert.equal(w.room.run.status, 'paused'); assert.equal(w.room.run.reason, '真人在原生终端输入');
+  stop('p5', [{ id: 'r3', type: 'shell' }]);
+  w.room.run = { id: 'mine', status: 'running', ids: [s.id, 'other-a'], awaiting: { sessionId: 'other-a' } };
+  submit('r2n', notice('r3', 'done')); assert.equal(w.room.run.status, 'paused'); assert.equal(w.room.run.reason, '成员开始了本轮之外的原生工作，请核对后再交接。');
+  assert.equal(s.messages.filter(m => m.role === 'user').length, 19, 'Every input keeps its own record');
+  assert.ok(!JSON.stringify(s).includes('PRIVATE'), 'Task descriptions and commands are not stored');
 });
 test('typed terminal input marks a possible native draft until a new native process starts', async t => {
   const { workspace: w, ids } = await fixture(t, 1);

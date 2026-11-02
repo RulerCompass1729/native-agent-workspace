@@ -479,6 +479,11 @@ class Workspace extends EventEmitter {
     on('activity', text => { s.activity = text; this.changed(); });
     on('background', info => {
       s.background = info.count; s.scheduled = info.scheduled; s.backgroundKinds = Array.isArray(info.kinds) ? info.kinds : null; s.backgroundAt = Date.now(); s.backgroundStale = false;
+      // Kept across turn ends: a task listed once may finish during a later turn, whose report no longer lists it.
+      // Each ID is used once; a new native process starts with none.
+      const known = runtime.backgroundTaskIds ||= new Set();
+      for (const id of Array.isArray(info.ids) ? info.ids : []) { known.delete(id); known.add(id); }
+      while (known.size > 200) known.delete(known.values().next().value);
       if ([info.count, info.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) this.nativeWorkObserved(s.id, '原生报告仍有后台或定时工作，请核对后再交接。');
       this.changed();
     });
@@ -511,18 +516,25 @@ class Workspace extends EventEmitter {
       s.activity = '原生确认连接已变化；正在核对原会话，未自动发送决定。'; this.changed();
     });
     on('nativeInput', (text, item) => {
+      // Machine-injected turns are not a person at the terminal. Claude 2.1.316 sends no hook source,
+      // so a turn made only of notifications for tasks this session last reported in flight also counts.
+      const blocks = text.match(/<task-notification>[\s\S]*?<\/task-notification>/g), onlyBlocks = Boolean(blocks) && !text.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
+      const taskIds = onlyBlocks ? blocks.map(block => /<task-id>\s*([A-Za-z0-9_-]{1,64})\s*<\/task-id>/.exec(block)?.[1]) : [];
+      const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event'].includes(item?.source);
+      const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
+      if (reported) for (const id of taskIds) runtime.backgroundTaskIds.delete(id);
+      const machine = sourced || reported, inputSource = sourced ? item.source : reported ? 'task-notification' : null;
       this.cancelCapacity(s.id);
-      wake.human(this, s.id); this.pause('真人在原生终端输入'); s.controlRevision++;
+      // It still interrupts a desktop send it displaced; that send is not retried.
+      if (!machine) { wake.human(this, s.id); this.pause('真人在原生终端输入'); s.controlRevision++; }
+      else if (item?.superseded) { this.pause('原生自动输入抢在交接发送之前开始；请核对后再继续。'); s.controlRevision++; }
       runtime.workspaceMcpCalls?.clear();
       if (item?.turnId && item.turnId === runtime.turnId) wake.nativeStart(this, runtime, { nativeId: s.nativeId, turnId: item.turnId }, s);
-      // Native reports machine-injected turns (task notifications, wakeups, peer messages) by source; they
-      // keep the input's place in the turn but are not shown as the person's words. Side effects are unchanged.
-      const machine = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event'].includes(item?.source);
-      const notices = machine ? text.match(/<task-notification>[\s\S]*?<\/task-notification>/g) : null;
-      const summaries = notices && !text.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim() ? notices.map(block => /<summary>([\s\S]*?)<\/summary>/.exec(block)?.[1]?.trim()).filter(Boolean) : [];
+      // Machine turns keep their place but are not shown as the person's words.
+      const summaries = machine && onlyBlocks ? blocks.map(block => /<summary>([\s\S]*?)<\/summary>/.exec(block)?.[1]?.trim()).filter(Boolean) : [];
       // The original text is kept for search and history; the summary is only what the reader shows.
-      const shown = summaries.length && summaries.length === notices.length ? { name: '后台任务通知', displayText: summaries.join('\n') } : machine ? { name: item.source.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入' } : {};
-      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource: item.source } : {}), time: Date.now() });
+      const shown = summaries.length && summaries.length === blocks.length ? { name: '后台任务通知', displayText: summaries.join('\n') } : machine ? { name: inputSource.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入' } : {};
+      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource } : {}), time: Date.now() });
       this.changed();
     });
     on('nativeInputImages', event => { if (require('./native-images.cjs').applyInputImages(s, event)) this.changed(); });
