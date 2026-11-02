@@ -244,7 +244,7 @@ class WorkspaceClient extends EventEmitter {
   }
   async pauseEntry(entry, explicit = false, scoped = false) {
     const arm = this.control.armed.get(entry.key);
-    if (!arm) return explicit ? entry.client.call('pause') : undefined;
+    if (!arm) return explicit ? entry.client.call('pause', { withdrawWakes: true }) : undefined;
     if (!arm.pause) arm.pause = (async () => {
       if (arm.entry.closing || arm.entry.closed) {
         // A normal window close is not a cancellation. Wait for its ordered
@@ -258,7 +258,7 @@ class WorkspaceClient extends EventEmitter {
         if (!replacement) throw new Error('没有可确认暂停的连接；输入未发送，请重新连接。');
         arm.entry = replacement;
       }
-      return scoped ? this.invoke(arm.entry, arm.roomId || 'shared', 'pause', [], true) : arm.entry.client.call('pause');
+      return scoped ? this.invoke(arm.entry, arm.roomId || 'shared', 'pause', [], true) : arm.entry.client.call('pause', ...(explicit ? [{ withdrawWakes: true }] : []));
     })().then(result => {
       if (this.control.armed.get(entry.key) === arm) this.control.armed.delete(entry.key);
       return result;
@@ -269,7 +269,7 @@ class WorkspaceClient extends EventEmitter {
     const epoch = this.control.manualEpoch, revision = this.control.sessionRevisions.get(id);
     return () => this.control.manualEpoch === epoch && this.control.sessionRevisions.get(id) === revision;
   }
-  async intervene(operation, id, preserveManualStream = false, strictWake = false, roomId) {
+  async intervene(operation, id, preserveManualStream = false, strictWake = false, roomId, revokeWakes = false) {
     if (roomId !== undefined) {
       // A membership/space pause revokes only that room's pending authority.
       // It is neither private native input nor a global agent-wake revocation.
@@ -281,12 +281,16 @@ class WorkspaceClient extends EventEmitter {
       const pending = operation(); this.control.interventions.add(pending);
       try { return await pending; } finally { this.control.interventions.delete(pending); }
     }
-    // Every human action still invalidates pending automatic handoff intent.
-    // Independent manual submissions only invalidate the same recipient.
-    if (typeof this.scope === 'string' && (strictWake || this.entries.some(e => e.state.capabilities?.includes('agentWakeV1')))) {
-      const confirmed = require('./session-wake.cjs').revoke({ dataDir: this.scope, sessions: new Map() });
-      if (strictWake && confirmed !== true) throw Object.assign(Error('旧自动消息授权未能确认撤销，手机输入没有派发。'), { notSent: true });
-    } else if (strictWake) throw Object.assign(Error('手机入口的本机范围未确认，没有派发。'), { notSent: true });
+    // Input, takeover or interruption in one session is recorded by that session's
+    // backend (its control/peer revisions are in both wake proofs), so it voids only
+    // wakes involving that session. Pausing all follow-up handoffs, and the phone
+    // path that requires a confirmed revocation, still withdraw every staged wake.
+    if (strictWake || revokeWakes) {
+      if (typeof this.scope === 'string' && (strictWake || this.entries.some(e => e.state.capabilities?.includes('agentWakeV1')))) {
+        const confirmed = require('./session-wake.cjs').revoke({ dataDir: this.scope, sessions: new Map() });
+        if (strictWake && confirmed !== true) throw Object.assign(Error('旧自动消息授权未能确认撤销，手机输入没有派发。'), { notSent: true });
+      } else if (strictWake) throw Object.assign(Error('手机入口的本机范围未确认，没有派发。'), { notSent: true });
+    }
     this.control.revision++;
     // Waiting shared input is not a native interruption. Keep the original
     // explicitly shared stream until its native end/pickup boundary.
@@ -615,7 +619,7 @@ class WorkspaceClient extends EventEmitter {
         const entries = new Map(this.entries.map(e => [e.key, e]));
         for (const [key, arm] of this.control.armed) entries.set(key, arm.entry);
         return Promise.all([...entries.values()].map(e => this.pauseEntry(e, true)));
-      }, id);
+      }, id, false, false, undefined, true);
     }
     if (method === 'create') {
       const guard = this.operationGuard(this.active);

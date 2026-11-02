@@ -20,7 +20,10 @@ const cleanText = (value, max = 16000) => {
 // tool progress) are display only and must not change saved state.
 const activityMark = s => { const last = (s.messages || []).findLast(m => !m.volatile); return `${last?.id}:${last?.status}`; };
 const wake = require('./session-wake.cjs');
-const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data);
+// Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
+// is hover, not a human instruction; presses, drags and releases still are.
+const isPointerHover = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => (Number(m[1]) & 35) === 35);
+const isTerminalResponse = data => /^\x1b\[[?>]?[\d;]*[cRn]$/.test(data) || /^\x1b\](10|11);rgb:[\da-f/]+(\x07|\x1b\\)$/i.test(data) || isPointerHover(data);
 
 class Workspace extends EventEmitter {
   constructor(host, dataDir, newWorkspaceRoot = path.join(dataDir, 'session-workspaces')) {
@@ -427,7 +430,7 @@ class Workspace extends EventEmitter {
     on('sharingBoundary', reason => this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id));
     on('nativeControlBoundary', reason => { s.peerRevision = (s.peerRevision || 0) + 1; this.peerLeases?.revoke('原生输入或权限边界已变化：' + reason, s.id); });
     on('capability', () => this.changed());
-    on('nativeTurnStart', info => wake.nativeStart(this, runtime, info));
+    on('nativeTurnStart', info => wake.nativeStart(this, runtime, info, s));
     on('nativeTurnEnd', info => {
       try { wake.complete(this, s, runtime, info); } catch { this.changed(); }
       const qualified = s.provider === 'codex' ? ['0.164.0', '0.165.0'].includes(runtime.host?.rpc?.nativeVersion) : s.provider === 'claude' && runtime.nativeAbortAvailable && !runtime.retainedReader;
@@ -508,7 +511,7 @@ class Workspace extends EventEmitter {
       this.cancelCapacity(s.id);
       wake.human(this, s.id); this.pause('真人在原生终端输入'); s.controlRevision++;
       runtime.workspaceMcpCalls?.clear();
-      if (item?.turnId && item.turnId === runtime.turnId) wake.nativeStart(this, runtime, { nativeId: s.nativeId, turnId: item.turnId });
+      if (item?.turnId && item.turnId === runtime.turnId) wake.nativeStart(this, runtime, { nativeId: s.nativeId, turnId: item.turnId }, s);
       // Native reports machine-injected turns (task notifications, wakeups, peer messages) by source; they
       // keep the input's place in the turn but are not shown as the person's words. Side effects are unchanged.
       const machine = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event'].includes(item?.source);
@@ -939,8 +942,12 @@ class Workspace extends EventEmitter {
     if (!run || run.peerLease || run.id !== this.roomFor(run.roomId || 'shared').run?.id || run.status !== 'running' || Date.now() < run.deadline) return false;
     this.pause('达到本轮 10 分钟期限。', run); return true;
   }
+  // The person's explicit pause of all follow-up handoffs also withdraws every staged
+  // workspace message. Input, takeover or interruption in one session is narrower:
+  // it changes that session's control/peer revision, which both the sender and the
+  // receiver proof of a wake carry, so only wakes involving that session are voided.
+  pauseAll(reason) { wake.revoke(this); this.pause(reason); }
   pause(reason = '已暂停交接', run, automatic = false) {
-    if (!automatic && !run) wake.revoke(this);
     if (run?.peerLease) { this.peerLeases?.pause(run.client, run.id, reason); return; }
     this.peerLeases?.revoke(reason, undefined, run ? run.roomId || 'shared' : undefined);
     for (const room of this.rooms.values()) if ((!run || room.run === run) && room.run?.status === 'running') {
