@@ -3821,3 +3821,20 @@ invite acceptance after reopening the dialog was not reached and remains
 GUI-unverified. Whether Claude 2 and Claude 3 join on the daily app is
 unverified until the user tries again.
 
+The signed alpha.155 bundle started twice on empty synthetic profiles through
+its own service bootstrap. The first attempt stopped on the test's own
+path-alias assertion; the second passed every check: its daemon ran from the
+private runtime copy, the changed renderer contract was present, a space was
+created, and the strict signature and CDHash were unchanged afterwards. No
+session or provider started. The daily update's own quiet check passed in its
+precheck and again just before the quit: no running relay or peer lease, no
+pending automatic message, and no working session on an automatic-message
+backend other than the main session that ran the operator. Peer-runner
+visibility in that check is unverified. A read-only probe only waited for that
+moment; the first attempt refused before quitting because a session on the
+alpha.154 backend was working. The ordinary visible update kept fourteen
+session records, archived ones included, with their native IDs, live process
+starts and drafts, and all seven existing backends kept their PID, start time
+and version. The installed bundle's signature has not yet been rechecked after
+a provider runs on the new backend.
+
