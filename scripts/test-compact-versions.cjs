@@ -9,7 +9,7 @@ const { RoomState } = require('../app/room-state.cjs'), { _electron } = scratch.
 const slot = path.resolve(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim(), '..', '.local/gui-test-slot.lock');
 const token = randomUUID(), owner = randomUUID(), evidence = process.env.NAW_T81_COMPACT_EVIDENCE_DIR;
 const hash = data => createHash('sha256').update(data).digest('hex'), delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const plan = { task: 'T81 compact backend versions source GUI', groups: 6, maxElectronStarts: 1, maxOwnedNodeStarts: 2, syntheticSessions: 7, sends: 0, productModels: 0, nativeInputs: 0, osClipboard: 0, syntheticCancelConfirmation: 1, actualBackendUpdates: 0, maxRunMs: 600000, cleanupMs: 60000, canonicalLeaseRequired: true, recordedTaskAuthorizationRequired: true };
+const plan = { task: 'T81 compact backend versions source GUI', groups: 6, maxElectronStarts: 1, maxOwnedNodeStarts: 2, syntheticSessions: 7, sends: 0, productModels: 0, nativeInputs: 0, osClipboard: 0, syntheticCancelConfirmation: 2, actualBackendUpdates: 0, maxRunMs: 600000, cleanupMs: 60000, canonicalLeaseRequired: true, recordedTaskAuthorizationRequired: true };
 if (process.argv.includes('--plan')) { console.log(JSON.stringify(plan, null, 2)); process.exit(0); }
 const env = additions => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('NAW_') && !key.startsWith('ELECTRON_') && !['NODE_OPTIONS', 'NODE_PATH'].includes(key))), ...additions });
 const hashes = () => Object.fromEntries(Buffer.concat([execFileSync('git', ['ls-files', '-z'], { cwd: root }), execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: root }), Buffer.from('app/dsh/client.js\0')]).toString().split('\0').filter(n => /^(app|scripts)\//.test(n)).map(n => [n, hash(fs.readFileSync(path.join(root, n)))]));
@@ -66,11 +66,11 @@ async function seed() {
   const entry = path.join(profile, 'entry'); fs.mkdirSync(entry);
   fs.writeFileSync(path.join(entry, 'package.json'), JSON.stringify({ name: 'naw-owned-compact-version-gui', version: require('../package.json').version, main: 'main.cjs' }));
   fs.writeFileSync(path.join(entry, 'main.cjs'), `const cp=require('node:child_process'),path=require('node:path'),e=require('electron');
-globalThis.t81Compact={copies:[],osClipboard:0,external:0,maintenance:0,replacementSpawn:0,cancelDialogs:0};
+globalThis.t81Compact={copies:[],osClipboard:0,external:0,maintenance:0,replacementSpawn:0,cancelDialogs:0,switchDialogs:[]};
 const spawn=cp.spawn;cp.spawn=function(bin,args,...rest){if(Array.isArray(args)&&args.some(arg=>typeof arg==='string'&&path.basename(arg)==='daemon.cjs')){globalThis.t81Compact.replacementSpawn++;throw Error('Replacement backend prohibited');}return spawn.call(this,bin,args,...rest);};
 e.clipboard.writeText=text=>globalThis.t81Compact.copies.push(text);for(const name of ['readText','readImage','writeImage','read','write','readBuffer','writeBuffer','clear'])e.clipboard[name]=()=>{globalThis.t81Compact.osClipboard++;throw Error('OS clipboard prohibited');};
 e.shell.openPath=e.shell.openExternal=async()=>{globalThis.t81Compact.external++;throw Error('External action prohibited');};
-e.dialog.showOpenDialog=async()=>{throw Error('OS chooser prohibited');};e.dialog.showMessageBox=async(win,options)=>{if(options.message!=='更新这个已结束会话的连接？')throw Error('Unexpected OS confirmation');globalThis.t81Compact.cancelDialogs++;return{response:0};};
+e.dialog.showOpenDialog=async()=>{throw Error('OS chooser prohibited');};e.dialog.showMessageBox=async(win,options)=>{if(/^结束并更新这个后台的 \\d+ 个会话？$/.test(options.message)){globalThis.t81Compact.switchDialogs.push(options.message);return{response:0};}if(options.message!=='更新这个已结束会话的连接？')throw Error('Unexpected OS confirmation');globalThis.t81Compact.cancelDialogs++;return{response:0};};
 const {WorkspaceClient}=require(${JSON.stringify(path.join(root, 'app/workspace-client.cjs'))});WorkspaceClient.prototype.maintainService=function(){globalThis.t81Compact.maintenance++;throw Error('Backend update prohibited');};
 require(${JSON.stringify(path.join(root, 'app/main.cjs'))});`);
   for (const trial of trials) { assert.ok(trial.child.connected); process.kill(trial.child.pid, 0); }
@@ -100,9 +100,12 @@ async function run() {
     await page.locator(`[data-space-id="${roomB}"] .room-nav`).click(); assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
     await page.locator('#clear-space-filter').click(); await page.locator('#sessions-flat').click();
   });
-  await group('03 update choices preserve working connections and an explicit canceled ended-service confirmation performs no update', async () => {
-    await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Enter'); await page.getByRole('menuitem', { name: '0.1.0-alpha.120 · 4 个会话 · 保留连接，查看原因', exact: true }).click();
-    await until(async () => (await page.locator('#toast').innerText()).includes('未结束'), 'Working backend reason visible');
+  await group('03 an idle old backend offers end-and-update, and canceled confirmations (end-and-update, then ended-service) perform no update', async () => {
+    const before = identity(await snapshot());
+    await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Enter'); await page.getByRole('menuitem', { name: '0.1.0-alpha.120 · 4 个会话 · 结束并更新…', exact: true }).click();
+    await until(async () => (await app.evaluate(() => globalThis.t81Compact.switchDialogs.length)) === 1, 'Exactly one synthetic end-and-update confirmation');
+    assert.deepEqual(await app.evaluate(() => globalThis.t81Compact.switchDialogs), ['结束并更新这个后台的 4 个会话？']);
+    assert.deepEqual(identity(await snapshot()), before, 'Canceling ends nothing and keeps identity and drafts');
     await fixture(trials[0], 'ended'); await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Space');
     await page.getByRole('menuitem', { name: '0.1.0-alpha.120 · 4 个会话 · 核对并更新连接…', exact: true }).click();
     await until(async () => (await app.evaluate(() => globalThis.t81Compact.cancelDialogs)) === 1, 'Exactly one synthetic cancel confirmation');
