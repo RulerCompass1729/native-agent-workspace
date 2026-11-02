@@ -53,7 +53,9 @@ const check = text => { checks.push(text); console.log('PASS:', text); };
 async function allHeadersVisible(ids) {
   const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   for (const id of ids) {
-    const boxes = await header(id).evaluate(el => [el, ...el.children].map(node => node.getBoundingClientRect().toJSON()));
+    // The overview always uses the compact surface (renderer.js compact-room-surface), where the compact child
+    // summary shows whenever it has text (collaboration-overview.css); only an empty one has no box.
+    const boxes = await header(id).evaluate(el => [el, ...[...el.children].filter(node => !node.matches('.collaboration-member-child-compact:empty'))].map(node => node.getBoundingClientRect().toJSON()));
     for (const box of boxes) {
       assert.ok(box.width > 0 && box.height > 0);
       assert.ok(box.left >= -1 && box.right <= viewport.width + 1 && box.top >= -1 && box.bottom <= viewport.height + 1,
@@ -81,8 +83,14 @@ async function create(name, provider) {
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Fixture session created');
   const record = (await snapshot()).sessions.find(s => s.name === name);
   await page.locator('#session-header-more').click();
-  await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click();
+  await closeJoinNotice();
   return record.id;
+}
+// Joining shows a persistent 撤销加入 notice; close it as a person would so it cannot cover later controls.
+async function closeJoinNotice() {
+  await page.locator('#toast-text', { hasText: '已加入' }).waitFor();
+  await page.locator('#toast-close').click(); await page.locator('#toast').waitFor({ state: 'hidden' });
 }
 function identity(state) { return state.sessions.map(s => ({ id: s.id, nativeId: s.nativeId, owner: s.owner, view: s.view, controlRevision: s.controlRevision, claudeQuestion: s.claudeQuestion })).sort((a, b) => a.id.localeCompare(b.id)); }
 async function scrollToPast(id, amount) {
@@ -184,7 +192,6 @@ async function run() {
   await unchangedNative(before, stateBefore); await capture('03-focused-member');
   await page.locator('#messages').hover(); await page.mouse.wheel(0, 140); await delay(120);
   // Since T-121 the enlarged member's own card returns to the whole space, like ← 返回共同工作.
-  // Not yet run: this script still stops earlier at the removed "加入协作" menu.
   await header(b).locator('.collaboration-member-name').click();
   await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).waitFor({ state: 'hidden' });
   assert.ok(Math.abs(await reader(b).evaluate(el => el.scrollTop) - positionBeforeFocus) < 3);
@@ -260,14 +267,17 @@ async function run() {
   assert.ok(!send.text.includes('PRIVATE_')); assert.ok(!send.text.includes('Unsent private member B draft'));
   check('Reopen preserves the same native identities and drafts; deliberate send targets only the unchanged chosen recipient');
   await fillRoomMessage(page, 'Retained room draft after send');
-  const retainedRoomDraft = await page.locator('#shared-input').inputValue();
+  // Since T-87 a sent @mention is cleared; choose C again so a real recipient must survive B leaving and returning.
+  await chooseRecipient(page, c);
+  const retainedRoomDraft = await page.locator('#shared-input').inputValue(), retainedRecipient = await page.locator('#recipient').inputValue();
+  assert.equal(retainedRecipient, c);
   await header(b).locator('.collaboration-member-name').click();
   await page.locator(`[data-session-menu="${b}"]`).click();
   await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
   await page.locator('#rename-name').fill('Member A'); await page.locator('#confirm-rename').click();
   await until(async () => (await header(b).innerText()).includes('Member A'), 'Same visible member header renamed');
-  assert.match(await header(a).locator('.collaboration-member-name').innerText(), /Member A.*Claude/);
-  assert.match(await header(b).locator('.collaboration-member-name').innerText(), /Member A.*Codex/);
+  assert.match(await header(a).locator('.collaboration-member-name').innerText(), /Member A[\s\S]*Claude/);
+  assert.match(await header(b).locator('.collaboration-member-name').innerText(), /Member A[\s\S]*Codex/);
   assert.notEqual(await header(a).locator('.collaboration-member-name').innerText(), await header(b).locator('.collaboration-member-name').innerText());
   const sameB = (await snapshot()).sessions.find(s => s.id === b);
   assert.equal(sameB.nativeId, ids.find(x => x[0] === b)[1]);
@@ -282,10 +292,10 @@ async function run() {
   await page.locator('#room-nav').click(); await until(() => header(b).count().then(n => n === 0), 'Detached member reader removed');
   await allHeadersVisible([a, c]);
   assert.equal(await page.locator('#shared-input').inputValue(), retainedRoomDraft);
-  assert.equal(await page.locator('#recipient').inputValue(), recipient);
+  assert.equal(await page.locator('#recipient').inputValue(), retainedRecipient);
   await page.locator(`[data-session-id="${b}"]`).click();
   await page.locator('#session-header-more').click();
-  await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); await page.locator('#room-nav').click();
+  await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click(); await closeJoinNotice(); await page.locator('#room-nav').click();
   await header(b).waitFor(); await allHeadersVisible([a, b, c]);
   assert.equal((await snapshot()).sessions.find(s => s.id === b).nativeId, sameB.nativeId);
   assert.equal((await snapshot()).sessions.find(s => s.id === b).liveDraft, sameB.liveDraft);
