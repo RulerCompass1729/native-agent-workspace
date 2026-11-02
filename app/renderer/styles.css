@@ -90,6 +90,8 @@ header > div:first-child { min-width: 0; }
 .session-more { flex: none; width: 28px; height: 32px; padding: 0; margin-right: 4px; border: 0; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; }
 .session-more:hover, .session-more[aria-expanded="true"] { color: var(--ink); background: var(--hover); }
 #rename-error { color: var(--dsw-alias-state-danger-label, #a03525); }
+#invite-error { color: var(--dsw-alias-state-danger-label, #a03525); overflow-wrap: anywhere; }
+#invite-list button[aria-disabled="true"] { opacity: .45; cursor: default; }
 .session-row.is-renaming, .room-row.is-renaming { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px; }
 .inline-rename { grid-column: 1 / -1; grid-row: 1; min-width: 0; width: 100%; padding: 4px; }
 .inline-rename-controls { display: flex; align-items: center; gap: 3px; min-width: 0; }

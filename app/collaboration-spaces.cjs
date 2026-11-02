@@ -62,8 +62,14 @@ function withMembership(session, id, joined) {
     roomMembershipRevisions: { ...state.revisions, [id]: nextRevision },
   };
 }
+// Another space is recorded by the session's own backend; an older one cannot.
+function canJoin(session, id) {
+  if (!roomId(id)) throw invalid();
+  const capabilities = session?.serviceCapabilities;
+  return id === DEFAULT_ROOM_ID || !Array.isArray(capabilities) || capabilities.includes('collaborationSpacesV1');
+}
 
-const contract = { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, withMembership, completedSharedRecord };
+const contract = { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, withMembership, canJoin, completedSharedRecord };
 if (typeof module !== 'undefined' && module.exports) module.exports = contract;
 else target.nativeWorkspaceSpaces = contract;
 })(typeof window === 'undefined' ? globalThis : window);

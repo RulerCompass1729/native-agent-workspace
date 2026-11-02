@@ -2149,3 +2149,28 @@ The final record review found one unsupported claim. Both ledgers said the
 saved-pen packet showed no relevant new pen mechanism, but its check records
 only matching hashes and an open saved-pen status, with no content finding.
 Both sentences now state only the hash match, no adoption and the open status.
+
+
+### Second space join refusal - alpha.155
+
+The user reported that sessions could not be added to a newly created second
+space. A fresh read-only reviewer accepted the source with no blocking findings
+and seven non-blocking ones, then accepted the follow-up delta. Resolved before
+delivery: undoing an original-space join on an older backend now has its own
+message; the next step names the existing 核对并更新连接 check instead of
+promising an update; blocked invite entries stay focusable and show their
+versioned reason inline; the regression also covers the drag refusal. The first
+brief cited control logs run with two temporary stale-test edits; the comparable
+after-fix runs with the same edits were added and both edits reverted. The
+author's check that all three older daily runtimes support atomic shutdown was
+not independently repeated.
+
+Remaining: a refused join or original-space undo from a path that reaches the
+server still pauses that space's relay first, and that undo is still offered for
+older-backend sessions. Repeating the same blocked invite entry may not be
+announced again by a screen reader. The late invite acceptance after reopening is
+GUI-unverified. The reproduction does not explain a failure for Claude 2 and
+Claude 3; only a retry on the daily app can settle it. The main session sits on
+an older backend and cannot join until that backend is updated, which ends its
+sessions; that is a separate user decision.
+

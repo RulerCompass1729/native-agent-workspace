@@ -72,9 +72,15 @@ function bindSpaceHighlight(element, id) {
   element.addEventListener('pointerenter', () => highlightSpace(id)); element.addEventListener('pointerleave', () => highlightSpace(''));
   element.addEventListener('focusin', () => highlightSpace(id)); element.addEventListener('focusout', event => { if (!element.contains(event.relatedTarget)) highlightSpace(''); });
 }
+const OLD_BACKEND_NEXT = '这个后台上的会话都结束后，可在侧栏「旧版会话」里核对并更新连接，再加入。';
+function oldBackendJoin(record) {
+  const version = versionValue(record.runtimeVersion);
+  return `「${participantLabel(record, state.sessions)}」连着旧版后台${version ? `（${version}）` : ''}，不能加入其他协作空间；原会话与草稿保留。${OLD_BACKEND_NEXT}`;
+}
 async function addToSpace(id, destination) {
   const room = spaceRecord(destination), record = state.sessions.find(s => s.id === id);
   if (!room || room.archived || !record || record.archived) throw Error('空间或会话已变化，没有加入。');
+  if (!window.nativeWorkspaceSpaces.canJoin(record, destination)) throw Error(oldBackendJoin(record));
   const receipt = await api.spaceAction(destination, 'join', [id, true]);
   updateState(await api.initial()); render();
   if (!receipt?.changed) return toast(`已在「${room.name}」中，其他归属保留。`);
@@ -3395,22 +3401,40 @@ function openInvite(anchor) {
   inviteOrigin = { anchor, revision: selectionRevision };
   const destination = spaceId;
   const ticket = openTransientDialog('invite-dialog'), revision = selectionRevision;
-  $('invite-list').replaceChildren(...state.sessions.filter(s => !inSpace(s, destination) && !s.archived && s.state !== 'ended').map(s => {
+  const candidates = state.sessions.filter(s => !inSpace(s, destination) && !s.archived && s.state !== 'ended');
+  const blocked = s => !window.nativeWorkspaceSpaces.canJoin(s, destination);
+  $('invite-error').hidden = true; $('invite-error').textContent = '';
+  $('invite-list').replaceChildren(...candidates.map(s => {
+    if (blocked(s)) {
+      // Stay focusable so keyboard and reader users can reach the exact reason.
+      const entry = button(`加入 ${participantLabel(s, state.sessions)} · 当前后台不可加入新空间`, () => {
+        if (!currentDialogTicket(ticket)) return;
+        $('invite-error').textContent = oldBackendJoin(s); $('invite-error').hidden = false;
+      });
+      entry.setAttribute('aria-disabled', 'true'); entry.title = oldBackendJoin(s); entry.dataset.inviteSession = s.id; return entry;
+    }
     const entry = button(`加入 ${participantLabel(s, state.sessions)}`, async () => {
-      const current = state.sessions.find(record => record.id === s.id);
-      if (!current || inSpace(current, destination) || current.archived || current.state === 'ended' || pairRevision(current, destination) !== pairRevision(s, destination) || current.nativeId !== s.nativeId) throw new Error('会话已变化，请关闭并重新打开邀请。');
-      if (!currentDialogTicket(ticket) || entry.disabled) return;
-      entry.disabled = true;
-      try { await api.spaceAction(destination, 'join', [s.id, true]); if (currentDialogTicket(ticket) && revision === selectionRevision) $('invite-dialog').close(); }
-      finally { if (currentDialogTicket(ticket)) entry.disabled = false; }
+      try {
+        const current = state.sessions.find(record => record.id === s.id);
+        if (!current || inSpace(current, destination) || current.archived || current.state === 'ended' || pairRevision(current, destination) !== pairRevision(s, destination) || current.nativeId !== s.nativeId) throw new Error('会话已变化，请关闭并重新打开邀请。');
+        if (!currentDialogTicket(ticket) || entry.disabled) return;
+        entry.disabled = true; $('invite-error').hidden = true;
+        try { await api.spaceAction(destination, 'join', [s.id, true]); if (currentDialogTicket(ticket) && revision === selectionRevision) $('invite-dialog').close(); }
+        finally { if (currentDialogTicket(ticket)) entry.disabled = false; }
+      } catch (error) {
+        // The modal hides ordinary toasts; keep the reason beside the choice.
+        if (!currentDialogTicket(ticket)) throw error;
+        $('invite-error').textContent = error.message || '没有加入。'; $('invite-error').hidden = false;
+      }
     });
     entry.dataset.inviteSession = s.id; return entry;
   }));
+  if (candidates.some(blocked)) $('invite-list').append(node('p', `旧版后台上的会话不能加入其他协作空间。${OLD_BACKEND_NEXT}`));
   if (!$('invite-list').children.length) $('invite-list').append(node('p', '所有可用会话已在这个空间中；可创建会话后邀请。'));
 }
 $('invite-dialog').addEventListener('close', () => {
   if ($('invite-dialog').open) return;
-  $('invite-list').replaceChildren();
+  $('invite-list').replaceChildren(); $('invite-error').hidden = true; $('invite-error').textContent = '';
   const origin = inviteOrigin; inviteOrigin = null;
   if (origin?.revision === selectionRevision && selected === 'room') focusMemberAction(origin.anchor);
 });

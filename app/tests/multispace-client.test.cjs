@@ -64,8 +64,10 @@ test('old retained services cannot be implicitly joined or sent selected-space c
   old.state.capabilities = []; delete old.state.rooms; old.actual.capabilities = []; delete old.actual.rooms;
   old.state.sessions[0] = { ...old.state.sessions[0], roomId: null, roomIds: [], roomMembershipRevisions: {} }; old.actual.sessions = structuredClone(old.state.sessions);
   const client = new WorkspaceClient([old], 'old'); t.after(() => client.close());
-  await assert.rejects(client.call('joinSpace', 'old', true, a), /原后台尚不支持/);
-  await assert.rejects(client.callSpace(a, 'forward', ['old', 'Never fallback', 'native-old']), /原后台尚不支持/);
+  await assert.rejects(client.call('joinSpace', 'old', true, a), /连着旧版后台.*「旧版会话」里核对并更新连接/);
+  await assert.rejects(client.callSpace(a, 'forward', ['old', 'Never fallback', 'native-old']), /连着旧版后台.*「旧版会话」里核对并更新连接/);
+  // Undoing an original-space join needs a proof this backend cannot check.
+  await assert.rejects(client.callSpace('shared', 'join', ['old', false, { revision: 1, nativeId: 'native-old' }]), /无法核对这次撤销.*选择离开/);
   assert.equal(old.calls.length, 0);
 });
 test('clearing selected-space history sends no default clear and preserves other histories and drafts', async t => {

@@ -1,8 +1,18 @@
 # Readiness and next gates
 
-As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
+As of 2026-11-01. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
+
+Candidate alpha.155 makes refused joins into a new collaboration space explain
+themselves. A session whose backend cannot record other spaces is refused before
+any backend call, with its backend version, the kept session and draft, and the
+condition for updating that backend: every session on it, archived ones included,
+must end first. The invite dialog keeps such sessions reachable with that reason
+and shows any failed join inside the dialog. The full unit suite, the existing
+multispace GUI and a new two-backend synthetic GUI pass. Daily delivery remains
+pending; current daily remains alpha.154. Sessions on older backends still cannot
+join other spaces until their backend is updated.
 
 Current daily GUI: alpha.154, committed build source `86faf397`. Rich snapshot
 cursor placement now matches the current source grid, and revealed collaboration

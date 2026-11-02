@@ -86,3 +86,11 @@ test('seven logical sessions can belong to three spaces without becoming extra n
   assert.equal(next.filter(s => spaces.isMember(s, A)).length, 3); assert.equal(next.filter(s => spaces.isMember(s, B)).length, 4);
   for (let i = 0; i < next.length; i++) { assert.equal(next[i].nativeId, originals[i].nativeId); assert.equal(next[i].draft, originals[i].draft); }
 });
+test('only the shared room stays open to a session whose backend cannot record other spaces', () => {
+  const old = session({ serviceCapabilities: ['observe', 'resume'] }), current = session({ serviceCapabilities: ['collaborationSpacesV1'] });
+  assert.equal(spaces.canJoin(old, 'shared'), true); assert.equal(spaces.canJoin(old, A), false);
+  assert.equal(spaces.canJoin(current, A), true);
+  // A snapshot from one backend carries no per-session list; its own gate decides.
+  assert.equal(spaces.canJoin(session(), A), true);
+  assert.throws(() => spaces.canJoin(old, 'not-a-room'));
+});

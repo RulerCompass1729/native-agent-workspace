@@ -9,6 +9,9 @@ const { CAPABILITY: PEER_HANDOFFS, DIRECTED: PEER_DIRECTED, identity: peerIdenti
 const spaces = require('./collaboration-spaces.cjs');
 const backendRooms = state => state.rooms || [state.room];
 const backendRoom = (state, id) => backendRooms(state).find(r => (r?.id || 'shared') === id);
+const OLD_BACKEND_SPACES = '这个会话连着旧版后台，不能加入或发送到其他协作空间；没有加入或发送，原会话与草稿保留。这个后台上的会话都结束后，可在侧栏「旧版会话」里核对并更新连接。';
+// An older backend cannot verify an undo proof even for the original space.
+const OLD_BACKEND_UNDO = '这个会话连着旧版后台，无法核对这次撤销，没有执行；原会话与草稿保留。需要时可从会话菜单选择离开。';
 const SPACE_METHODS = new Set(['join', 'forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory']);
 let creationQueue = Promise.resolve();
 const controls = new Map();
@@ -345,7 +348,7 @@ class WorkspaceClient extends EventEmitter {
   }
   invoke(entry, roomId, method, args, scopedPause = false) {
     if (roomId === 'shared' && !(method === 'join' && args[2] !== undefined) && (!scopedPause || !entry.state.capabilities?.includes('collaborationSpacesV1'))) return entry.client.call(method, ...args);
-    if (!entry.state.capabilities?.includes('collaborationSpacesV1')) throw Error('这个原后台尚不支持多个协作空间；没有加入或发送。原会话与草稿保留。');
+    if (!entry.state.capabilities?.includes('collaborationSpacesV1')) throw Error(roomId === 'shared' ? OLD_BACKEND_UNDO : OLD_BACKEND_SPACES);
     const ids = method === 'run' ? args[0] : ['forward', 'queueShared', 'steerShared'].includes(method) ? [args[0]] : [];
     const expected = Object.fromEntries(ids.map(id => [id, spaces.membershipRevision(entry.state.sessions.find(s => s.id === id), roomId)]));
     return entry.client.call('spaceAction', roomId, method, args, expected);
@@ -376,7 +379,7 @@ class WorkspaceClient extends EventEmitter {
       const targets = ['pause', 'clearSharedHistory'].includes(method)
         ? this.entries.filter(e => e.state.capabilities?.includes('collaborationSpacesV1'))
         : (method === 'run' ? args[0] : [args[0]]).map(id => this.route(id));
-      if (targets.some(e => !e.state.capabilities?.includes('collaborationSpacesV1'))) throw Error('这个原后台尚不支持多个协作空间；没有加入或发送。原会话与草稿保留。');
+      if (targets.some(e => !e.state.capabilities?.includes('collaborationSpacesV1'))) throw Error(OLD_BACKEND_SPACES);
     }
     if (method === 'wakePolicy') {
       const entry = args[0] === null ? this.entries.find(e => e.state.capabilities?.includes('agentWakeV1')) : this.route(args[0]);
