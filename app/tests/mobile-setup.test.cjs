@@ -9,14 +9,14 @@ class Element {
   remove() { this.removed = true; }
   all() { return [this, ...this.children.flatMap(child => child.all())]; }
 }
-function fixture({ pending = false, fail = false } = {}) {
+function fixture({ pending = false, fail = false, revoked = true } = {}) {
   const root = new Element('container'), calls = [], timers = new Map(), records = [
     { id: 'session-a', nativeId: 'native-a', name: '<script>literal member</script>' },
     { id: 'session-b', nativeId: 'native-b', name: 'Original second' },
     { id: 'archived', nativeId: 'native-c', archived: true },
   ]; let at = 1000, nextTimer = 0, release;
-  const api = { async mobilePairing(value) { calls.push(['pair', value]); if (pending) await new Promise(resolve => { release = resolve; }); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { secret: 's'.repeat(43), expiresAt: at + 120000 }; },
-    async mobileRevoke() { calls.push(['revoke']); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { authorizationRevoked: true, connectionClosed: true, committedWorkMayContinue: true }; } };
+  const api = { async mobilePairing(value) { calls.push(['pair', value]); if (pending && calls.filter(c => c[0] === 'pair').length === 1) await new Promise(resolve => { release = resolve; }); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { secret: 's'.repeat(43), expiresAt: at + 120000 }; },
+    async mobileRevoke() { calls.push(['revoke']); if (fail) throw Error('/PRIVATE_IPC_PATH'); return { authorizationRevoked: revoked, connectionClosed: true, committedWorkMayContinue: true }; } };
   const setup = bind({ container: root, document: { createElement: tag => new Element(tag) }, api, getSessions: () => records,
     now: () => at, setTimer(fn, delay) { const id = ++nextTimer; timers.set(id, { fn, delay }); return id; }, clearTimer(id) { timers.delete(id); } });
   const el = id => root.all().find(node => node.id === id), status = () => root.all().find(node => node.attributes.role === 'status').textContent;
@@ -63,6 +63,27 @@ test('explicit revoke during preparation invalidates the old visible result and 
   const f = fixture({ pending: true }); f.setup.open(); f.valid(); const old = f.el('mobile-prepare').listeners.click();
   await f.el('mobile-revoke').listeners.click(); f.release(); await old;
   assert.deepEqual(f.calls.map(c => c[0]), ['pair', 'revoke']); assert.equal(f.el('mobile-pair-link').value, ''); assert.match(f.status(), /原生工作可能继续/); assert.match(f.status(), /交接需要重新确认/);
+});
+test('a native identity change while preparation waits is not re-checked on screen; the stale selection cannot prepare again', async () => {
+  // Stated limit: the screen checks native identity only before the call, and the request carries none.
+  // The broker binds the identity it finds when it creates the pairing and later hides a changed one
+  // (mobile-broker.test.cjs: "a changed native identity hides cached metadata").
+  const f = fixture({ pending: true }); f.setup.open(); f.valid(); const held = f.el('mobile-prepare').listeners.click();
+  f.records[0].nativeId = 'replaced-native'; f.release(); await held;
+  assert.deepEqual(f.calls, [['pair', { actor: 'synthetic-human', origin: 'https://mobile.invalid', port: 0, carrierConfirmed: true, replace: false, selection: [{ sessionId: 'session-a', actions: ['read'] }] }]]);
+  assert.equal(f.el('mobile-pair-link').value, 'https://mobile.invalid/mobile/#pair=' + 's'.repeat(43)); assert.equal(f.timers.size, 1);
+  assert.match(f.status(), /不能据此认定手机已连接/);
+  await f.el('mobile-prepare').listeners.click();
+  assert.equal(f.calls.length, 1); assert.match(f.status(), /没有创建配对/); assert.equal(f.el('mobile-pair-link').value, ''); assert.equal(f.timers.size, 0);
+});
+test('a revoke the broker cannot confirm removes the visible link and never reports access as revoked', async () => {
+  const f = fixture({ revoked: false }); f.setup.open(); f.valid(); await f.el('mobile-prepare').listeners.click();
+  const link = f.el('mobile-pair-link'), box = f.root.all().find(n => n.children.includes(link));
+  assert.notEqual(link.value, ''); assert.equal(box.hidden, false);
+  await f.el('mobile-revoke').listeners.click();
+  assert.deepEqual(f.calls.map(c => c[0]), ['pair', 'revoke']);
+  assert.equal(link.value, ''); assert.equal(box.hidden, true); assert.equal(f.timers.size, 0);
+  assert.equal(f.status(), '撤销未确认，请核对原会话；已写入的工作可能继续。'); assert.doesNotMatch(f.status(), /已撤销/);
 });
 test('IPC errors remain generic and never display local paths or success', async () => {
   const f = fixture({ fail: true }); f.setup.open(); f.valid(); await f.el('mobile-prepare').listeners.click(); assert.match(f.status(), /未确认/); assert.ok(!f.status().includes('PRIVATE_'));
