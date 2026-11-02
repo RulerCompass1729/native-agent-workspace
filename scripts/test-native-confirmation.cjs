@@ -7,7 +7,7 @@ const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-confirmation-ui-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/reconnect-native.cjs')],
-  env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code },
+  env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: path.join(profile, 'workspace'), NAW_TEST_APP_ROOT: code },
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms)), checks = [], errors = [];
@@ -20,6 +20,9 @@ function fixture(method, target, value) { const id = ++sequence; return new Prom
   child.on('message', receive); child.send({ id, method, target, value });
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
+const progress = id => page.evaluate(async id => (await workspace.observe(id)).progress.items.filter(item =>
+  item.source === 'codex-native' && item.kind === 'item/commandExecution/requestApproval'), id);
+const approvalHeading = text => page.locator('#approval').getByText('原生确认同步 · ' + text, { exact: true });
 const event = (target, value) => fixture('event', target, value);
 const request = (target, id, command) => event(target, { id, method: 'item/commandExecution/requestApproval', params: { command, cwd: '/synthetic', reason: '合成权限检查，不执行命令' } });
 const resolve = (target, requestId) => event(target, { method: 'serverRequest/resolved', params: { requestId } });
@@ -29,7 +32,7 @@ async function run() {
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   app = await _electron.launch({
     executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'),
-    args: process.env.NAW_APP_EXECUTABLE ? [] : [root],
+    args: process.env.NAW_APP_EXECUTABLE ? [] : [code],
     env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) },
     timeout: 70000,
   });
@@ -64,11 +67,18 @@ async function run() {
   await page.locator('#approval').getByText('第一项合成确认', { exact: true }).waitFor();
   await page.locator('#approval').getByText('工作目录：/synthetic', { exact: true }).waitFor();
   await page.locator('#approval').getByText('原因：合成权限检查，不执行命令', { exact: true }).waitFor();
+  const first = (await progress(id))[0];
+  assert.equal((await progress(id)).length, 1);
+  assert.equal(first.status, 'waiting');
   const themes = await require('./check-theme.cjs').checkTheme(page);
   const oldButton = await page.getByRole('button', { name: '允许这一次', exact: true }).elementHandle();
   await shot('waiting');
   await request(id, '7', '第二项合成确认');
+  const two = await progress(id), second = two.find(item => item.id !== first.id);
+  assert.equal(two.length, 2); assert.ok(second); assert.equal(second.status, 'waiting');
   await resolve(id, 7);
+  const resolvedFirst = await progress(id);
+  assert.deepEqual(resolvedFirst.map(item => [item.id, item.status]), [[first.id, 'resolved'], [second.id, 'waiting']]);
   await page.locator('#approval').getByText('第二项合成确认', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '允许这一次', exact: true }).isEnabled(), true);
   await oldButton.evaluate(el => el.click());
@@ -76,12 +86,13 @@ async function run() {
   assert.deepEqual((await fixture('inspect')).replies, []);
   checks.push('Resolving an older numeric request leaves the current string-ID request actionable; its removed button cannot decide the newer request');
   await page.getByRole('button', { name: '拒绝', exact: true }).click();
-  await page.locator('#approval').getByText('等待原生确认结果', { exact: true }).waitFor();
+  await approvalHeading('等待原生确认结果').waitFor();
   await page.locator('#compose-hint').getByText('已提交决定，等待原生确认；可以继续编辑草稿。', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '允许这一次', exact: true }).isDisabled(), true);
   assert.equal(await page.getByRole('button', { name: '拒绝', exact: true }).isDisabled(), true);
   assert.equal((await snapshot()).sessions[0].state, 'approval');
   await request(id, '7', '第二项合成确认');
+  assert.deepEqual((await progress(id)).map(item => [item.id, item.status]), [[first.id, 'resolved'], [second.id, 'waiting']], 'Duplicate delivery keeps the original request records unchanged');
   assert.equal(await page.getByRole('button', { name: '拒绝', exact: true }).isDisabled(), true);
   await shot('decision-pending');
   await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-screen').waitFor();
@@ -89,13 +100,17 @@ async function run() {
   assert.equal(await page.getByRole('button', { name: '拒绝', exact: true }).isDisabled(), true);
   assert.equal(await page.locator('#message-input').inputValue(), '这份草稿保留，不发送');
   await resolve(id, '7');
-  await page.locator('#approval').getByText('这项原生确认已处理', { exact: true }).waitFor();
+  await approvalHeading('这项原生确认已处理').waitFor();
+  await page.locator('#approval').getByText('等待原生状态更新；已处理不代表工具执行成功。', { exact: true }).waitFor();
   await page.locator('#compose-hint').getByText('确认已处理，等待原生状态更新；可以继续编辑草稿。', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '允许这一次', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: '拒绝', exact: true }).count(), 0);
-  const trace = page.locator('.progress-trace');
-  if (!(await trace.evaluate(el => el.open))) await trace.locator('summary').click();
-  await until(async () => (await trace.innerText()).split('原生确认已处理').length - 1 === 2, 'Both original progress records resolved');
+  const resolved = await progress(id);
+  assert.deepEqual(resolved.map(item => [item.id, item.status, item.title]),
+    [[first.id, 'resolved', '原生确认已处理'], [second.id, 'resolved', '原生确认已处理']], 'Both original records resolve in place');
+  assert.deepEqual(resolved.map(item => item.time), [first.time, second.time], 'Resolution keeps each original record timestamp');
+  assert.equal((await snapshot()).sessions[0].messages.filter(message => message.kind === 'tool').length, 0,
+    'Control-only requests without a turn are not executed tool output');
   assert.equal((await snapshot()).sessions[0].state, 'approval');
   await shot('native-resolved');
   checks.push('One refusal stays pending through duplicate delivery and native-view switching, then native resolution removes decisions and updates both original progress records without claiming execution success');
@@ -124,7 +139,7 @@ async function run() {
   await page.locator('#approval .approval-command').getByText('first line\nsecond line', { exact: true }).waitFor();
   assert.equal(await page.locator('#approval .approval-command').textContent(), 'first line\nsecond line');
   await page.getByRole('button', { name: '允许这一次', exact: true }).click();
-  await page.locator('#approval').getByText('等待原生确认结果', { exact: true }).waitFor(); await resolve(id, 23);
+  await approvalHeading('等待原生确认结果').waitFor(); await resolve(id, 23);
   checks.push('Special permission scopes and native decision restrictions cannot be approved through either controls or direct IPC; a fully displayed multiline command retains one-time approval');
   await event(id, { id: 24, method: 'item/commandExecution/requestApproval', params: {
     kind: 'command', environmentId: 'local', command: '本机合成确认', cwd: '/synthetic',
@@ -134,18 +149,28 @@ async function run() {
   assert.equal(await page.getByRole('button', { name: '允许这一次', exact: true }).isEnabled(), true);
   assert.equal(await page.getByRole('button', { name: '拒绝', exact: true }).count(), 0);
   await page.getByRole('button', { name: '取消本轮', exact: true }).click();
-  await page.locator('#approval').getByText('等待原生确认结果', { exact: true }).waitFor();
+  await approvalHeading('等待原生确认结果').waitFor();
   assert.equal(await page.getByRole('button', { name: '取消本轮', exact: true }).isDisabled(), true);
   await shot('local-cancel'); await resolve(id, 24);
   checks.push('Local environment exposes literal one-time accept and turn cancellation; cancellation is pending until native resolution and never becomes a persistent policy grant');
   await request(id, 8, '连接中断前的合成确认');
   await page.locator('#approval').getByText('连接中断前的合成确认', { exact: true }).waitFor();
+  const beforeDisconnect = await progress(id), waiting = beforeDisconnect.filter(item => item.status === 'waiting');
+  assert.equal(waiting.length, 1);
   await fixture('transport-close', id);
   await until(async () => await page.locator('#approval').isHidden(), 'Disconnected confirmation cannot be clicked');
-  await until(async () => (await trace.innerText()).includes('原生确认结果未确认'), 'Lost resolution is marked unknown');
+  const disconnected = await progress(id);
+  assert.deepEqual(disconnected.map(item => [item.id, item.status]), beforeDisconnect.map(item =>
+    [item.id, item.id === waiting[0].id ? 'unknown' : item.status]), 'Only the unresolved original record becomes unknown');
+  assert.equal(disconnected.find(item => item.id === waiting[0].id).title, '原生确认结果未确认');
+  await until(async () => (await page.locator('#session-status').innerText()).includes('图形连接已断开；原生任务可能仍在运行。'), 'Disconnected native work stays explicitly unconfirmed');
   assert.equal(await page.locator('#message-input').inputValue(), '这份草稿保留，不发送');
   await shot('disconnected');
+  assert.equal((await snapshot()).sessions[0].messages.filter(message => message.kind === 'tool').length, 0,
+    'No confirmation, resolution or lost decision becomes executed tool output');
   const log = await fixture('inspect');
+  assert.ok(log.terminalCreations >= 1, 'The native terminal was open, so zero inputs is meaningful');
+  assert.equal(log.inputs, 0, 'Confirmation controls and read-only observations never type into the native terminal');
   assert.deepEqual(log.replies, [{ id: '7', result: { decision: 'decline' } }, { id: 23, result: { decision: 'accept' } }, { id: 24, result: { decision: 'cancel' } }]);
   assert.equal(log.calls.some(c => ['turn/start', 'turn/steer'].includes(c.method)), false);
   assert.equal((await snapshot()).diagnostics.dispatches, 0);
@@ -153,7 +178,8 @@ async function run() {
   const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), focusable: w.isFocusable() })));
   assert.deepEqual(windows, [{ visible: false, focusable: false }]);
   checks.push('Native idle and connection loss drive displayed status; lost decisions remain explicitly unknown; draft is intact, three explicit decisions, zero model tasks, one hidden non-focusable test window');
-  console.log(JSON.stringify({ checks, themes, errors, modelTasks: 0, nativeProcesses: 0, profile, windows }, null, 2));
+  if (evidence) fs.writeFileSync(path.join(evidence, 'confirmation-progress.json'), JSON.stringify({ first, second, resolved, beforeDisconnect, disconnected }, null, 2));
+  console.log(JSON.stringify({ checks, themes, errors, modelTasks: 0, nativeProcesses: 0, nativeInputs: log.inputs, progressRecords: disconnected.length, profile, windows }, null, 2));
 }
 run().catch(async error => {
   console.error(error.stack); process.exitCode = 1;
