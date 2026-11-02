@@ -2355,3 +2355,70 @@ after one attempt stopped on a busy test slot, the operator ran once and
 replaced the empty active backend in place. Open: a real 2.1.316 wake and the
 post-provider signature check on the daily app, checkpoint 2, and the untested
 2.1.316 modes.
+
+
+### Wakes survive unrelated human input (T-100 checkpoint 2)
+
+Codex 2's T-100 scope decision R3 required any human input to void every agent's
+staged wake, citing T-49. T-49's 「保留真人输入优先全局暂停」 came from the integrator's T-32
+caller review and is about collaboration runs, which still pause globally. The
+user's T-100 text asks for human priority on the target, idle-only delivery and
+per-session and global off switches. Global voiding meant a person talking to
+several agents almost never let a wake through, so the done condition could not
+be met. Now a person's action on the sender or receiver voids that wake; the
+explicit pause of all follow-up handoffs, global off and a backend upgrade still
+withdraw every wake. The lane's fresh reviewer first asked that a person acting
+on the sender mid-turn also withdraw that turn's wake and that an armed run's
+implicit pause stop withdrawing every wake; the delta review passed. Pointer
+motion without a button no longer counts as a person, so hover no longer pauses
+collaboration runs or cancels overload auto-continue. Open: the wake boundary is
+shared by the whole profile, so until every backend runs alpha.159, input or a
+native prompt in a session on an older backend still cancels every staged wake.
+
+
+### Terminal selection (T-126 source checkpoint)
+
+The user could not select terminal text. Fullscreen Claude Code takes the mouse,
+so in an input-capable view Claude selects and copies, as in iTerm2. Three views
+broke: a view rebuilt from a snapshot lost the mouse encoding, a view that
+cannot send input dropped the drag, and Option-click typed arrow keys. The
+lane's fresh reviewer twice required more: first a drag over known text proving
+the copy and the encoding a snapshot lost, then the views of sessions on older
+backends; the third round passed as a source checkpoint only. Open: installed
+acceptance, Codex, the member column, and right-click and wheel in old-backend
+views.
+
+
+### Old-backend sessions move to the current code (T-122)
+
+After an update, sessions on old backends could not use new features until the
+person ended them and updated each connection. At 21:15 the recommended answers
+were applied after twenty minutes without a reply, and at 21:24 the user
+confirmed them: the paused Codex sessions are reconnected too, the move defaults
+on and the sidebar can turn it off. The author made the move automatic only
+where the runtime proves nothing would be lost, and one click elsewhere: an idle
+Codex session, or a Claude session with any terminal input since its process
+started, drag-selecting text included, always needs the click. The lane's
+reviewer found in four rounds, among others, missed Agent Teams teammates, a
+signal that would kill the Codex program, a draft mark cleared by machine input,
+reconnection under a different owner and failures that left no names; the last
+two rounds passed. Integration review notes, low: an older build reopening an
+alpha.159 store keeps a stale input record that a later update could trust, and
+archived idle sessions are moved too. Open: the reconnection list can name
+archived sessions, Agent Teams teardown, and whether a reconnected Codex thread
+resumes its goal.
+
+
+### Task notifications are not the person (T-120)
+
+Claude Code 2.1.316 sends no prompt source, so the alpha.157 label never
+applied. A prompt made only of notifications whose task IDs the session's
+earlier turn-end report listed as running is now machine input: it is shown as
+后台任务通知 and does not pause collaboration, invalidate handoff authority or count
+as human activity for wakes, so it no longer resets the receiver's limit of
+three consecutive wakes or withdraws the sender's authority. If it displaced a
+desktop send, it still pauses with its own reason. The lane reviewer first
+required checking real notification formats and keeping IDs across turns; the
+delta review passed. Open: scheduled and loop wakeups on 2.1.316 and
+notifications for tasks no earlier report listed still count as the person, and
+a notification turn in a session inside a running relay still pauses that relay.

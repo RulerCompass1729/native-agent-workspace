@@ -3978,3 +3978,37 @@ live process starts and drafts; the seven other backends kept PID, start time
 and version. No 2.1.316 session has yet started on the new backend, so the
 bridge binding, a real wake and the post-provider signature check are unverified
 in the daily app.
+
+
+### Sidebar, wakes, selection, backend moves and notifications - alpha.159
+
+Seven commits from Claude 2 and Claude 3 are integrated with identical changed
+lines. Claude 3's notification change and Claude 2's wake change both edited the
+native-input handler; the merge keeps Claude 3's machine-input condition and
+Claude 2's added sender argument, and the handler's changed lines equal the
+lane's. On main the full unit suite passes 2,121 checks without skips. Ten GUI
+scripts exit 0: sidebar density, compact versions, collaboration overview,
+native terminal selection, session wake, multispace, session time, the T-116
+join check, member header menu and collaboration list name. Compact versions,
+multispace and the join check first stopped on their own launch gates, before
+any app started, because the integrator left out their authorization or evidence
+variables, and passed when rerun with them. Every running daily backend's pause
+handler ignores arguments and accepts up to five, so the upgrade's new pause
+argument reaches them as the plain pause.
+
+In the author lanes: the sidebar journey ran ten steps with eight synthetic
+sessions and no model. The wake change ran on real Claude Code 2.1.316 against
+local fixed replies: a person's message to a third session left A's staged wake
+to B deliverable, a message to B voided it without touching the shared boundary,
+and twenty pointer moves left the session unchanged. Selection ran on real
+Claude Code 2.1.316 with no model request and a fake pbcopy, including a
+legacy-snapshot mode that was not repeated on main; the author's earlier probes
+overwrote the system clipboard at least once and possibly three times. The
+backend move ran against one fixture backend for each of four older daily
+runtimes and the current code, with no model: each old process exited and its
+sessions came back with their owners; a hidden-window check ran one clicked and
+one automatic fixture move; on main only the move's cancel path has a GUI check.
+The notification rule was checked against the format of fifteen real
+notifications in the author's own native record and one hidden-window check,
+which predates the last change to how task IDs are kept; it has not run on a
+real hook. The overview script's native-fallback branch has never run.

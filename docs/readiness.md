@@ -1,8 +1,65 @@
 # Readiness and next gates
 
-As of 2026-11-01. This is a local Apple Silicon macOS technical trial.
+As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
+
+Candidate alpha.159 carries six reviewed changes. Sidebar rows take two lines,
+with the name and version mark first and space badges, a short status and the
+activity time below; each space group, independent sessions included, folds on
+its own and keeps that choice after a reload; and the session menu lists the
+session's facts before its actions. A person's action now voids only the staged
+agent wakes whose sender or receiver it touches; the explicit pause of all
+follow-up handoffs, turning wakes off and a backend upgrade still withdraw every
+wake, and moving the pointer over a fullscreen terminal no longer counts as a
+person operating it. Terminal text can be selected again: native snapshots keep
+the mouse encoding, so a drag in a rebuilt view reaches Claude, which selects
+and copies; views that cannot send input, and views of older backends, select
+locally and copy with Cmd+C; Option-click no longer types arrow keys. In the
+old-sessions menu, an old backend whose sessions are all idle offers 结束并更新…:
+after one confirmation NAW ends those sessions, restarts that backend on the
+current code over the same records and reconnects them with their native IDs,
+owners, drafts and spaces, sending nothing to them. An automatic variant, on by
+default with a switch in the same menu, runs only where every idle session is a
+Claude session whose runtime proves no terminal input of any kind since its
+process started (a key, click, drag to select text or wheel all count), no
+background or scheduled work in the last report and no child agent or teammate
+seen; a backend with an idle Codex session always needs the click, which also
+ends its Codex program. A turn made only of notifications for tasks the session
+reported running is shown as 后台任务通知 with its summary and no longer pauses
+collaboration or counts as the person, so it no longer resets an agent's limit
+of three consecutive wakes; one that displaced a desktop send still pauses
+collaboration. The collaboration overview GUI script runs to the end again.
+
+The sidebar, menus, local selection, Option-click and the move menu are window
+code and apply to every session. The wake narrowing, the pointer rule, the
+snapshot mouse encoding, the notification rule and the input record that
+automatic moves rely on run in the backend, so they reach only sessions on an
+alpha.159 backend. A wake also survives unrelated input only once every backend
+in the profile runs alpha.159: until then, any input or native prompt in a
+session on an older backend still cancels every staged wake. Every backend in
+the daily app today runs older code, which cannot prove the move conditions, so
+after this update no move is automatic and each needs the click; on the main
+session's backend that click also ends and reconnects Codex · NAW 开发, and that
+backend will keep needing the click on later updates while it holds an idle
+Codex session. From the next update on, other alpha.159 backends can move
+automatically only if nobody has used their sessions' terminals since those
+processes started. Unverified: on main only the cancel path of the move has a
+GUI check; the author moved one fixture backend for each of four older daily
+runtimes and the current code, with no model, and ran one clicked and one
+automatic fixture move in a hidden-window check; Agent Teams teardown and
+whether a reconnected Codex thread resumes its goal are untested. The
+notification rule was checked on Claude Code 2.1.316 only, against the format of
+fifteen real notifications and in one hidden-window check that predates its last
+change, not on a real hook run; scheduled and loop wakeups on 2.1.316, and
+notifications for tasks no earlier report listed, still count as the person, and
+a notification turn in a session that is in a running relay still pauses that
+relay. Selection was tested on Claude Code 2.1.316 only; Codex, the space member
+column, and right-click and wheel in old-backend views are untested. Each change
+was reviewed in its author lane and is integrated with identical changed lines;
+the one textual conflict was resolved by keeping both sides. The full unit suite
+passes 2,121 checks and ten GUI scripts exit 0. Daily delivery remains pending;
+current daily remains alpha.158.
 
 Current daily GUI: alpha.158, committed build source `403f6b6e`. It lets an
 enlarged member card return to the whole space, which completes the maximize
