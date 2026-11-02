@@ -2113,3 +2113,39 @@ flows. Its CLI reported only Read/Grep/Glob and no MCP servers. The latest
 cumulative list-price estimate is $0.6931322, not an invoice or a sum of runs.
 The four result-write/cleanup regressions pass with no skips; Main separately
 checked the whole script syntax. Signed execution remains pending.
+
+
+### Integrated signed and daily alpha.154 acceptance
+
+Clean source `86faf397` passes 178 affected checks and the build, then two
+independently approved signed trials run once each: four current-width cursor
+groups and all six corrected List-name groups. Sixty raw files are sealed;
+release takes 9.130/8.440 seconds with owned processes/profile/endpoint/lease gone
+and strict post-daemon signing. The effective old-flex control fails as intended;
+restoring source CSS, keyboard Next, Grid/List return and all four original first
+lines pass. Main views four PNGs; the reviewer views five others and raw results.
+Its actual-result and visible-update approval reports $2.3733252 cumulative list
+price, not an invoice or a sum. CLI tools remain Read/Grep/Glob with no MCP.
+
+The review identifies a material scope limit: the source shrink discards 33 As
+and B before hydration. Equality proves the restored view matches that current
+native grid; it does not prove retained program output. This remains open, as do
+wide/alternate screens, saved pen and origin. The sealed source-only saved-pen
+packet (32 entries) matches its hashes; no code or runtime rerun is adopted, and
+saved pen stays open. Main IPC/per-sender/OS counters stay uninstrumented. Physical
+input, native producers and the whole T77 are not qualified.
+
+The ordinary visible alpha.154 update preserves ten original native IDs, eleven
+positive before-live starts, twelve view/draft scopes and reported settings.
+Separate goal reads retain UUID, objective, creation and active status. Six
+nonempty old backends retain PID/start/version and old code. Temporary app copies
+are gone; archives remain. The operator's stale archive-error label checks the
+correct prior version. A post-cleanup hash-failure backstop label remains a
+nonblocking test-helper limitation; actual hashes match. Neither changes product
+behavior. The missing historical scratch record, mobile qualification, original
+lifecycle, full-day use and shared goal remain open.
+
+The final record review found one unsupported claim. Both ledgers said the
+saved-pen packet showed no relevant new pen mechanism, but its check records
+only matching hashes and an open saved-pen status, with no content finding.
+Both sentences now state only the hash match, no adoption and the open status.

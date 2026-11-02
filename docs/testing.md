@@ -3746,7 +3746,7 @@ old/native producers, physical input, original lifecycle, full-day use, whole T7
 and the shared goal remain open.
 
 
-### Native observation and list identity - alpha.154 candidate
+### Native observation and list identity - alpha.154
 
 One hundred seventy-eight affected terminal, collaboration, sidebar, build-info
 and scratch checks pass without skips, and the UI builds. Ten added snapshot
@@ -3768,3 +3768,28 @@ omitted its VM import and is retained as an invalid non-pass. The old allocator
 census remains heuristic; the new alias-based entry has explicit regression
 coverage. Signed integration, original native lifecycle and the shared goal remain
 open; no mobile candidate is included.
+
+Main signed integration now passes both complete paths once: four cursor groups
+with two production Terminals, two fake workers, two intentional windows, seven
+outputs, six snapshots and four reloads; six List-name groups with four synthetic
+members and eleven screenshots. The effective old-flex control removes a complete
+first line; restoring the actual stylesheet retains both non-first anchors and
+offsets through keyboard Next and Grid/List return. All four readers retain a
+fully painted original line. All sixty raw files match their seal. Cleanup takes
+9.130 and 8.440 seconds; owned processes, profiles, endpoints and lease are gone,
+and both strict post-daemon signature checks pass. Main checks four PNGs; the
+independent reviewer checks five others and the raw results. No real providers,
+product inference, native input or OS clipboard is used. Main IPC/per-sender/OS
+counters remain uninstrumented. Renderer viewport changes are not OS-frame or
+physical keyboard/VoiceOver tests.
+
+The source shrinks 118 columns to 57 by discarding 33 As and B. Restored views
+match that truncated native grid, including NEXT overwriting the last column;
+this is not output-retention qualification. The sealed source-only saved-pen
+packet (32 entries) matches its hashes; no code or runtime rerun is adopted, and
+saved pen stays open.
+The visible daily update preserves ten native IDs, eleven positive before-live
+process starts, twelve view/draft scopes, reported settings and the separately
+checked original active goal. Six old nonempty backends keep old code. Initial
+wide/alternate screens, pen/origin, real producers, physical input, original
+lifecycle, full-day use and the shared goal stay open. Mobile remains pending.
