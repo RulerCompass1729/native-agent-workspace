@@ -2264,3 +2264,24 @@ no before/after comparison of the restarted backend's non-session state, the zip
 is tied to the bundle only through the attestation text, a retained backend
 whose last session ends during the update window would be replaced, and the
 post-provider signature check is pending.
+
+
+### Background status, injected turns and Codex 2 collaboration fixes (alpha.157)
+
+Claude 3's background-status change first conflicted with the punctuation rule
+on the same compressed CSS line; the author moved its two state-dot rules to the
+end of the file and its original reviewer passed the revised commit. Its
+injected-turn label change passed a fresh reviewer after two fixes: the stored
+original text had been overwritten by the summary, and the evidence lacked the
+hook's source field description. Codex 2's four commits were reviewed in that
+lane by the temporary independent Codex reviewer the user allowed while Claude
+review was unavailable. Integration found that the drag-help title broke the
+list-name script's assumption that the title equals the member label; the script
+now compares the label text. Open: installed acceptance with real background
+work; the four Codex 2 behaviours on this build; injected turns keeping the
+human pause reason, bubble style and search label, and sharing the raw
+notification while copying the summary, with no unit test for their rendering;
+the coordinator snapshot still reporting ready; clearing scheduled work for a
+new process assuming session crons end with it; real OS notification delivery
+for the reopen fix; no assertion that a truncated name's tooltip keeps the full
+label; and the stale member-order and collaboration-list scripts.
