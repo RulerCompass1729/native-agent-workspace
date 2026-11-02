@@ -101,7 +101,7 @@ async function run() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); const shared = page.locator('#room-messages [data-message-id="shared-context"] .message-body'); await shared.waitFor(); const sharedText = await selectText(shared);
   await open(shared); await item('复制').click(); await until(async () => await copied() === sharedText, 'Shared reader selection');
   await page.locator('#room-nav').click({ button: 'right' }); await item('重命名…').waitFor(); assert.equal(await item('剪切').count(), 0); await page.keyboard.press('Escape');
-  await page.locator(`[data-session-id="${id}"]`).click(); await page.locator(`[data-session-row="${id}"]`).click({ button: 'right' }); await item('复制完整 NAW ID').waitFor(); await page.keyboard.press('Escape');
+  await page.locator('#clear-space-filter').click(); await page.locator(`[data-session-id="${id}"]`).click(); await page.locator(`[data-session-row="${id}"]`).click({ button: 'right' }); await item('复制完整 NAW ID').waitFor(); await page.keyboard.press('Escape');
   checks.push('Private/shared original selections and links copy exactly; session and room keep their dedicated menus');
 
   await page.locator('#terminal-tab').click(); await fixture('terminal', id, { sequence: ++sequence, data: '\x1bcTerminal original 你好\r\nSecond line\x1b[?1000h\x1b[?1006h\x1b[?2004h' });

@@ -81,7 +81,9 @@ async function run(){
   await fixture('history',id,Array.from({length:6},(_,j)=>({id:'column-'+i+'-'+j,type:'agentMessage',turnId:'column-turn-'+i,text:'Original member '+i+' paragraph '+j})));
   await page.locator('#message-input').fill('Private column draft '+i);
   await until(async()=>(await snapshot()).sessions.find(s=>s.id===id).liveDraft==='Private column draft '+i,'Private draft saved');
-  await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入协作',exact:true}).click();
+  // Since independent spaces (c9800cc) the header menu joins with 加入此空间; its undo notice stays until closed.
+  await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入此空间',exact:true}).click();
+  await page.locator('#toast-text',{hasText:'已加入'}).waitFor();await page.locator('#toast-close').click();await page.locator('#toast').waitFor({state:'hidden'});
  }
  await page.locator('#room-nav').click();await (await app.browserWindow(page)).evaluate(win=>win.setContentSize(850,600));
  await delay(200);
@@ -210,7 +212,8 @@ async function run(){
  assert.equal(afterReopen.stats.resizes,beforeReopen.stats.resizes);assert.equal(afterReopen.stats.inputs,beforeReopen.stats.inputs);assert.equal(afterReopen.overviewCalls.claim,beforeReopen.overviewCalls.claim);
  assert.equal(await page.locator(`[data-terminal-id="${imageId}"]`).count(),1);assert.equal(await field(ids[1]).inputValue(),'Solo and column one draft');check('Full app reopen retains each private draft, original native identity and visible pending native input without resize, claim or input');
  // Create a fifth existing member: all per-column inputs park, shared @ stays.
- const fifth=await create('Column 5');await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入协作',exact:true}).click();await page.locator('#room-nav').click();
+ const fifth=await create('Column 5');await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入此空间',exact:true}).click();
+ await page.locator('#toast-text',{hasText:'已加入'}).waitFor();await page.locator('#toast-close').click();await page.locator('#toast').waitFor({state:'hidden'});await page.locator('#room-nav').click();
  assert.equal(await page.locator('.collaboration-member-input:visible').count(),0);assert.equal(await page.locator('#shared-input').isVisible(),true);
  await page.evaluate(id=>workspace.join(id,false),fifth);await until(async()=>await page.locator('.collaboration-member-input:visible').count()===4,'Four columns restored');assert.equal(await field(ids[1]).inputValue(),'Solo and column one draft');
  const beforeRemove=await fixture('stats');await page.evaluate(id=>workspace.join(id,false),imageId);await until(async()=>await page.locator('.collaboration-member-reader').count()===3,'Removed column');
