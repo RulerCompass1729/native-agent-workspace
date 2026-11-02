@@ -98,10 +98,14 @@ async function run() {
   await copyBy(() => page.locator('#app-version').click()); check('Application version is visible without a dialog; one explicit copy acknowledges safe version metadata only');
   const matching = await create('Fixture matching', 'codex'), older = await create('Fixture retained', 'claude'), missing = await create('Fixture missing', 'codex'), development = await create('Fixture development', 'claude');
   overrides = [[older, '0.1.0-alpha.114'], [missing, undefined], [development, 'development']]; await applyVersions();
-  await until(async () => (await row(missing).locator('.session-backend-version').innerText()) === '后台版本未知', 'Missing own version visible');
+  // T114 compact rows: one mark per case (↑ older alpha, ≠ different, ? unreported); the exact value is in the mark's title.
+  const mark = async id => row(id).locator('.session-backend-version').evaluate(el => ({ text: el.textContent, marker: el.dataset.marker, title: el.title }));
+  await until(async () => (await row(missing).locator('.session-backend-version').innerText()) === '?', 'Missing own version visible');
   assert.equal(await row(matching).locator('.session-backend-version').isVisible(), false);
-  assert.equal(await row(older).locator('.session-backend-version').innerText(), '后台 alpha.114');
-  assert.equal(await row(development).locator('.session-backend-version').innerText(), '后台 development');
+  const marks = { missing: await mark(missing), older: await mark(older), development: await mark(development) };
+  assert.deepEqual([marks.missing.text, marks.older.text, marks.development.text], ['?', '↑', '≠']);
+  for (const value of Object.values(marks)) assert.equal(value.marker, value.text);
+  assert.match(marks.missing.title, /后台未报告版本/); assert.match(marks.older.title, /后台 0\.1\.0-alpha\.114/); assert.match(marks.development.title, /后台 development/);
   assert.match(await row(missing).locator('.session-link').getAttribute('aria-label'), /后台未报告版本/);
   assert.match(await row(older).locator('.session-link').getAttribute('title'), /后台 0.1.0-alpha.114/);
   const stable = identity(await snapshot()); await capture('01-visible-own-version-badges');
