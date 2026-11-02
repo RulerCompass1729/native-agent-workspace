@@ -12,6 +12,9 @@
 .collaboration-member-more{flex:none;padding:2px 6px;min-width:28px;background:transparent;border:0}
 .collaboration-member-name{font-weight:600;text-align:left;white-space:normal;overflow-wrap:anywhere;align-self:flex-start;max-width:100%;padding:2px 0;background:transparent;border:0}
 .collaboration-member-name::after{content:" ↗";color:var(--muted);font-weight:400}
+.collaboration-member-name[data-order-handle="true"]{cursor:grab}
+.collaboration-member-name[data-order-handle="true"]:active{cursor:grabbing}
+.collaboration-member-name[data-order-handle="true"]::before{content:"⠿";flex:none;align-self:center;margin-right:4px;color:var(--muted);font-weight:400;user-select:none;pointer-events:none}
 .collaboration-member-state{font-size:13px;font-weight:600;overflow-wrap:anywhere}
 .collaboration-member-child,.collaboration-member-freshness{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 .collaboration-member-child-compact{display:none}
