@@ -4,14 +4,19 @@ As of 2026-10-31. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.154 repairs current-width rich snapshot cursor placement and
-revealed collaboration-list name flow. One hundred seventy-eight affected checks
-and the integrated build pass. A new test entry's result-write cleanup gap is
-reproduced and guarded. Signed integration and daily delivery remain pending;
-current daily remains alpha.153. Initial wide/alternate-buffer preservation,
-saved pen, origin mode, native producers and the shared goal remain open.
+Current daily GUI: alpha.154, committed build source `86faf397`. Rich snapshot
+cursor placement now matches the current source grid, and revealed collaboration
+List names retain readable original lines and saved reading positions. One hundred
+seventy-eight affected checks, the build, four signed cursor flows and six signed
+list-name flows pass. The ordinary visible update preserves ten native IDs, eleven
+positive before-live process starts, twelve view/draft scopes, reported settings
+and the separately checked original active goal. Six nonempty old backends retain
+their old PID/start/version. Source-grid shrink truncation is still open: matching
+the current grid does not preserve text already lost there. Initial wide/alternate
+screens, saved pen, origin mode, real native producers, physical input, original
+lifecycle, full-day use and the shared goal remain open.
 
-Current daily GUI: alpha.153, committed build source `0d59d3d`. Read-only
+The prior alpha.153 task, source `0d59d3d`, remains qualified. Read-only
 terminal views consume live resize events even when the output sequence does not
 change. One hundred three affected checks, the UI build and four signed renderer
 flows pass. The ordinary visible update preserves ten native IDs, eleven positive
