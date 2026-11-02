@@ -3793,3 +3793,31 @@ process starts, twelve view/draft scopes, reported settings and the separately
 checked original active goal. Six old nonempty backends keep old code. Initial
 wide/alternate screens, pen/origin, real producers, physical input, original
 lifecycle, full-day use and the shared goal stay open. Mobile remains pending.
+
+
+### Joining a new space from older backends - alpha.155
+
+The user could not add sessions to a newly created second space. A Node
+reproduction with the actual RoomState and WorkspaceClient, over synthetic
+entries built from the daily profile's session records and runtime capability
+lists, joins every session on the current backend into that space and refuses
+every session on the six older backends. Drag and the session menu already
+showed that refusal as a toast, without a next step. From the invite dialog the
+toast sat behind the modal, so the click looked inert; this comes from source
+reading, not a run. An isolated grouped-sidebar GUI with an empty space joined
+current-backend sessions by group heading, space row and session menu.
+
+The new GUI regression runs two owned synthetic daemons; one reports the
+capabilities of an older backend from current source. Six checks pass: empty
+space creation, three successful join paths, the older-backend refusal by menu
+and by drag with version and next step, and the invite dialog's reachable
+blocked entry, keyboard-readable reason, inline failure and later success. With
+product files reverted it fails at the refusal check. The full unit suite passes
+1,992 checks without skips, including the original-space undo refusal, and the
+existing multispace GUI passes fifteen flows. The dialog-lifecycle and
+member-actions GUI scripts are stale at lines 115 and 59; with those two lines
+edited they fail at the same later steps with and without this change. The late
+invite acceptance after reopening the dialog was not reached and remains
+GUI-unverified. Whether Claude 2 and Claude 3 join on the daily app is
+unverified until the user tries again.
+
