@@ -47,9 +47,14 @@ function trackCursorModes(screen) {
   handlers.push(screen.parser.registerEscHandler({ final: 'c' }, resetShape));
   return {
     snapshot() {
+      // The serialize addon restores mouse tracking but not its report encoding. A view
+      // built from a snapshot would otherwise report legacy X10 mouse bytes, which
+      // fullscreen Claude ignores, so a drag there selects and copies nothing.
+      const encoding = screen._core?.coreMouseService?.activeEncoding;
       return (fallback === undefined ? '' : `\x1b[?12${fallback ? 'h' : 'l'}`)
         + '\x1b[0 q' + (shape ? `\x1b[${shape} q` : '')
-        + (blinkOnly === undefined ? '' : `\x1b[${blinkOnly} q`);
+        + (blinkOnly === undefined ? '' : `\x1b[${blinkOnly} q`)
+        + (encoding === 'SGR' ? '\x1b[?1006h' : encoding === 'SGR_PIXELS' ? '\x1b[?1016h' : '');
     },
     dispose() { for (const handler of handlers) handler.dispose(); },
   };

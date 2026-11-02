@@ -2720,8 +2720,22 @@ async function ensureTerminal(id, explicit = false) {
   $('terminal-area').style.backgroundColor = theme.background;
   const loading = node('p', '正在连接原生终端…', 'terminal-loading'); loading.setAttribute('role', 'status');
   const surface = node('div', undefined, 'terminal-surface'); surface.hidden = true; surface.inert = true; element.append(loading, surface);
-  const term = new Terminal({ fontFamily: '"MesloLGS NF", Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, disableStdin: true, theme: { ...theme } });
+  // Option-drag selects text even when the program takes the mouse. Option-click must not
+  // move the cursor: xterm would type arrow keys into the native program and clear the selection.
+  const term = new Terminal({ fontFamily: '"MesloLGS NF", Menlo, Monaco, monospace', fontSize: terminalDisplay.fontSize, lineHeight: 1, cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionClickForcesSelection: true, altClickMovesCursor: false, disableStdin: true, theme: { ...theme } });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.open(surface);
+  // Fullscreen Claude turns on mouse reporting, so xterm hands a drag to the program. A view
+  // that cannot send input (another window's session, a space member column) would drop
+  // that drag, so it selects locally instead. A view that can send input, or is switching to
+  // it on this press, still forwards the drag; the program selects and copies as in iTerm2.
+  // A view rebuilt from an older backend's snapshot can track the mouse without SGR. xterm sends
+  // those legacy reports through onBinary, which NAW never forwards (and Claude ignores them), so
+  // that view also selects locally rather than dropping the drag.
+  const selection = term._core?._selectionService, mouse = term._core?.coreMouseService;
+  if (typeof selection?.shouldForceSelection === 'function') {
+    const nativeForce = selection.shouldForceSelection.bind(selection);
+    selection.shouldForceSelection = event => (!terminalCanInput(id) && !canCaptureTerminal(id)) || mouse?.activeEncoding === 'DEFAULT' || nativeForce(event);
+  }
   const intent = selectionRevision;
   const entry = { element, term, fit, generation, nativeId: record?.nativeId, ready: false, sequence: 0, queued: [], firstTurnAttemptId: record?.activeTurnId, firstTurnHadOutput: record?.messages.some(message => message.role === 'assistant') }; terminals.set(id, entry); syncTerminalMount(id);
   term.onSelectionChange(() => nativeSelectionChanged(id, term));
