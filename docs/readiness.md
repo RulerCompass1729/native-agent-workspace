@@ -4,6 +4,40 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.160 carries six reviewed changes. For Claude Code 2.1.316
+sessions, the conversation view shows Claude's explanations between steps, which
+2.1.316 records as thinking blocks and the terminal draws as text, where the
+terminal shows them; it shows a `!` command typed in the terminal, with its
+output, as the person's command; the turn divider sits above the terminal input
+that started the turn; and each turn ends with the duration Claude reports and
+the time it ended. A notice with a button still stays until dismissed, but a
+press anywhere outside its buttons now clears it, without reaching the control
+underneath. A paste from the text-field menu that arrives after the person
+switched away and back is dropped. When a backend is older, the session's own ⋯
+menu offers 结束并更新这个后台… first, and the old-sessions menu names up to three
+sessions for each backend. Four stale GUI scripts run to the end again.
+
+The explanation, `!` command, turn head and clock changes run in the bridge
+plugin and the backend, so they reach only 2.1.316 sessions started on an
+alpha.160 backend. After this update that is only the empty active backend; the
+secretary's and the main session's backends run alpha.159 and record terminal
+input, and the main session's backend also holds a Codex session, so neither
+moves automatically and each needs the click again; the click is refused while a
+Claude session there has a background task or scheduled wakeup, including an
+agent's own background wait, so that agent must end its wait first. The menus,
+notices and paste guard are window code and apply to every session, and Codex
+rows that read You ran are labelled 你 in session views; on alpha.160 backends
+shared replies also leave out every provider's own-command rows, Codex included.
+Unverified: none of the 2.1.316 changes has run on a real `!` command or a real
+multi-step turn; their checks used the real plugin with synthetic engine events
+and no model. The cost of the new drawing hook to terminal responsiveness is
+unmeasured. Explanations are not shown in spaces or for turns the terminal does
+not draw, and earlier turns are not filled in; messages inserted while Claude
+works are still not shown on 2.1.316. Each change was reviewed in its author
+lane and is integrated with identical changed lines. The full unit suite passes
+2,144 checks, and eleven GUI scripts exit 0, the column input script in all four
+of its cases. Daily delivery remains pending; current daily remains alpha.159.
+
 Current daily GUI: alpha.159, committed build source `cc2c4f5c`. It carries six
 reviewed changes. Sidebar rows take two lines, with the name and version mark
 first and space badges, a short status and the activity time below; each space

@@ -2454,3 +2454,66 @@ also dropped its recheck of drafts and owners the person may edit. The operator
 ran once. Open: the move menu, sidebar, terminal selection and notification rule
 in daily use, a real wake, and the post-provider signature check on the new
 backend.
+
+
+### Claude 2.1.316 turn records and explanations (T-99, T-130)
+
+The user saw only tool rows in a Claude session's conversation view while the
+terminal showed paragraphs between steps. Claude Code 2.1.316 records those
+explanations as thinking blocks, and the bridge's reply text carried only text
+blocks. Rather than reclassify blocks itself, the bridge now follows what the
+terminal draws. The same change shows a terminal `!` command and its output as
+the person's command, places the turn divider above terminal input and adds the
+turn's reported duration. The lane reviewer first found the acceptance
+overstated and, for explanations, that one drawn before its record arrived would
+be lost; both were fixed and the reviews passed. Open: a real `!` command and a
+real multi-step turn on an installed alpha.160 backend, terminal responsiveness
+with the new drawing hook, spaces, turns the terminal does not draw, and
+messages inserted mid-turn.
+
+
+### Notices with a button (T-128)
+
+A notice with an undo button stayed over the controls below it. The lane
+reviewer rejected two first designs: an automatic timeout, which keyboard and
+screen-reader users cannot rely on, and a click that passes through, which could
+trigger a covered button without confirmation. Now a press anywhere outside the
+notice's buttons clears it; a press elsewhere still reaches its own control, and
+one that starts on the notice does not reach what is beneath it. Open: Escape
+does not close it.
+
+
+### Late paste after switching away (T-129)
+
+Since a 10-29 change (3e5fe6a) gave each session its own composer, a paste from
+the text-field menu that resolved after the person switched to a space and back
+still landed in the field. The paste now also requires the view revision it
+started with. The lane reviewer passed it and noted that restoring focus as the
+menu closes can, rarely, refuse a normal paste, which fails safe.
+
+
+### End and update from the session's menu (T-131)
+
+After alpha.159 the user could not find 结束并更新…: it lived only in the sidebar's
+old-sessions menu, whose items did not name sessions. The session's own menu now
+offers it first when its backend is older, and the old-sessions menu names up to
+three sessions per backend. The lane reviewer's first round required changes;
+the second passed. Open: the reason a backend is blocked appears only after a
+click, and the confirmation still uses older session names.
+
+
+### Stale GUI scripts and turn endings (T-123, board rule)
+
+Four session GUI scripts that stopped at assertions written before the spaces
+redesign and the wake menu item now run to the end. Separately, the board's
+survey found agents ending turns while waiting for the person and nothing waking
+them, about 2,400 idle minutes across three sessions since the Claude agents
+started; the user approved a rule that an agent ends a turn only while working
+on its next item or with one background wait for a specific event, now in the
+project instructions. On alpha.159 the secretary's first real wake to the main
+session was refused by the bridge before it reached the backend. Claude 2
+reproduced the cause: an old compatibility plugin that NAW had written into the
+shared working directory is also loaded, and its hook of the same name always
+refuses. A sender without it staged a wake that ran. T-100 remains open; a wake
+from 2.1.316 to 2.1.312 has not run. The integration reviewer also noted that
+the agent's own background wait blocks moving its backend.

@@ -4043,3 +4043,25 @@ long enough for two automatic-move checks, the other backends and all sixteen
 live native processes were unchanged and no move record existed. The move menu,
 the sidebar, terminal selection, the notification rule and a real wake have not
 yet been exercised in the daily app.
+
+
+### Explanations, `!` commands, notices, paste and update menu - alpha.160
+
+Seven commits from Claude 2 and Claude 3 are integrated without conflicts and
+with identical changed lines. On main the full unit suite passes 2,144 checks
+without skips. Eleven GUI scripts exit 0: session menu, sidebar and inline
+rename, which ran to the end for the first time since the spaces redesign;
+context menu, including the late-paste check, which failed before the fix in the
+author lane; column input in its full, fallback, long and retry cases; compact
+versions; multispace; member header menu; sidebar density; collaboration
+overview; and the T-116 join check.
+
+In the author lane the 2.1.316 changes passed the bridge plugin's engine tests
+with the real plugin code, 38 and then 40 checks, and hidden-window checks with
+the real plugin and backend adapter but synthetic engine events and no model; a
+shape probe of the author's own records found nine `!` commands, each one input
+line followed by one output line. Neither a real `!` command nor a real
+multi-step turn has run on an alpha.160 backend. The notice change passed a
+hidden-window check and multispace; the update-menu change passed a
+hidden-window check and compact versions; the paste fix passed the context menu,
+column input and member header menu scripts.

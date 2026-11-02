@@ -91,6 +91,18 @@ or start paid model runs as a side effect of editing documents.
   `docs/review.md`, fix them, then send only the delta to the same session. If
   Claude is unavailable, keep the checkpoint open rather than self-approving.
   Reuse relevant evidence and avoid frequent handoffs.
+- A Claude agent working from the private task board does not end a turn idle;
+  nothing reliably wakes an idle session. Before ending a turn, either be
+  working on the next item it can take, or leave exactly one background command
+  that exits on a specific event: a newer READY entry in a lane log, a reviewer
+  or test finishing, or a fixed wait while a choice is pending with the person.
+  Do not use `/loop` or timed polling prompts for this. Record choices for the
+  person on the board as its rules describe and keep working meanwhile; choices
+  that expose the machine, end sessions or backends, spend money or publish
+  still wait for an explicit answer. If nothing on the board is doable, say why
+  before ending the turn. A background wait counts as background work and blocks
+  moving the agent's backend: when the person asks to update it, end the wait
+  first.
 
 ## Architectural invariants
 
