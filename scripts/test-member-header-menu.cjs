@@ -152,6 +152,24 @@ async function run() {
     await win.evaluate(w => w.setContentSize(1240, 850)); await page.getByRole('button', { name: '网格', exact: true }).click();
     const owner = (await snapshot()).sessions.find(s => s.id === b).owner;
     await name(b).click(); await until(async () => (await snapshot()).viewState.roomSession === b, 'Passive member enlarged'); await rightTitle(b); await closeMenu(b);
+    // The enlarged member's own card control shows restore and toggles back to the whole space.
+    const arrow = id => name(id).evaluate(n => ({ mark: getComputedStyle(n, '::after').content, pressed: n.getAttribute('aria-pressed'), label: n.getAttribute('aria-label') }));
+    const enlarged = await arrow(b), other = await arrow(a);
+    assert.equal(enlarged.pressed, 'true'); assert.equal(other.pressed, 'false'); assert.notEqual(enlarged.mark, other.mark, 'The enlarged card shows a restore mark');
+    const room = async () => (await snapshot()).viewState.roomSession || '';
+    await name(b).click(); await until(async () => !(await room()), 'Clicking the enlarged card returns to the whole space');
+    assert.deepEqual(await arrow(b), { ...other, label: enlarged.label }, 'Returned card shows the enlarge mark again');
+    await name(b).focus(); await page.keyboard.press('Enter'); await until(async () => await room() === b, 'Enter enlarges the member');
+    await name(b).focus(); await page.keyboard.press('Enter'); await until(async () => !(await room()), 'Enter on the enlarged card returns');
+    await name(b).dblclick(); await until(async () => await room() === b, 'Double-click enlarges'); await settle(); await delay(150);
+    assert.equal(await room(), b, 'A double-click acts once and does not immediately return');
+    await drainEvents(); await page.keyboard.down('Control'); try { await name(b).click(); } finally { await page.keyboard.up('Control'); }
+    await settle(); const ctrlAfter = await room(), ctrlObserved = await page.evaluate(() => window.t75Events.splice(0)); events.push(...ctrlObserved);
+    const ctrlContext = ctrlObserved.filter(e => e.type === 'contextmenu');
+    measurements.push({ group: 'CDP-Control-left-click-enlarged', before: b, after: ctrlAfter, events: ctrlObserved, qualified: ctrlContext.length > 0 && ctrlAfter === b, limit: 'CDP event sequence only, no physical mouse qualification' });
+    if (ctrlContext.length) assert.equal(ctrlAfter, b, 'A delivered contextmenu cannot also leave the enlarged member');
+    if (await menu().count()) await closeMenu(b);
+    if (ctrlAfter !== b) { await name(b).click(); await until(async () => await room() === b, 'Member enlarged again'); }
     assert.equal((await snapshot()).sessions.find(s => s.id === b).owner, owner); await page.getByRole('button', { name: '← 返回共同工作', exact: true }).click();
     await page.getByRole('button', { name: '简化信息', exact: true }).click(); await rightTitle(a); await closeMenu(a); await page.getByRole('button', { name: '简化信息', exact: true }).click();
   });
