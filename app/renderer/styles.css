@@ -419,7 +419,7 @@ header h1, header p { overflow-wrap: anywhere; }
 .split-divider:hover::after,.split-divider:focus-visible::after{background:var(--border)}
 .split-workspace:not(.has-terminal)>.split-divider,.split-workspace.terminal-maximized>.split-divider,.split-workspace.native-only>.split-divider{display:none}
 @media(max-width:900px){.split-divider{display:none}}
-.pane-maximize{padding:4px 7px;font-size:12px;min-height:28px}
+.pane-maximize{padding:4px 7px;font-size:12px;min-height:28px}.pane-toggle svg{width:14px;height:14px;display:block;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.pane-toggle:not([data-restore]) .pane-restore-icon,.pane-toggle[data-restore] .pane-maximize-icon{display:none}
 .question-form{display:grid;gap:10px;margin:8px 0}
 .native-question{border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin:0;display:grid;gap:6px}
 .native-question legend{font-weight:600;padding:0 4px}

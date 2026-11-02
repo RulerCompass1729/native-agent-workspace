@@ -90,16 +90,30 @@ async function run() {
     assert.equal(await page.locator('#header #session-toolbar').count(), 1);
     await page.evaluate(() => { window.headerOriginalInput = document.getElementById('message-input'); window.headerOriginalTerminal = document.querySelector('.terminal-surface'); });
     await bounds('split'); await capture('split');
+    // The visible graphic, not only the accessible name, follows the actual layout.
+    const icon = selector => page.locator(selector).evaluate(button => {
+      const shown = [...button.querySelectorAll('svg path')].filter(path => getComputedStyle(path).display !== 'none'), box = button.querySelector('svg')?.getBoundingClientRect();
+      return { label: button.getAttribute('aria-label'), title: button.title, text: button.textContent.trim(), shape: shown.map(path => path.getAttribute('d')).join(' '), painted: shown.length === 1 && box.width > 0 && box.height > 0 };
+    });
+    const chatWide = await icon('#chat-maximize'), terminalWide = await icon('#terminal-maximize');
+    for (const [state, label] of [[chatWide, '放大对话'], [terminalWide, '放大终端']]) assert.deepEqual([state.painted, state.text, state.label, state.title], [true, '', label, label]);
+    assert.equal(chatWide.shape, terminalWide.shape, 'Both panes use the same maximize graphic');
     await page.locator('#chat-maximize').click(); await page.locator('#native-pane').waitFor({ state: 'hidden' }); await bounds('chat'); await capture('chat');
+    const chatRestore = await icon('#chat-maximize');
+    assert.deepEqual([chatRestore.painted, chatRestore.label, chatRestore.title], [true, '恢复并排', '恢复并排']); assert.notEqual(chatRestore.shape, chatWide.shape, 'Maximized conversation shows a restore graphic');
     await page.getByRole('button', { name: '恢复并排', exact: true }).click(); await page.locator('#native-pane').waitFor();
+    assert.equal((await icon('#chat-maximize')).shape, chatWide.shape, 'Restoring returns the maximize graphic');
     await page.locator('#terminal-maximize').click(); await until(() => page.locator('#conversation-pane').evaluate(n => n.getBoundingClientRect().height === 0), 'Terminal maximized'); await bounds('terminal'); await capture('terminal');
-    await page.locator('#terminal-maximize').click(); await page.locator('#close-native-terminal').click(); await page.locator('#native-pane').waitFor({ state: 'hidden' }); await page.locator('#chat-maximize').click(); await page.locator('#chat-tab').click();
+    const terminalRestore = await icon('#terminal-maximize');
+    assert.deepEqual([terminalRestore.painted, terminalRestore.label, terminalRestore.title, terminalRestore.shape], [true, '恢复并排', '恢复并排', chatRestore.shape], 'Maximized terminal shows the same restore graphic');
+    await page.locator('#terminal-maximize').click();
+    await until(async () => (await icon('#terminal-maximize')).shape === terminalWide.shape, 'Restored terminal returns the maximize graphic'); await page.locator('#close-native-terminal').click(); await page.locator('#native-pane').waitFor({ state: 'hidden' }); await page.locator('#chat-maximize').click(); await page.locator('#chat-tab').click();
     assert.equal(await page.evaluate(() => window.headerOriginalInput === document.getElementById('message-input') && window.headerOriginalTerminal === document.querySelector('.terminal-surface')), true, 'Layouts move existing nodes, never replace the draft/terminal');
     assert.equal(await input.inputValue(), draft); assert.equal((await fixture()).headerCalls.send, beforeLayoutCalls.send);
     check('Split/chat/terminal maximize, restore and close retain the original input/terminal nodes, identity and unsent draft');
 
     for (const anchor of ['#session-header-more', '#terminal-more']) { await menu(anchor); await page.locator(anchor).click(); await page.getByRole('menu').waitFor({ state: 'hidden' }); }
-    await menu('#session-header-more', 'Enter'); await item('加入协作').waitFor(); assert.equal(await item('分享选中内容').isDisabled(), true); await page.keyboard.press('Escape'); assert.equal(await page.locator('#session-header-more').evaluate(n => n === document.activeElement), true);
+    await menu('#session-header-more', 'Enter'); await item('加入此空间').waitFor(); assert.equal(await item('分享选中内容').isDisabled(), true); await page.keyboard.press('Escape'); assert.equal(await page.locator('#session-header-more').evaluate(n => n === document.activeElement), true);
     await menu('#session-header-more', 'Space'); await page.keyboard.press('Tab'); await page.getByRole('menu').waitFor({ state: 'hidden' });
     await menu('#session-header-more'); await item('用量').click(); await page.locator('#privacy-dialog').waitFor(); assert.equal(await page.locator('#privacy-dialog h2').innerText(), 'Header research · 用量'); await page.locator('#close-privacy').click();
     await page.locator('#session-files').click(); await page.locator('#file-dialog').waitFor(); assert.equal(await page.locator('#file-content').innerText(), fs.readFileSync(file, 'utf8')); await page.locator('#close-file').click();
