@@ -97,9 +97,8 @@ async function run() {
 
   await page.locator('#solo-drop').focus(); await page.keyboard.press('ArrowRight');
   await until(() => page.locator('#session-list').isVisible(), 'Right expands');
-  // Opening the space from its sidebar entry also filtered the list to its members (c9800cc); the only member has left.
-  assert.equal(await page.locator(`[data-session-id="${ids[0]}"]`).count(), 0);
-  await page.locator('#clear-space-filter').click(); await until(() => page.locator(`[data-session-id="${ids[0]}"]`).isVisible(), 'Show all sessions');
+  // Opening the space earlier did not filter the list (T-132): the member that just left is still listed.
+  await until(() => page.locator(`[data-session-id="${ids[0]}"]`).isVisible(), 'Every session stays listed');
   await page.locator(`[data-session-id="${ids[0]}"]`).click();
   await fixture('state', ids[0], 'working');
   await until(async () => (await page.locator('#session-group-summary').innerText()).includes('1 工作中'), 'Working overview');

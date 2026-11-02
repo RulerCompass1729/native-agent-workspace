@@ -163,7 +163,7 @@ async function run() {
   await guards(); await app.close(); app = null; await launch();
   const after = await snapshot(); assert.deepEqual(identities(after), ids);
   assert.deepEqual(after.sessions.map(s => [s.id, s.messages, s.liveDraft, s.name, s.roomId]), before.sessions.map(s => [s.id, s.messages, s.liveDraft, s.name, s.roomId]));
-  for (const key of ['selected', 'mode', 'roomSession', 'sharedDraft', 'roomRecipient', 'spaceId', 'sidebarSpaceFilter']) assert.deepEqual(after.viewState[key], before.viewState[key], key);
+  for (const key of ['selected', 'mode', 'roomSession', 'sharedDraft', 'roomRecipient', 'spaceId']) assert.deepEqual(after.viewState[key], before.viewState[key], key);
   await until(() => input(codex).evaluate(el => document.activeElement === el), 'Reopen original terminal');
   assert.equal((await fixture()).sends.length, 3); assert.equal((await fixture()).calls.filter(x => x === 'thread/items/list').length, 2, 'UI reopen does not reload the agent');
   check('Detach continues the same terminal; deliberate duplicate launch and reopen retain names, history, membership, both drafts and recipient with no replay');

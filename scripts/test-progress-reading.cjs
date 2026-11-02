@@ -57,7 +57,6 @@ async function guards() { const values = await application.evaluate(() => global
 async function check(text) { assert.ok(Date.now() - started < plan.maxRunMs, 'Five-minute stage-entry budget'); checks.push(text); console.log('PASS:', text); await capture('stage-' + String(checks.length).padStart(2, '0')); }
 async function selectSession(id) {
   const row = page.locator(`#session-list .session-link[data-session-id="${id}"]`);
-  if (!(await row.isVisible()) && (await snapshot()).viewState.sidebarSpaceFilter) await page.locator('#clear-space-filter').click();
   await row.click();
 }
 async function membership(id, join) {

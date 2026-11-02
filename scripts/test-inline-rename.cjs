@@ -130,8 +130,6 @@ async function run() {
   assert.equal(await page.locator('#shared-input').inputValue(), 'Shared draft remains unsent'); await rename('room'); await input.fill('Keep workspace draft'); await peer.evaluate(() => workspace.archiveRoom()); await until(async () => (await page.locator('#rename-error').innerText()).includes('已归档'), 'Archived workspace retains editor'); assert.equal(await input.isVisible(), true); await peer.evaluate(() => workspace.restoreRoom()); await until(() => page.locator('#confirm-rename').isEnabled(), 'Workspace restoration unlocks original editor'); await input.press('Escape');
   check('850×600 icon rail reuses the published sidebar reveal; workspace edits use their own original row/API and retain shared draft through rename/archive/restore');
 
-  // Opening the space from its sidebar entry also filtered the session list to its members (c9800cc); show all again.
-  await page.locator('#clear-space-filter').click();
   await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click(); await fixture('history', id, [{ id: 'rename-original-body', type: 'agentMessage', text: 'Original private selection 你好' }]); await page.locator('[data-message-id="rename-original-body"] .message-body').waitFor();
   await page.locator('[data-message-id="rename-original-body"] .message-body').evaluate(n => { const r = document.createRange(); r.selectNodeContents(n); getSelection().removeAllRanges(); getSelection().addRange(r); });
   await rename(id); await page.locator('#session-header-more').click(); await item('分享选中内容').waitFor(); assert.equal(await item('分享选中内容').isDisabled(), true); await page.keyboard.press('Escape'); await input.press('Escape');
