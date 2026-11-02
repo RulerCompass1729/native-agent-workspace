@@ -85,7 +85,8 @@ function backendPlan(state, sessionState = record => record.state, running = new
     if (plan.block) blocks.push(plan.block);
     else if (plan.stop) { stops.push(plan.stop); if (!plan.auto) unprovenReasons.push(plan.reason); }
   }
-  if (blocks.length) return { ready: false, auto: false, reason: `等空闲后更新：${blocks.join('；')}。`, stops };
+  // Blocked by its sessions (not by the backend itself): the reason names them (T-131).
+  if (blocks.length) return { ready: false, auto: false, blocked: true, reason: `等空闲后更新：${blocks.join('；')}。`, stops };
   return { ready: true, auto: stops.length > 0 && unprovenReasons.length === 0, reason: unprovenReasons.join('；'), stops,
     endsCodex: stops.some(s => s.provider === 'codex') };
 }

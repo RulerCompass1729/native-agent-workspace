@@ -102,12 +102,12 @@ async function run() {
   });
   await group('03 an idle old backend offers end-and-update, and canceled confirmations (end-and-update, then ended-service) perform no update', async () => {
     const before = identity(await snapshot());
-    await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Enter'); await page.getByRole('menuitem', { name: '0.1.0-alpha.120 · 4 个会话 · 结束并更新…', exact: true }).click();
+    await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Enter'); await page.getByRole('menuitem', { name: 'α120 · 结束并更新… · 4 个会话：Repeated member 等', exact: true }).click();
     await until(async () => (await app.evaluate(() => globalThis.t81Compact.switchDialogs.length)) === 1, 'Exactly one synthetic end-and-update confirmation');
     assert.deepEqual(await app.evaluate(() => globalThis.t81Compact.switchDialogs), ['结束并更新这个后台的 4 个会话？']);
     assert.deepEqual(identity(await snapshot()), before, 'Canceling ends nothing and keeps identity and drafts');
     await fixture(trials[0], 'ended'); await page.locator('#backend-version-summary').focus(); await page.locator('#backend-version-summary').press('Space');
-    await page.getByRole('menuitem', { name: '0.1.0-alpha.120 · 4 个会话 · 核对并更新连接…', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'α120 · 核对并更新连接… · 4 个会话：Repeated member 等', exact: true }).click();
     await until(async () => (await app.evaluate(() => globalThis.t81Compact.cancelDialogs)) === 1, 'Exactly one synthetic cancel confirmation');
   });
   await group('04 newer and unknown reports remain honest; matching all versions naturally removes both marker and summary', async () => {
