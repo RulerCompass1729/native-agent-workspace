@@ -2435,3 +2435,22 @@ required checking real notification formats and keeping IDs across turns; the
 delta review passed. Open: scheduled and loop wakeups on 2.1.316 and
 notifications for tasks no earlier report listed still count as the person, and
 a notification turn in a session inside a running relay still pauses that relay.
+
+
+### Integrated alpha.159 delivery
+
+A fresh read-only reviewer found no code blocker but held acceptance on two
+ledger sentences about behaviour after install: the wake boundary is shared by
+the whole profile, so older backends still cancel every staged wake, and
+automatic moves need no terminal input of any kind, not only no typing. With
+those fixed it accepted, and asked for the open items on notifications and on
+the move's reach. Before signing, Claude 2 reported three regressions from the
+sidebar change and two follow-up fixes; the same reviewer accepted them and
+confirmed that the two failing scripts were already stale. It accepted the
+update operator with two added gates, a precheck that the new move plan finds no
+automatic move and a check after two automatic-move ticks; at its suggestion the
+check waits for two ticks and runs after the install receipt, and the integrator
+also dropped its recheck of drafts and owners the person may edit. The operator
+ran once. Open: the move menu, sidebar, terminal selection and notification rule
+in daily use, a real wake, and the post-provider signature check on the new
+backend.
