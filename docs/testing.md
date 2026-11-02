@@ -3890,3 +3890,29 @@ other backends kept PID, start time and version. A backend whose last session
 ends during the quit and reopen would be replaced in place; that did not happen.
 The new backend has not yet run a provider, so the post-provider signature check
 is still pending.
+
+
+### Background status, injected turns and collaboration fixes - alpha.157
+
+Five lane commits are integrated with identical changed lines: Claude 3's
+background-status (T-117) and injected-turn label (T-120), and Codex 2's focus
+fallback (T92), compact jump-to-latest placement (T91) and stale-notification
+window reopen (T111). Codex 2's member drag affordance (T86) is ported without
+the T-60 message catalog: the same CSS rules, an order-handle flag, and the help
+text the catalog held at that commit, now in the name's title and description.
+The list-name GUI script read the name title as the full member label; it now
+reads the label text, because the title also carries that help.
+
+On main the full unit suite passes 2,067 checks without skips. The T-116 join,
+member-header menu, list-name, terminal-redraw, read-only scroll, native
+confirmation and multispace GUI scripts exit 0 on the batch. The member-order
+and collaboration-list scripts exit 1 at their own lines 93 and 82 on the Codex
+2 integration tree and on alpha.156 main, at a removed join menu item, before
+anything this batch changes. The background status and injected-turn labels were
+GUI-checked by their author on copies of main. No GUI run on this batch reaches
+the four Codex 2 behaviours; the drag grip is visible in a list-name screenshot
+on the Codex 2 integration tree. On older backends the renderer can show only
+the reported count: those backends keep no task types, report time or
+unconfirmed flag, do not reset the count on resume, and keep no input source, so
+injected turns there still show as the person. Installed acceptance with a real
+Claude background task remains open.
