@@ -2425,7 +2425,10 @@ function render() {
       $('native-pane-title').title = participantLabel(s, state.sessions) + ' · 原生终端';
       $('terminal-maximize').setAttribute('aria-label', terminalLayout === 'maximized' ? '恢复并排' : '放大终端');
       $('terminal-maximize').title = terminalLayout === 'maximized' ? '恢复并排' : '放大终端';
-      $('chat-maximize').setAttribute('aria-label', terminalLayout === 'hidden' ? '恢复并排' : '放大对话'); $('chat-maximize').title = $('chat-maximize').getAttribute('aria-label');
+      // A focused member's conversation tab also shows the chat alone, whatever the saved split.
+      $('chat-maximize').setAttribute('aria-label', !terminalVisible ? '恢复并排' : '放大对话'); $('chat-maximize').title = $('chat-maximize').getAttribute('aria-label');
+      // The graphic follows the same layout state as the accessible name.
+      $('terminal-maximize').toggleAttribute('data-restore', terminalLayout === 'maximized'); $('chat-maximize').toggleAttribute('data-restore', !terminalVisible);
       $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? ` · Codex ${s.nativeVersion || '版本未确认'} 尚未验证` : ''}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
       $('session-status').title = nativeVersionText(s);
       $('take-control').hidden = own || !alive;
@@ -3027,7 +3030,7 @@ for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace
 $('chat-tab').onclick = () => attempt(() => switchMode('chat')); $('terminal-tab').onclick = () => attempt(() => switchMode('terminal'));
 $('terminal-maximize').onclick = () => attempt(async () => { terminalLayout = terminalLayout === 'maximized' ? 'split' : 'maximized'; await switchMode('terminal'); });
 // The chat's own full-width toggle: hide the terminal, or bring it back beside the chat.
-$('chat-maximize').onclick = () => attempt(async () => { if (terminalLayout === 'hidden') await switchMode('terminal'); else { terminalLayout = 'hidden'; await switchMode('chat'); } });
+$('chat-maximize').onclick = () => attempt(async () => { if ($('native-pane').hidden) { terminalLayout = 'split'; await switchMode('terminal'); } else { terminalLayout = 'hidden'; await switchMode('chat'); } });
 $('close-native-terminal').onclick = () => attempt(async () => {
   if (selected === 'room') return selectRoom('');
   terminalLayout = 'hidden'; await switchMode('chat');

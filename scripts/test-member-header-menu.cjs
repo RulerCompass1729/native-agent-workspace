@@ -174,9 +174,24 @@ async function run() {
     await input.focus(); await input.evaluate(el => el.setSelectionRange(0, 6)); await page.keyboard.press('Shift+F10');
     for (const label of ['剪切', '复制', '粘贴', '全选']) assert.equal(await page.getByRole('menuitem', { name: label, exact: true }).count(), 1);
     await page.keyboard.press('Escape'); await until(async () => await menu().count() === 0, 'Editor menu closes'); assert.equal(await input.inputValue(), drafts[a]);
-    await name(a).click(); await page.locator('#terminal-tab').click(); const terminal = page.locator(`[data-terminal-id="${a}"] .xterm-screen`); await terminal.waitFor();
+    // Maximize controls show the graphic for the layout actually on screen.
+    const icon = selector => page.locator(selector).evaluate(button => {
+      const shown = [...button.querySelectorAll('svg path')].filter(path => getComputedStyle(path).display !== 'none'), box = button.querySelector('svg')?.getBoundingClientRect();
+      return { label: button.getAttribute('aria-label'), text: button.textContent.trim(), shape: shown.map(path => path.getAttribute('d')).join(' '), painted: shown.length === 1 && box.width > 0 && box.height > 0 };
+    });
+    await name(a).click(); await until(async () => await page.locator('#native-pane').isHidden() && (await icon('#chat-maximize')).label === '恢复并排', 'Focused member conversation is alone');
+    const chatAlone = await icon('#chat-maximize'); assert.equal(chatAlone.painted, true);
+    await page.locator('#chat-maximize').click(); await page.locator('#native-pane').waitFor();
+    await until(async () => (await icon('#chat-maximize')).label === '放大对话', 'Restore brings the member terminal back beside the conversation');
+    assert.notEqual((await icon('#chat-maximize')).shape, chatAlone.shape, 'Side by side shows the maximize graphic');
+    await page.locator('#terminal-tab').click(); const terminal = page.locator(`[data-terminal-id="${a}"] .xterm-screen`); await terminal.waitFor();
     await terminal.click({ button: 'right' }); await page.getByRole('menuitem', { name: '粘贴', exact: true }).waitFor(); assert.equal(await page.getByRole('menuitem', { name: '脱出协作', exact: true }).count(), 0);
     await page.locator('#title').click(); await until(async () => await menu().count() === 0, 'Terminal menu dismisses without terminal keyboard input');
+    const wide = await icon('#terminal-maximize'); assert.deepEqual([wide.painted, wide.text, wide.label], [true, '', '放大终端']);
+    await page.locator('#terminal-maximize').click(); await until(async () => (await icon('#terminal-maximize')).label === '恢复并排', 'Room terminal maximized');
+    const restore = await icon('#terminal-maximize'); assert.equal(restore.painted, true); assert.notEqual(restore.shape, wide.shape, 'Maximized member terminal shows a restore graphic');
+    assert.equal(restore.shape, chatAlone.shape, 'Both panes use the same restore graphic');
+    await page.locator('#terminal-maximize').click(); await until(async () => (await icon('#terminal-maximize')).shape === wide.shape, 'Room terminal restored');
     await page.locator('#room-nav').click(); await until(async () => (await snapshot()).sessions.find(s => s.id === a).liveDraft === drafts[a], 'Column draft persisted');
     let state = await snapshot(); assert.equal(state.viewState.sharedDraft, roomDraft); for (const s of state.sessions) assert.equal(s.liveDraft, drafts[s.id]);
     const stats = await fixture('stats'), ipc = await app.evaluate(() => globalThis.t75); measurements.push({ group: 'before-reopen', stats, ipc });
