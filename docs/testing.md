@@ -3929,3 +3929,37 @@ records, archived ones included, with their native IDs, live process starts and
 drafts; the seven other backends kept PID, start time and version. None of this
 batch's behaviours has yet been observed in the daily app, and the new backend
 has not yet run a provider, so the post-provider signature check is pending.
+
+
+### Member card return and Claude 2.1.316 bridge - alpha.158
+
+Claude 2's enlarged-card return and 2.1.316 bridge commits are integrated with
+identical changed lines; the card rule and the alpha.157 drag-grip rules were
+separate additions after the same CSS line and were kept together. On main the
+full unit suite passes 2,068 checks without skips, and the member-header menu,
+list-name and T-116 join GUI scripts exit 0. In the author lane the
+member-header script's five groups pass, including keyboard return, Ctrl-click
+and double-click; the space key, list and narrow layouts, a physical mouse and
+screen readers are unverified. The card return together with the alpha.157 drag
+grip was not reviewed in the lane, whose base predates the grip; only the main
+member-header run covers it, and a real-mouse drag then click is untested. The
+collaboration-overview script's rewritten no-op assertion has never run, because
+that script stops at line 84.
+
+For the bridge, the author ran real Claude Code 2.1.316 against local fixed
+replies with no paid calls: a Claude-to-Claude wake round trip, a shared-space
+final reply matching the native display, /clear, and answering a native question
+in the conversation view. The plugin interfaces used by the bridge are unchanged
+between 2.1.312 and 2.1.316 in the author's declaration comparison. These native
+runs were not repeated on main. Installed acceptance with a real wake on the
+daily app is open. In the shared-space run the room received the session's tool
+command and output, which today's 2.1.316 sessions do not share. After stopping
+a turn the author measured only the state for ten seconds: idle in 256 ms with
+the draft kept and native input required; the effect on the next send comes from
+source reading. Fork, permission, plan, image, Agent Teams, model and usage, and
+question modes other than the conversation view are untested on 2.1.316.
+
+Correction to the alpha.157 injected-turn label: Claude Code 2.1.316 builds the
+prompt-submit hook input without the source field, so the label never applies to
+real input. Its tests used simulated hook input. Without a source the display is
+unchanged.
