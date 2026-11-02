@@ -667,6 +667,25 @@ test('machine-injected native turns keep their place and side effects but are no
   const mixed = submit('m1', 'peer: ' + notice('c', 'done'), 'system'); assert.deepEqual([mixed.name, mixed.text, mixed.displayText], ['原生自动输入', 'peer: ' + notice('c', 'done'), undefined]);
   assert.equal(s.messages.filter(m => m.role === 'user').length, 10, 'Every input keeps its own record');
 });
+test('typed terminal input marks a possible native draft until a new native process starts', async t => {
+  const { workspace: w, ids } = await fixture(t, 1);
+  const { Claude } = require('../adapters.cjs');
+  const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+  runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
+  runtime.submission = { request: async () => ({ promptId: 'unused' }) }; const typed = []; runtime.terminal = { alive: true, input(data) { typed.push(data); } };
+  w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
+  const s = w.get(ids[0]), nativeId = s.nativeId; s.owner = 'desk'; s.view = 'terminal';
+  assert.equal(s.terminalInputPending, false, 'A new native process starts with an empty prompt');
+  w.input(ids[0], '\x1b[12;1R', 'desk'); assert.equal(s.terminalInputPending, false, 'A terminal reply is not typing');
+  w.input(ids[0], 'half a thought', 'desk'); assert.equal(s.terminalInputPending, true);
+  const notice = '<task-notification>\n<task-id>job</task-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>';
+  runtime.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: 'n1', session_id: nativeId, prompt: notice });
+  assert.equal(s.terminalInputPending, true, 'A notification turn does not consume what the person typed');
+  // Claude 2.1.316 does not say who submitted a prompt: a scheduled wakeup looks like this.
+  runtime.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: 'u1', session_id: nativeId, prompt: 'check CI' });
+  assert.equal(s.terminalInputPending, true, 'No later prompt proves the typed text was consumed');
+  w.bind(s, runtime); assert.equal(s.terminalInputPending, false, 'Only a new native process starts with an empty prompt');
+});
 test('unknown or active native work pauses routing without losing the reply or blocking explicit sharing', async t => {
   const clear = { background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false };
   const cases = [

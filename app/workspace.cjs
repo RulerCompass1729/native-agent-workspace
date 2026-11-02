@@ -387,6 +387,9 @@ class Workspace extends EventEmitter {
   bind(s, runtime) {
     // In-flight work belongs to the native process that reported it; a new process starts unreported.
     s.background = null; s.scheduled = null; s.backgroundKinds = null; s.backgroundAt = null; s.backgroundStale = false;
+    // A new native process starts with an empty prompt. Any later keystroke may leave an unsent draft there;
+    // only a new process clears this, since a submitted prompt may have been machine input, not the draft.
+    s.terminalInputPending = false;
     runtime.addressedCall = (identity, args) => addressed.accept(this, s, runtime, identity, args);
     runtime.addressedFailed = identity => addressed.failed(this, s, runtime, identity);
     const on = (event, handler) => runtime.on(event, (...args) => {
@@ -922,7 +925,7 @@ class Workspace extends EventEmitter {
     // Terminal-generated device/cursor replies are not human instructions.
     const response = isTerminalResponse(data);
     if (!response && s.view !== 'terminal') throw new Error('请切换到原生终端后输入。');
-    if (!response) { wake.human(this, id); this.cancelCapacity(id); this.pause('真人在原生终端操作'); s.controlRevision++; }
+    if (!response) { wake.human(this, id); this.cancelCapacity(id); this.pause('真人在原生终端操作'); s.controlRevision++; s.terminalInputPending = true; }
     const t = runtime.terminal; if (!t?.alive) throw new Error('终端尚未连接。'); t.input(data);
   }
   resize(id, owner, cols, rows) { const s = this.get(id); if (s.owner === owner && Number.isInteger(cols) && Number.isInteger(rows)) this.runtime(id).terminal?.resize(cols, rows); }

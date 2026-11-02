@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const api = {};
 api.gitWorktreePreview = async (...args) => { const result = await ipcRenderer.invoke('workspace:gitWorktreePreview', ...args); if (!result.ok) throw new Error(result.error); return result.value; };
-for (const name of ['connectionUpdates', 'spaceMerge', 'spaceCreate', 'spaceAction', 'spaceFiles', 'roomMemberOrder', 'sidebar', 'stageImages', 'pasteNativeContent', 'nativeHistory', 'importHistory', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'prepareInput', 'observe', 'unobserve', 'continueConnection', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'retainDraftRecovery', 'discardDraftRecovery', 'readingState', 'runtimeLocation', 'retrySave']) {
+for (const name of ['connectionUpdates', 'backendSwitchSettings', 'switchBackend', 'spaceMerge', 'spaceCreate', 'spaceAction', 'spaceFiles', 'roomMemberOrder', 'sidebar', 'stageImages', 'pasteNativeContent', 'nativeHistory', 'importHistory', 'openLocalFile', 'closeLocalFile', 'saveLocalFile', 'prepareInput', 'observe', 'unobserve', 'continueConnection', 'archiveSession', 'restoreSession', 'archiveRoom', 'restoreRoom', 'retainDraftRecovery', 'discardDraftRecovery', 'readingState', 'runtimeLocation', 'retrySave']) {
   api[name] = async (...args) => { const result = await ipcRenderer.invoke(`workspace:${name}`, ...args); if (!result.ok) throw new Error(result.error); return result.value; };
 }
 for (const name of ['initial', 'uiReady', 'viewState', 'chooseFolder', 'create', 'rename', 'roomRename', 'roomNotes', 'join', 'claim', 'send', 'queue', 'queueShared', 'steerShared', 'steer', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'run', 'pause', 'wakePolicy', 'forward', 'approve', 'answer', 'stop', 'resume', 'forget', 'reconnect', 'preflight', 'dataDirectory', 'quitService', 'clearSharedHistory', 'newWindow', 'copy', 'pasteText', 'openExternal']) {
@@ -16,7 +16,7 @@ for (const name of ['previewImage', 'expandImage', 'copyImage', 'releaseImage', 
 }
 api.retryStartup = () => ipcRenderer.invoke('workspace:retry-startup');
 api.startupData = () => ipcRenderer.invoke('workspace:startup-data');
-for (const [name, channel] of [['onState', 'workspace:state'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
+for (const [name, channel] of [['onState', 'workspace:state'], ['onViewStorage', 'workspace:view-storage'], ['onReconnected', 'workspace:reconnected'], ['onBackendSwitched', 'workspace:backend-switched'], ['onSessionName', 'workspace:session-name'], ['onTerminal', 'workspace:terminal'], ['onProgress', 'workspace:progress'], ['onNew', 'workspace:new'], ['onDisconnected', 'workspace:disconnected'], ['onStartup', 'workspace:startup']]) {
   api[name] = callback => { const listener = (_event, data) => callback(data); ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener); };
 }
 contextBridge.exposeInMainWorld('workspace', Object.freeze(api));

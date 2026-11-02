@@ -43,7 +43,7 @@ function mainOptions(client, version = current, profile) {
   const start = main.indexOf('function connectionUpdateOptions('), end = main.indexOf('function register(', start);
   assert.ok(start >= 0 && end > start);
   const fn = vm.runInNewContext(main.slice(start, end) + ';connectionUpdateOptions', {
-    continuationStatus: require('../service-client.cjs').continuationStatus,
+    continuationStatus: require('../service-client.cjs').continuationStatus, backendSwitch: require('../backend-switch.cjs'),
   });
   return plain(fn(client, version, profile));
 }
@@ -125,19 +125,23 @@ test('cancellation preserves the connection; a new active turn or identity after
 
 function menuFixture() {
   let resolve, requestCount = 0, menu;
-  const pending = new Promise(value => resolve = value), control = { isConnected: true, hidden: false }, calls = { updates: [], toasts: [], renders: 0 };
+  const pending = new Promise(value => resolve = value), control = { isConnected: true, hidden: false }, calls = { updates: [], toasts: [], renders: 0, settings: [], switches: [] };
+  const settings = { auto: true, interrupted: [] };
   const c = vm.createContext({ checkingBackendVersions: false, backendVersionMenu: null, backendVersionTicket: 0, selectionRevision: 1, disconnected: false, state: {},
     $: () => control, document: { activeElement: control, querySelector: () => null },
-    api: { connectionUpdates() { requestCount++; return pending; }, async continueConnection(...args) { calls.updates.push(args); return false; } },
+    api: { connectionUpdates() { requestCount++; return pending; }, async continueConnection(...args) { calls.updates.push(args); return false; },
+      async backendSwitchSettings(value) { calls.settings.push(value); if (typeof value === 'boolean') settings.auto = value; return { ...settings }; },
+      async switchBackend(value) { calls.switches.push(value); return { key: value.backendKey, resumed: ['s'], left: [] }; } },
     ui: { menu(value) { menu = value; return () => {}; } }, renderVersions() { calls.renders++; },
     versionValue: value => value, toast: value => calls.toasts.push(value), attempt: work => work() });
+  vm.runInContext(source.slice(source.indexOf('function backendSwitchedText('), source.indexOf("$('backend-version-summary').onclick")), c);
   // Model a browser dropping focus on native disable. This is an async focus
   // contract test, not a claim that a real Chromium GUI has been exercised.
   let disabled = false;
   Object.defineProperty(control, 'disabled', { get: () => disabled, set(value) { disabled = value; if (value) c.document.activeElement = {}; } });
   control.attributes = {}; control.setAttribute = (name, value) => control.attributes[name] = value;
   vm.runInContext(source.slice(source.indexOf('async function openBackendVersions('), source.indexOf("$('backend-version-summary').onclick")) + ';this.open = openBackendVersions;', c);
-  return { c, control, calls, resolve, get requests() { return requestCount; }, get menu() { return menu; } };
+  return { c, control, calls, settings, resolve, get requests() { return requestCount; }, get menu() { return menu; } };
 }
 test('an earlier read-only version check cannot open a menu after navigation or focus leaves its button', async () => {
   for (const change of [f => f.c.selectionRevision++, f => f.c.document.activeElement = {}, f => f.c.backendVersionTicket++]) {
@@ -155,4 +159,51 @@ test('one read-only check stays in flight, and a canceled update never claims th
   assert.deepEqual(f.calls.toasts, []);
   const blocked = menuFixture(), loading = blocked.c.open(); blocked.resolve([{ ...option, ready: false, reason: 'Working connection retained' }]); await loading;
   blocked.menu.onSelect('0'); assert.deepEqual(blocked.calls.toasts, ['Working connection retained']); assert.equal(blocked.calls.updates.length, 0);
+});
+
+test('an idle old backend offers one explicit end-and-update, and the automatic setting is one menu item', async () => {
+  const f = menuFixture(), opening = f.c.open();
+  const stops = [{ id: 's', nativeId: 'native-s', provider: 'claude', name: 'Claude 2', owner: 'view' }];
+  f.resolve([{ id: 's', backendKey: 'old', nativeId: 'native-s', version: '0.1.0-alpha.120', count: 1, ready: false, reason: 'Working connection retained',
+    switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]); await opening;
+  assert.deepEqual(plain(f.menu.items.map(item => item.label)), ['0.1.0-alpha.120 · 1 个会话 · 结束并更新…', '空闲时自动更新：开（点此关闭）']);
+  await f.menu.onSelect('0');
+  assert.deepEqual(plain(f.calls.switches), [{ backendKey: 'old', switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]);
+  assert.equal(f.calls.updates.length, 0); assert.deepEqual(f.calls.toasts, ['后台已更新，会话已按原身份接回；NAW 没有向它们发送任何内容。']);
+  assert.match(f.c.backendSwitchedText({ resumed: 1, left: 0, reconnectFailed: true }), /窗口没能自动重新连接/);
+  await f.menu.onSelect('auto'); assert.deepEqual(f.calls.settings, [undefined, false]); assert.match(f.calls.toasts.at(-1), /已关闭自动更新/);
+  // A blocked plan still only explains itself.
+  const blocked = menuFixture(), loading = blocked.c.open();
+  blocked.resolve([{ id: 's', backendKey: 'old', count: 1, ready: false, reason: 'Retained', switch: { ready: false, auto: false, reason: '等空闲后更新：Claude 2正在工作。', stops: [] } }]); await loading;
+  await blocked.menu.onSelect('0'); assert.deepEqual(blocked.calls.toasts, ['等空闲后更新：Claude 2正在工作。']); assert.equal(blocked.calls.switches.length, 0);
+});
+test('sessions ended by an unfinished update are named in the menu even with no old backend left', async () => {
+  const f = menuFixture(); f.settings.interrupted = ['Claude 2', 'Codex 秘书']; const opening = f.c.open(); f.resolve([]); await opening;
+  assert.deepEqual(plain(f.menu.items.map(item => item.id)), ['interrupted', 'auto']);
+  await f.menu.onSelect('interrupted'); assert.match(f.calls.toasts[0], /上次更新时结束了 Claude 2、Codex 秘书/);
+  assert.equal(f.c.backendSwitchedText({ resumed: 1, left: 2 }), '后台已更新；2 个会话没能自动接回，请在会话里点“继续原生会话”。');
+  assert.match(f.c.backendSwitchedText({ error: '旧后台尚未确认关闭' }), /没有完成：旧后台尚未确认关闭/);
+});
+
+test('sessions an unfinished move ended keep the old-sessions control visible after every old backend is gone', () => {
+  const elements = {}, $ = id => elements[id] ||= { id, hidden: false, textContent: '', title: '', disabled: false, attributes: {}, setAttribute(k, v) { this.attributes[k] = v; } };
+  const c = vm.createContext({ $, state: { appVersion: '0.1.0-alpha.157', sessions: [{ id: 'a', runtimeVersion: '0.1.0-alpha.157' }], switchEnded: [{ id: 'a', name: 'Claude 2' }, { id: 'b', name: 'Codex 秘书' }] },
+    disconnected: false, checkingBackendVersions: false, backendVersionTicket: 0, backendVersionMenu: null });
+  vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf("$('app-version').onclick")) + ';this.render = renderVersions;', c);
+  c.render();
+  assert.equal(elements['backend-version-summary'].hidden, false); assert.equal(elements['backend-version-summary'].textContent, '2 会话待接回');
+  assert.match(elements['backend-version-summary'].title, /结束了 2 个会话，还没有接回/);
+  c.state.switchEnded = []; c.render(); assert.equal(elements['backend-version-summary'].hidden, true, 'Hidden again once they are reconnected');
+});
+
+test('the sessions-to-reconnect list names every session a move left not live, and drops reconnected or archived ones', () => {
+  const main = fs.readFileSync(require.resolve('../main.cjs'), 'utf8');
+  const c = vm.createContext({ backendSwitching: null, switchRecords: { 'backends/aaaaaaaaaaaaaaaaaaaa': { sessions: [
+    { id: 'a', nativeId: 'na', name: 'Claude 2' }, { id: 'b', nativeId: 'nb', name: 'Codex 秘书' }, { id: 'c', nativeId: 'nc', name: 'Claude 3' }, { id: 'd', nativeId: 'nd', name: 'Archived' }, { id: 'e', nativeId: 'ne', name: 'Back' }] } } });
+  vm.runInContext(main.slice(main.indexOf('const notReconnected'), main.indexOf('async function runBackendSwitch(')) + ';this.endedByMove = endedByMove;', c);
+  const sessions = [{ id: 'a', nativeId: 'na', state: 'ended' }, { id: 'b', nativeId: 'nb', state: 'disconnected' }, { id: 'c', nativeId: 'nc', state: 'error' },
+    { id: 'd', nativeId: 'nd', state: 'ended', archived: true }, { id: 'e', nativeId: 'ne', state: 'idle' }];
+  assert.deepEqual(plain(c.endedByMove(sessions).map(s => s.name)), ['Claude 2', 'Codex 秘书', 'Claude 3']);
+  assert.deepEqual(plain(c.endedByMove([{ id: 'a', nativeId: 'other', state: 'ended' }])), [], 'A different native identity is not the session that was ended');
+  c.backendSwitching = 'backends/aaaaaaaaaaaaaaaaaaaa'; assert.deepEqual(plain(c.endedByMove(sessions)), [], 'Not while that backend is moving');
 });
