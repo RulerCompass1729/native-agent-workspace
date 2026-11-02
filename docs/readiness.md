@@ -4,6 +4,33 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.161 removes the refusal that blocked agent wakes from the
+secretary. Its working folder still held a compatibility plugin that NAW had
+written there for retained sessions, Claude Code loads it too, and its hook
+refused every wake. That copy now leaves the wake tool to the plugin NAW
+launches Claude with. Whenever an alpha.161 backend starts or resumes Claude in
+a folder, or an alpha.161 window connects input to a retained Claude there,
+NAW's own byte-exact old copy in that folder is refreshed; a launch never
+creates one; connecting a retained Claude still installs it as before, and
+edited or unsafe copies are left alone. After that, any later process in the
+folder loads the new copy, whichever backend starts it. Only the turn linked to
+the last submitted prompt can stage a wake, so a `!` command after a typed
+prompt that already started its turn no longer can; one route stays open by
+reading the code: if the person's own settings hook blocks a prompt, the next
+turn without a prompt of its own, such as a `!` command, can still stage one.
+Sessions started on alpha.159 or alpha.160 backends keep the wider `!` hole
+until a backend running alpha.161 restarts them. For the secretary that means
+moving its backend again, after it ends its own background wait and scheduled
+wakeups. A real installed wake from the secretary, on Claude Code 2.1.316, to
+the main session, on 2.1.312 and another backend, has not run, nor has a wake
+from a task-notification or scheduled-wakeup turn, and wakes do not yet appear
+on the space timeline. The change was reviewed in its author lane, which ran
+real Claude Code 2.1.316 against local fixed replies before and after the fix,
+and is integrated with identical changed lines. The full unit suite passes 2,154
+checks; the session wake GUI script exits 0 but runs no real provider, so it
+covers neither the refresh nor the new check. Daily delivery remains pending;
+current daily remains alpha.160.
+
 Current daily GUI: alpha.160, committed build source `0f3a541a`. It carries six
 reviewed changes. For Claude Code 2.1.316 sessions, the conversation view shows
 Claude's explanations between steps, which 2.1.316 records as thinking blocks

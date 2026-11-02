@@ -2537,3 +2537,30 @@ session there or in the secretary's and main session's sessions after their
 backends are moved again; the installed signature check after a provider starts
 from the alpha.160 bundle; and Claude 2's pending fixes for the refused wake and
 for `!` turns.
+
+
+### Wakes from a folder with NAW's old compatibility plugin (T-100 checkpoint 3)
+
+The first real wake after alpha.159, from the secretary to the main session, was
+refused before it reached the backend. The secretary works in the shared
+workspace folder, which still held the compatibility plugin NAW installs for
+retained sessions. Claude Code loads it beside the plugin NAW launches Claude
+with, and in a NAW-launched process that copy never binds, so its hook refused
+every wake with the same text as a real refusal. The copy now defers the tool
+when NAW launched the process, and a backend refreshes NAW's own byte-exact old
+copy before starting or resuming Claude there, never creating one; an author-run
+check found every compatibility output on main since the first install in the
+known list. The integration reviewer of alpha.160 noticed that a turn started by
+a person's `!` command still saw the last prompt and could stage a wake; the
+author confirmed it on real 2.1.316, and a wake now needs the turn linked to its
+prompt, as sharing a reply already does. The lane reviewer passed it after three
+rounds. The alpha.161 integration reviewer found by reading the code that a
+prompt the person's own settings hook blocks still becomes the last prompt, so
+the next turn without a prompt of its own, such as a `!` command, is linked to
+it and can still stage a wake; the service also accepts that prompt id. Open:
+that route; a refresh that fails on an edited or foreign copy is silent; with no
+NAW plugin loaded the tool's reply still says approved; the `!` refusal has no
+text of its own; wakes from task-notification and scheduled-wakeup turns on real
+2.1.316; the installed secretary-to-main wake, until which T-100 stays open and
+the secretary's instruction to wake by message stays untrue; wakes on the space
+timeline; and older backends that still reset the shared wake boundary.

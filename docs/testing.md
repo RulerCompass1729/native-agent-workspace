@@ -4083,3 +4083,21 @@ the person moved the secretary's and main session's backends to alpha.159 and
 providers ran there, the installed alpha.159 bundle kept its strict signature
 and CDHash and the moved sessions kept their native IDs. No provider has yet
 started from the alpha.160 bundle.
+
+
+### Wakes from a compatibility-plugin folder and `!` turns - alpha.161
+
+Claude 2's commit is integrated with identical changed lines; on main the full
+unit suite passes 2,154 checks without skips, and the session wake GUI script,
+with two real daemons and synthetic sends, exits 0; it starts no real provider,
+so it does not exercise the refresh or the new check. In the author lane, on
+real Claude Code 2.1.316 with local fixed replies and no paid calls, a sender
+whose folder held the exact old compatibility copy was refused on a lane build
+with alpha.159's bridge and on the pre-fix main, while a clean-folder sender
+woke its peer; after the fix the same sender staged a wake that its peer ran,
+the copy was upgraded in place, and a `!` turn's wake was refused where it had
+been staged before. The plugin's engine tests pass 40 checks there. These native
+runs were not repeated on main. The retained-session native script needs Claude
+Code 2.1.302, which this machine no longer has, so it did not run. An author-run
+check compared every compatibility output of the bridge hook on main since the
+first install with the refresh's known list; none is missing.

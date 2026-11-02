@@ -273,6 +273,9 @@ our own plugin code to `.claude/skills/native-workspace-compat` in that session'
 working directory. It does not install globally, copy provider credentials or
 silently overwrite a different/edited plugin. The app validates directory
 ownership and refuses symlink destinations. Native plugin reload stays explicit.
+From alpha.161, when NAW starts or resumes Claude in a folder that already holds
+this plugin, it refreshes NAW's own byte-exact earlier copy of the hook there;
+it never creates the plugin, and edited, foreign or unsafe copies stay untouched.
 
 Per-session socket credentials are in the existing private local socket directory,
 not the project/plugin or public repository. The UI's local metadata retains the
