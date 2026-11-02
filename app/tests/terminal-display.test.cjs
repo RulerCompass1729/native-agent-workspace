@@ -144,9 +144,13 @@ for (const inDialog of [false, true]) test(`the original DSH menu host stays out
   assert.equal(appended[0].style.position, 'fixed');
   assert.equal(appended[0].style.width, '0px');
   assert.equal(appended[0].style.height, '0px');
-  const menu = rendered[0].type();
+  const menu = rendered[0].type(rendered[0].props);
   assert.equal(menu.props.portal, !inDialog);
+  // update() re-renders the same open menu with new items; after close it renders nothing.
+  const next = [{ id: 'rename', label: '重命名…' }];
+  close.update(next); assert.equal(rendered.length, 2); assert.equal(rendered[1].type(rendered[1].props).props.items, next);
   close(); close(); assert.equal(closes.length, 1); assert.equal(removed.length, 1);
+  close.update([]); assert.equal(rendered.length, 2);
 });
 
 

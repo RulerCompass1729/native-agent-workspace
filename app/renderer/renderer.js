@@ -1312,20 +1312,29 @@ function openRoomMenu(point, anchor, id = spaceId) {
   });
   roomMenu.key = key; roomMenu.anchor = anchor; roomMenu.roomId = id;
 }
+// Facts refresh in place while the menu is open; a changed action list or order closes it, because
+// onSelect acts on the neighbours and memberships captured when it opened.
+function sessionMenuModel(id, row) {
+  const record = state.sessions.find(s => s.id === id), group = row.spaceId;
+  const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
+  const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: `${inSpace(record, r.id) ? '离开' : '加入'}「${r.name}」` }));
+  const actions = [{ id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), ...roomItems, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: record.wakeDisabled ? '允许其他 agent 叫醒' : '禁止其他 agent 叫醒' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  return { record, group, visible, index, actionsKey: JSON.stringify([actions, visible.map(s => s.id)]),
+    items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
+}
 function openSessionMenu(id, point, rowKey = id) {
   contentMenu?.close(); if (!state.sessions.some(s => s.id === id)) return;
   if (!point && sessionMenu?.rowKey === rowKey && !sessionMenu.anchor) { sessionMenu.close(); return; }
   sessionMenu?.close(); roomMenu?.();
   const row = sessionRows.get(rowKey) || sessionRow(id); if (!row) return;
   row.more.focus(); row.more.setAttribute('aria-expanded', 'true');
-  const record = state.sessions.find(s => s.id === id), group = row.spaceId;
-  const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
-  const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: `${inSpace(record, r.id) ? '离开' : '加入'}「${r.name}」` }));
+  const model = sessionMenuModel(id, row), { record, group, visible, index } = model;
   const close = ui.menu({
     // Read-only facts first (full name, IDs, status, spaces, times, versions), then the original actions.
-    items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text })), { type: 'separator', id: 'session-facts-actions' },
-      ...[{ id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), ...roomItems, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: record.wakeDisabled ? '允许其他 agent 叫醒' : '禁止其他 agent 叫醒' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }].map(item => ({ ...item, disabled: disconnected || item.disabled }))],
-    getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : row.more.getBoundingClientRect(),
+    items: model.items,
+    // The facts make this menu taller than the window can fit above or below the row; anchoring at the
+    // trigger's right edge keeps the clamped menu beside ⋯, so a second click still closes it.
+    getAnchorRect: () => { if (point) return { left: point.x, right: point.x, top: point.y, bottom: point.y }; const box = row.more.getBoundingClientRect(); return { left: box.right, right: box.right, top: box.top, bottom: box.bottom, width: 0, height: box.height }; },
     onClose: () => { sessionMenu = null; row.more.setAttribute('aria-expanded', 'false'); if (row.more.isConnected && row.more.getClientRects().length) row.more.focus({ preventScroll: true }); else focusSessionAction(id); },
     onSelect: action => {
       if (disconnected || !state.sessions.some(s => s.id === id)) return;
@@ -1341,7 +1350,7 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); });
     },
   });
-  sessionMenu = { id, rowKey, close, kind: 'session', factsKey: sidebarFactsKey(record) };
+  sessionMenu = { id, rowKey, row, close, kind: 'session', factsKey: sidebarFactsKey(record), actionsKey: model.actionsKey };
 }
 
 function memberMenuKey(id) {
@@ -1568,10 +1577,11 @@ function toggleSidebarGroup(id) {
 }
 function renderSessions() {
   renderVersions(); renderSidebarGroups();
-  // An open session menu shows a fact snapshot; close it rather than show stale facts.
+  // An open session menu keeps its facts current in place; it closes only when its actions or order change.
   if (sessionMenu?.kind === 'session') {
-    const current = state.sessions.find(record => record.id === sessionMenu.id);
-    if (!current || sessionMenu.factsKey !== sidebarFactsKey(current)) sessionMenu.close();
+    const current = state.sessions.find(record => record.id === sessionMenu.id), model = current && sessionMenuModel(current.id, sessionMenu.row);
+    if (!model || model.actionsKey !== sessionMenu.actionsKey) sessionMenu.close();
+    else if (sessionMenu.factsKey !== sidebarFactsKey(current)) { sessionMenu.factsKey = sidebarFactsKey(current); sessionMenu.close.update(model.items); }
   }
   const visible = sidebarSessions().filter(s => !sidebarSpaceFilter || inSpace(s, sidebarSpaceFilter));
   const grouped = sidebarView === 'grouped', occurrences = [], containers = new Map();
