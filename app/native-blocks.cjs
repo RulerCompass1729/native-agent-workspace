@@ -25,7 +25,17 @@ function applyNativeBlock(session, event, imageDataDir) {
   if (!row) {
     row = { id, role: event.kind === 'input' ? 'user' : ['response', 'summary', 'plan'].includes(event.kind) ? 'assistant' : event.kind === 'tool' ? 'tool' : 'system',
       nativeId: event.nativeId, nativeBlock: true, volatile: event.kind === 'tool', kind: event.kind, turnId: event.turnId, text: '', ...(event.replayed === true ? {} : { time: Date.now() }) };
-    session.messages.push(row);
+    // A drawn explanation (T-130) takes the place of its row in the native
+    // stream: before a later row that arrived first, and after any earlier
+    // explanation of the same turn that was drawn after it.
+    let at = session.messages.length;
+    if (event.kind === 'response' && event.phase === 'commentary' && event.id.startsWith('narration:') && Number.isSafeInteger(event.order)) {
+      const before = typeof event.beforeId === 'string' ? session.messages.findIndex(m => m.id === `native:${event.nativeId}:${event.beforeId}`) : -1;
+      if (before >= 0) at = before;
+      while (at > 0 && session.messages[at - 1].narrationOrder > event.order && session.messages[at - 1].turnId === event.turnId && session.messages[at - 1].nativeId === event.nativeId) at--;
+      row.narrationOrder = event.order;
+    }
+    session.messages.splice(at, 0, row);
   }
   if (Number.isSafeInteger(event.index)) {
     if (Number.isSafeInteger(row.nativeIndex) && event.index <= row.nativeIndex) return false;
@@ -36,6 +46,7 @@ function applyNativeBlock(session, event, imageDataDir) {
   if (typeof event.delta === 'string') row.text += event.delta;
   for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag', 'toolKind']) if (typeof event[field] === 'string') row[field] = event[field];
   if (event.kind === 'input' && ['native-inline', 'native-prompt'].includes(event.inputMode)) row.inputMode = event.inputMode;
+  if (event.kind === 'response' && event.phase === 'commentary') row.phase = 'commentary';
   if (Object.hasOwn(event, 'images')) row.images = require('./native-images.cjs').imageReferences(event.images, event.imageCwd || session.cwd, row.images);
   if (Number.isSafeInteger(event.imageCount) && event.imageCount > 0 && event.imageCount <= 17 && ['tool', 'input'].includes(row.kind) && row.status === 'complete') {
     if (!Array.isArray(row.images)) row.images = [];

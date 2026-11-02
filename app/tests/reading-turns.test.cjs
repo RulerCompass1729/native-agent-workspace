@@ -79,3 +79,15 @@ test('a linked terminal prompt or ! command heads its turn; an unlinked one keep
   const unlinked = r.readingTurnMarks([native('before'),native('before-end',{role:'system',kind:'turn',turnId:'S',text:''}),{...typed,nativeId:undefined,turnId:undefined},...turn]);
   assert.equal(unlinked.has('claude-prompt-p'),false); assert.equal(unlinked.get('bash').start,true);
 });
+test('Claude\'s drawn explanation stays visible between tool groups, inside its turn, without a heading clock', () => {
+  const r = reader();
+  const say = (id, text) => native(id, { phase: 'commentary', text });
+  const rows = [native('ask',{role:'user',kind:'input',inputTag:'q'}), say('n1','我先读一下文件。'), native('read',{role:'tool',kind:'tool',title:'Read'}), native('grep',{role:'tool',kind:'tool',title:'Grep'}),
+    say('n2','找到了，接着改。'), native('edit',{role:'tool',kind:'tool',title:'Edit'}), native('answer'), native('end',{role:'system',kind:'turn',text:''})];
+  const marks = r.readingTurnMarks(rows);
+  assert.equal(marks.get('ask').start, true); for (const id of ['n1','n2','answer']) assert.equal(marks.get(id).start, false);
+  const groups = plain([...r.nativeProcessGroups(rows,false,rows).values()]);
+  assert.ok(groups.every(g => g.messages.every(m => !['n1','n2'].includes(m.id))), 'explanations are never folded away');
+  assert.ok(groups.some(g => g.messages.map(m => m.id).join() === 'read,grep'), 'tools on either side of an explanation group separately');
+  assert.equal(r.readingMessageClock({ ...rows[1], time: 1000 }), null);
+});
