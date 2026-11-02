@@ -6,6 +6,7 @@
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else target.nativeWorkspaceCollaboration = api;
 })(typeof window === 'undefined' ? globalThis : window, function (target, fleet) {
+  const ORDER_HELP = '拖动抓手或名称排序；点击名称单独查看。也可用 Option 加上下方向键，或成员菜单上移、下移。';
   const labels = { starting: '正在启动', idle: '会话就绪', working: '正在工作', approval: '等待确认', stopping: '等待退出确认', disconnected: '已断开', recoverable: '等待恢复', ended: '已结束', background: '已转到后台', error: '需要检查' };
   function statusFacts(record, connected = true, now = Date.now()) {
     const live = connected && !record.transportDisconnected && !record.backendUnavailable;
@@ -274,10 +275,12 @@
       records.forEach((record, i) => {
         let pane = panes.get(record.id); if (!pane) { pane = makePane(record); panes.set(record.id, pane); }
         const label = options.label(record), suffix = label.startsWith(record.name) ? label.slice(record.name.length) : '';
-        setText(pane.nameText, suffix ? record.name : label); setText(pane.nameSuffix, suffix); pane.name.title = label;
+        setText(pane.nameText, suffix ? record.name : label); setText(pane.nameSuffix, suffix);
+        pane.name.dataset.orderHandle = String(canOrder());
+        pane.name.title = label + (canOrder() ? ` · ${ORDER_HELP}` : '');
         pane.name.setAttribute('aria-label', `放大 ${label} 的会话`); pane.name.setAttribute('aria-pressed', String(focused === record.id));
         if (options.onMove) {
-          pane.name.setAttribute('aria-description', `第 ${i + 1} 位，共 ${records.length} 位成员。${canOrder() ? '拖动卡片头排序，或按 Option 加上下方向键；也可在成员菜单中上移或下移。' : ''}`);
+          pane.name.setAttribute('aria-description', `第 ${i + 1} 位，共 ${records.length} 位成员。${canOrder() ? ORDER_HELP : ''}`);
           if (canOrder()) pane.name.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');
           else pane.name.removeAttribute('aria-keyshortcuts');
         }
