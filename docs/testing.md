@@ -3916,3 +3916,16 @@ the reported count: those backends keep no task types, report time or
 unconfirmed flag, do not reset the count on resume, and keep no input source, so
 injected turns there still show as the person. Installed acceptance with a real
 Claude background task remains open.
+
+The committed alpha.157 tree passes the same 2,067 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap: its daemon ran from the private runtime copy, a space was created,
+and the strict signature and CDHash were unchanged afterwards; no session or
+provider started. The daily's active backend had no sessions, so the update
+replaced it in place; the operator rechecked after the GUI quit that it was
+still empty and that no shared relay was running, and compared the installed
+CDHash after reopening. The ordinary visible update kept fourteen session
+records, archived ones included, with their native IDs, live process starts and
+drafts; the seven other backends kept PID, start time and version. None of this
+batch's behaviours has yet been observed in the daily app, and the new backend
+has not yet run a provider, so the post-provider signature check is pending.

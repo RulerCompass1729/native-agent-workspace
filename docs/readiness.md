@@ -4,22 +4,25 @@ As of 2026-11-01. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.157 shows reported background work instead of a ready dot after
-a Claude turn ends and labels machine-injected native turns instead of showing
-them as the person; both were GUI-checked by their author. It also carries four
-Codex 2 fixes with source and earlier lane component evidence only, and unit
-tests only for the reopen fix: reopening closed windows from stale
-notifications, keeping nearby focus when a read-only member region disappears,
-keeping the compact list's jump-to-latest control inside its reader, and a
-visible drag grip on member names. Existing sessions stay on older backends
-after the update: they show only the reported count, without task types; an
-interrupted or resumed session there can keep showing its last count until its
-next turn ends; an idle session with stale child records can keep a hollow ring;
-and machine-injected turns there are still shown as the person. The full unit
-suite and seven GUI scripts pass. Daily delivery remains pending; current daily
-remains alpha.156.
+Current daily GUI: alpha.157, committed build source `901004fb`. It shows
+reported background work instead of a ready dot after a Claude turn ends and
+labels machine-injected native turns instead of showing them as the person; both
+were GUI-checked by their author. It also carries four Codex 2 fixes with source
+and earlier lane component evidence only, and unit tests only for the reopen
+fix: reopening closed windows from stale notifications, keeping nearby focus
+when a read-only member region disappears, keeping the compact list's
+jump-to-latest control inside its reader, and a visible drag grip on member
+names. Existing sessions stay on older backends after the update: they show only
+the reported count, without task types; an interrupted or resumed session there
+can keep showing its last count until its next turn ends; an idle session with
+stale child records can keep a hollow ring; and machine-injected turns there are
+still shown as the person. The full unit suite and seven GUI scripts pass. The
+signed bundle passed one isolated launch. The ordinary visible update kept
+fourteen session records, archived ones included, with their native IDs, live
+processes and drafts; the empty active backend was replaced in place and the
+seven other backends kept PID, start time and version.
 
-Current daily GUI: alpha.156, committed build source `4a20d988`. A terminal
+The prior alpha.156 task, source `4a20d988`, remains qualified. A terminal
 view, the session's own or a read-only one, rebuilt from a native snapshot keeps
 scroll regions, origin-relative cursors, pending-wrap cursors and
 background-erased pending rows; only sessions on an alpha.156 backend get it,
