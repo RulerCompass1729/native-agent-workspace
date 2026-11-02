@@ -252,8 +252,10 @@ function connectionUpdateOptions(client, applicationVersion, profile) {
     // Moving idle sessions too (T-122): automatic only where the runtime proves nothing would be lost.
     const plan = old && !unavailable && entry !== client.active ? backendSwitch.backendPlan(entry.state, value => client.sessionState?.(value) || value.state, runningRelays(client)) : null;
     options.push({ backendKey: entry.key, id: record.id, nativeId: record.nativeId || null, version: version || null,
-      switch: plan && plan.stops.length ? { ready: plan.ready, auto: plan.auto, reason: plan.reason, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
+      switch: plan && (plan.stops.length || plan.blocked) ? { ready: plan.ready, auto: plan.auto, reason: plan.reason, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
       count: visible.length, ready: Boolean(old && status.ready && !unavailable && !effectiveActive),
+      // Which sessions this backend holds, so a menu can name them (T-131).
+      sessions: visible.map(value => ({ id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 80) : '' })),
       reason: unavailable ? '这个后台连接正在更新或已断开，原会话继续保留。' : !old ? '版本未知、较新或无法比较，不能把它当作旧后台自动更新。原连接保留。'
         : effectiveActive ? status.reason || '原生会话尚未确认结束；原连接保留，不会自动安排重启。' : status.reason || '' });
   }

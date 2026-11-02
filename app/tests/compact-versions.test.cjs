@@ -134,6 +134,7 @@ function menuFixture() {
       async switchBackend(value) { calls.switches.push(value); return { key: value.backendKey, resumed: ['s'], left: [] }; } },
     ui: { menu(value) { menu = value; return () => {}; } }, renderVersions() { calls.renders++; },
     versionValue: value => value, toast: value => calls.toasts.push(value), attempt: work => work() });
+  vm.runInContext(source.slice(source.indexOf('function compactAppVersion('), source.indexOf('function backendVersionNotice(')), c);
   vm.runInContext(source.slice(source.indexOf('function backendSwitchedText('), source.indexOf("$('backend-version-summary').onclick")), c);
   // Model a browser dropping focus on native disable. This is an async focus
   // contract test, not a claim that a real Chromium GUI has been exercised.
@@ -166,7 +167,7 @@ test('an idle old backend offers one explicit end-and-update, and the automatic 
   const stops = [{ id: 's', nativeId: 'native-s', provider: 'claude', name: 'Claude 2', owner: 'view' }];
   f.resolve([{ id: 's', backendKey: 'old', nativeId: 'native-s', version: '0.1.0-alpha.120', count: 1, ready: false, reason: 'Working connection retained',
     switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]); await opening;
-  assert.deepEqual(plain(f.menu.items.map(item => item.label)), ['0.1.0-alpha.120 · 1 个会话 · 结束并更新…', '空闲时自动更新：开（点此关闭）']);
+  assert.deepEqual(plain(f.menu.items.map(item => item.label)), ['α120 · 结束并更新… · 1 个会话', '空闲时自动更新：开（点此关闭）']);
   await f.menu.onSelect('0');
   assert.deepEqual(plain(f.calls.switches), [{ backendKey: 'old', switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]);
   assert.equal(f.calls.updates.length, 0); assert.deepEqual(f.calls.toasts, ['后台已更新，会话已按原身份接回；NAW 没有向它们发送任何内容。']);
@@ -206,4 +207,56 @@ test('the sessions-to-reconnect list names every session a move left not live, a
   assert.deepEqual(plain(c.endedByMove(sessions).map(s => s.name)), ['Claude 2', 'Codex 秘书', 'Claude 3']);
   assert.deepEqual(plain(c.endedByMove([{ id: 'a', nativeId: 'other', state: 'ended' }])), [], 'A different native identity is not the session that was ended');
   c.backendSwitching = 'backends/aaaaaaaaaaaaaaaaaaaa'; assert.deepEqual(plain(c.endedByMove(sessions)), [], 'Not while that backend is moving');
+});
+// T-131: each old backend names its sessions, and a session's own menu offers the update.
+test('each old backend names the sessions it holds, only the visible ones', t => {
+  const os = require('node:os'), path = require('node:path'), { RoomState } = require('../room-state.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-version-names-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const profile = new RoomState(directory); profile.value.archivedSessions = ['hidden'];
+  const records = [{ id: 'a', name: 'Claude · NAW 开发', nativeId: 'n-a', state: 'idle' }, { id: 'b', name: '秘书'.repeat(50), nativeId: 'n-b', state: 'idle' }, { id: 'hidden', name: 'Hidden', nativeId: 'n-h', state: 'idle' }];
+  const client = { entries: [{ key: 'old', state: { runtimeVersion: '0.1.0-alpha.120', sessions: records, capabilities: ['atomicShutdown'] } }], snapshot: () => ({ sessions: records, room: { messages: [] } }) };
+  const [option] = mainOptions(client, current, profile);
+  assert.deepEqual(option.sessions.map(s => s.id), ['a', 'b']); assert.equal(option.sessions[1].name.length, 80);
+  const label = (o, sessions = []) => { const f = menuFixture(); f.c.state.sessions = sessions; return f.c.backendOptionLabel(o); };
+  assert.equal(label({ version: '0.1.0-alpha.118', count: 2, ready: false, switch: { ready: true }, sessions: [{ id: 'a', name: 'Claude · NAW 开发' }, { id: 'b', name: '秘书' }] }), 'α118 · 结束并更新… · 2 个会话：Claude · NAW 开发、秘书');
+  assert.equal(label({ version: '0.1.0-alpha.120', count: 4, ready: true, sessions: ['A', 'B', 'C', 'D'].map(name => ({ id: name, name })) }), 'α120 · 核对并更新连接… · 4 个会话：A、B、C 等');
+  assert.equal(label({ version: '0.1.0-alpha.120', count: 1, ready: false }), 'α120 · 保留连接，查看原因 · 1 个会话');
+  assert.equal(label({ version: '0.1.0-alpha.120', count: 3, ready: true, sessions: ['Same', 'Same', ''].map((name, i) => ({ id: String(i), name })) }), 'α120 · 核对并更新连接… · 3 个会话：Same 等');
+  // The name this window shows (a local rename) wins over the backend's stored name; long names are shortened.
+  assert.equal(label({ version: '0.1.0-alpha.120', count: 2, ready: true, sessions: [{ id: 'a', name: 'Claude 2' }, { id: 'b', name: 'x'.repeat(40) }] }, [{ id: 'a', name: 'NAW 开发' }]),
+    `α120 · 核对并更新连接… · 2 个会话：NAW 开发、${'x'.repeat(16)}…`);
+});
+test('a session\'s own menu runs the update of the backend that holds it, or says why not', async () => {
+  const stops = [{ id: 's', nativeId: 'native-s', provider: 'claude', name: 'Claude 2', owner: 'view' }];
+  const other = { id: 'x', backendKey: 'other', count: 1, ready: false, reason: 'other backend', sessions: [{ id: 'x', name: 'X' }] };
+  const mine = { id: 's', backendKey: 'old', count: 1, ready: false, reason: 'Retained', switch: { ready: true, auto: false, reason: '', stops }, sessions: [{ id: 's', name: 'Claude 2' }] };
+  const f = menuFixture(), updating = f.c.updateSessionBackend('s'); f.resolve([other, mine]); await updating; await new Promise(r => setImmediate(r));
+  assert.deepEqual(plain(f.calls.switches), [{ backendKey: 'old', switch: mine.switch }]);
+  const blocked = menuFixture(), checking = blocked.c.updateSessionBackend('s');
+  blocked.resolve([{ ...mine, switch: { ready: false, reason: '等空闲后更新：Claude 2正在工作。', stops: [] } }]); await checking;
+  assert.deepEqual(blocked.calls.toasts, ['等空闲后更新：Claude 2正在工作。']); assert.equal(blocked.calls.switches.length, 0);
+  const none = menuFixture(), nothing = none.c.updateSessionBackend('s'); none.resolve([other]); await nothing;
+  assert.match(none.calls.toasts[0], /不需要更新/); assert.equal(none.calls.switches.length + none.calls.updates.length, 0);
+});
+test('the session menu offers the update right under its version fact, only for an older backend', () => {
+  const start = source.indexOf('function sessionMenuModel('), end = source.indexOf('function openSessionMenu(');
+  const c = vm.createContext({ state: { appVersion: current, sessions: [], capabilities: [] }, disconnected: false, allSpaces: () => [], inSpace: () => false,
+    orderedMembers: () => [], sidebarSessions: () => [], sidebarDetails: record => ['fact ' + record.id] });
+  vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf('function backendVersionSummary(')) + source.slice(start, end), c);
+  const ids = record => { c.state.sessions = [record]; return c.sessionMenuModel(record.id, { spaceId: null }).items.map(item => item.id); };
+  assert.deepEqual(plain(ids({ id: 'old', runtimeVersion: '0.1.0-alpha.120' }).slice(0, 4)), ['session-fact-0', 'session-facts-actions', 'update-backend', 'rename']);
+  for (const record of [{ id: 'same', runtimeVersion: current }, { id: 'newer', runtimeVersion: '0.1.0-alpha.140' }, { id: 'unknown' }, { id: 'archived', runtimeVersion: '0.1.0-alpha.120', archived: true }])
+    assert.equal(ids(record).includes('update-backend'), false, record.id);
+});
+test('a session blocked by its own work says exactly why, end to end from the main process', async () => {
+  const records = [{ id: 's', name: 'Claude 2', provider: 'claude', state: 'idle', nativeId: 'native-s', background: 1 }];
+  const entry = { key: 'old', state: { runtimeVersion: '0.1.0-alpha.120', sessions: records, capabilities: ['atomicShutdown', 'resume'], servicePid: 4321 } };
+  const client = { entries: [entry], active: { key: 'current' }, snapshot: () => ({ sessions: records, room: { messages: [] } }) };
+  const options = mainOptions(client);
+  assert.equal(options[0].switch.ready, false); assert.match(options[0].switch.reason, /后台任务在跑 · 1 项/);
+  const f = menuFixture(), checking = f.c.updateSessionBackend('s'); f.resolve(options); await checking;
+  assert.deepEqual(f.calls.toasts, ['等空闲后更新：Claude 2：后台任务在跑 · 1 项。']); assert.equal(f.calls.switches.length + f.calls.updates.length, 0);
+  // A backend that cannot take the one-step move at all keeps the earlier, manual guidance.
+  const early = mainOptions({ ...client, entries: [{ key: 'old', state: { ...entry.state, capabilities: [] } }] });
+  assert.equal(early[0].switch, null);
 });

@@ -119,7 +119,7 @@ test('an open facts menu refreshes changed state or version in place and closes 
   const prefix = section('function renderSessions() {', '\n  const visible =');
   const facts = items => items.filter(item => item.type === 'label').map(item => item.text);
   const setup = () => { const h = harness(row()); h.ctx.renderVersions = h.ctx.renderSidebarGroups = () => {}; vm.runInContext(prefix + '\n}', h.ctx); h.open(); return h; };
-  for (const [change, expected] of [[h => { h.record.state = 'working'; }, /正在工作/], [h => { h.record.runtimeVersion = '0.1.0-alpha.140'; }, /后台 0\.1\.0-alpha\.140/]]) {
+  for (const [change, expected] of [[h => { h.record.state = 'working'; }, /正在工作/], [h => { h.record.runtimeVersion = '0.1.0-alpha.160'; }, /后台 0\.1\.0-alpha\.160/]]) {
     const h = setup(), opened = h.ctx.sessionMenu;
     h.record.liveDraft = 'UNSENT original draft'; h.ctx.renderSessions(); assert.strictEqual(h.ctx.sessionMenu, opened, 'Unrelated draft changes do not dismiss a facts menu'); assert.equal(h.updates.length, 0);
     change(h); h.ctx.renderSessions(); assert.strictEqual(h.ctx.sessionMenu, opened, 'A changed fact keeps the same menu open');
@@ -127,7 +127,8 @@ test('an open facts menu refreshes changed state or version in place and closes 
     assert.deepEqual(h.updates[0].filter(item => item.type !== 'label'), h.menus[0].items.filter(item => item.type !== 'label'), 'Actions are unchanged');
     h.ctx.renderSessions(); assert.equal(h.updates.length, 1, 'No re-render without a further change');
   }
-  for (const change of [h => { h.ctx.disconnected = true; }, h => { h.record.nativeId = undefined; }, h => { h.records.reverse(); }, h => { h.ctx.state.sessions = h.records.filter(r => r !== h.record); }]) {
+  // A backend that becomes older adds 「结束并更新这个后台…」 (T-131): a changed action list closes the menu.
+  for (const change of [h => { h.record.runtimeVersion = '0.1.0-alpha.140'; }, h => { h.ctx.disconnected = true; }, h => { h.record.nativeId = undefined; }, h => { h.records.reverse(); }, h => { h.ctx.state.sessions = h.records.filter(r => r !== h.record); }]) {
     const h = setup(); change(h); h.ctx.renderSessions(); assert.equal(h.ctx.sessionMenu, null, 'A changed action list, order or connection closes the menu');
   }
 });

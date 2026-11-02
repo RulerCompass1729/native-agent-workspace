@@ -1326,7 +1326,9 @@ function sessionMenuModel(id, row) {
   const record = state.sessions.find(s => s.id === id), group = row.spaceId;
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
   const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: `${inSpace(record, r.id) ? '离开' : '加入'}「${r.name}」` }));
-  const actions = [{ id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), ...roomItems, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: record.wakeDisabled ? '允许其他 agent 叫醒' : '禁止其他 agent 叫醒' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  // Right under the version fact that says this backend is older (T-131).
+  const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: '结束并更新这个后台…' }] : [];
+  const actions = [...update, { id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), ...roomItems, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: record.wakeDisabled ? '允许其他 agent 叫醒' : '禁止其他 agent 叫醒' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions, visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
@@ -1350,6 +1352,7 @@ function openSessionMenu(id, point, rowKey = id) {
         const destination = action.slice(11), person = state.sessions.find(s => s.id === id);
         attempt(() => inSpace(person, destination) ? detach(id, destination) : addToSpace(id, destination));
       } else if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled)));
+      else if (action === 'update-backend') attempt(() => updateSessionBackend(id));
       else if (action === 'up' || action === 'down') attempt(() => group ? moveRoomMember(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down', group) : moveSidebarSession(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down'));
       else if (action === 'copy-id' || action === 'copy-native-id') attempt(() => api.copy(action === 'copy-id' ? id : state.sessions.find(s => s.id === id)?.nativeId));
       else if (action === 'rename') openRename(id, row.more);
@@ -1518,7 +1521,7 @@ async function openBackendVersions() {
     const interrupted = settings.interrupted.length ? `上次更新时结束了 ${settings.interrupted.join('、')}，可在会话里点“继续原生会话”接回` : '';
     if (!options.length && !interrupted) return toast('当前没有需要核对的旧后台连接。');
     backendVersionMenu = ui.menu({
-      items: [...options.map((option, index) => ({ id: String(index), label: `${versionValue(option.version) || '版本未知'} · ${option.count} 个会话 · ${option.ready ? '核对并更新连接…' : option.switch?.ready ? '结束并更新…' : '保留连接，查看原因'}` })),
+      items: [...options.map((option, index) => ({ id: String(index), label: backendOptionLabel(option) })),
         ...(interrupted ? [{ id: 'interrupted', label: interrupted }] : []),
         { id: 'auto', label: settings.auto ? '空闲时自动更新：开（点此关闭）' : '空闲时自动更新：关（点此打开）' }],
       getAnchorRect: () => control.getBoundingClientRect(),
@@ -1528,16 +1531,36 @@ async function openBackendVersions() {
         if (key === 'interrupted') return toast(interrupted);
         if (key === 'auto') return attempt(async () => { const next = await api.backendSwitchSettings(!settings.auto); toast(next.auto ? '已打开：旧后台上的会话确认空闲后会自动更新并接回。' : '已关闭自动更新；旧后台上的会话保持原样。'); });
         const option = options[Number(key)];
-        if (!option) return;
-        if (!option.ready && option.switch?.ready) return attempt(async () => { const result = await api.switchBackend({ backendKey: option.backendKey, switch: option.switch }); if (result) toast(backendSwitchedText(result)); });
-        if (!option.ready) return toast(option.switch?.reason && !option.switch.ready ? option.switch.reason : option.reason);
-        attempt(async () => {
-          const updated = await api.continueConnection(option.id, { backendKey: option.backendKey, nativeId: option.nativeId, version: option.version });
-          if (updated) toast('这个后台的连接已更新；原生任务没有自动重发。');
-        });
+        if (option) return runBackendOption(option);
       },
     });
   } finally { checkingBackendVersions = false; renderVersions(); }
+}
+// One label and one action per old backend, shared by the sidebar's old-sessions
+// menu and a session's own ⋯ menu (T-131), so each backend says whose it is.
+function backendOptionLabel(option) {
+  // Names as this window shows them (renames included); the action comes first so
+  // a narrow menu never hides what a click does.
+  const shown = id => state.sessions?.find(record => record.id === id)?.name;
+  const short = name => name.length > 16 ? name.slice(0, 16) + '…' : name;
+  const names = [...new Set(Array.isArray(option.sessions) ? option.sessions.map(s => shown(s.id) || s.name).filter(Boolean) : [])].slice(0, 3);
+  const who = names.length ? `：${names.map(short).join('、')}${option.count > names.length ? ' 等' : ''}` : '';
+  return `${option.version ? compactAppVersion(option.version) : '版本未知'} · ${option.ready ? '核对并更新连接…' : option.switch?.ready ? '结束并更新…' : '保留连接，查看原因'} · ${option.count} 个会话${who}`;
+}
+function runBackendOption(option) {
+  if (!option.ready && option.switch?.ready) return attempt(async () => { const result = await api.switchBackend({ backendKey: option.backendKey, switch: option.switch }); if (result) toast(backendSwitchedText(result)); });
+  if (!option.ready) return toast(option.switch?.reason && !option.switch.ready ? option.switch.reason : option.reason);
+  return attempt(async () => {
+    const updated = await api.continueConnection(option.id, { backendKey: option.backendKey, nativeId: option.nativeId, version: option.version });
+    if (updated) toast('这个后台的连接已更新；原生任务没有自动重发。');
+  });
+}
+// From a session's own menu: find the backend that holds it now, then act as the sidebar would.
+async function updateSessionBackend(id) {
+  const options = await api.connectionUpdates();
+  const option = options.find(o => Array.isArray(o.sessions) && o.sessions.some(s => s.id === id));
+  if (!option) return toast('这个会话的后台现在不需要更新，或它已经在新版后台上。');
+  return runBackendOption(option);
 }
 function backendSwitchedText(result) {
   if (result.error) return '自动更新旧后台没有完成：' + result.error;
