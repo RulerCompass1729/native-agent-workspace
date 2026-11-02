@@ -128,6 +128,20 @@ test('malformed Unicode in human text is rejected before native delegation', asy
   await assert.rejects(f.broker.send(auth, { contextId: row.contextId, requestId: randomUUID(), text: 'broken\ud800' }));
   assert.equal(f.sent.length, 0);
 });
+test('text with a native terminal prefix is refused before any request record or client call', async t => {
+  const f = fixture(t), { auth } = await f.pair(), row = await f.broker.read(auth, f.record.id);
+  for (const text of ['!x', ' !x', '\n\t!x', '\u3000!x', '#x', ' #x', '/x', ' /x']) {
+    const requestId = randomUUID();
+    await assert.rejects(f.broker.send(auth, { contextId: row.contextId, requestId, text }), { code: 'MOBILE_BROKER_DENIED' }, JSON.stringify(text));
+    await assert.rejects(f.broker.receipt(auth, requestId), { code: 'MOBILE_RECEIPT_UNKNOWN' }, 'no request record for ' + JSON.stringify(text));
+  }
+  assert.deepEqual(f.calls.map(value => value.method), ['mobileRead']); assert.equal(f.sent.length, 0);
+  // The same request ID is still free, and the prefixes are only refused at the start.
+  const requestId = randomUUID();
+  await assert.rejects(f.broker.send(auth, { contextId: row.contextId, requestId, text: '!x' }));
+  assert.equal((await f.broker.send(auth, { contextId: row.contextId, requestId, text: 'run it! #1 a/b' })).status, 'submitted');
+  assert.deepEqual(f.sent.map(value => value.text), ['run it! #1 a/b']);
+});
 test('read whitelists originals and opaque context without exposing owner, draft, native identity or backend proof', async t => {
   const f = fixture(t), { auth } = await f.pair(), row = await f.broker.read(auth, f.record.id), raw = JSON.stringify(row);
   assert.equal(row.messages[0].text, 'Original reply'); assert.equal(row.contextId.length, 43);

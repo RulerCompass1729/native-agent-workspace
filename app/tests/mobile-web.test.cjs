@@ -81,6 +81,18 @@ test('a late original read cannot overwrite another selected session', async () 
   const second = f.client.select('b'), releaseSecond = f.takeRead(); releaseSecond(); await second; releaseFirst(); await first;
   assert.equal(f.client.state.row.id, 'b'); assert.equal(f.client.state.selected, 'b');
 });
+test('text with a native terminal prefix is refused on the phone without a pending row or request', async () => {
+  const f = fixture(); await f.client.start(); await f.client.select('a'); const before = f.values.get(KEY);
+  for (const text of ['!x', ' !x', '\n!x', '#x', '/x']) {
+    f.client.setDraft(text); const saved = f.values.get(KEY); await f.client.send();
+    assert.equal(f.client.state.pending.length, 0); assert.equal(f.client.state.draft, text); assert.equal(f.client.state.busy, false);
+    assert.match(f.client.state.notice, /不发送以 !、# 或 \/ 开头/); assert.equal(f.values.get(KEY), saved, 'no pending row saved for ' + JSON.stringify(text));
+  }
+  assert.notEqual(before, f.values.get(KEY)); assert.equal(JSON.parse(f.values.get(KEY)).pending.length, 0);
+  assert.equal(f.calls.filter(c => ['/mobile/send', '/mobile/answer', '/mobile/receipt'].includes(c.route)).length, 0);
+  f.client.setDraft('ok! #1'); await f.client.send();
+  assert.deepEqual(f.calls.filter(c => c.route === '/mobile/send').map(c => c.value.text), ['ok! #1']); assert.equal(f.client.state.pending[0].status, 'submitted');
+});
 test('malformed or oversized local storage is a visible blocker, not an input retry', async () => {
   const f = fixture({ stored: { version: 0, drafts: [], pending: [] } }); await f.client.start(); await f.client.select('a');
   assert.equal(f.client.state.storageError, true); await assert.rejects(f.client.send()); assert.equal(f.calls.filter(c => c.route === '/mobile/send').length, 0);
@@ -102,6 +114,24 @@ class Element {
   addEventListener(name, listener) { this.listeners[name] = listener; }
   querySelectorAll(tag) { return this.children.flatMap(c => [c.tag === tag ? [c] : [], c.querySelectorAll(tag)].flat()); }
 }
+test('the actual phone mount shows the prefix refusal instead of a generic failure', async () => {
+  const ids = ['logout', 'notice', 'sessions', 'member-title', 'refresh', 'member-state', 'messages', 'omissions', 'questions', 'compose', 'draft', 'draft-status', 'send', 'receipts'];
+  const elements = Object.fromEntries(ids.map(id => [id, new Element(id)])), calls = [], disk = new Map();
+  const document = { getElementById: id => elements[id], createElement: tag => new Element(tag) };
+  const client = mount(document, { hash: '', pathname: '/mobile/' }, { replaceState() {} },
+    { getItem: key => disk.get(key) || null, setItem: (key, value) => disk.set(key, value) }, async (route, options) => {
+      calls.push(route); let result;
+      if (route === '/mobile/session') result = { deviceId, csrf: 'c'.repeat(43), sessions: [{ id: 'a', name: 'Original member', state: 'idle', actions: ['read', 'send'] }] };
+      else if (route === '/mobile/read/a') result = { id: 'a', contextId: 'x'.repeat(43), canSend: true, messages: [], question: null };
+      else assert.fail('unexpected route ' + route);
+      return { ok: true, json: async () => result };
+    }, { randomUUID });
+  await client.ready; await client.select('a');
+  elements.draft.value = '!echo'; elements.draft.listeners.input(); assert.equal(elements.send.disabled, false);
+  elements.compose.listeners.submit({ preventDefault() {} }); await new Promise(resolve => setImmediate(resolve));
+  assert.match(elements.notice.textContent, /不发送以 !、# 或 \/ 开头/); assert.deepEqual(calls, ['/mobile/session', '/mobile/read/a']);
+  assert.equal(client.state.pending.length, 0); assert.equal(elements.draft.value, '!echo');
+});
 test('the actual phone mount clears the fragment before fetch, renders literal originals and uses native question keys', async () => {
   const ids = ['logout', 'notice', 'sessions', 'member-title', 'refresh', 'member-state', 'messages', 'omissions', 'questions', 'compose', 'draft', 'draft-status', 'send', 'receipts'];
   const elements = Object.fromEntries(ids.map(id => [id, new Element(id)])), calls = [], disk = new Map(); let cleared = false;

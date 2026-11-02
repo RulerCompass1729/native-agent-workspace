@@ -11,6 +11,8 @@
     unconfirmed: '结果未确认，请查原回执，勿重复发送', 'not-sent': '未发送，草稿保留', 'reply-written': '回答已写入；原生处理仍待确认',
   };
   const failure = code => Object.assign(new Error(code), { code });
+  // Same rule as the broker: these prefixes have native terminal meaning.
+  const nativePrefix = value => /^[!#/]/.test(value.trim());
   function createMobileClient({ request, storage, newId, onChange = () => {} }) {
     const state = { session: null, selected: null, row: null, draft: '', revision: 0, busy: false, notice: '', storageError: false, drafts: [], pending: [] };
     let readEpoch = 0, unreadableStorage = false;
@@ -94,6 +96,9 @@
     async function submit(action, answers) {
       if (state.busy || state.storageError || !state.session || !state.row || state.row.id !== state.selected || unresolved() ||
           action === 'send' && (!state.row.canSend || !state.draft.trim()) || action === 'answer' && !state.row.question) throw failure('MOBILE_INPUT_UNAVAILABLE');
+      if (action === 'send' && nativePrefix(state.draft)) {
+        state.notice = '手机端不发送以 !、# 或 / 开头的文字：在原生终端里它们会被当成命令、记忆或斜杠命令。草稿已保留，请改写开头或回 Mac 输入。'; changed(); return;
+      }
       const requestId = newId(); if (!uuid(requestId)) throw failure('MOBILE_BAD_REQUEST_ID');
       const contextId = state.row.contextId, deviceId = state.session.deviceId, csrf = state.session.csrf;
       const pending = { deviceId, sessionId: state.selected, requestId, action, text: action === 'send' ? state.draft : '', revision: state.revision, status: 'unconfirmed' };

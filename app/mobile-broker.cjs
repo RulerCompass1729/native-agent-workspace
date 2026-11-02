@@ -13,6 +13,9 @@ const token = value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(v
 const digest = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const fingerprint = value => digest(JSON.stringify(stable(value)));
+// A leading ! (shell), # (memory) or / (command) has meaning in a native terminal.
+// Phone text is plain prompt text, so it is refused before any record or call.
+const nativePrefix = text => /^[!#/]/.test(text.trim());
 const receipt = (value, ticket, requestId, action) => {
   if (!value || value.requestId !== requestId || value.sessionId !== ticket.sessionId || value.nativeId !== ticket.nativeId || value.action !== action ||
       !['prepared', 'awaiting-native', 'submitted', 'unconfirmed', 'not-sent', 'reply-written'].includes(value.status)) throw denied('MOBILE_RECEIPT_UNKNOWN');
@@ -139,7 +142,7 @@ class MobileBroker {
   async #submit(auth, value, action) {
     const keys = action === 'send' ? ['contextId', 'requestId', 'text'] : ['contextId', 'requestId', 'answers'];
     if (!exact(value, keys) || !token(value.contextId) || !uuid(value.requestId) ||
-        action === 'send' && (typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || !value.text.isWellFormed()) ||
+        action === 'send' && (typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || !value.text.isWellFormed() || nativePrefix(value.text)) ||
         action === 'answer' && (!value.answers || typeof value.answers !== 'object' || Array.isArray(value.answers))) throw denied();
     if (Buffer.byteLength(JSON.stringify(value)) > 65536) throw denied();
     this.#writeState(auth);
