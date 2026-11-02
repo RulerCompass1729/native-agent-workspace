@@ -2302,3 +2302,41 @@ backend in place. Open: the post-provider signature check on the new backend,
 the Codex 2 behaviours and the background and injected-turn labels in the daily
 app, the window between the last quiet check and bootstrap, and the items listed
 above.
+
+
+### Enlarged member card returns to the whole space (T-121, completes T-119)
+
+In a collaboration space, an enlarged member's card kept its enlarge mark and
+ignored clicks. The earlier no-op was an intentional passive-focus safeguard.
+The user accepted option A: the enlarged card shows a return mark, and clicking
+it returns through the same focus reset as the back link. The shared focus
+function is unchanged, and the accessible name stays constant with the pressed
+state. The lane's independent reviewer required updating the old no-op assertion
+and asked for Ctrl-click, double-click and keyboard coverage; the delta review
+passed.
+
+
+### Claude Code 2.1.316 bridge binding (T-100 checkpoint 1)
+
+Every daily Claude session runs Claude Code 2.1.316, but the bridge's version
+lists ended at 2.1.312, so no root binding existed: every agent message was
+refused locally, and a 2.1.316 session's conversation view showed only final
+replies. 2.1.316 now joins the native-block and context-transition lists only,
+matching 2.1.307. The lane's fresh reviewer first asked for a plugin declaration
+comparison and a shared-space final-reply run; with that evidence the delta
+review passed. Install note from that review: when a new 2.1.316 member answers
+a message from its space, that turn's intermediate text and tool rows, with
+commands and output, go into the space; turns started in its own terminal stay
+private. Open: any native input still cancels every pending wake (checkpoint 2),
+the secretary runs on a backend without agent wake, and a real wake on the
+installed app.
+
+
+### Correction: injected-turn label (T-120)
+
+Claude 2 recorded at 19:53, before alpha.157 was delivered, that Claude Code
+2.1.316 does not pass the prompt source to the hook; integration missed that
+note in another lane and shipped records saying the label applies. Claude 3
+confirmed it after delivery. It does not apply to real input. The code is
+harmless without a source and stays. The author will redo the label from a
+signal 2.1.316 provides.
