@@ -4026,3 +4026,20 @@ script stops waiting for a member tab strip that the overview hid earlier. Both
 are stale scripts already listed for repair. In the lane the follow-ups passed
 the session menu script with its pending repair and a check at 850 by 600 with
 the sidebar collapsed.
+
+After the follow-ups, the member header menu, multispace and collaboration
+overview scripts were rerun because the shared menu host changed, and exit 0.
+The committed alpha.159 tree passes the same 2,121 unit checks. A first package
+built before the follow-ups was not used. The signed bundle started once on an
+empty synthetic profile through its own service bootstrap and kept its strict
+signature and CDHash; no session or provider started. Every running daily
+backend's pause handler was read before the update. The daily's active backend
+had no sessions, so it was replaced in place; before quitting, the operator also
+required that the new code's own move plan found no automatic move for any other
+backend. The ordinary visible update kept fourteen session records, archived
+ones included, with their native IDs, live process starts and drafts; the seven
+other backends kept PID, start time and version. After a further 150 seconds,
+long enough for two automatic-move checks, the other backends and all sixteen
+live native processes were unchanged and no move record existed. The move menu,
+the sidebar, terminal selection, the notification rule and a real wake have not
+yet been exercised in the daily app.
