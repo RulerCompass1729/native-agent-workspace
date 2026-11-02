@@ -3876,3 +3876,17 @@ join label removed with independent spaces, in the author lane and on main, so
 its 850x600 group is unverified. Two earlier main runs of those two scripts
 exited at once because the outer test-slot lease blocked them; no GUI started.
 The T-116 join regression still passes all six checks.
+
+The signed alpha.156 bundle started once on an empty synthetic profile through
+its own service bootstrap: its daemon ran from the private runtime copy, a space
+was created, and the strict signature and CDHash were unchanged afterwards. No
+session or provider started. The daily's active backend had no sessions, so the
+update replaced it in place and the upgrade branch that pauses other backends
+did not run. The operator checked that it stayed empty after the GUI quit and
+before the bundle was replaced, and compared the installed CDHash after
+reopening. The ordinary visible update kept fourteen session records, archived
+ones included, with their native IDs, live process starts and drafts; the seven
+other backends kept PID, start time and version. A backend whose last session
+ends during the quit and reopen would be replaced in place; that did not happen.
+The new backend has not yet run a provider, so the post-provider signature check
+is still pending.

@@ -2247,3 +2247,20 @@ click did nothing; the button now follows whether the terminal is shown. The
 delta review passed. The member-card enlarge link is a separate user question
 (T-121). Not verified: the DSH host runtime, forced-colors mode, the maximized
 then focused-member then restore path, and the installed app.
+
+
+### Integrated alpha.156 delivery
+
+A fresh read-only reviewer accepted the integration of the four lane changes
+after record corrections, including the split of the pre-fix failures, the scope
+of the snapshot change, the synthetic-snapshot limit, a failing compact-header
+run summarized as a pass, and a missing T-116 regression log. It then rejected
+the first update operator: with an empty active backend the operator skipped the
+all-backend quiet check, but a session created between its last read and the GUI
+exit would have sent the upgrade pause to unchecked backends. A recheck after
+the GUI quit and before the bundle replacement closed that; the reviewer
+accepted one run, which replaced the empty active backend in place. Remaining:
+no before/after comparison of the restarted backend's non-session state, the zip
+is tied to the bundle only through the attestation text, a retained backend
+whose last session ends during the update window would be replaced, and the
+post-provider signature check is pending.

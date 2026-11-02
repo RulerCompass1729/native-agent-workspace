@@ -4,25 +4,28 @@ As of 2026-11-01. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.156 restores scroll regions, origin-relative cursors,
-pending-wrap cursors and background-erased pending rows when a terminal view,
-the session's own or a read-only one, is rebuilt from a native snapshot. Only
-sessions on a new alpha.156 backend get it; existing backends keep their code.
-Two GUI-side changes reach every session after the update: terminal rows keep
-full-width punctuation on the grid instead of drifting right after each mark,
-and both maximize buttons show a restore graphic once maximized; the member-card
-enlarge link is a separate user question (T-121). It also ports the native
-confirmation GUI test to the current same-screen interface. All four changes
-were reviewed in their author lanes and are integrated with identical changed
-lines. The full unit suite passes. The punctuation change passes its GUI script.
-For the maximize buttons, the member-header script passes; the compact-header
-script passes its maximize groups and then fails at line 124 on a removed join
-label, so its 850x600 group is unverified. The confirmation and read-only scroll
-GUI scripts pass but serve synthetic snapshots, so they do not cover the
-snapshot rendering. Daily delivery remains pending; current daily remains
-alpha.155. Browser rendering of the restored terminal states is unverified.
+Current daily GUI: alpha.156, committed build source `4a20d988`. A terminal
+view, the session's own or a read-only one, rebuilt from a native snapshot keeps
+scroll regions, origin-relative cursors, pending-wrap cursors and
+background-erased pending rows; only sessions on an alpha.156 backend get it,
+and the daily's empty active backend was replaced in place so new sessions do.
+Terminal rows keep full-width punctuation on the grid, and both maximize buttons
+show a restore graphic once maximized; the member-card enlarge link is a
+separate user question (T-121). The native confirmation GUI test now matches the
+same-screen interface. All four changes were reviewed in their author lanes and
+are integrated with identical changed lines. The full unit suite passes. The
+punctuation change passes its GUI script; for the maximize buttons the
+member-header script passes and the compact-header script stops at line 124, so
+its 850x600 group is unverified. The confirmation and read-only scroll scripts
+serve synthetic snapshots, and browser rendering of the restored terminal states
+is unverified. The signed bundle passed one isolated launch. The ordinary
+visible update kept fourteen session records, archived ones included, with their
+native IDs, live processes and drafts; the seven other backends kept PID, start
+time and version, and no pause was sent: the upgrade branch did not run, since
+the active backend kept its key, and no shared relay was running after the GUI
+quit.
 
-Current daily GUI: alpha.155, committed build source `d4b37047`. Refused joins
+The prior alpha.155 task, source `d4b37047`, remains qualified. Refused joins
 into a new collaboration space now explain themselves. A session whose backend
 cannot record other spaces is refused before any backend call, with its backend
 version, the kept session and draft, and the condition for updating that backend:
