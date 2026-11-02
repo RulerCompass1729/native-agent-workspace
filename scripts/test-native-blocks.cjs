@@ -237,7 +237,9 @@ async function cleanup() {
     console.log(JSON.stringify({ checks: [answerMode === 'gui' ? 'A held native question (single and multi-select) is answered in the chat view; native\'s own tool result carries the answers and its dialog never opens' : 'A held native question handed back opens the native dialog in the terminal, which answers it'], nativeVersion, localResponses: calls, paidModelCalls: 0, errors, evidence: base }));
     return;
   }
-  await page.getByRole('button', { name: '加入协作', exact: true }).click();
+  // Joining is 加入此空间 in the session's ⋯ menu; close its 撤销加入 notice as a person would.
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click();
+  await page.locator('#toast-text', { hasText: '已加入' }).waitFor(); await page.locator('#toast-close').click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Run the local check.'); await page.locator('#forward-button').click();
@@ -414,8 +416,15 @@ async function cleanup() {
   assert.ok(fs.readFileSync(path.join(profile, 'workspace.json'), 'utf8').includes('NATIVE_TOOL: 42'));
   checks.push('Stable block order, display-confirmed shared reply, same native process, bounded structured tool history retained locally');
   // The native session's own usage metadata, read after the turn without another request.
-  await until(async () => (await snapshot()).sessions[0].usage?.source === 'claude-session-usage', 'Native usage reading');
-  assert.ok((await snapshot()).sessions[0].usage.context.window > 0); checks.push('Native usage metadata is read after the turn');
+  if (/^2\.1\.316\b/.test(nativeVersion)) {
+    // 2.1.316 is bound for native blocks and turn identity only (T-100 checkpoint 1); its usage
+    // reading is not qualified yet (T-133). Nothing may be invented in its place.
+    await sleep(1500); assert.notEqual((await snapshot()).sessions[0].usage?.source, 'claude-session-usage');
+    checks.push('2.1.316: native usage reading is not qualified yet, and none is shown');
+  } else {
+    await until(async () => (await snapshot()).sessions[0].usage?.source === 'claude-session-usage', 'Native usage reading');
+    assert.ok((await snapshot()).sessions[0].usage.context.window > 0); checks.push('Native usage metadata is read after the turn');
+  }
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'shared-native-blocks.png') }); }
   await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill('Start the interrupt check.'); await page.locator('#send-button').click();

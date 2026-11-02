@@ -28,7 +28,9 @@ process.prependListener('message', q => {
     runtime.emit('capability');
   }
   if (q.method === 'header-collision') {
-    collision = { ...runtime.record, id: q.target.slice(0, 6) + (q.target[6] === 'a' ? 'b' : 'a') + '-synthetic-collision', name: 'Synthetic collision', roomId: null };
+    // Since c9800cc membership is roomIds; a record that keeps the original's roomIds with roomId null is
+    // invalid and stops the window's render ("协作空间成员记录无法核对").
+    collision = { ...runtime.record, id: q.target.slice(0, 6) + (q.target[6] === 'a' ? 'b' : 'a') + '-synthetic-collision', name: 'Synthetic collision', roomId: null, roomIds: [] };
     runtime.emit('capability');
   }
 });

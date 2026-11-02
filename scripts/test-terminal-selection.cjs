@@ -92,13 +92,20 @@ async function run() {
   assert.equal(await page.locator('#session-layout > .split-divider').getAttribute('aria-valuenow'), '80', 'Narrow-pane drag actually applied');
   const narrow = await page.locator('.native-pane-toolbar').evaluate(bar => {
     const bounds = bar.getBoundingClientRect();
-    return [...bar.querySelectorAll('#terminal-selection-hint, #terminal-controls button')].map(el => {
+    // Since ac9a014 the compact surface hides 显示… and offers it from the pane's ⋯ (#terminal-more); measure what is shown.
+    return [...bar.querySelectorAll('#terminal-selection-hint, #terminal-controls button, #terminal-more, #terminal-maximize, #close-native-terminal')].filter(el => el.getClientRects().length).map(el => {
       const r = el.getBoundingClientRect(); return { id: el.id, left: r.left, right: r.right, top: r.top, bottom: r.bottom, paneLeft: bounds.left, paneRight: bounds.right, paneTop: bounds.top, paneBottom: bounds.bottom };
     });
   });
   for (const r of narrow) {
     assert.ok(r.paneRight - r.paneLeft <= split.width * 0.21, 'Actual native pane is at the minimum split width');
     assert.ok(r.left >= r.paneLeft && r.right <= r.paneRight && r.top >= r.paneTop && r.bottom <= r.paneBottom, 'Hint and copy controls remain inside the narrow native pane: ' + r.id);
+  }
+  assert.ok(['terminal-selection-hint', 'terminal-copy', 'terminal-paste'].every(id => narrow.some(r => r.id === id)), 'Hint, copy and paste are shown in the narrow pane');
+  if (!narrow.some(r => r.id === 'terminal-display')) {
+    assert.ok(narrow.some(r => r.id === 'terminal-more'), 'Hidden display settings stay reachable from the pane');
+    await page.locator('#terminal-more').click(); await page.getByRole('menuitem', { name: '显示…', exact: true }).waitFor();
+    await page.keyboard.press('Escape'); await page.getByRole('menuitem', { name: '显示…', exact: true }).waitFor({ state: 'hidden' });
   }
   assert.equal(await page.locator('#terminal-copy').getAttribute('aria-describedby'), 'terminal-selection-hint'); await capture('narrow-visible-selection-hint');
   const stats = await fixture(); assert.deepEqual(stats.sends, []); assert.deepEqual(stats.interruptions, []); assert.deepEqual(errors, []);

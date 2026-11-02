@@ -23,6 +23,16 @@ Workspace.prototype.pause = function (...args) {
   if (heldPause && args[0]?.startsWith('你暂停')) return new Promise((resolve, reject) => { heldPause = { resolve, reject }; });
   return result;
 };
+// Since the multi-space change (c9800cc) a space's explicit pause is pauseRoom, which applies the effect
+// through pause() without awaiting it; hold the acknowledgement here instead, never inside.
+const originalPauseRoom = Workspace.prototype.pauseRoom;
+Workspace.prototype.pauseRoom = function (...args) {
+  const hold = heldPause === true && args[1]?.startsWith('你暂停');
+  if (hold) heldPause = null;
+  const result = originalPauseRoom.apply(this, args);
+  if (hold) return new Promise((resolve, reject) => { heldPause = { resolve, reject }; });
+  return result;
+};
 function notify(r, method, params) { r.event({ method, params: { threadId: r.record.nativeId, ...params } }); }
 const item = (i, text = 'PRIVATE-HISTORY-' + i) => ({ turnId: 'history-turn', item: { id: 'history-' + i, type: i % 2 ? 'agentMessage' : 'userMessage', ...(i % 2 ? { text } : { content: [{ type: 'text', text }] }) } });
 const history = Array.from({ length: 105 }, (_, i) => item(i));
