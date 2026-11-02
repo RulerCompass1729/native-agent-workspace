@@ -232,6 +232,73 @@ test('native 2.1.316 binds the root so a main-turn workspace message reaches the
   assert.equal(staged.length, 1);
   assert.deepEqual({ turnId: staged[0].turnId, promptId: staged[0].promptId, callId: staged[0].callId, arguments: staged[0].arguments }, { turnId: 'turn-316', promptId, callId: 'call-316', arguments: args });
 });
+test('native 2.1.316: a turn without its own prompt, such as a `!` command, cannot stage a workspace message', async () => {
+  // T-100 (integration review I139): a `!` turn raises no UserPromptSubmit, so
+  // it still sees the last typed prompt; that prompt already started its turn.
+  const tool = 'mcp__native_workspace__workspace_message', staged = [], refused = '没有本原生主会话的定向协作授权。';
+  const f = await mod({ version: '2.1.316', toolReader: async () => [{ name: tool }], requestHandler: async (url, options, body, r) => {
+    if (url.endsWith('/addressed-capability')) { r.addressedSendAvailable = body.available && r.nativeBlocks === true && !r.retainedReader; return { ok: true, text: '{}' }; }
+    if (url.endsWith('/addressed-message')) { staged.push(body); return { ok: true, text: JSON.stringify({ status: 'staged' }) }; }
+    if (url.endsWith('/addressed-failed')) return { ok: true, text: '{}' };
+  } });
+  for (const fn of f.clock.splice(0).filter(fn => fn.delay === 500)) await fn();
+  const args = { recipient_id: 'peer-session', message: 'Continue from the task board.' };
+  const execute = async () => ({ text: JSON.stringify({ approved: true, ...args }) }); execute.origin = { plugin: 'engine' };
+  const typed = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: typed, prompt: 'Look at the board.' });
+  await f.invoke('turn.start', { turnId: 'typed-turn' }); await f.invoke('turn.complete', { turnId: 'typed-turn' });
+  await f.invoke('turn.start', { turnId: 'shell-turn' });
+  assert.deepEqual(await f.invoke('tool.call', { tool, tool_use_id: 'call-shell', ...args }, execute), { deny: refused });
+  await f.invoke('turn.complete', { turnId: 'shell-turn' });
+  assert.equal(staged.length, 0);
+  const next = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: next, prompt: 'Wake the idle peer.' });
+  await f.invoke('turn.start', { turnId: 'typed-turn-2' });
+  assert.equal((await f.invoke('tool.call', { tool, tool_use_id: 'call-typed', ...args }, execute)).deny, undefined);
+  assert.deepEqual(staged.map(x => [x.turnId, x.promptId]), [['typed-turn-2', next]]);
+});
+test('a compat copy defers workspace_message to the mod NAW launched and still refuses in a retained process', async () => {
+  // T-100: the daily shared folder kept a compat copy; Claude loads it beside
+  // NAW's own --plugin-dir mod, and its refusal blocked every wake there.
+  const tool = 'mcp__native_workspace__workspace_message', args = { recipient_id: 'peer-session', message: 'Continue from the task board.' };
+  const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', 'const legacyOnly = true;');
+  for (const launched of [true, false]) {
+    const { register } = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + randomUUID()).toString('base64'));
+    const calls = [];
+    register((name, matcher, handler) => { if (name === 'tool.call' && handler && matcher?.tool === tool) calls.push(handler); return { catch() {} }; });
+    const $ = { env: { get: async key => key === 'NAW_SUBMIT_SOCKET' && launched ? '/fixture/socket' : undefined } };
+    const next = async () => ({ text: 'launcher mod result' }); next.origin = { plugin: 'engine' };
+    assert.equal(calls.length, 1);
+    assert.deepEqual(await calls[0]($, { tool, tool_use_id: 'call', ...args }, next), launched ? { text: 'launcher mod result' } : { deny: '没有本原生主会话的定向协作授权。' });
+  }
+});
+test('NAW\'s own mod and a compat copy in the folder stage one workspace message in either hook order', async () => {
+  // As in this file's other chains, next.origin names who made the call (the
+  // engine for a model tool use), whichever mod runs first. The real 2.1.316
+  // run (T-100 evidence) covers the order the engine actually uses.
+  const tool = 'mcp__native_workspace__workspace_message', staged = [], args = { recipient_id: 'peer-session', message: 'Continue from the task board.' };
+  const f = await mod({ version: '2.1.316', toolReader: async () => [{ name: tool }], requestHandler: async (url, options, body, r) => {
+    if (url.endsWith('/addressed-capability')) { r.addressedSendAvailable = body.available && r.nativeBlocks === true && !r.retainedReader; return { ok: true, text: '{}' }; }
+    if (url.endsWith('/addressed-message')) { staged.push(body); return { ok: true, text: JSON.stringify({ status: 'staged' }) }; }
+  } });
+  for (const fn of f.clock.splice(0).filter(fn => fn.delay === 500)) await fn();
+  const source = fs.readFileSync(path.join(__dirname, '../claude-bridge/hooks/register.js'), 'utf8').replace('const legacyOnly = false;', 'const legacyOnly = true;');
+  const { register } = await import('data:text/javascript;base64,' + Buffer.from(source + '\n//' + randomUUID()).toString('base64'));
+  let compat; register((name, matcher, handler) => { if (name === 'tool.call' && handler && matcher?.tool === tool) compat = handler; return { catch() {} }; });
+  const launched = { env: { get: async key => key === 'NAW_SUBMIT_SOCKET' ? '/fixture/socket' : undefined } };
+  for (const order of ['compat first', 'NAW mod first']) {
+    const promptId = randomUUID(), turnId = 'turn ' + order, e = { tool, tool_use_id: 'call ' + order, ...args };
+    await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
+    await f.invoke('turn.start', { turnId });
+    const execute = async () => ({ text: JSON.stringify({ approved: true, ...args }) }); execute.origin = { plugin: 'engine' };
+    let result;
+    if (order === 'compat first') { const inner = v => f.invoke('tool.call', v, execute); inner.origin = execute.origin; result = await compat(launched, e, inner); }
+    else { const inner = v => compat(launched, v, execute); inner.origin = execute.origin; result = await f.invoke('tool.call', e, inner); }
+    assert.equal(result.deny, undefined, order); assert.equal(JSON.parse(result.result).status, 'staged', order);
+    assert.deepEqual(staged.at(-1) && [staged.length, staged.at(-1).turnId, staged.at(-1).promptId], [order === 'compat first' ? 1 : 2, turnId, promptId]);
+    await f.invoke('turn.complete', { turnId });
+  }
+});
 test('the retained compatibility hook keeps unverified 2.1.311/312 blocks off', async () => {
   for (const version of ['2.1.311', '2.1.312']) {
     const f = await mod({ version, legacy: true });

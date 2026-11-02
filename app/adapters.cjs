@@ -11,6 +11,7 @@ const { CODEX_WEBSOCKET_MAX_PAYLOAD } = require('./codex-terminal-bridge.cjs');
 const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 const SerializeAddon = createTerminalSerializeAddon();
 const { SubmissionChannel, createSubmissionServer } = require('./claude-submit.cjs');
+const { installPlugin: refreshCompatPlugin } = require('./claude-compat-plugin.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
@@ -465,6 +466,9 @@ class Claude extends EventEmitter {
     const holder = record.recovering && claudeHolder(record.nativeId, record.externalHistory === true);
     if (holder) { const error = Error(`另一个 claude 进程（PID ${holder}）引用了这个原生会话，可能正在写入。请先在那里退出，避免两个程序同时写同一会话。`); error.nativeActiveWriter = true; throw error; }
     if (record.recovering && record.externalHistory) claudeImportAvailable(record, host);
+    // Claude also loads the compat plugin a retained session once left in this
+    // folder; refresh NAW's own byte-exact old copy before starting (T-100).
+    try { refreshCompatPlugin(record.cwd, { existingOnly: true }); } catch { /* Edited or unsafe copies stay untouched. */ }
     host.hookTargets.set(this.token, this);
     const command = `${quote(pythonExecutable())} ${quote(path.join(__dirname, 'claude_hook.py'))}`;
     const hooks = {};

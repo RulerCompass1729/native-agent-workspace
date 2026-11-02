@@ -441,3 +441,52 @@ test('last committed compatibility hook can upgrade to this working tree', t => 
  installPlugin(cwd);const current=fs.readFileSync(file,'utf8');fs.writeFileSync(file,prior);
  installPlugin(cwd);assert.equal(fs.readFileSync(file,'utf8'),current);
 });
+
+// T-100: Claude loads a compat copy left in a folder even when NAW itself
+// starts the session there, so a launch refreshes NAW's own copy first.
+test('a launch refreshes only an existing compat copy and never creates one', t => {
+  const { cwd } = fixture(t), plugin = path.join(cwd, '.claude/skills/native-workspace-compat');
+  assert.equal(installPlugin(cwd, { existingOnly: true }), false); assert.equal(fs.existsSync(path.join(cwd, '.claude')), false);
+  fs.mkdirSync(path.join(cwd, '.claude/skills'), { recursive: true });
+  assert.equal(installPlugin(cwd, { existingOnly: true }), false); assert.deepEqual(fs.readdirSync(path.join(cwd, '.claude/skills')), []);
+  installPlugin(cwd); fs.rmSync(path.join(plugin, 'hooks/hooks.json'));
+  assert.equal(installPlugin(cwd, { existingOnly: true }), true);
+  assert.equal(fs.existsSync(path.join(plugin, 'hooks/hooks.json')), false, 'A missing file is not recreated');
+});
+test('a launch leaves an unsafe or edited compat copy untouched and never writes through a link', t => {
+  const { root, cwd } = fixture(t), plugin = path.join(cwd, '.claude/skills/native-workspace-compat');
+  installPlugin(cwd); const file = path.join(plugin, 'hooks/register.js'), metadata = path.join(plugin, '.claude-plugin/plugin.json');
+  const original = fs.readFileSync(metadata, 'utf8'), edited = original + ' ';
+  // An edited plugin.json blocks the whole refresh: an old register.js is never paired with someone else's metadata.
+  fs.writeFileSync(metadata, edited); fs.writeFileSync(file, '// old');
+  assert.throws(() => installPlugin(cwd, { existingOnly: true }), /未覆盖/);
+  assert.equal(fs.readFileSync(file, 'utf8'), '// old'); assert.equal(fs.readFileSync(metadata, 'utf8'), edited);
+  // A .claude that links elsewhere is refused even when the copy there would otherwise be refreshable.
+  fs.writeFileSync(metadata, original); const elsewhere = path.join(root, 'elsewhere');
+  fs.renameSync(path.join(cwd, '.claude'), elsewhere); fs.symlinkSync(elsewhere, path.join(cwd, '.claude'));
+  assert.throws(() => installPlugin(cwd, { existingOnly: true }), /不可安全写入/);
+  assert.equal(fs.readFileSync(path.join(elsewhere, 'skills/native-workspace-compat/hooks/register.js'), 'utf8'), '// old');
+});
+for (const commit of ['e5eafe74d62dade8310f0bb52d68be7a1b9b0421', '6345e63181f69e941e4e3c3d77a0004d84cf4879', '3d5adca1c8478827b6897cc78e7d18ace9e446ea', 'ccea1a6669b1c40ebbf5648998bfdec6c24affbf'])
+  test(`committed compat copy ${commit.slice(0, 7)} upgrades when NAW starts Claude in its folder; edited copies stay`, t => {
+    const { cwd } = fixture(t), file = path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js');
+    const prior = require('node:child_process').execFileSync('git', ['show', `${commit}:app/claude-bridge/hooks/register.js`],
+      { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8' }).replace('const legacyOnly = false;', 'const legacyOnly = true;');
+    installPlugin(cwd); const current = fs.readFileSync(file, 'utf8'); fs.writeFileSync(file, prior);
+    assert.equal(installPlugin(cwd, { existingOnly: true }), true); assert.equal(fs.readFileSync(file, 'utf8'), current);
+    const edited = prior + '\n// Human customization\n'; fs.writeFileSync(file, edited);
+    assert.throws(() => installPlugin(cwd, { existingOnly: true }), /未覆盖/); assert.equal(fs.readFileSync(file, 'utf8'), edited);
+  });
+// The daemon runs from a copied runtime; a module it requires but the copy
+// lacks fails only there (a first T-100 fix was silently skipped that way).
+test('every local module the copied daemon runtime requires is in that copy', () => {
+  const root = path.resolve(__dirname, '../..'), source = fs.readFileSync(path.join(root, 'app/service-client.cjs'), 'utf8');
+  const at = source.indexOf('  const names = '), names = require('node:vm').runInNewContext(source.slice(at + 16, source.indexOf(';\n', at)));
+  assert.ok(names.includes('adapters.cjs') && names.includes('claude-compat-plugin.cjs'));
+  for (const name of names.filter(n => /\.c?js$/.test(n)))
+    for (const [, required] of fs.readFileSync(path.join(root, 'app', name), 'utf8').matchAll(/require\('\.\/([^'/]+)'\)/g))
+      assert.ok(names.includes(required), `${name} requires ${required}, which the runtime copy lacks`);
+  const packaged = fs.readFileSync(path.join(root, 'scripts/package-mac.cjs'), 'utf8'), from = packaged.indexOf('    const sources = ');
+  const sources = require('node:vm').runInNewContext(packaged.slice(from + 20, packaged.indexOf(';\n', from)));
+  for (const name of names) assert.ok(sources.includes(name), `${name} is copied into the runtime but not packaged`);
+});

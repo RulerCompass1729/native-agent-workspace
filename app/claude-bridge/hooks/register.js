@@ -675,8 +675,14 @@ async function syncRoot($) {
 export function register(on) {
   on('tool.describe', { tool: 'mcp__native_workspace__workspace_message' }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
   on('tool.call', { tool: 'mcp__native_workspace__workspace_message' }, async ($, e, next) => {
-    const binding = rootBinding, turnId = activeTurn, promptId = rootPrompt?.id;
-    if (!addressedTool || stopped || !binding || !turnId || !promptId || e.agentId ||
+    // A compat copy left in a session's folder also loads when NAW itself
+    // starts Claude there; that launch's own mod owns this tool (T-100).
+    if (legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET')) return next(e);
+    const binding = rootBinding, turnId = activeTurn, promptId = rootPrompt?.id, link = promptId && promptTurns.get(promptId);
+    // A turn with no UserPromptSubmit of its own (a person's `!` command, for
+    // one) still sees the last prompt here. Only the one turn that prompt
+    // started may stage a message, as for sharing a reply (T-100).
+    if (!addressedTool || stopped || !binding || !turnId || !promptId || link?.binding !== binding || link.turnId !== turnId || link.ambiguous || e.agentId ||
       next.origin?.plugin !== 'engine' || e.tool_use_id === undefined) return { deny: '没有本原生主会话的定向协作授权。' };
     const args = { recipient_id: e.recipient_id, message: e.message };
     // Let Claude run the real MCP call: PreToolUse, configured rules, native

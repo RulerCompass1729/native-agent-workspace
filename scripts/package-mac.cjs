@@ -54,7 +54,7 @@ async function build() {
       'dsh-host.cjs', 'dsh-server.mjs', 'ui-errors.cjs', 'ui-parent-lease.cjs',
       'service-client.cjs', 'backend-switch.cjs', 'service-transport.cjs', 'service-layout.cjs', 'workspace-client.cjs', 'legacy-observation.cjs', 'legacy-input.cjs', 'legacy-codex.cjs', 'legacy-claude.cjs', 'reader-cache.cjs', 'legacy-shared.cjs', 'platform.cjs', 'runtime-locations.cjs', 'preflight.cjs', 'daemon.cjs',
       'adapters.cjs', 'terminal-keyboard.cjs', 'codex-terminal-bridge.cjs', 'codex-tool-content.cjs', 'workspace.cjs', 'git-worktree.cjs', 'collaboration-spaces.cjs', 'space-merge.cjs', 'mobile-access.cjs', 'mobile-session.cjs', 'native-blocks.cjs', 'native-images.cjs', 'shared-replies.cjs', 'session-wake.cjs', 'addressed-handoffs.cjs', 'claude-message-tool.cjs', 'room-threads.js', 'room-mention.js', 'native-history.cjs', 'approval-policy.js', 'native-usage.js', 'peer-handoffs.cjs', 'service-connection.cjs', 'observation.cjs', 'window-placement.cjs', 'pty_host.py', 'claude_hook.py',
-      'claude-submit.cjs', 'submission-policy.cjs', 'session-labels.cjs', 'room-state.cjs', 'view-drafts.cjs', 'reading-state.cjs', 'view-store.cjs', 'claude-bridge/.claude-plugin/plugin.json',
+      'claude-submit.cjs', 'claude-compat-plugin.cjs', 'submission-policy.cjs', 'session-labels.cjs', 'room-state.cjs', 'view-drafts.cjs', 'reading-state.cjs', 'view-store.cjs', 'claude-bridge/.claude-plugin/plugin.json',
       'claude-bridge/hooks/hooks.json', 'claude-bridge/hooks/register.js',
       'dsh/package.json', 'dsh/host.js', 'dsh/client.js'];
     for (const name of sources) {
