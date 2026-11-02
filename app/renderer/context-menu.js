@@ -50,7 +50,9 @@ function showContentMenu(element, point, keyboard = false, event) {
     if (field && !field.disabled && typeof field.selectionStart === 'number') {
       const binding = sessionComposers.get(field.dataset.composerSession), bindingRevision = binding?.revision;
       const record = binding && state.sessions.find(s => s.id === binding.id), nativeId = record?.nativeId, controlRevision = record?.controlRevision;
-      const fieldCurrent = () => binding ? composerCurrent(binding) && binding.revision === bindingRevision && binding.ui.input === field && state.sessions.find(s => s.id === binding.id)?.nativeId === nativeId && state.sessions.find(s => s.id === binding.id)?.controlRevision === controlRevision : contentMenuCurrent(origin);
+      // The solo session composer is parked and reattached when the person switches away and back, keeping its
+      // own revision; the view's selectionRevision is what proves no switch happened (T-129).
+      const fieldCurrent = () => binding ? origin.revision === selectionRevision && composerCurrent(binding) && binding.revision === bindingRevision && binding.ui.input === field && state.sessions.find(s => s.id === binding.id)?.nativeId === nativeId && state.sessions.find(s => s.id === binding.id)?.controlRevision === controlRevision : contentMenuCurrent(origin);
       const draftRevision = () => binding ? draftRevisions.get(binding.id) : field.id === 'message-input' ? draftRevisions.get(origin.id) : field.id === 'shared-input' ? roomDraftRevision : field.id === 'rename-name' ? renameRevision : undefined;
       fieldState = { value: field.value, start: field.selectionStart, end: field.selectionEnd, direction: field.selectionDirection, revision: draftRevision() };
       const selectedText = fieldState.value.slice(fieldState.start, fieldState.end);
