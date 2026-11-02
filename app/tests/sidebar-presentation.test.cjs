@@ -7,10 +7,10 @@ const fleet = require('../renderer/fleet-observation.js'), collaboration = requi
 function section(start, end) { const a = source.indexOf(start), b = source.indexOf(end, a + start.length); assert.ok(a >= 0 && b > a); return source.slice(a, b); }
 const row = patch => ({ id: 'synthetic-session', nativeId: 'synthetic-native', provider: 'codex', name: 'literal <name> 中文', state: 'idle', runtimeVersion: '0.1.0-alpha.157', messages: [], ...patch });
 function harness(record, connected = true) {
-  const copied = [], actions = [], menus = [], records = [row({ id: 'earlier' }), record, row({ id: 'later' })];
+  const copied = [], actions = [], menus = [], updates = [], records = [row({ id: 'earlier' }), record, row({ id: 'later' })];
   const more = { isConnected: true, disabled: false, focus() {}, setAttribute() {}, getClientRects: () => [1], getBoundingClientRect: () => ({ left: 0, top: 0 }) };
   const currentRow = { more, spaceId: undefined }, ctx = { disconnected: !connected, state: { sessions: records, rooms: [], capabilities: ['agentWakeV1', 'observe'], appVersion: '0.1.0-alpha.157' },
-    ui: { menu: options => { menus.push(options); return () => options.onClose(); } },
+    ui: { menu: options => { menus.push(options); return Object.assign(() => options.onClose(), { update: items => updates.push(items) }); } },
     window: { workspace: { copy: value => copied.push(value), archiveSession: () => actions.push('archive'), wakePolicy: () => actions.push('wake'), continueConnection: () => actions.push('continue'), newWindow: () => actions.push('window') }, nativeWorkspaceFleet: fleet, nativeWorkspaceCollaboration: collaboration },
     allSpaces: () => ctx.state.rooms, inSpace: (s, id) => (s.roomIds || []).includes(id),
     contentMenu: null, sessionMenu: null, roomMenu: null, sessionRows: new Map([[record.id, currentRow]]), sessionRow: () => currentRow,
@@ -18,8 +18,8 @@ function harness(record, connected = true) {
     openRename: () => actions.push('rename'), moveSidebarSession: () => actions.push('move'), moveRoomMember: () => actions.push('move'),
     addToSpace: () => actions.push('join'), detach: () => actions.push('leave'), toast() {} };
   vm.createContext(ctx);
-  vm.runInContext(source.slice(0, source.indexOf('\nlet state, owner,')) + '\n' + section('function sessionTime(', '\nfunction renderDraftRecovery(') + '\n' + section('function versionValue(', '\nfunction appVersionReport(') + '\n' + section('function sessionShortId(', '\nasync function moveSidebarSession(') + '\n' + section('function openSessionMenu(', '\nfunction memberMenuKey('), ctx);
-  return { ctx, copied, actions, menus, record, present: () => ctx.sidebarPresentation(record), details: () => ctx.sidebarDetails(record), open: () => ctx.openSessionMenu(record.id) };
+  vm.runInContext(source.slice(0, source.indexOf('\nlet state, owner,')) + '\n' + section('function sessionTime(', '\nfunction renderDraftRecovery(') + '\n' + section('function versionValue(', '\nfunction appVersionReport(') + '\n' + section('function sessionShortId(', '\nasync function moveSidebarSession(') + '\n' + section('function sessionMenuModel(', '\nfunction memberMenuKey('), ctx);
+  return { ctx, copied, actions, menus, updates, records, record, present: () => ctx.sidebarPresentation(record), details: () => ctx.sidebarDetails(record), open: () => ctx.openSessionMenu(record.id) };
 }
 const child = (id, kind, stale = false) => ({ event: 'subAgentActivity', nativeId: id, kind, stale });
 
@@ -115,12 +115,19 @@ test('an exhausted recovery keeps reported background work in the compact line',
 test('a Codex row has no background report and keeps its ordinary dot', () => {
   const p = harness(row({ provider: 'codex', background: 2 })).present(); assert.equal(p.workTone, '');
 });
-test('an open facts snapshot survives unrelated drafts and closes on changed native state, version or connection', () => {
+test('an open facts menu refreshes changed state or version in place and closes only when its actions, order or connection change', () => {
   const prefix = section('function renderSessions() {', '\n  const visible =');
-  for (const change of [h => { h.record.state = 'working'; }, h => { h.record.runtimeVersion = '0.1.0-alpha.140'; }, h => { h.ctx.disconnected = true; }]) {
-    const h = harness(row()); h.ctx.renderVersions = h.ctx.renderSidebarGroups = () => {};
-    vm.runInContext(prefix + '\n}', h.ctx); h.open(); const opened = h.ctx.sessionMenu;
-    h.record.liveDraft = 'UNSENT original draft'; h.ctx.renderSessions(); assert.strictEqual(h.ctx.sessionMenu, opened, 'Unrelated draft changes do not dismiss a facts menu');
-    change(h); h.ctx.renderSessions(); assert.equal(h.ctx.sessionMenu, null, 'Changed facts cannot remain in the open menu');
+  const facts = items => items.filter(item => item.type === 'label').map(item => item.text);
+  const setup = () => { const h = harness(row()); h.ctx.renderVersions = h.ctx.renderSidebarGroups = () => {}; vm.runInContext(prefix + '\n}', h.ctx); h.open(); return h; };
+  for (const [change, expected] of [[h => { h.record.state = 'working'; }, /正在工作/], [h => { h.record.runtimeVersion = '0.1.0-alpha.140'; }, /后台 0\.1\.0-alpha\.140/]]) {
+    const h = setup(), opened = h.ctx.sessionMenu;
+    h.record.liveDraft = 'UNSENT original draft'; h.ctx.renderSessions(); assert.strictEqual(h.ctx.sessionMenu, opened, 'Unrelated draft changes do not dismiss a facts menu'); assert.equal(h.updates.length, 0);
+    change(h); h.ctx.renderSessions(); assert.strictEqual(h.ctx.sessionMenu, opened, 'A changed fact keeps the same menu open');
+    assert.equal(h.updates.length, 1); assert.ok(facts(h.updates[0]).some(text => expected.test(text)), 'The open menu shows the changed fact');
+    assert.deepEqual(h.updates[0].filter(item => item.type !== 'label'), h.menus[0].items.filter(item => item.type !== 'label'), 'Actions are unchanged');
+    h.ctx.renderSessions(); assert.equal(h.updates.length, 1, 'No re-render without a further change');
+  }
+  for (const change of [h => { h.ctx.disconnected = true; }, h => { h.record.nativeId = undefined; }, h => { h.records.reverse(); }, h => { h.ctx.state.sessions = h.records.filter(r => r !== h.record); }]) {
+    const h = setup(); change(h); h.ctx.renderSessions(); assert.equal(h.ctx.sessionMenu, null, 'A changed action list, order or connection closes the menu');
   }
 });

@@ -111,7 +111,7 @@ window.__ModuleLoader__.load({
             const tab = event => { if (event.key === 'Tab') { event.stopPropagation(); close(); } };
             document.addEventListener('keydown', tab, true);
             if (modal) { modal.addEventListener('close', close); window.addEventListener('resize', position); document.addEventListener('scroll', position, true); }
-            function SessionMenu() {
+            function SessionMenu({ items }) {
               React.useEffect(() => {
                 // A newly mounted portal starts hidden until DSH positions it.
                 // Its first autofocus can run too early; retry after layout,
@@ -128,8 +128,10 @@ window.__ModuleLoader__.load({
                 onSelect: action => { close(); onSelect(action); },
               });
             }
-            root.render(React.createElement(SessionMenu));
-            return close;
+            // update() re-renders the same open menu with new items (same ids keep focus); it does not reopen it.
+            const update = next => { if (!closed) root.render(React.createElement(SessionMenu, { items: next })); };
+            update(items);
+            return Object.assign(close, { update });
           },
           markdown(el, text, streaming, onLayout, source) {
             let root = markdownRoots.get(el);
