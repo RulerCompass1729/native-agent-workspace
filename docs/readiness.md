@@ -4,30 +4,35 @@ As of 2026-11-01. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.158 lets an enlarged member card return to the whole space,
-which completes the maximize work, and binds Claude Code 2.1.316 in the native
-bridge. With that binding, a 2.1.316 session's own conversation view shows
-intermediate text and tool output again, and an agent wake between two 2.1.316
-sessions completed in the author's local fixed-reply run. The bridge change
-reaches only Claude sessions started by an alpha.158 backend. When such a
-session answers a message from a space it belongs to, that turn's intermediate
-text and tool rows, including commands and output, also go into the space, as
-with 2.1.307 to 2.1.312; today's 2.1.316 sessions share only final replies, and
-turns started in the session's own terminal stay private. Stopping one of their
-turns from NAW returned it to idle in 256 ms in the author's run. From the
-source, Esc in its terminal has the same effect, and NAW sends and wakes to it
-are then refused until a prompt submitted in its native terminal starts a new
-turn. Any native input still cancels every pending wake; that second checkpoint
-is open. Fork, permission, plan, image, Agent Teams, model and usage, and
-question modes other than the conversation view are untested on 2.1.316. Both
-changes were reviewed in their author lane and are integrated with identical
-changed lines. The full unit suite and three related GUI scripts pass.
-Correction to alpha.157: Claude Code 2.1.316 does not pass the prompt source to
-the hook, so the injected-turn label has no effect on real input, and injected
-turns still show as the person. Daily delivery remains pending; current daily
-remains alpha.157.
+Current daily GUI: alpha.158, committed build source `403f6b6e`. It lets an
+enlarged member card return to the whole space, which completes the maximize
+work, and binds Claude Code 2.1.316 in the native bridge. With that binding, a
+2.1.316 session's own conversation view shows intermediate text and tool output
+again, and an agent wake between two 2.1.316 sessions completed in the author's
+local fixed-reply run. The bridge change reaches only Claude sessions started by
+an alpha.158 backend. When such a session answers a message from a space it
+belongs to, that turn's intermediate text and tool rows, including commands and
+output, also go into the space, as with 2.1.307 to 2.1.312; today's 2.1.316
+sessions share only final replies, and turns started in the session's own
+terminal stay private. Stopping one of their turns from NAW returned it to idle
+in 256 ms in the author's run. From the source, Esc in its terminal has the same
+effect, and NAW sends and wakes to it are then refused until a prompt submitted
+in its native terminal starts a new turn. Any native input still cancels every
+pending wake; that second checkpoint is open. Fork, permission, plan, image,
+Agent Teams, model and usage, and question modes other than the conversation
+view are untested on 2.1.316. Both changes were reviewed in their author lane
+and are integrated with identical changed lines. The full unit suite and three
+related GUI scripts pass. Correction to alpha.157: Claude Code 2.1.316 does not
+pass the prompt source to the hook, so the injected-turn label has no effect on
+real input, and injected turns still show as the person. The signed bundle
+passed one isolated launch. The ordinary visible update kept fourteen session
+records, archived ones included, with their native IDs, live processes and
+drafts; the empty active backend was replaced in place, so new Claude sessions
+started there load the 2.1.316 binding when Claude Code is 2.1.316, which is not
+yet observed in the daily app; and the seven other backends kept PID, start time
+and version.
 
-Current daily GUI: alpha.157, committed build source `901004fb`. It shows
+The prior alpha.157 task, source `901004fb`, remains qualified. It shows
 reported background work instead of a ready dot after a Claude turn ends; that
 was GUI-checked by its author. A label for machine-injected native turns,
 checked only with simulated hook input, has no effect on real Claude Code

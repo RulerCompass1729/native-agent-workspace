@@ -2340,3 +2340,18 @@ note in another lane and shipped records saying the label applies. Claude 3
 confirmed it after delivery. It does not apply to real input. The code is
 harmless without a source and stays. The author will redo the label from a
 signal 2.1.316 provides.
+
+
+### Integrated alpha.158 delivery
+
+A fresh read-only reviewer accepted the integration after three ledger rounds:
+it required the space-sharing install note and the modes untested on 2.1.316,
+removing the alpha.157 injected-turn claim from the current-daily paragraph, and
+separating the measured stop result from what the source implies, and asked for
+limiting the sharing note to turns that answer a space message and recording
+that integration missed Claude 2's earlier note about the missing source. It
+accepted the update operator as a substitution-only copy of the alpha.157 one;
+after one attempt stopped on a busy test slot, the operator ran once and
+replaced the empty active backend in place. Open: a real 2.1.316 wake and the
+post-provider signature check on the daily app, checkpoint 2, and the untested
+2.1.316 modes.
