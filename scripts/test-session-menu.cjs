@@ -105,6 +105,9 @@ async function run() {
   await page.emulateMedia({ colorScheme: null });
   await page.keyboard.press('End');
   assert.ok(await item('归档会话').evaluate(el => el === document.activeElement), 'End focuses the last menu item');
+  // T-100 put the wake policy action between the window action and archive.
+  await page.keyboard.press('ArrowUp');
+  assert.ok(await item('禁止其他 agent 叫醒').evaluate(el => el === document.activeElement), 'ArrowUp reaches the wake policy action');
   await page.keyboard.press('ArrowUp');
   assert.ok(await item('在独立窗口打开').evaluate(el => el === document.activeElement), 'ArrowUp returns to the window action');
   const opened = application.waitForEvent('window');
@@ -118,10 +121,14 @@ async function run() {
   await until(async () => (await more(b.id).getAttribute('aria-label')).includes('很长'), 'Other-window rename broadcast');
   await second.close();
   await page.locator('#room-nav').click();
-  assert.equal(await page.locator(`[data-room-session="${b.id}"]`).innerText(), '很长的会话名称'.repeat(7));
+  // Since c381270 the member tab strip stays hidden; the member's overview card shows the name.
+  const card = page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${b.id}"] .collaboration-member-name`);
+  await until(async () => await card.locator('.collaboration-name-text').innerText() === '很长的会话名称'.repeat(7), 'Space card shows the other-window rename');
+  // Opening the space from its sidebar entry also filtered the session list to its members (c9800cc); show all again.
+  await page.locator('#clear-space-filter').click(); await link(sessions[0].id).waitFor({ state: 'visible' });
   const win = await application.browserWindow(page);
   await win.evaluate(w => w.setSize(850, 600));
-  assert.ok(await page.locator(`[data-room-session="${b.id}"]`).evaluate(el => el.getBoundingClientRect().width <= 200 && el.title.startsWith(el.textContent + ' · ')));
+  assert.ok(await card.evaluate(el => el.getBoundingClientRect().right <= el.closest('.collaboration-member-status').getBoundingClientRect().right + 0.5 && el.title.startsWith('很长的会话名称'.repeat(7))), 'Long card name stays in its header and keeps the full name in its title');
   assert.ok(await page.locator('#recipient').evaluate(el => el.getBoundingClientRect().width <= 260 && el.title === el.selectedOptions[0].textContent));
   await more(b.id).click(); await item('重命名…').waitFor({ state: 'visible' });
   await until(async () => page.getByRole('menu').evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; }), 'Menu fits small window');

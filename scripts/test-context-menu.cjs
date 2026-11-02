@@ -85,7 +85,8 @@ async function run() {
   await input.evaluate(el => el.select()); await app.evaluate(() => { globalThis.menuClipboard.hold = true; globalThis.menuClipboard.text = 'Do not paste after returning'; });
   const beforeReturn = await app.evaluate(() => globalThis.menuClipboard.reads); await open(input); await item('粘贴').click();
   await until(async () => await app.evaluate(() => globalThis.menuClipboard.reads) > beforeReturn, 'Delayed paste before switching away');
-  await page.locator('#room-nav').click(); await page.locator(`[data-session-id="${id}"]`).click();
+  // Opening the space from its sidebar entry also filters the session list to its members (c9800cc); show all to return.
+  await page.locator('#room-nav').click(); await page.locator('#clear-space-filter').click(); await page.locator(`[data-session-id="${id}"]`).click();
   await app.evaluate(() => { globalThis.menuClipboard.hold = false; globalThis.menuRelease(); }); await delay(150); assert.equal(await input.inputValue(), 'Newer unsent draft');
   const beforeDismiss = await app.evaluate(() => globalThis.menuClipboard.copies.length); await open(input); await page.keyboard.press('Escape'); await open(input, 'Shift+F10'); await page.keyboard.press('Tab');
   assert.equal(await app.evaluate(() => globalThis.menuClipboard.copies.length), beforeDismiss); assert.equal(await input.inputValue(), 'Newer unsent draft');

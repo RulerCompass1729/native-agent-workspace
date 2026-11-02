@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-sidebar-ui-'));
 const ids = ['abcdef00-0000-4000-8000-000000000001', 'abcdef10-0000-4000-8000-000000000002', '12345600-0000-4000-8000-000000000003'];
-fs.writeFileSync(path.join(profile, 'workspace.json'), JSON.stringify({ sessions: ids.map((id, i) => ({ id, provider: i === 1 ? 'claude' : 'codex', name: i < 2 ? '学习' : '常用', nativeId: i === 2 ? null : 'synthetic-native-' + i, model: 'fixture', cwd: profile, state: 'idle', messages: [] })) }), { mode: 0o600 });
+fs.writeFileSync(path.join(profile, 'workspace.json'), JSON.stringify({ sessions: ids.map((id, i) => ({ id, provider: i === 1 ? 'claude' : 'codex', name: i < 2 ? '学习' : '常用', nativeId: i === 2 ? null : 'synthetic-native-' + i, model: 'fixture', cwd: profile, state: 'idle', view: 'chat', messages: [] })) }), { mode: 0o600 });
 fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify([{ owner: 'sidebar-owner', active: true, selected: ids[0], mode: 'chat' }, { owner: 'sidebar-observer', active: true, selected: '', mode: 'chat' }]), { mode: 0o600 });
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/native-progress.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms)), checks = [], errors = [];
@@ -84,7 +84,9 @@ async function run() {
   await expectOrder([ids[0], ids[2], ids[1]]);
   assert.ok((await snapshot()).sessions.find(s => s.id === ids[0]).roomId, 'Sorting a member does not detach it');
   await page.locator('#room-nav').click();
-  const memberTab = page.locator(`[data-room-session="${ids[0]}"]`); await memberTab.waitFor(); assert.ok((await memberTab.innerText()).includes('abcdef0'));
+  // Since c381270 the member tab strip stays hidden; the member's overview card name is the drag handle.
+  const memberTab = page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${ids[0]}"] .collaboration-member-name`);
+  await memberTab.waitFor(); assert.equal(await memberTab.getAttribute('draggable'), 'true'); assert.ok((await memberTab.innerText()).includes('abcdef0'), 'The card visibly shows the short ID that tells the two 学习 sessions apart');
   await page.locator('#solo-drop').click();
   await until(() => page.locator('#session-list').isHidden(), 'Sessions collapsed');
   await dragTo(memberTab, page.locator('#solo-drop'));
@@ -95,6 +97,9 @@ async function run() {
 
   await page.locator('#solo-drop').focus(); await page.keyboard.press('ArrowRight');
   await until(() => page.locator('#session-list').isVisible(), 'Right expands');
+  // Opening the space from its sidebar entry also filtered the list to its members (c9800cc); the only member has left.
+  assert.equal(await page.locator(`[data-session-id="${ids[0]}"]`).count(), 0);
+  await page.locator('#clear-space-filter').click(); await until(() => page.locator(`[data-session-id="${ids[0]}"]`).isVisible(), 'Show all sessions');
   await page.locator(`[data-session-id="${ids[0]}"]`).click();
   await fixture('state', ids[0], 'working');
   await until(async () => (await page.locator('#session-group-summary').innerText()).includes('1 工作中'), 'Working overview');
