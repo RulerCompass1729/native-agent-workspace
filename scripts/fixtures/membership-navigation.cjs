@@ -5,12 +5,18 @@ function install({ ipcMain }) {
   if (!handlers?.get || !handlers?.set) throw Error('Owned IPC delay fixture unavailable');
   const plans = new Map(), waiting = new Map(), calls = [];
   const key = (method, id) => `${method}:${id ?? 'room'}`;
-  for (const method of ['join', 'restoreSession', 'restoreRoom']) {
-    const channel = `workspace:${method}`, original = handlers.get(channel);
+  // Since the multi-space change (c9800cc) the window joins, leaves and restores a space
+  // through spaceAction(space, action, args); map those back to the gate names.
+  const route = (channel, event, args) => channel !== 'workspace:spaceAction' ? { method: channel.slice(10), id: args[0] }
+    : args[1] === 'join' ? { method: 'join', id: args[2]?.[0] } : args[1] === 'restore' ? { method: 'restoreRoom', id: undefined } : null;
+  for (const channel of ['workspace:join', 'workspace:restoreSession', 'workspace:restoreRoom', 'workspace:spaceAction']) {
+    const original = handlers.get(channel);
     if (typeof original !== 'function') throw Error('Owned navigation handler unavailable');
     handlers.set(channel, async (event, ...args) => {
-      const id = key(method, args[0]), plan = plans.get(id); plans.delete(id);
-      const call = { method, id: args[0], phase: 'before' }; calls.push(call);
+      const target = route(channel, event, args);
+      if (!target) return original(event, ...args);
+      const { method } = target, id = key(method, target.id), plan = plans.get(id); plans.delete(id);
+      const call = { method, id: target.id, phase: 'before' }; calls.push(call);
       const hold = () => new Promise((resolve, reject) => waiting.set(id, { resolve, reject, phase: call.phase, call }));
       if (plan === 'before') await hold();
       const value = await original(event, ...args); call.phase = 'after';
@@ -30,7 +36,7 @@ function install({ ipcMain }) {
     status() { return { calls, waiting: [...waiting].map(([id, p]) => ({ id, phase: p.phase })) }; },
     close() { for (const p of waiting.values()) p.reject(Error('Owned fixture closed')); waiting.clear(); plans.clear(); },
   };
-  return { methods: ['join', 'restoreSession', 'restoreRoom'] };
+  return { methods: ['join', 'restoreSession', 'restoreRoom', 'spaceAction'] };
 }
 module.exports = { install };
 if (typeof process.send === 'function') {

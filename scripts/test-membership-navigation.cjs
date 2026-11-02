@@ -66,15 +66,28 @@ async function run() {
     for (const key of ['claim', 'terminal']) assert.equal(after.overviewCalls[key], before.overviewCalls[key], label + ' never claims or opens a native view');
     assert.equal(after.stats.sends, before.stats.sends); return after;
   }
+  // Since c9800cc a sidebar space click also filters the list to its members, and the filter is saved;
+  // like a person, show all before reaching a session outside the space.
+  async function row(id) {
+    if (await page.locator('#clear-space-filter').isVisible()) await page.locator('#clear-space-filter').click();
+    return page.locator(`[data-session-id="${id}"]`);
+  }
+  // Joining shows a 撤销加入 notice with no time limit; close it as a person would.
+  async function closeJoinNotice() {
+    await page.locator('#toast-text', { hasText: '已加入' }).waitFor(); await page.locator('#toast-close').click();
+  }
   async function joinFromSolo(id) {
-    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#session-header-more').click();
-    await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+    await (await row(id)).click(); await page.locator('#session-header-more').click();
+    await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click();
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).roomId, 'Existing session rejoined');
+    await closeJoinNotice();
   }
   async function detachMenu(id) { await more(id).click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click(); }
+  // Since T-128 a pointer press clears a notice with an action; only a keyboard path can leave one in place.
+  async function detachMenuByKeyboard(id) { await more(id).press('Enter'); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).press('Enter'); }
   async function left(id) { await until(async () => !(await snapshot()).sessions.find(s => s.id === id).roomId, 'Exact member left'); await settle(); }
   async function archive(id) {
-    await page.locator(`.session-more[data-session-menu="${id}"]`).click();
+    await row(id); await page.locator(`.session-more[data-session-menu="${id}"]`).click();
     await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).archived, 'Exact session archived');
   }
@@ -84,7 +97,7 @@ async function run() {
     await page.locator('#message-input').fill('Original private draft ' + name);
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).liveDraft === 'Original private draft ' + name, 'Private draft saved');
     await fixture('nativeBlock', id, { id: 'original', kind: 'response', text: 'Original source for ' + name, status: 'complete' });
-    if (ids.length < 4) { await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); }
+    if (ids.length < 4) { await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click(); await closeJoinNotice(); }
   }
   const [a, b, c, d] = ids;
   peer = await require(path.join(code, 'app/service-client.cjs')).connect(profile, 'owned-navigation-peer');
@@ -108,7 +121,7 @@ async function run() {
   await capture('01-explicit-open');
 
   await joinFromSolo(b); const solo = await view(), soloCalls = await fixture('stats');
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click(); await left(b);
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '离开此空间', exact: true }).click(); await left(b);
   await until(() => page.locator('#toast .toast-action').count().then(n => n === 0), 'No redundant Open for the current solo session');
   assert.equal((await view()).selected, b); assert.equal((await view()).mode, solo.mode); await stableCalls(soloCalls, 'Solo detach');
   assert.equal(await page.locator('#message-input').inputValue(), 'Original private draft Navigation B');
@@ -117,7 +130,7 @@ async function run() {
   await header(b).locator('.collaboration-member-name').click();
   if (await page.locator('#toast-close').isVisible()) await page.locator('#toast-close').click();
   await hold('join', b, 'after'); const focusedCalls = await fixture('stats');
-  await page.locator('#header-actions').getByRole('button', { name: '脱出协作', exact: true }).click(); await pending('join', b, 'after');
+  await page.locator('#header-actions').getByRole('button', { name: '离开此空间', exact: true }).click(); await pending('join', b, 'after');
   await left(b); const beforeReply = await view();
   assert.equal(beforeReply.selected, 'room'); assert.equal(beforeReply.roomSession, ''); assert.equal(beforeReply.mode, 'chat');
   await stableCalls(focusedCalls, 'Focused state-before-reply removal'); await capture('02-state-before-reply-stays');
@@ -125,14 +138,14 @@ async function run() {
   assert.equal((await view()).selected, 'room');
   check('Solo detach preserves its mode; focused List removal returns to the room even when state arrives before the reply');
 
-  await hold('join', a); const rejected = await fixture('stats'); await detachMenu(a); await pending('join', a, 'before');
+  await hold('join', a); const rejected = await fixture('stats'); await detachMenuByKeyboard(a); await pending('join', a, 'before');
   await page.getByRole('button', { name: '打开 Navigation B', exact: true }).focus(); await release('join', a, true);
   await page.locator('#toast-text').getByText('Synthetic navigation operation failed', { exact: false }).waitFor();
   assert.equal(await page.locator('#toast .toast-action').count(), 0); assert.equal((await active()).id, 'toast-close');
   assert.equal((await snapshot()).sessions.find(s => s.id === a).roomId, 'shared'); await stableCalls(rejected, 'Rejected detach');
   assert.equal((await view()).selected, 'room');
   await hold('join', c); await detachMenu(c); await pending('join', c, 'before');
-  await page.locator(`[data-session-id="${d}"]`).click(); await page.locator('#message-input').fill('Human newer private draft');
+  await (await row(d)).click(); await page.locator('#message-input').fill('Human newer private draft');
   await release('join', c); await left(c);
   assert.equal((await view()).selected, d); assert.equal(await page.locator('#message-input').inputValue(), 'Human newer private draft');
   assert.equal((await active()).id, 'message-input');
@@ -149,12 +162,12 @@ async function run() {
   assert.equal((await view()).selected, 'room'); assert.equal((await active()).id, 'archive-button'); await capture('03-restored-session-stays');
   await page.getByRole('button', { name: '打开 Navigation D', exact: true }).press('Space');
   await until(async () => (await view()).selected === d, 'Explicit restored-session Open'); assert.equal(await page.locator('#message-input').inputValue(), 'Human newer private draft');
-  await page.locator(`[data-session-id="${a}"]`).click(); await archive(a);
+  await (await row(a)).click(); await archive(a);
   const currentRestore = page.locator('#header-actions').getByRole('button', { name: '恢复会话', exact: true }); const currentBefore = await view(); await currentRestore.click();
   await until(async () => !(await snapshot()).sessions.find(s => s.id === a).archived, 'Current archived session restored');
   assert.equal((await view()).selected, a); assert.equal((await view()).mode, currentBefore.mode);
   await until(() => page.locator('#toast .toast-action').count().then(n => n === 0), 'No redundant Open after restoring current session');
-  await joinFromSolo(a); await page.locator(`[data-session-id="${d}"]`).click();
+  await joinFromSolo(a); await (await row(d)).click();
   await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '归档工作区', exact: true }).click();
   await until(async () => (await snapshot()).room.archived, 'Owned room archived');
   await hold('restoreRoom', undefined); const roomRestoreCalls = await fixture('stats');
@@ -174,18 +187,21 @@ async function run() {
   check('The drag-out entry point and last-member removal keep the empty room and original shared draft visible');
 
   const staleOpenA = page.getByRole('button', { name: '打开 Navigation A', exact: true }); await staleOpenA.waitFor();
-  await page.locator(`[data-session-id="${a}"]`).click(); await joinFromSolo(a);
-  await page.locator('#terminal-tab').click(); await terminal(a).waitFor({ state: 'attached' }); await page.locator(`#terminal-area [data-terminal-id="${a}"] .terminal-surface`).waitFor();
+  // Since T-128 a pointer press clears this notice and joining here shows its own 撤销加入 notice, so the
+  // old Open can only outlive the next steps when another window rejoins A and the person uses the keyboard.
+  await peer.call('join', a, true); await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId, 'Another window rejoined A');
+  await page.locator(`[data-session-id="${a}"]`).press('Enter'); await until(async () => (await view()).selected === a, 'Keyboard selected A');
+  await page.locator('#terminal-tab').press('Enter'); await terminal(a).waitFor({ state: 'attached' }); await page.locator(`#terminal-area [data-terminal-id="${a}"] .terminal-surface`).waitFor();
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'terminal', 'Native view settled');
-  await page.locator('#chat-tab').click(); await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'chat', 'Native view back to chat');
-  await fixture('navigation-hold-claim', a); await page.locator('#terminal-tab').click();
+  await page.locator('#chat-tab').press('Enter'); await until(async () => (await snapshot()).sessions.find(s => s.id === a).view === 'chat', 'Native view back to chat');
+  await fixture('navigation-hold-claim', a); await page.locator('#terminal-tab').press('Enter');
   await until(async () => (await fixture('stats')).navigation.waitingClaims.includes(a), 'Real view claim held');
   await terminal(a).focus(); await page.keyboard.type('retained native text');
   const queued = await fixture('stats');
   await staleOpenA.press('Enter');
   assert.equal((await view()).selected, a); assert.equal((await view()).mode, 'terminal');
   assert.ok((await fixture('stats')).navigation.waitingClaims.includes(a), 'An old Open notice cannot replace the pending native view intent');
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click(); await left(a);
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '离开此空间', exact: true }).click(); await left(a);
   assert.equal((await view()).selected, a); assert.equal((await view()).mode, 'terminal'); await stableCalls(queued, 'Solo detach with queued input');
   await until(() => page.locator('#toast .toast-action').count().then(n => n === 0), 'No current-session Open can cancel the queued edit'); await capture('05-native-queue-after-detach');
   assert.equal((await fixture('stats')).navigation.inputs.length, queued.navigation.inputs.length);
@@ -207,7 +223,9 @@ async function run() {
   const compositionBefore = await fixture('stats'); await peer.call('join', a, false);
   await until(async () => (await view()).selected === 'room' && !(await view()).roomSession, 'Remote focused removal keeps room');
   assert.equal(await page.locator('#toast .toast-action:visible').count(), 0, 'Remote removal never produces a success Open notice');
-  const recovery = page.locator(`#terminal-area [data-terminal-id="${a}"] .terminal-input-recovery textarea`);
+  // Since 3e5fe6a a terminal outside the current view is parked in a hidden holder, not #terminal-area;
+  // its unconfirmed text stays in that terminal's own recovery panel until the person reopens it.
+  const recovery = page.locator(`[data-terminal-id="${a}"] .terminal-input-recovery textarea`);
   await until(async () => {
     const received = (await fixture('stats')).navigation.inputs.slice(compositionBefore.navigation.inputs.length).map(x => x.data).join('');
     return received.includes('保留输入') || (await recovery.inputValue()).includes('保留输入');
@@ -215,7 +233,7 @@ async function run() {
   const compositionAfter = await fixture('stats'), received = compositionAfter.navigation.inputs.slice(compositionBefore.navigation.inputs.length), retained = await recovery.inputValue();
   assert.ok(received.every(x => x.id === a)); assert.equal(received.map(x => x.data).join('') + retained, '保留输入');
   measurements.push({ name: 'original-composition', received, retained, trace: await page.evaluate(() => globalThis.navigationImeTrace) });
-  await cdp.detach(); await page.locator(`[data-session-id="${a}"]`).click();
+  await cdp.detach(); await (await row(a)).click();
   if (retained) assert.equal(await recovery.isVisible(), true);
   assert.equal((await snapshot()).sessions.find(s => s.id === a).liveDraft, 'Original private draft Navigation A');
   check('Remote focused removal keeps the room and preserves Chromium composition once at its original session, without Enter or another target');

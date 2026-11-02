@@ -36,12 +36,22 @@ async function authorize(first, goal) {
   await page.locator('#run-button').click(); await page.locator('#run-limit').selectOption('2');
   await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
 }
+// Since c9800cc a sidebar space click also filters the list to its members, and authorize() clicks the
+// space each time; like a person, show all before reaching a session outside the space.
+async function row(id) {
+  if (await page.locator('#clear-space-filter').isVisible()) await page.locator('#clear-space-filter').click();
+  // This window is narrow enough for the sidebar rail, which hides 显示全部; clicking the filtering space
+  // again is then the only way back (the hidden filter is T-132).
+  else if (await page.locator('#room-nav.space-filtered').count()) await page.locator('#room-nav').click();
+  return page.locator(`[data-session-id="${id}"]`);
+}
 async function pendingPrivate(id, text) {
-  await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click();
+  await (await row(id)).click(); await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill(text); await fixture('holdSend', { target: id });
   const count = (await fixture()).sends.length; await page.locator('#message-input').press('Enter');
   await until(async () => (await fixture()).sends.length === count + 1, 'Private submission waits');
 }
+const PAUSE_UNCONFIRMED = '部分后台尚未确认这个空间的交接已暂停；未重发任务。';
 async function completePair(first, second, previous) {
   await until(async () => (await fixture()).sends.length === previous + 1, 'Authorized first recipient');
   assert.equal((await fixture()).sends.at(-1).id, first); await fixture('release', { text: '35 minutes daily' });
@@ -57,10 +67,17 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(950, 700));
   const a = await create('claude', '核查者'), b = await create('codex', '复核者');
-  for (const id of [a, b]) { await page.locator(`[data-session-id="${id}"]`).click(); await page.getByRole('button', { name: '加入协作', exact: true }).click(); }
+  // Joining is 加入此空间 in the session's ⋯ menu; its 撤销加入 notice has no time limit, so close it as a person would.
+  for (const id of [a, b]) {
+    await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#session-header-more').click();
+    await page.getByRole('menuitem', { name: '加入此空间', exact: true }).click();
+    await page.locator('#toast-text', { hasText: '已加入' }).waitFor(); await page.locator('#toast-close').click();
+  }
   // The sidebar marks exactly one current place, visibly (bar + frame) and with aria-current.
   const current = () => page.evaluate(() => [...document.querySelectorAll('[aria-current="page"]')].map(el => el.id || el.dataset.sessionId));
-  const marked = selector => page.locator(selector).evaluate(el => getComputedStyle(el.closest('.session-row') || el).boxShadow.includes('inset'));
+  // Current = bar + frame. Since c9800cc a filtering space also shows a bar alone (.space-filtered), so
+  // require the 1px inset frame that only the current place has.
+  const marked = selector => page.locator(selector).evaluate(el => { const shadow = getComputedStyle(el.closest('.session-row') || el).boxShadow; return shadow.includes('inset') && shadow.includes('0px 0px 0px 1px'); });
   await page.locator('#room-nav').click(); await until(async () => JSON.stringify(await current()) === '["room-nav"]', 'Room marked current');
   assert.equal(await marked('#room-nav'), true); assert.equal(await marked(`[data-session-id="${a}"]`), false);
   await page.locator(`[data-session-id="${a}"]`).click(); await until(async () => JSON.stringify(await current()) === JSON.stringify([a]), 'Session marked current');
@@ -92,7 +109,7 @@ async function run() {
   await fixture('rejectSend', { target: c, text: 'Synthetic private failure after cancelled wait' });
   await until(async () => !(await snapshot()).sessions.find(s => s.id === c).pendingTag, 'Private rejection settled');
   await delay(200); assert.equal((await fixture()).sends.length, 1); assert.equal(await roomBody(page), nextDraft);
-  await page.locator(`[data-session-id="${c}"]`).click(); await page.locator('#chat-tab').click();
+  await (await row(c)).click(); await page.locator('#chat-tab').click();
   assert.equal(await page.locator('#message-input').inputValue(), '私人问题一，不进入共同任务');
   checks.push('Waiting is visible and cancellable through the existing status/action; late private rejection retains both drafts and dispatches no cancelled task');
   await authorize(a, nextDraft); await completePair(a, b, 1);
@@ -136,7 +153,9 @@ async function run() {
   assert.match(await page.locator('#run-status').innerText(), /正在取消/);
   assert.ok(!(await page.locator('#toast').innerText()).includes('Synthetic old send rejected'));
   await fixture('rejectPause', { text: 'Synthetic pause confirmation lost' });
-  await until(async () => (await page.locator('#toast').innerText()).includes('Synthetic pause confirmation lost'), 'Pause failure remains visible');
+  // Since c9800cc a space's pause reports any backend's lost acknowledgement in one message (workspace-client.cjs).
+  // Wait for a shown notice: a closed one keeps its old text, and this message repeats below.
+  await page.locator('#toast-text', { hasText: PAUSE_UNCONFIRMED }).waitFor();
   // A notice never covers where the person types, and the person can close it.
   const [notice, composer] = await Promise.all(['#toast', '#room-composer'].map(selector => page.locator(selector).boundingBox()));
   assert.ok(notice.y + notice.height <= composer.y || notice.y >= composer.y + composer.height, 'The notice does not cover the composer');
@@ -151,7 +170,7 @@ async function run() {
   await fixture('holdPause'); await page.locator('#pause-button').click();
   await until(async () => (await fixture()).pausePending, 'Pause ACK pending for reversed order');
   await fixture('rejectPause', { text: 'Synthetic cancellation unconfirmed before native ACK' });
-  await until(async () => (await page.locator('#toast').innerText()).includes('Synthetic cancellation unconfirmed before native ACK'), 'Cancellation failure shown before native acknowledgement');
+  await page.locator('#toast-text', { hasText: PAUSE_UNCONFIRMED }).waitFor(); // shown before the native acknowledgement below
   await fixture('confirmSend', { target: a }); await delay(250);
   assert.equal(await roomBody(page), failedFirstDraft, 'Requested cancellation protects material even when its confirmation failed first');
   assert.ok(!(await page.locator('#toast').innerText()).includes('已取消'));
