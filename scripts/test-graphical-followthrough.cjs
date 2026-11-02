@@ -64,7 +64,6 @@ async function check(text) { assert.ok(Date.now() - started < plan.maxRunMs, 'Fi
 async function openSearchScope(scope) { await page.locator('#search-button').click(); await page.locator('#search-options > summary').click(); await page.locator('#search-scope').selectOption(scope); }
 async function selectSession(id) {
   const row = page.locator(`#session-list .session-link[data-session-id="${id}"]`);
-  if (!(await row.isVisible()) && (await snapshot()).viewState.sidebarSpaceFilter) await page.locator('#clear-space-filter').click();
   await row.click();
 }
 async function launch() {

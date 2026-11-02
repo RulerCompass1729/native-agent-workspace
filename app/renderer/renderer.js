@@ -30,7 +30,7 @@ let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSurface = 'overview', roomOverview;
 let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
-let spaceId = 'shared', sidebarView = 'flat', sidebarSpaceFilter = '', hoverSpace = '';
+let spaceId = 'shared', sidebarView = 'flat', hoverSpace = '';
 let sidebarCollapsedGroups = new Set();
 let roomViews = Object.create(null);
 const roomHistories = new Map(), spaceRows = new Map(), sidebarGroups = new Map();
@@ -725,10 +725,10 @@ function projectSpace(next) {
     return { ...s, peerIdentity: { ...identity, ...(spaceId === 'shared' ? {} : { roomId: spaceId, roomMemberRevision: pairRevision(s) }) }, sharedActivity: s.sharedActivities?.[spaceId] || (spaceId === 'shared' ? s.sharedActivity : null) };
   }), room: room || { id: spaceId, name: '空间资料未能读取', archived: true, unavailable: true, messages: [], events: [], notes: '', files: [], memberOrder: [] } };
 }
-function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarSpaceFilter, sidebarCollapsedGroups: [...sidebarCollapsedGroups], roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
-async function selectSpace(id, filter = false) {
+function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarCollapsedGroups: [...sidebarCollapsedGroups], roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
+// Opening a space never changes which sessions the sidebar lists (T-132).
+async function selectSpace(id) {
   if (!spaceRecord(id)) throw Error('这个空间的资料尚不可用，草稿保留。');
-  if (filter) sidebarSpaceFilter = sidebarSpaceFilter === id ? '' : id;
   if (spaceId !== id) {
     captureReadingViews(); captureRoomView(); closeMentions(); suspendColumnInputs();
     roomOverview?.dispose(); roomOverview = null; spaceId = id; state = projectSpace(state); restoreRoomView();
@@ -742,7 +742,7 @@ function renderSpaceNavigation() {
     if (!row) {
       if (room.id === 'shared') row = { element: $('room-nav').parentElement, nav: $('room-nav'), name: $('room-nav-name'), count: $('member-count'), more: $('room-more') };
       else {
-        const element = node('div', undefined, 'room-row'), nav = button('', () => selectSpace(room.id, true), 'room-nav'), name = node('span', undefined, 'rail-label'), count = node('span');
+        const element = node('div', undefined, 'room-row'), nav = button('', () => selectSpace(room.id), 'room-nav'), name = node('span', undefined, 'rail-label'), count = node('span');
         nav.append(node('span', '◉', 'rail-icon'), name, count);
         const more = button('⋯', () => openRoomMenu(undefined, more, room.id), 'session-more'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
         element.append(nav, more); $('additional-spaces').append(element); row = { element, nav, name, count, more };
@@ -754,10 +754,9 @@ function renderSpaceNavigation() {
     }
     row.element.hidden = Boolean(room.archived) && !(renameTarget?.id === 'room' && renameTarget.roomId === room.id);
     row.nav.disabled = Boolean(room.archived); row.more.disabled = disconnected || Boolean(room.archived) || renameTarget?.id === 'room' && renameTarget.roomId === room.id;
-    row.nav.className = `room-nav ${roomTone(room.id)}`; row.nav.classList.toggle('active', selected === 'room' && spaceId === room.id); row.nav.classList.toggle('space-filtered', sidebarSpaceFilter === room.id);
-    row.nav.setAttribute('aria-pressed', String(sidebarSpaceFilter === room.id));
+    row.nav.className = `room-nav ${roomTone(room.id)}`; row.nav.classList.toggle('active', selected === 'room' && spaceId === room.id);
     if (selected === 'room' && spaceId === room.id) row.nav.setAttribute('aria-current', 'page'); else row.nav.removeAttribute('aria-current');
-    row.nav.setAttribute('aria-label', `${room.name} · ${members(room.id).length} 位成员 · 点击筛选，再次点击显示全部`); row.nav.title = row.nav.getAttribute('aria-label');
+    row.nav.setAttribute('aria-label', `打开协作空间「${room.name}」 · ${members(room.id).length} 位成员`); row.nav.title = row.nav.getAttribute('aria-label');
     row.name.textContent = room.id === 'shared' ? `◉ ${room.name}` : room.name; row.count.textContent = members(room.id).length;
     row.more.setAttribute('aria-label', `空间操作：${room.name}`); row.more.title = row.more.getAttribute('aria-label');
   }
@@ -1614,20 +1613,19 @@ function renderSessions() {
     if (!model || model.actionsKey !== sessionMenu.actionsKey) sessionMenu.close();
     else if (sessionMenu.factsKey !== sidebarFactsKey(current)) { sessionMenu.factsKey = sidebarFactsKey(current); sessionMenu.close.update(model.items); }
   }
-  const visible = sidebarSessions().filter(s => !sidebarSpaceFilter || inSpace(s, sidebarSpaceFilter));
+  const visible = sidebarSessions();
   const grouped = sidebarView === 'grouped', occurrences = [], containers = new Map();
   const list = $('session-list');
   $('sessions-flat').setAttribute('aria-pressed', String(!grouped)); $('sessions-grouped').setAttribute('aria-pressed', String(grouped));
-  $('clear-space-filter').hidden = !sidebarSpaceFilter;
-  $('clear-space-filter').title = sidebarSpaceFilter ? `清除「${spaceRecord(sidebarSpaceFilter)?.name || '空间'}」筛选` : '';
   if (grouped) {
-    const groups = allSpaces().filter(r => !r.archived && (!sidebarSpaceFilter || r.id === sidebarSpaceFilter)).map(r => ({ id: r.id, name: r.name, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
-    if (!sidebarSpaceFilter) groups.push({ id: '', name: '独立会话', people: visible.filter(s => !window.nativeWorkspaceSpaces.roomIds(s).length) });
+    const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, name: r.name, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
+    // Every listed session appears at least once: a session left only in an archived or unknown space counts as independent.
+    groups.push({ id: '', name: '独立会话', people: visible.filter(s => !groups.some(group => inSpace(s, group.id))) });
     groups.forEach((group, index) => {
       let entry = sidebarGroups.get(group.id);
       if (!entry) {
         const element = node('section', undefined, 'session-space-group'), heading = node('h3'), body = node('div');
-        const title = group.id ? button('', () => selectSpace(group.id, true)) : node('span');
+        const title = group.id ? button('', () => selectSpace(group.id)) : node('span');
         const toggle = button('▾', () => toggleSidebarGroup(group.id), 'session-space-toggle'), attention = node('span', undefined, 'session-space-attention');
         body.id = `session-space-members-${crypto.randomUUID()}`; attention.id = `${body.id}-attention`;
         toggle.setAttribute('aria-controls', body.id); heading.append(toggle, title, attention); element.append(heading, body); element.dataset.sessionGroup = group.id || 'independent';
@@ -1638,9 +1636,11 @@ function renderSessions() {
       if (group.id) entry.title.setAttribute('aria-label', `打开协作空间「${group.name}」`);
       // A folded group hides only its own rows; its name, count and any rows needing attention stay visible.
       const closed = sidebarCollapsedGroups.has(group.id || 'independent');
+      // The narrow rail still lists a folded group's rows (T-132), so an open menu or focus there stays put.
+      const rowsHidden = closed && list.closest('.naw')?.dataset.collapsed !== 'true';
       const menuRow = sessionMenu?.kind === 'session' && sessionRows.get(sessionMenu.rowKey);
-      const closeMenu = closed && sessionMenu?.kind === 'session' && entry.body.contains(menuRow?.element || sessionMenu.anchor);
-      const hiddenFocus = closed && (entry.body.contains(document.activeElement) || closeMenu);
+      const closeMenu = rowsHidden && sessionMenu?.kind === 'session' && entry.body.contains(menuRow?.element || sessionMenu.anchor);
+      const hiddenFocus = rowsHidden && (entry.body.contains(document.activeElement) || closeMenu);
       entry.body.hidden = closed; entry.toggle.textContent = closed ? '▸' : '▾'; entry.toggle.setAttribute('aria-expanded', String(!closed));
       entry.toggle.setAttribute('aria-label', `${closed ? '展开' : '折叠'}${group.name}`); entry.toggle.setAttribute('title', `${closed ? '展开' : '折叠'}${group.name}`);
       const attention = group.people.map(record => ({ record, presentation: sidebarPresentation(record) })).filter(item => item.presentation.marker === '!');
@@ -3170,8 +3170,7 @@ $('workspace-group').addEventListener('contextmenu', event => {
 });
 $('workspace-toggle').addEventListener('keydown', event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); event.stopPropagation(); openSpaceRegionMenu(undefined, $('workspace-toggle')); } });
 for (const [id, view] of [['sessions-flat', 'flat'], ['sessions-grouped', 'grouped']]) $(id).onclick = () => { sidebarView = view; sessionMenu?.close(); render(); attempt(persistView); $(id).focus(); };
-$('clear-space-filter').onclick = () => { sidebarSpaceFilter = ''; render(); attempt(persistView); $('sessions-flat').focus(); };
-$('room-nav').onclick = () => attempt(() => selectSpace('shared', true));
+$('room-nav').onclick = () => attempt(() => selectSpace('shared'));
 $('panorama-nav').onclick = () => attempt(openPanorama);
 $('return-panorama').onclick = () => attempt(returnToPanorama);
 $('room-more').onclick = () => openRoomMenu(undefined, $('room-more'), 'shared');
@@ -3712,7 +3711,7 @@ attempt(async () => {
   if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
   roomViews = state.viewState.roomViews || Object.create(null);
   if (!roomViews.shared) roomViews.shared = Object.fromEntries(roomViewFields.filter(k => state.viewState[k] !== undefined).map(k => [k, state.viewState[k]]));
-  spaceId = state.viewState.spaceId || 'shared'; sidebarView = state.viewState.sidebarView || 'flat'; sidebarSpaceFilter = state.viewState.sidebarSpaceFilter || '';
+  spaceId = state.viewState.spaceId || 'shared'; sidebarView = state.viewState.sidebarView || 'flat';
   sidebarCollapsedGroups = new Set(state.viewState.sidebarCollapsedGroups || []);
   state = projectSpace(state); const savedRoomView = roomViews[spaceId] || {};
   owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;

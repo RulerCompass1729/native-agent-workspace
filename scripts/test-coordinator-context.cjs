@@ -147,7 +147,6 @@ async function run() {
   await check('Combined draft above16000 is refused visibly; both the original long draft and background preview remain unsent and editable');
   await closeBackground(); await fillRoomMessage(page, insertedBody);
   await until(async () => (await snapshot()).viewState.sharedDraft === insertedDraft, 'Explicit inserted draft restored after negative case');
-  if (await page.locator('#clear-space-filter').isVisible()) await page.locator('#clear-space-filter').click();
   await page.locator('[data-session-id="' + ids[2] + '"]').click(); await settleDisplays();
   assert.equal((await snapshot()).viewState.mode, 'chat'); assert.equal(await page.locator('#message-input').inputValue(), 'PRIVATE_U_UNSENT');
   if (!await page.locator('#advanced').evaluate(el => el.open)) await page.locator('#advanced > summary').click();

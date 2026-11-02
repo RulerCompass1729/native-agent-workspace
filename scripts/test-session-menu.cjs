@@ -124,8 +124,7 @@ async function run() {
   // Since c381270 the member tab strip stays hidden; the member's overview card shows the name.
   const card = page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${b.id}"] .collaboration-member-name`);
   await until(async () => await card.locator('.collaboration-name-text').innerText() === '很长的会话名称'.repeat(7), 'Space card shows the other-window rename');
-  // Opening the space from its sidebar entry also filtered the session list to its members (c9800cc); show all again.
-  await page.locator('#clear-space-filter').click(); await link(sessions[0].id).waitFor({ state: 'visible' });
+  await link(sessions[0].id).waitFor({ state: 'visible' });
   const win = await application.browserWindow(page);
   await win.evaluate(w => w.setSize(850, 600));
   assert.ok(await card.evaluate(el => el.getBoundingClientRect().right <= el.closest('.collaboration-member-status').getBoundingClientRect().right + 0.5 && el.title.startsWith('很长的会话名称'.repeat(7))), 'Long card name stays in its header and keeps the full name in its title');

@@ -85,8 +85,7 @@ async function run() {
   await input.evaluate(el => el.select()); await app.evaluate(() => { globalThis.menuClipboard.hold = true; globalThis.menuClipboard.text = 'Do not paste after returning'; });
   const beforeReturn = await app.evaluate(() => globalThis.menuClipboard.reads); await open(input); await item('粘贴').click();
   await until(async () => await app.evaluate(() => globalThis.menuClipboard.reads) > beforeReturn, 'Delayed paste before switching away');
-  // Opening the space from its sidebar entry also filters the session list to its members (c9800cc); show all to return.
-  await page.locator('#room-nav').click(); await page.locator('#clear-space-filter').click(); await page.locator(`[data-session-id="${id}"]`).click();
+  await page.locator('#room-nav').click(); await page.locator(`[data-session-id="${id}"]`).click();
   await app.evaluate(() => { globalThis.menuClipboard.hold = false; globalThis.menuRelease(); }); await delay(150); assert.equal(await input.inputValue(), 'Newer unsent draft');
   const beforeDismiss = await app.evaluate(() => globalThis.menuClipboard.copies.length); await open(input); await page.keyboard.press('Escape'); await open(input, 'Shift+F10'); await page.keyboard.press('Tab');
   assert.equal(await app.evaluate(() => globalThis.menuClipboard.copies.length), beforeDismiss); assert.equal(await input.inputValue(), 'Newer unsent draft');
@@ -101,7 +100,7 @@ async function run() {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); const shared = page.locator('#room-messages [data-message-id="shared-context"] .message-body'); await shared.waitFor(); const sharedText = await selectText(shared);
   await open(shared); await item('复制').click(); await until(async () => await copied() === sharedText, 'Shared reader selection');
   await page.locator('#room-nav').click({ button: 'right' }); await item('重命名…').waitFor(); assert.equal(await item('剪切').count(), 0); await page.keyboard.press('Escape');
-  await page.locator('#clear-space-filter').click(); await page.locator(`[data-session-id="${id}"]`).click(); await page.locator(`[data-session-row="${id}"]`).click({ button: 'right' }); await item('复制完整 NAW ID').waitFor(); await page.keyboard.press('Escape');
+  await page.locator(`[data-session-id="${id}"]`).click(); await page.locator(`[data-session-row="${id}"]`).click({ button: 'right' }); await item('复制完整 NAW ID').waitFor(); await page.keyboard.press('Escape');
   checks.push('Private/shared original selections and links copy exactly; session and room keep their dedicated menus');
 
   await page.locator('#terminal-tab').click(); await fixture('terminal', id, { sequence: ++sequence, data: '\x1bcTerminal original 你好\r\nSecond line\x1b[?1000h\x1b[?1006h\x1b[?2004h' });

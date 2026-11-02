@@ -7,7 +7,7 @@ const { connectService } = require('../app/service-connection.cjs'), { writeLayo
 const { RoomState } = require('../app/room-state.cjs'), { _electron } = scratch.playwright(require('playwright'));
 const slot = path.resolve(execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim(), '..', '.local/gui-test-slot.lock');
 const evidence = process.env.NAW_RAIL_EVIDENCE_DIR, token = randomUUID(), owner = randomUUID();
-const plan = { task: 'T69/T108 existing collapsed membership controls', groups: 4, maxElectronStarts: 1, maxOwnedNodeStarts: 1, syntheticSessions: 7, productModels: 0, nativeInputs: 0, sends: 0, osClipboard: 0, maxRunMs: 120000, cleanupMs: 60000, canonicalLeaseRequired: true };
+const plan = { task: 'T69/T108 existing collapsed membership controls', groups: 5, maxElectronStarts: 1, maxOwnedNodeStarts: 1, syntheticSessions: 7, productModels: 0, nativeInputs: 0, sends: 0, osClipboard: 0, maxRunMs: 120000, cleanupMs: 60000, canonicalLeaseRequired: true };
 if (process.argv.includes('--plan')) { console.log(JSON.stringify(plan, null, 2)); process.exit(0); }
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms)), hash = data => createHash('sha256').update(data).digest('hex');
 const env = additions => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('NAW_') && !key.startsWith('ELECTRON_') && !['NODE_OPTIONS', 'NODE_PATH'].includes(key))), ...additions });
@@ -119,6 +119,13 @@ require(${JSON.stringify(path.join(root, 'app/main.cjs'))});`);
     const count = await sidebar().locator('.session-row').count(); await collapse(); await hiddenRailControls(); await capture('04-grouped-rail');
     await expand(); assert.equal(await sidebar().locator('.session-row').count(), count); assert.equal(await page.locator('#sessions-grouped').getAttribute('aria-pressed'), 'true');
     assert.equal(await page.locator('#new-space').isVisible(), true); assert.ok(await sidebar().locator('.session-space-badges:visible').count() >= 7);
+  });
+  await group('05 folded groups still list their sessions in the narrow rail, which has no headings to unfold from (T-132)', async () => {
+    await expand(); await page.locator('#sessions-grouped').click(); const toggles = sidebar().locator('.session-space-toggle'), total = await toggles.count(); assert.ok(total >= 3);
+    for (let n = 0; n < total; n++) { await toggles.nth(n).click(); assert.equal(await toggles.nth(n).getAttribute('aria-expanded'), 'false'); }
+    const listed = () => sidebar().locator('.session-row:visible').evaluateAll(rows => new Set(rows.map(row => row.dataset.sessionRow)).size);
+    assert.equal(await listed(), 0, 'Folded in the wide sidebar'); await collapse(); await until(async () => await listed() === 7, 'Every session listed in the rail despite folds'); await capture('05-folded-rail');
+    await expand(); assert.equal(await listed(), 0, 'Folds kept after the rail'); for (let n = 0; n < total; n++) await toggles.nth(n).click(); assert.equal(await listed(), 7);
   });
   assert.deepEqual(errors, []); assert.deepEqual(hashes(), frozen);
 }

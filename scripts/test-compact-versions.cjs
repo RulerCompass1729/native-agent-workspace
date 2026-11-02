@@ -94,11 +94,11 @@ async function run() {
     const boxes = [await name.boundingBox(), await badge.boundingBox()]; assert.ok(Math.abs(boxes[0].y - boxes[1].y) < 8, 'Badge occupies the name line');
     assert.match(await row.locator('.session-link').getAttribute('aria-label'), /后台 0\.1\.0-alpha\.120/);
   });
-  await group('02 grouping and space filtering repeat occurrences without changing the global unique count', async () => {
-    await page.locator('#sessions-grouped').click(); assert.ok(await rows().count() > 7);
+  await group('02 grouping repeats occurrences, and opening a space keeps every occurrence and the global unique count', async () => {
+    await page.locator('#sessions-grouped').click(); const listed = await rows().count(); assert.ok(listed > 7);
     assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
     await page.locator(`[data-space-id="${roomB}"] .room-nav`).click(); assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
-    await page.locator('#clear-space-filter').click(); await page.locator('#sessions-flat').click();
+    assert.equal(await rows().count(), listed, 'Opening a space keeps every session listed (T-132)'); await page.locator('#sessions-flat').click();
   });
   await group('03 an idle old backend offers end-and-update, and canceled confirmations (end-and-update, then ended-service) perform no update', async () => {
     const before = identity(await snapshot());

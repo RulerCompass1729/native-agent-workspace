@@ -189,7 +189,7 @@ async function run() {
   await page.locator(`[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '在独立窗口打开', exact: true }).click();
   await until(() => app.windows().length === 2, 'Intentional observer window'); const second = app.windows().find(w => w !== page); await second.locator('#new-session').waitFor();
   await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click(); await page.locator('#rename-name').fill('共享复盘'); await page.locator('#confirm-rename').click();
-  await until(async () => await second.locator('#room-nav').getAttribute('aria-label') === '共享复盘', 'Other window sees rename');
+  await until(async () => (await second.locator('#room-nav').getAttribute('aria-label')).includes('「共享复盘」'), 'Other window sees rename');
   await second.locator('#room-nav').click(); await second.locator('#room-notes').click(); await second.locator('#room-notes-text').fill('OTHER-UNSAVED');
   await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('先保存的版本'); await page.locator('#save-notes').click();
   await second.locator('#save-notes').click(); await second.locator('#notes-error').waitFor(); assert.equal(await second.locator('#room-notes-text').inputValue(), 'OTHER-UNSAVED'); assert.equal((await snapshot()).room.notes, '先保存的版本');
