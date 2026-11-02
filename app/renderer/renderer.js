@@ -691,6 +691,14 @@ ui.copyCode = async text => {
   catch (error) { toast('复制失败，请重试。'); throw error; }
 };
 $('toast-close').onclick = () => { clearTimeout(toastTimer); $('toast').hidden = true; };
+// T-128: a notice with an action keeps no time limit, so keyboard and screen-
+// reader users can still reach it, but it never stays in the way: any press
+// that is not on one of its own buttons ends it, on the notice or elsewhere.
+// The press is not passed on, so nothing hidden beneath it is triggered.
+document.addEventListener('pointerdown', event => {
+  if ($('toast').hidden || !$('toast').querySelector('.toast-action')) return;
+  if (!(event.target instanceof Element && $('toast').contains(event.target) && event.target.closest('button'))) $('toast').hidden = true;
+}, true);
 async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
 function captureRoomView() {
   const view = roomViews[spaceId] ||= {};
