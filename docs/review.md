@@ -2285,3 +2285,20 @@ the coordinator snapshot still reporting ready; clearing scheduled work for a
 new process assuming session crons end with it; real OS notification delivery
 for the reopen fix; no assertion that a truncated name's tooltip keeps the full
 label; and the stale member-order and collaboration-list scripts.
+
+
+### Integrated alpha.157 delivery
+
+A fresh read-only reviewer accepted the integration after ledger corrections:
+the effects on older backends (count only, a count kept after an interrupt or
+resume, a hollow ring that can persist, injected turns still shown as the
+person), labelling the four Codex 2 fixes as source and lane component evidence
+with unit tests only for the reopen fix, and placing the failing member-order
+and collaboration-list runs on the Codex 2 integration tree. Three further
+wording fixes it suggested were applied before the commit and checked in the
+final record review. It accepted the update operator as a substitution-only copy
+of the alpha.156 one; that operator ran once and replaced the empty active
+backend in place. Open: the post-provider signature check on the new backend,
+the Codex 2 behaviours and the background and injected-turn labels in the daily
+app, the window between the last quiet check and bootstrap, and the items listed
+above.
