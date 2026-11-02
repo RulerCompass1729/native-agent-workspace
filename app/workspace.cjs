@@ -509,7 +509,14 @@ class Workspace extends EventEmitter {
       wake.human(this, s.id); this.pause('真人在原生终端输入'); s.controlRevision++;
       runtime.workspaceMcpCalls?.clear();
       if (item?.turnId && item.turnId === runtime.turnId) wake.nativeStart(this, runtime, { nativeId: s.nativeId, turnId: item.turnId });
-      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, status: 'submitted', origin: 'native', time: Date.now() });
+      // Native reports machine-injected turns (task notifications, wakeups, peer messages) by source; they
+      // keep the input's place in the turn but are not shown as the person's words. Side effects are unchanged.
+      const machine = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event'].includes(item?.source);
+      const notices = machine ? text.match(/<task-notification>[\s\S]*?<\/task-notification>/g) : null;
+      const summaries = notices && !text.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim() ? notices.map(block => /<summary>([\s\S]*?)<\/summary>/.exec(block)?.[1]?.trim()).filter(Boolean) : [];
+      // The original text is kept for search and history; the summary is only what the reader shows.
+      const shown = summaries.length && summaries.length === notices.length ? { name: '后台任务通知', displayText: summaries.join('\n') } : machine ? { name: item.source.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入' } : {};
+      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource: item.source } : {}), time: Date.now() });
       this.changed();
     });
     on('nativeInputImages', event => { if (require('./native-images.cjs').applyInputImages(s, event)) this.changed(); });

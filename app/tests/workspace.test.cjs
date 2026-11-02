@@ -637,6 +637,36 @@ test('turn-end background reports follow native-typed and task-notification turn
   assert.equal(s.background, null); assert.equal(s.scheduled, null); assert.equal(s.backgroundKinds, null); assert.equal(s.backgroundAt, null); assert.equal(s.backgroundStale, false);
   assert.equal(fleetStatus(s, '就绪'), '就绪', 'A new native process starts unreported, not unconfirmed');
 });
+test('machine-injected native turns keep their place and side effects but are not shown as the person', async t => {
+  const { workspace: w, ids } = await fixture(t, 1);
+  const { Claude } = require('../adapters.cjs');
+  const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+  runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
+  runtime.submission = { request: async () => ({ promptId: 'unused' }) }; runtime.terminal = { input() {} };
+  w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
+  const s = w.get(ids[0]), nativeId = s.nativeId;
+  const notice = (id, summary) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>${summary}</summary>\n</task-notification>`;
+  const submit = (id, prompt, source) => { runtime.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: id, session_id: nativeId, prompt, ...(source ? { source } : {}) }); return s.messages.find(m => m.id === 'claude-prompt-' + id); };
+  let revision = s.controlRevision;
+  const raw = notice('job', 'Background command "Run review" completed (exit code 0)'), one = submit('n1', raw, 'system');
+  assert.deepEqual([one.role, one.name, one.displayText, one.inputSource], ['user', '后台任务通知', 'Background command "Run review" completed (exit code 0)', 'system']);
+  assert.equal(one.text, raw, 'The original native text is kept for search and history');
+  assert.equal(s.controlRevision, revision + 1, 'Existing native-input side effects are unchanged'); assert.equal(s.state, 'working'); assert.equal(s.backgroundStale, true);
+  const two = submit('n2', notice('a', 'First done') + '\n' + notice('b', 'Second failed'), 'system');
+  assert.equal(two.name, '后台任务通知'); assert.equal(two.displayText, 'First done\nSecond failed'); assert.match(two.text, /<task-id>a<\/task-id>[\s\S]*<task-id>b<\/task-id>/);
+  const typed = submit('u1', notice('fake', 'typed by a person'), 'user');
+  assert.equal(typed.name, undefined, 'The same text typed by a person stays the person\'s input'); assert.equal(typed.displayText, undefined); assert.equal(typed.text, notice('fake', 'typed by a person'));
+  const sdk = submit('s1', notice('sdk', 'from -p'), 'sdk'); assert.deepEqual([sdk.name, sdk.displayText, sdk.inputSource], [undefined, undefined, undefined], 'sdk input is a person or caller, not a machine turn');
+  const unknown = submit('u2', notice('old', 'no source field'));
+  assert.equal(unknown.name, undefined, 'An older payload without source keeps the existing display'); assert.equal(unknown.inputSource, undefined);
+  const wake = submit('w1', 'check the build', 'loop_wakeup'); assert.deepEqual([wake.name, wake.text, wake.displayText], ['定时唤醒', 'check the build', undefined]);
+  const cron = submit('w2', 'daily check', 'schedule_wakeup'); assert.deepEqual([cron.name, cron.inputSource], ['定时唤醒', 'schedule_wakeup']);
+  const poll = submit('p1', 'event body', 'poll_event'); assert.deepEqual([poll.name, poll.inputSource], ['原生自动输入', 'poll_event']);
+  const bare = '<task-notification><task-id>x</task-id><status>killed</status></task-notification>', noSummary = submit('b1', bare, 'system');
+  assert.deepEqual([noSummary.name, noSummary.text, noSummary.displayText], ['原生自动输入', bare, undefined], 'A block without a summary keeps its original text');
+  const mixed = submit('m1', 'peer: ' + notice('c', 'done'), 'system'); assert.deepEqual([mixed.name, mixed.text, mixed.displayText], ['原生自动输入', 'peer: ' + notice('c', 'done'), undefined]);
+  assert.equal(s.messages.filter(m => m.role === 'user').length, 10, 'Every input keeps its own record');
+});
 test('unknown or active native work pauses routing without losing the reply or blocking explicit sharing', async t => {
   const clear = { background: 0, scheduled: 0, fleetPending: 0, stopHookActive: false };
   const cases = [

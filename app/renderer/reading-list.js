@@ -285,7 +285,8 @@ function readingView(el, key) {
   return view;
 }
 function nativeCompletionText(message) {
-  if (message.kind !== 'turn') return message.text;
+  // A machine-injected input may carry a short display summary; its original text stays in the record.
+  if (message.kind !== 'turn') return message.role === 'user' && typeof message.displayText === 'string' && message.displayText ? message.displayText : message.text;
   // Earlier releases invented these completion sentences. Keep native error
   // details, but do not translate or reconstruct a missing TUI footer from time.
   const text = (message.text || '').replace(/^原生(?:本轮已结束|已中断本轮|本轮未正常完成)(?: · [^\n]*)?(?:\n|$)/, '');
