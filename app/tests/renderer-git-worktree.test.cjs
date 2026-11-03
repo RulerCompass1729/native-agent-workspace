@@ -4,20 +4,23 @@ const {randomUUID}=require('node:crypto');
 const source=fs.readFileSync(path.join(__dirname,'../renderer/renderer.js'),'utf8');
 function fixture() {
   const nodes=new Map(),timers=new Map(),requests=[]; let timer=0;
-  const get=id=>{if(!nodes.has(id))nodes.set(id,{checked:false,disabled:false,hidden:false,value:'',textContent:'',open:false});return nodes.get(id);};
+  const get=id=>{if(!nodes.has(id))nodes.set(id,{checked:false,disabled:false,hidden:false,value:'',textContent:'',open:false,dataset:{},replaceChildren(){},add(){},querySelectorAll:()=>[]});return nodes.get(id);};
   const dialog=get('create-dialog'); dialog.open=true; const ticket={valid:true};
   const context={ $,state:{capabilities:['gitWorktreeV1','nativePermissionDefaults','createSkipPermissions','newSessionDirectory'],preflight:{python:true,codex:true}},
     document:{querySelector:()=>({value:'codex'})},crypto:{randomUUID},dialogTickets:new Map([[dialog,ticket]]),
     currentDialogTicket:t=>t===ticket&&ticket.valid&&dialog.open,
+    allSpaces:()=>[],spaceRecord:()=>undefined,Option:function(){},
     setTimeout:fn=>{timers.set(++timer,fn);return timer;},clearTimeout:id=>timers.delete(id),
     api:{gitWorktreePreview:(...args)=>new Promise(resolve=>requests.push({args,resolve})),create:()=>{context.createCalls++;return Promise.resolve('id');}},createCalls:0};
   function $(id){return get(id);}
   context.attempt=fn=>{context.pending=fn();};
   vm.createContext(context);
-  const names=['invalidateGitPreview','refreshGitPreview','scheduleGitPreview','createReadiness'];
+  // T-115: createReadiness also renders the space choice; an independent session (the default) keeps these checks unchanged.
+  const names=['invalidateGitPreview','refreshGitPreview','scheduleGitPreview','createReadiness','renderCreateSpaces','createSpaceReadiness','createSpaceChoice'];
   const declarations=names.map(name=>source.match(new RegExp('(?:async )?function '+name+'\\([\\s\\S]*?\\n}'))?.[0]);
   assert.ok(declarations.every(Boolean));
-  vm.runInContext("let folder='/synthetic/repo',newDirectory=false,creatingSession=false,gitWorktreePlan=null,gitWorktreeNonce='nonce',gitPreviewRevision=0,gitPreviewLoading=false,gitPreviewTimer,selectionRevision=0;\n"+declarations.join('\n'),context);
+  get('create-space-kind').value='independent';
+  vm.runInContext("const CREATE_SPACE_HELP='';let folder='/synthetic/repo',newDirectory=false,creatingSession=false,gitWorktreePlan=null,gitWorktreeNonce='nonce',gitPreviewRevision=0,gitPreviewLoading=false,gitPreviewTimer,selectionRevision=0;\n"+declarations.join('\n'),context);
   get('git-worktree').checked=true; get('chosen-folder').textContent='/synthetic/repo';
   return {get,ticket,requests,timers,context,run:code=>vm.runInContext(code,context)};
 }
