@@ -2748,3 +2748,33 @@ run on main did so twice; that run did not measure it. Open: in the product,
 Cmd+C in a terminal still writes the selection twice and a failed copy can be
 reported wrongly; a Claude session on an alpha.164 backend; the post-provider
 signature check; the publication scan limit.
+
+
+### A working member's reader stays at its latest output (T-134)
+
+In a space grid, a working member's 跳到最新 bounced back and the wheel could not
+settle at the bottom. The author's frame records showed a scroll between a
+render and its follow frame; the most likely cause is a refresh that folds rows
+or reorders replies moving the scroll position before the return to the bottom,
+so it was taken as the person scrolling up. The lane reviewer rejected a first
+version that treated every scroll without a key or pointer as layout, because it
+would pull back upward arrow keys and screen-reader scrolling; the final rule
+applies only while following and yields to scrolling up, upward keys and the
+scroll bar. It passed in the third and fourth rounds. The integration reviewer
+found that the rule now applies after every render while following, including
+idle columns in a grid whenever any member refreshes, which widens the window in
+which a screen reader's scroll can be pulled back. Open: that window; real
+trackpads and screen readers; daily use.
+
+
+### The terminal-selection test kept off the real clipboard (T-126 follow-up)
+
+Since T-126 the terminal-selection script wrote the copied text to the person's
+real clipboard on each run, because the Cmd+C it pressed also triggered the
+application menu's copy, which Chromium writes directly. The script now blocks
+that key path in the capture phase, compares the clipboard's change count before
+and after and fails if it moved, accepts Claude Code 2.1.317 and can name the
+CLI. The lane reviewer passed it after three rounds. Open: in the product, Cmd+C
+in a terminal still writes the selection twice and a failed copy can be reported
+wrongly; the clipboard count is read before the app closes, so a write during
+close would go unnoticed.

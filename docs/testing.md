@@ -4226,3 +4226,22 @@ and shows two copies, by that mechanism wrote the text Auto mode to the person's
 clipboard twice; that run did not measure the clipboard. A fix that blocks that
 key path and fails the run if the clipboard change count moves is ready for the
 next batch.
+
+
+### Grid follow and the clipboard-safe selection test - alpha.165
+
+Two commits from Claude 3 and Claude 2 are integrated with identical changed
+lines. On main the full unit suite passes 2,182 checks without skips. The new
+grid-follow script, reading turns, progress reading and column input exit 0;
+progress reading first stopped at its own launch gate because the integrator
+left out its authorization variable, and passed when rerun with it. The reading
+script stops waiting for its Markdown history and the reading pages script stops
+waiting to focus a 复制 button; both fail at the same steps on a checkout of the
+code before this batch, so up to those steps they are stale rather than
+regressions, and the steps after them, including the edited 跳到最新 step of the
+reading script, ran on neither version. In the author lane the grid-follow
+script failed its first step on the old code and passed five times on the new
+code, and seventeen deliberate breakages were caught by its unit tests. The
+terminal-selection script was not run on main this time, to avoid any further
+risk to the person's clipboard; the author ran it three times with the clipboard
+change count unchanged.

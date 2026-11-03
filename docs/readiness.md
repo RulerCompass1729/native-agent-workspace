@@ -4,6 +4,33 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.165 keeps a working member's reader in a space grid at its
+latest output: while it follows the latest output, each refresh is treated like
+a page change, so a scroll that lands between a refresh and the return to the
+bottom is no longer taken as the person scrolling up and 跳到最新 no longer bounces.
+The likely cause, from the author's frame records, is a refresh briefly moving
+the scroll position; the records showed a 184-pixel scroll between a render and
+its follow frame with the content height unchanged. Scrolling up by more than 80
+pixels, for example with PageUp, Home, the wheel or the scroll bar, still leaves
+the follow; a single ArrowUp or a small wheel step stays within that distance,
+so the next refresh follows again, as before. The cost: a scroll without a key
+or pointer event, such as a screen reader's or a key pressed with focus outside
+the reader, can now be pulled back after every render while following, not only
+after a render that adds a row, and in a grid this includes idle members'
+columns while any member refreshes; the author estimated the window at five to
+fifteen percent of the time while output streams. It is window code and applies
+to every session. Unverified: a real working session in the daily app, a real
+mouse wheel and trackpad, the macOS overlay scroll bar, screen readers, keys
+pressed with focus outside the reader, the terminal area of that column, and the
+single-session view beyond 跳到最新, whose reading scripts stop earlier. A second
+commit changes only the terminal-selection test so that it no longer writes the
+person's clipboard. Both changes were reviewed in their author lanes and are
+integrated with identical changed lines. The full unit suite passes 2,182
+checks, and the new grid-follow, reading turns, progress reading and column
+input GUI scripts exit 0; the reading and reading pages scripts fail at the same
+steps on the code before this batch. Daily delivery remains pending; current
+daily remains alpha.164.
+
 Current daily GUI: alpha.164, committed build source `c5dad6ce`. It qualifies
 Claude Code 2.1.317, to which this machine was upgraded on 11-02: wherever
 2.1.316 was qualified, for the root binding, native blocks, context transitions,
