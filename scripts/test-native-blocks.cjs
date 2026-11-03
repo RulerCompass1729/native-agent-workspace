@@ -29,7 +29,7 @@ const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_M
 const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
 assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial].filter(Boolean).length <= 1, 'One bounded case per run');
 assert.ok(!/^2\.1\.312\b/.test(nativeVersion) || compatibilityTrial || scrollTrial, '312 requires a bounded qualified compatibility or basic-text scroll witness');
-let planFile = null; const planSteps = [];
+let planFile = null, planNotes = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
 // The multi case asks two questions at once, the second multi-select.
@@ -76,7 +76,7 @@ const server = http.createServer((req, res) => {
       planFile ||= (body.match(/\/[^"\\\s]*\/plans\/[^"\\\s]+\.md/) || [])[0] || null;
       const step = !planFile && !planSteps.length ? 'look' : !planSteps.includes('write') ? 'write' : !planSteps.includes('exit') ? 'exit' : 'final';
       planSteps.push(step);
-      if (step === 'look') block(res, 0, { type: 'tool_use', id: 'toolu_local_plan_look', name: 'Read', input: { file_path: path.join(fs.realpathSync(cwd), 'notes.txt') } });
+      if (step === 'look') block(res, 0, { type: 'tool_use', id: 'toolu_local_plan_look', name: 'Read', input: { file_path: planNotes } });
       else if (step === 'write') block(res, 0, { type: 'tool_use', id: 'toolu_local_plan_write', name: 'Write', input: { file_path: planFile, content: planText } });
       else if (step === 'exit') block(res, 0, { type: 'tool_use', id: 'toolu_local_plan_exit', name: 'ExitPlanMode', input: {} });
       else block(res, 0, { type: 'text', text: 'NATIVE_FINAL: the plan was approved.\n' });
@@ -113,13 +113,14 @@ async function cleanup() {
 }
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const shim = path.join(base, 'claude-local');
+  const shim = path.join(base, 'claude-local'), fakeBin = path.join(base, 'bin');
+  // Claude copies a finished drag through pbcopy; keep any copy in this scratch folder, never the person's clipboard.
+  fs.mkdirSync(fakeBin, { mode: 0o700 }); fs.writeFileSync(path.join(fakeBin, 'pbcopy'), `#!/bin/sh\ncat > "${base}/pbcopy-$$.txt"\n`, { mode: 0o700 });
   // A selected executable is the supported native-discovery setting. No
   // production adapter methods are replaced by this test.
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
-    `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")\n` +
+    `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",PATH=${JSON.stringify(fakeBin)}+":"+os.environ.get("PATH",""))\n` +
     `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+["--model","haiku","--allowedTools","Bash(printf:*)"${planTrial ? ',"--permission-mode","plan"' : permissionTrial ? ',"--permission-mode","default"' : ''}])\n`, { mode: 0o700 });
-  if (planTrial) fs.writeFileSync(path.join(cwd, 'notes.txt'), 'local notes\n');
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true },
     // New sessions start in their own folder under `${workspace}-sessions` (daemon.cjs).
     [fs.realpathSync(cwd) + '-sessions']: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
@@ -140,6 +141,8 @@ async function cleanup() {
   }
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Native submission bridge', 60000);
   const before = (await snapshot()).sessions[0];
+  // New sessions start in their own folder under `${workspace}-sessions`; the plan reads a file there, inside its working directory.
+  if (planTrial) { planNotes = path.join(fs.realpathSync(before.cwd), 'notes.txt'); fs.writeFileSync(planNotes, 'local notes\n'); }
   if (scrollTrial) {
     await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('Show the numbered local fixture without changing files.'); await page.locator('#send-button').click();
     await until(async () => calls === 1 && (await snapshot()).sessions[0].state === 'idle', 'One local native reply completes');
@@ -250,10 +253,15 @@ async function cleanup() {
     assert.ok(planFile, 'Native named a plan file in plan mode');
     // Native fills the ExitPlanMode request with the plan file's text and path; the
     // panel shows that native input as is, and the reader keeps the Write call.
+    // Since b6f633f the request is a compact 待批准 row; open it (and its full original request, if shown apart).
+    const planRow = page.locator('#approval .native-approval-request', { hasText: '待批准' }); await planRow.waitFor(); await planRow.locator(':scope > summary').click();
+    if (await planRow.locator('.native-approval-original').count()) await planRow.locator('.native-approval-original > summary').click();
     const panel = await page.locator('#approval').innerText(); fs.writeFileSync(path.join(base, 'plan-panel.txt'), panel);
     const request = (await snapshot()).sessions[0].nativeApproval.requests.find(r => r.title === 'ExitPlanMode');
     assert.deepEqual(JSON.parse(request.input), { plan: planText, planFilePath: planFile }, 'The request input is native\'s own plan text and file');
     assert.ok(panel.includes('ExitPlanMode') && panel.includes('PLAN_MARKER') && panel.includes(planFile), 'The panel shows the native plan request as is');
+    // The reader folds a turn's steps into one process row (reading-list.js process-details); open them to read each step.
+    for (let i = 0; i < 6; i++) { const closed = page.locator('#messages details.process-details:not([open]) > summary:visible'); if (!await closed.count()) break; await closed.first().click(); }
     assert.ok((await page.locator('#messages').innerText()).includes('Write'), 'The reader keeps the native plan file write');
     assert.equal((await snapshot()).sessions[0].nativePermissionMode, 'plan');
     await page.locator('#terminal-tab').click();
@@ -278,11 +286,15 @@ async function cleanup() {
     await until(async () => (await snapshot()).sessions[0].nativeApproval?.requests.some(r => r.title === 'Bash'), 'Native permission request reaches the private panel', 60000);
     const request = (await snapshot()).sessions[0].nativeApproval.requests.find(r => r.title === 'Bash');
     assert.match(request.input, /touch native-permission-marker && echo NATIVE_PERMISSION_DONE/, 'The request carries native\'s tool input as is');
+    // Since b6f633f a native-only request is a compact 待批准 row; its input is one click away.
+    const requestRow = page.locator('#approval .native-approval-request', { hasText: '待批准' }); await requestRow.waitFor(); await requestRow.locator(':scope > summary').click();
     await until(async () => { const text = await page.locator('#approval').innerText(); return text.includes('Bash') && text.includes('touch native-permission-marker'); }, 'The panel shows the tool and its input', 10000);
     fs.writeFileSync(path.join(base, 'permission-panel.txt'), await page.locator('#approval').innerText());
     assert.equal(await page.locator('#approval').getByRole('button', { name: '允许这一次', exact: true }).count(), 0, 'NAW offers no decision of its own');
     assert.equal(calls, 1, 'No model request before the decision');
-    assert.ok(!fs.existsSync(path.join(cwd, 'native-permission-marker')), 'The command did not run before the decision');
+    // New sessions start in their own folder under `${workspace}-sessions`; look where the command actually runs.
+    const sessionCwd = (await snapshot()).sessions[0].cwd; assert.ok(sessionCwd && fs.existsSync(sessionCwd), 'The session folder exists');
+    assert.ok(!fs.existsSync(path.join(sessionCwd, 'native-permission-marker')), 'The command did not run before the decision');
     await page.locator('#terminal-tab').click();
     await until(async () => (await rows()).includes('touch native-permission-marker') && /Do you want to proceed\?/.test(await rows()), 'The same native TUI asks before running', 30000);
     // Option 3 would also switch the session to auto mode; Enter only on plain Yes.
@@ -291,7 +303,7 @@ async function cleanup() {
     await page.locator('#terminal-area .xterm-helper-textarea').press('Enter');
     await until(async () => { const s = (await snapshot()).sessions[0]; return calls === 2 && s.state === 'idle' && s.messages.some(m => m.text?.includes('NATIVE_FINAL: the permitted')); }, 'The permitted command runs and the turn continues', 60000);
     assert.match(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8'), /NATIVE_PERMISSION_DONE/, 'Native ran the command after the decision');
-    assert.ok(fs.existsSync(path.join(cwd, 'native-permission-marker')), 'The permitted command changed the folder');
+    assert.ok(fs.existsSync(path.join(sessionCwd, 'native-permission-marker')), 'The permitted command changed the folder');
     const after = (await snapshot()).sessions[0]; assert.equal(after.nativeId, before.nativeId); assert.equal(after.pid, before.pid);
     await page.locator('#chat-tab').click(); await until(() => page.locator('#approval').isHidden(), 'The decided request clears the panel');
     assert.deepEqual(errors, []);
@@ -300,6 +312,8 @@ async function cleanup() {
   if (questionTrial) {
     await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click();
     await until(async () => (await snapshot()).sessions[0].nativeApproval?.requests.some(r => r.title === 'AskUserQuestion'), 'Actual native question reaches existing private panel');
+    // Since b6f633f a native-only question is a compact 待回答 row; open it to read the original question.
+    const questionRow = page.locator('#approval .native-approval-request', { hasText: '待回答' }); await questionRow.waitFor(); await questionRow.locator(':scope > summary').click();
     for (const question of nativeQuestions) {
       await page.locator('#approval').getByText(question.question, {exact:true}).waitFor();
       await page.locator('#approval').getByText(question.header, {exact:true}).waitFor();
