@@ -179,6 +179,8 @@ async function run() {
   const contextTarget = page.locator('#room-messages article').filter({ has: page.getByText('本条背景已接收。', { exact: true }) });
   assert.equal(await contextTarget.evaluate(el => { const box = el.getBoundingClientRect(), list = el.parentElement.getBoundingClientRect(); return document.activeElement === el && box.top >= list.top && box.top < list.bottom - 30; }), true, 'Context target remains visible after preceding Markdown mounts');
   // A session detaches without erasing its already received context or drafts.
+  // T-158: B is the recipient when it leaves, so the saved-view check below shows that leaving clears it.
+  await chooseRecipient(b); assert.equal(await page.locator('#recipient').inputValue(), b, 'B is the recipient before it leaves'); await savedRecipient(b);
   await dragMemberOut(b, '#solo-drop');
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).roomId === null, 'Mouse drag out');
   await terminal(b); await page.keyboard.type('-CONTINUE');
@@ -190,14 +192,19 @@ async function run() {
   await page.locator('#close-context').click();
   assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context.trim()));
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); assert.equal(await page.locator('#recipient').inputValue(), '');
+  await leftRecipientCleared();
   await page.locator('#room-filter').selectOption(b); assert.ok((await page.locator('#room-messages').innerText()).includes('本条背景已接收')); assert.ok((await page.locator('#room-messages').innerText()).includes('离开了工作区'));
   passed.push('Shared notes persist locally; only an explicit send transmits visible context once; drag out preserves terminal, private draft and received native history');
   await page.locator('#room-filter').selectOption(''); await chooseRecipient(a); await fillRoomMessage(page, '尚在执行的共享任务'); await page.locator('#forward-button').click();
   await until(async () => (await fixture()).sends.length === 3, 'Pending task');
+  // T-158: that send cleared the recipient (c586251); A is chosen again so that leaving is what clears it.
+  await chooseRecipient(a); assert.equal(await page.locator('#recipient').inputValue(), a, 'A is the recipient before it leaves'); await savedRecipient(a);
   await dragMemberOut(a, '#session-list');
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === null, 'Active session detached'); await reply('PRIVATE-AFTER-LEAVE');
   assert.equal((await snapshot()).room.messages.some(m => m.text === 'PRIVATE-AFTER-LEAVE'), false); assert.ok((await snapshot()).sessions.find(s => s.id === a).messages.some(m => m.text === 'PRIVATE-AFTER-LEAVE'));
-  await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await fillRoomMessage(page, '保留的合作草稿'); const before = await snapshot(); await capture('collaboration-ready');
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await leftRecipientCleared();
+  await fillRoomMessage(page, '保留的合作草稿'); const before = await snapshot(); await capture('collaboration-ready');
   await openUsage();
   assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'usage');
   assert.equal(await page.locator('#trust-status [data-usage-session]').count(), before.sessions.filter(s => s.roomId === 'shared' && !s.archived).length);
@@ -283,3 +290,14 @@ run().catch(async e => { console.error(e.stack); if (page && !page.isClosed()) {
 }));
 
 async function chooseRecipient(id) { await inlineRecipient(page, id); }
+// T-158: before a leave, the saved view holds the chosen member as an active recipient.
+async function savedRecipient(id) {
+  await until(async () => { const view = (await snapshot()).viewState; return view.roomRecipient === id && view.roomMention?.id === id && view.roomMention.active === true; }, 'The saved view holds the recipient before it leaves');
+}
+// T-158: the saved view keeps no recipient and no active address after a member leaves. The address text itself stays in
+// the draft, inactive (docs/interaction.md: 离开使地址失效，正文和旧地址文本保留，但发送关闭). #recipient cannot show this:
+// it is a select listing only current members, so it reads '' for anyone who left. A mutation run that kept the address
+// valid after leaving still showed '' there and failed only here (evidence t158-leave-recipient-20261103, m1 and m2).
+async function leftRecipientCleared() {
+  await until(async () => { const view = (await snapshot()).viewState; return view.roomRecipient === '' && view.roomMention?.active !== true; }, 'The saved view drops the recipient that left');
+}
