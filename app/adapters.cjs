@@ -584,6 +584,20 @@ class Claude extends EventEmitter {
     return { observed: true };
   }
   observeBlock(message) {
+    if (message.kind === 'prompt-media') {
+      // T-133: an image in a prompt typed in the native terminal, named by prompt id and text tag. The
+      // workspace gives it to that prompt's row with the same text. Only where prompt blocks are not shown themselves.
+      const [, promptId, tag] = /^prompt:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})-q([a-f0-9]{8})$/i.exec(message.id || '') || [];
+      if (!this.nativeMedia || this.nativePromptInput || this.retainedReader || !this.validRootBinding(message) || message.epoch !== this.observationEpoch || !promptId ||
+        message.mediaOnly !== true || message.status !== 'complete' || !require('./native-images.cjs').validImagePayload(message.imagePayload) ||
+        !Number.isSafeInteger(message.sequence) || message.sequence <= (this.rootObservation?.sequence || 0) ||
+        Object.keys(message).some(k => !['id', 'kind', 'status', 'mediaOnly', 'imagePayload', 'block', 'sessionId', 'lease', 'epoch', 'sequence', 'gap', 'replayed'].includes(k))) throw Error('Invalid native media');
+      this.rootObservation = { lease: message.lease, sequence: message.sequence };
+      if (!message.replayed) this.observationSeenAt = Date.now();
+      if (message.gap) this.observeRootGap(message);
+      this.emit('nativePromptImage', { promptId, tag: tag.toLowerCase(), nativeId: this.record.nativeId, imagePayload: message.imagePayload });
+      return { observed: true };
+    }
     if (message.mediaOnly === true) {
       const row = this.record.messages?.find(m => m.id === `native:${this.record.nativeId}:${message.id}`);
       if (!this.nativeMedia || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||

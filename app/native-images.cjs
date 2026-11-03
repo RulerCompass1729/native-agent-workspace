@@ -165,7 +165,9 @@ function removeCachedImages(dataDir, sessionId, keep = new Set()) {
   return result;
 }
 function applyImagePayload(row, payload, dataDir, sessionId) {
-  if (!validImagePayload(payload) || !['tool', 'input'].includes(row.kind) || !['complete', 'submitted'].includes(row.status)) return false;
+  // T-133: also a prompt typed in the Claude terminal, shown from the settings hook (its id is claude-prompt-…).
+  const promptRow = row.role === 'user' && row.origin === 'native' && typeof row.id === 'string' && row.id.startsWith('claude-prompt-');
+  if (!validImagePayload(payload) || !(['tool', 'input'].includes(row.kind) || promptRow) || !['complete', 'submitted'].includes(row.status)) return false;
   if (!Array.isArray(row.images)) row.images = [];
   while (row.images.length <= payload.index) row.images.push({ pending: true, unavailable: '图片尚未完整同步。' });
   row.images[payload.index] = nativePixelReference(dataDir, sessionId, payload, row.images[payload.index]);

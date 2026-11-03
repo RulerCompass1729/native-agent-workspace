@@ -34,7 +34,10 @@ const readImageTrial = process.env.NAW_TEST_NATIVE_READ_IMAGE === '1';
 // T-133: NAW_TEST_NATIVE_QUEUE=1 (session chat) or =shared (space record) queues a message while the final reply is held.
 const queueTrial = ['1', 'shared'].includes(process.env.NAW_TEST_NATIVE_QUEUE), queueShared = process.env.NAW_TEST_NATIVE_QUEUE === 'shared', queuedText = 'QUEUED_PROMPT: reply with the queued marker.';
 let queuedRequests = 0;
-assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial, modelTrial, readImageTrial, queueTrial].filter(Boolean).length <= 1, 'One bounded case per run');
+// T-133: NAW_TEST_NATIVE_PROMPT_IMAGE=1 types a prompt in the native terminal with an image file pasted in (as a drag of
+// the file does), through the terminal's own input path; the clipboard is never used.
+const promptImageTrial = process.env.NAW_TEST_NATIVE_PROMPT_IMAGE === '1';
+assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial, modelTrial, readImageTrial, queueTrial, promptImageTrial].filter(Boolean).length <= 1, 'One bounded case per run');
 assert.ok(!/^2\.1\.312\b/.test(nativeVersion) || compatibilityTrial || scrollTrial, '312 requires a bounded qualified compatibility or basic-text scroll witness');
 let planFile = null, planNotes = null, readImagePath = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
@@ -67,7 +70,7 @@ const server = http.createServer((req, res) => {
     if (scrollTrial && number > 1) { unexpectedRequest = Error('Scroll budget exceeded: one local response only'); res.writeHead(429); res.end(); return; }
     if (compatibilityTrial && number > 3) { unexpectedRequest = Error('Compatibility budget exceeded: at most three local responses'); res.writeHead(429); res.end(); return; }
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
-    if (number > (imageTrial ? 1 : questionTrial || permissionTrial || readImageTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
+    if (number > (imageTrial || promptImageTrial ? 1 : questionTrial || permissionTrial || readImageTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -82,6 +85,11 @@ const server = http.createServer((req, res) => {
       if (number === 1) block(res, 0, { type: 'tool_use', id: 'toolu_local_read_image', name: 'Read', input: { file_path: readImagePath } });
       else block(res, 0, { type: 'text', text: 'NATIVE_READ_IMAGE_FINAL' });
       event(res, 'message_delta', { delta: { stop_reason: number === 1 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
+      event(res, 'message_stop', {}); res.end(); return;
+    }
+    if (promptImageTrial) {
+      block(res, 0, { type: 'text', text: 'NATIVE_PROMPT_IMAGE_FINAL' });
+      event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } });
       event(res, 'message_stop', {}); res.end(); return;
     }
     if (imageTrial) {
@@ -175,6 +183,39 @@ async function cleanup() {
     assert.equal(calls, 0, 'Native model commands make no model request'); assert.deepEqual(errors, []);
     checks.push('Native /model switches reach the GUI header and survive reload with the same ID/PID/draft; task model returns to haiku');
     console.log(JSON.stringify({ checks, nativeVersion, startModel: before.model, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+  }
+  if (promptImageTrial) {
+    const pasteboard = () => testScratch.childProcess.execFileSync('osascript', ['-l', 'JavaScript', '-e', "ObjC.import('AppKit'); $.NSPasteboard.generalPasteboard.changeCount"], { encoding: 'utf8' }).trim();
+    const pasteboardBefore = pasteboard();
+    const original = Buffer.from([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255]);
+    const bitmap = data => application.evaluate(({ nativeImage }, d) => nativeImage.createFromBuffer(Buffer.from(d, 'base64')).toBitmap().toString('base64'), data);
+    const png = await application.evaluate(({ nativeImage }, data) => nativeImage.createFromBitmap(Buffer.from(data), { width: 2, height: 2 }).toPNG().toString('base64'), Array.from(original));
+    const shot = path.join(fs.realpathSync(before.cwd), 'prompt-shot.png'); fs.writeFileSync(shot, Buffer.from(png, 'base64'));
+    await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#terminal-tab').click();
+    const textarea = page.locator('#terminal-area .xterm-helper-textarea').first(); await textarea.focus();
+    await textarea.pressSequentially('PROMPT_IMAGE describe this image ');
+    // The bytes xterm sends for a paste in bracketed-paste mode, through the same terminal input call.
+    await page.evaluate(([id, data]) => workspace.input(id, data), [before.id, `\x1b[200~${shot}\x1b[201~`]);
+    await until(async () => (await page.locator('#terminal-area .xterm-rows').first().innerText()).includes('[Image #1]'), 'Claude Code takes the pasted file as an image'); await textarea.press('Enter');
+    await until(async () => { const s = (await snapshot()).sessions[0]; return calls === 1 && s.state === 'idle' && s.messages.some(m => m.text?.includes('NATIVE_PROMPT_IMAGE_FINAL')); }, 'The image prompt gets its fixed reply', 40000);
+    const sent = JSON.parse(fs.readFileSync(path.join(base, 'request-1.json'), 'utf8')).messages.flatMap(m => Array.isArray(m.content) ? m.content : []).filter(c => c.type === 'image');
+    assert.equal(sent.length, 1, 'Claude Code attached the pasted image file to the prompt');
+    await until(async () => (await snapshot()).sessions[0].messages.some(m => m.role === 'user' && m.text?.startsWith('PROMPT_IMAGE') && m.images?.length === 1), 'The prompt row carries the image', 15000);
+    const message = (await snapshot()).sessions[0].messages.find(m => m.role === 'user' && m.text?.startsWith('PROMPT_IMAGE'));
+    assert.match(message.id, /^claude-prompt-/); assert.notEqual(message.images[0].unavailable !== undefined, true);
+    await page.locator('#chat-tab').click();
+    const row = page.locator(`#messages [data-message-id="${message.id}"]`); await row.waitFor();
+    const img = row.locator('.native-image img').first(), toggle = row.locator('.native-image-toggle').first();
+    await until(async () => await img.count() && await img.evaluate(el => el.complete && el.naturalWidth > 0), 'The prompt row shows the image thumbnail');
+    await toggle.click();
+    await until(async () => (await toggle.getAttribute('aria-expanded')) === 'true' && await img.evaluate(el => el.complete && el.naturalWidth > 0), 'The image opens');
+    const src = await img.evaluate(el => el.src); assert.match(src, /^data:image\/png;base64,/);
+    assert.equal(await bitmap(src.split(',')[1]), await bitmap(sent[0].source.data), 'The opened image has the pixels Claude received');
+    assert.equal(pasteboard(), pasteboardBefore, 'The system clipboard was never written');
+    assert.equal(fs.readdirSync(base).filter(f => f.startsWith('pbcopy-')).length, 0);
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-prompt-image.png') }); }
+    console.log(JSON.stringify({ checks: ['A prompt typed in the native terminal with an image file pasted in shows that image on its conversation row, and it opens with the pixels Claude received; the clipboard is untouched'], nativeVersion, localResponses: calls, paidModelCalls: 0, evidence: base }));
+    return;
   }
   if (readImageTrial) {
     const original = Buffer.from([0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 255, 255]);

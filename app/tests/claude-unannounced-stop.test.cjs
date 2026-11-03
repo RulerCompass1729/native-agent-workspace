@@ -13,7 +13,7 @@ function fixture(t) {
   r.terminal = { alive: true }; r.submission = new SubmissionChannel(); r.ready = true;
   const w = new Workspace({ binaries: {}, close() {} }, dir); w.sessions.set(r.record.id, r.record); w.runtimes.set(r.record.id, r); w.bind(r.record, r);
   t.after(() => { try { w.close(); } finally { fs.rmSync(dir, { recursive: true, force: true }); } });
-  r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true, nativeTurnRecords: true });
+  r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true, nativeTurnRecords: true, nativeMedia: true });
   const emit = value => r.observeRoot({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1, ...value });
   const hook = (name, extra = {}) => r.hook({ hook_event_name: name, session_id: r.record.nativeId, ...extra });
   const stop = promptId => hook('Stop', { prompt_id: promptId, last_assistant_message: 'reply', background_tasks: [], session_crons: [], stop_hook_active: false });
@@ -123,4 +123,33 @@ test('a prompt typed during a turn does not re-capture that turn\'s wake authori
   f.typed(first, 'Look at the board.'); f.start('first-turn', first); const before = starts.length;
   f.typed(first, 'Wake the idle peer.');
   assert.equal(starts.length, before, 'the typed prompt re-captured the running turn');
+});
+
+// T-133: an image in a prompt typed in the terminal, for that prompt's settings-hook row.
+const onePixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+for (const order of ['row-first', 'image-first']) test(`a terminal prompt's image lands on its row, ${order} (T-133)`, async t => {
+  const f = fixture(t), id = randomUUID();
+  const image = () => f.emit({ id: `prompt:${id}-q${promptTextTag('Describe this image.')}`, kind: 'prompt-media', status: 'complete', mediaOnly: true, imagePayload: { index: 0, mime: 'image/png', data: onePixelPng } });
+  if (order === 'row-first') { f.typed(id, 'Describe this image.'); image(); } else { image(); f.typed(id, 'Describe this image.'); }
+  await new Promise(resolve => setImmediate(resolve));
+  const row = f.rows().find(m => m.id === `claude-prompt-${id}`);
+  assert.equal(row.images?.length, 1); assert.equal(row.images[0].unavailable, undefined); assert.equal(row.nativeId, f.r.record.nativeId);
+  // Clicking it opens the original: the viewer finds it by the row's native session.
+  const ref = require('../native-images.cjs').imageSource({ sessions: [f.w.sessions.get('session')] }, { kind: 'session', sessionId: 'session', messageId: row.id, nativeId: f.r.record.nativeId, index: 0 });
+  assert.ok(ref);
+});
+test('a terminal prompt image goes to the row with its own text, whatever the mod remembered (T-133)', async t => {
+  // A reloaded mod, or a restarted backend, cannot misplace it: the row is matched by prompt id and text tag.
+  const f = fixture(t), id = randomUUID(), typed = 'Check this image.';
+  f.typed(id, 'Look at the board.'); f.start('first-turn', id); f.typed(id, typed);
+  f.emit({ id: `prompt:${id}-q${promptTextTag(typed)}`, kind: 'prompt-media', status: 'complete', mediaOnly: true, imagePayload: { index: 0, mime: 'image/png', data: onePixelPng } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.rows().find(m => m.id === `claude-prompt-${id}`).images, undefined, 'not the turn\'s first prompt');
+  assert.equal(f.rows().find(m => m.id === `claude-prompt-${id}-q${promptTextTag(typed)}`).images?.length, 1);
+});
+test('a terminal prompt image is refused where prompt blocks are shown themselves, or for a malformed row (T-133)', t => {
+  const f = fixture(t), id = randomUUID(), block = extra => ({ id: `prompt:${id}-q${promptTextTag('Describe this image.')}`, kind: 'prompt-media', status: 'complete', mediaOnly: true, imagePayload: { index: 0, mime: 'image/png', data: onePixelPng }, ...extra });
+  assert.throws(() => f.emit(block({ id: 'prompt:not-a-prompt' })), /Invalid native media/);
+  assert.throws(() => f.emit(block({ text: 'smuggled' })), /Invalid native media/);
+  f.r.nativePromptInput = true; assert.throws(() => f.emit(block()), /Invalid native media/);
 });
