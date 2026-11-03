@@ -3936,3 +3936,20 @@ mid-line had turned two existing assertions, zero dispatches and zero clipboard
 use, into comments; the comment was moved to its own line and the script rerun,
 and the third passed. Not covered: cancelling the merge spaces dialog, which
 discards a merge and needs the whole merge flow.
+
+
+### Integrated alpha.174 delivery
+
+A fresh read-only reviewer accepted Claude 2's T-115 change and Claude 2's T-159
+script fix. It held acceptance for one round until the ledgers said that
+adopting exactly one new session or space after a lost reply departs from the
+design adopted on 10-31, with the risk, which is now part of the person's open
+question on T-115; it also found a rare path in which a created session is not
+adopted after two failed reads and a retry creates a second one, assigned to
+Claude 2. With T-159 on the integrated tree, dialog lifecycle's create-dialog
+checks ran and passed. The update operator was accepted as a substitution of the
+alpha.173 one and ran once; it deleted the previous app on success, so the
+alpha.173 archive, whose hash was checked before the run, is the only rollback.
+Afterwards application search, by display name, listed only the copy in
+/Applications. Open: T-115's A/B and C1/C2 questions for the person, the
+lost-session fix, and daily use of the new field.
