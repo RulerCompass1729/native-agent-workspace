@@ -1016,6 +1016,14 @@ export function register(on) {
     // Read before the settings hooks run (they can take seconds): the one foreign submission this
     // prompt arrives in, if exactly one is in flight (T-138).
     const composerTyped = foreignInFlight.size === 1 && [...foreignInFlight][0].origin === 'composer';
+    // T-137: a Claude Code cross-session message arrives as a submission whose engine-pinned origin is
+    // `peer`; its UserPromptSubmit carries no source. Tag it `naw-peer` for the settings hooks below (NAW's
+    // own hook forwards `source`), so NAW never takes another agent's message for the person's input.
+    // Measured on 2.1.317: a module's rewrite of this input reaches the settings hooks after it. The person's
+    // own settings hooks see the tag too; it is NAW's, not a value Claude Code sends. NAW's own submission
+    // is not in foreignInFlight, so one arriving inside a peer submission can carry the tag; the adapter
+    // matches NAW's own sends before reading any source.
+    const peer = root && foreignInFlight.size === 1 && [...foreignInFlight][0].origin === 'peer' && e.source === undefined;
     if (candidate) {
       // Count all events, including malformed/unknown identities. Filtering
       // first could make an unrelated event look like the only candidate.
@@ -1023,7 +1031,7 @@ export function register(on) {
       else candidate.invalid = true;
     }
     try {
-      const result = await next(e);
+      const result = await next(peer ? { ...e, source: 'naw-peer' } : e);
       // Only a prompt that goes on can head a turn; a blocked one never does.
       if (root && binding === rootBinding && result?.block === undefined && !result?.preventContinuation) {
         // Only a prompt that goes on may name, and authorize, the turn it starts;

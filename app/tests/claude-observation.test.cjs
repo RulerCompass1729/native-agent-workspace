@@ -1584,3 +1584,29 @@ test('only the terminal\'s drawing counts, and only explanation rows can be plac
   require('../native-blocks.cjs').applyNativeBlock(s, { id: 'display:x', nativeId: 'N', kind: 'response', turnId: 't', text: 'reply', status: 'complete', beforeId: 'tool:a', index: 0 });
   assert.deepEqual(s.messages.map(m => m.id), ['native:N:tool:a', 'native:N:display:x']);
 });
+
+// T-137: a Claude Code cross-session message (engine origin `peer`) is tagged source 'naw-peer' for the
+// settings hooks below, so NAW does not take it for the person's input; nothing else is tagged.
+for (const version of ['2.1.316', '2.1.317']) test(`native ${version}: only a cross-session message is tagged as one for NAW's hook (T-137)`, async () => {
+  const f = await addressedMod(version), sid = f.r.record.nativeId;
+  const sources = async (origin, extra = {}, agent) => {
+    const seen = [];
+    await f.invoke('prompt.submit', { text: 'x', origin: { kind: origin }, wait: false, isMeta: true }, async () => {
+      await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: randomUUID(), prompt: '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="A">hi</cross-session-message>', ...(agent ? { agent_id: agent } : {}), ...extra },
+        async ev => { seen.push(ev.source); return {}; });
+      return {};
+    });
+    return seen;
+  };
+  assert.deepEqual(await sources('peer'), ['naw-peer']);
+  assert.deepEqual(await sources('composer'), [undefined], 'the person typing the same text is not tagged');
+  assert.deepEqual(await sources('peer', { source: 'system' }), ['system'], 'an engine source is kept');
+  assert.deepEqual(await sources('peer', {}, 'sub-agent'), [undefined], 'a teammate\'s prompt is not the root\'s');
+  // Overlapping submissions: the origin is not certain, so nothing is tagged.
+  let release; const held = new Promise(resolve => { release = resolve; }), seen = [];
+  const other = f.invoke('prompt.submit', { text: 'y', origin: { kind: 'composer' }, wait: false }, async () => { await held; return {}; });
+  await f.invoke('prompt.submit', { text: 'x', origin: { kind: 'peer' }, wait: false }, async () => {
+    await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: randomUUID(), prompt: 'z' }, async ev => { seen.push(ev.source); return {}; }); return {}; });
+  release(); await other;
+  assert.deepEqual(seen, [undefined]);
+});

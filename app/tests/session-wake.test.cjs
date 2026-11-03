@@ -330,3 +330,15 @@ test('the combined view of both backends shows the wake once (T-137)', async t =
   assert.equal(new Set(rows.map(m => m.id)).size, 1, 'one wake, one row');
   assert.equal(rows[0].wakeStatus, 'submitted');
 });
+test('a cross-session message is not the person, yet its input boundary still voids a staged wake (T-137)', async t => {
+  const f = await fixture(t, 'claude'); assert.equal((await f.call()).status, 'staged');
+  const before = [f.source.get(f.a).controlRevision, f.source.get(f.a).wakeHumanRevision || 0];
+  f.ra.emit('nativeInput', '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="X">\nhi\n</cross-session-message>', { id: 'peer-input', source: 'naw-peer' });
+  assert.deepEqual([f.source.get(f.a).controlRevision, f.source.get(f.a).wakeHumanRevision || 0], before, 'not a person acting on the sender');
+  assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'staged');
+  // The mod sends control:input for every foreign submission, a peer one included.
+  f.ra.emit('nativeControlBoundary', 'control:input');
+  await f.finish();
+  assert.notEqual(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted', 'the boundary voids it');
+  assert.equal(f.writes.length, 0);
+});
