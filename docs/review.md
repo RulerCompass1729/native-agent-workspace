@@ -3228,3 +3228,20 @@ an entry in the capped list of rows waiting to be linked, which can never link
 anything. Open, low: after a backend restart in the middle of a turn the typed
 prompt still loses its row, as before; the second turn's reply still starts its
 own reading group, which predates this change.
+
+
+### Integrated alpha.170 delivery
+
+A fresh read-only reviewer accepted both integrated commits, the T-141
+withdrawal and the display half of T-138. Over three rounds it confirmed from
+the source that no wake alpha.169 would have delivered is withdrawn, and had the
+ledgers say that the wakes after a boundary before staging remain an open
+limitation, that the remaining re-capture is limited to an identical prompt or a
+turn whose first text is no longer known, that a mid-turn cross-session message
+is now also copied into spaces, and where the typed prompt's row stands. One
+delta was sent empty because, by the author's account, the edit script stopped
+on an unmatched sentence and the review call did not depend on it; the reviewer
+refused it, and the resent delta passed with one sentence correction, which was
+committed as given. The update operator was accepted as a substitution of the
+alpha.169 one and ran once. Open: T-143; daily checks once sessions are on an
+alpha.170 backend; the post-provider signature check.

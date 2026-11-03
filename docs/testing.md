@@ -4434,3 +4434,14 @@ paid call or a pbcopy call, and native blocks made no paid call; the main run's
 screenshot is kept outside the repository. The compat known-list check finds all
 40 earlier main builds of the hook since 257c523 in the upgrade list and no
 other entries.
+
+The committed alpha.170 tree passes the same 2,257 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. An initial-only read before the update found the active backend empty
+and no backend that qualified for an automatic move, and the operator re-checked
+both live; no backend move record was present before the run. The ordinary
+visible update kept fourteen session records with their native IDs, live process
+starts and drafts, and the seven other backends kept PID, start time and
+version; 150 seconds later they and all sixteen live native processes were
+unchanged and no move record existed.
