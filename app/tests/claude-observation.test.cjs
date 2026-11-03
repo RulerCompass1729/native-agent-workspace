@@ -339,6 +339,16 @@ test('native 2.1.312 (the main session\'s binary): a typed turn and a turn NAW s
   assert.equal(inside?.deny, undefined);
   assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['woken-312', submitted]]);
 });
+test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, turn records and narration, no capacity (T-133)', async () => {
+  const f = await addressedMod('2.1.317'), promptId = randomUUID();
+  assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeAbortAvailable, true); assert.notEqual(f.r.nativeCapacityAvailable, true);
+  assert.equal(f.r.nativeTurnRecords, true); assert.equal(f.r.nativeNarration, true);
+  for (const flag of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia']) assert.notEqual(f.r[flag], true, flag);
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
+  await f.invoke('turn.start', { turnId: 'turn-317' });
+  assert.equal((await wakeCall(f, 'call-317')).deny, undefined);
+  assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['turn-317', promptId]]);
+});
 test('a compat copy defers workspace_message to the mod NAW launched and still refuses in a retained process', async () => {
   // T-100: the daily shared folder kept a compat copy; Claude loads it beside
   // NAW's own --plugin-dir mod, and its refusal blocked every wake there.
@@ -1077,6 +1087,13 @@ for (const version of ['2.1.310', '2.1.312']) test('usage metadata is read after
   assert.equal(usage[1].context.window, 200000); assert.equal(usage[1].context.tokens, undefined);
 });
 
+for (const [version, read] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false]]) test(`native ${version} ${read ? 'reads' : 'does not read'} the free status-line usage (T-133)`, async () => {
+  let reads = 0;
+  const f = await mod({ version, usageReader: async args => { reads++; assert.equal(args, undefined, 'Only the free plain read'); return { context: { window: 200000, tokens: 1234, percent: 1 } }; } });
+  const blocks = []; f.r.on('nativeBlock', row => blocks.push(row));
+  await f.readUsage(); await new Promise(r => setImmediate(r));
+  assert.equal(reads > 0, read, version); // bind already reads once; an explicit read may add one
+});
 test('held usage metadata never blocks binding/input and coalesces reads', async () => {
   let reads = 0, release;
   const f = await mod({ version: '2.1.309', usageReader: () => { reads++; return new Promise(r => { release = r; }); } });
