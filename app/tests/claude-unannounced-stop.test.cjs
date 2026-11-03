@@ -4,7 +4,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { EventEmitter } = require('node:events'), { randomUUID } = require('node:crypto');
-const { Claude } = require('../adapters.cjs'), { Workspace } = require('../workspace.cjs');
+const { Claude, promptTextTag } = require('../adapters.cjs'), { Workspace } = require('../workspace.cjs');
 const { SubmissionChannel } = require('../claude-submit.cjs');
 
 function fixture(t) {
@@ -13,15 +13,15 @@ function fixture(t) {
   r.terminal = { alive: true }; r.submission = new SubmissionChannel(); r.ready = true;
   const w = new Workspace({ binaries: {}, close() {} }, dir); w.sessions.set(r.record.id, r.record); w.runtimes.set(r.record.id, r); w.bind(r.record, r);
   t.after(() => { try { w.close(); } finally { fs.rmSync(dir, { recursive: true, force: true }); } });
-  r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true });
+  r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true, nativeTurnRecords: true });
   const emit = value => r.observeRoot({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1, ...value });
   const hook = (name, extra = {}) => r.hook({ hook_event_name: name, session_id: r.record.nativeId, ...extra });
   const stop = promptId => hook('Stop', { prompt_id: promptId, last_assistant_message: 'reply', background_tasks: [], session_crons: [], stop_hook_active: false });
-  const start = (turnId, promptId) => emit({ id: 'control:turn-start', kind: 'control', turnId, promptId, status: 'running' });
+  const start = (turnId, promptId, triggers) => emit({ id: 'control:turn-start', kind: 'control', turnId, promptId, status: 'running', ...(triggers ? { triggers } : {}) });
   const end = turnId => emit({ id: `turn:${turnId}`, kind: 'turn', turnId, status: 'complete', text: '' });
   const typed = (promptId, prompt) => hook('UserPromptSubmit', { prompt_id: promptId, prompt });
   const tool = () => hook('PreToolUse', { tool_name: 'Bash', prompt_id: undefined });
-  return { r, w, stop, start, end, typed, tool, state: () => w.sessions.get('session').state };
+  return { r, w, emit, stop, start, end, typed, tool, state: () => w.sessions.get('session').state, rows: () => w.sessions.get('session').messages.filter(m => m.role === 'user') };
 }
 // First turn, a prompt typed while it runs (same id), then that prompt's own turn running a tool.
 function queued(f) {
@@ -94,4 +94,33 @@ test('a turn that already reported its end never gets a second, boundary end (T-
   f.r.rootTurn = null; // e.g. a later reset or a mismatched StopFailure clears it before a re-sent block
   f.end('first-turn');
   assert.deepEqual(ends, [['first-turn', 'completed']]);
+});
+
+// T-138 display (measured on 2.1.317: the typed prompt had no row at all, round3/green-317/completed.json).
+for (const own of [false, true]) test(`a prompt typed during a ${own ? 'desktop-sent' : 'typed'} turn gets its own row, joins no running turn, and heads its own turn (T-138)`, t => {
+  const f = fixture(t), first = randomUUID(), typed = '再看一下 T-141。';
+  if (own) f.r.pending = { text: 'Look at the board.', promptId: first }; // NAW's own send: no nativeInput, but its text is recorded
+  f.typed(first, 'Look at the board.'); f.start('first-turn', first);
+  f.typed(first, typed); f.typed(first, typed); // the same submit seen twice keeps one row
+  const id = `claude-prompt-${first}-q${promptTextTag(typed)}`, queued = () => f.rows().find(m => m.id === id);
+  assert.equal(f.rows().filter(m => m.id === id).length, 1);
+  assert.equal(queued().text, typed); assert.equal(queued().turnId, undefined, 'not linked to the running turn');
+  assert.deepEqual(f.rows().map(m => m.id), [...(own ? [] : [`claude-prompt-${first}`]), id]);
+  f.stop(first); f.end('first-turn');
+  const firstEnd = () => f.w.sessions.get('session').messages.findIndex(m => m.kind === 'turn' && m.turnId === 'first-turn');
+  assert.ok(firstEnd() > f.w.sessions.get('session').messages.indexOf(queued()), 'typed before the first turn ended');
+  f.start('queued-turn', first, { prompts: [`${first}-q${promptTextTag(typed)}`], rows: [] });
+  assert.equal(queued().turnId, 'queued-turn');
+  // It now stands where its own turn begins: after the first turn's end, as in the native terminal.
+  const messages = f.w.sessions.get('session').messages;
+  assert.equal(messages.at(-1), queued());
+  assert.ok(firstEnd() >= 0 && firstEnd() < messages.indexOf(queued()));
+});
+test('a prompt typed during a turn does not re-capture that turn\'s wake authority (T-141)', t => {
+  const f = fixture(t), first = randomUUID(), starts = [];
+  const wake = require('../session-wake.cjs'), original = wake.nativeStart; wake.nativeStart = (...a) => { starts.push(a[2].turnId); return original(...a); };
+  t.after(() => { wake.nativeStart = original; });
+  f.typed(first, 'Look at the board.'); f.start('first-turn', first); const before = starts.length;
+  f.typed(first, 'Wake the idle peer.');
+  assert.equal(starts.length, before, 'the typed prompt re-captured the running turn');
 });

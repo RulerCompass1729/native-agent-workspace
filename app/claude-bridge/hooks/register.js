@@ -141,6 +141,11 @@ let rootPrompt = null;
 // turn.start's text is the prompt verbatim. Only that exact match with the first prompt still in
 // line lets the new turn act on it; anything else leaves the turn ambiguous, as before.
 let queuedPrompts = [];
+// T-138 display: a prompt typed during a turn shares that turn's prompt id on 2.1.316/2.1.317. NAW's
+// adapter stores it as `claude-prompt-<id>-q<tag>`, the tag made from its text by this same function
+// (adapters.cjs promptTextTag; a test pins the two equal), so a turn it starts can name its row with
+// no shared history: a hot reload here loses nothing.
+const promptTextTag = text => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0; return h.toString(16).padStart(8, '0'); };
 // The foreign submissions now in flight, with their origins (UserPromptSubmit fires inside one): only
 // the person's own composer input can join the line. This mod's own submissions never reach this hook.
 // A set, not a saved-and-restored value: interleaved submissions do not exit in reverse order.
@@ -886,17 +891,20 @@ export function register(on) {
     if (!e.agentId) {
       // A new root turn after idle, with no newer UserPromptSubmit and not this mod's own
       // submission, is a queued prompt's own turn only if its text is the first one in line.
-      let queuedTurn = false;
+      let queuedTurn = false, queuedRow = null;
       if (rootIdle && queuedPrompts.length) {
         const first = queuedPrompts[0];
         queuedTurn = !collecting && rootPrompt?.binding === rootBinding && !rootPrompt.pending && first.binding === rootBinding &&
           first.promptId === rootPrompt.id && typeof e.text === 'string' && e.text === first.text;
         queuedPrompts = queuedTurn ? queuedPrompts.slice(1) : [];
+        // The queued prompt's own row heads this turn (T-138 display).
+        if (queuedTurn && first.text !== rootPrompt.firstText) queuedRow = `${first.promptId}-q${promptTextTag(first.text)}`;
       }
       activeTurn = e.turnId;
       lastPhase = null;
       flushShell($);
-      const triggers = rootIdle && !collecting && rootBinding?.nativeTurnRecords ? turnTriggers.filter(t => t.binding === rootBinding) : [];
+      const triggers = rootIdle && !collecting && rootBinding?.nativeTurnRecords
+        ? [...turnTriggers.filter(t => t.binding === rootBinding), ...(queuedRow ? [{ prompt: queuedRow, binding: rootBinding }] : [])].slice(-8) : [];
       turnTriggers = []; rootIdle = false; expectPrompt = null;
       shellTurn = triggers.length && !triggers.some(t => t.prompt) ? { binding: rootBinding, turnId: e.turnId } : null;
       enqueueBlock($, { id: 'control:turn-start', kind: 'control', turnId: e.turnId, promptId: rootPrompt?.id, status: 'running',
@@ -1046,7 +1054,9 @@ export function register(on) {
             queuedPrompts = [...queuedPrompts, { binding, promptId: e.prompt_id, text: e.prompt }];
           else queuedPrompts = [];
         } else if (rootIdle) queuedPrompts = [];
-        rootPrompt = { id: e.prompt_id, binding, pending: rootIdle };
+        // firstText: the text this id was first submitted with; a later, different one is a typed prompt (T-138 display).
+        const firstText = rootPrompt?.id === e.prompt_id && rootPrompt.binding === binding ? rootPrompt.firstText : e.prompt;
+        rootPrompt = { id: e.prompt_id, binding, pending: rootIdle, firstText };
         triggerTurn({ prompt: e.prompt_id }, binding);
         if (binding?.nativeTurnRecords) expectPrompt = binding;
       }

@@ -321,8 +321,9 @@ for (const version of ['2.1.316', '2.1.312']) test(`native ${version}: a prompt 
 // Measured order: a typed prompt's UserPromptSubmit fires inside its prompt.submit (origin composer).
 const typedDuringTurn = (f, promptId, prompt, origin = 'composer') => f.invoke('prompt.submit', { text: prompt, origin: { kind: origin }, turnId: 'first-turn', wait: false },
   async () => { await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt }); return {}; });
-async function queuedTurn(version, { typed = 'Wake the idle peer.', started = typed, delivered = false, newer = false, origin = 'composer', aborted = false, otherId = false } = {}) {
+async function queuedTurn(version, { typed = 'Wake the idle peer.', started = typed, delivered = false, newer = false, origin = 'composer', aborted = false, otherId = false, link = null } = {}) {
   const f = await addressedMod(version), first = randomUUID(), sid = f.r.record.nativeId;
+  if (link) f.r.on('nativeTurnTriggers', info => link.push(info));
   await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'Look at the board.' });
   await f.invoke('turn.start', { turnId: 'first-turn', text: 'Look at the board.' });
   await typedDuringTurn(f, first, typed, origin);
@@ -341,6 +342,12 @@ for (const version of ['2.1.316', '2.1.317']) {
     const { f, first, result } = await queuedTurn(version);
     assert.equal(result.deny, undefined);
     assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['queued-turn', first]]);
+  });
+  test(`native ${version}: a queued prompt's own turn names its row by the adapter's tag for its text (T-138 display)`, async () => {
+    const typed = '叫醒空闲的同伴 — wake the idle peer.', links = [];
+    const { f, first } = await queuedTurn(version, { typed, link: links });
+    for (let n = 0; n < 20 && f.clock.some(fn => fn.delay === 0); n++) await f.clock.splice(f.clock.findIndex(fn => fn.delay === 0), 1)[0]();
+    assert.deepEqual(links.map(x => [x.turnId, x.prompts]), [['first-turn', [first]], ['queued-turn', [`${first}-q${require('../adapters.cjs').promptTextTag(typed)}`]]]);
   });
   test(`native ${version}: a turn whose text is not the queued prompt stays ambiguous (T-138)`, async () => {
     for (const started of ['Wake the idle peer. ', 'wake the idle peer.', '<bash-input>ls</bash-input>', null]) {
@@ -1441,7 +1448,7 @@ test('the adapter accepts ! rows, triggers and turn clocks only as agreed and in
     { ...clock, nativeDurationMs: -1 }, { ...clock, nativeDurationMs: 1.5 }, { ...clock, nativeCompletedAt: 9e15 },
     { id: 'tool:toolu_model', kind: 'tool', title: 'Bash', text: '', status: 'complete', nativeDurationMs: 5 },
     { ...start, triggers: { prompts: [], rows: [] } }, { ...start, triggers: { prompts: Array.from({ length: 9 }, () => randomUUID()), rows: [] } },
-    { ...start, triggers: { prompts: ['not-an-id'], rows: [] } }, { ...start, triggers: { prompts: [], rows: ['tool:toolu_model'] } },
+    { ...start, triggers: { prompts: ['not-an-id'], rows: [] } }, { ...start, triggers: { prompts: [`${randomUUID()}-q1`], rows: [] } }, { ...start, triggers: { prompts: [], rows: ['tool:toolu_model'] } },
     { ...start, triggers: { prompts: [], rows: [], extra: [] } }, { ...start, triggers: [shell.id] },
     { id: 'control:input', kind: 'control', status: 'complete', triggers: start.triggers },
   ]) assert.throws(() => agreed.observeRoot(frame(agreed, row)), /Invalid native/, JSON.stringify(row).slice(0, 120));

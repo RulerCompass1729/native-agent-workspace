@@ -350,11 +350,13 @@ const FOLLOWED_ROOT_TRANSITIONS = { clear: 'clear', resume: 'fork' };
 // transcript tail and extract the newest matching ai-title row.
 // The inputs a root turn.start claims: native prompt ids and this mod's own
 // `!` command rows, both taken while no root turn ran. Bounded, exact shapes.
+// The mod's promptTextTag, verbatim (register.js cannot require; a test pins the two equal).
+const promptTextTag = text => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0; return h.toString(16).padStart(8, '0'); };
 function nativeTurnTriggers(value) {
   const uuid = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}';
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(k => ['prompts', 'rows'].includes(k)) &&
     Array.isArray(value.prompts) && Array.isArray(value.rows) && value.prompts.length + value.rows.length > 0 && value.prompts.length + value.rows.length <= 8 &&
-    value.prompts.every(id => typeof id === 'string' && new RegExp(`^${uuid}$`, 'i').test(id)) &&
+    value.prompts.every(id => typeof id === 'string' && new RegExp(`^${uuid}(?:-q[0-9a-f]{8})?$`, 'i').test(id)) &&
     value.rows.every(id => typeof id === 'string' && new RegExp(`^tool:shell-${uuid}$`, 'i').test(id)));
 }
 function claudeGeneratedTitle(file, nativeId) {
@@ -1003,6 +1005,13 @@ class Claude extends EventEmitter {
           this.announcedPrompts ||= new Set(); this.announcedPrompts.add(event.prompt_id); this.announceCount = (this.announceCount || 0) + 1;
           if (this.announcedPrompts.size > 64) this.announcedPrompts.delete(this.announcedPrompts.values().next().value);
         }
+        // T-138 display: on 2.1.316/2.1.317 a prompt typed during a turn shares that turn's prompt id. Every
+        // submit is recorded here, our own sends included, so the first text per id is known. A later,
+        // different text gets its own row, `-q<tag>` from its text (the mod tags the turn it starts the same
+        // way), and is not the running turn's input: T-141, it would re-capture that turn's wake authority.
+        const firstText = event.prompt_id ? this.promptFirstText(event.prompt_id, event.prompt) : undefined;
+        const laterText = Boolean(event.prompt_id) && typeof event.prompt === 'string' && typeof firstText === 'string' && event.prompt !== firstText;
+        const rowId = !event.prompt_id ? null : laterText ? `claude-prompt-${event.prompt_id}-q${promptTextTag(event.prompt)}` : `claude-prompt-${event.prompt_id}`;
         const entering = this.queued || this.pending;
         if (entering && !entering.accepted && this.submission.pending?.authorized && event.prompt === entering.text) {
           entering.prompts.add(event.prompt_id || null);
@@ -1011,7 +1020,7 @@ class Claude extends EventEmitter {
           const superseded = Boolean(this.queued || this.pending);
           if (this.queued) this.queued.superseded = true;
           this.pending = null; this.emit('state', 'working');
-          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: `claude-prompt-${event.prompt_id}`, ...(this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);
+          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: rowId, ...(!laterText && this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);
         }
         break;
       }
@@ -1056,6 +1065,11 @@ class Claude extends EventEmitter {
         this.reportCapacityFailure(); break;
       case 'SessionEnd': this.contextEnding(event.reason); break;
     }
+  }
+  promptFirstText(id, text) {
+    this.promptTexts ||= new Map();
+    if (!this.promptTexts.has(id)) { this.promptTexts.set(id, text); while (this.promptTexts.size > 64) this.promptTexts.delete(this.promptTexts.keys().next().value); }
+    return this.promptTexts.get(id);
   }
   // Idle without a reply: nothing is shared or attributed, the session only stops showing work (T-138).
   settleUnannounced(turnId) {
@@ -2444,4 +2458,4 @@ class NativeHost {
   close() { this.closed = true; for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }
 }
 
-module.exports = { claudeHolder, claudeImportAvailable, NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle };
+module.exports = { claudeHolder, claudeImportAvailable, NativeHost, Terminal, Claude, Codex, Rpc, executable, delay, claudeGeneratedTitle, promptTextTag };
