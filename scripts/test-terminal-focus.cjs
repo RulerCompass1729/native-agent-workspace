@@ -21,8 +21,13 @@ const focused = id => input(id).evaluate(el => el === document.activeElement);
 const text = async id => (await fixture('stats')).inputs.filter(x => x.id === id).map(x => x.data).join('');
 async function capture(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') }); } }
 async function chooseRoom(id) {
+  // T-147: a member opens from its card in 成员概览 (the member tabs were replaced in alpha.117, T-53);
+  // its terminal is the open member's 原生终端 view.
   if (!(await page.locator('#room-view').isVisible())) await page.locator('#room-nav').click();
-  const tab = page.locator(`[data-room-session="${id}"]`); if (await tab.getAttribute('aria-pressed') !== 'true') await tab.click();
+  if (!(await page.locator('#collaboration-overview').isVisible())) await page.locator('#room-overview').click();
+  const name = page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${id}"] .collaboration-member-name`);
+  if (await name.getAttribute('aria-pressed') !== 'true') await name.click();
+  await page.locator('#terminal-tab').click();
 }
 async function toChat(id) { await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click(); await page.locator('#message-input').waitFor(); }
 async function holdAndChoose(id) { await fixture('hold-claim', id); await chooseRoom(id); await until(async () => (await fixture('stats')).claims.includes(id), 'Claim held'); }
@@ -36,12 +41,15 @@ async function run() {
   }
   const [a, b] = (await snapshot()).sessions;
   await holdAndChoose(a.id); await until(async () => (await fixture('stats')).pending.includes(a.id), 'A snapshot'); await fixture('release', a.id);
-  await input(a.id).waitFor({ state: 'visible' }); assert.equal(await page.locator('#terminal-paste').isDisabled(), true); assert.equal(await text(a.id), '');
+  // T-147: an open member's 原生终端 whose terminal is not ready yet shows after the control acknowledgement
+  // (switchMode), where the old member tab showed it during the claim. Until then A's input is hidden and nothing reaches A.
+  await delay(150); assert.equal(await page.locator('#terminal-paste').isDisabled(), true); assert.equal(await text(a.id), '');
+  assert.equal(await input(a.id).count(), 1); assert.equal(await input(a.id).isVisible(), false);
   await fixture('release-claim', a.id);
-  await until(() => focused(a.id), 'Snapshot-first terminal receives focus after control acknowledgement');
+  await until(() => focused(a.id), 'The terminal shows, focused, after control acknowledgement');
   await page.keyboard.type('FIRST-A'); await until(async () => await text(a.id) === 'FIRST-A', 'First input arrives exactly once');
   await capture('first-input');
-  passed.push('Snapshot before control: first input goes to the selected member after acknowledgement');
+  passed.push('Before control the terminal stays hidden and nothing reaches A; after acknowledgement the first input goes to A once');
   await toChat(a.id); await holdAndChoose(a.id); await chooseRoom(b.id);
   await until(async () => (await fixture('stats')).pending.includes(b.id), 'B snapshot'); await fixture('release', b.id); await until(() => focused(b.id), 'B focus');
   await fixture('release-claim', a.id); await delay(150); assert.equal(await focused(b.id), true);
@@ -64,13 +72,20 @@ async function run() {
   passed.push('Leaving the member view for the shared draft cancels delayed focus');
   await toChat(a.id); await holdAndChoose(a.id); await fixture('fail-claim', a.id);
   await page.locator('#toast').filter({ hasText: 'Synthetic control failure' }).waitFor();
-  assert.equal(await page.locator('#terminal-paste').isDisabled(), true); assert.equal(await focused(a.id), false);
+  // T-147: a ready terminal keeps focus while its claim is pending (switchMode; test-terminal-ime types into it then),
+  // and keeps it after the claim fails. What matters: nothing typed afterwards reaches A.
+  assert.equal(await page.locator('#terminal-paste').isDisabled(), true);
+  await input(a.id).focus(); assert.equal(await focused(a.id), true, 'typing targets A\'s terminal');
+  await page.keyboard.type('AFTER-FAIL'); await delay(150); assert.equal(await text(a.id), 'FIRST-A'); await capture('typed-after-failed-claim');
   await delay(150); assert.equal((await snapshot()).sessions.find(s => s.id === a.id).view, 'chat'); assert.equal((await fixture('stats')).claims.length, 0);
-  await page.locator(`[data-room-session="${a.id}"]`).click(); await until(() => focused(a.id), 'Explicit retry focuses');
+  // The explicit retry: choosing the open member's 原生终端 again.
+  await page.locator('#terminal-tab').click(); await until(() => focused(a.id), 'Explicit retry focuses');
   passed.push('Failed control change stays gated and reports the error; explicit reselection retries');
   await toChat(a.id); await holdAndChoose(a.id); await fixture('release-taken', a.id); await delay(150);
   assert.equal((await snapshot()).sessions.find(s => s.id === a.id).owner, 'other-test-view');
-  assert.equal(await page.locator('#terminal-paste').isDisabled(), true); assert.equal(await focused(a.id), false);
+  assert.equal(await page.locator('#terminal-paste').isDisabled(), true);
+  await input(a.id).focus(); assert.equal(await focused(a.id), true, 'typing targets A\'s terminal');
+  await page.keyboard.type('AFTER-TAKEN'); await delay(150);
   assert.equal(await text(a.id), 'FIRST-A'); await page.locator('#take-control').waitFor();
   passed.push('An intervening owner change keeps the view read-only; focus recovery never reclaims control');
   assert.equal((await snapshot()).diagnostics.dispatches, 0); assert.equal(app.windows().length, 1); assert.deepEqual(errors, []); await capture('focus-complete');

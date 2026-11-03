@@ -48,7 +48,13 @@ async function launch() {
   });
 }
 async function chooseFile(file, button = 'room-files') {
-  await app.evaluate((_electron, file) => global.__fileChoices.push(file), file); await page.locator('#' + button).click(); await page.locator('#file-dialog').waitFor();
+  await app.evaluate((_electron, file) => global.__fileChoices.push(file), file); await page.locator('#' + button).click();
+  if (button === 'room-files') {
+    // T-147: a space's 文件… lists its file references; a local file is added there, then opened from the list.
+    await page.locator('#space-files-dialog').waitFor(); await page.locator('#add-space-files').click();
+    await page.locator('#space-files-list').getByRole('button', { name: path.basename(file), exact: true }).last().click();
+  }
+  await page.locator('#file-dialog').waitFor();
 }
 async function create(provider) {
   const previous = (await snapshot()).sessions.map(s => s.id);
@@ -69,10 +75,17 @@ async function run() {
   await page.locator(`[data-session-menu="${a}"]`).click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
   await page.locator('#rename-name').fill('计划复核'); await page.locator('#confirm-rename').click();
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await recipient(a);
-  await page.locator(`[data-room-session="${c}"]`).click();
+  // T-147: members open from their card in 成员概览 (the member tabs were replaced in alpha.117, T-53).
+  await page.locator('#room-overview').click();
+  await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${c}"] .collaboration-member-name`).click();
+  await page.locator('#conversation-pane').waitFor();
+  assert.equal(await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${c}"] .collaboration-member-name`).getAttribute('aria-pressed'),'true','C is the open member');
+  // The shared composer and its 文件… are hidden while a member is open, so the file step below runs after returning.
+  assert.equal(await page.locator('#recipient').inputValue(),a,'Opening a member does not choose the file or message recipient');
+  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  await page.locator('#room-record').click();
   assert.equal(await page.locator('#room-record-view').isVisible(),true);
-  assert.equal(await page.locator('#terminal-area').isVisible(),true);
-  assert.equal(await page.locator('#recipient').inputValue(),a,'Displayed terminal does not choose the file or message recipient');
+  assert.equal(await page.locator('#recipient').inputValue(),a,'Returning to the record keeps the recipient');
   const material = path.join(profile, '计划.csv'); fs.writeFileSync(material, '项目,人数,单价\n午餐,3,18\n交通,3,7\n');
   await fillRoomMessage(page, '请核查预算并给出结论。'); await chooseFile(material);
   assert.match(await page.locator('#file-content').innerText(), /午餐,3,18/); assert.equal((await native()).sends.length, 0);
