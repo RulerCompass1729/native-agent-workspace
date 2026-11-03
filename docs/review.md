@@ -2826,3 +2826,25 @@ does, without starting Claude; the alpha.166 compatibility copy behaves like
 alpha.165's on every Claude version. The operator ran once. Open: deleting
 cached images with a session's records (T-140); the cases that did not run;
 publication of alpha.163 to alpha.166; the post-provider signature check.
+
+
+### Publication scan aggregate bound raised to 512 MiB (T-139)
+
+After alpha.163 the proactive complete-history scan of all local refs exceeded
+its 256 MiB aggregate bound and blocked publication without skipping content, as
+designed; it stopped at the bound, before the private rules on the rest and
+before the secret scan. An author-run byte count put it at 257.3 MiB over 23
+refs and 602 commits, and main alone at 216.0 MiB. The integrator stopped
+publication and asked the person, who chose to raise the aggregate bound to 512
+MiB as on 10-24 and 10-28, with the gitleaks deadline checked and an independent
+review. Only the bound changes: the per-item limit, ref, tree, historical patch,
+message, identity and secret coverage, and both deadlines are unchanged. The
+boundary tests now place clean content, private data and a secret past the
+former 256 MiB bound. The guard's 26 tests pass. The later complete scan with
+the new bound, after other refs had grown to 622 commits and 4,180 unique blobs,
+covered 264.1 MiB, found no private data or secret, and its gitleaks step took
+88.3 seconds of its 120. The independent reviewer first required that the 10-30
+paragraph stop stating the current bound and that the blocked scan not be
+credited with finding nothing. Open: at this rate the gitleaks deadline is
+likely to block at roughly 350 MiB, before the new byte bound, which will need
+another decision.
