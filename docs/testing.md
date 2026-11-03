@@ -4675,3 +4675,17 @@ still passes 2,286 checks and the name check reports nothing missing; dialog
 lifecycle, navigation and create space choice exit 0, with dialog lifecycle's
 create-dialog checks running for the first time on this tree, and the system
 clipboard's change count at 268 before and after.
+
+The committed alpha.174 tree passed all 2,286 unit checks on its first run. The
+signed bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started, and the launch does not exercise the new 协作空间 field. An initial-only
+read before the update found the active backend empty and no backend that
+qualified for an automatic move, and the operator re-checked both live; saved
+checks found no backend move record and an alpha.173 rollback archive whose hash
+matched its recorded value. The ordinary visible update kept fourteen session
+records with their native IDs, live process starts and drafts, and the seven
+other backends kept PID, start time and version; 150 seconds later they and all
+sixteen live native processes were unchanged and no move record existed. Saved
+checks afterwards found only the copy in /Applications in application search and
+an empty rollback folder.
