@@ -876,8 +876,10 @@ export function register(on) {
       // starts for the same prompt are ambiguous, never a sharing authority.
       if (rootPrompt?.binding === rootBinding) {
         const previous = promptTurns.get(rootPrompt.id);
+        // A prompt heads one turn: a later start under it (a `!` command) is ambiguous.
         promptTurns.set(rootPrompt.id, { binding: rootBinding, turnId: e.turnId, promptId: rootPrompt.id,
-          ambiguous: Boolean(previous && previous.turnId !== e.turnId) }); trimLinks(promptTurns);
+          ambiguous: Boolean(previous && previous.turnId !== e.turnId) || (!rootPrompt.pending && previous?.turnId !== e.turnId) }); trimLinks(promptTurns);
+        rootPrompt.pending = false;
       }
       if (collecting) collecting.turns.push(e.turnId);
     }
@@ -979,10 +981,7 @@ export function register(on) {
   });
   on('classic.UserPromptSubmit', async ($, e, next) => {
     const root = !e.agent_id && e.session_id === rootBinding?.sessionId && /^[a-f0-9-]{36}$/i.test(e.prompt_id || ''), binding = rootBinding;
-    if (root) {
-      rootPrompt = { id: e.prompt_id, binding: rootBinding };
-      if (shellInput?.binding === binding) shellInput = null; // a typed lookalike, not a `!` command
-    }
+    if (root && shellInput?.binding === binding) shellInput = null; // a typed lookalike, not a `!` command
     const candidate = collecting;
     if (candidate) {
       // Count all events, including malformed/unknown identities. Filtering
@@ -994,6 +993,9 @@ export function register(on) {
       const result = await next(e);
       // Only a prompt that goes on can head a turn; a blocked one never does.
       if (root && binding === rootBinding && result?.block === undefined && !result?.preventContinuation) {
+        // Only a prompt that goes on may name, and authorize, the turn it starts;
+        // a blocked one must not become the prompt of a later `!` turn (T-100, I140).
+        rootPrompt = { id: e.prompt_id, binding, pending: true };
         triggerTurn({ prompt: e.prompt_id }, binding);
         if (binding?.nativeTurnRecords) expectPrompt = binding;
       }

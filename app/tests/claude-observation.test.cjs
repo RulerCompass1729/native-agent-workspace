@@ -257,6 +257,59 @@ test('native 2.1.316: a turn without its own prompt, such as a `!` command, cann
   assert.equal((await f.invoke('tool.call', { tool, tool_use_id: 'call-typed', ...args }, execute)).deny, undefined);
   assert.deepEqual(staged.map(x => [x.turnId, x.promptId]), [['typed-turn-2', next]]);
 });
+function addressedMod(version, extra = {}) {
+  const tool = 'mcp__native_workspace__workspace_message', staged = [];
+  return mod({ version, toolReader: async () => [{ name: tool }], ...extra, requestHandler: async (url, options, body, r) => {
+    if (url.endsWith('/addressed-capability')) { r.addressedSendAvailable = body.available && r.nativeBlocks === true && !r.retainedReader; return { ok: true, text: '{}' }; }
+    if (url.endsWith('/addressed-message')) { staged.push(body); return { ok: true, text: JSON.stringify({ status: 'staged' }) }; }
+    if (url.endsWith('/addressed-failed')) return { ok: true, text: '{}' };
+    return extra.requestHandler?.(url, options, body, r);
+  } }).then(async f => { for (const fn of f.clock.splice(0).filter(fn => fn.delay === 500)) await fn(); return Object.assign(f, { tool, staged }); });
+}
+const wakeCall = async (f, id) => {
+  const args = { recipient_id: 'peer-session', message: 'Continue from the task board.' };
+  const execute = async () => ({ text: JSON.stringify({ approved: true, ...args }) }); execute.origin = { plugin: 'engine' };
+  return f.invoke('tool.call', { tool: f.tool, tool_use_id: id, ...args }, execute);
+};
+test('native 2.1.316: a prompt a settings hook stopped never authorizes a later turn without its own prompt', async () => {
+  // T-100 (integration review I140): only a prompt that goes on may become the
+  // turn's prompt; otherwise a following `!` turn would be its only, unambiguous turn.
+  for (const verdict of [{ block: 'blocked by a settings hook' }, { preventContinuation: true, stopReason: 'stop' }]) for (const earlier of [true, false]) {
+    const f = await addressedMod('2.1.316'), label = JSON.stringify({ verdict, earlier });
+    if (earlier) {
+      await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: randomUUID(), prompt: 'Look at the board.' });
+      await f.invoke('turn.start', { turnId: 'typed-turn' }); await f.invoke('turn.complete', { turnId: 'typed-turn' });
+    }
+    await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: randomUUID(), prompt: 'blocked text' }, async () => verdict);
+    await f.invoke('turn.start', { turnId: 'shell-turn' });
+    assert.deepEqual(await wakeCall(f, 'call-shell'), { deny: '没有本原生主会话的定向协作授权。' }, label);
+    assert.equal(f.staged.length, 0, label);
+  }
+});
+test('native 2.1.312 (the main session\'s binary): a typed turn and a turn NAW submitted each stage a workspace message', async () => {
+  const typed = await addressedMod('2.1.312'), promptId = randomUUID();
+  await typed.invoke('classic.UserPromptSubmit', { session_id: typed.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
+  await typed.invoke('turn.start', { turnId: 'typed-312' });
+  assert.equal((await wakeCall(typed, 'call-typed-312')).deny, undefined);
+  assert.deepEqual(typed.staged.map(x => [x.turnId, x.promptId]), [['typed-312', promptId]]);
+  // A woken receiver's turn is sent by NAW itself through $.prompt.submit.
+  let f, offered = false, inside; const submitted = randomUUID(), text = '[Workspace message from Sender] continue.';
+  f = await addressedMod('2.1.312', {
+    promptSubmit: async () => {
+      await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: submitted, prompt: text });
+      await f.invoke('turn.start', { turnId: 'woken-312' });
+      inside = await wakeCall(f, 'call-woken-312');
+      return { text, origin: { kind: 'plugin', name: 'native-workspace-submit' } };
+    },
+    requestHandler: async url => {
+      if (url.endsWith('/next') && offered) { offered = false; return { ok: true, text: JSON.stringify({ id: 'tag-312', text }) }; }
+      if (url.endsWith('/authorize')) return { ok: true, text: '{"allowed":true}' };
+      if (url.endsWith('/result')) return { ok: true, text: '{}' };
+    } });
+  offered = true; await f.poll();
+  assert.equal(inside?.deny, undefined);
+  assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['woken-312', submitted]]);
+});
 test('a compat copy defers workspace_message to the mod NAW launched and still refuses in a retained process', async () => {
   // T-100: the daily shared folder kept a compat copy; Claude loads it beside
   // NAW's own --plugin-dir mod, and its refusal blocked every wake there.
