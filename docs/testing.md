@@ -4175,3 +4175,17 @@ on the old code and passed after it, and five runs of the held-question stop
 each made one model request. In the author lane the collaboration script still
 stops at line 71; the permission and plan modes of native blocks did not run on
 main, and continuation after an overload on 2.1.316 is unverified.
+
+The committed alpha.163 tree passes the same 2,162 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. Before the update an initial-only read of every daily backend found the
+active backend empty and no backend that qualified for an automatic move, and
+the operator required the same live before quitting. The ordinary visible update
+kept fourteen session records with their native IDs, live process starts and
+drafts, and the seven other backends kept PID, start time and version; 150
+seconds later they and all sixteen live native processes were unchanged and no
+move record existed. The native-blocks runs above used Claude Code 2.1.316 and
+finished, at 17:07 and 17:08, before the 2.1.317 version directory appeared,
+dated 17:26; that script refuses other versions, so a rerun needs the 2.1.316
+binary or a 2.1.317 qualification.
