@@ -4,6 +4,37 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.176 carries Claude 2's reviewed change that stops 开始一个会话 at the
+three places the alpha.175 records listed where a second session could still be
+created (T-115 follow-up). Once a session has been kept, continuing, branching
+from an existing session, choosing a folder and the Git copy are locked as well
+as 创建. With the automatic folder, when the result could not be confirmed and a
+retry meets 已存在, the dialog stops without changing the folder. With a chosen
+existing folder, which other sessions may share, it stops as soon as the result
+cannot be confirmed. Each stop asks the person to check the sidebar and, if the
+session is not there, to close the dialog and create it again; with a space
+chosen it says the session can join the space from the session menu once it
+exists. This closes the second-session paths the alpha.175 records listed. Two
+routes remain open (owner Claude 2): a successful independent create whose
+dialog stays open because the selection changed, for example a focused member
+leaving in another window, re-enables 创建 without a kept id; and when an
+independent session's reply is lost but a fresh read finds it, nothing stops a
+second click, because the renderer does not check whether the found record is
+live or a failed start's error record. After an unconfirmed result with the
+automatic folder, 自动新建 and 选择… stay enabled, and an unconfirmed Git copy can be
+ticked again for a new path; both are deliberate. When the stop follows 已存在, the
+service's text still suggests a new or chosen folder, though both controls are
+now disabled. The change runs in the window. It is integrated with identical
+changed lines, the full unit suite passes 2,286 checks and the name check
+reports nothing missing. With the UI bundle rebuilt, create space choice,
+session directory, dialog lifecycle and daily use exit 0 on main without model
+calls, with the system clipboard's change count unchanged. Unverified: the stop
+wording with a space chosen when the result cannot be confirmed; the kept
+state's Git copy and space locks, the folder locks after an unconfirmed result
+and the Claude branch and takeover locks, which only the source shows; and daily
+use of this change. Daily delivery remains pending; current daily remains
+alpha.175.
+
 Current daily GUI: alpha.175, committed build source `fc566e96`. It carries two
 reviewed window changes from Claude 2, an integration fix to the second and a
 script fix. First, when a session is created and its id returned but the two

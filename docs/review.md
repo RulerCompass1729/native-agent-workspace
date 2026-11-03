@@ -4006,8 +4006,8 @@ been kept with the automatic folder, beside 这里不会再建一个, because th
 follow-up's kept state did not exist when the T-96 lane was reviewed;
 integration added that state to the condition and a check in create space
 choice's kept-state helper, which fails on the old renderer. The fix's commit
-message, code comment and assertion label call the kept state locked, though
-only 创建 is disabled there.
+message, code comment and assertion label call the kept state locked, though in
+alpha.175 only 创建 was disabled there; alpha.176 locks the rest.
 
 Claude 2's lane reviewer passed it in the first round with three small
 improvements, the stale screen-reader text, the conflicting wording when taking
@@ -4047,3 +4047,37 @@ searching by bundle identifier listed only the copy in /Applications. Open: the
 chosen-folder second click and the kept-state controls, taken up by Claude 2 in
 716ac9e for alpha.176; T-115's A/B and C1/C2, where A and C1 applied under the
 20-minute rule; daily use.
+
+
+### The create dialog stops at the three recorded second-session places (T-115 follow-up 2)
+
+The alpha.175 records listed three places where 开始一个会话 could still create a
+second session. Claude 2 now stops the dialog in each: once a session has been
+kept, continuing, branching from an existing session, choosing a folder and the
+Git copy are locked as well as 创建; with the automatic folder, when the result
+could not be confirmed and a retry meets 已存在, the folder is the one the first
+attempt created, so the session very likely exists and the dialog stops without
+changing the folder; and with a chosen existing folder, which other sessions may
+share, the dialog stops as soon as the result cannot be confirmed. Each stop
+asks the person to check the sidebar and, if the session is not there, to close
+the dialog and create it again; with a space chosen it says the session can join
+the space from the session menu once it exists.
+
+Claude 2's lane reviewer passed it in two rounds, the first adding the two
+wordings for what to do when no session is found and after choosing a space.
+Lane evidence: create space choice 13 of 13 with a check for each case, failing
+at the first new check with main's earlier renderer; session directory 6 of 6,
+dialog lifecycle 13 of 13 and the unit suite 2,286; the clipboard count did not
+change. Not exercised: the stop wording with a space chosen when the result
+cannot be confirmed; several locks are shown only in the source. The lane's
+dialog lifecycle 13 of 13 came from round 1, before the wording-only change. The
+integration reviewer found the headline too broad: two routes remain open (owner
+Claude 2): a successful independent create whose dialog stays open because the
+selection changed, for example a focused member leaving in another window,
+re-enables 创建 without a kept id; and when an independent session's reply is lost
+but a fresh read finds it, nothing stops a second click, because the renderer
+does not check whether the found record is live or a failed start's error
+record. After an unconfirmed result with the automatic folder, 自动新建 and 选择… stay
+enabled, and an unconfirmed Git copy can be ticked again for a new path; both
+are deliberate. The commit title 16cc816 still says wherever; the ledgers use
+the narrower wording.
