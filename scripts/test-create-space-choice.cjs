@@ -30,8 +30,8 @@ const calls = () => app.evaluate(() => ({ ...globalThis.t115Calls }));
 // A fault is returned the way register() returns any handler error, { ok: false, error }, so the renderer sees a real failure.
 async function instrument() {
   await app.evaluate(({ ipcMain }) => {
-    globalThis.t115Calls = { create: 0, spaceCreate: 0, join: 0 }; globalThis.t115Faults = [];
-    for (const name of ['create', 'spaceCreate', 'spaceAction']) {
+    globalThis.t115Calls = { create: 0, spaceCreate: 0, join: 0, initial: 0 }; globalThis.t115Faults = [];
+    for (const name of ['create', 'spaceCreate', 'spaceAction', 'initial']) {
       const key = 'workspace:' + name, original = ipcMain._invokeHandlers.get(key); if (!original) throw Error(key);
       ipcMain._invokeHandlers.set(key, async (event, ...args) => {
         const kind = name === 'spaceAction' ? (args[1] === 'join' ? 'join' : '') : name; if (kind) globalThis.t115Calls[kind]++;
@@ -150,6 +150,54 @@ async function run() {
   nowCreate = await calls(); assert.deepEqual([nowCreate.create - markCreate.create, nowCreate.spaceCreate - markCreate.spaceCreate, nowCreate.join - markCreate.join], [1, 1, 1]);
   check('A failed session creation retries only when nothing was created; a session kept despite the error is joined, not created again');
 
+  // 4d. The session is created but the next two reads of the state fail: its returned id is kept (I158).
+  markCreate = await calls(); await fault('initial', 'before'); await fault('initial', 'before');
+  await open('读取失败'); await page.locator('#create-space-kind').selectOption('existing'); await page.locator('#create-space-existing').selectOption(studyId);
+  await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('可以点「仅继续加入」'), 'The returned id is kept despite two failed reads');
+  assert.equal(await page.locator('#confirm-create').innerText(), '仅继续加入');
+  await page.locator('#confirm-create').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' });
+  const [readFail] = await named('读取失败'); assert.equal((await named('读取失败')).length, 1); assert.deepEqual(await spacesOf(readFail.id), [studyId]);
+  nowCreate = await calls(); assert.deepEqual([nowCreate.create - markCreate.create, nowCreate.join - markCreate.join], [1, 1]);
+  markCreate = nowCreate; await fault('initial', 'before'); await fault('initial', 'before');
+  await open('独立读取失败'); const keptFolder = await page.locator('#chosen-folder').innerText(); await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('保留在侧栏'), 'An independent session is reported kept');
+  assert.equal(await page.locator('#chosen-folder').innerText(), keptFolder, 'Its folder is kept, not replaced by a new one');
+  const noSecond = async name => {
+    assert.equal(await page.locator('#confirm-create').isDisabled(), true, name + ': 创建 is off once the session exists');
+    assert.match(await page.locator('#create-readiness').innerText(), /关闭对话框即可；这里不会再建一个/);
+    assert.equal(await page.locator('#cancel-create').innerText(), '关闭，保留结果');
+    await page.locator('#cancel-create').click(); assert.equal((await named(name)).length, 1, name + ': one session');
+  };
+  await noSecond('独立读取失败'); const [readFailSolo] = await named('独立读取失败');
+  // The same with a chosen existing folder, which several sessions may share: only the disabled 创建 prevents a second.
+  await fault('initial', 'before'); await fault('initial', 'before');
+  await pick(legacy); await open('已有目录读取失败'); await page.locator('#choose-folder').click(); await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('保留在侧栏'), 'A chosen-folder session is reported kept');
+  await noSecond('已有目录读取失败'); const [readFailFolder] = await named('已有目录读取失败'); assert.equal(readFailFolder.cwd, legacy);
+  // No id and no fresh read: whether it exists is unknown, so the dialog asks for a look and keeps the folder.
+  markCreate = await calls(); await fault('create', 'after'); await fault('initial', 'before');
+  await open('结果未知'); const unknownFolder = await page.locator('#chosen-folder').innerText(); await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('无法确认会话是否已经建好'), 'An unknown result asks for a look');
+  assert.equal(await page.locator('#chosen-folder').innerText(), unknownFolder, 'The folder is not replaced, so a retry cannot land elsewhere');
+  await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('已存在'), 'A retry stops at the folder the first attempt created');
+  await page.locator('#cancel-create').click(); assert.equal((await named('结果未知')).length, 1, 'Still one session');
+  const [unknownSolo] = await named('结果未知');
+  check('Once a created session\'s id is known, the dialog offers no second 创建 (automatic or chosen folder); an unknown result asks for a look and keeps its folder');
+
+  // 4e. A step that retrying can't fix ends the retry instead of inviting it.
+  const doomedId = await page.evaluate(() => workspace.spaceCreate('将归档'));
+  await fault('join', 'before'); await open('归档后加入'); await page.locator('#create-space-kind').selectOption('existing'); await page.locator('#create-space-existing').selectOption(doomedId);
+  await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('Synthetic join failure'), 'Join failure before archiving');
+  await page.evaluate(id => workspace.spaceAction(id, 'archive', []), doomedId);
+  await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('请关闭对话框'), 'An archived space ends the retry');
+  assert.doesNotMatch(await page.locator('#create-error').innerText(), /可以点「仅继续加入」/); assert.equal(await page.locator('#confirm-create').isDisabled(), true);
+  await page.locator('#cancel-create').click(); const [doomed] = await named('归档后加入'); assert.deepEqual(await spacesOf(doomed.id), []);
+  check('When the space was archived meanwhile, the dialog says to close instead of retrying, and 仅继续加入 is off');
+
   // 5. The space write happened but its reply was lost: the one new space is kept, not created again.
   let mark = await calls(); await fault('spaceCreate', 'after');
   await open('丢失回复'); await page.locator('#create-space-kind').selectOption('new');
@@ -200,7 +248,7 @@ async function run() {
   check('关闭，保留结果 keeps the session outside the space and starts no further step; the next opening starts fresh');
 
   // 9. Memberships survive a whole-app reopen.
-  const expected = { [solo.id]: [], [helper.id]: [studyId], [weekend.id]: [weekendRoom.id], [chosenFolder.id]: [studyId], [copy.id]: [weekendRoom.id], [skipped.id]: [studyId], [createRetry.id]: [studyId], [createLost.id]: [createLostRooms[0].id], [lost.id]: [lostRooms[0].id], [spaceFail.id]: [retryRooms[0].id], [joinFail.id]: [studyId], [closed.id]: [] };
+  const expected = { [solo.id]: [], [helper.id]: [studyId], [weekend.id]: [weekendRoom.id], [chosenFolder.id]: [studyId], [copy.id]: [weekendRoom.id], [skipped.id]: [studyId], [createRetry.id]: [studyId], [createLost.id]: [createLostRooms[0].id], [readFail.id]: [studyId], [readFailSolo.id]: [], [readFailFolder.id]: [], [unknownSolo.id]: [], [doomed.id]: [], [lost.id]: [lostRooms[0].id], [spaceFail.id]: [retryRooms[0].id], [joinFail.id]: [studyId], [closed.id]: [] };
   await app.close(); app = null; await launch();
   for (const [id, rooms] of Object.entries(expected)) assert.deepEqual(await spacesOf(id), rooms, 'Membership after reopen: ' + id);
   await page.locator(`[data-session-id="${helper.id}"]`).first().waitFor();
