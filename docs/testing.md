@@ -4255,3 +4255,17 @@ the same live. The ordinary visible update kept fourteen session records with
 their native IDs, live process starts and drafts, and the seven other backends
 kept PID, start time and version; 150 seconds later they and all sixteen live
 native processes were unchanged and no move record existed.
+
+
+### Model switches and tool images on 2.1.316 and 2.1.317 - alpha.166
+
+Claude 2's two commits are integrated with identical changed lines. On main the
+full unit suite passes 2,192 checks without skips. Native blocks ran on main
+against real Claude Code 2.1.317 in its default, model-switch and image-read
+modes, and against 2.1.316 in its model-switch and image-read modes, each
+against a local fixture server with no paid calls; the model-switch runs needed
+no replies, and the only image run was 2 by 2 pixels. In the author lane each
+new check failed on 2.1.317 with only its capability turned off and passed with
+it on. The cached image copies were not inspected on main; the limits are in the
+image cache code and covered by unit tests, and folder and file permissions were
+checked in source only.
