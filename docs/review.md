@@ -2585,3 +2585,38 @@ it ends its own background wait; a no-model probe of the wake check for Claude
 Code 2.1.312 before the main session's backend moves; the installed
 secretary-to-main wake; the blocked-prompt route; and the post-provider
 signature check for alpha.161.
+
+
+### A blocked prompt no longer authorizes a later turn (T-100 checkpoint 4)
+
+The alpha.161 integration reviewer found by reading the code that a prompt the
+person's own settings hook blocks still became the last prompt, so the next turn
+without a prompt of its own could stage a wake. The author reproduced it on real
+2.1.316 and changed the bridge so that only a prompt the hook lets through
+counts, for the first turn that starts after it. The lane reviewer passed it.
+The alpha.162 integration reviewer found by reading the code that a prompt typed
+while a turn runs is linked to the next turn, so a `!` command after that turn
+could stage a wake under it, as in alpha.161, and that a `!` turn after a
+blocked prompt now carries the earlier allowed prompt, or none, so interrupting
+it no longer asks for terminal input first and a failure there offers no retry
+input. Open: that mid-turn route; that `!` turn's lost terminal-input request
+and retry input; inputs that are let through but start no turn; a hook chain
+that throws now refuses the wake; the missing positive check that a normal
+prompt after a blocked one can still wake; a real 2.1.312 session; tightening
+the service to reject a stale prompt id as well; and a blocked prompt that stays
+shown as in progress in the conversation view, observed by the author.
+
+
+### Five more stale GUI scripts (T-123 checkpoint 3)
+
+Membership navigation, terminal selection, native blocks and compact header were
+rewritten for the current spaces and notices and run to the end; room waiting
+stops at one assertion that shows a product issue. Each failure was traced to
+the change that caused it; the earlier checkpoint's compact-header cause was
+misidentified and is corrected in the READY. The lane reviewer asked in its
+first round that two checks stop reading text left behind by a closed notice,
+then passed. Open, found while doing this: with the current space filtered, the
+filter style hides the current-position frame; in a narrow window the sidebar
+rail hides 显示全部 while the filter stays on; one inconsistent membership record
+silently stops the window refreshing; and usage, model, queue and interrupt are
+not yet qualified on Claude Code 2.1.316.

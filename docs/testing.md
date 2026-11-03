@@ -4119,3 +4119,22 @@ starts from this bundle are unverified. Correction to alpha.160: the person
 moved the secretary's backend to alpha.160 at 15:28, so a provider did start
 from that bundle; its signature was not checked after that before this update
 replaced it, and that check can no longer be made.
+
+
+### Blocked prompts and five more GUI checks - alpha.162
+
+Claude 2's two commits are integrated with identical changed lines. On main the
+full unit suite passes 2,156 checks without skips, and five GUI scripts exit 0:
+membership navigation, terminal selection, native blocks, compact header and
+session wake. Native blocks ran real Claude Code 2.1.316 against three local
+fixed replies with no paid calls; its optional question, permission, plan, image
+and stop modes did not run. Room waiting did not run on main; in the author lane
+it was brought up to date but still stops at one assertion: with the current
+space filtered, the filter style hides the current-position frame, a product
+issue left to the filter change. In the author lane, on real 2.1.316 with local
+fixed replies, a prompt blocked by a settings hook followed by a `!` command
+staged a wake before the fix and was refused after it, while the earlier typed
+turn's wake still arrived and the old compatibility copy was upgraded; a
+terminal probe found that /cost, /context and `!` raise no prompt-submit hook. A
+unit fixture for Claude Code 2.1.312 stages wakes from a typed turn and from a
+turn NAW submitted; no real 2.1.312 session ran.
