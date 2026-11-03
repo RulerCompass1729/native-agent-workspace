@@ -3369,6 +3369,8 @@ $('create-form').onsubmit = event => { event.preventDefault();
   let createdId = ''; // T-115: once the service returns the new session's id, a later failed read can't lose it
   try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = createdId = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); updateState(await api.initial()); render();
     if (choice.kind !== 'independent') { ticket.creation = { choice, sessionId: id, view, roomId: choice.roomId || '' }; creatingSession = false; await finishCreateSpace(ticket, revision); return; }
+    // I160: the session exists from here on, so this opening creates no other, even if it stays open (the selection moved).
+    ticket.created = id;
     if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, view); } else toast('此前创建的会话已保留在侧栏。'); }
   catch (error) {
     let reread = true; try { updateState(await api.initial()); render(); } catch { reread = false; }
@@ -3377,7 +3379,9 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // only exactly one new session at this path is adopted. 仅继续加入 then joins it instead of starting another session.
     const keptId = createdId || (created && state.sessions.filter(s => s.cwd === submittedFolder && !priorIds.has(s.id)).length === 1 ? created.id : '');
     if (choice.kind !== 'independent' && keptId) ticket.creation = { choice, sessionId: keptId, view: preference, roomId: choice.roomId || '' };
-    else if (createdId) ticket.created = createdId; // an independent session that exists: this dialog creates no other
+    // An independent session that exists stops this dialog: by its returned id, or (I160) found again without one, unless
+    // its start failed (state error), which stays retryable in a new folder as before.
+    else if (keptId && (createdId || created?.state !== 'error')) ticket.created = keptId;
     // Without an id and without a fresh read, nobody can tell whether the session exists: ask for a look, don't invite a retry.
     const unknown = !createdId && !reread;
     // I159: two cases where a session may exist without an id, so this dialog stops (ticket.created = 'unconfirmed'):
@@ -3394,7 +3398,8 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // A space was chosen but no session can be named: the space can still be joined later from the session menu.
     const spaceLater = ticket.created === 'unconfirmed' && choice.kind !== 'independent' ? ' 如果会话已建好，可以从会话菜单加入空间。' : '';
     const join = !ticket.creation ? '' : currentDialogTicket(ticket) ? ' 还没加入空间；可以点「仅继续加入」，不会重建会话。' : ' 还没加入空间；可以打开这个会话，从会话菜单加入空间。';
-    const message = kept + error.message + join + spaceLater;
+    // Stopped at its own folder, the service's 已存在 advice (use another folder) would contradict the locked form (I160).
+    const message = kept + (ownFolderTaken ? '' : error.message) + join + spaceLater;
     if (currentDialogTicket(ticket)) $('create-error').textContent = message; else toast(message);
     if (worktree && currentDialogTicket(ticket) && !ticket.creation) { invalidateGitPreview(); $('chosen-folder').textContent = folder; $('git-worktree-preview').textContent = '若已生成副本，其路径和分支会保留。要再创建，请明确重新选择仓库或重新勾选副本；不会自动重试。'; }
     // A failed/uncertain start may already own the displayed path. Preserve
