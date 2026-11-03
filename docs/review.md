@@ -3492,23 +3492,24 @@ unconfirmed handoff pauses, so the refusal only comes after a confirmation
 nobody in the test clicked. As the lane reviewer asked, the script now replaces
 the system confirmation with a counting stub, written after that review and
 first reviewed at integration, and asserts that a refused clear asks for no
-confirmation first. It stops at that assertion until the product refuses first.
-That assertion should then pass unchanged, but the rest of the script, from :62
-on, has not run on current code. The stub counts dialog.showMessageBox only, so
-a future fix that confirmed through showMessageBoxSync or an in-app dialog would
-count none and pass; it stays installed for the rest of the run, where a
-confirmation not starting with 清除 fails loudly.
+confirmation first. It stopped at that assertion until the product refused
+first. The T-149 product fix in alpha.172 does, and on main at 459f5a7 the
+unchanged script runs through, including the steps from :62 on. The stub counts
+dialog.showMessageBox only, so a future fix that confirmed through
+showMessageBoxSync or an in-app dialog would count none and pass; it stays
+installed for the rest of the run, where a confirmation not starting with 清除
+fails loudly.
 
 The product fix is not part of this change. The recommendation on the T-149 row,
-pending the person or the board's 20-minute rule, is to check for unconfirmed
+since taken in alpha.172 (see the entry below), is to check for unconfirmed
 handoff pauses before the confirmation using the client check that covers every
 backend, keep the check after confirmation because state can change while the
-dialog is open, and note that other spaces refuse with different text
-(workspace-client.cjs:642), which this script, targeting 共同工作 only, does not
-cover. Lane evidence: the full suite, including the name check, passed 2,267
-checks and the clipboard count did not change; an earlier claim that the run
-showed a real dialog on screen was withdrawn, since the test window is hidden
-and no screenshot showed it.
+dialog is open, and note that other spaces refuse with different text (now in
+clearRefusal, workspace-client.cjs:354), which this script, targeting 共同工作 only,
+does not cover. Lane evidence: the full suite, including the name check, passed
+2,267 checks and the clipboard count did not change; an earlier claim that the
+run showed a real dialog on screen was withdrawn, since the test window is
+hidden and no screenshot showed it.
 
 
 ### Integrated scripts-only batch after alpha.171
@@ -3517,5 +3518,136 @@ Claude 3's name check and script fixes (T-146), Claude 2's five member-card
 scripts (T-147), four paging waits (T-148) and two scripts from a real run
 (T-149) are integrated on main with identical changed lines. None of them
 changes application code: only scripts, a fixture and one unit test, none of
-which is packaged, so no daily update follows. Peer workflow now stops at a real
-product assertion by design (T-149).
+which is packaged, so no daily update follows. Peer workflow stopped at a real
+product assertion by design until T-149's product fix in alpha.172; it now runs
+through.
+
+
+### The sidebar's status marks, space labels and grouped view (T-142, T-144, T-145)
+
+**Source.** User feedback 2026-11-02 20:40–20:58, three board rows, with the recommended minimums in effect under the 20-minute rule:
+- the status dot was not noticeable;
+- 「Claude…」 was unreadable;
+- the 会话 and 协作空间 sections overlapped and disagreed.
+
+**Change.**
+- **Status mark:** on the avatar's corner, with a shape per state. It keeps that shape on the selected row and under reduced motion. Only working, waiting and failed rows move.
+- **Colour:** red only for what needs the person or failed. Unknown sub-tasks are a dashed ring with 「N 个子任务状态未知」 (shared with cards and panorama), and 「◌」 in the rail.
+- **Space labels:** the whole name with 「#」, not repeated in the grouped view.
+- **Grouped view:**
+  - each space heading carries its ⋯, right-click and Shift+F10;
+  - the open space's heading is highlighted;
+  - the 协作空间 section keeps only 全部空间 and 新建空间 and only their height;
+  - renaming shows the editor in that section;
+  - no empty 独立会话 group.
+- **Rows:** one arrangement (status, then label and time; a row with no label shown keeps the time on the status line). Rows with a label are about 14px taller in the flat view, reversing T-114's one-line metadata for them.
+
+**Review.** A fresh read-only reviewer in the author lane.
+- **Round 1, CHANGES:**
+  - High: renaming a space in the grouped view mounted its editor in a hidden row;
+  - the selected row lost shapes;
+  - working and ready differed only by colour;
+  - the open space was unmarked;
+  - the hidden rows' height went unused;
+  - a drag test was moved without a cause;
+  - stale test wording;
+  - narrow labels.
+- **Round 2, CHANGES:** the open-space mark was only for screen readers; the fitted section was not re-measured for a late rename error.
+- **Round 3, PASS.**
+
+**Evidence.**
+- Full suite: 2263/0.
+- Hidden synthetic GUI:
+  - sidebar-status (marks, shapes, reduced motion, selected row, labels, grouped fit, rename and its error, open heading);
+  - sidebar-layout, membership-rail, density, multispace, compact-versions and space-join-empty, the last including a refused old-backend drop onto a grouped heading.
+
+**Open.**
+- The earlier grouped drag failure is inferred to be the drag needing to scroll (both ends on screen now works). Drag with auto-scroll on a real trackpad is unverified.
+- test-compact-room stops at 加入协作 until T-146 is merged. On main, with T-146 integrated, compact-room exits 0.
+- A space rename error says 「会话名称不能为空」 (existing wording).
+- Not verified: the daily app, dark mode, a screen reader.
+- Integration review: in the grouped view the new content observer forces one extra layout per render, because every render rewrites class and hidden; an idle session whose background state is unconfirmed now shows ◌ instead of !, and no longer counts in a folded group's !N; the grouped heading's accessible name drops the member count the flat row announced, though the heading is now the space's only listing; compact cards do not ellipsize the longer mixed sub-task wording, which compact-room does not cover; the 14 pixels are the lane reviewer's measurement (63 against 48.9) for ordinary rows with a label and were not re-measured on main; and renaming a space while 协作空间 is folded shows no editor, an existing problem now easier to reach from the heading ⋯ (T-155).
+
+### When getting control for a terminal fails or is taken (T-152)
+
+**Source.**
+- Claude 2's probe in T-147 found that the status stayed 「输入暂存，尚未发送」 after a failed control change.
+- The terminal kept the keyboard, and keys typed next went nowhere.
+
+**Change.**
+- When held input ends unsent, the window redraws at once.
+- If the keyboard is still in that terminal's own surface, it moves to the native pane, given a temporary `tabindex=-1`. Nothing there can be pressed.
+- Choosing 原生终端 retries.
+- Focus elsewhere in the terminal host stays where it is.
+
+**Review.** Two rounds with a fresh read-only reviewer (claude-opus-5-5).
+- **Round 1, CHANGES.**
+  - Focus went to the 原生终端 tab, so a typed Space or Enter pressed it. The retry could then send the rest of the typing, for Claude a prompt fragment.
+  - The focus check also covered the unsent-input box.
+  - The commit message overclaimed.
+  - The reviewer also raised a read-only cue after failure.
+- **Round 2, PASS.**
+
+**Decisions.**
+- **Click-to-retry rejected:** it contradicts test-terminal-focus:78-80.
+- **Status suffix deferred to T-154 for the user:** startup restores the saved mode without a claim, so the suffix would also show after a relaunch and change test-compact-header:185.
+
+**Evidence.**
+- Hidden synthetic GUI: test-terminal-claim-failure fails on the old code (stale status) and on round 1 (focus on the tab), and passes on the final version.
+- terminal-focus, solo-use, compact-header, terminal-ready and readonly-terminal-scroll pass.
+- terminal-ime passes its held-input outcomes, then stops at the pre-existing :262 (T-153). (lane evidence; on main terminal-ime runs through after T-153)
+- Full suite 2276/0.
+
+**Open.**
+- An IME composition that is active at the failure.
+- The send-failure and connection-change focus paths.
+- The daily app.
+- Tab or Shift+Tab from the pane reaches 复制 or the summary; a retry is several Tabs away.
+
+
+### Two terminal scripts open 显示… from the ⋯ menu (T-153)
+
+test-terminal-ime:262 and test-terminal-layout:132 clicked the hidden #terminal-display button; in a compact session header it is in the terminal ⋯ menu. A shared helper now uses the menu when ⋯ is shown, and the button otherwise. Both scripts run through (terminal-ime's opt-in foreground-return step skipped).
+
+Review: one round, PASS (fresh read-only reviewer, claude-opus-5-5). Wording fixes taken.
+
+Open:
+- scripts/check-tui.cjs:26 and :54 have the same pattern. They run only from test-desktop against a real data dir, so they were not changed or run.
+- test-dialog-lifecycle:108-109 holds a third copy of this logic; a shared fixture is optional.
+- The comment at test-terminal-ime:267 ("after another control owns focus") predates this change: closing the dialog already returns focus to the terminal.
+
+
+### Refuse a shared-record clear before asking (T-149, product part)
+
+**Source.**
+- Claude 2 found it in T-149's real run.
+- Clearing a space's shared record asked for confirmation first, then the workspace client refused it: a pause not yet confirmed, a handoff still running, or no capability.
+- peer-workflow:61 counted that confirmation.
+
+**Change.**
+- `WorkspaceClient.clearRefusal` holds the rules, shared by the clear and by the new `clearSharedHistoryProblem` (socket and connection guards, a fresh read, no counters).
+- main.cjs calls it before the dialog, and the check after confirmation stays.
+
+**Review.** Two rounds with a fresh read-only reviewer in the author lane.
+- **Round 1, CHANGES:**
+  - the 共同工作 test could not tell the new check from a copy of the old single-snapshot one;
+  - nothing tested the order in main.cjs;
+  - the commit message overclaimed;
+  - an updating connection still asked, then refused;
+  - nothing checked that the control counters stay untouched.
+- **Round 2, PASS.**
+
+**Evidence.**
+- Unit tests, plus a room-ipc test that drives the real handler. It fails if the pre-check line is removed (mutation-no-precheck.txt).
+- peer-workflow runs through; forget-images and multispace pass.
+- Full suite 2284/0.
+
+**Trade-off.** A hanging backend now delays the dialog, not the clear (up to 40 s).
+
+**Open.**
+- The legacy `register('clearSharedHistory')` still uses the single-snapshot check. Nothing in the product calls it.
+- No GUI run refuses a named-space clear through the window.
+- No test changes state while the confirmation is open (lane reviewer).
+- The room-ipc test file that fails without the pre-check (mutation-no-precheck.txt) was written after the lane's round-2 review and has not been reviewed on its own.
+- test-collaboration stops at :71 on `#usage-button`, the same kind of stale step as T-153.
+- Claude 2 delivered a second fix for the same item after Claude 3 had claimed it; the integrator took Claude 3's, which claimed first and also refuses a disconnected or updating backend before the dialog and tests the order in main.cjs.
