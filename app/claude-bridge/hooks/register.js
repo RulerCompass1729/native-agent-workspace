@@ -998,7 +998,9 @@ export function register(on) {
       if (root && binding === rootBinding && result?.block === undefined && !result?.preventContinuation) {
         // Only a prompt that goes on may name, and authorize, the turn it starts;
         // a blocked one must not become the prompt of a later `!` turn (T-100, I140).
-        rootPrompt = { id: e.prompt_id, binding, pending: true };
+        // A prompt delivered into a running root turn (2.1.312 queued_command,
+        // 2.1.316 mid-turn input) never starts its own turn, so it can head none (I141).
+        rootPrompt = { id: e.prompt_id, binding, pending: rootIdle };
         triggerTurn({ prompt: e.prompt_id }, binding);
         if (binding?.nativeTurnRecords) expectPrompt = binding;
       }

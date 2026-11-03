@@ -89,6 +89,15 @@ test('a person acting on the sender or the receiver still cancels that wake', as
     assert.notEqual(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'submitted', act);
   }
 });
+test('a sender boundary that cancels a staged wake names its reason in the record', async t => {
+  // T-100: the 11-02 secretary wake was cancelled with no trace of which boundary did it.
+  const f = await fixture(t, 'claude'); assert.equal((await f.call()).status, 'staged');
+  f.ra.emit('state', 'approval');
+  const row = f.source.get(f.a).messages.find(m => m.wake);
+  assert.equal(row.wake.status, 'cancelled');
+  assert.match(row.text, /^原生观察或控制边界已变化（等待原生权限确认）；自动消息未投递。/);
+  await f.finish(); assert.equal(f.writes.length, 0);
+});
 test('target busy, permission wait, or immediate global/session off prevents any native write', async t => {
   for (const boundary of ['busy', 'permission', 'global', 'session']) {
     const f = await fixture(t); await f.call();

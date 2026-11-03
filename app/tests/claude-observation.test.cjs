@@ -299,6 +299,22 @@ test('native 2.1.316: a prompt a settings hook stopped never authorizes a later 
     assert.equal(f.staged.length, 0, label);
   }
 });
+for (const version of ['2.1.316', '2.1.312']) test(`native ${version}: a prompt delivered into a running turn never heads a later turn without its own prompt`, async () => {
+  // T-100 (integration review I141 L1): a mid-turn prompt goes on but starts no turn of its own.
+  const f = await addressedMod(version), first = randomUUID(), midTurn = randomUUID(), later = randomUUID();
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: first, prompt: 'Look at the board.' });
+  await f.invoke('turn.start', { turnId: 'typed-turn' });
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: midTurn, prompt: 'And also this.' });
+  await f.invoke('turn.complete', { turnId: 'typed-turn' });
+  await f.invoke('turn.start', { turnId: 'shell-turn' });
+  assert.deepEqual(await wakeCall(f, 'call-shell'), { deny: '没有本原生主会话的定向协作授权。' });
+  await f.invoke('turn.complete', { turnId: 'shell-turn' });
+  assert.equal(f.staged.length, 0);
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: later, prompt: 'Wake the idle peer.' });
+  await f.invoke('turn.start', { turnId: 'typed-turn-2' });
+  assert.equal((await wakeCall(f, 'call-typed')).deny, undefined);
+  assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['typed-turn-2', later]]);
+});
 test('native 2.1.312 (the main session\'s binary): a typed turn and a turn NAW submitted each stage a workspace message', async () => {
   const typed = await addressedMod('2.1.312'), promptId = randomUUID();
   await typed.invoke('classic.UserPromptSubmit', { session_id: typed.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
