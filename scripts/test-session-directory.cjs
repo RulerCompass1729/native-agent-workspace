@@ -48,6 +48,10 @@ async function run() {
   assert.notEqual(first, legacy, 'Default preview must be a new directory, not the shared folder');
   assert.equal(path.dirname(first), legacy + '-sessions'); assert.equal(fs.existsSync(first), false);
   await page.locator('#session-name').fill('Edit name'); assert.equal(await preview(), first, 'Preview stable during one dialog');
+  // T-96: with a new empty folder the Git copy option is off, and the dialog says why and what to do.
+  const gitHelp = page.locator('#git-worktree-source-help');
+  assert.equal(await page.locator('#git-worktree').isDisabled(), true); assert.equal(await gitHelp.isVisible(), true);
+  assert.match(await gitHelp.innerText(), /先点「选择…」选一个已有提交的 Git 仓库，再勾选/); assert.equal(await page.locator('#git-worktree').getAttribute('aria-describedby'), 'git-worktree-source-help');
   await page.locator('#choose-folder').click(); assert.equal(await preview(), first, 'Cancelled folder picker preserves preview');
   await shot('01-new-preview'); await page.locator('#cancel-create').click(); assert.equal(fs.existsSync(first), false);
   const aPath = await open('First automatic'); assert.notEqual(aPath, first); const a = await submit('First automatic');
@@ -58,13 +62,17 @@ async function run() {
 
   await app.evaluate((_, cwd) => { globalThis.directoryPick = cwd; }, legacy);
   await open('Existing folder'); await page.locator('#choose-folder').click(); assert.equal(await preview(), legacy);
+  assert.equal(await page.locator('#git-worktree').isDisabled(), false); assert.equal(await page.locator('#git-worktree-source-help').isVisible(), false, 'The Git help goes once a folder is chosen');
+  assert.equal(await page.locator('#git-worktree-source-help').textContent(), '', 'A hidden help is empty, so it no longer describes the checkbox');
   assert.match(await page.locator('#create-permission-note').innerText(), /已有目录/); assert.doesNotMatch(await page.locator('#create-permission-note').innerText(), /空目录/);
   const existing = await submit('Existing folder'); assert.equal(existing.cwd, legacy); assert.deepEqual(fs.readdirSync(legacy), ['keep.txt']);
   await open('Reset'); await page.locator('#choose-folder').click(); await page.locator('#new-folder').click(); const reset = await preview(); assert.notEqual(reset, legacy); assert.equal(fs.existsSync(reset), false);
+  assert.equal(await page.locator('#git-worktree-source-help').isVisible(), true, 'Back to a new folder, the Git help returns');
   await page.locator('input[name="provider"][value="claude"]').check(); assert.equal(await page.locator('#open-native-history').isDisabled(), true);
   await page.locator('#claude-history-id').fill('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'); assert.equal(await page.locator('#confirm-create').isDisabled(), true);
+  assert.equal(await page.locator('#git-worktree-source-help').isVisible(), false, 'A takeover asks for the original folder, so the Git help is not shown');
   await page.locator('#choose-folder').click(); assert.equal(await page.locator('#open-native-history').isDisabled(), false); await page.locator('#cancel-create').click();
-  check('Choose existing preserves original files and permissions wording; reset restores automatic mode; Claude history requires its original directory');
+  check('Choose existing preserves original files and permissions wording; reset restores automatic mode; Claude history requires its original directory; the Git copy help shows only with a new folder');
 
   const collision = await open('Collision'); fs.mkdirSync(collision); fs.writeFileSync(path.join(collision, 'keep'), 'Never overwrite');
   const before = (await state()).sessions.length; await page.locator('#confirm-create').click();
