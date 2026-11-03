@@ -4794,3 +4794,21 @@ whose result is unknown; session directory, which now also checks that a spaced
 create whose start failed stays retryable, dialog lifecycle and daily use exit 0
 without model calls, with the system clipboard's change count at 268 before and
 after every run.
+
+The committed alpha.178 tree passed all 2,286 unit checks, and its UI build log
+records the committed head. The signed bundle started once on an empty synthetic
+profile through its own service bootstrap and kept its strict signature and
+CDHash; no session or provider started, and the launch does not exercise the new
+stops. The update operator was compared by program with the alpha.177 operator;
+its template changed this once so that later operators differ only in version
+numbers, and that change was reviewed. An initial-only read before the update
+found the active backend empty and no backend that qualified for an automatic
+move; saved checks found no backend move record and an alpha.177 rollback
+archive whose hash matched its recorded value, checked again just before the
+run. The ordinary visible update kept fourteen session records with their native
+IDs, live process starts and drafts, and the seven other backends kept PID,
+start time and version; 150 seconds later they and all sixteen live native
+processes were unchanged and no move record existed. Saved checks afterwards
+found only the copy in /Applications when searching by its bundle identifier,
+and an empty rollback folder. A script, not a reviewer, checked these install
+records against the commit and counts.
