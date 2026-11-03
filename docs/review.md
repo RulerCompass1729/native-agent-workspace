@@ -2848,3 +2848,41 @@ paragraph stop stating the current bound and that the blocked scan not be
 credited with finding nothing. Open: at this rate the gitleaks deadline is
 likely to block at roughly 350 MiB, before the new byte bound, which will need
 another decision.
+
+
+### Every collaboration space gets the same sidebar row (T-136)
+
+The user asked why the spaces in the sidebar looked different. 共同工作 was a
+hard-coded row with its own icon, and the drop hint sat between it and the other
+spaces, so the list looked like two groups. All spaces now render through the
+same row, and the hint moved below the list. The lane reviewer asked for changes
+in the first two rounds and passed the third and fourth. Open: blank space above
+the hint with few spaces; 全部空间 sits 8 pixels left.
+
+
+### The grid-follow guard covers only a changed reader (T-134 follow-up)
+
+The alpha.165 integration review found that the follow guard applied after every
+render to every following reader, including idle grid columns. The guard now
+compares a short content key per page and ignores input-less scrolls only where
+the render changed rows; a new GUI step scrolls an idle following column to the
+top without input and expects it to leave the follow. The lane reviewer passed
+it in two rounds. The integration reviewer noted that the content key misses
+some inputs, such as a process group's active state, exit codes, display text
+and same-length edits; a render it misses falls back to the rule from before
+alpha.165, so the original bounce can return for that render; nothing new. Open:
+if the daily app loses the follow when an agent goes idle, add exit codes and
+the group's active state to the key; the remaining window in a changed reader;
+test-reading-pages still fails at a step that predates T-134.
+
+
+### Old saved sidebar filter removed on start (T-132 follow-up)
+
+After T-132 an old saved filter stayed in the view file, so a rollback would
+apply it again. The app now drops the retired field when it reads the view file
+and saves at once. The lane reviewer passed it in one round with three low
+notes: an identity assertion, which was added afterwards and not re-reviewed;
+that the boot save now runs before the service starts; and that the boot wiring
+has GUI coverage only. Dropping the field copies the view and removes only that
+field, and a failed load writes nothing. Open: returning to a build before
+alpha.163 is safe only after this build has started once.
