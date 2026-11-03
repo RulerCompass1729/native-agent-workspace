@@ -748,7 +748,10 @@ class Claude extends EventEmitter {
     if (kind === 'turn' && this.rootTurn?.id === turnId && !this.rootTurn.completed && ['working', 'error', null].includes(this.rootTurn.status) && !message.replayed && !message.gap) {
       this.rootTurn.status = status === 'interrupted' ? 'idle' : status === 'failed' && message.failedRequest === true ? 'error' : null;
       this.rootTurn.completed = status === 'complete';
-      if (this.rootTurn.completed && !incomplete && !turn.incomplete) this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'completed' });
+      if (this.rootTurn.completed && !incomplete && !turn.incomplete) {
+        if (this.startedRootTurn?.id === turnId) this.startedRootTurn.endReported = true; // never a second, boundary end (T-141)
+        this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'completed' });
+      }
       if (status === 'failed' && message.failedRequest === true && !incomplete && !turn.incomplete && /^[a-f0-9-]{36}$/i.test(message.errorMessageId || '')) this.rootTurn.errorMessageId = message.errorMessageId;
       if (incomplete || turn.incomplete) this.rootTurn.errorMessageId = null;
       this.reportCapacityFailure();
@@ -765,6 +768,13 @@ class Claude extends EventEmitter {
         this.emit('interrupted', { turnId, tag: pending?.tag });
       }
       this.emit('state', status === 'failed' ? 'error' : 'idle');
+    }
+    // T-141: an input or permission boundary clears rootTurn (its sharing authority), so this turn's end was
+    // never reported and a wake it staged stayed 已登记 for good (measured on 2.1.317). Report the end once,
+    // without that authority, so the wake is withdrawn with its reason.
+    if (kind === 'turn' && this.startedRootTurn?.id === turnId && !this.rootTurn && !this.startedRootTurn.endReported && !message.replayed && !message.gap) {
+      this.startedRootTurn.endReported = true;
+      this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId, status: 'boundary' });
     }
     if (kind === 'turn' && status === 'complete' && this.startedRootTurn?.id === turnId && !message.replayed && !message.gap) {
       this.startedRootTurn.completed = true;
@@ -784,6 +794,7 @@ class Claude extends EventEmitter {
     turn.pendingFailure = overloaded === null && turn.failureReads < 5;
     if (turn.pendingFailure) return;
     turn.endReported = true;
+    if (this.startedRootTurn?.id === turn.id) this.startedRootTurn.endReported = true; // never a second, boundary end (T-141)
     this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: turn.id, status: 'failed', errorInfo: overloaded === true ? 'serverOverloaded' : null });
   }
   finishInterrupted(turnId) {

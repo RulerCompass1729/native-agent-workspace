@@ -76,3 +76,22 @@ test('a prompt announced after the queued turn started leaves settling to that p
   f.stop(randomUUID()); f.end('queued-turn');
   assert.equal(f.state(), 'working');
 });
+test('a turn whose authority an input boundary took still reports its end, once, as a boundary (T-141)', t => {
+  const f = fixture(t), first = randomUUID(), ends = []; f.r.on('nativeTurnEnd', info => ends.push([info.turnId, info.status]));
+  const emit = value => f.r.observeRoot({ block: true, sessionId: f.r.record.nativeId, lease: f.r.rootLease, epoch: f.r.observationEpoch, sequence: (f.r.rootObservation?.sequence || 0) + 1, ...value });
+  f.typed(first, 'Look at the board.'); f.start('first-turn', first);
+  emit({ id: 'control:input', kind: 'control', status: 'complete' });
+  assert.equal(f.r.rootTurn, null, 'the boundary took the turn\'s sharing authority');
+  f.end('first-turn'); f.end('first-turn');
+  assert.deepEqual(ends, [['first-turn', 'boundary']]);
+  // A turn with no boundary reports only its normal end.
+  const second = randomUUID(); f.typed(second, 'Next.'); f.start('second-turn', second); f.stop(second); f.end('second-turn');
+  assert.deepEqual(ends, [['first-turn', 'boundary'], ['second-turn', 'completed']]);
+});
+test('a turn that already reported its end never gets a second, boundary end (T-141)', t => {
+  const f = fixture(t), first = randomUUID(), ends = []; f.r.on('nativeTurnEnd', info => ends.push([info.turnId, info.status]));
+  f.typed(first, 'Look at the board.'); f.start('first-turn', first); f.stop(first); f.end('first-turn');
+  f.r.rootTurn = null; // e.g. a later reset or a mismatched StopFailure clears it before a re-sent block
+  f.end('first-turn');
+  assert.deepEqual(ends, [['first-turn', 'completed']]);
+});
