@@ -3804,8 +3804,10 @@ overview replaces member tabs (T-53), opening A from its card does not change
 the recipient, and B receives the text unchanged; command records are found by
 their command text; and a record the person folded stays folded after a later
 error, and a fold changed just before quitting is still there right after
-reopening; that a failed tool record does not unfold by itself (T-66) is covered
-by test-failed-tool-reading, not separately by this script.
+reopening; that a failed tool record does not unfold by itself (T-66) is checked
+by test-failed-tool-reading according to its source, which was not run at these
+checkpoints, and not separately by this script; this script does not check the
+visible text of the turn row's TIME element.
 
 The lane reviewer took three rounds: a checkpoint at line 206 first, then two
 rounds each finding checks that always passed, which were fixed, and a pass on
@@ -3814,8 +3816,56 @@ relabel was reviewed at integration. The system clipboard's change count stayed
 the same. The script now sets the recipient to B, removes B through the service
 and waits for the recipient to clear, so leaving through the service clears a
 stale address has a running check again; leaving by dragging out, in
-test-collaboration, still has none (T-158). Not covered: whether a record never
-touched unfolds on an interruption; no such test was found by search, to be
-added when the folding rule for interrupted records changes. The lane reviewer's
-earlier claim, in part 1, that nothing pinned clearing the recipient after a
-send was wrong; that is the c586251 design recorded in interaction.md:778.
+test-collaboration, still had none (closed by T-158 below). Not covered: whether
+a record never touched unfolds on an interruption; no such test was found by
+search, to be added when the folding rule for interrupted records changes. The
+lane reviewer's earlier claim, in part 1, that nothing pinned clearing the
+recipient after a send was wrong; that is the c586251 design recorded in
+interaction.md:778.
+
+
+### Member actions skips only an empty compact sub-task line (T-150, part 3)
+
+Member actions stopped at its check that every member status fact is inside the
+visible reading area. Claude 2 found an outdated expectation: b4a764c (10-29,
+confirmed by git log -S) gave each member card a sub-task line that is shown
+only when it has text; it is empty, taking no space, when no sub-task is
+observed, and the check counted it. The script now skips only that line while it
+is empty; with text it must still be on screen. This completes the five T-150
+scripts: control focus, privacy boundaries and room send in part 1, codex
+usability in part 2 and member actions here.
+
+The lane reviewer passed it in two rounds, on the lane's tree, which by the
+author's git reading does not contain every product commit main has; the only
+run on the integrated tree is main's; the first round found the initial skip too
+wide, since it also skipped a line that had text but was hidden by accident, and
+it was narrowed. Known limits, unchanged: an element cut to one pixel square
+still counts as visible, and this fixture never fills the sub-task line, so the
+with-text case is not exercised here. The system clipboard's change count stayed
+the same.
+
+
+### Dragging a member out drops it as the recipient (T-158)
+
+Two of test-collaboration's checks that the recipient is empty after a member
+leaves always passed, because no recipient was set before either leave and the
+visible recipient picker lists only current members, so it is empty once one
+leaves. Claude 2 now sets the leaving member as the recipient before each of the
+two drags out of the space, confirms it was saved as a valid recipient, and
+after the drag waits until the saved state no longer holds that recipient and
+the address is no longer valid. As interaction.md says, the @ text in the input
+stays but stops working, so the script does not assert that it is removed; the
+two original picker checks, now at :194 and :218, are kept and still cannot
+fail, while :195 and :206 are the real checks; a comment on the helper explains
+why.
+
+Claude 2 checked the after-leave step, on an earlier version of the script,
+against a temporarily broken product, in which a member that left kept a valid
+address: each step failed at its own member, and the change was reverted with no
+app difference. The lane reviewer passed it in two rounds, the second for the
+before-leaving check added on its optional suggestion; the integrated version
+only moves a comment after that pass, which was reviewed at integration. The
+clipboard count did not change. With codex usability covering leaving through
+the service, both ways of leaving now have a running check. Later: a member
+dragged out and added back should not get its old address back, to be added when
+the drag-back logic changes.
