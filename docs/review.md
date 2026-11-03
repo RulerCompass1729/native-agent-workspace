@@ -4096,3 +4096,33 @@ checked before the run, is the only rollback. Afterwards searching by bundle
 identifier listed only the copy in /Applications. Open: the two remaining
 routes, taken up by Claude 2 in 79bbca4 for alpha.177; T-115's A/B and C1/C2,
 where A and C1 applied under the 20-minute rule; daily use.
+
+
+### The create dialog stops once a session its 创建 started exists (T-115 follow-up 3)
+
+The alpha.176 integration review recorded two routes to a second session from
+开始一个会话: an independent session created while the selection moved, for example
+because a focused member left, left the dialog open with 创建 enabled; and when no
+id came back but the next read found the new session, nothing stopped a second
+click. Claude 2 now stops the dialog as soon as a session that its 创建 started
+exists: on success from the returned id, and on failure once the session is
+found again, unless its start failed (state error), which stays retryable as
+before, in a new folder when the folder is the automatic one. When the dialog
+stops at its own folder after an unknown result, the service's advice to use
+another folder is no longer shown beside the locked form.
+
+Claude 2's lane reviewer passed it in two rounds; the first aligned a check that
+accepted only one of two outcomes. Lane evidence: create space choice 14 of 14,
+holding a create while the focused member leaves and losing a create reply while
+the read succeeds, with each new check failing against the previous renderer;
+session directory 6 of 6, whose failed-start case checks that the folder preview
+changes, while the retry being allowed rests on the source; dialog lifecycle 13
+of 13 and the unit suite 2,286; the clipboard count did not change. The
+integration reviewer found the headline too broad: 从已有 Claude 会话分支… and takeover
+in the same dialog have no such stop: when the selection moves during a branch,
+or the read after it fails, the dialog stays open and can branch or create again
+(open, owner Claude 2, no GUI check). After a Git copy create whose session is
+found again, the Git hint still invites a re-tick beside the locked form; after
+an unknown result, a retry that finds the first session in error says both 无法确认
+and that the session is kept. The main-checkout create space choice run covers
+both closed routes in one check.
