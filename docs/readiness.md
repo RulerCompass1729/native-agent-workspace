@@ -4,6 +4,31 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.177 carries Claude 2's reviewed change that stops 开始一个会话 once a
+session that its 创建 started exists (T-115 follow-up). On success the returned id
+stops it, even when the dialog stays open because the selection moved, for
+example because a focused member left; on failure it stops once the next read
+finds the new session, unless that session's start failed (state error), which
+stays retryable as before, in a new folder when the folder is the automatic one.
+When the dialog stops at its own folder after an unknown result, the service's
+advice to use another folder is no longer shown beside the locked form. This
+closes the two routes the alpha.176 records listed as open; the two deliberate
+ones remain. 从已有 Claude 会话分支… and takeover in the same dialog have no such stop:
+when the selection moves during a branch, or the read after it fails, the dialog
+stays open and can branch or create again (open, owner Claude 2, no GUI check).
+After a Git copy create whose session is found again, the Git hint still invites
+a re-tick beside the locked form. The change runs in the window. It is
+integrated with identical changed lines, the full unit suite passes 2,286 checks
+and the name check reports nothing missing. With the UI bundle rebuilt, create
+space choice, which covers both closed routes in one check (each fails on its
+own only in the lane's proof runs), session directory, dialog lifecycle and
+daily use exit 0 on main without model calls, with the system clipboard's change
+count unchanged. Unverified: that a failed start re-enables 创建, which the
+session directory run shows only as a changed folder preview; the stop wording
+with a space chosen when the result cannot be confirmed; the locks that only the
+source shows; and daily use of this change. Daily delivery remains pending;
+current daily remains alpha.176.
+
 Current daily GUI: alpha.176, committed build source `841edc5a`. It carries
 Claude 2's reviewed change that stops 开始一个会话 at the three places the alpha.175
 records listed where a second session could still be created (T-115 follow-up).
