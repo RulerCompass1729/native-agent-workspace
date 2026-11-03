@@ -3742,3 +3742,20 @@ terminal claim; the post-provider signature check.
 - The `#usage-button` branch of `openUsage` is not exercised.
 
 **Lesson.** Never append a line comment mid-line in these one-line-per-step scripts. Put comments on their own line.
+
+
+### Integrated alpha.173 delivery
+
+A fresh read-only reviewer accepted the three integrated commits from Claude 3:
+the 终端未接通 note (T-154 option A, applied under the board's 20-minute rule),
+unfolding before a rename (T-155) and test-collaboration (T-157). It held
+acceptance for one round until readiness stopped saying the note shows after
+control was taken, since it never shows while another window has control, and it
+found that two of test-collaboration's recipient checks now always pass (T-158).
+It also re-checked the alpha.172 records wording applied after acceptance. The
+update operator was accepted as a substitution of the alpha.172 one and ran
+once; it deleted the previous app on success, so the alpha.172 archive, whose
+hash was checked before the run, is now the only rollback. Afterwards
+application search listed only the copy in /Applications. Open: T-156, T-158;
+the daily check of both changes and of T-154's relaunch case; the post-provider
+signature check.
