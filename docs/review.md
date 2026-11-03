@@ -2886,3 +2886,16 @@ that the boot save now runs before the service starts; and that the boot wiring
 has GUI coverage only. Dropping the field copies the view and removes only that
 field, and a failed load writes nothing. Open: returning to a build before
 alpha.163 is safe only after this build has started once.
+
+
+### Integrated alpha.167 delivery
+
+A fresh read-only reviewer found the integrated code identical to the lane's and
+nothing unsafe, and held acceptance for two rounds until the ledgers stated the
+pull-back window that remains in a reader whose rows change, named screen
+readers only as an untested example, and said that a render the new content key
+misses falls back to the rule from before alpha.165. It accepted the update
+operator as a substitution of the alpha.166 one. The operator ran once;
+afterwards an author-run check found no saved filter in the daily view file,
+without a record of whether it was there before. Open: daily use of the space
+rows and the narrowed guard; the post-provider signature check.
