@@ -4,37 +4,44 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.166 turns on two more Claude Code 2.1.316 and 2.1.317
-capabilities. When the person switches the model with /model in the native
-terminal, the conversation view's model now follows. When a Claude tool returns
-an image of at most 1 MB, such as a small screenshot Claude read, the
-conversation view shows it; a larger image, or one past the session's 64 MB,
-still shows as unavailable and the row stays partly unsynchronized, as on
-2.1.312. Privacy: to show those images, NAW keeps a local copy of each in the
-data directory's native-image-cache folder, one owner-only folder per session,
-named by the hash of the image bytes. Until now only Claude Code 2.1.312
-sessions did this; with this change the main session of every 2.1.316 and
-2.1.317 session started on an alpha.166 backend does, with no limit across
-sessions. Archiving a session, removing its application records or clearing
-shared records does not yet delete these copies, and a space's shared rows keep
-references that can still open them; removing the application data directory
-does. NAW sends none of these copies off the machine; Claude itself sends the
-image to its provider, as in a terminal. Both changes reach a session only after
-a backend running alpha.166 starts it. In the author lane, real 2.1.317 failed
-each check with only that capability turned off and passed with it on, and
-2.1.316 passed too, against a local fixture server with no paid calls. Not run:
-images over 1 MB or resized by Claude, images from MCP tools, a Read after
-/clear, the model header or a switch after /clear, and /model inside a teammate;
-the model sent when the bridge binds is not checked anywhere, and only a 2-by-2
-image was run. Both changes were reviewed in their author lane and are
-integrated with identical changed lines. The full unit suite passes 2,192 checks
-at the version-bumped tree, and on main native blocks passed its default,
+Current daily GUI: alpha.166, committed build source `cb17a55b`. It turns on two
+more Claude Code 2.1.316 and 2.1.317 capabilities. When the person switches the
+model with /model in the native terminal, the conversation view's model now
+follows. When a Claude tool returns an image of at most 1 MB, such as a small
+screenshot Claude read, the conversation view shows it; a larger image, or one
+past the session's 64 MB, still shows as unavailable and the row stays partly
+unsynchronized, as on 2.1.312. Privacy: to show those images, NAW keeps a local
+copy of each in the data directory's native-image-cache folder, one owner-only
+folder per session, named by the hash of the image bytes. Until now only Claude
+Code 2.1.312 sessions did this; with this change the main session of every
+2.1.316 and 2.1.317 session started on an alpha.166 backend does, with no limit
+across sessions. Archiving a session, removing its application records or
+clearing shared records does not yet delete these copies, and a space's shared
+rows keep references that can still open them; removing the application data
+directory does. NAW sends none of these copies off the machine; Claude itself
+sends the image to its provider, as in a terminal. Both changes reach a session
+only after a backend running alpha.166 starts it. In the author lane, real
+2.1.317 failed each check with only that capability turned off and passed with
+it on, and 2.1.316 passed too, against a local fixture server with no paid
+calls. Not run: images over 1 MB or resized by Claude, images from MCP tools, a
+Read after /clear, the model header or a switch after /clear, and /model inside
+a teammate; the model sent when the bridge binds is not checked anywhere, and
+only a 2-by-2 image was run. Both changes were reviewed in their author lane and
+are integrated with identical changed lines. The full unit suite passes 2,192
+checks at the version-bumped tree, and on main native blocks passed its default,
 model-switch and image-read modes on real Claude Code 2.1.317 and its
 model-switch and image-read modes on 2.1.316, against a local fixture server
-with no paid calls; the model-switch runs needed no replies. Daily delivery
-remains pending; current daily remains alpha.165.
+with no paid calls; the model-switch runs needed no replies. The signed bundle
+passed one isolated launch. The ordinary visible update kept fourteen session
+records with their native IDs, live processes and drafts; the empty active
+backend was replaced in place, and the seven other backends kept PID, start time
+and version, also 150 seconds later, long enough for two automatic-move checks,
+with no move started. At the update no Claude session ran on an alpha.166
+backend, so these capabilities and the extended image cache reach no daily
+session yet. alpha.163 to alpha.166 were each installed but none is published
+yet, pending the person's decision on the publication scan's size limit.
 
-Current daily GUI: alpha.165, committed build source `a835d37f`. It keeps a
+The prior alpha.165 task, source `a835d37f`, remains qualified. It keeps a
 working member's reader in a space grid at its latest output: while it follows
 the latest output, each refresh is treated like a page change, so a scroll that
 lands between a refresh and the return to the bottom is no longer taken as the
