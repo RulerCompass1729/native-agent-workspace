@@ -173,6 +173,19 @@ async function run() {
   check('Grid column: a press held on a reply keeps following; a scrollbar drag down to the end follows once let go');
   const quiet = await geometry(column(other)); assert.ok(quiet.fromBottom < 80 && quiet.lastShown, 'The idle column is unchanged at its latest');
 
+  // An idle following column, drawn again on every update of the busy one: a scroll with no
+  // input, as a screen reader makes, leaves the latest even right after a render (T-134 follow-up).
+  assert.ok((await geometry(column(other))).fromBottom < 80, 'The idle column follows its latest');
+  await column(other).evaluate((el, busyId) => new Promise(resolve => {
+    const busyReader = document.querySelector(`.collaboration-member-reader[data-member-id="${busyId}"] .collaboration-messages`);
+    const observer = new MutationObserver(() => { observer.disconnect(); el.scrollTop = 0; resolve(); });
+    // Every render resets each row's class, a change recorded at once, so this runs right
+    // after the render that drew both columns and before any frame.
+    observer.observe(busyReader, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class'] });
+  }), busy);
+  await delay(1000); const idle = await geometry(column(other)); measurements.push({ label: 'idle column scrolled with no input right after a render', idle });
+  assert.ok(idle.fromBottom > 1000 && idle.jumpShown, `The idle column left the latest and stays away (${idle.fromBottom}px from the end)`);
+  check('Grid column: an idle following column keeps a scroll made with no input, even right after a render');
   await page.locator(`#session-list [data-session-id="${busy}"]`).click(); await page.locator('#chat-tab').click();
   const solo = page.locator('#messages');
   await until(async () => (await geometry(solo)).lastId?.includes('reply-'), 'Solo view shows the streaming reply');
