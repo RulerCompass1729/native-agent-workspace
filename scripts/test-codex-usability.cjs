@@ -87,7 +87,7 @@ async function run() {
   await fixture('nativeBlock',a,{id:'turn:raw-cut',kind:'turn',turnId:'raw-cut',text:' \n',status:'interrupted'});
   await page.locator('#messages .native-turn .message-body').getByText('interrupted',{exact:true}).waitFor();
   // Same-window task: full native originals, compact defaults, focused input only.
-  // T-150: since 6bf5ad0 (T-99) a turn's search, reasoning and command records sit in one process group, closed by
+  // T-150: since 6bf5ad0 (T-67) a turn's search, reasoning and command records sit in one process group, closed by
   // default; each record keeps its own fold inside it (as test-command-actions and test-process-group-reading check).
   const record = text => page.locator('#messages .process:not([data-process-group])').filter({hasText:text});
   const search = record('Seattle forecast'), reasoning = record('原生摘要第一段。'), command = record('check-document');

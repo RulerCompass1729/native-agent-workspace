@@ -191,7 +191,8 @@ async function run() {
   { const after = await page.locator('#context-text').inputValue(); assert.ok(after.includes(` · ${a}\n归属：`) && !after.includes(` · ${b}\n归属：`), 'The left session is no longer listed as a member'); }
   await page.locator('#close-context').click();
   assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context.trim()));
-  await page.locator('#room-nav').click(); await page.locator('#room-record').click(); assert.equal(await page.locator('#recipient').inputValue(), '');
+  // #recipient lists only current members, so it reads '' here whatever happened; leftRecipientCleared checks the saved view.
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await leftRecipientCleared();
   await page.locator('#room-filter').selectOption(b); assert.ok((await page.locator('#room-messages').innerText()).includes('本条背景已接收')); assert.ok((await page.locator('#room-messages').innerText()).includes('离开了工作区'));
   passed.push('Shared notes persist locally; only an explicit send transmits visible context once; drag out preserves terminal, private draft and received native history');
@@ -215,7 +216,8 @@ async function run() {
   passed.push('Single-session and room usage reuse native readings with explicit scope, preserve drafts/recipients, retain privacy controls and never dispatch');
   await app.close(); app = null; await launch(); const after = await snapshot();
   assert.deepEqual(identities(after), ids); assert.equal(after.room.name, '周末学习小组'); assert.equal(after.room.notes, before.room.notes); assert.deepEqual(after.room.events, before.room.events); assert.deepEqual(after.room.messages, before.room.messages);
-  assert.equal(await roomBody(page), '保留的合作草稿'); assert.equal(await page.locator('#recipient').inputValue(), ''); assert.equal((await fixture()).sends.length, 3);
+  // The reopened view restores no recipient: checked on the saved view, since #recipient would read '' for a departed one anyway.
+  assert.equal(await roomBody(page), '保留的合作草稿'); assert.equal(after.viewState.roomRecipient, '', 'No recipient is restored after the reopen'); assert.equal((await fixture()).sends.length, 3);
   // Intentional second window verifies one metadata writer; close it afterwards.
   await page.locator(`[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '在独立窗口打开', exact: true }).click();
   await until(() => app.windows().length === 2, 'Intentional observer window'); const second = app.windows().find(w => w !== page); await second.locator('#new-session').waitFor();
@@ -295,7 +297,7 @@ async function savedRecipient(id) {
   await until(async () => { const view = (await snapshot()).viewState; return view.roomRecipient === id && view.roomMention?.id === id && view.roomMention.active === true; }, 'The saved view holds the recipient before it leaves');
 }
 // T-158: the saved view keeps no recipient and no active address after a member leaves. The address text itself stays in
-// the draft, inactive (docs/interaction.md: 离开使地址失效，正文和旧地址文本保留，但发送关闭). #recipient cannot show this:
+// the draft, inactive (docs/interaction.md:780: 「改名、离开或成员版本变化使地址失效，正文和旧地址文本保留，但发送关闭。」). #recipient cannot show this:
 // it is a select listing only current members, so it reads '' for anyone who left. A mutation run that kept the address
 // valid after leaving still showed '' there and failed only here (evidence t158-leave-recipient-20261103, m1 and m2).
 async function leftRecipientCleared() {
