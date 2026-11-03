@@ -96,4 +96,18 @@ class ViewStore {
     }
   }
 }
-module.exports = { ViewStore, validViews };
+// Retired fields are dropped when views are read and the file is saved again, so going
+// back to an older build cannot bring them back. sidebarSpaceFilter: the hidden sidebar
+// filter removed in T-132.
+const retiredViewFields = ['sidebarSpaceFilter'];
+function dropRetiredViewFields(views) {
+  let changed = false;
+  const next = views.map(view => {
+    if (!retiredViewFields.some(field => Object.hasOwn(view, field))) return view;
+    changed = true; const copy = { ...view };
+    for (const field of retiredViewFields) delete copy[field];
+    return copy;
+  });
+  return { views: next, changed };
+}
+module.exports = { ViewStore, validViews, dropRetiredViewFields };
