@@ -4205,3 +4205,24 @@ compatibility copy; turn records were seen working on 2.1.317, explanations were
 not exercised; on 2.1.316, turning the usage reading off made its step fail and
 turning it on made it pass. The terminal-selection script is fixed to 2.1.316
 and did not run. No cancelled wake has yet occurred with the new reason text.
+
+The committed alpha.164 tree passes the same 2,170 unit checks. The signed
+bundle's first launch attempt stopped on a busy GUI test slot before starting
+anything; the retry started once on an empty synthetic profile through the
+bundle's own service bootstrap and kept its strict signature and CDHash, with no
+session or provider. An initial-only read before the update found the active
+backend empty and no backend that qualified for an automatic move, and the
+operator required the same live. The ordinary visible update kept fourteen
+session records with their native IDs, live process starts and drafts, and the
+seven other backends kept PID, start time and version; 150 seconds later they
+and all sixteen live native processes were unchanged and no move record existed.
+
+Correction to alpha.159: the terminal-selection script does not leave the system
+clipboard untouched. Claude 2 found that since T-126 each run also writes the
+copied text to the real clipboard two or three times, because the Cmd+C it
+presses also triggers the application menu's copy, which Chromium writes
+directly. The integration run on main, whose log file is dated 10:24 on 11-02
+and shows two copies, by that mechanism wrote the text Auto mode to the person's
+clipboard twice; that run did not measure the clipboard. A fix that blocks that
+key path and fails the run if the clipboard change count moves is ready for the
+next batch.
