@@ -2792,3 +2792,21 @@ to their failing steps. It accepted the update operator as a substitution of the
 alpha.164 one. The operator ran once. Open: the wider pull-back window; daily
 use of the grid follow; publication of alpha.163 to alpha.165; the post-provider
 signature check.
+
+
+### Native model switches and tool images on Claude Code 2.1.316 and 2.1.317 (T-133 items 4 and 5)
+
+Two capabilities that 2.1.312 already had stayed off for 2.1.316 and 2.1.317:
+following a /model switch typed in the native terminal, and showing an image a
+tool returned. The author compared the plugin interfaces, turned each on for
+both versions and showed on real 2.1.317 that each check fails with only that
+switch off. Showing images extends the local image cache, documented in the
+privacy notes, to every 2.1.316 and 2.1.317 session. The lane reviewer passed
+both after two rounds each. The integration reviewer added that images over 1 MB
+or past the 64 MB session limit still show as unavailable, that shared room rows
+keep references to cached images, and that there is no limit across sessions.
+Open: deleting a session's cached images when its records are removed, recorded
+as T-140, including what room rows show afterwards; images over 1 MB, resized by
+Claude, from MCP tools or read after /clear; the model header and a switch after
+/clear; /model in a teammate; the model block sent at bind, none of which ran or
+is checked; the native queue and direct input, which wait for T-138.
