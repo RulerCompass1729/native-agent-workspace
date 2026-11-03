@@ -1040,6 +1040,21 @@ function canFlushComposition(id, token = terminals.get(id)?.composition) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
   return Boolean(token && currentTerminalDisplay(entry, record) && !token.cancelled && !token.consumed && entry?.composition === token && !entry.composing && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === owner && record.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
 }
+// Input held while a terminal's view was being switched is over without being sent: the switch failed, another
+// view took control, or the session or connection changed. Redraw now, so the status stops saying it is held and
+// the terminal stops taking keys. If the keyboard is still in that terminal, which can no longer take it, move it to
+// the native pane itself: nothing there can be pressed, so the rest of what is being typed cannot retry the switch
+// and reach the terminal after all. Choosing 原生终端 again retries.
+function releaseHeldTerminal(id, entry) {
+  render();
+  const surface = entry?.element.isConnected && entry.element.querySelector('.terminal-surface');
+  if (!surface?.contains(document.activeElement) || terminalCanInput(id) || canCaptureTerminal(id) || canFlushComposition(id)) return;
+  entry.term.blur();
+  const pane = $('native-pane');
+  if (!pane.getClientRects().length) return;
+  if (!pane.hasAttribute('tabindex')) { pane.tabIndex = -1; pane.addEventListener('blur', () => pane.removeAttribute('tabindex'), { once: true }); }
+  pane.focus({ preventScroll: true });
+}
 function clearFailedTerminal(id) {
   const entry = terminals.get(id);
   if (entry?.failed) { entry.term.dispose(); entry.element.remove(); terminals.delete(id); }
@@ -2838,7 +2853,7 @@ async function switchMode(next, takeControl = false) {
   if (entry?.composing) entry.term.blur();
   const ending = entry?.composition;
   const stillSelected = () => revision === selectionRevision && activeSessionId() === s.id;
-  let queued;
+  let queued, delivered = false;
   if (next === 'terminal' && !ending && entry?.ready && currentTerminalDisplay(entry, s) && s.owner === owner) {
     queued = { revision, owner: s.owner, text: '' };
     queued.done = new Promise((resolve, reject) => { queued.resolve = resolve; queued.reject = reject; });
@@ -2864,7 +2879,7 @@ async function switchMode(next, takeControl = false) {
     if (queued && entry.viewInput === queued) {
       const text = queued.text;
       entry.viewInput = null;
-      try { if (text) await api.input(s.id, text); queued.resolve(); }
+      try { if (text) await api.input(s.id, text); queued.resolve(); delivered = true; }
       catch (error) { queued.reject(error); if (text) entry.preserveUnconfirmed(text, error); throw error; }
     }
     if (!stillSelected()) return;
@@ -2874,6 +2889,7 @@ async function switchMode(next, takeControl = false) {
     else if (inputFocusAllowed()) chatInput().focus();
   } finally {
     if (queued && entry.viewInput === queued) cancelViewInput(entry);
+    if (queued && !delivered) releaseHeldTerminal(s.id, entry);
     if (pendingMode?.revision === revision) { pendingMode = undefined; render(); }
   }
 }
