@@ -206,7 +206,8 @@ async function run() {
     await open(b); await page.locator('#sessions-grouped').click(); await app.close(); app = null;
     const views = JSON.parse(fs.readFileSync(path.join(profile, 'views.json'), 'utf8')); assert.ok(views.length); for (const view of views) view.sidebarSpaceFilter = b; fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify(views), { mode: 0o600 }); await launch();
     await until(async () => (await page.evaluate(() => workspace.initial())).viewState.spaceId === b, 'Selected space restored'); assert.equal(await page.locator('#sessions-grouped').getAttribute('aria-pressed'), 'true');
-    await until(async () => await page.locator('.session-row').evaluateAll(rows => new Set(rows.map(row => row.dataset.sessionRow)).size) === 7, 'Every session listed despite the older saved filter'); assert.equal(await page.locator('[data-session-group="independent"]').count(), 1);
+    await until(async () => await page.locator('.session-row').evaluateAll(rows => new Set(rows.map(row => row.dataset.sessionRow)).size) === 7, 'Every session listed despite the older saved filter');
+    await until(() => !fs.readFileSync(path.join(profile, 'views.json'), 'utf8').includes('sidebarSpaceFilter'), 'The retired filter is dropped from the view file at start'); assert.equal(await page.locator('[data-session-group="independent"]').count(), 1);
     assert.equal((await page.evaluate(() => workspace.initial())).viewState.roomViews.shared.sharedDraft, 'Original shared unsent');
   });
   assert.deepEqual(sourceHashes(), frozen, 'All tested source remains frozen');

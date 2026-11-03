@@ -1,7 +1,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), vm = require('node:vm');
-const { ViewStore } = require('../view-store.cjs');
+const { ViewStore, dropRetiredViewFields } = require('../view-store.cjs');
 const { searchRecords } = require('../renderer/local-search.js');
 const { openMessageFile } = require('../local-files.cjs');
 const { imageSource } = require('../native-images.cjs');
@@ -60,4 +60,18 @@ test('actual clear button targets the room captured when privacy opened and show
   await $('clear-shared-history').onclick({ type: 'click' });
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[context.trustClearRoom, 'clearSharedHistory', []]]);
   assert.equal($('trust-refresh-status').textContent, 'Synthetic save failure'); assert.equal($('clear-shared-history').disabled, false);
+});
+test('a view file from an older build loses its retired sidebar filter when read, and nothing else (T-132)', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-retired-view-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const a = randomUUID(), store = new ViewStore(dir); store.load();
+  const views = [{ owner: 'one', selected: 'room', spaceId: a, mode: 'chat', sidebarView: 'grouped', sidebarSpaceFilter: a, sharedDraft: 'Unsent draft' }, { owner: 'two', selected: 'room', mode: 'terminal' }];
+  store.save(views);
+  const raw = new ViewStore(dir).load(), loaded = dropRetiredViewFields(raw);
+  assert.strictEqual(loaded.views[1], raw[1], 'a view without the field is passed through as the same object');
+  assert.equal(loaded.changed, true);
+  assert.deepEqual(loaded.views[0], { owner: 'one', selected: 'room', spaceId: a, mode: 'chat', sidebarView: 'grouped', sharedDraft: 'Unsent draft' });
+  assert.strictEqual(loaded.views[1].owner, 'two'); assert.deepEqual(loaded.views[1], views[1]);
+  const again = new ViewStore(dir); again.load(); again.save(loaded.views);
+  assert.equal(dropRetiredViewFields(new ViewStore(dir).load()).changed, false, 'saved once, the file no longer carries it');
+  assert.equal(fs.readFileSync(path.join(dir, 'views.json'), 'utf8').includes('sidebarSpaceFilter'), false);
 });
