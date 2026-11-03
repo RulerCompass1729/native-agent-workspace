@@ -4689,3 +4689,23 @@ other backends kept PID, start time and version; 150 seconds later they and all
 sixteen live native processes were unchanged and no move record existed. Saved
 checks afterwards found only the copy in /Applications in application search and
 an empty rollback folder.
+
+
+### A kept session id, the Git copy help and two script checks - alpha.175
+
+Three commits from Claude 2 are integrated with identical changed lines. On main
+the full unit suite passes 2,286 checks without skips, and the name check
+reports nothing missing across 530 lookups in 177 scripts. After rebuilding the
+UI bundle, create space choice, which now covers the kept id after failed reads,
+session directory, which checks when the Git copy help appears and disappears
+and its screen-reader link, dialog lifecycle, collaboration, codex usability,
+navigation and daily use exit 0 without model calls, with the system clipboard's
+change count at 268 before and after every run.
+
+Integration then found that the Git copy help still showed once an independent
+session had been kept with the automatic folder, and added that state to its
+condition plus a check in create space choice's locked-form helper. With the
+previous renderer and the new check, create space choice failed exactly at that
+check; with the fixed renderer, rebuilt, it and session directory exit 0, the
+full unit suite still passes 2,286 checks and the name check reports nothing
+missing; the system clipboard's change count stayed at 268.

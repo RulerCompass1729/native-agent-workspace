@@ -3953,3 +3953,81 @@ alpha.173 archive, whose hash was checked before the run, is the only rollback.
 Afterwards application search, by display name, listed only the copy in
 /Applications. Open: T-115's A/B and C1/C2 questions for the person, the
 lost-session fix, and daily use of the new field.
+
+
+### A created session is kept when the reads after it fail (T-115 follow-up)
+
+The integration review of alpha.174 found a rare path: the session was created
+and its id returned, but the two state reads right after both failed, so the
+session was not adopted and creating again made a second one. Claude 2 now keeps
+the id: with a space chosen, 仅继续加入 joins that session directly; for an
+independent session, 创建 is disabled and the dialog says the session exists and
+the dialog can be closed, with the automatic or chosen folder alike. When
+neither an id nor a fresh state is available, the dialog asks the person to
+check the sidebar first and keeps the folder; with the automatic folder a second
+click can then only meet the existing session, but with a chosen existing
+folder, which several sessions may share, a second click can still create a
+second session, and the dialog only asks the person to look first. Two wordings
+changed: after the dialog is closed it points to joining from the session menu,
+and when the space was archived, the session removed or on an old backend, it no
+longer invites a retry and 仅继续加入 is disabled.
+
+Claude 2's lane reviewer took three rounds: the first found that an independent
+session in a chosen folder could still be created twice, which was fixed; the
+second asked for session directory to be rerun on the new code; the third
+passed. Lane evidence: create space choice 13 of 13, failing with main's earlier
+renderer and with the previous round's; session directory 6 of 6, dialog
+lifecycle 13 of 13 and the unit suite 2,286; the clipboard count did not change.
+The integration reviewer added: a retry that meets 已存在 after a state update
+shows only that error and resets the automatic folder, so a third click can
+create a new session (a low item the lane reviewer raised in round 2 and no
+record had kept); in the kept state with a chosen folder, branching from an
+existing Claude session and takeover stay enabled; and a final error's toast
+says 请关闭对话框 even after the dialog closed. After a selection change while the
+dialog stays open, the toast points to the session menu while 仅继续加入 stays
+enabled. Not exercised in the GUI, besides the removed-session case: the wording
+after the dialog is closed and in the old-backend case. On the person's
+question, the A and C1 recommendations applied under the 20-minute rule, which
+leaves the current behaviour; B or C2 can still be chosen.
+
+
+### Why the Git working copy option is off for a new folder (T-96)
+
+The person said on 10-31 that 新建 Git 工作副本 seemed impossible to click. With the
+default automatic empty folder that option is disabled; it now carries the help
+要新建 Git 工作副本，请先点「选择…」选一个已有提交的 Git 仓库，再勾选这一项。这里不会新建仓库。 The help shows only in
+that case, not with a chosen folder, when taking over a Claude session, which
+needs its own folder, or while T-115's join is in progress; when hidden its text
+is cleared, so a screen reader does not read a stale note. This is the last
+source part of T-96, whose parts ① and ② shipped in 28c2ded and ③ in 32f6a9d;
+its check on the installed version remains. The integration reviewer found that
+on the integrated code the help still showed once an independent session had
+been kept with the automatic folder, beside 这里不会再建一个, because the T-115
+follow-up's kept state did not exist when the T-96 lane was reviewed;
+integration added that state to the condition and a check in create space
+choice's kept-state helper, which fails on the old renderer. The fix's commit
+message, code comment and assertion label call the kept state locked, though
+only 创建 is disabled there.
+
+Claude 2's lane reviewer passed it in the first round with three small
+improvements, the stale screen-reader text, the conflicting wording when taking
+over and the note after T-115 locks the form, which were made, and passed again.
+Lane evidence: session directory 6 of 6, checking when the help appears and
+disappears and its screen-reader link, and create space choice 11 of 11.
+
+
+### Two empty-recipient checks that could not fail are replaced (T-158 follow-up)
+
+The alpha.173 and later reviews noted that test-collaboration's two checks of an
+empty #recipient after a member leaves could never fail, since the picker lists
+only current members. Claude 2 removed the one at :194, since the next line's
+saved-recipient check already covers it, and changed the one at :218, after
+reopening the app, to check that the saved state holds no recipient. The comment
+at :298 now quotes interaction.md:780 word for word, and test-codex-usability's
+comment now ties 6bf5ad0 to T-67 instead of T-99. Both scripts run through in
+the author lane with the clipboard count unchanged, and the lane reviewer passed
+it. Its stated limit: at :218 the draft was already replaced before reopening,
+so the check shows only that an empty recipient stays empty after reopening, not
+that reopening could not reactivate a departed member's address; that needs an
+invalid address kept in the draft across the reopen, to be added when the reopen
+logic changes. Scripts only.
