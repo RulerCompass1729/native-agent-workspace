@@ -2730,3 +2730,21 @@ turn, whose replies do not match and cannot wake, recorded as T-138; real
 2.1.312 queued prompts; a prompt arriving during the Stop hook and a throwing
 turn completion, both failing closed; 2.1.310, which has no local binary, and
 2.1.311, which was not run.
+
+
+### Integrated alpha.164 delivery
+
+A fresh read-only reviewer found the integrated files byte-identical to the
+lane-reviewed ones and nothing unsafe, and held acceptance until the ledgers
+stopped calling a terminal-answered question held, stopped presenting the
+synthetic wake script as a 2.1.317 run, and listed what remains unverified on
+2.1.317. It accepted the update operator as a substitution of the alpha.163 one.
+The operator ran once. Publication of alpha.163 and alpha.164 waits for the
+person: the pre-push history scan of all refs now exceeds its 256 MiB limit; an
+author-run measurement put it at 257.3 MiB over 23 refs, while the push hook's
+scan of main alone is 216 MiB. Separately, the terminal-selection script was
+found to write to the person's clipboard, and by that mechanism the alpha.159
+run on main did so twice; that run did not measure it. Open: in the product,
+Cmd+C in a terminal still writes the selection twice and a failed copy can be
+reported wrongly; a Claude session on an alpha.164 backend; the post-provider
+signature check; the publication scan limit.
