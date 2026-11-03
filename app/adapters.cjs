@@ -549,6 +549,8 @@ class Claude extends EventEmitter {
     this.nativePromptInput = this.nativeBlocks && message.nativeInlineInput === true && message.nativePromptInput === true && !this.retainedReader;
     this.nativeInlineInput = this.nativeBlocks && message.nativeInlineInput === true && (this.retainedReader ? !this.nativeQueue : this.nativePromptInput);
     this.nativeAbortAvailable = message.nativeAbort === true && !this.retainedReader;
+    // A mod that predates nativeCapacity qualified capacity recovery together with abort.
+    this.nativeCapacityAvailable = this.nativeAbortAvailable && message.nativeCapacity !== false;
     this.addressedSendAvailable = this.nativeBlocks && message.addressedTool === true && !this.retainedReader;
     this.nativeSharedDisplay = this.retainedReader && message.nativeSharedDisplay === true;
     // Native `!` commands, turn-start inputs and the turn's own clock (T-99).
@@ -766,7 +768,7 @@ class Claude extends EventEmitter {
   }
   reportCapacityFailure(retry = false) {
     const turn = this.rootTurn;
-    if (!this.nativeAbortAvailable || this.retainedReader || !turn || turn.endReported || turn.completed || turn.inputUsed || turn.failureCancelled ||
+    if (!this.nativeCapacityAvailable || this.retainedReader || !turn || turn.endReported || turn.completed || turn.inputUsed || turn.failureCancelled ||
       !turn.failedTranscript || !turn.errorMessageId || !this.failedTurnInputMatches(turn.id) || turn.failureReads && !retry) return;
     turn.failurePosture ||= { owner: this.record.owner, control: this.record.controlRevision, member: this.record.memberRevision };
     const same = turn.failurePosture.owner === this.record.owner && turn.failurePosture.control === this.record.controlRevision && turn.failurePosture.member === this.record.memberRevision;
