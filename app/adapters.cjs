@@ -652,6 +652,9 @@ class Claude extends EventEmitter {
           this.seenRootTurns.add(message.turnId);
           while (this.seenRootTurns.size > 256) this.seenRootTurns.delete(this.seenRootTurns.values().next().value);
           this.rootTurn = message.replayed || message.gap ? null : { id: message.turnId, promptId: message.promptId, status: 'working' };
+          // T-138: the started root turn, kept apart from rootTurn (permission and input boundaries clear
+          // that sharing authority); `announced` is how many prompts UserPromptSubmit had announced by then.
+          this.startedRootTurn = message.replayed || message.gap ? null : { id: message.turnId, announced: this.announceCount || 0, completed: false };
           if (this.rootTurn) this.emit('nativeTurnStart', { nativeId: this.record.nativeId, turnId: message.turnId });
           if (message.triggers) this.emit('nativeTurnTriggers', { nativeId: this.record.nativeId, turnId: message.turnId, prompts: message.triggers.prompts, rows: message.triggers.rows });
           this.liveTurn = this.rootTurn ? { id: message.turnId, promptId: message.promptId, phase: 'requesting', label: 'requesting' } : null;
@@ -762,6 +765,10 @@ class Claude extends EventEmitter {
         this.emit('interrupted', { turnId, tag: pending?.tag });
       }
       this.emit('state', status === 'failed' ? 'error' : 'idle');
+    }
+    if (kind === 'turn' && status === 'complete' && this.startedRootTurn?.id === turnId && !message.replayed && !message.gap) {
+      this.startedRootTurn.completed = true;
+      if (this.unannouncedStop?.turnId === turnId) this.settleUnannounced(turnId);
     }
     if (kind === 'turn' && this.pending?.turnId === turnId && this.pending.stopEvent) this.finishReply(this.pending, this.pending.stopEvent);
     return { observed: true };
@@ -981,6 +988,10 @@ class Claude extends EventEmitter {
         // structured submission result acknowledges our own sends separately.
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
         this.lastPromptId = event.prompt_id || null;
+        if (event.prompt_id) {
+          this.announcedPrompts ||= new Set(); this.announcedPrompts.add(event.prompt_id); this.announceCount = (this.announceCount || 0) + 1;
+          if (this.announcedPrompts.size > 64) this.announcedPrompts.delete(this.announcedPrompts.values().next().value);
+        }
         const entering = this.queued || this.pending;
         if (entering && !entering.accepted && this.submission.pending?.authorized && event.prompt === entering.text) {
           entering.prompts.add(event.prompt_id || null);
@@ -1011,6 +1022,15 @@ class Claude extends EventEmitter {
         if ((pending && event.prompt_id !== pending.promptId) ||
           (!pending && this.lastPromptId && event.prompt_id !== this.lastPromptId)) {
           if (!this.nativeBlocks && event.last_assistant_message) this.emit('messageItem', { id: `claude-stop-${event.prompt_id || crypto.randomUUID()}`, text: event.last_assistant_message });
+          // T-138: a queued prompt's own turn, or a `!` turn, stops under a prompt id no
+          // UserPromptSubmit announced (2.1.316, 2.1.317). A late Stop of an earlier prompt
+          // carries an announced id and stays dropped. The root turn's own end settles it.
+          const started = this.startedRootTurn;
+          if (!pending && !this.queued && this.nativeBlocks && !this.retainedReader && started && started.announced === (this.announceCount || 0) &&
+            /^[a-f0-9-]{36}$/i.test(event.prompt_id || '') && !this.announcedPrompts?.has(event.prompt_id)) {
+            this.unannouncedStop = { turnId: started.id, event };
+            if (started.completed) this.settleUnannounced(started.id);
+          }
           return;
         }
         this.finishReply(pending, event);
@@ -1025,6 +1045,27 @@ class Claude extends EventEmitter {
         this.reportCapacityFailure(); break;
       case 'SessionEnd': this.contextEnding(event.reason); break;
     }
+  }
+  // Idle without a reply: nothing is shared or attributed, the session only stops showing work (T-138).
+  settleUnannounced(turnId) {
+    const stopped = this.unannouncedStop;
+    const started = this.startedRootTurn;
+    // Only the started root turn that ended, with no prompt announced since it started.
+    if (!stopped || stopped.turnId !== turnId || started?.id !== turnId || !started.completed || started.announced !== (this.announceCount || 0) || this.pending || this.queued) return;
+    this.unannouncedStop = null;
+    const { background, scheduled, stopHookActive } = this.emitBackground(stopped.event);
+    this.emit('state', 'idle');
+    this.emit('complete', { text: '', background, scheduled, fleetPending: null, stopHookActive });
+  }
+  emitBackground(event) {
+    const background = Array.isArray(event.background_tasks) ? event.background_tasks.length : null;
+    const scheduled = Array.isArray(event.session_crons) ? event.session_crons.length : null;
+    // Type labels only; task descriptions and commands stay in the native session.
+    const kinds = background ? event.background_tasks.slice(0, 50).map(t => ['shell', 'subagent', 'monitor', 'workflow'].includes(t?.type) ? t.type : 'other') : null;
+    // Opaque task IDs only, kept in memory: a later notification turn for one of them is machine input.
+    const ids = background ? event.background_tasks.slice(0, 50).map(t => typeof t?.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(t.id) ? t.id : null).filter(Boolean) : [];
+    this.emit('background', { count: background, scheduled, kinds, ids });
+    return { background, scheduled, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null };
   }
   finishReply(pending, event) {
         if (pending?.nativeId && (pending.nativeId !== this.record.nativeId || this.rootEnding?.sessionId === pending.nativeId)) {
@@ -1054,13 +1095,7 @@ class Claude extends EventEmitter {
         clearTimeout(pending?.displayTimer);
         const displayConfirmed = !this.nativeBlocks || (proof?.ended && !proof.incomplete && proof.promptId === pending?.promptId && typeof proof.safeText === 'string');
         if (this.pending === pending) this.pending = null;
-        const background = Array.isArray(event.background_tasks) ? event.background_tasks.length : null;
-        const scheduled = Array.isArray(event.session_crons) ? event.session_crons.length : null;
-        // Type labels only; task descriptions and commands stay in the native session.
-        const kinds = background ? event.background_tasks.slice(0, 50).map(t => ['shell', 'subagent', 'monitor', 'workflow'].includes(t?.type) ? t.type : 'other') : null;
-        // Opaque task IDs only, kept in memory: a later notification turn for one of them is machine input.
-        const ids = background ? event.background_tasks.slice(0, 50).map(t => typeof t?.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(t.id) ? t.id : null).filter(Boolean) : [];
-        this.emit('background', { count: background, scheduled, kinds, ids });
+        const { background, scheduled } = this.emitBackground(event);
         this.emit('state', 'idle');
         // Observed child hooks cannot certify that all descendants are idle.
         this.emit('complete', { messageId: displayConfirmed ? proof?.messageId : undefined, tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });

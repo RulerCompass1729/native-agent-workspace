@@ -316,6 +316,118 @@ for (const version of ['2.1.316', '2.1.312']) test(`native ${version}: a prompt 
   assert.equal((await wakeCall(f, 'call-typed')).deny, undefined);
   assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['typed-turn-2', later]]);
 });
+// T-138 (measured on 2.1.316 and 2.1.317): a prompt typed during a turn raises UserPromptSubmit
+// once, with the running prompt's id; its own later turn starts with exactly its text.
+// Measured order: a typed prompt's UserPromptSubmit fires inside its prompt.submit (origin composer).
+const typedDuringTurn = (f, promptId, prompt, origin = 'composer') => f.invoke('prompt.submit', { text: prompt, origin: { kind: origin }, turnId: 'first-turn', wait: false },
+  async () => { await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt }); return {}; });
+async function queuedTurn(version, { typed = 'Wake the idle peer.', started = typed, delivered = false, newer = false, origin = 'composer', aborted = false, otherId = false } = {}) {
+  const f = await addressedMod(version), first = randomUUID(), sid = f.r.record.nativeId;
+  await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'Look at the board.' });
+  await f.invoke('turn.start', { turnId: 'first-turn', text: 'Look at the board.' });
+  await typedDuringTurn(f, first, typed, origin);
+  if (otherId) await typedDuringTurn(f, randomUUID(), 'Another prompt with its own id.');
+  if (delivered) await f.append({ uuid: randomUUID(), door: 'delivery', origin: { kind: 'composer' },
+    message: { type: 'attachment', name: 'queued_command', role: 'user', content: [{ type: 'text', text: `The user sent: ${typed}` }] } });
+  await f.invoke('turn.complete', { turnId: 'first-turn', reason: aborted ? 'aborted' : 'answer', isAborted: aborted });
+  const later = newer ? randomUUID() : null;
+  if (later) await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: later, prompt: started });
+  await f.invoke('turn.start', { turnId: 'queued-turn', text: started });
+  return { f, first, later, result: await wakeCall(f, 'call-queued') };
+}
+const refusedWake = { deny: '没有本原生主会话的定向协作授权。' };
+for (const version of ['2.1.316', '2.1.317']) {
+  test(`native ${version}: a queued prompt's own turn, started with exactly its text, may wake a peer (T-138)`, async () => {
+    const { f, first, result } = await queuedTurn(version);
+    assert.equal(result.deny, undefined);
+    assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['queued-turn', first]]);
+  });
+  test(`native ${version}: a turn whose text is not the queued prompt stays ambiguous (T-138)`, async () => {
+    for (const started of ['Wake the idle peer. ', 'wake the idle peer.', '<bash-input>ls</bash-input>', null]) {
+      const { f, result } = await queuedTurn(version, { started });
+      assert.deepEqual(result, refusedWake, String(started)); assert.equal(f.staged.length, 0);
+    }
+  });
+  test(`native ${version}: a queued prompt taken into the running turn heads no later turn (T-138)`, async () => {
+    const { f, result } = await queuedTurn(version, { delivered: true });
+    assert.deepEqual(result, refusedWake); assert.equal(f.staged.length, 0);
+  });
+  test(`native ${version}: only the person's own composer input joins the line (T-138)`, async () => {
+    for (const origin of ['plugin', 'engine', null]) {
+      const { f, result } = await queuedTurn(version, { origin });
+      assert.deepEqual(result, refusedWake, String(origin)); assert.equal(f.staged.length, 0);
+    }
+  });
+  test(`native ${version}: overlapping submissions never let a non-composer prompt join the line (T-138)`, async () => {
+    const f = await addressedMod(version), first = randomUUID(), sid = f.r.record.nativeId;
+    await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'Look at the board.' });
+    await f.invoke('turn.start', { turnId: 'first-turn', text: 'Look at the board.' });
+    // An engine submission is still in its UserPromptSubmit hooks when the person presses Enter.
+    let release, releaseTail; const held = new Promise(resolve => { release = resolve; }), tail = new Promise(resolve => { releaseTail = resolve; });
+    // The engine submission stays in flight after its own UserPromptSubmit returns.
+    const engine = f.invoke('prompt.submit', { text: 'Engine text.', origin: { kind: 'engine' }, turnId: 'first-turn', wait: false }, async () => {
+      await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'Engine text.' }, async () => { await held; return {}; }); await tail; return {}; });
+    await new Promise(resolve => setImmediate(resolve));
+    // The person's own submission is in flight too when the engine's hooks resolve.
+    let releaseTyped; const typedHeld = new Promise(resolve => { releaseTyped = resolve; });
+    const typed = f.invoke('prompt.submit', { text: 'Wake the idle peer.', origin: { kind: 'composer' }, turnId: 'first-turn', wait: false }, async () => {
+      await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'Wake the idle peer.' }, async () => { await typedHeld; return {}; }); return {}; });
+    await new Promise(resolve => setImmediate(resolve));
+    release(); await new Promise(resolve => setImmediate(resolve));
+    releaseTyped(); await new Promise(resolve => setImmediate(resolve));
+    releaseTail(); await engine; await typed;
+    await f.invoke('turn.complete', { turnId: 'first-turn', reason: 'answer', isAborted: false });
+    await f.invoke('turn.start', { turnId: 'engine-turn', text: 'Engine text.' });
+    assert.deepEqual(await wakeCall(f, 'call-engine'), refusedWake);
+    assert.equal(f.staged.length, 0);
+  });
+  test(`native ${version}: interleaved submissions leave no stale composer origin (T-138)`, async () => {
+    const f = await addressedMod(version), first = randomUUID(), sid = f.r.record.nativeId, tick = () => new Promise(resolve => setImmediate(resolve));
+    await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'Look at the board.' });
+    await f.invoke('turn.start', { turnId: 'first-turn', text: 'Look at the board.' });
+    const gate = () => { let open; const shut = new Promise(resolve => { open = resolve; }); return { shut, open }; };
+    const submit = (text, kind, before, after) => f.invoke('prompt.submit', { text, origin: { kind }, turnId: 'first-turn', wait: false }, async () => {
+      await before; await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: text }); await after; return {}; });
+    // Composer A enters, engine B enters, A exits, then B exits: they do not leave in reverse order.
+    const a = gate(), b = gate(); const sa = submit('Composer A.', 'composer', null, a.shut), sb = submit('Engine B.', 'engine', null, b.shut);
+    await tick(); a.open(); await sa; b.open(); await sb;
+    // Engine Y enters, engine X enters, Y exits; only then does X's UserPromptSubmit run.
+    const y = gate(), x = gate(); const sy = submit('Engine Y.', 'engine', null, y.shut), sx = submit('Engine X.', 'engine', x.shut, null);
+    await tick(); y.open(); await sy; x.open(); await sx;
+    await f.invoke('turn.complete', { turnId: 'first-turn', reason: 'answer', isAborted: false });
+    await f.invoke('turn.start', { turnId: 'engine-turn', text: 'Engine X.' });
+    assert.deepEqual(await wakeCall(f, 'call-x'), refusedWake);
+    assert.equal(f.staged.length, 0);
+  });
+  test(`native ${version}: a mid-turn prompt with another id drops the line (T-138)`, async () => {
+    const { f, result } = await queuedTurn(version, { otherId: true });
+    assert.deepEqual(result, refusedWake); assert.equal(f.staged.length, 0);
+  });
+  test(`native ${version}: after Esc the queued prompt still runs as its own turn and may wake (T-138, measured)`, async () => {
+    const { f, first, result } = await queuedTurn(version, { aborted: true });
+    assert.equal(result.deny, undefined);
+    assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['queued-turn', first]]);
+  });
+  test(`native ${version}: a newer idle prompt heads its own turn, not the queued one (T-138)`, async () => {
+    const { f, later, result } = await queuedTurn(version, { newer: true });
+    assert.equal(result.deny, undefined);
+    assert.deepEqual(f.staged.map(x => [x.turnId, x.promptId]), [['queued-turn', later]]);
+  });
+  test(`native ${version}: queued prompts are matched first in line only, once each (T-138)`, async () => {
+    const f = await addressedMod(version), first = randomUUID(), sid = f.r.record.nativeId;
+    await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'Look at the board.' });
+    await f.invoke('turn.start', { turnId: 'first-turn', text: 'Look at the board.' });
+    for (const prompt of ['Step A.', 'Step B.']) await typedDuringTurn(f, first, prompt);
+    await f.invoke('turn.complete', { turnId: 'first-turn' });
+    // Out of order: B is not first in line, so its turn stays ambiguous and the line is dropped.
+    await f.invoke('turn.start', { turnId: 'turn-b', text: 'Step B.' });
+    assert.deepEqual(await wakeCall(f, 'call-b'), refusedWake);
+    await f.invoke('turn.complete', { turnId: 'turn-b' });
+    await f.invoke('turn.start', { turnId: 'turn-a', text: 'Step A.' });
+    assert.deepEqual(await wakeCall(f, 'call-a'), refusedWake);
+    assert.equal(f.staged.length, 0);
+  });
+}
 test('native 2.1.312 (the main session\'s binary): a typed turn and a turn NAW submitted each stage a workspace message', async () => {
   const typed = await addressedMod('2.1.312'), promptId = randomUUID();
   await typed.invoke('classic.UserPromptSubmit', { session_id: typed.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
