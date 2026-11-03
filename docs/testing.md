@@ -4189,3 +4189,19 @@ move record existed. The native-blocks runs above used Claude Code 2.1.316 and
 finished, at 17:07 and 17:08, before the 2.1.317 version directory appeared,
 dated 17:26; that script refuses other versions, so a rerun needs the 2.1.316
 binary or a 2.1.317 qualification.
+
+
+### Claude Code 2.1.317 and cancelled-wake reasons - alpha.164
+
+Claude 2's two commits are integrated with identical changed lines. On main the
+full unit suite passes 2,170 checks without skips. With the machine's Claude
+Code at 2.1.317, native blocks ran on main in its default mode, with a held
+native question stopped by 停止, with a permission prompt and with a plan, each
+against local fixed replies with no paid calls, and the session wake GUI script,
+which uses synthetic sends and no real provider, exits 0. In the author lane the
+same flows passed on 2.1.317, plus a room-forwarded question answered with the
+first choice in the native terminal and a wake from a folder with the old
+compatibility copy; turn records were seen working on 2.1.317, explanations were
+not exercised; on 2.1.316, turning the usage reading off made its step fail and
+turning it on made it pass. The terminal-selection script is fixed to 2.1.316
+and did not run. No cancelled wake has yet occurred with the new reason text.

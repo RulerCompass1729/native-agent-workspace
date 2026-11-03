@@ -2694,3 +2694,39 @@ it. Open: 2.1.317 qualification, without which this batch's native stop, and the
 immediate wake eligibility after a stop, reach no daily session unless a 2.1.316
 binary is set explicitly; the post-provider signature check for alpha.163; and
 the held-question stop race.
+
+
+### Claude Code 2.1.317 qualification and usage reading (T-133 items 2 and 3)
+
+Claude Code on the machine upgraded to 2.1.317, which no qualified capability
+included, so new or restarted Claude sessions lost the root binding and
+everything built on it. The author compared the plugin declarations 2.1.317
+writes with 2.1.316's: only a backdrop interface and its component were added;
+the built-in tools changed in several ways, and the bridge reads none of the
+changed fields. 2.1.317 now joins every 2.1.316 qualification, and the free
+usage reading is enabled for both. The lane reviewer passed it. The integration
+reviewer added that turn records depend on row text the declarations do not
+cover and fail closed, and that a compatibility copy run by a retained process
+gets none of the qualified capabilities on 2.1.317, though NAW can still send to
+it. Open: explanations, /branch, answering a held question from the conversation
+view and terminal selection on real 2.1.317; the terminal-selection script fixed
+to 2.1.316; whether the usage reading triggers token counting; comments that
+still name only 2.1.316.
+
+
+### Cancelled wakes name their reason (T-100 checkpoint 5)
+
+The secretary's 16:21 wake was cancelled with a generic reason that could not
+tell a permission prompt from a gap, an interrupt or a person's input. A wake
+cancelled at a participant's boundary now names that boundary; other
+cancellation paths keep their generic text. The author narrowed the 16:21 case
+to before the end of the secretary's turn and ruled out a background task
+started in the same turn; the rest awaits the next real wake. The alpha.162
+reviewer's mid-turn route turned out not to occur on real 2.1.316, where a
+prompt typed during a turn reuses the running prompt's id in the one probe that
+observed it, but the bridge now accepts only a prompt that arrives while no turn
+runs. The lane reviewer passed it. Open: queued prompts followed by their own
+turn, whose replies do not match and cannot wake, recorded as T-138; real
+2.1.312 queued prompts; a prompt arriving during the Stop hook and a throwing
+turn completion, both failing closed; 2.1.310, which has no local binary, and
+2.1.311, which was not run.

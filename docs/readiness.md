@@ -4,6 +4,32 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.164 qualifies Claude Code 2.1.317, to which this machine was
+upgraded on 11-02: wherever 2.1.316 was qualified, for the root binding, native
+blocks, context transitions, the native stop, turn records and explanations,
+2.1.317 is now included, so a Claude session started or restarted on an
+alpha.164 backend gets them again, and a stopped 2.1.317 session can be woken
+right away, as on 2.1.316. The free status-line usage reading is also turned on
+for 2.1.316 and 2.1.317; capacity recovery, the native queue,
+insert-while-working, native prompt rows, images and model switching stay off. A
+wake cancelled because a participant's native observation or control boundary
+changed now names that boundary; other cancellations keep their generic text.
+Only a prompt that arrives while no turn runs can head a turn; on real 2.1.316
+this made no observed difference. On main, native blocks passed on real Claude
+Code 2.1.317 in its default, held-question stop, permission and plan modes with
+local fixed replies and no paid calls, and the session wake GUI script, which
+uses synthetic sends and no real provider, exits 0. In the author lane real
+2.1.317 also passed a room-forwarded question answered in the native terminal
+and a wake from a folder with the old compatibility copy. Unverified on 2.1.317:
+explanations, which have only the plugin declaration as evidence; /branch, which
+has not run on 2.1.316 either; answering a held question from the conversation
+view; and terminal selection, which is not version-gated and whose script is
+fixed to 2.1.316. As on 2.1.316, 停止 during a permission prompt or after a
+display gap still falls back to Esc, and the held-question stop is still a race.
+Both changes were reviewed in their author lane and are integrated with
+identical changed lines. The full unit suite passes 2,170 checks. Daily delivery
+remains pending; current daily remains alpha.163.
+
 Current daily GUI: alpha.163, committed build source `03c00e21`. It carries two
 reviewed changes. Clicking a space's name in the sidebar now only opens the
 space and no longer filters the session list; 显示全部 is gone, leaving the flat and
