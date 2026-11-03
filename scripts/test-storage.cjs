@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Actual Electron/DSH and service, synthetic provider output; no model calls.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -52,7 +53,7 @@ async function run() {
   }));
   await fixture('history', id, history);
   await page.locator('#message-input').fill('还没发出的中文草稿。');
-  await page.getByRole('button', { name: '加入协作', exact: true }).click();
+  await joinSpace(page);
   await until(() => {
     try {
       const saved = stored();

@@ -1,5 +1,6 @@
 // T49: actual source GUI + Codex adapter, synthetic transport, zero inference.
 const scratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient, fillRoomMessage } = require('./room-input.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -50,7 +51,7 @@ async function run() {
   await page.locator('#new-session').waitFor();
   const a = await create('T49 A'), b = await create('T49 B'), c = await create('T49 C');
   for (const [id, draft] of [[b, 'B unsent draft'], [c, 'C unsent draft']]) {
-    await select(id); await page.locator('#message-input').fill(draft); await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await select(id); await page.locator('#message-input').fill(draft); await joinSpace(page);
   }
   await select(a); await page.locator('#message-input').fill('Independent A original task'); await page.locator('#send-button').click();
   await until(async () => (await native()).sends.length === 1, 'A original turn');

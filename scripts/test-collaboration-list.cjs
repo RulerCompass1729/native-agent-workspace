@@ -1,5 +1,6 @@
 // Actual isolated source GUI/service. Only native output is synthetic.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -59,7 +60,7 @@ async function readingAnchor(host = page.locator('#messages')) {
   });
 }
 async function copyOriginal(host, id, text) {
-  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: '复制', exact: true });
+  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: /^复制：/ });
   if (installed) {
     await copy.focus(); assert.equal(await copy.isEnabled(), true);
     assert.equal((await snapshot()).sessions.flatMap(s => s.messages).find(m => m.id === id)?.text, text);
@@ -79,7 +80,7 @@ async function run() {
       text: `Original member ${i} line ${j}.\n\n原会话内容，保持独立。` })));
     await page.locator('#message-input').fill('Independent unsent draft ' + i);
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).liveDraft === 'Independent unsent draft ' + i, 'Draft persisted');
-    await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
   }
   const identity = s => s.sessions.map(x => [x.id, x.nativeId, x.owner, x.liveDraft]);
   const originalIdentity = identity(await snapshot());
@@ -205,7 +206,7 @@ async function run() {
   for (let i = 4; i < 6; i++) {
     const id = await create('List member ' + i); ids.push(id);
     await fixture('history', id, [{ id: 'extra-' + i, type: 'agentMessage', text: 'Original extra member ' + i }]);
-    await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
   }
   await page.locator('#room-nav').click();
   await list.evaluate(el => { el.scrollTop = 0; }); await reader(ids[0]).hover();

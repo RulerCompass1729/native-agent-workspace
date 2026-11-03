@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Actual hidden Electron/workspace, synthetic native transport. No provider or model call.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -24,7 +25,7 @@ async function create(name) {
   await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();
   await page.locator('#session-name').fill(name);await createIn(page, 'chat');
   await until(async()=>(await snapshot()).sessions.some(s=>s.name===name&&s.state==='idle'),'Session ready');
-  const s=(await snapshot()).sessions.find(s=>s.name===name);await page.getByRole('button',{name:'加入协作',exact:true}).click();return s.id;
+  const s=(await snapshot()).sessions.find(s=>s.name===name);await joinSpace(page);return s.id;
 }
 async function capture(name) { if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,name+'.png')});} }
 (async()=>{

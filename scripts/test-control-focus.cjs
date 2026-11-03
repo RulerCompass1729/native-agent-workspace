@@ -53,11 +53,11 @@ async function run() {
   await page.locator('#new-session').waitFor();
   const a = await create('claude'), header = page.locator('#header-actions');
   await page.locator('#session-header-more').click();
-  await hold(page.getByRole('menuitem', { name: '加入协作', exact: true }), () => update(a));
+  await hold(page.getByRole('menuitem', { name: '加入此空间', exact: true }), () => update(a));
   await page.keyboard.press('Enter'); await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === 'shared', 'Keyboard joins current session');
   const b = await create('codex');
   await page.locator('#session-header-more').click();
-  await hold(page.getByRole('menuitem', { name: '加入协作', exact: true }), () => update(b));
+  await hold(page.getByRole('menuitem', { name: '加入此空间', exact: true }), () => update(b));
   await page.keyboard.press('Enter'); await until(async () => (await snapshot()).sessions.find(s => s.id === b).roomId === 'shared', 'Changed selection joins new session');
   checks.push('Header button retains its original node and keyboard focus during history updates; Enter acts on the currently selected session');
 
@@ -127,7 +127,7 @@ async function run() {
 
   await page.locator(`[data-session-id="${a}"]`).click();
   await page.locator('#session-header-more').click();
-  const join = page.getByRole('menuitem', { name: '加入协作', exact: true });
+  const join = page.getByRole('menuitem', { name: '加入此空间', exact: true });
   await join.focus(); await client.call('join', a, true);
   await until(() => page.getByRole('menu').count().then(n => n === 0), 'Obsolete join menu withdrawn');
   await page.keyboard.press('Enter');
@@ -135,7 +135,7 @@ async function run() {
   assert.equal((await snapshot()).sessions.find(s => s.id === a).roomId, 'shared', 'Old join focus cannot execute opposite leave action');
   assert.equal(await page.getByRole('menu').count(), 0);
   await page.locator('#session-header-more').click();
-  const leave = page.getByRole('menuitem', { name: '脱出协作', exact: true });
+  const leave = page.getByRole('menuitem', { name: '离开此空间', exact: true });
   await leave.focus(); await client.call('join', a, false);
   await until(() => page.getByRole('menu').count().then(n => n === 0), 'Obsolete leave menu withdrawn');
   await page.keyboard.press('Enter');

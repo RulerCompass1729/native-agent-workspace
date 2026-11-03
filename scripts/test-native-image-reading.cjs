@@ -1,6 +1,7 @@
 // Source Electron, real service/IPC/Codex reducers, synthetic native events.
 // Clipboard is captured in the owned process; no OS clipboard/provider/model.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
@@ -40,7 +41,7 @@ async function create(name) {
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Synthetic session ready');
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); return id;
+  await joinSpace(page); return id;
 }
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Own daemon ready');

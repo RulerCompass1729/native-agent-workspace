@@ -1,6 +1,7 @@
 // Actual isolated source GUI/service, synthetic native transport. No model,
 // provider process, task input or real system clipboard read/write.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -55,8 +56,7 @@ async function create(name, provider) {
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Synthetic session ready');
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
-  await page.locator('#session-header-more').click();
-  await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); return id;
+  await joinSpace(page); return id;
 }
 async function emit(id, itemId, status = 'failed', text = originalError) {
   await fixture('nativeBlock', id, { id: `tool:${itemId}`, kind: 'tool', title: 'Edit', toolKind: 'fileChange', turnId: 'failure-turn', input: originalInput, text, status });
@@ -108,7 +108,7 @@ async function run() {
   await until(() => summary(failed).innerText().then(text => text.includes('found three.')), 'Original error reason restored');
   await toggle(failed, true); await failed.locator('.message-body').waitFor();
   assert.equal(await failed.locator('.native-tool-input').textContent(), originalInput); assert.equal(await failed.locator('.message-body').textContent(), originalError);
-  await failed.hover(); await failed.getByRole('button', { name: '复制', exact: true }).click();
+  await failed.hover(); await failed.getByRole('button', { name: /^复制：/ }).click();
   assert.equal(await app.evaluate(() => globalThis.failedToolCopies.at(-1)), originalError);
   const selected = await failed.locator('.message-body').evaluate(el => { const range = document.createRange(); range.selectNodeContents(el); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); return selection.toString(); });
   await fixture('nativeBlock', b, { id: 'response:other', kind: 'response', text: 'Other member continues streaming.', status: 'streaming' });
@@ -177,7 +177,7 @@ async function run() {
   assert.equal((await summary(commandRow).innerText()).split(command).length - 1, 1);
   assert.equal(await commandRow.locator('.process-tail').textContent(), '> fixture test\nPreparing fixture checks.');
   await toggle(commandRow, true); assert.equal(await commandRow.locator('.native-tool-input').textContent(), command);
-  await commandRow.hover(); await commandRow.getByRole('button', { name: '复制', exact: true }).click();
+  await commandRow.hover(); await commandRow.getByRole('button', { name: /^复制：/ }).click();
   assert.equal(await app.evaluate(() => globalThis.failedToolCopies.at(-1)), commandOutput); await toggle(commandRow, false);
   const bashCommand = 'node /synthetic/check.cjs', bashInput = JSON.stringify({ command: bashCommand }), bashOutput = 'Preparing synthetic script.\nERROR: synthetic script failed\nOriginal Bash trace retained.\n';
   await fixture('nativeBlock', a, { id: 'tool:failed-bash', kind: 'tool', title: 'Bash', turnId: 'failed-bash-turn', input: bashInput, text: bashOutput, status: 'failed' });
@@ -187,7 +187,7 @@ async function run() {
   assert.equal((await summary(bashRow).innerText()).split(bashCommand).length - 1, 1);
   assert.equal(await bashRow.locator('.process-tail').textContent(), 'Preparing synthetic script.\nERROR: synthetic script failed');
   await toggle(bashRow, true); assert.equal(await bashRow.locator('.native-tool-input').textContent(), bashInput);
-  await bashRow.hover(); await bashRow.getByRole('button', { name: '复制', exact: true }).click();
+  await bashRow.hover(); await bashRow.getByRole('button', { name: /^复制：/ }).click();
   assert.equal(await app.evaluate(() => globalThis.failedToolCopies.at(-1)), bashOutput); await toggle(bashRow, false);
   await capture('04-failed-commands-preserve-preview');
   check('Failed Codex command and Claude Bash keep their original command preview once, bounded output and exact trace/copy');

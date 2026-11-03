@@ -1,6 +1,7 @@
 // Actual isolated Electron/DSH/service; synthetic native transport only.
 // No provider/model turn or physical system clipboard operation.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -56,7 +57,7 @@ async function create(label, provider, join = true) {
   await page.locator('#session-name').fill(label); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === label && s.provider === provider && s.state === 'idle'), 'Synthetic session ready');
   const id = (await snapshot()).sessions.find(s => s.name === label && s.provider === provider).id;
-  if (join) { await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); }
+  if (join) { await joinSpace(page); }
   return id;
 }
 async function visibleStates(ids, menu = false) {

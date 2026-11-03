@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Actual hidden Electron/DSH renderer and persistence; synthetic records, no model.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
@@ -109,7 +110,7 @@ async function run() {
   checks.push('Large-result pagination and keyboard dismissal work without replacing native state');
   for (const id of [first, second]) {
     await page.locator(`[data-session-id="${id}"]`).click();
-    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).roomId === 'shared', 'Member joined');
   }
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual alpha.2 backend + Claude 2.1.302 + current Electron. Three loopback
 // responses (four with NAW_RETAINED_QUEUE=1, five with NAW_RETAINED_SHARED=1), zero paid inference. No original profile or global keyboard access.
@@ -153,7 +154,7 @@ async function launch() {
     if (errorRecovery) {
       assert.equal(after.failedTurnInputAvailable, true); recovering = true;
       await page.locator('#chat-tab').click();
-      await page.getByRole('button', { name: '加入协作', exact: true }).click();
+      await joinSpace(page);
       await page.locator('#room-nav').click(); await page.locator('#room-record').click();
       await inlineRecipient(page, id);
       await fillRoomMessage(page, 'Continue with this new shared task after the failure.');
@@ -186,7 +187,7 @@ async function launch() {
   assert.equal(await page.locator('#messages').getByText('RETAINED_HISTORY: original native answer.', { exact: true }).count(), 1);
   assert.equal(calls, 1); checks.push('Actual old backend and native TUI history retained on same-process input/reader attachment');
   if (sharedTrial || toolHistoryTrial) {
-    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     await inlineRecipient(page, id);
     await fillRoomMessage(page, 'Read the local result in the unified interface.'); await page.locator('#forward-button').click();
@@ -251,7 +252,7 @@ async function launch() {
   let queuedTag;
   if (queueTrial) {
     if (sharedQueueTrial) {
-      await page.getByRole('button', { name: '加入协作', exact: true }).click();
+      await joinSpace(page);
       await page.locator('#room-nav').click(); await page.locator('#room-record').click();
       await inlineRecipient(page, id);
       await until(async () => (await page.locator('#forward-button').innerText()) === '等本轮结束后发送 ↑', 'Room supports original native waiting queue');
@@ -421,8 +422,8 @@ async function launch() {
     assert.equal(verified.sessions.find(s => s.id === id).nativeId, before.nativeId);
     assert.equal(verified.sessions.find(s => s.id === id).pid, before.pid);
     await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#chat-tab').click();
-    await page.getByRole('button', { name: '脱出协作', exact: true }).click();
-    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await leaveSpace(page);
+    await joinSpace(page);
     assert.ok(!JSON.stringify((await snapshot()).room.messages).includes('RETAINED_PRIVATE_AFTER_PERMISSION'));
     fs.writeFileSync(path.join(base, 'shared-final.json'), JSON.stringify(await snapshot(), null, 2));
     checks.push('Real native permission and GUI leave/rejoin retain original process without promoting later private output or replay');

@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron renderer/IPC/storage; provider replies and OS dialog selection
@@ -55,7 +56,7 @@ async function create(provider) {
   await page.locator('#session-name').fill('伙伴'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => !previous.includes(s.id) && s.chatAvailable), 'New distinct session ready');
   const id = (await snapshot()).sessions.find(s => !previous.includes(s.id)).id;
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;
+  await joinSpace(page); return id;
 }
 async function recipient(id) { await inlineRecipient(page, id); }
 async function openRun() { await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click(); await page.locator('#run-dialog').waitFor(); }
@@ -121,7 +122,7 @@ async function run() {
   await app.evaluate(() => { process.getBuiltinModule('node:fs').renameSync = global.__originalRename; });
   await page.locator('#retry-save').click(); assert.equal((await roomBody(page)).split('文件：计划.csv').length, 2);
   passed.push('Material insertion stays once across persistence failure and retry; draft is retained');
-  await page.locator(`[data-session-id="${c}"]`).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+  await page.locator(`[data-session-id="${c}"]`).click(); await leaveSpace(page);
   await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('独立继续的草稿'); await chooseFile(material, 'session-files'); await page.locator('#insert-file').click();
   const privateDraft = await page.locator('#message-input').inputValue(); await until(async () => (await snapshot()).sessions.find(s => s.id === c).liveDraft === privateDraft, 'Solo draft saved');
   assert.equal((await snapshot()).sessions.find(s => s.id === c).roomId, null);

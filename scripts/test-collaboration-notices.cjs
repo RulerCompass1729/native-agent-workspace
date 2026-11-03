@@ -1,6 +1,7 @@
 // Actual isolated Electron/service and synthetic native notices. No models,
 // provider processes, user-profile changes or system clipboard reads/writes.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -77,7 +78,7 @@ async function measure(host, id, name) {
   assert.match(measurement.headingText, /内容未完整同步/); assert.match(measurement.headingText, /本次运行记录/);
   scenes.push({ name, rest, ...measurement, failures }); violations.push(...failures.map(f => name + ': ' + f));
   if (evidence) await page.screenshot({ path: path.join(evidence, name + '.png') });
-  const copy = row.getByRole('button', { name: '复制', exact: true });
+  const copy = row.getByRole('button', { name: /^复制：/ });
   await page.mouse.move(5, 5);
   await copy.focus(); assert.equal(await copy.evaluate(el => getComputedStyle(el.parentElement).opacity), '1');
   const copiesBefore = await app.evaluate(() => globalThis.noticeCopies.length);
@@ -108,7 +109,7 @@ async function run() {
     await page.locator('#new-session').click(); await page.locator('input[name="provider"][value="codex"]').check();
     await page.locator('#session-name').fill(name); await createIn(page, 'chat');
     const s = (await snapshot()).sessions.find(s => s.name === name); ids.push(s.id);
-    await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
   }
   const nativeBefore = await stats();
   await page.locator('#room-nav').click();

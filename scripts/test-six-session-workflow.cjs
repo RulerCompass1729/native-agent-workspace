@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Upper-bound daily workflow through the actual app. Provider replies are
@@ -43,7 +44,7 @@ async function create(provider, join = true, name) {
   await page.locator('#session-name').fill(name || '学习伙伴'); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => !previous.includes(s.id) && s.chatAvailable), 'Distinct session ready');
   const id = (await snapshot()).sessions.find(s => !previous.includes(s.id)).id;
-  if (join) await page.getByRole('button', { name: '加入协作', exact: true }).click(); return id;
+  if (join) await joinSpace(page); return id;
 }
 async function room() { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }
 async function authorize(ids, goal) {
@@ -123,7 +124,7 @@ async function run() {
   await until(async () => (await native()).sends.length === 8, 'Second reply accepted');
   await page.locator(`[data-session-id="${ids[4]}"]`).click(); await page.locator('#chat-tab').click();
   const draft = '这是离开后继续讨论的私人草稿，暂不发送。'; await page.locator('#message-input').fill(draft);
-  await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+  await leaveSpace(page);
   await until(async () => (await snapshot()).room.run.status === 'paused', 'Later participant departure invalidates handoff');
   await native('release', '脱出之后的私人结果，不再交给后续成员。');
   assert.equal((await native()).sends.length, 8);
@@ -144,7 +145,7 @@ async function run() {
   // A separate native session can await permission while this selected pair
   // works. Its private tool event must not alter their sharing authorization.
   await page.locator(`[data-session-id="${ids[5]}"]`).click();
-  await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+  await leaveSpace(page);
   await authorize(ids.slice(0, 2), '最后核查每天35分钟、每周175分钟。');
   await until(async () => (await native()).sends.length === 9, 'Selected pair started');
   const runId = (await snapshot()).room.run.id;

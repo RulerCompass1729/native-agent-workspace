@@ -1,5 +1,6 @@
 // Actual isolated source GUI/service. Only native output is synthetic.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -76,7 +77,7 @@ async function readingAnchor(host = page.locator('#messages')) {
 }
 async function copyOriginal(host, id, text) {
   const before = await app.evaluate(() => globalThis.pageCopies.length);
-  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: '复制', exact: true });
+  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: /^复制：/ });
   await copy.focus(); await copy.press('Enter');
   await until(async () => await app.evaluate((_, n) => globalThis.pageCopies.length === n + 1 && globalThis.pageCopies.at(-1), before) === text, 'One fresh original copy receipt');
 }
@@ -90,7 +91,7 @@ async function run() {
     await fixture('history', id, Array.from({ length: 24 }, (_, j) => ({ id: `order-${i}-${j}`, type: 'agentMessage', turnId: `turn-${i}`, text: `Original member ${i} paragraph ${j}.\n\nKeep selected source unchanged.` })));
     await page.locator('#message-input').fill('Private unsent order draft ' + i);
     await until(async () => (await snapshot()).sessions.find(s => s.id === id).liveDraft === 'Private unsent order draft ' + i, 'Original draft persisted');
-    await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
   }
   const [a,b,c,d] = ids;
   await page.locator('#room-nav').click();
@@ -228,7 +229,7 @@ async function run() {
   assert.equal(fs.readFileSync(path.join(profile,'room-state.json'),'utf8'),beforeFailure); await expectOrder(page,[b,c,d,a]);
   check('Actual atomic disk failure announces the failure in the existing notice and live status without a predicted reorder');
   const extra=[];
-  for(let i=0;i<4;i++) {const id=await create('Order extra '+i);extra.push(id);await fixture('history',id,Array.from({length:16},(_,j)=>({id:`extra-${i}-${j}`,type:'agentMessage',turnId:`extra-${i}`,text:`Extra member ${i} original ${j}`})));await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入协作',exact:true}).click();}
+  for(let i=0;i<4;i++) {const id=await create('Order extra '+i);extra.push(id);await fixture('history',id,Array.from({length:16},(_,j)=>({id:`extra-${i}-${j}`,type:'agentMessage',turnId:`extra-${i}`,text:`Extra member ${i} original ${j}`})));await joinSpace(page);}
   await page.locator('#room-nav').click(); await page.getByRole('button',{name:'列表',exact:true}).click();
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setContentSize(850,600));
   await expectOrder(page,[b,c,d,a,...extra]);

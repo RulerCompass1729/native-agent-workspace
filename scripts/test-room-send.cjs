@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real desktop/IPC/workspace, synthetic delayed replies. No native processes.
@@ -19,7 +20,7 @@ const messageRow = text => page.locator('#room-messages article').filter({ has: 
 async function capture(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, name + '.png') }); } }
 async function create(provider) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#session-name').fill(provider + ' · 共享测试'); await createIn(page, 'chat');
-  await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Created'); await page.getByRole('button', { name: '加入协作', exact: true }).click();
+  await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Created'); await joinSpace(page);
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); return (await snapshot()).sessions.find(s => s.provider === provider).id;
 }
 async function sent(count, id, text) {
@@ -127,7 +128,7 @@ async function run() {
   passed.push('Blank and pending sends are blocked; late failure and reopen retain the newer draft without replay');
   await chooseRecipient(b); const departedDraft = await page.locator('#shared-input').inputValue();
   const firstReply=page.locator('#room-messages article').filter({ has: page.getByText('FIRST-REPLY', { exact: true }) });
-  await firstReply.hover(); await firstReply.getByRole('button', { name: '选择并分享', exact: true }).click();
+  await firstReply.hover(); await firstReply.getByRole('button', { name: /^选择并分享：/ }).click();
   await page.locator('#share-recipient').selectOption(b); await client.call('join', b, false);
   await until(async () => await page.locator('#recipient').inputValue() === '', 'Departed room recipient cleared');
   assert.equal(await page.locator('#share-recipient').inputValue(), ''); assert.equal(await page.locator('#confirm-share').isDisabled(), true);

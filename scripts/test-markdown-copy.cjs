@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Actual hidden Electron/DSH and the existing trusted copy IPC. Intercept its
 // writer only in this owned process: all system clipboard formats stay intact.
@@ -95,7 +96,7 @@ async function run() {
   await capture('compact-code-small');
   checks.push('Small-window code starts beside its copy action, preserves unbroken tokens and supports actual horizontal scrolling');
 
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); await page.locator('#room-nav').click(); await page.locator('#shared-input').fill('保留的共享草稿');
+  await joinSpace(page); await page.locator('#room-nav').click(); await page.locator('#shared-input').fill('保留的共享草稿');
   const shared = page.locator('#room-messages [data-message-id="shared-copy-fixture"] .md-code-block');
   await until(async () => await shared.count() === 2, 'Saved shared assistant code appears');
   await dismissToast(); await shared.first().getByRole('button', { name: '复制', exact: true }).click(); await until(() => clipboardMatches(command), 'Saved shared code copies through the same native IPC');

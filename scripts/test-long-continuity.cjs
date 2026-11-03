@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Actual hidden Electron/DSH and daemon. Synthetic long histories isolate local
 // continuity from model latency/cost; all user actions use the rendered UI.
@@ -55,7 +56,7 @@ async function run() {
   const loadMs = Date.now() - began;
   const draft = '还没有发出的计划：继续核对原文。';
   await page.locator('#message-input').fill(draft);
-  await page.getByRole('button', { name: '加入协作', exact: true }).click();
+  await joinSpace(page);
   await anchor().scrollIntoViewIfNeeded();
   const box = await anchor().boundingBox(); await page.mouse.click(box.x + 25, box.y + 9, { clickCount: 3 });
   const selection = await page.evaluate(() => window.getSelection().toString()); assert.match(selection, /Long record 40/);

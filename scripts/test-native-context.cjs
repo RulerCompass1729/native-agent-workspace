@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict');
@@ -17,7 +18,7 @@ async function launch(){app=await _electron.launch({executablePath:process.env.N
  await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#session-name').fill('学习助手');await createIn(page, 'chat');
  await until(async()=>(await snapshot()).sessions[0]?.state==='idle','Ready');const original=(await snapshot()).sessions[0],id=original.id;
  await fixture('reply',{target:id,text:'清空前保留的私人结果。'});await page.locator('#messages').getByText('清空前保留的私人结果。',{exact:true}).waitFor();
- await page.locator('#message-input').fill('尚未发送的中文材料');await page.getByRole('button',{name:'加入协作',exact:true}).click();
+ await page.locator('#message-input').fill('尚未发送的中文材料');await joinSpace(page);
  await fixture('clear',{target:id});await until(async()=>(await page.evaluate(()=>workspace.initial())).sessions[0].nativeId!==original.nativeId,'New root visible');
  assert.equal(await page.locator('#message-input').inputValue(),'尚未发送的中文材料');assert.equal(await page.locator('#send-button').isEnabled(),true);assert.equal((await snapshot()).sessions[0].nativeContexts.length,1);
  await page.locator('#messages').getByText('清空前保留的私人结果。',{exact:true}).waitFor();await page.locator('#messages').getByText('原生上下文',{exact:true}).waitFor();await shot('clear-retains-history-draft');
@@ -33,7 +34,7 @@ async function launch(){app=await _electron.launch({executablePath:process.env.N
   checks.push('Pending draft survives clear and late native '+outcome+' without automatic replay');
  }
  await page.locator('#new-session').click();await page.locator('input[name="provider"][value="claude"]').check();await page.locator('#session-name').fill('复核助手');await createIn(page, 'chat');
- await page.getByRole('button',{name:'加入协作',exact:true}).click();await page.locator('#room-nav').click();await page.locator('#room-record').click();
+ await joinSpace(page);await page.locator('#room-nav').click();await page.locator('#room-record').click();
  await inlineRecipient(page, id);const material='保留共同核查材料';await fillRoomMessage(page, material);
  await fixture('hold');await page.locator('#room-advanced summary').click();await page.locator('#run-button').click();await page.locator('#run-limit').selectOption('2');await page.locator('#run-consent').check();await page.locator('#confirm-run').click();
  await until(async()=>(await fixture('stats')).sends.length===3,'Run waits for first native acceptance');await fixture('clear',{target:id});await fixture('resolve');await delay(200);

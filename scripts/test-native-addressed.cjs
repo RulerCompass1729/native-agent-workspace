@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + native Claude/Codex; fixed loopback responses exercise tool
@@ -123,7 +124,7 @@ async function create(provider, key = provider) {
   }
   await until(async () => { const s = await created(); return s?.state === 'idle' && s.chatAvailable && s.addressedSendAvailable; }, `${provider} addressed tool connected`, 60000);
   const s = await created(); ids[key] = s.id;
-  await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click(); return s;
+  await joinSpace(page); return s;
 }
 async function start(first, text) {
   const previousRun = (await snapshot()).room.run?.id;
@@ -186,7 +187,7 @@ async function start(first, text) {
       await page.locator('#close-privacy').click(); assert.deepEqual(counts, before); assert.equal(tokenCountRequests, 0);
     }
     for (const member of [claude, second]) {
-      await page.locator(`[data-session-menu="${member.id}"]`).click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click();
+      await page.locator(`[data-session-menu="${member.id}"]`).click(); await page.getByRole('menuitem', { name: '离开「共同工作」', exact: true }).click();
       await until(async () => !(await snapshot()).sessions.find(s => s.id === member.id).roomId, 'Independent same-name invite candidate');
     }
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
@@ -241,7 +242,7 @@ async function start(first, text) {
     assert.match(await page.locator('#room-messages').innerText(), /材料核对完成/);
     assert.doesNotMatch(await page.locator('#room-messages').innerText(), /三位完成：最终预算/);
     await page.locator('#room-filter').selectOption('');
-    await page.locator(`[data-session-id="${second.id}"]`).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+    await page.locator(`[data-session-id="${second.id}"]`).click(); await leaveSpace(page);
     await page.locator('#terminal-tab').click();
     await until(async () => (await page.locator('#terminal-area').innerText()).includes('材料核对完成'), 'Detached native TUI retains its own work');
     assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
@@ -340,7 +341,7 @@ async function start(first, text) {
   await until(async () => (await snapshot()).sessions.find(s => s.id === codex.id).state === 'idle', 'Current native turn can finish after pause');
   assert.equal((await snapshot()).room.run.status, 'paused'); assert.equal(counts.claude, 3); assert.equal((await snapshot()).diagnostics.dispatches, 4);
   checks.push('Human pause revokes a staged message; no peer task starts');
-  await page.locator(`[data-session-id="${claude.id}"]`).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+  await page.locator(`[data-session-id="${claude.id}"]`).click(); await leaveSpace(page);
   const nativeClaude = page.locator(`[data-terminal-id="${claude.id}"]`);
   await page.locator('#terminal-tab').click(); await nativeClaude.waitFor({ state: 'visible' });
   await until(async () => (await nativeClaude.innerText()).includes('最终预算'), 'Same Claude terminal shows collaborative result');

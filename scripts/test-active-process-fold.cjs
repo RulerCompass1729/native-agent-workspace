@@ -58,7 +58,7 @@ async function create(name, provider = 'codex') {
 async function capture(name) { if (evidence) await page.screenshot({ path: path.join(evidence, name + '.png') }); }
 async function copyOriginal(host, id, text) {
   const before = await app.evaluate(() => globalThis.pageCopies.length);
-  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: '复制', exact: true });
+  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: /^复制：/ });
   await copy.focus(); await copy.press('Enter');
   await until(async () => await app.evaluate((_, n) => globalThis.pageCopies.length === n + 1 && globalThis.pageCopies.at(-1), before) === text, 'One fresh original copy receipt');
 }

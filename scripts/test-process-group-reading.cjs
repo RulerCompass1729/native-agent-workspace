@@ -1,6 +1,7 @@
 // Actual isolated Electron/DSH/service with existing synthetic transport only.
 // Explicit native turn facts, no provider/model task or OS clipboard operation.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -63,7 +64,7 @@ async function create(name, provider) {
   await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Synthetic session ready');
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); return id;
+  await joinSpace(page); return id;
 }
 async function toggle(element, open, key, fold) {
   if (await detail(element).evaluate(el => el.open) !== open) await summary(element).click();
@@ -112,7 +113,7 @@ async function run() {
   const publicSummary = await row(b, 'summary:public');
   await toggle(publicSummary, true, keyB, await nativeId(b, 'summary:public'));
   await publicSummary.locator('.message-body').getByText('PUBLIC_ORIGINAL_SUMMARY: this is native-provided display text.', { exact: true }).waitFor();
-  await publicSummary.hover(); await publicSummary.locator(':scope > .message-actions').getByRole('button', { name: '复制', exact: true }).click();
+  await publicSummary.hover(); await publicSummary.locator('.message-heading > .message-actions').first().getByRole('button', { name: /^复制：/ }).click();
   assert.equal(await app.evaluate(() => globalThis.groupCopies.at(-1)), 'PUBLIC_ORIGINAL_SUMMARY: this is native-provided display text.');
   await toggle(publicSummary, false, keyB, await nativeId(b, 'summary:public'));
   await toggle(second, true, keyB, await nativeId(b, 'tool:second')); assert.equal(await second.locator(':scope > details > .process-content > .message-body').textContent(), original);
@@ -125,7 +126,7 @@ async function run() {
   const selectionBox = await page.evaluate(() => { const r = getSelection().getRangeAt(0).getBoundingClientRect(); return { x: r.left + 2, y: r.top + 2 }; });
   await page.mouse.click(selectionBox.x, selectionBox.y, { button: 'right' }); await page.getByRole('menuitem', { name: '复制', exact: true }).click();
   assert.equal(await app.evaluate(() => globalThis.groupCopies.at(-1)), selected);
-  await second.hover(); await second.locator(':scope > .message-actions').getByRole('button', { name: '复制', exact: true }).click();
+  await second.hover(); await second.locator('.message-heading > .message-actions').first().getByRole('button', { name: /^复制：/ }).click();
   assert.equal(await app.evaluate(() => globalThis.groupCopies.at(-1)), original);
   assert.match(await summary(gb).innerText(), /失败 1/); await capture('02-mixed-original-process-and-failure');
   check('Native public summary and mixed tools retain every original and earlier failure; growth/other-member output preserve selection and exact per-row/selection copies');
@@ -172,7 +173,7 @@ async function run() {
   assert.equal(await sharedHost.locator(':scope > [data-process-group] > details > summary:visible').count(), 0, 'A hidden answer/omitted source rows cannot be crossed');
   await page.locator('#room-search').fill('SHARED_MATCH_THIRD');
   const third = sharedHost.locator('[data-message-id="shared-3"]'); await toggle(third, true);
-  await third.hover(); await third.locator(':scope > .message-actions').getByRole('button', { name: '查看上下文', exact: true }).click();
+  await third.hover(); await third.locator('.message-heading > .message-actions').first().getByRole('button', { name: '查看上下文', exact: true }).click();
   await until(() => third.evaluate(el => document.activeElement === el), 'Context navigation focuses original after revealing its parent');
   assert.equal(await detail(sharedGroup).evaluate(el => el.open), true);
   saved = (await snapshot()).viewState.readingPositions.room.folds; assert.equal(saved['process:shared-3'], false);

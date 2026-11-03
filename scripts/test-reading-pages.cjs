@@ -1,5 +1,6 @@
 // Actual isolated source GUI/service. Only native output is synthetic.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -183,10 +184,10 @@ async function run() {
   assert.deepEqual((await snapshot()).sessions.map(s => [s.id, s.nativeId]), identities);
   check('Named keyboard reader Home/End reach original history boundaries without paging the editable input');
 
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+  await joinSpace(page);
   await page.locator(`[data-session-id="${other}"]`).click();
   await fixture('history', other, history.slice(0, 120).map(m => ({ ...m, id: 'other-' + m.id })));
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+  await joinSpace(page);
   await page.locator('#room-nav').click();
   const member = sid => page.locator(`.collaboration-member-reader[data-member-id="${sid}"] .messages`);
   await until(() => member(id).locator('article').count().then(n => n === 50), 'Member A recent page');

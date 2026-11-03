@@ -1,6 +1,7 @@
 // Complete owned source GUI/service task using real reducers and native pixels.
 // Synthetic native event source; clipboard captured, no provider/model/daily app.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
@@ -38,7 +39,7 @@ async function create(name) {
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Synthetic Claude ready');
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); return id;
+  await joinSpace(page); return id;
 }
 async function tool(id, source, turn, text = '') {
   await emit(id, { id: source, kind: 'tool', title: 'Read', input: '{"file_path":"/requested-before-permission.png"}', turnId: turn, text: '', status: 'running' });
@@ -84,8 +85,8 @@ async function run() {
   await page.keyboard.press('Escape'); assert.equal(await widget.locator('.native-image-toggle').getAttribute('aria-expanded'), 'false');
   await row.hover();
   console.log('Original row action evidence:', JSON.stringify(await row.evaluate(el => [...el.querySelectorAll('.message-actions button')].map(button => ({ text: button.textContent, hidden: button.hidden, parent: button.parentElement.className })))));
-  assert.equal(await row.getByRole('button', { name: '复制文字', exact: true }).isVisible(), true);
-  await row.getByRole('button', { name: '复制文字', exact: true }).click();
+  assert.equal(await row.getByRole('button', { name: /^复制：/ }).isVisible(), true);
+  await row.getByRole('button', { name: /^复制：/ }).click();
   assert.equal(await app.evaluate(() => globalThis.nativeTextCopies.at(-1)), 'ORIGINAL_NATIVE_READ_TEXT');
   check('Accepted native pixels A are previewed/copied despite source file B; late media preserves selected original text and body identity, with in-place expand/Esc and exact text copy');
   const input = 'prompt:' + randomUUID(); await emit(a, { id: input, kind: 'input', inputMode: 'native-prompt', text: 'ORIGINAL_NATIVE_IMAGE_INPUT', status: 'complete' });

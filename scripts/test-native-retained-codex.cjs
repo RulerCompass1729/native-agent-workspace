@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual retained alpha.2 host, native Codex and current Electron; four task Responses streams plus at most one native title response.
 // Native execution and UI are real; inference is fixed.
@@ -106,7 +107,7 @@ async function launch() {
   fs.writeFileSync(path.join(base,'original-boundary-before-share.json'),JSON.stringify(originalBoundary,null,2));
   checks.push('Original native history attaches to the same process and ID without another model request');
   await page.locator('#message-input').fill('Unsent private draft.');
-  await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
+  await joinSpace(page);
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await inlineRecipient(page, id);
   await fillRoomMessage(page, 'Report the shared task result.'); await page.locator('#forward-button').click();
@@ -172,8 +173,8 @@ async function launch() {
   assert.ok(done.sessions.find(s => s.id === id).messages.some(m => m.role === 'tool' && m.text.includes('NATIVE_TOOL_FILE: hello 世界')));
   assert.equal(done.diagnostics.dispatches, 2); assert.equal(calls, 4);
   await page.locator('#chat-tab').click();
-  await page.locator('#header-actions').getByRole('button', { name: '脱出协作', exact: true }).click();
-  await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
+  await leaveSpace(page);
+  await joinSpace(page);
   assert.ok(!(await snapshot()).room.messages.some(m => m.text === 'NATIVE_TOOL_DONE: created and read sample.txt.'));
   assert.equal((await snapshot()).sessions.find(s => s.id === id).nativeId, before.nativeId);
   assert.equal((await snapshot()).sessions.find(s => s.id === id).pid, before.pid);

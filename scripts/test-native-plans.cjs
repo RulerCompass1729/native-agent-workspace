@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex Plan mode and Electron; four bounded fixed loopback responses.
@@ -115,7 +116,7 @@ async function launch() {
   await input.press('Escape');
   await until(async()=>!(await terminal.innerText()).includes('Implement this plan?'),'Native implementation menu dismissed');
   await page.locator('#chat-tab').click();
-  await page.locator('#header-actions').getByRole('button',{name:'加入协作',exact:true}).click();
+  await joinSpace(page);
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
   await inlineRecipient(page, before.id);
   await fillRoomMessage(page, 'Plan this shared example.');await page.locator('#forward-button').click();
