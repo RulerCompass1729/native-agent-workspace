@@ -4779,3 +4779,18 @@ seconds later they and all sixteen live native processes were unchanged and no
 move record existed. Saved checks afterwards found only the copy in
 /Applications when searching by its bundle identifier, and an empty rollback
 folder.
+
+
+### One stop rule for every create dialog entry - alpha.178
+
+Claude 2's two commits are integrated with identical changed lines. On main the
+full unit suite passes 2,286 checks without skips, and the name check reports
+nothing missing across 530 lookups in 177 scripts. After rebuilding the UI
+bundle, create space choice passes 16 checks, now including a branch stopped
+after the selection moved, a failed read, a lost reply or an unknown result, the
+dialog closed during a create, a successful branch, a branch failing before any
+write, a selection change during a spaced create and a join, and a Git copy
+whose result is unknown; session directory, which now also checks that a spaced
+create whose start failed stays retryable, dialog lifecycle and daily use exit 0
+without model calls, with the system clipboard's change count at 268 before and
+after every run.

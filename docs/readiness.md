@@ -4,6 +4,37 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.178 carries Claude 2's two reviewed follow-ups that apply one
+rule to every place 开始一个会话 can start a session (T-115): a session that this
+opening started, or may have started where that cannot be told apart, stops the
+dialog, except a session whose start failed (state error), which stays
+retryable, as an independent create already did. Claude 2 listed the entry
+points (创建, 创建 with a space, 从已有 Claude 会话分支…, Claude takeover and continuing a
+Codex history) against ten failure points and the retry entries in one table,
+which the lane reviewer checked against the code. 从已有 Claude 会话分支… and takeover
+now stop the same way as 创建, keeping a returned id before the next read. A Git
+copy whose reply and re-read are both lost stops as unconfirmed, like a chosen
+folder. With a space chosen, a failed start is no longer adopted into the space
+and stays retryable in a new folder; a join that finishes after the selection
+moved closes the dialog; and a selection change during a spaced create now says
+the selection changed, not that the dialog closed. Takeover and continuing a
+Codex history rely on the service returning the existing record for the same
+native id, which unit checks cover. The change runs in the window. Both commits
+are integrated with identical changed lines, the full unit suite passes 2,286
+checks and the name check reports nothing missing. With the UI bundle rebuilt,
+create space choice passes 16 checks, and session directory, dialog lifecycle
+and daily use exit 0 on main without model calls, with the system clipboard's
+change count unchanged. Unverified: the rows the branch table marks as source
+only or untested, namely the Git copy's unconfirmed stop, where the GUI check
+accepts either that or the found-again stop; a failed branch start; a branch
+whose dialog was closed meanwhile; a success whose opening of the session then
+fails; a spaced create closed meanwhile or retried after 已存在; a lost join reply,
+or a lost space reply with a failed re-read; the spaced unconfirmed sentence;
+takeover and continuing a Codex history in the GUI, where unit checks cover the
+service's deduplication; and Enter or a programmatic submit on a stopped dialog.
+Also daily use of this change. Daily delivery remains pending; current daily
+remains alpha.177.
+
 Current daily GUI: alpha.177, committed build source `e2a445f9`. It carries
 Claude 2's reviewed change that stops 开始一个会话 once a session that its 创建 started
 exists (T-115 follow-up). On success the returned id stops it, even when the
