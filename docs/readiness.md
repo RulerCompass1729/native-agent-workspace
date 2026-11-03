@@ -4,31 +4,46 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.163 carries two reviewed changes. Clicking a space's name in the
-sidebar now only opens the space and no longer filters the session list; 显示全部 is
-gone, leaving the flat and grouped views, and the grouped view can fold the
-other groups; an old saved filter is read but no longer applied, and the current
-space's frame shows again. In the grouped view, sessions that belong only to
-archived or unknown spaces are listed under independent sessions, so both views
-list the same sessions and counts. On Claude Code 2.1.316, 停止 now aborts the
-turn through the native interface instead of typing Esc, so the conversation
-input is usable right after stopping; with a native question held, stopping sent
-no further model request in six local runs, but the question is still released
-before the abort, so this is not guaranteed. A stopped 2.1.316 session can now
-be woken by an agent again right away, within the usual limits, as on 2.1.312,
-where before it waited until the person typed in its terminal; this reaches a
-2.1.316 session only after a backend running alpha.163 restarts it. Automatic
-continuation after an overload stays limited to 2.1.310 to 2.1.312 and is
-unverified on 2.1.316. Unverified: 停止 during a native permission prompt or after
-a display gap on 2.1.316, which still falls back to Esc, so NAW may stay at
-正在处理. Both changes were reviewed in their author lanes and are integrated with
-identical changed lines, with a third commit that updates one GUI script. The
-full unit suite passes 2,162 checks and eleven GUI scripts exit 0, among them
-room waiting to the end and native blocks in its default and question-interrupt
-modes on real Claude Code 2.1.316 with local fixed replies and no paid calls.
-Daily delivery remains pending; current daily remains alpha.162.
+Current daily GUI: alpha.163, committed build source `03c00e21`. It carries two
+reviewed changes. Clicking a space's name in the sidebar now only opens the
+space and no longer filters the session list; 显示全部 is gone, leaving the flat and
+grouped views, and the grouped view can fold the other groups; an old saved
+filter is read but no longer applied, and the current space's frame shows again.
+In the grouped view, sessions that belong only to archived or unknown spaces are
+listed under independent sessions, so both views list the same sessions and
+counts. On Claude Code 2.1.316, 停止 now aborts the turn through the native
+interface instead of typing Esc, so the conversation input is usable right after
+stopping; with a native question held, stopping sent no further model request in
+six local runs, but the question is still released before the abort, so this is
+not guaranteed. A stopped 2.1.316 session can now be woken by an agent again
+right away, within the usual limits, as on 2.1.312, where before it waited until
+the person typed in its terminal; this reaches a 2.1.316 session only after a
+backend running alpha.163 restarts it. Automatic continuation after an overload
+stays limited to 2.1.310 to 2.1.312 and is unverified on 2.1.316. Unverified: 停止
+during a native permission prompt or after a display gap on 2.1.316, which still
+falls back to Esc, so NAW may stay at 正在处理. Both changes were reviewed in their
+author lanes and are integrated with identical changed lines, with a third
+commit that updates one GUI script. The full unit suite passes 2,162 checks and
+eleven GUI scripts exit 0, among them room waiting to the end and native blocks
+in its default and question-interrupt modes on real Claude Code 2.1.316 with
+local fixed replies and no paid calls. The signed bundle passed one isolated
+launch. The ordinary visible update kept fourteen session records with their
+native IDs, live processes and drafts; the empty active backend was replaced in
+place, and the seven other backends kept PID, start time and version, also 150
+seconds later, long enough for two automatic-move checks, with no move started.
+Shortly before the update, Claude Code on this machine was upgraded to 2.1.317,
+which NAW has not yet qualified. With the default lookup of the Claude location,
+a Claude session started or restarted from then on gets no root binding: no
+native blocks in its conversation view, no native stop, so 停止 falls back to Esc,
+no turn records or explanations, and no workspace messages, so it can neither
+stage a wake nor take part in a directed space run; by source NAW can still send
+to it and wake it, which is untested on 2.1.317. Running processes keep only
+what their own backend and Claude Code version already gave them, and none runs
+on an alpha.163 backend, so this batch's native stop and the immediate wake
+eligibility after a stop reach no daily session until 2.1.317 is qualified or a
+2.1.316 binary is set explicitly as the Claude location.
 
-Current daily GUI: alpha.162, committed build source `23f76b3b`. It closes the
+The prior alpha.162 task, source `23f76b3b`, remains qualified. It closes the
 wake route the alpha.161 review found: a prompt that the person's own settings
 hook blocks no longer becomes the prompt a later turn can stage a wake under.
 Only a prompt the hook lets through counts, and only for the first turn that

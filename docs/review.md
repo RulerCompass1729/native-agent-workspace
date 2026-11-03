@@ -2675,3 +2675,22 @@ held-question stop still releases the hook before the abort, and if any run
 shows more than one model request or a gap, the abort should start first; 停止
 during a native permission prompt or after a display gap still falls back to Esc
 and may not return to idle; continuation after an overload on 2.1.316.
+
+
+### Integrated alpha.163 delivery
+
+A fresh read-only reviewer found no code blocker and the integrated files
+byte-identical to the lane-reviewed ones, but held acceptance until the
+held-question stop was described as a race that passed six local runs rather
+than a guarantee, and asked that the new wake eligibility of stopped 2.1.316
+sessions and the rollback effect of an old saved filter be recorded. It accepted
+the update operator as a substitution of the alpha.162 one, with the pre-install
+read now taken live from the backends. The operator ran once. Claude Code on the
+machine was upgraded to 2.1.317 during this batch; until it is qualified, a
+Claude session started or restarted with the default Claude location gets no
+root binding, so no native blocks, native stop, turn records, explanations or
+workspace messages, though by source, untested on 2.1.317, NAW can still send to
+it. Open: 2.1.317 qualification, without which this batch's native stop, and the
+immediate wake eligibility after a stop, reach no daily session unless a 2.1.316
+binary is set explicitly; the post-provider signature check for alpha.163; and
+the held-question stop race.
