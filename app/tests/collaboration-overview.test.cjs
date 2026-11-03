@@ -47,7 +47,7 @@ test('compact facts omit empty rows without treating unobserved or partial child
   assert.equal(empty.child, '子任务：未报告'); assert.equal(empty.freshness, '更新时间未报告');
   record.fleet = [1, 2, 3].map(id => ({ event: 'thread/started', id: 'compact-child-' + id, stale: false }));
   const partial = statusFacts(record, true, 10000);
-  assert.equal(partial.compactChild, '3 未知 · 部分观察');
+  assert.equal(partial.compactChild, '3 个子任务状态未知', 'says what is unknown (T-145); the full text keeps 部分观察');
   assert.match(partial.child, /3 项状态未知（部分观察）/); assert.equal(partial.state, '会话就绪');
   assert.equal(statusFacts(record, false, 10000).freshnessReported, true, 'Disconnection remains visible even without a timestamp');
   record.nativeActivity = { nativeId: record.nativeId, observedAt: 1000 };

@@ -541,8 +541,34 @@ header h1, header p { overflow-wrap: anywhere; }
 .state-dot.bg-work{background:#5b7fa6}
 .state-dot.bg-unknown{background:transparent;box-shadow:inset 0 0 0 1.5px #747b6f}
 
-/* Existing sidebar rows: normal facts share two text lines; long actionable
-   states wrap above one shared membership/time row. No hidden state or new pane. */
+/* T-142: a session's status mark sits on its avatar's top-right corner, 10px, set off from the avatar by a
+   ring in the colour of the sidebar or of the row behind it (--ring). Each state has its own shape, so
+   colour is not needed to tell them apart: ready is a solid disc; working a disc with a dot inside;
+   background work a half disc; waiting or failed a solid disc with an outer ring; ended or unreachable a
+   hollow ring; unknown sub-tasks or unconfirmed background work a dashed ring. Only working breathes and
+   waiting pulses, and nothing moves when reduced motion is asked for. The full text is in the row's label. */
+.session-link .agent-icon{position:relative}
+.session-link .agent-icon>.state-dot{--ring:var(--panel,var(--bg,#fff));position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;box-sizing:border-box;box-shadow:0 0 0 2px var(--ring)}
+.session-row.active .session-link .agent-icon>.state-dot{--ring:var(--selected)}
+.session-row.space-highlight .session-link .agent-icon>.state-dot{--ring:var(--raised)}
+.session-link .agent-icon>.state-dot.working{background:radial-gradient(circle,#b78c42 0 1.6px,var(--ring) 1.6px 2.6px,#b78c42 2.6px)}
+.session-link .agent-icon>.state-dot.idle.bg-work{background:linear-gradient(90deg,#5b7fa6 50%,var(--ring) 50%);box-shadow:0 0 0 2px var(--ring),inset 0 0 0 1.5px #5b7fa6}
+.session-link .agent-icon>.state-dot.ended,.session-link .agent-icon>.state-dot.disconnected,.session-link .agent-icon>.state-dot.recoverable{background:var(--ring);box-shadow:0 0 0 2px var(--ring),inset 0 0 0 2px #868980}
+.session-link .agent-icon>.state-dot.bg-unknown{background:var(--ring);border:1.5px dashed #6c7266}
+.session-link .agent-icon>.state-dot.approval,.session-link .agent-icon>.state-dot.error{background:#b26345;border:0;box-shadow:0 0 0 2px var(--ring),0 0 0 3.5px #b26345}
+.session-row:not(.active) .session-link:hover .agent-icon>.state-dot{--ring:var(--hover)}
+.session-link .agent-icon>.state-dot.bg-unknown:is(.ended,.disconnected,.recoverable){border:0}
+@media(prefers-reduced-motion:no-preference){
+  .session-link .agent-icon>.state-dot.working{animation:naw-status-breathe 1.8s ease-in-out infinite}
+  .session-link .agent-icon>.state-dot.approval,.session-link .agent-icon>.state-dot.error{animation:naw-status-call 1.1s ease-in-out infinite}
+}
+@keyframes naw-status-breathe{50%{opacity:.55}}
+@keyframes naw-status-call{50%{box-shadow:0 0 0 2px var(--ring),0 0 0 4.5px rgba(178,99,69,.45)}}
+/* T-144: a space label is marked as a space and shortened only by the width it has. */
+.space-badge:not(.space-badge-more)::before{content:'# ';opacity:.7}
+
+/* Sidebar rows (T-145): the name, then the status on its own line(s), then the space label and time on
+   one row; a row with no label shown keeps the time on the status line. No hidden state or new pane. */
 .sidebar-state-marker{display:none}
 &[data-native-surface="sidebar"]:not([data-collapsed="true"]){
   .session-row .session-link{padding:6px 7px;gap:7px}
@@ -550,16 +576,21 @@ header h1, header p { overflow-wrap: anywhere; }
   .session-link .label>.session-title{grid-column:1;grid-row:1;display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .session-link .label>.session-backend-version{grid-column:2;grid-row:1;font-size:11px;line-height:1.4}
   .session-link .label>.session-short-id{display:none}
-  .session-link .label>.session-metadata{grid-column:1/-1;display:grid;grid-template-columns:minmax(min-content,48px) max-content minmax(0,66px);gap:4px;min-width:0;align-items:baseline}
+  .session-link .label>.session-metadata{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1px 6px;min-width:0;align-items:baseline}
   .session-link .session-space-badges{grid-column:1;display:flex;flex-wrap:nowrap;gap:2px;margin:0;min-width:min-content;overflow:hidden}
   .session-space-badges .space-badge{flex:1 1 0;min-width:0;width:0}
   .session-space-badges .space-badge-more{flex:0 0 auto;width:auto}
-  .session-link .label small{grid-column:2;min-width:0;white-space:nowrap;margin:0;font-size:11px;line-height:1.5}
-  .session-time{grid-column:3;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:10px;color:var(--muted);line-height:1.5}
-  .has-status-detail .session-link .label>.session-metadata{grid-template-columns:minmax(0,1fr) minmax(0,66px);row-gap:1px}
-  .has-status-detail .session-link .label small{grid-column:1/-1;grid-row:1;white-space:normal;overflow-wrap:anywhere}
-  .has-status-detail .session-space-badges{grid-column:1;grid-row:2;max-width:72px}
-  .has-status-detail .session-time{grid-column:2;grid-row:2;text-align:right}
+  .session-link .label small{grid-column:1/-1;grid-row:1;min-width:0;margin:0;font-size:11px;line-height:1.5;white-space:normal;overflow-wrap:anywhere}
+  .session-link .session-space-badges{grid-column:1;grid-row:2;max-width:100%}
+  .session-time{grid-column:2;grid-row:2;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:10px;color:var(--muted);line-height:1.5;text-align:right}
+  /* With no space label (the grouped view, or an independent session), the time shares the status line. */
+  .session-link .label>.session-metadata:has(>.session-space-badges[hidden],>.session-space-badges:empty) small{grid-column:1}
+  .session-link .label>.session-metadata:has(>.session-space-badges[hidden],>.session-space-badges:empty) .session-time{grid-row:1}
+  /* T-145: in the grouped view the group headings are the space list, with each space's ⋯ */
+  #workspace-group[data-grouped-sessions="true"] .room-row:not(.is-renaming),#workspace-group[data-grouped-sessions="true"]>.drop-hint{display:none}
+  .space-group-more{margin-left:auto;flex:none}
+  /* The open space is marked on its heading, as its 协作空间 row is in the flat view. */
+  .session-space-heading.active{background:var(--selected);box-shadow:inset 3px 0 0 var(--ink)}
 }
 &[data-native-surface="sidebar"][data-collapsed="true"]{
   .session-row .session-link{position:relative}

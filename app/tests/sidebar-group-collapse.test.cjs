@@ -15,10 +15,12 @@ function harness(){
   contains(node){return Boolean(node&&(node===this||this.children.some(child=>child.contains(node))));}
   setAttribute(name,value){this.attrs[name]=String(value);}removeAttribute(name){delete this.attrs[name];}getAttribute(name){return this.attrs[name]??null;}
   focus(){ctx.document.activeElement=this;calls.push(['focus',this]);}
+  addEventListener(type,fn){(this.listeners??=[]).push({type,fn});}
+  get classList(){const el=this,set=()=>new Set(String(el.className||'').split(' ').filter(Boolean));return{contains:c=>set().has(c),toggle(c,on){const s=set();if(on===undefined?!s.has(c):on)s.add(c);else s.delete(c);el.className=[...s].join(' ');},add(c){this.toggle(c,true);},remove(c){this.toggle(c,false);}};}
  }
  const list=new Element('div'),node=(tag,text,cls)=>Object.assign(new Element(tag),{textContent:text??'',className:cls||''});
  ctx={Map,Set,crypto:{randomUUID:()=>String(++sequence)},document:{activeElement:null},sidebarCollapsedGroups:new Set(),sidebarGroups:new Map(),sessionRows:new Map(),sessionMenu:null,visible:records,inSpace:(s,id)=>spaces.isMember(s,id),occurrences:[],containers:new Map(),list,
-  allSpaces:()=>rooms,orderedMembers:id=>records.filter(record=>spaces.isMember(record,id)),window:{nativeWorkspaceSpaces:spaces},node,button:(text,click,cls)=>Object.assign(node('button',text,cls),{onclick:click}),roomTone:id=>id===A?'space-tone-a':'space-tone-b',sidebarPresentation:r=>({marker:r.marker,full:r.status}),bindSpaceHighlight:()=>{},dropTarget:(...args)=>calls.push(['dropTarget',...args]),selectSpace:(...args)=>calls.push(['navigate',...args]),attempt:fn=>fn(),persistView:()=>persisted.push([...ctx.sidebarCollapsedGroups]),toast:text=>notices.push(text)};
+  disconnected:false,renameTarget:null,selected:'',spaceId:'shared',openRoomMenu(){},allSpaces:()=>rooms,orderedMembers:id=>records.filter(record=>spaces.isMember(record,id)),window:{nativeWorkspaceSpaces:spaces},node,button:(text,click,cls)=>Object.assign(node('button',text,cls),{onclick:click}),roomTone:id=>id===A?'space-tone-a':'space-tone-b',sidebarPresentation:r=>({marker:r.marker,full:r.status}),bindSpaceHighlight:()=>{},dropTarget:(...args)=>calls.push(['dropTarget',...args]),selectSpace:(...args)=>calls.push(['navigate',...args]),attempt:fn=>fn(),persistView:()=>persisted.push([...ctx.sidebarCollapsedGroups]),toast:text=>notices.push(text)};
  list.closest=selector=>selector==='.naw'?ctx.naw??null:null;
  vm.createContext(ctx);const groupBody=section(source,'    const groups = allSpaces()', '\n  } else {');vm.runInContext('function renderSessions(){ occurrences=[]; containers=new Map();\n'+groupBody+'\n}\n'+section(source,'function toggleSidebarGroup(', 'function renderSessions() {'),ctx);
  const render=()=>ctx.renderSessions();render();return{ctx,calls,persisted,notices,records,record,independent,rooms,Element,node,list,render,group:id=>ctx.sidebarGroups.get(id),toggle:id=>ctx.toggleSidebarGroup(id)};
@@ -55,3 +57,19 @@ test('T-132: every real way of opening a space keeps the same rows in the flat a
  assert.equal(ctx.spaceId,A);
 });
 test('T-132: opening a space from the sidebar never filters the session list',()=>{assert.equal(source.includes('sidebarSpaceFilter'),false);assert.equal(source.includes('clear-space-filter'),false);assert.match(section(source,'async function selectSpace(','\n}\n'),/^async function selectSpace\(id\) \{/);assert.equal(fs.readFileSync(path.join(__dirname,'../renderer/index.html'),'utf8').includes('显示全部'),false);});
+test('T-145: an empty 独立会话 group is not shown, and each space heading carries that space\'s ⋯',()=>{
+ const h=harness(),opened=[];h.ctx.openRoomMenu=(point,anchor,id)=>opened.push([anchor,id]);
+ assert.ok(h.list.children.includes(h.group('').element));
+ const at=h.records.indexOf(h.independent);h.records.splice(at,1);h.render();
+ assert.ok(!h.list.children.includes(h.group('').element),'no independent session: no 独立会话 group');
+ assert.ok(h.list.children.includes(h.group(A).element),'a space group stays');
+ h.records.splice(at,0,h.independent);h.render();assert.ok(h.list.children.includes(h.group('').element));
+ const more=h.group(A).more;assert.equal(more.tagName,'BUTTON');assert.equal(more.getAttribute('aria-haspopup'),'menu');assert.match(more.getAttribute('aria-label'),/^空间操作：/);
+ more.onclick();assert.deepEqual(opened,[[more,A]]);assert.equal(h.group('').more,null,'独立会话 is not a space');
+ const title=h.group(A).title;
+ const ctxMenu=title.listeners.find(l=>l.type==='contextmenu');ctxMenu.fn({clientX:7,clientY:9,preventDefault(){},stopPropagation(){}});assert.deepEqual(opened.at(-1),[more,A],'right-click on the name opens the same menu');
+ const key=title.listeners.find(l=>l.type==='keydown');key.fn({key:'F10',shiftKey:true,preventDefault(){},stopPropagation(){}});assert.equal(opened.length,3,'Shift+F10 too');
+ assert.equal(title.getAttribute('aria-current'),null);h.ctx.selected='room';h.ctx.spaceId=A;h.render();
+ assert.equal(h.group(A).title.getAttribute('aria-current'),'page','the open space is marked on its heading');assert.ok(h.group(A).title.className.split(' ').includes('active'));
+ assert.equal(h.group(B).title.getAttribute('aria-current'),null);
+});

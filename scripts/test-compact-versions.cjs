@@ -97,7 +97,8 @@ async function run() {
   await group('02 grouping repeats occurrences, and opening a space keeps every occurrence and the global unique count', async () => {
     await page.locator('#sessions-grouped').click(); const listed = await rows().count(); assert.ok(listed > 7);
     assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
-    await page.locator(`[data-space-id="${roomB}"] .room-nav`).click(); assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
+    // T-145: in the grouped view a space is opened from its group heading (the 协作空间 rows are not repeated there).
+    await page.locator(`#session-list [data-session-group="${roomB}"] .session-space-heading`).click(); assert.equal(await page.locator('#backend-version-summary').innerText(), '4 旧版会话');
     assert.equal(await rows().count(), listed, 'Opening a space keeps every session listed (T-132)'); await page.locator('#sessions-flat').click();
   });
   await group('03 an idle old backend offers end-and-update, and canceled confirmations (end-and-update, then ended-service) perform no update', async () => {
