@@ -168,6 +168,8 @@ async function run() {
     assert.match(await page.locator('#create-readiness').innerText(), /关闭对话框即可；这里不会再建一个/);
     assert.equal(await page.locator('#cancel-create').innerText(), '关闭，保留结果');
     assert.equal(await page.locator('#git-worktree-source-help').isVisible(), false, name + ': no Git copy instruction while the form is locked');
+    // I159: continuing or branching another session, or another folder, would add a session too.
+    for (const id of ['#open-native-history', '#choose-folder', '#new-folder']) assert.equal(await page.locator(id).isDisabled(), true, name + ': ' + id + ' is off');
     await page.locator('#cancel-create').click(); assert.equal((await named(name)).length, 1, name + ': one session');
   };
   await noSecond('独立读取失败'); const [readFailSolo] = await named('独立读取失败');
@@ -183,9 +185,18 @@ async function run() {
   assert.equal(await page.locator('#chosen-folder').innerText(), unknownFolder, 'The folder is not replaced, so a retry cannot land elsewhere');
   await page.locator('#confirm-create').click();
   await until(async () => (await page.locator('#create-error').innerText()).includes('已存在'), 'A retry stops at the folder the first attempt created');
+  // I159: that folder was made by the first attempt, so the session very likely exists; this dialog makes no third try.
+  assert.match(await page.locator('#create-error').innerText(), /会话很可能已经建好/); assert.equal(await page.locator('#chosen-folder').innerText(), unknownFolder, 'Still the same folder');
+  assert.equal(await page.locator('#confirm-create').isDisabled(), true); assert.match(await page.locator('#create-readiness').innerText(), /无法确认会话是否已经建好/);
   await page.locator('#cancel-create').click(); assert.equal((await named('结果未知')).length, 1, 'Still one session');
+  // I159: with a chosen existing folder, which other sessions may share, an unknown result stops this dialog at once.
+  await fault('create', 'after'); await fault('initial', 'before');
+  await pick(legacy); await open('已有目录结果未知'); await page.locator('#choose-folder').click(); await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('关掉对话框重新打开再建'), 'An unknown result in a shared folder stops the dialog');
+  assert.equal(await page.locator('#confirm-create').isDisabled(), true); await page.locator('#cancel-create').click();
+  assert.equal((await named('已有目录结果未知')).length, 1); const [unknownShared] = await named('已有目录结果未知');
   const [unknownSolo] = await named('结果未知');
-  check('Once a created session\'s id is known, the dialog offers no second 创建 (automatic or chosen folder); an unknown result asks for a look and keeps its folder');
+  check('Once a created session\'s id is known, the dialog offers no second 创建, continue or branch (automatic or chosen folder); an unknown result asks for a look, keeps its folder, and stops once its folder proves taken or is shared');
 
   // 4e. A step that retrying can't fix ends the retry instead of inviting it.
   const doomedId = await page.evaluate(() => workspace.spaceCreate('将归档'));
@@ -249,7 +260,7 @@ async function run() {
   check('关闭，保留结果 keeps the session outside the space and starts no further step; the next opening starts fresh');
 
   // 9. Memberships survive a whole-app reopen.
-  const expected = { [solo.id]: [], [helper.id]: [studyId], [weekend.id]: [weekendRoom.id], [chosenFolder.id]: [studyId], [copy.id]: [weekendRoom.id], [skipped.id]: [studyId], [createRetry.id]: [studyId], [createLost.id]: [createLostRooms[0].id], [readFail.id]: [studyId], [readFailSolo.id]: [], [readFailFolder.id]: [], [unknownSolo.id]: [], [doomed.id]: [], [lost.id]: [lostRooms[0].id], [spaceFail.id]: [retryRooms[0].id], [joinFail.id]: [studyId], [closed.id]: [] };
+  const expected = { [solo.id]: [], [helper.id]: [studyId], [weekend.id]: [weekendRoom.id], [chosenFolder.id]: [studyId], [copy.id]: [weekendRoom.id], [skipped.id]: [studyId], [createRetry.id]: [studyId], [createLost.id]: [createLostRooms[0].id], [readFail.id]: [studyId], [readFailSolo.id]: [], [readFailFolder.id]: [], [unknownSolo.id]: [], [unknownShared.id]: [], [doomed.id]: [], [lost.id]: [lostRooms[0].id], [spaceFail.id]: [retryRooms[0].id], [joinFail.id]: [studyId], [closed.id]: [] };
   await app.close(); app = null; await launch();
   for (const [id, rooms] of Object.entries(expected)) assert.deepEqual(await spacesOf(id), rooms, 'Membership after reopen: ' + id);
   await page.locator(`[data-session-id="${helper.id}"]`).first().waitFor();
