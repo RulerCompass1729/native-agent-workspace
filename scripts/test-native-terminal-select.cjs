@@ -2,7 +2,9 @@
 // known text row in the terminal views a person uses: chat split, terminal tab, a view rebuilt from the
 // service snapshot after a reload, and a second window that cannot send input. No model request: the CLI
 // only starts. A fake pbcopy on PATH stores Claude's copies in scratch and a stubbed Electron clipboard
-// records NAW's copies; the real clipboard is never touched. Takes the canonical GUI slot; exits 75 if busy.
+// records NAW's copies. Each Cmd+C keeps its default action from reaching the app menu's Copy, which would
+// write the real pasteboard through Chromium; the run then asserts the pasteboard's change count did not
+// move (the count only, never its content). Takes the canonical GUI slot; exits 75 if busy.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
@@ -20,12 +22,20 @@ fs.mkdirSync(evidence, { recursive: true });
 const base = testScratch.directory(path.join(os.tmpdir(), 'naw-terminal-select-'));
 const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), config = path.join(base, 'claude'), fakeBin = path.join(base, 'fakebin'), copiesDir = path.join(base, 'pbcopy');
 for (const dir of [profile, cwd, config, fakeBin, copiesDir]) fs.mkdirSync(dir, { mode: 0o700 });
-const binary = fs.realpathSync(executable('claude'));
+// NAW_CLAUDE_BIN: run a specific installed Claude Code (for example ~/.local/share/claude/versions/2.1.316).
+const binary = fs.realpathSync(process.env.NAW_CLAUDE_BIN || executable('claude'));
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, /^2\.1\.316\b/, 'Qualified on Claude Code 2.1.316 only; verify the fullscreen mouse contract before extending');
+assert.match(nativeVersion, /^2\.1\.31[67]\b/, 'Qualified on Claude Code 2.1.316 and 2.1.317 only; verify the fullscreen mouse contract before extending');
 // NAW_TEST_LEGACY_SNAPSHOT=1: run with a backend whose snapshot lacks the SGR encoding (an older
 // running backend); the rebuilt view must then select locally instead of dropping the drag.
+// The flag does not fake that backend: it changes case g's expected results and adds a Cmd+C after it.
+// First put in place an app/terminal-keyboard.cjs whose trackCursorModes().snapshot() leaves out
+// ?1006h (as before T-126), and restore it afterwards. Without that, the run stops here, before launching.
 const legacySnapshot = process.env.NAW_TEST_LEGACY_SNAPSHOT === '1';
+const pasteboardCount = () => testScratch.childProcess.execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', 'ObjC.import("AppKit"); $.NSPasteboard.generalPasteboard.changeCount'], { encoding: 'utf8' }).trim();
+const pasteboardBefore = pasteboardCount();
+if (legacySnapshot) assert.ok(!fs.readFileSync(path.join(root, 'app', 'terminal-keyboard.cjs'), 'utf8').includes('?1006h'),
+  'NAW_TEST_LEGACY_SNAPSHOT=1 needs an app/terminal-keyboard.cjs whose snapshot() leaves out ?1006h; see the comment above');
 const TEXT = 'Auto mode';
 // Moving the pointer (with or without Option) over an any-event program sends no-button motion reports only.
 const hoverOnly = sent => sent.every(d => /^\x1b\[<(\d+);\d+;\d+M$/.test(d) && (Number(/^\x1b\[<(\d+);/.exec(d)[1]) & 35) === 35);
@@ -67,6 +77,9 @@ async function measure(label, view, id, action) {
 }
 async function cmdC(view, label) {
   const before = await application.evaluate(() => globalThis.selectCopies.length);
+  // NAW's own handler copies through the stubbed clipboard; stop the key from also reaching the menu's Copy.
+  // Capture phase, so nothing between the window and the terminal can let it through (neither handler checks defaultPrevented).
+  await view.evaluate(() => { if (!window.selectNoMenuCopy) { window.selectNoMenuCopy = true; window.addEventListener('keydown', e => { if (e.metaKey && e.key.toLowerCase() === 'c') e.preventDefault(); }, true); } });
   await view.keyboard.press('Meta+C'); await sleep(400);
   results[label].appCopies = (await application.evaluate(() => globalThis.selectCopies.slice())).slice(before);
 }
@@ -124,7 +137,8 @@ async function cmdC(view, label) {
   await until(() => second.evaluate(id => Boolean(window.selectTerms.get(id)), id), 'Second window terminal', 20000);
   await until(async () => (await second.locator('#terminal-area').innerText()).includes(TEXT), 'Second window shows the welcome', 20000); await sleep(800);
   await measure('e-second-window-drag', second, id, () => drag(second, id)); await cmdC(second, 'e-second-window-drag');
-  const out = { nativeVersion, localResponses: total, paidModelCalls: 0, results, errors };
+  const pasteboardAfter = pasteboardCount();
+  const out = { nativeVersion, localResponses: total, paidModelCalls: 0, pasteboard: { before: pasteboardBefore, after: pasteboardAfter }, results, errors };
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify(out, null, 2)); console.log(JSON.stringify(out));
   const r = results;
   for (const k of ['b-terminal-drag', 'a-chat-split-drag', ...(legacySnapshot ? [] : ['g-rebuilt-view-drag'])]) { assert.deepEqual(r[k].nativeCopies, [TEXT], k + ': Claude copies exactly the dragged text'); assert.equal(r[k].local, '', k + ': no local selection'); }
@@ -141,5 +155,6 @@ async function cmdC(view, label) {
   }
   assert.ok(hoverOnly(r['h-option-click-blank'].sent), 'Option-click types no arrow keys into the program'); assert.equal(r['h-option-click-blank'].controlRevisionDelta, 0);
   assert.equal(total, 0, 'No model request'); assert.deepEqual(errors, []);
-})().catch(async error => { console.error(error.stack); console.error(JSON.stringify({ partial: results, errors })); process.exitCode = 1; try { await page.screenshot({ path: path.join(evidence, 'failure.png') }); } catch {} })
+  assert.equal(pasteboardAfter, pasteboardBefore, 'The real pasteboard was written during the run. Do not rerun until you know why; if you copied something yourself meanwhile, a rerun is fine');
+})().catch(async error => { console.error(error.stack); let pasteboardAfter; try { pasteboardAfter = pasteboardCount(); } catch {} console.error(JSON.stringify({ partial: results, errors, pasteboard: { before: pasteboardBefore, after: pasteboardAfter } })); process.exitCode = 1; try { await page.screenshot({ path: path.join(evidence, 'failure.png') }); } catch {} })
   .finally(testScratch.cleanup(cleanup));
