@@ -1017,6 +1017,12 @@ async function detach(id, source = spaceId) {
 function focusTerminal(id = activeSessionId()) {
   if ((terminalCanInput(id) || canCaptureTerminal(id)) && inputFocusAllowed()) terminals.get(id).term.focus();
 }
+// 原生终端 is shown for a session this window controls, but the native view is not the terminal: a control change
+// failed, or the saved view was restored at start without one. The terminal takes no keys until 原生终端 is chosen
+// again, so the status says so (T-154) instead of a plain 「就绪」.
+function terminalUnclaimed(s, own, visible) {
+  return Boolean(own && visible && mode === 'terminal' && s.view !== 'terminal' && terminals.get(s.id)?.ready && !terminals.get(s.id)?.viewInput && !viewClaims.has(s.id) && !disconnected && nativeUsable(s));
+}
 function terminalCanInput(id) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
   return Boolean(entry?.ready && currentTerminalDisplay(entry, record) && terminalContextVisible(id) && nativeUsable(record) && record?.owner === owner && record?.view === 'terminal' && !state?.roomStorageWarning && !disconnected);
@@ -2723,7 +2729,7 @@ function render() {
       $('chat-maximize').setAttribute('aria-label', !terminalVisible ? '恢复并排' : '放大对话'); $('chat-maximize').title = $('chat-maximize').getAttribute('aria-label');
       // The graphic follows the same layout state as the accessible name.
       $('terminal-maximize').toggleAttribute('data-restore', terminalLayout === 'maximized'); $('chat-maximize').toggleAttribute('data-restore', !terminalVisible);
-      $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? ` · Codex ${s.nativeVersion || '版本未确认'} 尚未验证` : ''}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : ''}`;
+      $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? ` · Codex ${s.nativeVersion || '版本未确认'} 尚未验证` : ''}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : terminalUnclaimed(s, own, terminalVisible) ? ' · 终端未接通，可点「原生终端」重试' : ''}`;
       $('session-status').title = nativeVersionText(s);
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');

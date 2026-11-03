@@ -51,6 +51,8 @@ async function run() {
   await page.locator('#toast').filter({ hasText: 'Synthetic control failure' }).waitFor();
   const failed = await where(); measurements.push({ failed });
   assert.equal(failed.status.includes('输入暂存'), false, `After the failure the status no longer says input is held (${failed.status})`);
+  // T-154: the terminal is still shown but takes no keys; the status says so, and how to retry.
+  assert.ok(failed.status.endsWith(' · 终端未接通，可点「原生终端」重试'), `The status says the terminal is not connected (${failed.status})`);
   assert.equal(failed.inTerminal, false, 'The keyboard left the terminal'); assert.equal(failed.onPane, true, `The keyboard is on the native pane (${failed.label})`);
   // Keep typing, with a space and Enter: nothing is pressed, nothing retries, nothing is sent.
   await page.keyboard.type('ab cd'); await page.keyboard.press('Enter'); await page.keyboard.press('Space'); await delay(300);
@@ -62,6 +64,7 @@ async function run() {
   await until(async () => (await record()).view === 'terminal', 'Choosing 原生终端 retries the control change');
   await until(() => input.evaluate(el => el === document.activeElement), 'After the retry the terminal takes the keyboard');
   assert.equal(await page.locator('#native-pane').getAttribute('tabindex'), null, 'The pane is not left in the tab order');
+  await until(async () => !(await where()).status.includes('终端未接通'), 'After the retry the status no longer says the terminal is not connected');
   await page.keyboard.type('RETRY'); await until(async () => await sent() === 'RETRY', 'Typing after the retry reaches the terminal once');
   passed.push('A failed control change: the status stops saying input is held, the keyboard moves to the native pane, typing on (space and Enter included) neither retries nor sends, and choosing 原生终端 retries');
 
@@ -72,6 +75,7 @@ async function run() {
   await recovery.waitFor(); await page.locator('#take-control').waitFor();
   const taken = await where(); measurements.push({ taken, kept: await recovery.locator('textarea').inputValue() });
   assert.equal(taken.status.includes('输入暂存'), false, `The status no longer says input is held (${taken.status})`); assert.ok(taken.status.includes('另一个窗口控制'), taken.status);
+  assert.equal(taken.status.includes('终端未接通'), false, 'Under another window\'s control the status says that, not that a retry would help');
   assert.equal(taken.inTerminal, false); assert.equal(taken.onPane, true, `The keyboard is on the native pane (${taken.label})`); assert.equal(taken.onTakeControl, false, 'The keyboard is never put on 接管');
   assert.equal(await recovery.locator('textarea').inputValue(), 'TAKEN', 'What was typed while waiting is kept, not sent');
   await page.keyboard.type('NO PE'); await page.keyboard.press('Enter'); await delay(300);
