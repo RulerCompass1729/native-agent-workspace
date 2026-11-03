@@ -167,6 +167,7 @@ async function run() {
     assert.equal(await page.locator('#confirm-create').isDisabled(), true, name + ': 创建 is off once the session exists');
     assert.match(await page.locator('#create-readiness').innerText(), /关闭对话框即可；这里不会再建一个/);
     assert.equal(await page.locator('#cancel-create').innerText(), '关闭，保留结果');
+    assert.equal(await page.locator('#git-worktree-source-help').isVisible(), false, name + ': no Git copy instruction while the form is locked');
     await page.locator('#cancel-create').click(); assert.equal((await named(name)).length, 1, name + ': one session');
   };
   await noSecond('独立读取失败'); const [readFailSolo] = await named('独立读取失败');

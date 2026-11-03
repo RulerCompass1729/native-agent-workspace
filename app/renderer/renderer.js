@@ -1950,9 +1950,10 @@ function createReadiness() {
   $('git-worktree').disabled = creatingSession || newDirectory || Boolean(takeover) || (!gitSupported && !gitSelected);
   $('git-worktree-details').hidden = !gitSelected;
   // T-96: the option is off while the folder is a new empty one; say why and what to do (the person: 「貌似没法点新建 Git」).
-  // Not during a takeover (which needs the original folder) or once T-115's session exists (the form is locked); the
-  // help is emptied while hidden, so the checkbox's description is never stale.
-  const gitHelp = !$('git-worktree-option').hidden && !gitSelected && newDirectory && !takeover && !dialogTickets.get($('create-dialog'))?.creation;
+  // Not during a takeover (which needs the original folder) or once T-115's session exists, being joined or already
+  // kept (the form is locked either way); the help is emptied while hidden, so the checkbox's description is never stale.
+  const createTicket = dialogTickets.get($('create-dialog'));
+  const gitHelp = !$('git-worktree-option').hidden && !gitSelected && newDirectory && !takeover && !createTicket?.creation && !createTicket?.created;
   $('git-worktree-source-help').hidden = !gitHelp;
   $('git-worktree-source-help').textContent = gitHelp ? '要新建 Git 工作副本，请先点「选择…」选一个已有提交的 Git 仓库，再勾选这一项。这里不会新建仓库。' : '';
   $('git-worktree-relative').disabled = creatingSession;
