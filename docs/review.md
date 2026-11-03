@@ -3985,7 +3985,7 @@ record had kept); in the kept state with a chosen folder, branching from an
 existing Claude session and takeover stay enabled; and a final error's toast
 says 请关闭对话框 even after the dialog closed. After a selection change while the
 dialog stays open, the toast points to the session menu while 仅继续加入 stays
-enabled. Not exercised in the GUI, besides the removed-session case: the wording
+enabled. Not exercised in the GUI: the removed-session case, and the wording
 after the dialog is closed and in the old-backend case. On the person's
 question, the A and C1 recommendations applied under the 20-minute rule, which
 leaves the current behaviour; B or C2 can still be chosen.
@@ -4031,3 +4031,19 @@ so the check shows only that an empty recipient stays empty after reopening, not
 that reopening could not reactivate a departed member's address; that needs an
 invalid address kept in the draft across the reopen, to be added when the reopen
 logic changes. Scripts only.
+
+
+### Integrated alpha.175 delivery
+
+A fresh read-only reviewer accepted Claude 2's T-115 follow-up, T-96 help and
+script follow-ups after one held round: the ledgers overstated that a second
+click could only meet the existing session, which holds for the automatic folder
+only, and the integrated code still showed the Git copy help in the kept state,
+which integration fixed in d288e41 with a check that fails on the previous
+renderer. The update operator was accepted as a substitution of the alpha.174
+one and ran once; it deleted the previous app on success, so the alpha.174
+archive, whose hash was checked before the run, is the only rollback. Afterwards
+searching by bundle identifier listed only the copy in /Applications. Open: the
+chosen-folder second click and the kept-state controls, taken up by Claude 2 in
+716ac9e for alpha.176; T-115's A/B and C1/C2, where A and C1 applied under the
+20-minute rule; daily use.

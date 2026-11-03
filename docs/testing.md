@@ -4699,13 +4699,28 @@ reports nothing missing across 530 lookups in 177 scripts. After rebuilding the
 UI bundle, create space choice, which now covers the kept id after failed reads,
 session directory, which checks when the Git copy help appears and disappears
 and its screen-reader link, dialog lifecycle, collaboration, codex usability,
-navigation and daily use exit 0 without model calls, with the system clipboard's
-change count at 268 before and after every run.
+navigation and daily use exit 0 without model calls, five of them before the
+integration fix below, which only the first two exercise, with the system
+clipboard's change count at 268 before and after every run.
 
 Integration then found that the Git copy help still showed once an independent
 session had been kept with the automatic folder, and added that state to its
-condition plus a check in create space choice's locked-form helper. With the
+condition plus a check in create space choice's kept-state helper. With the
 previous renderer and the new check, create space choice failed exactly at that
 check; with the fixed renderer, rebuilt, it and session directory exit 0, the
 full unit suite still passes 2,286 checks and the name check reports nothing
 missing; the system clipboard's change count stayed at 268.
+
+The committed alpha.175 tree passed all 2,286 unit checks, and its UI build log
+records the committed head. The signed bundle started once on an empty synthetic
+profile through its own service bootstrap and kept its strict signature and
+CDHash; no session or provider started. An initial-only read before the update
+found the active backend empty and no backend that qualified for an automatic
+move, and the operator re-checked both live; saved checks found no backend move
+record and an alpha.174 rollback archive whose hash matched its recorded value.
+The ordinary visible update kept fourteen session records with their native IDs,
+live process starts and drafts, and the seven other backends kept PID, start
+time and version; 150 seconds later they and all sixteen live native processes
+were unchanged and no move record existed. Saved checks afterwards found only
+the copy in /Applications when searching by its bundle identifier, and an empty
+rollback folder.
