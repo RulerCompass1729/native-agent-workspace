@@ -140,9 +140,11 @@ function complete(w, s, r, info) {
     }).catch(error => { intent.status = 'unconfirmed'; row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; w.changed(); w.persist(); });
   }
 }
-function cancelParticipant(w, id) {
+function cancelParticipant(w, id, reason) {
+  // Name the boundary, so a cancelled wake can be traced (T-100: the 11-02 secretary wake).
+  const why = typeof reason === 'string' && reason ? `（${reason.slice(0, 120)}）` : '';
   for (const row of w.sessions.get(id)?.messages || []) if (row.wake?.status === 'staged') {
-    row.wake.status = 'cancelled'; row.text = `原生观察或控制边界已变化；自动消息未投递。\n${row.wake.body}`;
+    row.wake.status = 'cancelled'; row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`;
   }
 }
 function take(w, spec) {

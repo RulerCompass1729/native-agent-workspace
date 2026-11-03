@@ -1005,7 +1005,7 @@ class Workspace extends EventEmitter {
     if (room?.run) this.pause(reason, room.run);
   }
   pauseParticipant(id, reason, automatic = false) {
-    if (!automatic) wake.cancelParticipant(this, id);
+    if (!automatic) wake.cancelParticipant(this, id, reason);
     this.peerLeases?.revoke(reason, id);
     // Native activity in another independent session does not revoke this
     // selected run. Explicit human interventions still use the global pause.

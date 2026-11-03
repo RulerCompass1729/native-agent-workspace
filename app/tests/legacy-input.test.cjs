@@ -434,12 +434,19 @@ test('forget also cancels a later session in an already-running restore batch', 
 
 // Catch a newly edited bridge forgetting the exact prior committed upgrade
 // path before a full installed/profile check reaches the person's sessions.
-test('last committed compatibility hook can upgrade to this working tree', t => {
+// On a clean tree HEAD equals the working tree, so also walk the last few
+// commits that changed the hook: each earlier output must upgrade (I141 N4).
+test('recently committed compatibility hooks can upgrade to this working tree', t => {
  const {cwd}=fixture(t),file=path.join(cwd,'.claude/skills/native-workspace-compat/hooks/register.js');
- const prior=require('node:child_process').execFileSync('git',['show','HEAD:app/claude-bridge/hooks/register.js'],
-   {cwd:path.resolve(__dirname,'../..'),encoding:'utf8'}).replace('const legacyOnly = false;','const legacyOnly = true;');
- installPlugin(cwd);const current=fs.readFileSync(file,'utf8');fs.writeFileSync(file,prior);
- installPlugin(cwd);assert.equal(fs.readFileSync(file,'utf8'),current);
+ const git=args=>require('node:child_process').execFileSync('git',args,{cwd:path.resolve(__dirname,'../..'),encoding:'utf8'});
+ const commits=['HEAD',...git(['log','--format=%H','-n','6','HEAD','--','app/claude-bridge/hooks/register.js']).split('\n').filter(Boolean)];
+ installPlugin(cwd);const current=fs.readFileSync(file,'utf8');let checked=0;
+ for(const commit of commits){
+  const prior=git(['show',`${commit}:app/claude-bridge/hooks/register.js`]).replace('const legacyOnly = false;','const legacyOnly = true;');
+  if(prior===current)continue;
+  fs.writeFileSync(file,prior);installPlugin(cwd);assert.equal(fs.readFileSync(file,'utf8'),current,commit);checked++;
+ }
+ assert.ok(checked>=5,'At least five earlier committed hooks were checked');
 });
 
 // T-100: Claude loads a compat copy left in a folder even when NAW itself
@@ -467,7 +474,7 @@ test('a launch leaves an unsafe or edited compat copy untouched and never writes
   assert.throws(() => installPlugin(cwd, { existingOnly: true }), /不可安全写入/);
   assert.equal(fs.readFileSync(path.join(elsewhere, 'skills/native-workspace-compat/hooks/register.js'), 'utf8'), '// old');
 });
-for (const commit of ['e5eafe74d62dade8310f0bb52d68be7a1b9b0421', '6345e63181f69e941e4e3c3d77a0004d84cf4879', '3d5adca1c8478827b6897cc78e7d18ace9e446ea', 'ccea1a6669b1c40ebbf5648998bfdec6c24affbf'])
+for (const commit of ['e5eafe74d62dade8310f0bb52d68be7a1b9b0421', '6345e63181f69e941e4e3c3d77a0004d84cf4879', '3d5adca1c8478827b6897cc78e7d18ace9e446ea', 'ccea1a6669b1c40ebbf5648998bfdec6c24affbf', 'dea4132'])
   test(`committed compat copy ${commit.slice(0, 7)} upgrades when NAW starts Claude in its folder; edited copies stay`, t => {
     const { cwd } = fixture(t), file = path.join(cwd, '.claude/skills/native-workspace-compat/hooks/register.js');
     const prior = require('node:child_process').execFileSync('git', ['show', `${commit}:app/claude-bridge/hooks/register.js`],
