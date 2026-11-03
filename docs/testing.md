@@ -4724,3 +4724,13 @@ time and version; 150 seconds later they and all sixteen live native processes
 were unchanged and no move record existed. Saved checks afterwards found only
 the copy in /Applications when searching by its bundle identifier, and an empty
 rollback folder.
+
+
+### Stopping the create dialog at the three recorded places - alpha.176
+
+Claude 2's commit is integrated with identical changed lines. On main the full
+unit suite passes 2,286 checks without skips, and the name check reports nothing
+missing across 530 lookups in 177 scripts. After rebuilding the UI bundle,
+create space choice, with a check for each of the three stops, session
+directory, dialog lifecycle and daily use exit 0 without model calls, with the
+system clipboard's change count at 268 before and after every run.
