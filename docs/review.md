@@ -4145,3 +4145,29 @@ only rollback. Afterwards searching by bundle identifier listed only the copy in
 /Applications. Open: the branch path, for which Claude 2 offered a0ef9fa, not
 yet integrated; T-115's A/B and C1/C2, where A and C1 applied under the
 20-minute rule; daily use.
+
+
+### One stop rule for every create dialog entry (T-115 follow-ups 4 and 5)
+
+After four follow-ups that each closed one route to a second session, the
+secretary asked Claude 2 to list every branch of 开始一个会话 where a session may
+already exist, for each provider, failure point and retry entry, with its
+behaviour and test, and to close what the table left open in one change. Claude
+2's table has five entry points (创建, 创建 with a space, 从已有 Claude 会话分支…, Claude
+takeover, continuing a Codex history) against ten failure points and the retry
+entries on a stopped dialog. The first follow-up makes the branch and takeover
+path stop like 创建, keeping a returned id before the next read and adopting
+exactly one new usable Claude session found again; the second makes a Git copy
+with an unknown result stop as unconfirmed, keeps a failed start out of a chosen
+space, closes the dialog after a join that finishes once the selection moved,
+and corrects the selection-change wording.
+
+Claude 2's lane reviewer checked the table against the code in two rounds; the
+first found two missing rows and an overstated test reference, which were fixed.
+Lane evidence: create space choice 15 checks run twice after the first round and
+16 checks once on the final renderer, which main's run repeats; session
+directory 6 of 6; dialog lifecycle 13 of 13; the unit suite 2,286; the
+selection-change wording, the spaced failed start and the join that closes the
+dialog fail on the previous renderer, while the Git copy change has no failing
+run and the newly tested rows already behaved correctly. The table marks the
+rows that only the source shows.
