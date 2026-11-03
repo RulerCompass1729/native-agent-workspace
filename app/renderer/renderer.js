@@ -1249,7 +1249,7 @@ function renderCreateSpaces() {
     if (chosen && !select.value) createReadiness(); // the chosen space went away: 创建 must reflect it now
   }
   $('create-space-existing-wrap').hidden = kind !== 'existing'; $('create-space-new-wrap').hidden = kind !== 'new';
-  const locked = creatingSession || Boolean(dialogTickets.get($('create-dialog'))?.creation);
+  const ticket = dialogTickets.get($('create-dialog')), locked = creatingSession || Boolean(ticket?.creation || ticket?.created);
   for (const id of ['create-space-kind', 'create-space-existing', 'create-space-name']) $(id).disabled = locked;
 }
 async function finishCreateSpace(ticket, revision) {
@@ -1994,21 +1994,22 @@ function createReadiness() {
 function createSpaceReadiness(final = false) {
   const ticket = dialogTickets.get($('create-dialog')), creation = ticket?.creation, spaced = $('create-space-kind').value !== 'independent';
   const takeover = document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim();
-  for (const input of $('create-dialog').querySelectorAll('input[name="provider"], #session-name, #claude-history-id, #skip-permissions, #initial-view')) input.disabled = Boolean(creation);
+  const stopped = Boolean(creation || ticket?.created); // a session from this opening exists, or may (I159)
+  for (const input of $('create-dialog').querySelectorAll('input[name="provider"], #session-name, #claude-history-id, #skip-permissions, #initial-view')) input.disabled = stopped;
   $('cancel-create').textContent = creation || ticket?.created ? '关闭，保留结果' : '取消';
   // Continuing an existing session doesn't take the space choice yet; say so rather than drop it.
   $('create-space-help').hidden = !spaced;
   $('create-space-help').textContent = spaced ? CREATE_SPACE_HELP + '继续或接管已有会话时不能同时选空间：先继续，再从会话菜单加入空间。' : '';
-  if (spaced || creation) $('open-native-history').disabled = true;
+  if (spaced || stopped) $('open-native-history').disabled = true; // continuing or branching would add another session
+  if (stopped) for (const id of ['choose-folder', 'new-folder', 'git-worktree', 'git-worktree-relative']) $(id).disabled = true;
   if (creation) {
-    for (const id of ['choose-folder', 'new-folder', 'git-worktree', 'git-worktree-relative']) $(id).disabled = true;
     $('confirm-create').textContent = '仅继续加入'; $('confirm-create').disabled = creatingSession || Boolean(creation.blocked);
     if (final) $('create-readiness').textContent = '';
     return;
   }
   $('confirm-create').textContent = spaced ? '创建并加入空间' : '创建会话';
   if (!final) return;
-  if (ticket?.created) { $('confirm-create').disabled = true; $('create-readiness').textContent = '会话已建好并保留在侧栏，关闭对话框即可；这里不会再建一个。'; return; }
+  if (ticket?.created) { $('confirm-create').disabled = true; $('create-readiness').textContent = ticket.created === 'unconfirmed' ? '无法确认会话是否已经建好；请在侧栏核对，侧栏里没有的话，关掉对话框重新打开再建。这里不会再建一个。' : '会话已建好并保留在侧栏，关闭对话框即可；这里不会再建一个。'; return; }
   let problem = spaced && takeover ? '接管已有 Claude 会话时不能同时选空间；请改成独立会话，接管后再从会话菜单加入空间。' : '';
   if (!problem) try { createSpaceChoice(); } catch (error) { problem = error.message; }
   if (problem) { $('confirm-create').disabled = true; if (!$('create-readiness').textContent) $('create-readiness').textContent = problem; }
@@ -3379,15 +3380,27 @@ $('create-form').onsubmit = event => { event.preventDefault();
     else if (createdId) ticket.created = createdId; // an independent session that exists: this dialog creates no other
     // Without an id and without a fresh read, nobody can tell whether the session exists: ask for a look, don't invite a retry.
     const unknown = !createdId && !reread;
-    const kept = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。` : createdId ? `会话（${sessionShortId(createdId)}）已建好，保留在侧栏。` : unknown ? '无法确认会话是否已经建好，请先在侧栏核对，再决定要不要重新创建。' : '';
+    // I159: two cases where a session may exist without an id, so this dialog stops (ticket.created = 'unconfirmed'):
+    // a chosen existing folder, which other sessions may share, so a retry could add a second; and a retry after an
+    // unknown result that finds its own new folder already there (已存在), made by the first attempt.
+    const ownFolderTaken = !createdId && ticket.unsurePath === submittedFolder && /已存在/u.test(error.message || '');
+    const sharedFolder = unknown && !newDirectory && !worktree;
+    if (!ticket.creation && !ticket.created && (ownFolderTaken || sharedFolder)) ticket.created = 'unconfirmed';
+    if (unknown && newDirectory) ticket.unsurePath = submittedFolder;
+    const kept = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。` : createdId ? `会话（${sessionShortId(createdId)}）已建好，保留在侧栏。`
+      : ownFolderTaken ? '这个目录是上一次创建时建的，会话很可能已经建好；请在侧栏核对，侧栏里没有的话，关掉对话框重新打开再建。这里不会再建一个。'
+      : sharedFolder ? '无法确认会话是否已经建好，请先在侧栏核对；侧栏里没有的话，关掉对话框重新打开再建。这里不会再建一个。'
+      : unknown ? '无法确认会话是否已经建好，请先在侧栏核对，再决定要不要重新创建。' : '';
+    // A space was chosen but no session can be named: the space can still be joined later from the session menu.
+    const spaceLater = ticket.created === 'unconfirmed' && choice.kind !== 'independent' ? ' 如果会话已建好，可以从会话菜单加入空间。' : '';
     const join = !ticket.creation ? '' : currentDialogTicket(ticket) ? ' 还没加入空间；可以点「仅继续加入」，不会重建会话。' : ' 还没加入空间；可以打开这个会话，从会话菜单加入空间。';
-    const message = kept + error.message + join;
+    const message = kept + error.message + join + spaceLater;
     if (currentDialogTicket(ticket)) $('create-error').textContent = message; else toast(message);
     if (worktree && currentDialogTicket(ticket) && !ticket.creation) { invalidateGitPreview(); $('chosen-folder').textContent = folder; $('git-worktree-preview').textContent = '若已生成副本，其路径和分支会保留。要再创建，请明确重新选择仓库或重新勾选副本；不会自动重试。'; }
     // A failed/uncertain start may already own the displayed path. Preserve
     // that record and any files; a new explicit submit gets a fresh preview.
     // A known id means the session owns this path; keeping it makes another 创建 fail as 已存在 rather than add a second one.
-    if (currentDialogTicket(ticket) && newDirectory && !ticket.creation && !createdId && !unknown) resetCreateDirectory();
+    if (currentDialogTicket(ticket) && newDirectory && !ticket.creation && !ticket.created && !createdId && !unknown) resetCreateDirectory();
   }
   finally { creatingSession = false; createReadiness(); }
 }); };
