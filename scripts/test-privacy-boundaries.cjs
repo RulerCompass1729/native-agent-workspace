@@ -114,7 +114,11 @@ async function run() {
   await page.locator('[data-message-id="unsafe-markdown"] .message-actions').getByRole('button', { name: /^复制：/ }).click();
   assert.deepEqual((await app.evaluate(() => globalThis.privacyProbe.copies)), [text]);
   await body.getByRole('button', { name: '复制', exact: true }).click();
-  assert.deepEqual(await page.evaluate(() => window.browserClipboardProbe), { reads: 0, copies: [codeText] });
+  // T-150: code-block copy goes through the app's own native copy writer (test-markdown-copy checks that path), never the
+  // browser clipboard; both are intercepted here, so the system clipboard stays untouched.
+  await until(async () => (await app.evaluate(() => globalThis.privacyProbe.copies)).length === 2, 'Code copy reaches the native copy writer');
+  assert.deepEqual(await app.evaluate(() => globalThis.privacyProbe.copies), [text, codeText]);
+  assert.deepEqual(await page.evaluate(() => window.browserClipboardProbe), { reads: 0, copies: [] });
   await page.locator('#privacy-button').click();
   assert.ok((await page.locator('#trust-status').textContent()).includes('未报告；不能据此判断为零'));
   await page.locator('#refresh-trust').click(); await page.locator('#close-privacy').click();

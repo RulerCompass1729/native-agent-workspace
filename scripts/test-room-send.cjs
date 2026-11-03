@@ -61,7 +61,9 @@ async function run() {
   const b = await create('codex'); await chooseRecipient(b); await fillRoomMessage(page, '只分享这段'); await page.locator('#shared-input').press('Shift+Enter');
   assert.equal(await roomBody(page), '只分享这段\n'); assert.equal((await native('stats')).sends.length, 1);
   await page.locator('#forward-button').click(); await sent(2, b, '只分享这段'); assert.equal((await snapshot()).room.run, null); await complete('SECOND-REPLY\nSECOND-LINE');
-  await fillRoomMessage(page, 'x'.repeat(6000)); assert.ok((await page.locator('#shared-input').inputValue()).length > 6000);
+  // T-150: since c9800cc a sent message takes its @recipient with it (the mention is part of the message), so the next
+  // message names its recipient again, as a person types @ for it.
+  await chooseRecipient(b); await fillRoomMessage(page, 'x'.repeat(6000)); assert.ok((await page.locator('#shared-input').inputValue()).length > 6000);
   await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click(); await page.locator('#run-dialog').waitFor();
   assert.equal(await page.locator('#run-preview').innerText(), 'x'.repeat(6000)); await page.locator('#cancel-run').click(); await fillRoomMessage(page, '');
   const s = await snapshot(); assert.ok(s.room.messages.some(m => m.text === 'SECOND-REPLY\nSECOND-LINE'));
@@ -78,7 +80,8 @@ async function run() {
   await sharedReply.scrollIntoViewIfNeeded(); await capture('shared-native-lines'); assert.equal(s.sessions.find(x => x.id === a).messages.filter(m => m.role === 'user').length, 1);
   await chooseRecipient(a); await fillRoomMessage(page, '键盘发送'); await page.locator('#forward-button').focus(); await page.keyboard.press('Enter'); await sent(3, a, '键盘发送'); assert.equal((await snapshot()).room.run, null); await complete('KEYBOARD-REPLY');
   passed.push('Pointer and keyboard send once to selected recipient; Shift Enter remains a newline');
-  await fillRoomMessage(page, '显式自动核查'); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
+  // T-150: the keyboard send above took its @recipient with it (c9800cc); the next message names one again.
+  await chooseRecipient(a); await fillRoomMessage(page, '显式自动核查'); await page.locator('#room-advanced summary').click(); await page.locator('#run-button').click();
   assert.equal((await native('stats')).sends.length, 3); assert.ok(await page.locator('#confirm-run').isDisabled());
   await page.locator('#run-consent').check(); await page.locator('#confirm-run').click(); await sent(4, a, '显式自动核查');
   const running = (await snapshot()).room.run; assert.equal(running.mode, 'replies'); assert.deepEqual(running.ids, [a, b]);
@@ -101,7 +104,8 @@ async function run() {
   passed.push('Explicit finite reply authorization routes three replies once, retains unknown native work, and stops at its limit');
   await chooseRecipient(b); await fillRoomMessage(page, '暂停后的定向发送'); await page.locator('#room-composer').evaluate(form => form.requestSubmit()); await sent(7, b, '暂停后的定向发送'); await complete('FINAL-REPLY');
   assert.equal((await snapshot()).room.run.id, running.id); assert.equal((await snapshot()).room.run.status, 'completed'); passed.push('Default submission after a paused run does not restart automatic collaboration');
-  await fillRoomMessage(page, '   '); assert.equal(await page.locator('#forward-button').isDisabled(), true); assert.equal(await page.locator('#run-button').isDisabled(), true);
+  // T-150: with a recipient chosen (the send above took its @recipient with it, c9800cc), so only blankness disables these.
+  await chooseRecipient(b); await fillRoomMessage(page, '   '); assert.equal(await page.locator('#forward-button').isDisabled(), true); assert.equal(await page.locator('#run-button').isDisabled(), true);
   await fillRoomMessage(page, '等待确认的发送'); await page.locator('#forward-button').click(); await sent(8, b, '等待确认的发送');
   await page.locator('#room-composer').evaluate(form => { form.requestSubmit(); form.requestSubmit(); });
   assert.equal(await page.locator('#forward-button').isDisabled(), true); assert.equal(await page.locator('#run-button').isDisabled(), true);
@@ -119,7 +123,11 @@ async function run() {
   for (const savedRecipient of [undefined, 'no-longer-a-member']) {
     await app.close(); app = null;
     const file = path.join(profile, 'views.json'), views = JSON.parse(fs.readFileSync(file));
-    for (const view of views) { if (require('../app/room-mention.js').valid(view.roomMention, view.sharedDraft)) view.sharedDraft = require('../app/room-mention.js').body(view.roomMention, view.sharedDraft); delete view.roomMention; if (savedRecipient === undefined) delete view.roomRecipient; else view.roomRecipient = savedRecipient; }
+    for (const view of views) { if (require('../app/room-mention.js').valid(view.roomMention, view.sharedDraft)) view.sharedDraft = require('../app/room-mention.js').body(view.roomMention, view.sharedDraft); delete view.roomMention;
+      // T-150: c9800cc also keeps each space's recipient in roomViews. The older format has no roomViews; the current format
+      // names the unavailable recipient there.
+      if (savedRecipient === undefined) { delete view.roomRecipient; delete view.roomViews; }
+      else { view.roomRecipient = savedRecipient; for (const space of Object.values(view.roomViews || {})) { space.roomRecipient = savedRecipient; delete space.roomMention; } } }
     fs.writeFileSync(file, JSON.stringify(views)); await launch(); await page.locator('#shared-input').waitFor();
     assert.equal(await roomBody(page), '发送期间的新草稿'); assert.equal(await page.locator('#recipient').inputValue(), '');
     assert.equal(await page.locator('#forward-button').isDisabled(), true); await page.locator('#room-composer').evaluate(form => form.requestSubmit()); assert.equal((await native('stats')).sends.length, 8);
@@ -127,6 +135,9 @@ async function run() {
   passed.push('Reopen retains the recipient; legacy or unavailable recipient requires an explicit choice with no dispatch');
   passed.push('Blank and pending sends are blocked; late failure and reopen retain the newer draft without replay');
   await chooseRecipient(b); const departedDraft = await page.locator('#shared-input').inputValue();
+  // T-150: after these relaunches the space shows 成员概览 (my inference: the edited view file lost the saved surface);
+  // the shared reply is in 共享记录.
+  await page.locator('#room-record').click();
   const firstReply=page.locator('#room-messages article').filter({ has: page.getByText('FIRST-REPLY', { exact: true }) });
   await firstReply.hover(); await firstReply.getByRole('button', { name: /^选择并分享：/ }).click();
   await page.locator('#share-recipient').selectOption(b); await client.call('join', b, false);
