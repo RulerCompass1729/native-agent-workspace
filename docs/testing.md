@@ -4307,3 +4307,45 @@ PID, start time and version; 150 seconds later they and all sixteen live native
 processes were unchanged and no move record existed. Afterwards an author-run
 check found no sidebarSpaceFilter in the daily view file; whether it was there
 before was not recorded.
+
+
+### A prompt typed while Claude works - alpha.168
+
+Claude 2's commit is integrated with identical changed lines. On main the full
+unit suite passes 2,221 checks without skips. The native blocks script passes in
+its default, interrupt and permission modes on Claude Code 2.1.317 with no paid
+calls, and the session wake GUI script, which uses synthetic sends and no real
+provider, exits 0. The author's real-CLI runner, copied unchanged, ran once on
+main with 2.1.317 through the source app, local fixed replies, a temporary
+profile and a fake pbcopy: the person's first prompt was held, a second prompt
+was typed during it, and that prompt's own turn called workspace_message after
+the recipient's cooldown. The recipient received it and ran one woken turn, a
+later `!` turn's call was refused for lack of authority, and the sender was idle
+after the queued turn and at the end. The run used twelve local responses, its
+cap, with no paid call and no pbcopy call; the plugin and adapter hashes equal
+the lane's final green run. In the author lane the same run passed on 2.1.316,
+and with the exact match or the idle settle removed it failed for the right
+reason; those runs used the lane's previous round, which differs only in how
+submissions in flight are tracked, and the lane reviewer accepted reusing them.
+A compat known-list check found that all 38 main builds of the hook since a
+compatibility copy could first be written, at commit 257c523, are in the upgrade
+list, and that the list holds no other entries.
+
+
+### Agent wakes in the shared record - alpha.168
+
+Claude 2's commit is integrated with identical changed lines on top of the T-138
+change, and the UI bundle was rebuilt before the GUI scripts. With both commits
+the full unit suite passes 2,228 checks without skips, and the collaboration
+overview, collaboration list name, multispace and session wake GUI scripts exit
+0. The older collaboration list script stops waiting for its 加入协作 menu item, as
+it did on alpha.156. A copy of the author's real-CLI runner, taken from the lane
+after the author had begun extending its separate cross-session branch and so
+not byte-equal to the lane's final T-137 run, ran once on main with Claude Code
+2.1.317, local fixed replies, a temporary profile and a fake pbcopy: Sender A
+and Receiver B joined 共同工作, A woke B, and the space's snapshot held one system
+row 「Sender A → Receiver B」 with status submitted; the shared record view showed
+it with 原生已接收 and the message, and after a rename through the service the label
+followed. It used three local responses, no paid call and no pbcopy call. In the
+author lane the row was missing with the write removed and vanished under the
+member filter with the renderer reverted, and the same run passed on 2.1.316.
