@@ -64,7 +64,10 @@ async function visibleStates(ids, menu = false) {
   const bounds = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   const menuBox = menu ? await page.getByRole('menu').boundingBox() : null;
   for (const id of ids) {
-    const facts = await header(id).evaluate(el => [el, ...el.children].map(n => n.getBoundingClientRect().toJSON()));
+    // T-150: since b4a764c each card holds an aria-hidden compact child-task span; the room surface shows it only when it
+    // has text (no observed child tasks leaves it empty and display:none). Only the empty span is skipped: with text it is
+    // the one visible child-task fact, so it must still be on screen.
+    const facts = await header(id).evaluate(el => [el, ...el.children].filter(n => !n.matches('.collaboration-member-child-compact:empty')).map(n => n.getBoundingClientRect().toJSON()));
     for (const r of facts) {
       assert.ok(r.width > 0 && r.height > 0 && r.left >= 0 && r.right <= bounds.width + 1 && r.top >= 0 && r.bottom <= bounds.height + 1, 'Every member state fact remains in the visible reading surface');
       if (menuBox) assert.ok(menuBox.y >= r.bottom - 1 || menuBox.y + menuBox.height <= r.top + 1 || menuBox.x >= r.right - 1 || menuBox.x + menuBox.width <= r.left + 1, 'The member menu must not cover any state card');
