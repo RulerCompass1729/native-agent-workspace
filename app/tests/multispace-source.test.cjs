@@ -75,3 +75,14 @@ test('a view file from an older build loses its retired sidebar filter when read
   assert.equal(dropRetiredViewFields(new ViewStore(dir).load()).changed, false, 'saved once, the file no longer carries it');
   assert.equal(fs.readFileSync(path.join(dir, 'views.json'), 'utf8').includes('sidebarSpaceFilter'), false);
 });
+test('column terminal heights are kept per session with the view, and bad values are refused (T-135)', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-column-terminal-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const store = new ViewStore(dir); store.load();
+  const view = { owner: 'one', selected: 'room', mode: 'chat', columnTerminalHeights: { 'session-a': 192, 'session-b': 64 } };
+  store.save([view]); assert.deepEqual(new ViewStore(dir).load(), [view]);
+  const before = fs.readFileSync(store.file, 'utf8');
+  for (const bad of [{ columnTerminalHeights: [] }, { columnTerminalHeights: { 'session-a': 12.5 } }, { columnTerminalHeights: { 'session-a': 10 } }, { columnTerminalHeights: { 'session-a': 9000 } }, { columnTerminalHeights: { '': 100 } },
+    { columnTerminalHeights: Object.fromEntries(Array.from({ length: 201 }, (_, i) => ['s' + i, 100])) }]) {
+    assert.throws(() => store.save([{ ...view, ...bad }])); assert.equal(fs.readFileSync(store.file, 'utf8'), before);
+  }
+});

@@ -41,7 +41,7 @@ function fixture(member = 0) {
     spaceId: 'shared', pairRevision: record => require('../collaboration-spaces.cjs').membershipRevision(record), selectionRevision: 1, selected: 'room', disconnected: false, state: { room: { archived: false }, members: records }, roomSurface: 'overview', roomSession: '', sessionMenu: null, roomMenu: null,
     members: () => context.state.members, orderedMembers: () => context.state.members, $: id => elements.get(id),
     activeSessionId: () => 'naw-alpha', current: () => records[0], terminals: new Map(), sessionComposers: new Map(), owner: 'fixture-owner',
-    toast: text => notices.push(text), attempt: action => action(), detach: id => changed.push(id),
+    toast: text => notices.push(text), attempt: action => action(), detach: id => changed.push(id), columnTerminalBinding: () => null,
     captureReadingViews() {}, restoreOverviewReading() {}, moveRoomMember: (...args) => changed.push(args),
     api: { copy: id => copies.push(id) }, ui: { menu: config => { const entry = { config, closed: false }; const close = () => { if (entry.closed) return; entry.closed = true; config.onClose(); }; entry.close = close; menus.push(entry); return close; } },
     header, name, heading, next, record: records[member], button,
@@ -120,5 +120,13 @@ test('existing identity, membership and selection guards reject stale header men
     const f = fixture(); f.emit(f.label, 'contextmenu'); const menu = memberMenus(f)[0]; assert.ok(menu); change(f);
     for (const action of ['copy-id', 'detach', 'later']) menu.config.onSelect(action);
     assert.deepEqual(f.copies, []); assert.deepEqual(f.changed, []); assert.equal(f.notices.length, 3); menu.close(); assert.equal(f.document.activeElement.id, 'manage-members');
+  }
+});
+test('the terminal-height item is offered only for a column that shows its terminal (T-135)', () => {
+  for (const member of [0, 1]) {
+    const f = fixture(member); f.context.columnTerminalBinding = id => id === 'naw-alpha' ? { id } : null;
+    f.emit(f.more, 'click');
+    const ids = Array.from(memberMenus(f)[0].config.items, x => x.id);
+    assert.deepEqual(ids, member ? ['detach', 'copy-id', 'earlier'] : ['detach', 'copy-id', 'terminal-height-all', 'later']);
   }
 });
