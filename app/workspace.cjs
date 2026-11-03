@@ -569,7 +569,10 @@ class Workspace extends EventEmitter {
       const shown = summaries.length && summaries.length === blocks.length ? { name: '后台任务通知', displayText: summaries.join('\n') }
         : peer ? { name: peer.name, ...(peer.body !== null ? { displayText: peer.body } : {}) }
         : machine ? { name: inputSource.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入' } : {};
-      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource } : {}), time: Date.now() });
+      if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) {
+        s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource } : {}), time: Date.now() });
+        if (peer) this.mirrorPeer(s, peer, Date.now(), text);
+      }
       this.changed();
     });
     on('nativeInputImages', event => { if (require('./native-images.cjs').applyInputImages(s, event)) this.changed(); });
@@ -695,14 +698,32 @@ class Workspace extends EventEmitter {
   // is shown by that session's name, as a process-number match.
   peerMessage(text) {
     const outer = /^\s*<cross-session-message((?:\s+[a-z-]{1,20}="[^"<>]{0,512}")*)\s*>\n?([\s\S]*?)\n?<\/cross-session-message>\s*$/.exec(String(text));
-    if (!outer) return { name: '会话间消息', body: null };
+    if (!outer) return { name: '会话间消息', body: null, senderId: null, senderName: '' };
     const attrs = Object.fromEntries([...outer[1].matchAll(/([a-z-]{1,20})="([^"<>]{0,512})"/g)].map(m => [m[1], m[2]]));
     const pid = /^uds:\/tmp\/cc-socks\/(\d{1,10})\.sock$/.exec(attrs.from || '')?.[1];
     const sender = pid ? [...this.sessions.values()].find(s => s.provider === 'claude' && String(s.pid) === pid) : null;
     // No control or bidirectional-formatting characters: they could reorder or hide the marker.
     const claimed = (attrs['from-name'] || '').replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '').trim().slice(0, 80);
     const who = sender ? `${sender.name || '会话'}（按进程号对应，未核实）` : claimed ? `${claimed}（未核实）` : '未知会话';
-    return { name: `会话间消息 · 来自 ${who}`, body: outer[2] };
+    return { name: `会话间消息 · 来自 ${who}`, body: outer[2], senderId: sender?.id || null, senderName: sender ? sender.name || '' : claimed };
+  }
+  // T-137: a cross-session message also appears in the spaces of the session that received it (the ones
+  // it shares with a local sender, else its own). Only the receiving backend writes it: it holds the proof
+  // of delivery and covers senders NAW does not run. Same row rules as a wake: a system row with a fresh
+  // id and the participants inside `peerMessage`, so no reply, share or handoff path reads it; final at arrival.
+  mirrorPeer(s, peer, time, original) {
+    let own; try { own = spaces.roomIds(s); } catch { return; }
+    const sender = peer.senderId ? this.sessions.get(peer.senderId) : null;
+    let theirs = new Set(); try { if (sender) theirs = new Set(spaces.roomIds(sender)); } catch { /* no shared space */ }
+    const common = own.filter(id => theirs.has(id));
+    for (const id of common.length ? common : own) {
+      const room = this.rooms.get(id);
+      // The stored name carries the mark too: merged copies keep `name` but not `peerMessage`.
+      if (room) room.messages.push({ id: randomUUID(), role: 'system', kind: 'agent-peer', name: `${peer.senderName || '未知会话'}（未核实） → ${s.name || '会话'}`,
+        peerMessage: { senderId: peer.senderId, senderName: peer.senderName || '', recipientId: s.id, recipientName: s.name || '' },
+        // A text that is not one strict wrapper keeps its original, so the space never loses the content.
+        text: `会话间消息（Claude Code 自带，未经 NAW 转交；发送方未核实）\n${peer.body ?? String(original ?? '')}`, time });
+    }
   }
   wakeView(room) {
     if (!Array.isArray(room?.messages) || !room.messages.some(m => m?.wake)) return room;
