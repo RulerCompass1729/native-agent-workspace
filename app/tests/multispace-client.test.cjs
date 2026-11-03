@@ -70,6 +70,23 @@ test('old retained services cannot be implicitly joined or sent selected-space c
   await assert.rejects(client.callSpace('shared', 'join', ['old', false, { revision: 1, nativeId: 'native-old' }]), /无法核对这次撤销.*选择离开/);
   assert.equal(old.calls.length, 0);
 });
+for (const run of [{ status: 'running' }, { status: 'paused', pausePending: true }, { status: 'paused', pauseUnconfirmed: true }]) test('a space clear that will be refused says why before anyone is asked, from any backend: ' + JSON.stringify(run), async t => {
+  // T-149: checked across every backend, with this space's own wording, before the window's confirmation.
+  const { a, b, one, two, client } = fixture(t);
+  two.actual.rooms.find(r => r.id === a).run = { id: 'second', ...run };
+  assert.equal(await client.clearSharedHistoryProblem(a), '请先核对这个空间的交接已暂停，再清除记录。');
+  assert.equal(await client.clearSharedHistoryProblem(b), '', 'Another space is not held back');
+  for (const e of [one, two]) assert.equal(e.calls.some(([m]) => m !== 'initial'), false, 'Only fresh reads');
+  await assert.rejects(client.callSpace(a, 'clearSharedHistory', []), /这个空间的交接已暂停/);
+  assert.match(await client.clearSharedHistoryProblem('not a space id'), /无效协作空间/);
+});
+test('clearing 共同工作 is refused before asking while another space\'s pause is unresolved on any backend, which its own snapshot does not show', async t => {
+  // Condition (1) of T-149: the check covers every backend and every space, not the one snapshot the older clear read.
+  const { b, client, two } = fixture(t);
+  two.actual.rooms.find(r => r.id === b).run = { id: 'b-run', status: 'paused', pausePending: true };
+  assert.match(await client.clearSharedHistoryProblem('shared'), /核对各后台/);
+  assert.equal(Boolean(client.snapshot().room.run?.pausePending || client.snapshot().room.run?.pauseUnconfirmed), false, 'The shared snapshot alone shows no unresolved pause');
+});
 test('clearing selected-space history sends no default clear and preserves other histories and drafts', async t => {
   const { a, b, one, two, client } = fixture(t);
   await client.callSpace(a, 'clearSharedHistory', []);

@@ -25,6 +25,17 @@ test('real desktop clear handler retains concurrently saved note instead of losi
   assert.equal((await d.invoke('roomNotes', 'newer', d.room().revision)).ok, true); release();
   const result = await clearing; assert.equal(result.ok, false); assert.match(result.error, /清除期间更新/); assert.equal(d.room().notes, 'newer');
 });
+test('a space clear the client will refuse is refused before the confirmation; an allowed one asks once, after the check (T-149)', async t => {
+  const d = await desktop(t), order = []; let refusal = '请先核对各后台已撤销后续交接授权，再清除共享记录。';
+  d.client.clearSharedHistoryProblem = async roomId => { order.push(['check', roomId]); return refusal; };
+  d.client.callSpace = async (roomId, method) => { order.push(['clear', roomId, method]); return true; };
+  d.dialog.showMessageBox = async (_win, options) => { order.push(['ask', options.message]); return { response: 1 }; };
+  const refused = await d.invoke('spaceAction', 'shared', 'clearSharedHistory', []);
+  assert.equal(refused.ok, false); assert.match(refused.error, /核对各后台/); assert.deepEqual(order, [['check', 'shared']], 'Refused without asking');
+  order.length = 0; refusal = '';
+  const cleared = await d.invoke('spaceAction', 'shared', 'clearSharedHistory', []);
+  assert.equal(cleared.ok, true, JSON.stringify(cleared)); assert.deepEqual(order.map(step => step[0]), ['check', 'ask', 'clear'], 'Checked, then asked once, then cleared');
+});
 test('closing or disconnected observer does not turn successful metadata write into a failed save', async t => {
   const d = await desktop(t);
   d.sandbox.observer = { win: { isDestroyed: () => false }, client: { socket: { destroyed: false }, call: async () => { throw Error('Observer closed'); } } };

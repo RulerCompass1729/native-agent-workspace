@@ -409,6 +409,8 @@ async function boot() {
     else if (['forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory'].includes(action)) {
       if (action === 'clearSharedHistory') {
         roomState.writable(roomId);
+        // A clear every backend would refuse is refused before the person is asked; the client checks again after (T-149).
+        const refusal = await c.client.clearSharedHistoryProblem(roomId); if (refusal) throw Error(refusal);
         const value = roomState.metadata(roomId), revision = value.revision;
         const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: `清除「${value.name}」的共享记录？`, detail: '仅清除这个空间的共享消息、成员时间线和笔记。文件引用和原生会话保留，已经收到的内容无法撤回。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
         if (answer.response !== 1) return false;
