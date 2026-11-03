@@ -2620,3 +2620,23 @@ filter style hides the current-position frame; in a narrow window the sidebar
 rail hides 显示全部 while the filter stays on; one inconsistent membership record
 silently stops the window refreshing; and usage, model, queue and interrupt are
 not yet qualified on Claude Code 2.1.316.
+
+
+### Integrated alpha.162 delivery
+
+A fresh read-only reviewer found no code blocker in the blocked-prompt check but
+held acceptance on three ledger points: by reading the code, an allowed prompt
+is linked to the first turn that starts after it, so a prompt typed while a turn
+runs can still lend its authority to a following `!` turn, as in alpha.161; the
+stale GUI scripts had no review entry; and the room-waiting result was
+lane-only. With those stated it accepted, and the mid-turn route went to the
+author. It accepted the update operator as a substitution of the alpha.161 one.
+The operator ran once. In daily use since alpha.161, the compatibility refresh
+worked for the secretary's folder, and a wake there was staged and then
+cancelled; the secretary reports it was its wake to the main session. The
+alpha.161 post-provider signature check was not run before that bundle was
+replaced and is closed as not done. Open: why that wake was cancelled; the
+mid-turn route, and the blocked-prompt route that stays open in the secretary's
+alpha.161 session; the wider `!` gap in the main session's alpha.159 session; a
+real Claude Code 2.1.312 run before the main session's backend moves; and the
+post-provider signature check for alpha.162, whose bridge no session runs yet.
