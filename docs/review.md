@@ -3787,3 +3787,35 @@ as no backend version mismatch sets its own notice; the line under the button
 gives the right reason when no recipient is chosen, and with one member or a
 busy member it only describes sending; codex usability and member actions, the
 other two T-150 scripts, are not done yet.
+
+
+### Codex usability follows the current reading and room behaviour (T-150, part 2)
+
+Codex usability stopped at real assertions that Claude 2 found were all outdated
+expectations after intentional interface changes, with no product regression.
+The script now follows them: a human message has a heading row and its
+background moved into the body (5e0c1ed); a turn row shows only its footer, the
+native duration and, unless it repeats the reply's clock, the completion time,
+in the solo view and the shared record (5e0c1ed); the process record is grouped
+per turn and folded by default (6bf5ad0); 分享选中内容 lives in the session header's ⋯
+menu (ac9a014); a native redo restores the recipient this window chose
+(524a72f), while typed identical text still gets no recipient; the member
+overview replaces member tabs (T-53), opening A from its card does not change
+the recipient, and B receives the text unchanged; command records are found by
+their command text; and a record the person folded stays folded after a later
+error, and a fold changed just before quitting is still there right after
+reopening; that a failed tool record does not unfold by itself (T-66) is covered
+by test-failed-tool-reading, not separately by this script.
+
+The lane reviewer took three rounds: a checkpoint at line 206 first, then two
+rounds each finding checks that always passed, which were fixed, and a pass on
+the version before one assertion message was relabelled as that pass asked; the
+relabel was reviewed at integration. The system clipboard's change count stayed
+the same. The script now sets the recipient to B, removes B through the service
+and waits for the recipient to clear, so leaving through the service clears a
+stale address has a running check again; leaving by dragging out, in
+test-collaboration, still has none (T-158). Not covered: whether a record never
+touched unfolds on an interruption; no such test was found by search, to be
+added when the folding rule for interrupted records changes. The lane reviewer's
+earlier claim, in part 1, that nothing pinned clearing the recipient after a
+send was wrong; that is the c586251 design recorded in interaction.md:778.
