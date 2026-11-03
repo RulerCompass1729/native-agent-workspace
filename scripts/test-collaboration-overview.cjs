@@ -209,7 +209,7 @@ async function run() {
   assert.equal(await page.locator('#shared-input').inputValue(), rawDraft); assert.equal(await page.locator('#recipient').inputValue(), recipient);
   await unchangedNative(before, stateBefore);
   check('Search from the overview locates the exact existing personal GUI message and returns to independent overview positions');
-  const grip = page.locator(`.collaboration-member-reader[data-member-id="${a}"] [role="separator"]`);
+  const grip = page.locator(`.collaboration-member-reader[data-member-id="${a}"] [role="separator"][aria-orientation="vertical"]`);
   const width = (await reader(a).boundingBox()).width; await grip.focus(); await page.keyboard.press('ArrowRight');
   assert.ok((await reader(a).boundingBox()).width > width);
   await page.getByRole('button', { name: '列表', exact: true }).click();

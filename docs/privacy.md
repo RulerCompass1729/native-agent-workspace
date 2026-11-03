@@ -26,13 +26,15 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   of its image bytes. Each image is at most 1 MB and each session's folder at
   most 64 MB. Archiving a session keeps its folder, since the session can be
   restored. 移除本应用记录… deletes the session's copies once the removal is saved,
-  except those a collaboration space's shared rows still show: the removal
-  keeps shared content, so the space can still open them. Clearing the shared
+  except those a collaboration space's shared rows on the same backend still
+  show: the removal keeps shared content, so the space can still open them. A
+  merged copy of such a row on another backend is not checked, so its image
+  can stop opening. Clearing the shared
   records that show them then deletes them, and the folder goes once it is
   empty. A kept image whose shared row a space already dropped under its limit
   on stored tool rows stays until the application data directory is removed.
-  Only files this application wrote are deleted, and a folder that is a link or
-  not the person's own is left alone. A session removed before this change
+  Only regular files named the way this application names them are deleted,
+  and a folder that is a link or not the person's own is left alone. A session removed before this change
   keeps its folder until a shared record showing its images is cleared, which
   deletes the rest of that folder too, or until the application data directory
   is removed.
