@@ -708,9 +708,11 @@ class Workspace extends EventEmitter {
     const attrs = Object.fromEntries([...outer[1].matchAll(/([a-z-]{1,20})="([^"<>]{0,512})"/g)].map(m => [m[1], m[2]]));
     const pid = /^uds:\/tmp\/cc-socks\/(\d{1,10})\.sock$/.exec(attrs.from || '')?.[1];
     const sender = pid ? [...this.sessions.values()].find(s => s.provider === 'claude' && String(s.pid) === pid) : null;
-    // No control or bidirectional-formatting characters: they could reorder or hide the marker.
-    const claimed = (attrs['from-name'] || '').replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '').trim().slice(0, 80);
-    const who = sender ? `${sender.name || '会话'}（按进程号对应，未核实）` : claimed ? `${claimed}（未核实）` : '未知会话';
+    // No control, invisible or bidirectional-formatting characters: they could reorder, split or hide the marker.
+    // A claimed name is shown inside 「」 (here, in mirrorPeer and in the renderer), so it cannot contain those quotes or their lookalikes:
+    // anything in it that looks like NAW's marker then visibly sits inside the claim. Its own brackets stay.
+    const claimed = (attrs['from-name'] || '').replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\u300c\u300d\u3164\ufe41-\ufe44\ufeff\uff62\uff63\uffa0\ufff9-\ufffb]/g, '').trim().slice(0, 80);
+    const who = sender ? `${sender.name || '会话'}（按进程号对应，未核实）` : claimed ? `「${claimed}」（未核实）` : '未知会话';
     return { name: `会话间消息 · 来自 ${who}`, body: outer[2], senderId: sender?.id || null, senderName: sender ? sender.name || '' : claimed };
   }
   // T-137: a cross-session message also appears in the spaces of the session that received it (the ones
@@ -725,7 +727,7 @@ class Workspace extends EventEmitter {
     for (const id of common.length ? common : own) {
       const room = this.rooms.get(id);
       // The stored name carries the mark too: merged copies keep `name` but not `peerMessage`.
-      if (room) room.messages.push({ id: randomUUID(), role: 'system', kind: 'agent-peer', name: `${peer.senderName || '未知会话'}（未核实） → ${s.name || '会话'}`,
+      if (room) room.messages.push({ id: randomUUID(), role: 'system', kind: 'agent-peer', name: `${peer.senderId ? peer.senderName || '会话' : peer.senderName ? `「${peer.senderName}」` : '未知会话'}（未核实） → ${s.name || '会话'}`,
         peerMessage: { senderId: peer.senderId, senderName: peer.senderName || '', recipientId: s.id, recipientName: s.name || '' },
         // A text that is not one strict wrapper keeps its original, so the space never loses the content.
         text: `会话间消息（Claude Code 自带，未经 NAW 转交；发送方未核实）\n${peer.body ?? String(original ?? '')}`, time });
