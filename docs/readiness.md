@@ -4,6 +4,30 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.162 closes the wake route the alpha.161 review found: a prompt
+that the person's own settings hook blocks no longer becomes the prompt a later
+turn can stage a wake under. Only a prompt the hook lets through counts, and
+only for the first turn that starts after it; any later turn under it is treated
+as ambiguous and refused. By reading the code, a prompt typed while a turn is
+running and let through is still linked to the next turn, so a `!` command after
+that turn ends could stage a wake under it, as in alpha.161; this has not been
+checked on real 2.1.316. Like alpha.161, it reaches a session only after a
+backend running alpha.162 restarts it. In the author lane, on real Claude Code
+2.1.316 with local fixed replies, a blocked prompt followed by a `!` command
+staged a wake before the fix and was refused after it, while a typed turn's wake
+still arrived; probes there found that /cost, /context and `!` raise no
+prompt-submit hook. Unverified: inputs that are let through but start no turn,
+such as /compact or Esc before the turn starts; a real Claude Code 2.1.312
+session, which the main session uses, covered only by a unit fixture. Five more
+GUI scripts were brought up to date; in the author lane room waiting still stops
+at one assertion that shows a real issue, the space filter hiding the
+current-position frame. Both changes were reviewed in their author lane and are
+integrated with identical changed lines. The full unit suite passes 2,156
+checks, and the membership navigation, terminal selection, native blocks,
+compact header and session wake GUI scripts exit 0; native blocks runs real
+Claude Code 2.1.316 against three local fixed replies with no paid calls. Daily
+delivery remains pending; current daily remains alpha.161.
+
 Current daily GUI: alpha.161, committed build source `9c78f558`. It removes the
 refusal that blocked agent wakes from the secretary. The secretary's running
 process, started at 15:28 on an alpha.160 backend, keeps the stale copy loaded,
