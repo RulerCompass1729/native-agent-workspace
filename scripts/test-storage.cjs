@@ -116,6 +116,8 @@ async function run() {
   assert.equal(recovered.diagnostics.dispatches, 0);
   await page.getByRole('button', { name: '继续原生会话', exact: true }).waitFor();
   await page.locator('#messages [data-message-id="streaming-reply"] .message-heading').getByText('结果未确认',{exact:true}).waitFor();
+  // T-148: the conversation is paged; the first stored record opens with 显示更早的记录, as a person reaches it.
+  for (let i = 0; i < 40 && !(await page.locator('#messages [data-message-id="stored-0"]').count()); i++) { await page.locator('#messages .reading-page[data-direction="older"]').click(); await delay(150); }
   await page.locator('#messages [data-message-id="stored-0"]').scrollIntoViewIfNeeded();
   assert.equal(await page.locator('#messages [data-message-id="stored-0"] .message-body p').first().textContent(), history[0].text.split('\n\n')[0]);
   checks.push('Actual process crash and UI reconnect retain checkpointed history, same identity, draft and room; no task replay');

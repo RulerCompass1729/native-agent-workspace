@@ -76,6 +76,8 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === second).archived, 'Archived');
   await page.locator(`[data-session-id="${first}"]`).click(); await page.locator('#message-input').fill('未发草稿不应该被搜索到');
   const original = page.locator('#messages [data-message-id="record-20"] .message-body');
+  // T-148: the conversation is paged; an earlier record opens with 显示更早的记录, as a person reaches it.
+  for (let i = 0; i < 40 && !(await original.count()); i++) { await page.locator('#messages .reading-page[data-direction="older"]').click(); await delay(150); }
   await original.scrollIntoViewIfNeeded(); await delay(100);
   const oldTop = await page.locator('#messages').evaluate(el => el.scrollTop);
   await page.locator('#message-input').focus(); await page.keyboard.press('Meta+f');

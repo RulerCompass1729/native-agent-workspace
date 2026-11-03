@@ -52,8 +52,12 @@ async function run() {
   const bytes = Buffer.byteLength(JSON.stringify(history)), began = Date.now();
   await fixture('history', id, history);
   await page.locator('#messages [data-message-id="long-79"] .message-body p').first().waitFor();
+  // T-148: the conversation is paged (the first page is the latest 50 records); one 显示更早的记录 mounts the rest
+  // of this 80-record history, as a person reaches it. loadMs therefore includes that one click.
+  await page.locator('#messages .reading-page[data-direction="older"]').click();
   await until(() => page.locator('#messages .message-body p').count().then(n => n === 160), 'Long history rendered');
   const loadMs = Date.now() - began;
+  assert.equal(await page.locator('#messages [data-message-id="long-40"] .message-body p').count(), 2, 'Record 40 is shown whole');
   const draft = '还没有发出的计划：继续核对原文。';
   await page.locator('#message-input').fill(draft);
   await joinSpace(page);

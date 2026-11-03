@@ -34,11 +34,23 @@ async function create(name) {
   return (await snapshot()).sessions.find(s => s.name === name).id;
 }
 const historical = () => page.locator('#messages [data-message-id="history-40"]');
+// T-148: under paging the reader's scrollTop changes when pages mount above or are removed, while the text a person
+// reads stays put. Reading position is measured where record 40's first paragraph sits in the reader; both readings must exist.
+const anchorTop = () => page.evaluate(() => { const el = document.querySelector('#messages [data-message-id="history-40"] .message-body p'); return el ? el.getBoundingClientRect().top - document.getElementById('messages').getBoundingClientRect().top : null; });
+const same = (a, b) => a !== null && b !== null && Math.abs(a - b) < 3;
+// T-148: the conversation is paged. A record not on the shown page opens with 显示更早的记录 or 显示较新的记录.
+async function showRecord(locator, n) {
+  for (let i = 0; i < 60 && !(await locator.count()); i++) {
+    const shown = await page.locator('#messages [data-message-id^="history-"]').evaluateAll(els => els.map(el => Number(el.dataset.messageId.slice(8))));
+    await page.locator(`#messages .reading-page[data-direction="${shown.length && Math.min(...shown) > n ? 'older' : 'newer'}"]`).click(); await delay(150);
+  }
+}
 async function markReading() {
+  await showRecord(historical(), 40);
   await historical().locator('.message-body p').first().scrollIntoViewIfNeeded();
   const box = await historical().locator('.message-body p').first().boundingBox(); assert.ok(box);
   await page.mouse.click(box.x + 25, box.y + 9, { clickCount: 3 });
-  return page.evaluate(() => ({ selection: window.getSelection().toString(), scroll: document.getElementById('messages').scrollTop }));
+  return { ...await page.evaluate(() => ({ selection: window.getSelection().toString(), scroll: document.getElementById('messages').scrollTop })), anchor: await anchorTop() };
 }
 async function resource(label) {
   const metrics = await app.evaluate(({ app }) => app.getAppMetrics().map(m => ({ type: m.type, cpu: m.cpu, memory: m.memory })));
@@ -53,7 +65,8 @@ async function run() {
   const history = Array.from({ length: historyCount }, (_, i) => ({ id: `history-${i}`, type: 'agentMessage', turnId: `history-turn-${i}`, text: `Reading record ${i}. 保留这段历史，不应被新的输出打断。\n\n**已完成的内容**\n\n${'这是一段用于连续阅读测试的合成正文。 '.repeat(12)}\n\n\`\`\`js\nconst record = ${i};\n\`\`\`` }));
   const began = Date.now(); await fixture('history', id, history);
   await page.locator(`#messages [data-message-id="history-${historyCount - 1}"] .message-body p`).first().waitFor();
-  await until(() => page.locator('#messages .message-body p').count().then(n => n >= historyCount * 2), 'Markdown history mounted');
+  // T-148: the conversation is paged, so only the shown page is mounted; each shown record is Markdown (at least two paragraphs).
+  await until(async () => { const counts = await page.locator('#messages [data-message-id^="history-"]').evaluateAll(els => els.map(el => el.querySelectorAll('.message-body p').length)); return counts.length > 0 && counts.every(n => n >= 2); }, 'Markdown history mounted');
   const markdownBody = page.locator(`#messages [data-message-id="history-${historyCount - 1}"] .message-body`);
   assert.equal(await markdownBody.evaluate(el => getComputedStyle(el).whiteSpace), 'normal');
   const codeWhitespace = await markdownBody.locator('pre').first().evaluate(el => getComputedStyle(el).whiteSpace);
@@ -109,9 +122,9 @@ async function run() {
   assert.ok(lineGeometry.positions['Live update 1.'] - lineGeometry.positions['Live update 0.'] > 10,
     'Native newline stays a visible line break in the unified reader: ' + JSON.stringify(lineGeometry));
   observations.push({check:'Native single newlines remain visible during streaming',pass:true});
-  const after = await page.evaluate(() => ({ selection: window.getSelection().toString(), scroll: document.getElementById('messages').scrollTop, removed: window.readingMutations }));
+  const after = { ...await page.evaluate(() => ({ selection: window.getSelection().toString(), scroll: document.getElementById('messages').scrollTop, removed: window.readingMutations })), anchor: await anchorTop() };
   observations.push({ check: 'reading selection survives another message streaming', pass: after.selection === before.selection, before: before.selection, after: after.selection });
-  observations.push({ check: 'reading position remains stable during streaming', pass: Math.abs(after.scroll - before.scroll) < 3, before: before.scroll, after: after.scroll });
+  observations.push({ check: 'reading position remains stable during streaming', pass: same(after.anchor, before.anchor), before: before.anchor, after: after.anchor, scrollBefore: before.scroll, scrollAfter: after.scroll });
   const copy = historical().locator('.message-actions').getByRole('button', { name: /^复制：/ }); await copy.focus();
   await fixture('delta', id, { id: 'live-reply', text: 'More while copying.\n' }); await delay(120);
   observations.push({ check: 'historical action retains keyboard focus during streaming', pass: await copy.evaluate(el => document.activeElement === el) });
@@ -121,23 +134,29 @@ async function run() {
   assert.equal(await app.evaluate(() => globalThis.copiedText.at(-1)), (await snapshot()).sessions.find(s => s.id === id).messages.find(m => m.id === 'live-reply').text, 'Reused action copies latest streaming payload');
   await resource('stream-complete');
   const outputElapsedMs = Date.now() - started;
-  const readPosition = (await markReading()).scroll;
+  const read = await markReading(), readPosition = read.scroll, readAnchor = read.anchor;
   await page.locator('#terminal-tab').click();
   await until(async () => (await fixture('stats')).pending.includes(id), 'Terminal attachment'); await fixture('release', id);
   await page.locator('#chat-tab').click(); await delay(150);
-  observations.push({ check: 'returning from native view restores reading position', pass: Math.abs(await page.locator('#messages').evaluate(el => el.scrollTop) - readPosition) < 3, expected: readPosition, actual: await page.locator('#messages').evaluate(el => el.scrollTop), saved: (await snapshot()).viewState.readingPositions });
+  observations.push({ check: 'returning from native view restores reading position', pass: same(await anchorTop(), readAnchor), expected: readAnchor, actual: await anchorTop(), saved: (await snapshot()).viewState.readingPositions });
   await page.locator(`[data-session-id="${other}"]`).click(); await page.locator(`[data-session-id="${id}"]`).click(); await delay(200);
-  observations.push({ check: 'returning from another conversation restores reading position', pass: Math.abs(await page.locator('#messages').evaluate(el => el.scrollTop) - readPosition) < 3, expected: readPosition, actual: await page.locator('#messages').evaluate(el => el.scrollTop), saved: (await snapshot()).viewState.readingPositions });
+  observations.push({ check: 'returning from another conversation restores reading position', pass: same(await anchorTop(), readAnchor), expected: readAnchor, actual: await anchorTop(), saved: (await snapshot()).viewState.readingPositions });
   if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true, mode: 0o700 }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'reading.png') }); }
   await app.close(); app = null; await launch(); await delay(300);
-  observations.push({ check: 'reopening restores the selected conversation and reading position', pass: (await snapshot()).viewState.selected === id && Math.abs(await page.locator('#messages').evaluate(el => el.scrollTop) - readPosition) < 3 });
+  observations.push({ check: 'reopening restores the selected conversation and reading position', pass: (await snapshot()).viewState.selected === id && same(await anchorTop(), readAnchor) });
   if (typedDraft) assert.equal(await page.locator('#message-input').inputValue(), typedDraft, 'Draft survives view/session switching and app reopening');
-  await page.locator('#message-input').click(); await page.locator('#messages').hover(); await page.mouse.wheel(0, await page.locator('#messages').evaluate(el => el.scrollHeight));
-  await until(() => page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3), 'Pointer scroll to latest');
+  await page.locator('#message-input').click(); await page.locator('#messages').hover();
+  // T-148: the conversation is paged; scrolling down keeps opening newer pages until the latest one, as a person scrolls.
+  const atLatest = async () => !(await page.locator('#messages .reading-page[data-direction="newer"]').isVisible()) && await page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3);
+  for (let i = 0; i < 60 && !(await atLatest()); i++) { await page.mouse.wheel(0, await page.locator('#messages').evaluate(el => el.scrollHeight)); await delay(150); }
+  await until(atLatest, 'Pointer scroll to latest');
   await fixture('delta', id, { id: 'follow-reply', text: 'Follow newest output.\n\n'.repeat(24) }); await delay(150);
   observations.push({ check: 'new output follows when already at the bottom', pass: await page.locator('#messages').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 3) });
-  await page.locator('#messages').hover(); await page.mouse.wheel(0, -await page.locator('#messages').evaluate(el => el.scrollHeight));
-  await until(() => page.locator('#messages').evaluate(el => el.scrollTop === 0), 'Pointer scroll to oldest');
+  await page.locator('#messages').hover();
+  // T-148: the oldest record is on the first page; scrolling up keeps opening earlier pages, as a person scrolls.
+  const atOldest = async () => !(await page.locator('#messages .reading-page[data-direction="older"]').isVisible()) && await page.locator('#messages').evaluate(el => el.scrollTop === 0);
+  for (let i = 0; i < 60 && !(await atOldest()); i++) { await page.mouse.wheel(0, -await page.locator('#messages').evaluate(el => el.scrollHeight)); await delay(150); }
+  await until(atOldest, 'Pointer scroll to oldest');
   await fixture('delta', id, { id: 'follow-reply', text: 'More below the oldest record.\n\n' }); await delay(150);
   observations.push({ check: 'new output never pulls the reader away from the oldest record', pass: await page.locator('#messages').evaluate(el => el.scrollTop === 0) });
   // Start a large layout update and immediately change sessions. Late commits
@@ -145,17 +164,20 @@ async function run() {
   await fixture('delta', id, { id: 'follow-reply', text: '**Late layout**\n\n'.repeat(120) });
   await page.locator(`[data-session-id="${other}"]`).click(); await delay(150);
   observations.push({ check: 'late output does not populate, scroll or take focus in another conversation', pass: await page.locator('#messages').evaluate(el => el.scrollTop === 0 && el.querySelectorAll('article').length === 0 && document.activeElement === document.getElementById('message-input')) });
-  for (let i = 0; i < 6; i++) { await page.locator(`[data-session-id="${id}"]`).click(); await page.locator(`#messages [data-message-id="history-${historyCount - 1}"] .message-body p`).first().waitFor(); await page.locator(`[data-session-id="${other}"]`).click(); }
+  // T-148: returning restores the paged reading position: the reader was last at the oldest record, so its page shows.
+  const oldestShown = async () => { await page.locator('#messages [data-message-id="history-0"] .message-body p').first().waitFor(); assert.equal(await page.locator('#messages .reading-page[data-direction="older"]').isVisible(), false, 'Returning restores the oldest page the reader left'); };
+  for (let i = 0; i < 6; i++) { await page.locator(`[data-session-id="${id}"]`).click(); await oldestShown(); await page.locator(`[data-session-id="${other}"]`).click(); }
   await resource('after-six-conversation-roundtrips');
-  await page.locator(`[data-session-id="${id}"]`).click(); await historical().locator('.message-body p').first().waitFor(); await markReading();
+  await page.locator(`[data-session-id="${id}"]`).click(); await oldestShown(); const reread = await markReading();
   // Hold only the main-process disk coalescer. Scroll still travels through real
   // pointer events, IPC and memory; normal quit must flush it before the timer.
   await app.evaluate(() => { const original = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => original(fn, ms === 150 ? 60000 : ms, ...args); });
   await page.locator('#messages').hover(); await page.mouse.wheel(0, 137);
   let closingPosition;
-  await until(async () => { closingPosition = await page.locator('#messages').evaluate(el => el.scrollTop); return Math.abs(closingPosition - readPosition) > 10 && (await snapshot()).viewState.readingPositions[id]?.top === closingPosition; }, 'Scroll reached main while disk save is held');
+  await until(async () => { closingPosition = await page.locator('#messages').evaluate(el => el.scrollTop); return Math.abs(closingPosition - reread.scroll) > 10 && (await snapshot()).viewState.readingPositions[id]?.top === closingPosition; }, 'Scroll reached main while disk save is held');
+  const closingAnchor = await anchorTop();
   await app.close(); app = null; await launch(); await delay(200);
-  observations.push({ check: 'quit flushes the latest scroll before a pending disk-save timer', pass: Math.abs(await page.locator('#messages').evaluate(el => el.scrollTop) - closingPosition) < 3 });
+  observations.push({ check: 'quit flushes the latest scroll before a pending disk-save timer', pass: same(await anchorTop(), closingAnchor), expected: closingAnchor, actual: await anchorTop() });
   const persisted = (await snapshot()).viewState;
   const rejected = await page.evaluate(async () => {
     const old = (await workspace.initial()).viewState;
