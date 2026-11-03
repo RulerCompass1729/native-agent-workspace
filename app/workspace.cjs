@@ -436,7 +436,9 @@ class Workspace extends EventEmitter {
     on('capability', () => this.changed());
     on('nativeTurnStart', info => wake.nativeStart(this, runtime, info, s));
     // Reading only: the inputs a native turn started from head its group. A row
-    // gains a missing turn; it is never moved, and it grants no sharing. A typed
+    // gains a missing turn and grants no sharing. It is not moved, except a prompt
+    // typed during an earlier turn (`-q` row, T-138): it moves to where its own turn
+    // begins, after the earlier turn's reply, as the native terminal shows it. A typed
     // prompt's row comes from the settings hook on its own socket and can land
     // after its turn start: that link waits, bounded, for the row.
     const pendingPrompts = new Map();
@@ -450,7 +452,10 @@ class Workspace extends EventEmitter {
       let linked = false;
       for (const id of info.prompts) {
         const m = typedRow(id);
-        if (m) linked = linkTurn(m, info.turnId) || linked;
+        if (m && linkTurn(m, info.turnId)) {
+          linked = true;
+          if (/-q[0-9a-f]{8}$/.test(id)) { const i = s.messages.indexOf(m); if (i >= 0 && i < s.messages.length - 1) { s.messages.splice(i, 1); s.messages.push(m); } }
+        }
         else { pendingPrompts.set(id, { nativeId: s.nativeId, turnId: info.turnId }); while (pendingPrompts.size > 16) pendingPrompts.delete(pendingPrompts.keys().next().value); }
       }
       const rows = new Set(info.rows.map(id => `native:${s.nativeId}:${id}`));
