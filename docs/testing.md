@@ -4734,3 +4734,18 @@ missing across 530 lookups in 177 scripts. After rebuilding the UI bundle,
 create space choice, with a check for each of the three stops, session
 directory, dialog lifecycle and daily use exit 0 without model calls, with the
 system clipboard's change count at 268 before and after every run.
+
+The committed alpha.176 tree passed all 2,286 unit checks, and its UI build log
+records the committed head. The signed bundle started once on an empty synthetic
+profile through its own service bootstrap and kept its strict signature and
+CDHash; no session or provider started, and the launch does not exercise the new
+stops. An initial-only read before the update found the active backend empty and
+no backend that qualified for an automatic move, and the operator re-checked
+both live; saved checks found no backend move record and an alpha.175 rollback
+archive whose hash matched its recorded value, checked again just before the
+run. The ordinary visible update kept fourteen session records with their native
+IDs, live process starts and drafts, and the seven other backends kept PID,
+start time and version; 150 seconds later they and all sixteen live native
+processes were unchanged and no move record existed. Saved checks afterwards
+found only the copy in /Applications when searching by its bundle identifier,
+and an empty rollback folder.

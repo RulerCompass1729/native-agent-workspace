@@ -4,40 +4,44 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.176 carries Claude 2's reviewed change that stops 开始一个会话 at the
-three places the alpha.175 records listed where a second session could still be
-created (T-115 follow-up). Once a session has been kept, continuing, branching
-from an existing session, choosing a folder and the Git copy are locked as well
-as 创建. With the automatic folder, when the result could not be confirmed and a
-retry meets 已存在, the dialog stops without changing the folder. With a chosen
-existing folder, which other sessions may share, it stops as soon as the result
-cannot be confirmed. Each stop asks the person to check the sidebar and, if the
-session is not there, to close the dialog and create it again; with a space
-chosen it says the session can join the space from the session menu once it
-exists. This closes the second-session paths the alpha.175 records listed. Two
-routes remain open (owner Claude 2): a successful independent create whose
-dialog stays open because the selection changed, for example a focused member
-leaving in another window, re-enables 创建 without a kept id; and when an
-independent session's reply is lost but a fresh read finds it, nothing stops a
-second click, because the renderer does not check whether the found record is
-live or a failed start's error record. After an unconfirmed result with the
-automatic folder, 自动新建 and 选择… stay enabled, and an unconfirmed Git copy can be
-ticked again for a new path; both are deliberate. When the stop follows 已存在, the
-service's text still suggests a new or chosen folder, though both controls are
-now disabled. The change runs in the window. It is integrated with identical
-changed lines, the full unit suite passes 2,286 checks and the name check
-reports nothing missing. With the UI bundle rebuilt, create space choice,
-session directory, dialog lifecycle and daily use exit 0 on main without model
-calls, with the system clipboard's change count unchanged. Unverified: the stop
-wording with a space chosen when the result cannot be confirmed; the kept
-state's Git copy and space locks, the folder locks after an unconfirmed result
-and the Claude branch and takeover locks, which only the source shows; and daily
-use of this change. Daily delivery remains pending; current daily remains
-alpha.175.
+Current daily GUI: alpha.176, committed build source `841edc5a`. It carries
+Claude 2's reviewed change that stops 开始一个会话 at the three places the alpha.175
+records listed where a second session could still be created (T-115 follow-up).
+Once a session has been kept, continuing, branching from an existing session,
+choosing a folder and the Git copy are locked as well as 创建. With the automatic
+folder, when the result could not be confirmed and a retry meets 已存在, the dialog
+stops without changing the folder. With a chosen existing folder, which other
+sessions may share, it stops as soon as the result cannot be confirmed. Each
+stop asks the person to check the sidebar and, if the session is not there, to
+close the dialog and create it again; with a space chosen it says the session
+can join the space from the session menu once it exists. This closes the
+second-session paths the alpha.175 records listed. Two routes remain open (owner
+Claude 2): a successful independent create whose dialog stays open because the
+selection changed, for example a focused member leaving in another window,
+re-enables 创建 without a kept id; and when an independent session's reply is lost
+but a fresh read finds it, nothing stops a second click, because the renderer
+does not check whether the found record is live or a failed start's error
+record. After an unconfirmed result with the automatic folder, 自动新建 and 选择… stay
+enabled, and an unconfirmed Git copy can be ticked again for a new path; both
+are deliberate. When the stop follows 已存在, the service's text still suggests a
+new or chosen folder, though both controls are now disabled. The change runs in
+the window. It is integrated with identical changed lines, the full unit suite
+passes 2,286 checks and the name check reports nothing missing. With the UI
+bundle rebuilt, create space choice, session directory, dialog lifecycle and
+daily use exit 0 on main without model calls, with the system clipboard's change
+count unchanged. Unverified: the stop wording with a space chosen when the
+result cannot be confirmed; the kept state's Git copy and space locks, the
+folder locks after an unconfirmed result and the Claude branch and takeover
+locks, which only the source shows; and daily use of this change. The signed
+bundle passed one isolated launch, which does not exercise these stops. The
+ordinary visible update kept fourteen session records with their native IDs,
+live processes and drafts; the empty active backend was replaced in place, and
+the seven other backends kept PID, start time and version, also 150 seconds
+later, with no move started. The change is in the daily app now.
 
-Current daily GUI: alpha.175, committed build source `fc566e96`. It carries two
-reviewed window changes from Claude 2, an integration fix to the second and a
-script fix. First, when a session is created and its id returned but the two
+The prior alpha.175 delivery, source `fc566e96`, remains qualified. It carries
+two reviewed window changes from Claude 2, an integration fix to the second and
+a script fix. First, when a session is created and its id returned but the two
 state reads right after both fail, the session is no longer lost (T-115
 follow-up): with a space chosen, 仅继续加入 joins that session; for an independent
 session, 创建 is disabled and the dialog says the session exists. When neither an
@@ -45,34 +49,34 @@ id nor a fresh state is available, the dialog asks the person to check the
 sidebar and keeps the folder; with the automatic folder another click can then
 only meet the existing session, while with a chosen existing folder, which
 several sessions may share, another click can still create a second session, so
-the dialog only asks the person to look first. A retry that meets 已存在 after a
-state update shows only that error and resets the automatic folder, so a third
-click can create a new session; and in the kept state with a chosen folder, 从已有
-Claude 会话分支… and takeover remain available. After the dialog is closed the next
-step points to the session menu, and when the space was archived, the session
-removed or on an old backend it no longer invites a retry. Second, the disabled
-新建 Git 工作副本 option now says why when the folder is the automatic empty one:
-choose an existing Git repository with a commit first; it never creates a
-repository (the last source part of T-96; its check on the installed version
-remains); integration hid this help also once a session is kept and 创建 is
-disabled, where it contradicted the dialog. The script fix replaces two
-empty-recipient checks in test-collaboration that could not fail and corrects
-two comments. On the person's open T-115 questions, A and C1 applied under the
-board's 20-minute rule, which leaves the current behaviour; B or C2 can still be
-chosen. Both changes run in the window. All three are integrated with identical
-changed lines, the full unit suite passes 2,286 checks and the name check
-reports nothing missing. With the UI bundle rebuilt, create space choice,
-session directory, dialog lifecycle, collaboration, codex usability, navigation
-and daily use exit 0 on main without model calls, the last five before the
-integration fix, which only the first two exercise, with the system clipboard's
-change count unchanged. Unverified: the wording after the dialog is closed, in
-the old-backend case and when a session was removed, which no GUI run shows, and
-daily use of these changes. The signed bundle passed one isolated launch, which
-does not exercise these changes. The ordinary visible update kept fourteen
-session records with their native IDs, live processes and drafts; the empty
-active backend was replaced in place, and the seven other backends kept PID,
-start time and version, also 150 seconds later, with no move started. These
-changes are in the daily app now.
+the dialog only asks the person to look first (closed in alpha.176). A retry
+that meets 已存在 after a state update shows only that error and resets the
+automatic folder, so a third click can create a new session; and in the kept
+state with a chosen folder, 从已有 Claude 会话分支… and takeover remain available (both
+closed in alpha.176). After the dialog is closed the next step points to the
+session menu, and when the space was archived, the session removed or on an old
+backend it no longer invites a retry. Second, the disabled 新建 Git 工作副本 option
+now says why when the folder is the automatic empty one: choose an existing Git
+repository with a commit first; it never creates a repository (the last source
+part of T-96; its check on the installed version remains); integration hid this
+help also once a session is kept and 创建 is disabled, where it contradicted the
+dialog. The script fix replaces two empty-recipient checks in test-collaboration
+that could not fail and corrects two comments. On the person's open T-115
+questions, A and C1 applied under the board's 20-minute rule, which leaves the
+current behaviour; B or C2 can still be chosen. Both changes run in the window.
+All three are integrated with identical changed lines, the full unit suite
+passes 2,286 checks and the name check reports nothing missing. With the UI
+bundle rebuilt, create space choice, session directory, dialog lifecycle,
+collaboration, codex usability, navigation and daily use exit 0 on main without
+model calls, the last five before the integration fix, which only the first two
+exercise, with the system clipboard's change count unchanged. Unverified: the
+wording after the dialog is closed, in the old-backend case and when a session
+was removed, which no GUI run shows, and daily use of these changes. The signed
+bundle passed one isolated launch, which does not exercise these changes. The
+ordinary visible update kept fourteen session records with their native IDs,
+live processes and drafts; the empty active backend was replaced in place, and
+the seven other backends kept PID, start time and version, also 150 seconds
+later, with no move started. These changes are in the daily app now.
 
 The prior alpha.174 delivery, source `49cecddc`, remains qualified. It carries
 Claude 2's reviewed change that lets a new session join a collaboration space as

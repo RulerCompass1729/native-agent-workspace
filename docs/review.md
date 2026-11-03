@@ -4081,3 +4081,18 @@ record. After an unconfirmed result with the automatic folder, 自动新建 and 
 enabled, and an unconfirmed Git copy can be ticked again for a new path; both
 are deliberate. The commit title 16cc816 still says wherever; the ledgers use
 the narrower wording.
+
+
+### Integrated alpha.176 delivery
+
+A fresh read-only reviewer accepted Claude 2's second T-115 follow-up after one
+held round: the ledgers' headline said the dialog stops wherever its session may
+already exist, while two routes to a second session remain, so the records were
+narrowed to the three places the alpha.175 records listed and the two routes
+recorded as open. The update operator was accepted as a substitution of the
+alpha.175 one and ran once; its receipt text keeps the broader wording. It
+deleted the previous app on success, so the alpha.175 archive, whose hash was
+checked before the run, is the only rollback. Afterwards searching by bundle
+identifier listed only the copy in /Applications. Open: the two remaining
+routes, taken up by Claude 2 in 79bbca4 for alpha.177; T-115's A/B and C1/C2,
+where A and C1 applied under the 20-minute rule; daily use.
