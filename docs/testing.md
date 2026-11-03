@@ -4616,3 +4616,14 @@ and the seven other backends kept PID, start time and version; 150 seconds later
 they and all sixteen live native processes were unchanged and no move record
 existed. Saved checks afterwards found only the copy in /Applications in
 application search and an empty rollback folder.
+
+
+### Three GUI scripts follow interface changes - after alpha.173
+
+Claude 2's T-150 commit, which changes three scripts only, is integrated on main
+with identical changed lines; the two withdrawn commits beside it on the
+author's branch were not taken. No packaged file changes, so the daily app stays
+at alpha.173. On main the full unit suite passes 2,286 checks without skips and
+the name check reports nothing missing. After rebuilding the UI bundle, control
+focus, privacy boundaries and room send exit 0 without model calls, and the
+system clipboard's change count stayed at 268 before and after each.

@@ -3759,3 +3759,31 @@ hash was checked before the run, is now the only rollback. Afterwards
 application search listed only the copy in /Applications. Open: T-156, T-158;
 the daily check of both changes and of T-154's relaunch case; the post-provider
 signature check.
+
+
+### Three GUI scripts follow interface changes (T-150, part 1)
+
+T-146 left five GUI scripts stopped at real assertions, to be judged as product
+regressions or outdated expectations. Claude 2 found three of them outdated.
+Control focus looked for 本会话仍参与该工作区 in the collaboration background preview,
+which became a snapshot in 64420d2; it now checks that the member's 归属 lists a
+space. Privacy boundaries expected a code block's copy in the browser clipboard;
+it goes through the application's own copy path, and both paths are intercepted,
+so the system clipboard's change count stayed the same. Room send expected the @
+recipient to survive a send; it is cleared with the message, as the 2026-10-23
+inline-@ design says (interaction.md:778, 发送成功后清空 @ 地址和正文), so the script picks
+the recipient again before the next message, writes the unavailable ID into both
+the top-level and per-space fields, and opens 共享记录 after a relaunch. When that
+clearing first shipped is not confirmed from files. A saved mention that names a
+departed member is not tested by this script.
+
+The lane reviewer passed it in two rounds; the first found that the check that a
+blank message cannot be sent always passed, which was fixed. The old expectation
+conflicted with that recorded design, so the script fix is right; the person can
+ask to change the design if they prefer the recipient to stay. Open: the 一起核查…
+button's tooltip says 现有后台暂不支持这项核查 when no recipient is chosen, there is only
+one member or a member is busy or ineligible, which is the wrong reason, as long
+as no backend version mismatch sets its own notice; the line under the button
+gives the right reason when no recipient is chosen, and with one member or a
+busy member it only describes sending; codex usability and member actions, the
+other two T-150 scripts, are not done yet.
