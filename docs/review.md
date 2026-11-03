@@ -4171,3 +4171,18 @@ selection-change wording, the spaced failed start and the join that closes the
 dialog fail on the previous renderer, while the Git copy change has no failing
 run and the newly tested rows already behaved correctly. The table marks the
 rows that only the source shows.
+
+
+### Integrated alpha.178 delivery
+
+The first batch under the verification principles had one integration review,
+which looked only at how the batch combined with main and at the integration
+edits; it found no interaction, and held one round for two of those edits: the
+project instructions allowed the update operator to differ in more than version
+numbers and hashes, and the candidate's unverified list left out rows the branch
+table marks as source only. Both were fixed, and the operator template was
+changed once so that later operators differ only in version numbers; that change
+was reviewed, and later operators are compared by program. The operator ran
+once. It deleted the previous app on success, so the alpha.177 archive is the
+only rollback. Open: the rows the branch table marks as source only; T-115's A/B
+and C1/C2, where A and C1 applied under the 20-minute rule; daily use.
