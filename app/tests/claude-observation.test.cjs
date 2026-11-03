@@ -62,6 +62,33 @@ for(const order of ['api-first','boundary-first'])test('native GUI abort require
  assert.equal(r.nativeInputRequired,true,'The previous receipt is still using the channel');
  r.submission.pending=null;r.completeNativeAbort();await done;assert.equal(r.nativeInputRequired,false);
 });
+test('a queued message still waiting for its own turn does not hold a stop of the running turn (T-133)',async()=>{
+ const r=adapter(),turnId=randomUUID();r.nativeAbortAvailable=true;r.rootTurn={id:turnId,status:'working'};r.terminal.input=()=>{throw Error('No fallback key');};
+ const done=r.interrupt(),command=r.nativeAbortCommand();
+ r.queued={tag:'queued-message'};r.submission.pending={tag:'queued-message'};
+ r.rootTurn.status='idle';r.finishInterrupted(turnId);
+ r.nativeAbortResult({sessionId:r.record.nativeId,lease:r.rootLease,epoch:r.observationEpoch,id:command.id,turnId,status:'aborted',submitSettled:true});
+ await done;assert.equal(r.nativeInputRequired,false);
+});
+for (const version of ['2.1.316','2.1.317']) test(`native ${version}: a stop while our queued message waits reports the stopped turn's submission settled (T-133)`,async t=>{
+ const tag=randomUUID(),aborts=[];let offered=false,finishSubmit;
+ const f=await mod({version,turnAbort:async()=>{},promptSubmit:()=>new Promise(resolve=>{finishSubmit=resolve;}),
+  fetchObservation:(body,r)=>({...r.observeRoot(body),abort:r.nativeAbortCommand()}),
+  requestHandler:async(url,options,body)=>{
+   if(url.endsWith('/next')&&offered){offered=false;return{ok:true,text:JSON.stringify({id:tag,text:'Queued while Claude works.'})};}
+   if(url.endsWith('/authorize'))return{ok:true,text:'{"allowed":true}'};
+   if(url.endsWith('/abort-result'))aborts.push(body.submitSettled);
+  }});
+ t.after(()=>{f.r.cancelNativeAbort();finishSubmit?.({text:'Queued while Claude works.',origin:{kind:'plugin',name:'native-workspace-submit'}});});
+ const turnId=randomUUID();await f.invoke('turn.start',{turnId});await f.clock.shift()();
+ offered=true;f.poll();await new Promise(resolve=>setImmediate(resolve));assert.equal(typeof finishSubmit,'function','our queued message is waiting');
+ f.r.interrupt();
+ // The abort command rides the next observation reply, while the turn still runs.
+ const next=()=> (async function*(){yield {kind:'thinking'};return {stopReason:'end_turn'};})();next.origin={plugin:'engine',tier:'core'};
+ const stream=f.invoke('turn.step',{turnId},next);await stream.next();t.after(()=>stream.return());
+ for(let n=0;n<6&&!aborts.length;n++){const fn=f.clock.find(x=>x.delay===0);if(!fn)break;f.clock.splice(f.clock.indexOf(fn),1);await fn();await new Promise(resolve=>setImmediate(resolve));}
+ assert.deepEqual(aborts,[true]);
+});
 test('stale abort results cannot unlock a newer native turn or a changed control revision',async()=>{
  for(const changed of ['turn','control','epoch','gap']){
   const r=adapter(),turnId=randomUUID();r.nativeAbortAvailable=true;r.rootTurn={id:turnId,status:'working'};r.terminal.input=()=>{throw Error('No fallback key');};
@@ -232,7 +259,8 @@ test('native 2.1.316 binds the root so a main-turn workspace message reaches the
     if (url.endsWith('/addressed-message')) { staged.push(body); return { ok: true, text: JSON.stringify({ status: 'staged' }) }; }
   } });
   assert.equal(f.r.nativeBlocks, true);
-  for (const flag of ['nativeQueue', 'nativeCapacityAvailable', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  for (const flag of ['nativeCapacityAvailable', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  assert.equal(f.r.nativeQueue, true, 'The queue is qualified on 2.1.316 (T-133)');
   assert.equal(f.r.nativeMedia, true, 'Tool-result media is qualified on 2.1.316 (T-133)');
   for (const fn of f.clock.splice(0).filter(fn => fn.delay === 500)) await fn();
   assert.equal(f.r.addressedSendAvailable, true);
@@ -463,7 +491,8 @@ test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, 
   const f = await addressedMod('2.1.317'), promptId = randomUUID();
   assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeAbortAvailable, true); assert.notEqual(f.r.nativeCapacityAvailable, true);
   assert.equal(f.r.nativeTurnRecords, true); assert.equal(f.r.nativeNarration, true);
-  for (const flag of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  for (const flag of ['nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  assert.equal(f.r.nativeQueue, true, 'The queue is qualified on 2.1.317 (T-133)');
   assert.equal(f.r.nativeMedia, true, 'Tool-result media is qualified on 2.1.317 (T-133)');
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
   await f.invoke('turn.start', { turnId: 'turn-317' });

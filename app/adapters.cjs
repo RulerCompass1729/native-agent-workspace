@@ -841,7 +841,8 @@ class Claude extends EventEmitter {
   completeNativeAbort() {
     const request = this.nativeAbortRequest; if (!request) return;
     if (!this.nativeAbortCurrent(request)) { this.cancelNativeAbort(); return; }
-    if (!request.apiDone || !request.nativeDone || !request.submitSettled || this.submission.pending) return;
+    // A queued message still waiting for its own turn does not hold the stopped turn (T-133).
+    if (!request.apiDone || !request.nativeDone || !request.submitSettled || (this.submission.pending && this.submission.pending.tag !== this.queued?.tag)) return;
     this.nativeAbortRequest = null; clearTimeout(request.timer);
     this.nativeInputRequired = false; this.emit('inputRequired', false); request.resolve({ interrupted: true });
   }

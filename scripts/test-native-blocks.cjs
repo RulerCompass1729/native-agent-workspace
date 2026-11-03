@@ -31,7 +31,10 @@ const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
 const modelTrial = process.env.NAW_TEST_NATIVE_MODEL === '1';
 // NAW_TEST_NATIVE_READ_IMAGE=1: Claude reads a PNG in its folder; the Read row must show that image (T-133).
 const readImageTrial = process.env.NAW_TEST_NATIVE_READ_IMAGE === '1';
-assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial, modelTrial, readImageTrial].filter(Boolean).length <= 1, 'One bounded case per run');
+// T-133: NAW_TEST_NATIVE_QUEUE=1 (session chat) or =shared (space record) queues a message while the final reply is held.
+const queueTrial = ['1', 'shared'].includes(process.env.NAW_TEST_NATIVE_QUEUE), queueShared = process.env.NAW_TEST_NATIVE_QUEUE === 'shared', queuedText = 'QUEUED_PROMPT: reply with the queued marker.';
+let queuedRequests = 0;
+assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial, modelTrial, readImageTrial, queueTrial].filter(Boolean).length <= 1, 'One bounded case per run');
 assert.ok(!/^2\.1\.312\b/.test(nativeVersion) || compatibilityTrial || scrollTrial, '312 requires a bounded qualified compatibility or basic-text scroll witness');
 let planFile = null, planNotes = null, readImagePath = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
@@ -53,6 +56,12 @@ const server = http.createServer((req, res) => {
   let body = ''; req.on('data', data => body += data); req.on('end', async () => {
     if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens')) {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ input_tokens: 100, data: [] })); return;
+    }
+    if (queueTrial && body.includes('QUEUED_PROMPT') && !queuedRequests) {
+      queuedRequests++; const request = JSON.parse(body); res.writeHead(200, { 'content-type': 'text/event-stream' });
+      event(res, 'message_start', { message: { id: 'msg_local_queued', type: 'message', role: 'assistant', model: request.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } });
+      block(res, 0, { type: 'text', text: 'NATIVE_QUEUED: the queued reply.\n' });
+      event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } }); event(res, 'message_stop', {}); res.end(); return;
     }
     const number = ++calls;
     if (scrollTrial && number > 1) { unexpectedRequest = Error('Scroll budget exceeded: one local response only'); res.writeHead(429); res.end(); return; }
@@ -465,6 +474,29 @@ async function cleanup() {
   assert.ok(sharing.filter(m => m.sharedStream).every(m => m.sessionId === before.id && m.replyTo));
   assert.equal(calls, 2); assert.equal((await snapshot()).diagnostics.dispatches, 1);
   checks.push('Actual native ACK binds intermediate and tool blocks into the shared main reader before final reply, without another dispatch');
+  if (queueTrial) {
+    // T-133: the message waits for this turn, then runs as its own turn; its reply is its own, and the
+    // conversation shows it after this turn's reply, as the native terminal does.
+    assert.equal((await snapshot()).sessions[0].queueAvailable, true, 'The native queue is available while Claude works');
+    if (queueShared) { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await inlineRecipient(page, before.id); await fillRoomMessage(page, queuedText); await page.locator('#forward-button').click(); }
+    else { await page.locator(`[data-session-id="${before.id}"]`).click(); await page.locator('#chat-tab').click(); await page.locator('#message-input').fill(queuedText); await page.locator('#send-button').click(); await until(async () => (await page.locator('#message-input').inputValue()) === '', 'The queued message leaves the composer'); }
+    releaseFinal();
+    await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && s.messages.some(m => m.text?.includes('NATIVE_QUEUED:')); }, 'Queued message runs as its own turn', 40000);
+    const after = await snapshot(), rows = after.sessions[0].messages.filter(m => ['user', 'assistant'].includes(m.role)), at = p => rows.findIndex(m => m.text?.startsWith(p));
+    assert.ok(at('NATIVE_FINAL') >= 0 && at('NATIVE_FINAL') < at('QUEUED_PROMPT') && at('QUEUED_PROMPT') < at('NATIVE_QUEUED'), 'Conversation order: first reply, queued message, its reply');
+    if (queueShared) {
+      const room = after.room.messages, first = room.find(m => m.role === 'human' && m.text === 'Run the local check.'), queued = room.find(m => m.role === 'human' && m.text === queuedText);
+      const reply = p => room.filter(m => m.role === 'assistant' && m.text.includes(p));
+      assert.deepEqual(reply('NATIVE_FINAL:').map(m => [m.replyTo, m.finalReply]), [[first.id, true]]);
+      assert.deepEqual(reply('NATIVE_QUEUED:').map(m => [m.replyTo, m.finalReply]), [[queued.id, true]]);
+      assert.deepEqual(queued.deliveries.map(d => d.status), ['submitted']);
+    }
+    // Exactly the two default requests besides the queued one: a resent queued message would add a third.
+    assert.equal(queuedRequests, 1); assert.equal(calls, 2); assert.equal(fs.readdirSync(base).filter(f => f.startsWith('pbcopy-')).length, 0);
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-queue.png') }); }
+    console.log(JSON.stringify({ checks: [`A message ${queueShared ? 'queued from the space record' : 'queued in the session chat'} while Claude works runs as its own turn; its reply is its own${queueShared ? ' in the space record too' : ''}; the conversation shows it after the running turn's reply`], nativeVersion, localResponses: calls + queuedRequests, paidModelCalls: 0, evidence: base }));
+    return;
+  }
   releaseFinal();
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.kind === 'turn'), 'Native turn boundary');
   await until(async () => (await snapshot()).room.messages.some(m => m.role === 'assistant' && m.text.includes('NATIVE_FINAL:')), 'Display-confirmed shared final reply');
