@@ -146,6 +146,17 @@ async function run() {
   await until(async () => await page.evaluate(() => { const e = document.querySelector('#rename-error').getBoundingClientRect(), g = document.querySelector('#workspace-group').getBoundingClientRect(); return e.height > 0 && e.top >= g.top - 1 && e.bottom <= g.bottom + 1; }), 'The rename error is fully inside the section');
   measurements.push({ renameError: await error.innerText() });
   await page.keyboard.press('Escape'); await editor.waitFor({ state: 'hidden' });
+  // T-155: with 协作空间 folded, renaming a space from its heading unfolds the section and shows the editor there.
+  const workspaceToggle = page.locator('#workspace-toggle');
+  await workspaceToggle.click(); await until(async () => await workspaceToggle.getAttribute('aria-expanded') === 'false', '协作空间 folded');
+  await longGroup.locator('.space-group-more').click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click();
+  await editor.waitFor({ state: 'visible' });
+  assert.equal(await workspaceToggle.getAttribute('aria-expanded'), 'true', 'Renaming unfolded 协作空间');
+  assert.ok(await editor.evaluate(el => el.contains(document.activeElement)), 'The editor has the keyboard');
+  const inSection = await page.evaluate(() => { const e = document.querySelector('#rename-editor').getBoundingClientRect(), g = document.querySelector('#workspace-group').getBoundingClientRect(); return e.height > 0 && e.top >= g.top - 1 && e.bottom <= g.bottom + 1; });
+  measurements.push({ foldedRename: { inSection } }); assert.ok(inSection, 'The editor is inside the visible 协作空间 section');
+  await page.keyboard.press('Escape'); await editor.waitFor({ state: 'hidden' });
+  check('With 协作空间 folded, renaming a space from its heading unfolds the section and focuses the editor there');
   await page.evaluate(id => workspace.join(id, true), solo);
   await until(async () => await page.locator('#session-list [data-session-group="independent"]').count() === 0, 'The empty 独立会话 group goes');
   await capture('03-grouped');

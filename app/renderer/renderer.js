@@ -1345,6 +1345,15 @@ function openRename(id, origin, roomId = spaceId) {
     }
     closeRename(false);
   }
+  // A space's editor opens in its row in the 协作空间 section, which is hidden while that section is folded; the heading's
+  // and the header's ⋯ are reachable then. Unfold the section first, as the person would (T-155).
+  if (id === 'room' && state.sidebar?.workspaceCollapsed) {
+    return attempt(async () => {
+      await api.sidebar({ type: 'collapse', section: 'workspace', collapsed: false });
+      if (state.sidebar?.workspaceCollapsed) state.sidebar = { ...state.sidebar, workspaceCollapsed: false };
+      openRename(id, origin, roomId);
+    });
+  }
   const row = id === 'room' ? spaceRows.get(roomId)?.element : origin?.closest('.session-row') || sessionRow(id)?.element;
   if (!row || record.archived || id === 'room' && spaceRecord(roomId)?.archived) return;
   renameTarget = { id, roomId, origin, originalName: record.name, row, label: id === 'room' ? spaceRows.get(roomId).name : [...sessionRows.values()].find(r => r.element === row).name };
