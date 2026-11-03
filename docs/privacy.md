@@ -112,10 +112,12 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   Clearing shared records does not cancel a native task already in progress.
   A space's shared record also lists the automatic messages agents send each
   other with NAW's workspace_message (sender → recipient, the message and
-  whether it was delivered); Claude Code's own cross-session messages are not
-  recorded there yet. The
+  whether it was delivered). The
   sender's backend writes them into the spaces both agents share, or the
   sender's own spaces, and the sender's own record keeps the message too.
+  It also lists Claude Code's own cross-session messages that reach a session
+  here, with the sender as the message names it and marked unverified; the
+  receiving backend writes them into that session's spaces.
   Clearing a space's shared records removes the space's copies.
   It also clears the local membership timeline and all saved note versions;
   a concurrent newer edit is preserved and reported instead of silently erased.
