@@ -346,6 +346,24 @@ class WorkspaceClient extends EventEmitter {
     if (method === 'pauseSpace') return this.callSpace(args[0], 'pause', []);
     return this.callScoped('shared', method, args);
   }
+  // Why clearing a space's shared record would be refused, across every backend ('' when it would not be). The clear
+  // below checks this again after its refresh; the window asks first, so a clear that will be refused is refused
+  // before the person is asked to confirm it (T-149). Reading fresh state is the only side effect: no control
+  // counters move. A closed service or a connection being updated or replaced throws, as the clear itself would.
+  clearRefusal(roomId, state, entries = this.entries) {
+    if (roomId !== 'shared') return entries.some(e => { const run = backendRoom(e.state, roomId)?.run; return run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed; }) ? '请先核对这个空间的交接已暂停，再清除记录。' : '';
+    if (!state.capabilities.includes('clearSharedHistory') || state.room.run?.status === 'running') return '请先暂停交接，并确认各后台支持清除记录。';
+    if (this.entries.some(e => backendRooms(e.state).some(r => r?.run?.pausePending || r?.run?.pauseUnconfirmed))) return '请先核对各后台已撤销后续交接授权，再清除共享记录。';
+    return '';
+  }
+  async clearSharedHistoryProblem(roomId = 'shared') {
+    if (!spaces.roomId(roomId)) return '无效协作空间操作。';
+    if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
+    const entries = this.entries.filter(e => roomId === 'shared' || e.state.capabilities?.includes('collaborationSpacesV1'));
+    const guards = entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
+    const state = await this.refresh(roomId); guards.forEach(check => check());
+    return this.clearRefusal(roomId, state, entries);
+  }
   callSpace(roomId, method, args) {
     if (!spaces.roomId(roomId) || !SPACE_METHODS.has(method) || !Array.isArray(args)) return Promise.reject(Error('无效协作空间操作。'));
     return this.callScoped(roomId, method, [...args], true);
@@ -638,8 +656,8 @@ class WorkspaceClient extends EventEmitter {
         this.control.revision++; this.control.manualEpoch++;
         const entries = this.entries.filter(e => e.state.capabilities?.includes('collaborationSpacesV1'));
         const guards = entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
-        await this.refresh(roomId); guards.forEach(check => check());
-        if (entries.some(e => { const run = backendRoom(e.state, roomId)?.run; return run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed; })) throw Error('请先核对这个空间的交接已暂停，再清除记录。');
+        const refreshed = await this.refresh(roomId); guards.forEach(check => check());
+        const refusal = this.clearRefusal(roomId, refreshed, entries); if (refusal) throw Error(refusal);
         const results = await Promise.allSettled(entries.map(e => this.invoke(e, roomId, 'clearSharedHistory', [])));
         if (results.some(r => r.status === 'rejected')) throw Error('部分后台未确认清除；其他空间未清除，未自动重试。');
         await this.refresh(roomId); return results.some(r => r.value?.imagesLeft) ? { imagesLeft: true } : true;
@@ -649,8 +667,7 @@ class WorkspaceClient extends EventEmitter {
       const guards = this.entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
       const state = await this.refresh(roomId);
       if (method === 'shutdown' && state.sessions.some(s => !['ended', 'background'].includes(s.state))) throw new Error('请先结束各原生会话，再关闭运行服务。');
-      if (method === 'clearSharedHistory' && (!state.capabilities.includes(method) || state.room.run?.status === 'running')) throw new Error('请先暂停交接，并确认各后台支持清除记录。');
-      if (method === 'clearSharedHistory' && this.entries.some(e => backendRooms(e.state).some(r => r?.run?.pausePending || r?.run?.pauseUnconfirmed))) throw new Error('请先核对各后台已撤销后续交接授权，再清除共享记录。');
+      if (method === 'clearSharedHistory') { const refusal = this.clearRefusal(roomId, state); if (refusal) throw new Error(refusal); }
       // These are explicit user actions. Partial failure must remain visible.
       guards.forEach(check => check());
       const results = await Promise.allSettled(this.entries.map(e => method === 'clearSharedHistory'
