@@ -4,6 +4,49 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.172 carries three reviewed changes from Claude 3 and a script
+fix. First, the sidebar is easier to read at a glance (T-142, T-144, T-145):
+each session's status mark sits on the avatar's corner with a different shape
+per state, not only a colour, and keeps it on the selected row; only working,
+waiting and failed rows move, and none does with reduced motion. Red is used
+only for what needs the person or failed; unknown sub-task states read N
+个子任务状态未知. Space labels show the whole space name after 「#」. In the grouped view
+each space's ⋯ moves to its heading, the open space's heading is highlighted,
+the 协作空间 section keeps only 全部空间 and 新建空间, renaming shows its editor there while
+that section is open, and an empty 独立会话 group is hidden. The cost: in the flat
+view a row with a space label is about 14 pixels taller than T-114's one-line
+layout, which the person can ask to revert. Second, when getting control for a
+session's 原生终端 fails or is taken, the status stops saying 「输入暂存，尚未发送」 at once
+and the keyboard moves off that terminal, so later keys no longer go into a
+terminal that cannot take them. They are still not kept; text typed while
+waiting stays in the 未发送 box (T-152). Checked on a solo session; where focus
+lands in a member's view is not asserted. Clicking back into the terminal still
+shows only 就绪 and sends nothing; how to show that is the person's choice in
+T-154. Third, clearing a space's shared records when it would be refused,
+because a handoff pause is not yet confirmed, a handoff is running, a backend
+cannot clear or a connection is updating, now says why before asking
+清除「…」的共享记录？, which can take up to 40 seconds because every backend is read fresh
+first (T-149); for 共同工作 the check covers every backend and every space, a named
+space checks itself on the backends that support spaces, and the check after
+confirmation stays. All three run in the window and the main process, so they
+reach existing sessions once the app is updated; the third's refusal for a space
+other than 共同工作 was checked by unit tests only. The script fix lets two terminal
+GUI scripts open 显示… from the terminal's ⋯ menu. All are integrated with
+identical changed lines, and the full unit suite passes 2,286 checks on a second
+run; the first failed one unrelated codex host recovery test, which then passed
+five times on its own (see testing); the name check reports nothing missing.
+With the UI bundle rebuilt, seventeen GUI scripts exit 0 on main at df9bc00
+without model calls, among them the new sidebar status and terminal claim
+failure checks, sidebar density, membership rail and layout, multispace, compact
+room and versions, space join, terminal IME (its opt-in foreground-return step
+skipped), layout, focus and ready, collaboration overview, daily use and grid
+follow, and at 459f5a7, with the third change, peer workflow, which used to stop
+at a confirmation before the refusal, forget images and multispace; the system
+clipboard was not written. Unverified: the daily app, dark mode, screen readers,
+a real trackpad drag, and T-154's case of a relaunch that reopens a terminal
+whose control was never taken. Daily delivery remains pending; current daily
+remains alpha.171.
+
 Current daily GUI: alpha.171, committed build source `0be84d9d`. It carries
 three reviewed changes from Claude 2. The first lets the person send from NAW
 while Claude works (T-133, item 1). On Claude Code 2.1.316 and 2.1.317 the send

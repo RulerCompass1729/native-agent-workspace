@@ -4548,3 +4548,30 @@ top. On main the name check still reports nothing missing. Markdown copy exits
 confirmation first, with one confirmation counted, as in the author lane; that
 is the product order recorded on the T-149 row, not a script fault. The system
 clipboard's change count stayed at 268 across both runs.
+
+
+### Sidebar status marks and a failed terminal claim - alpha.172
+
+Three commits from Claude 3 are integrated with identical changed lines. On main
+the full unit suite passes 2,278 checks without skips, and the name check
+reports nothing missing across 526 lookups in 176 scripts. After rebuilding the
+UI bundle, seventeen GUI scripts exit 0 without model calls: sidebar status,
+which is new and checks the marks' place, size and shapes, reduced motion, the
+selected row, full space labels, the grouped view's height, renaming and the
+open space's highlight; sidebar density, membership rail, layout and the basic
+sidebar; multispace; compact room and compact versions; space join; terminal
+claim failure, which is new and failed on the old code and on the first version
+in the author lane; terminal IME, with its opt-in macOS foreground-return step
+skipped, and terminal layout, which T-153 fixed; terminal focus and ready;
+collaboration overview; daily use; and grid follow. The system clipboard's
+change count stayed at 268 before and after every run.
+
+Claude 3's T-149 product commit is integrated on top with identical changed
+lines. The first full unit run on that tree failed one test, codex host
+recovery's failed-transport case, with a refused connection to its temporary
+socket; this batch does not touch that code, the test file then passed five
+times in a row on its own, and a second full run passed all 2,286 checks without
+skips. That test is recorded as intermittent. With the UI bundle rebuilt, peer
+workflow now runs through, including the steps after the refused clear that had
+not run on current code, and forget images, multispace and collaboration
+overview exit 0; the system clipboard's change count stayed at 268.
