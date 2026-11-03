@@ -94,8 +94,9 @@ or start paid model runs as a side effect of editing documents.
 - A Claude agent working from the private task board does not end a turn idle;
   nothing reliably wakes an idle session. Before ending a turn, either be
   working on the next item it can take, or leave exactly one background command
-  that exits on a specific event: a newer READY entry in a lane log, a reviewer
-  or test finishing, or a fixed wait while a choice is pending with the person.
+  that exits on a specific event: a newer READY entry in a lane log (for the
+  main session, also a new secretary note that names it), a reviewer or test
+  finishing, or a fixed wait while a choice is pending with the person.
   Do not use `/loop` or timed polling prompts for this. Record choices for the
   person on the board as its rules describe and keep working meanwhile; choices
   that expose the machine, end sessions or backends, spend money or publish
@@ -103,6 +104,40 @@ or start paid model runs as a side effect of editing documents.
   before ending the turn. A background wait counts as background work and blocks
   moving the agent's backend: when the person asks to update it, end the wait
   first.
+- Verification principles (approved by the person on 2026-11-02 for every Claude
+  and Codex agent here). A check exists only when it can catch a failure the
+  earlier checks cannot, and missing that failure costs more than the check; say
+  what each check prevents. A reversible, local risk gets one check; an
+  irreversible or outward-facing action (push, deleting data, credentials,
+  publication) gets at least two independent checks and still asks the person
+  first. A conclusion holds only for the content it saw: reuse it while the
+  patch or template hash is unchanged and re-check only what changed, so an
+  already reviewed patch merged unchanged is not reviewed again. Leave to
+  programs what they can decide (tests, template comparison, hashes, counts);
+  people and models judge intent, experience and design trade-offs, and each
+  machine-checkable problem a judgment review finds becomes a test. Completion
+  follows the person's use: after an update is installed in the daily app,
+  operate each change of that version the person can see as they described it,
+  by GUI script where possible and otherwise by asking the person through the
+  board's secretary; the row moves to done only once that passes. Fixed
+  per-version overhead (packaging, signed launch, install, records, push scan)
+  stays under about a quarter of the version's cycle; otherwise batch, except
+  urgent items. The rules correct themselves: daily, or every five versions, the
+  secretary reports three numbers from the records to the person (at which step
+  each problem the person found in daily use should have been caught, whether
+  each kind of check has recently caught a real problem, and the time from
+  feedback to the daily app); a step that misses often is strengthened, and a
+  check with no findings for a long time whose risk is covered elsewhere is
+  downgraded. Rule changes are shown to the person first. Not traded for speed:
+  the pre-push privacy and secret scan, no self-review, asking before
+  irreversible or outward actions, and requirements the person stated. In
+  practice: each change gets one author-side review that quotes the person's
+  words and checks side effects on other views; integration review runs once per
+  batch and covers only the combined interactions and the edits made while
+  integrating; the daily update operator is compared by program with the last
+  operator that ran, allowing only version numbers and hashes to differ, and
+  goes to review only when that template changes; install records are checked by
+  script against commit ids and counts instead of review.
 
 ## Architectural invariants
 
