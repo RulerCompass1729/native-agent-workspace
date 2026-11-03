@@ -4,6 +4,51 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.168 carries two reviewed changes from Claude 2. The first is for
+a prompt typed while Claude works (T-138, wake half). On Claude Code 2.1.316 and
+2.1.317, when the person types a prompt into a working Claude session's terminal
+and that prompt later runs as its own turn, that turn may now wake another
+agent, but only when the prompt was typed in the terminal, was first in line,
+and the new turn's text equals it exactly; anything else is refused as before.
+When a queued prompt's own turn ran a tool, the session stayed 正在工作, and a
+working session cannot be woken; it now returns to idle when that turn ends,
+without sharing or attributing any reply. The stuck state and its fix were
+measured on the author's runner; that the problem predates this change, and that
+a `!` turn whose tool runs had it too and is now fixed the same way, is inferred
+from the source. The queued prompt still has no row of its own in the
+conversation view, which the source suggests but no test has shown, and prompts
+queued through Remote Control are not admitted. Unverified: a `!` turn whose
+tool actually runs, pulling a queued prompt back with ↑, and a prompt typed or
+blocked during the queued turn, which can leave the session working if no later
+turn starts. T-141, a possible wider wake permission from the same native event,
+remains open. The change reaches only sessions started or moved onto an
+alpha.168 backend. It is integrated with identical changed lines. On main with
+real Claude Code 2.1.317 and local fixed replies only, a prompt queued during
+the first turn woke the other session, which ran one woken turn; a later `!`
+turn was still refused, and the sender was idle after the queued turn and at the
+end. The native blocks checks pass on 2.1.317 in their default, interrupt and
+permission modes without paid calls, and the session wake GUI script, which uses
+synthetic sends and no real provider, exits 0. Claude Code 2.1.316 and the runs
+with a guard removed were tested only in the author lane, on its previous round,
+which differs only in how submissions in flight are tracked. The second change
+records agent wakes in collaboration spaces (T-137, item 1). When an agent wakes
+another session with workspace_message, the shared record of each space both
+share, or of the sender's own spaces when they share none, gains a row 「sender →
+recipient」 with the message and its delivery state, read from the sender's own
+row; names follow renames and the member filter finds it. Only the sender's
+backend writes the row, it is never passed to an agent, and clearing the space's
+shared records removes it. Earlier records said wakes did not yet appear on the
+space timeline; from this candidate they do. On main with real Claude Code
+2.1.317 and local fixed replies, a wake between two members of 共同工作 showed in
+its shared record as 原生已接收 with the message, also after a rename. Unverified: a
+wake between the secretary and the main session on the daily app, across
+backends; where a wake should go when the two share no space is the person's
+choice in T-143. With both changes the full unit suite passes 2,228 checks, and
+the collaboration overview, collaboration list name, multispace and session wake
+GUI scripts exit 0; the older collaboration list script still stops where it
+stopped on alpha.156. Daily delivery remains pending; current daily remains
+alpha.167.
+
 Current daily GUI: alpha.167, committed build source `1af68000`. It carries
 three reviewed window changes. Every collaboration space in the sidebar now uses
 the same row: 共同工作 no longer has its own icon, member counts are hidden for all

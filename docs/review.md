@@ -2899,3 +2899,83 @@ operator as a substitution of the alpha.166 one. The operator ran once;
 afterwards an author-run check found no saved filter in the daily view file,
 without a record of whether it was there before. Open: daily use of the space
 rows and the narrowed guard; the post-provider signature check.
+
+
+### A prompt typed while Claude works can wake peers, and its turn settles (T-138, wake half)
+
+Claude 2, 11-02. Review: a fresh lane session over four rounds (CHANGES, then CHANGES (narrow), then PASS, then a delta for the stale-origin item, which passed).
+
+**Trigger.** On Claude Code 2.1.316 and 2.1.317, a prompt the person types while Claude works raises `UserPromptSubmit` once, at enqueue, with the running prompt's id. Measured by a read-only probe that records ids and text hashes only (`t138-probe-20261102/`).
+- **Path A (no mid-turn point).** The prompt later starts its own turn, whose `turn.start` text is exactly that prompt. The turn's classic events (PostToolUse, Stop, MessageDisplay) carry a new prompt id that no `UserPromptSubmit` announced.
+- **Path B (a tool call in the running turn).** The prompt joins that turn as a `queued_command` delivery.
+- **`!` turns.** Their `turn.start` text is the command output, they raise no `UserPromptSubmit`, and their Stop is also unannounced.
+- **Esc.** Esc runs the queued prompt as its own turn at once.
+
+**Findings.**
+- **T-138.** The queued prompt's own turn could not wake a peer; its link was ambiguous.
+- **F1 (reviewer).** After such a turn, or a `!` turn, ran a tool, NAW showed 正在工作 for good. The adapter drops a Stop whose id was never announced. The symptom was measured. That it predates the change (any tool in a queued turn on HEAD) is inferred from the source.
+- **F2.** Clearing on interrupt would refuse the prompt the engine runs right after Esc, as measured. Kept.
+- **F3.** A `!` turn can't match: its text is the output.
+- **F4.** Entries are tied to the prompt id.
+- **F5.** The line admits composer input only. At `UserPromptSubmit` entry, exactly one foreign submission must be in flight and its origin must be composer. In-flight submissions are tracked as a set, because a saved-and-restored origin went stale when submissions interleaved (round 3, low).
+- **Round 2, finding 1.** A native permission ask clears `rootTurn`, so settling now uses the started turn instead.
+
+**Fix.**
+- **`register.js`.** A bounded line of composer prompts typed during a root turn. A new root turn after idle, with no newer prompt and not NAW's own, is that prompt's turn only by exact text equality with the first entry; on any mismatch the line is dropped. A `queued_command` delivery or an idle prompt clears it.
+- **`adapters.cjs`.** An unannounced Stop, plus the started root turn's own completed `turn` block (either order, with no prompt announced since that turn started and nothing pending), settles the session to idle with an untagged empty `complete`.
+- The background computation is shared in `emitBackground()`.
+
+**Evidence.**
+- **Unit tests:** 2203/2203 in the lane's final round, 2221/2221 on main. Mutations fail exactly their tests:
+  - no-unambiguous;
+  - no-text-match;
+  - no-delivery-clear;
+  - no-settle;
+  - no-announced-check;
+  - origin read after await;
+  - the round-4 stale saved origin, which fails exactly the new interleaving test on both versions.
+
+  The permission tests fail on the round-2 adapter.
+- **Real CLI** (source app, local fixed replies, 0 paid, fake pbcopy):
+  - **Red, 2.1.317:** with no-unambiguous, the wake is refused. With no-settle, S ends `working`.
+  - **Green, 2.1.317 and 2.1.316:** B is woken (`submitted`). S is idle after the queued turn and at the end. A later `!` turn is still refused.
+  - The red runs and the 2.1.316 run used round 3, which differs only in how submissions in flight are tracked; the final bytes ran on 2.1.317 in the lane and once on main.
+
+**Open.**
+- **Display half:** the queued prompt's own row collides with the running prompt's row id (`adapters.cjs:992`, `workspace.cjs:566`; inferred). The new prompt id seen in classic events is the lead.
+- **T-141 (F6):** a queued `UserPromptSubmit` may re-capture T1's wake authority (inferred).
+- **Not covered:**
+  - a `!` turn whose tool actually runs (same adapter path, no test);
+  - ↑ recall of a queued message (unmeasured);
+  - a prompt typed, or blocked by a hook, while the queued turn runs. The adapter counts it as announced, so the queued turn's own Stop doesn't settle. If that prompt carries T1's id and no later turn starts, S stays `working` (round 3, low, unmeasured).
+- **Deliberate narrowing:** queued Remote Control (`bridge`) prompts are not admitted.
+- **Integration review (inferred, low):** an unannounced Stop is credited to whichever root turn has started when it arrives; if it arrives after the next turn started, that turn settles once with the earlier turn's background counts and again at its own Stop. Nothing is shared. The settle is not limited by Claude version, though it was measured only on 2.1.316 and 2.1.317.
+
+
+### Agent wakes appear in the collaboration space's shared record (T-137, item 1)
+
+The person asked how agent-to-agent messages are tracked and asked that they
+leave a record in the collaboration space. Before this change a wake left a row
+only in the sender's own conversation. Now the sender's backend also writes one
+system row into each space the sender and recipient share, or into the sender's
+own spaces when they share none. The row stores the sender's and recipient's ids
+and names and the wake's id inside its wake reference, and the full message as
+its text; when shown, its delivery status, and its text while the sender's row
+exists, are read from the sender's row, names follow renames, and the member
+filter finds it. It has no top-level session id, final reply or share tag, which
+keeps it off the handoff path, and no other reader passes space rows to an
+agent. It is saved with the space's records and stays after the sender's own
+records are removed, then showing that the sender's record is gone; clearing the
+space's shared records removes it on every backend. Claude 2's lane reviewer
+asked for changes once and then passed it.
+
+Open, all low: a name in a wake row is not a filter shortcut, though the member
+menu works; if a finished wake's sender record is removed before a merge is
+confirmed, the merge fails safely with the generic error; the combined view of
+two backends is tested only for the default space; code later added between the
+row push and the save could let an unsaved wake be sent; the status lookup for
+wake rows runs on every snapshot and its cost is not measured. The person's
+choice for wakes with no shared space is T-143, and the daily check across
+backends is still to do. The lane's first GUI round ran against a stale UI
+bundle; its final rounds rebuilt it, and every main GUI batch from alpha.158 on
+has a log of rebuilding the bundle before running; packaging always rebuilds it.

@@ -111,7 +111,9 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   records are separate: pause handoffs, then use **隐私与用量 → 清理与完全退出 → 清除共同工作记录**.
   Clearing shared records does not cancel a native task already in progress.
   A space's shared record also lists the automatic messages agents send each
-  other (sender → recipient, the message and whether it was delivered). The
+  other with NAW's workspace_message (sender → recipient, the message and
+  whether it was delivered); Claude Code's own cross-session messages are not
+  recorded there yet. The
   sender's backend writes them into the spaces both agents share, or the
   sender's own spaces, and the sender's own record keeps the message too.
   Clearing a space's shared records removes the space's copies.
