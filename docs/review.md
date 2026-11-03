@@ -3354,14 +3354,33 @@ re-picked onto main as 1749707 with identical changed lines, it passed 2,270
 checks and the same runs. Open, low, an image can be lost but not misplaced: a
 queued image prompt taken into the running turn, a NAW send with the same text
 that runs first, a frame lost to a gap, and a plugin reload between the prompt
-and its block. An image it never goes to a prompt with different text or to
-another session. The same text typed twice in one turn has one row, so the
-second one's image shows on that row, and a different image that row already
-showed is then marked as changed. Not run: an image prompt typed while Claude
-works, several images in one prompt, images over 1 MB, and an image pasted from
-the clipboard; the runs pasted a file path so the clipboard stayed untouched.
-The integration reviewer also noted, from the source only: removing a session's
-records deletes its prompt images as T-140 does for tool images; pasted
-screenshots now count toward the 64 MB per-session cache, after which later
-images show as unavailable; and images still waiting for their row are limited
-by count, at most 8 prompts of 17 images in backend memory, not by time.
+and its block. An image never goes to a prompt with different text or to another
+session. The same text typed twice in one turn has one row, so the second one's
+image shows on that row, and a different image that row already showed is then
+marked as changed. Not run: an image prompt typed while Claude works, several
+images in one prompt, images over 1 MB, and an image pasted from the clipboard;
+the runs pasted a file path so the clipboard stayed untouched. The integration
+reviewer also noted, from the source only: removing a session's records deletes
+its prompt images as T-140 does for tool images; pasted screenshots now count
+toward the 64 MB per-session cache, after which later images show as
+unavailable; and images still waiting for their row are limited by count, at
+most 8 prompts of 17 images in backend memory, not by time.
+
+
+### Integrated alpha.171 delivery
+
+A fresh read-only reviewer accepted the three integrated commits from Claude 2:
+the queue while Claude works, the quoted cross-session sender name and the
+terminal prompt image. Over three rounds it had the ledgers say that 停止 stops
+only the running turn and the queued message then runs at once, which lane runs
+were made before each change and on which version, that item 2 would show
+prompts typed in the terminal, not send input from NAW into it, where each
+change reaches, and that an image never goes to a prompt with different text or
+another session but can show on a row typed twice with the same text. It also
+re-checked the alpha.170 records wording applied after acceptance. The update
+operator was accepted as a substitution of the alpha.170 one and ran once; its
+pinned receipt names native blocks default on 2.1.317 and 2.1.316, but the
+default flow ran on 2.1.317 only. The operator checked the alpha.170 rollback
+archive's presence, not its hash, and after the run it is the only rollback.
+Open: T-143; daily checks once sessions are on an alpha.171 backend; the
+post-provider signature check.
