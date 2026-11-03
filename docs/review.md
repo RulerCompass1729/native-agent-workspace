@@ -2778,3 +2778,17 @@ CLI. The lane reviewer passed it after three rounds. Open: in the product, Cmd+C
 in a terminal still writes the selection twice and a failed copy can be reported
 wrongly; the clipboard count is read before the app closes, so a write during
 close would go unnoticed.
+
+
+### Integrated alpha.165 delivery
+
+A fresh read-only reviewer found the integrated files identical to the
+lane-reviewed ones and nothing unsafe in the code, and held acceptance until the
+ledgers stated the new rule's cost: while following, every render now opens the
+pull-back window, including idle members' columns in a grid, so a screen
+reader's scroll can be pulled back; and until the cause was labelled likely, the
+80-pixel follow distance stated, and the stale reading scripts described only up
+to their failing steps. It accepted the update operator as a substitution of the
+alpha.164 one. The operator ran once. Open: the wider pull-back window; daily
+use of the grid follow; publication of alpha.163 to alpha.165; the post-provider
+signature check.

@@ -4245,3 +4245,13 @@ code, and seventeen deliberate breakages were caught by its unit tests. The
 terminal-selection script was not run on main this time, to avoid any further
 risk to the person's clipboard; the author ran it three times with the clipboard
 change count unchanged.
+
+The committed alpha.165 tree passes the same 2,182 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. An initial-only read before the update found the active backend empty
+and no backend that qualified for an automatic move, and the operator required
+the same live. The ordinary visible update kept fourteen session records with
+their native IDs, live process starts and drafts, and the seven other backends
+kept PID, start time and version; 150 seconds later they and all sixteen live
+native processes were unchanged and no move record existed.
