@@ -59,7 +59,8 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     '21747af95a28473c4e4427679368b71a5ad502a60af8057814994fdf157ce2c3',
     'f187117c765b290c78f8cf1e5d60e6bfdd7b51b1e43a4e06b1de567070ddc0d6',
     'ac4bb9518434cc4b278ce1eeee71a7e6c246b255b4fcada02a8fc0af116dfc56',
-    '5de54527becca19aa455af4a8fcd1723c27c57242396d360af88eb654e271fa9']);
+    '5de54527becca19aa455af4a8fcd1723c27c57242396d360af88eb654e271fa9',
+    '0def028a251c2666ddca955669b7fbd19663892cea2a97b79290f259de14829f']);
   const upgrades = new Set();
   for (const [name, content] of files) {
     const filename = path.join(directory, name);
