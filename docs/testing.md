@@ -4498,3 +4498,14 @@ after and found it unchanged, and the fake pbcopy was not called. The default
 flow passed on 2.1.317, the session wake GUI script exits 0, and no run made a
 paid call. The compat known-list check finds all 42 earlier main builds of the
 hook since 257c523 in the upgrade list and no other entries.
+
+The committed alpha.171 tree passes the same 2,270 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. An initial-only read before the update found the active backend empty
+and no backend that qualified for an automatic move, and the operator re-checked
+both live; a saved check found no backend move record before the run. The
+ordinary visible update kept fourteen session records with their native IDs,
+live process starts and drafts, and the seven other backends kept PID, start
+time and version; 150 seconds later they and all sixteen live native processes
+were unchanged and no move record existed.
