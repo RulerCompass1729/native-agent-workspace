@@ -101,7 +101,7 @@ function nativePixelReference(dataDir, sessionId, payload, previous) {
     };
     safeDirectory(dataDir, false);
     const base = safeDirectory(path.join(dataDir, 'native-image-cache'), true);
-    const folder = safeDirectory(path.join(base, createHash('sha256').update(sessionId).digest('hex')), true);
+    const folder = safeDirectory(path.join(base, cacheFolderName(sessionId)), true);
     const extension = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }[mime];
     const file = path.join(folder, digest + '.' + extension); let stat;
     if (fs.existsSync(file)) {
@@ -117,7 +117,7 @@ function nativePixelReference(dataDir, sessionId, payload, previous) {
       let stored = 0;
       for (const name of fs.readdirSync(folder)) {
         const value = fs.lstatSync(path.join(folder, name));
-        if (!/^[a-f0-9]{64}\.(png|jpg|gif|webp)$/.test(name) || !value.isFile() || value.isSymbolicLink()) throw Error('原生图片缓存目录无法核验。');
+        if (!CACHED_IMAGE_NAME.test(name) || !value.isFile() || value.isSymbolicLink()) throw Error('原生图片缓存目录无法核验。');
         stored += value.size;
       }
       if (stored + bytes.length > 64 * 1024 * 1024) throw Error('本会话原生图片已达 64 MB 上限。');
@@ -133,6 +133,36 @@ function nativePixelReference(dataDir, sessionId, payload, previous) {
   } catch (error) {
     return { ...(previous && !previous.pending ? previous : original), ...(!previous?.pixelSha256 && digest ? { kind: 'native-pixels', pixelSha256: digest } : {}), unavailable: error.code ? '原生图片无法存入本机缓存。' : error.message };
   }
+}
+// Each session's cached native images live in native-image-cache/<SHA-256 of the session id>/,
+// one file per image named by the SHA-256 of its bytes.
+function cacheFolderName(sessionId) { return createHash('sha256').update(sessionId).digest('hex'); }
+const CACHED_IMAGE_NAME = /^[a-f0-9]{64}\.(png|jpg|gif|webp)$/;
+// The folder and file a cached image reference points to, as "<folder>/<file>", so a reference
+// still matches when the data directory is spelled differently.
+function cachedImageKey(ref) {
+  return ref?.kind === 'native-pixels' && typeof ref.cachedPath === 'string' ? `${path.basename(path.dirname(ref.cachedPath))}/${path.basename(ref.cachedPath)}` : null;
+}
+// T-140: when a session's records are removed, this app's copies of its native images go too.
+// Files listed in keep (shared rows of a collaboration space still show them) stay. Only files
+// this module names are removed; a folder that is a link, not a folder or not the person's own
+// is left alone. The folder goes once nothing is left in it. Never throws: it reports.
+function removeCachedImages(dataDir, sessionId, keep = new Set()) {
+  const result = { removed: 0, kept: 0, failed: false };
+  try {
+    const base = path.join(dataDir, 'native-image-cache'), name = cacheFolderName(sessionId), folder = path.join(base, name);
+    for (const directory of [base, folder]) {
+      let stat; try { stat = fs.lstatSync(directory); } catch (error) { if (error.code === 'ENOENT') return result; throw error; }
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('原生图片缓存目录无法核验。');
+    }
+    for (const entry of fs.readdirSync(folder)) {
+      const file = path.join(folder, entry), stat = fs.lstatSync(file);
+      if (!CACHED_IMAGE_NAME.test(entry) || !stat.isFile() || stat.isSymbolicLink() || keep.has(`${name}/${entry}`)) { result.kept++; continue; }
+      fs.unlinkSync(file); result.removed++;
+    }
+    if (!result.kept) fs.rmdirSync(folder);
+  } catch { result.failed = true; }
+  return result;
 }
 function applyImagePayload(row, payload, dataDir, sessionId) {
   if (!validImagePayload(payload) || !['tool', 'input'].includes(row.kind) || !['complete', 'submitted'].includes(row.status)) return false;
@@ -309,4 +339,4 @@ class ImagePreviews {
   release(token) { const entry = this.entries.get(token); if (entry) { this.bytes -= entry.png.length; this.entries.delete(token); } }
   close() { this.closed = true; this.entries.clear(); this.bytes = 0; }
 }
-module.exports = { MAX_IMAGES, MAX_BYTES, MAX_PIXELS, MAX_NATIVE_BYTES, MAX_NATIVE_ENCODED, validImagePayload, applyImagePayload, imageDimensions, userImageReferences, imageReferences, applyInputImages, imageSource, resolvedImagePath, readImage, ImagePreviews };
+module.exports = { MAX_IMAGES, MAX_BYTES, MAX_PIXELS, MAX_NATIVE_BYTES, MAX_NATIVE_ENCODED, validImagePayload, applyImagePayload, cachedImageKey, removeCachedImages, imageDimensions, userImageReferences, imageReferences, applyInputImages, imageSource, resolvedImagePath, readImage, ImagePreviews };

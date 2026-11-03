@@ -24,10 +24,18 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   2.1.312 only, images in the person's prompts shown as native input. Each
   session has its own owner-only folder, and each file is named by the SHA-256
   of its image bytes. Each image is at most 1 MB and each session's folder at
-  most 64 MB. Archiving a session or using 移除本应用记录… does not delete its folder
-  yet; removing the application data directory does. A collaboration space's
-  shared rows keep references to these copies, so the space can still open them
-  after the session is removed, and clearing shared records leaves the files.
+  most 64 MB. Archiving a session keeps its folder, since the session can be
+  restored. 移除本应用记录… deletes the session's copies once the removal is saved,
+  except those a collaboration space's shared rows still show: the removal
+  keeps shared content, so the space can still open them. Clearing the shared
+  records that show them then deletes them, and the folder goes once it is
+  empty. A kept image whose shared row a space already dropped under its limit
+  on stored tool rows stays until the application data directory is removed.
+  Only files this application wrote are deleted, and a folder that is a link or
+  not the person's own is left alone. A session removed before this change
+  keeps its folder until a shared record showing its images is cleared, which
+  deletes the rest of that folder too, or until the application data directory
+  is removed.
   Teammates' images are not cached, and there is no limit across sessions.
 - legacy-shared.json stores only native display blocks authorized by an explicit
   room send on inspected retained Claude connections. It is owner-only and atomic;

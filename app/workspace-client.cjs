@@ -642,7 +642,7 @@ class WorkspaceClient extends EventEmitter {
         if (entries.some(e => { const run = backendRoom(e.state, roomId)?.run; return run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed; })) throw Error('请先核对这个空间的交接已暂停，再清除记录。');
         const results = await Promise.allSettled(entries.map(e => this.invoke(e, roomId, 'clearSharedHistory', [])));
         if (results.some(r => r.status === 'rejected')) throw Error('部分后台未确认清除；其他空间未清除，未自动重试。');
-        await this.refresh(roomId); return true;
+        await this.refresh(roomId); return results.some(r => r.value?.imagesLeft) ? { imagesLeft: true } : true;
       }
       this.control.revision++; this.control.manualEpoch++;
       const sharedIds = this.control.legacyInput?.sharedMessages?.().map(message => message.id) || [];
@@ -657,7 +657,8 @@ class WorkspaceClient extends EventEmitter {
         && e.state.runtimeVersion === '0.1.0-alpha.2' && !e.state.room.messages?.length ? Promise.resolve() : e.client.call(method)));
       if (results.some(r => r.status === 'rejected')) throw new Error('部分后台未确认操作；请重新连接核对，未自动重试。');
       if (method === 'clearSharedHistory') this.control.legacyInput?.clearSharedHistory(sharedIds);
-      return true;
+      // A service reports cached images of removed sessions it could not delete (T-140).
+      return results.some(r => r.value?.imagesLeft) ? { imagesLeft: true } : true;
     }
     if (method === 'run') {
       const guards = new Map(this.entries.map(e => [e.key, this.operationGuard(e)]));

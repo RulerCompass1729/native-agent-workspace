@@ -797,3 +797,12 @@ test('only the explicit pause asks a backend to withdraw every staged wake; the 
   await c.pauseEntry(entry, true);
   assert.deepEqual(next.calls.filter(([method]) => method === 'pause').at(-1), ['pause', { withdrawWakes: true }]);
 });
+
+test('clearing 共同工作 passes on a service\'s report that cached images could not be deleted (T-140)', async () => {
+  for (const left of [false, true]) {
+    const { next, c } = fixture(), call = next.client.call;
+    next.client.call = async (method, ...args) => method === 'clearSharedHistory' ? (await call(method, ...args), left ? { imagesLeft: true } : true) : call(method, ...args);
+    assert.deepEqual(await c.call('clearSharedHistory'), left ? { imagesLeft: true } : true);
+    c.close();
+  }
+});

@@ -11,6 +11,7 @@ const { nativeApprovalPolicy, ApprovalQueue } = require('./approval-policy.js');
 const { NativeHistory, claudeMetadata, nativeId, codexVersionInfo } = require('./native-history.cjs');
 const spaces = require('./collaboration-spaces.cjs');
 const gitWorktree = require('./git-worktree.cjs');
+const { cachedImageKey, removeCachedImages } = require('./native-images.cjs');
 
 const cleanText = (value, max = 16000) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error(`请输入有效文字；一次最多 ${max.toLocaleString('en-US')} 个字符。`);
@@ -1334,12 +1335,26 @@ class Workspace extends EventEmitter {
     for (const [tag, forward] of this.forwards) if ((forward.roomId || 'shared') === roomId) this.forwards.delete(tag);
     room.run = null; room.messages = []; room.revision++; this.changed(); this.persist();
     if (this.storageWarning) { Object.assign(room, retained); this.emit('change'); throw Error(this.storageWarning); }
+    // Images kept only for these shared rows, from sessions whose records are already removed.
+    const removed = new Set(retained.messages.filter(m => m.sessionId && !this.sessions.has(m.sessionId) && m.images?.some(cachedImageKey)).map(m => m.sessionId)), keep = this.sharedImageKeys();
+    if ([...removed].map(id => removeCachedImages(this.dataDir, id, keep)).some(r => r.failed)) return { imagesLeft: true };
   }
+  // Cached native images that a collaboration space's shared rows still show.
+  sharedImageKeys() {
+    const keys = new Set();
+    for (const room of this.rooms.values()) for (const m of room.messages || []) for (const ref of Array.isArray(m.images) ? m.images : []) { const key = cachedImageKey(ref); if (key) keys.add(key); }
+    return keys;
+  }
+  // T-140: removing a session's records also removes this app's copies of its native images,
+  // once the removal is saved. Images its shared rows show stay with the shared record (the
+  // removal dialog promises shared content stays) until that record is cleared. The records go
+  // even when the files cannot; the caller reports it after its own cleanup.
   forget(id) {
     const s = this.get(id);
     if (this.runtimes.has(id) || (s.state !== 'ended' && (processMayBeAlive(s.processIdentity) || processMayBeAlive(s.serverIdentity)))) throw new Error('原生连接仍存在，请先结束或检查会话。');
     this.sessions.delete(id); this.drafts.delete(id); this.draftRevisions.delete(id); this.changed(); this.persist();
     this.progress.delete(id); this.observedTerminals.delete(id);
+    if (!this.storageWarning && removeCachedImages(this.dataDir, id, this.sharedImageKeys()).failed) return { imagesLeft: true };
   }
   close() { this.closed = true; clearTimeout(this.saveTimer); clearInterval(this.deadlineTimer); this.persist(); this.host.close(); }
 }

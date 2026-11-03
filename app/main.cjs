@@ -414,9 +414,11 @@ async function boot() {
         if (answer.response !== 1) return false;
         if (roomState.metadata(roomId).revision !== revision) throw Error('空间资料已变化，请重新核对后清除。');
         roomState.writable(roomId);
-        await c.client.callSpace(roomId, action, []);
+        const result = await c.client.callSpace(roomId, action, []);
         try { roomState.clear(revision, roomId); } catch (error) { throw Error(`共享消息已清除，时间线和笔记已保留。${error.message}`); }
-        await broadcastRoom(); return true;
+        await broadcastRoom();
+        if (result?.imagesLeft) throw Error('共享记录已清除，但已移除会话的本机图片副本未能全部删除，请检查本机数据目录的权限。');
+        return true;
       }
       if (action !== 'pause') for (const id of action === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]]) roomState.assertAvailable(id, true, roomId);
       if (action === 'run' && Array.isArray(args[0])) {
@@ -524,8 +526,9 @@ async function boot() {
     const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: '清除共同工作记录？', detail: '清除本应用里的共享消息、成员时间线和共享笔记，并停止尚未完成的分享回写。名称与各个原生会话保留，不能撤回其他 agent 已收到的内容。正在执行的原生任务不会因此取消。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
       const revision = roomState.value.revision;
-      await c.client.call('clearSharedHistory');
+      const result = await c.client.call('clearSharedHistory');
       try { roomState.clear(revision); } catch (error) { throw Error(`共享消息已清除，时间线和笔记已保留。${error.message}`); }
+      if (result?.imagesLeft) { await broadcastRoom(); throw Error('共享记录已清除，但已移除会话的本机图片副本未能全部删除，请检查本机数据目录的权限。'); }
       await broadcastRoom(); return true;
     }
   });
@@ -622,11 +625,14 @@ async function boot() {
       buttons: ['取消', '移除记录'], defaultId: 0, cancelId: 0,
     });
     if (answer.response === 1) {
-      await c.client.call(action, id);
+      const result = await c.client.call(action, id);
       if (action === 'forget') {
         for (const view of views) { delete view.readingPositions?.[id]; forgetDraft(view, id); if (view.selected === id) view.selected = ''; }
         saveViews();
-        try { sessionLabels.remove(id); } catch { throw new Error('会话记录已移除，但本地显示名未能清理。请检查本机数据权限与磁盘空间。'); }
+        let labelsLeft = false; try { sessionLabels.remove(id); } catch { labelsLeft = true; }
+        if (labelsLeft && result?.imagesLeft) throw new Error('会话记录已移除，但本地显示名和本机的图片副本未能全部清理。请检查本机数据权限与磁盘空间。');
+        if (labelsLeft) throw new Error('会话记录已移除，但本地显示名未能清理。请检查本机数据权限与磁盘空间。');
+        if (result?.imagesLeft) throw new Error('会话记录已移除，但本机的图片副本未能全部删除，请检查本机数据目录的权限。');
       }
     }
   });

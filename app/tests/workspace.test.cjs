@@ -1078,3 +1078,52 @@ for (const accepted of [true, false]) test(`private Claude queue (${accepted}) r
   assert.ok(w.room.messages.find(m => m.text === 'shared prefix').sharingStopped);
   assert.equal(w.versions.dispatches, 2);
 });
+
+test('removing a session\'s records removes its cached native images, except those its shared rows show, until the shared record is cleared (T-140)', async t => {
+  const { applyImagePayload } = require('../native-images.cjs');
+  const { workspace: w, ids: [id] } = await fixture(t);
+  w.runtimes.delete(id); const s = w.get(id); s.state = 'ended'; s.processIdentity = null;
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=', 'base64'), other = Buffer.from(png); other[other.length - 1] ^= 1;
+  const cached = (key, bytes) => { const row = { id: `native:N:tool:${key}`, nativeId: 'N', role: 'tool', kind: 'tool', text: 'shown', status: 'complete' }; applyImagePayload(row, { index: 0, mime: 'image/png', data: bytes.toString('base64') }, w.dataDir, id); assert.ok(row.images[0].cachedPath, row.images[0].unavailable); return row; };
+  const shared = cached('shared', png), private_ = cached('private', other), folder = path.dirname(shared.images[0].cachedPath);
+  w.room.messages.push({ id: 'room-row', sessionId: id, nativeId: 'N', role: 'assistant', kind: 'tool', status: 'complete', sharedStream: true, images: shared.images.map(ref => ({ ...ref })) });
+  assert.equal(w.forget(id), undefined);
+  assert.equal(w.sessions.has(id), false); assert.ok(!fs.existsSync(private_.images[0].cachedPath), 'an image only the session showed is removed');
+  assert.ok(fs.existsSync(shared.images[0].cachedPath), 'an image the shared record shows stays, as the removal dialog promises');
+  assert.equal(w.clearSharedHistory(), undefined);
+  assert.ok(!fs.existsSync(folder), 'clearing the shared record removes what was kept for it, and the folder');
+});
+test('a removal that is not saved keeps the images, and a removal whose images cannot go still removes the records (T-140)', async t => {
+  const { applyImagePayload } = require('../native-images.cjs');
+  const { workspace: w, ids: [first, second] } = await fixture(t, 2);
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=', 'base64');
+  const cache = id => { w.runtimes.delete(id); Object.assign(w.get(id), { state: 'ended', processIdentity: null }); const row = { id: 'native:N:tool:R', nativeId: 'N', role: 'tool', kind: 'tool', text: 'shown', status: 'complete' }; applyImagePayload(row, { index: 0, mime: 'image/png', data: png.toString('base64') }, w.dataDir, id); return row.images[0].cachedPath; };
+  const kept = cache(first);
+  w.storageWarning = 'disk full'; w.forget(first); w.storageWarning = null;
+  assert.ok(fs.existsSync(kept), 'the record may come back after a restart, so its images stay');
+  const stuck = cache(second), folder = path.dirname(stuck); fs.chmodSync(folder, 0o500);
+  try { assert.deepEqual(w.forget(second), { imagesLeft: true }); assert.equal(w.sessions.has(second), false); assert.ok(fs.existsSync(stuck)); }
+  finally { fs.chmodSync(folder, 0o700); }
+});
+
+test('removing a session with no shared images removes its image folder at once (T-140)', async t => {
+  const { applyImagePayload } = require('../native-images.cjs');
+  const { workspace: w, ids: [id] } = await fixture(t);
+  w.runtimes.delete(id); Object.assign(w.get(id), { state: 'ended', processIdentity: null });
+  const row = { id: 'native:N:tool:R', nativeId: 'N', role: 'tool', kind: 'tool', text: 'shown', status: 'complete' };
+  applyImagePayload(row, { index: 0, mime: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=' }, w.dataDir, id);
+  const folder = path.dirname(row.images[0].cachedPath); assert.ok(fs.existsSync(folder));
+  assert.equal(w.forget(id), undefined); assert.equal(fs.existsSync(folder), false);
+});
+test('an image shared in two spaces stays until both shared records are cleared (T-140)', async t => {
+  const { applyImagePayload } = require('../native-images.cjs');
+  const { workspace: w, ids: [id] } = await fixture(t);
+  w.runtimes.delete(id); Object.assign(w.get(id), { state: 'ended', processIdentity: null });
+  const row = { id: 'native:N:tool:R', nativeId: 'N', role: 'tool', kind: 'tool', text: 'shown', status: 'complete' };
+  applyImagePayload(row, { index: 0, mime: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=' }, w.dataDir, id);
+  const file = row.images[0].cachedPath, space = require('node:crypto').randomUUID(), sharedRow = room => ({ id: `row-${room}`, sessionId: id, nativeId: 'N', role: 'assistant', kind: 'tool', status: 'complete', sharedStream: true, images: row.images.map(ref => ({ ...ref })) });
+  w.room.messages.push(sharedRow('shared')); w.roomFor(space, true).messages.push(sharedRow(space));
+  w.forget(id); assert.ok(fs.existsSync(file));
+  assert.equal(w.clearSharedHistory(space), undefined); assert.ok(fs.existsSync(file), 'still shown in 共同工作');
+  assert.equal(w.clearSharedHistory(), undefined); assert.equal(fs.existsSync(path.dirname(file)), false, 'gone once no shared record shows it');
+});

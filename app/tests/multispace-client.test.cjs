@@ -92,3 +92,11 @@ for (const action of ['forward', 'queueShared', 'steerShared']) test(`selected $
   assert.equal(one.actual.rooms[1].run.status, 'running');
   assert.equal(third.calls.filter(c => c[0] === 'spaceAction' && c[1] === b && c[2] === action).length, 1);
 });
+
+test('clearing a named space passes on a service\'s report that cached images could not be deleted (T-140)', async t => {
+  for (const left of [false, true]) {
+    const { a, one, client } = fixture(t), call = one.client.call;
+    one.client.call = async (method, ...args) => { const value = await call(method, ...args); return left && method === 'spaceAction' && args[1] === 'clearSharedHistory' ? { imagesLeft: true } : value; };
+    assert.deepEqual(await client.callSpace(a, 'clearSharedHistory', []), left ? { imagesLeft: true } : true);
+  }
+});
