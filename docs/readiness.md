@@ -4,6 +4,43 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.174 carries Claude 2's reviewed change that lets a new session
+join a collaboration space as it starts (T-115), and a fix to two GUI scripts
+(T-159). 开始一个会话 gains a 协作空间 field: an independent session, the default and
+unchanged, joining an existing space, or creating a space, named after the
+session by default, and joining it. The steps run in order, and if one fails the
+parts that succeeded are kept, the dialog names the unfinished step and its
+button becomes 仅继续加入, which finishes only what remains; closing the dialog
+midway keeps what was created. The design was adopted on 10-31 under the board's
+20-minute rule, and in one point the code departs from it: the adopted design
+said a lost reply is never resolved by guessing from a name or folder, while the
+code adopts a session found in the chosen folder, or a space found by its name,
+when exactly one new one appears, joining such a space without a further click.
+The risk is adopting a session created at the same moment in the same folder, or
+a same-named space created in another window; the session case shows its name
+and short ID before 仅继续加入. Whether to keep that or return to the stricter rule
+is now part of the person's open question on T-115. With a space chosen,
+continuing an existing session or taking over a Claude session cannot be
+combined yet; the dialog says to continue first and join from the session menu,
+and the person may ask for that to be added. The change runs in the window, so
+it applies once the app is updated. Both commits are integrated with identical
+changed lines, the full unit suite passes 2,286 checks and the name check
+reports nothing missing. With the UI bundle rebuilt, the new create space choice
+GUI script runs the whole journey on main, and the session directory,
+multispace, sidebar status, space join, collaboration overview and daily use
+scripts exit 0 without model calls by their synthetic transport; the system
+clipboard's change count did not change. Dialog lifecycle and navigation first
+failed on main at the same points as without this change; with Claude 2's T-159
+script fix for their two outdated expectations, both run through, so dialog
+lifecycle's create-dialog checks, closing without creating and a creation
+confirmed after closing, now pass with the new space field present. Unverified:
+a lost join reply, a lost space reply followed by a failed re-read, closing
+while a step is still running, a space archived while the form is open, the
+sidebar's flat and grouped views updating at once, and the daily app. Known,
+rare: if the session is created but the two state reads right after it both
+fail, it is not adopted and a retry creates a second session that joins the
+space instead. Daily delivery remains pending; current daily remains alpha.173.
+
 Current daily GUI: alpha.173, committed build source `8d5bda5b`. It carries two
 reviewed window changes from Claude 3 and a script fix. First, a shown 原生终端 that
 takes no keys, after getting control failed, or after a relaunch that reopens

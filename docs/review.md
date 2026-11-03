@@ -3869,3 +3869,70 @@ clipboard count did not change. With codex usability covering leaving through
 the service, both ways of leaving now have a running check. Later: a member
 dragged out and added back should not get its old address back, to be added when
 the drag-back logic changes.
+
+
+### A new session can join or create a collaboration space (T-115)
+
+The person asked on 10-31 whether starting a session could join an existing
+collaboration space or create one. Codex 2 proposed an optional 协作空间 field with
+three choices, independent by default, join an existing space, or create a space
+and join it; that proposal (A) was adopted on 10-31 under the board's 20-minute
+rule rather than chosen by the person. Claude 2 implemented it on current main,
+using Codex 2's uncommitted work only as a reference because it rested on a
+translation layer main does not have and mixed in other wording. The steps run
+in order, validation, the session, the new space if any, then the join; if a
+step fails, what succeeded is kept, the dialog names the unfinished step and the
+button becomes 仅继续加入, which only does what remains and never recreates the
+session or space. A session or space that was written although its reply was
+lost is adopted only when exactly one new one appears; the space-name adoption
+was in Claude 2's first version and the lane review extended it to sessions; it
+departs from the adopted proposal, which said a lost reply is never resolved by
+guessing from a name or folder. The integration reviewer flagged the departure:
+a session created at the same moment in the same folder, or a same-named space
+from another window, could be adopted, and such a space is joined without a
+further click. It is now part of the person's open question on the row. Closing
+the dialog midway keeps what was created and stops the remaining steps. It works
+with the automatic folder, a chosen folder, a Git working copy and skipping
+permission prompts.
+
+Claude 2's lane reviewer asked for changes once: a failure of the session
+creation itself could create a second session, and no test covered it, and the
+regression runs predated the final renderer; both were fixed, and the second
+round passed. Lane evidence: the new create space choice GUI script ran the
+whole journey with eleven checks passing, the unit suite passed 2,286 checks and
+the session directory script passed; dialog lifecycle and navigation fail on
+clean main as well (T-159). The integration reviewer also found, non-blocking:
+when the session is created but the two state reads right after it both fail,
+the session is not adopted and a retry creates a second one; after the dialog is
+closed, or when the space was archived or the session is on an old backend, the
+next-step text still suggests 仅继续加入; and in the adopted Git-copy case the
+preview still asks to reselect the repository. Not covered, though sound in the
+source: a lost join reply, and a lost space reply followed by a failed re-read.
+Open for the person: with a space chosen, continuing an existing session or
+taking over a Claude session cannot be combined yet; the dialog says to continue
+first and then join from the session menu. The recommended A keeps that; B would
+add it now; A applies under the 20-minute rule unless the person answers.
+
+
+### Two GUI scripts follow the space dialogs and in-view restores (T-159)
+
+Dialog lifecycle and navigation failed on clean main. Claude 2 found both
+outdated after intentional changes. Three space dialogs added on 10-30 (new
+space, space files and merge spaces; c9800cc, 3305174) raised the dialogs that
+close on an outside click from 12 to 15; the script now lists them by id, so a
+future addition names itself in the failure, and it adds cancel checks for the
+new space and space files dialogs, by background click, Escape and the button,
+none of which sends a create or add request. Notes and invites go through
+spaceAction since c9800cc and are counted per action, the final zero-send check
+now also counts the shared run, forward, queue and steer requests, whose
+per-request counts could never fail before, while the fixture's own send and
+dispatch counts already guarded real dispatch, and 文件… opens the space file list
+first. Navigation: since T-92 a restored archived session stays in the current
+view with 打开 in the notice, so the script checks the view did not change before
+clicking 打开.
+
+The lane reviewer took three rounds; the second found that a comment inserted
+mid-line had turned two existing assertions, zero dispatches and zero clipboard
+use, into comments; the comment was moved to its own line and the script rerun,
+and the third passed. Not covered: cancelling the merge spaces dialog, which
+discards a merge and needs the whole merge flow.

@@ -4651,3 +4651,27 @@ nothing missing, and after rebuilding the UI bundle test-collaboration exits 0,
 including the new steps that set the leaving member as the recipient before each
 drag out and wait for the saved recipient to clear, with the system clipboard's
 change count at 268 before and after.
+
+
+### Creating a session into a collaboration space - alpha.174
+
+Claude 2's commit is integrated with identical changed lines. On main the full
+unit suite passes 2,286 checks without skips, and the name check reports nothing
+missing across 529 lookups in 177 scripts. After rebuilding the UI bundle, the
+new create space choice script runs the whole journey in the real app and exits
+0, as do session directory, multispace, sidebar status, space join,
+collaboration overview and daily use, without model calls and with the system
+clipboard's change count at 268 before and after every run. Dialog lifecycle
+stops at its count of dialogs (15 against an expected 12) and navigation at the
+restored archived session's row, exactly as the author lane recorded on clean
+main; both are T-159.
+
+Claude 2's T-159 commit, which changes dialog lifecycle and navigation only, is
+integrated with identical changed lines on top. Both had outdated expectations:
+three space dialogs added on 10-30 raised the count of dialogs that close on an
+outside click from 12 to 15, now listed by id, and since T-92 restoring an
+archived session stays in the current view and offers 打开. On main the unit suite
+still passes 2,286 checks and the name check reports nothing missing; dialog
+lifecycle, navigation and create space choice exit 0, with dialog lifecycle's
+create-dialog checks running for the first time on this tree, and the system
+clipboard's change count at 268 before and after.
