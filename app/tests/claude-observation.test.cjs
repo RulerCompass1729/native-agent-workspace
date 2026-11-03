@@ -768,6 +768,36 @@ for (const [version, on] of [['2.1.312', true], ['2.1.316', true], ['2.1.317', t
   assert.equal(original.incomplete === true, !on);
   assert.equal(rows.some(r => r.mediaOnly && r.imagePayload?.data === onePixelPng && r.imagePayload.mime === 'image/png'), on);
 });
+// T-133 (measured on 2.1.317): the settings hook carries a terminal prompt's text only; its prompt block carries the image.
+const imagePrompt = (text, data = onePixelPng) => ({ uuid: randomUUID(), door: 'prompt', origin: { kind: 'composer' },
+  message: { type: 'user', role: 'user', content: [{ type: 'text', text }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }] } });
+const flushZero = async f => { for (let i = 0; i < 8 && f.clock.some(fn => fn.delay === 0); i++) { const fn = f.clock.find(x => x.delay === 0); f.clock.splice(f.clock.indexOf(fn), 1); await fn(); } };
+for (const [version, on] of [['2.1.316', true], ['2.1.317', true], ['2.1.312', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a terminal prompt's image for its settings-hook row (T-133)`, async () => {
+  const f = await mod({ version }), images = [], promptId = randomUUID(), text = 'Describe this image.';
+  f.r.on('nativePromptImage', event => images.push(event));
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: text });
+  await f.append(imagePrompt(text)); await flushZero(f);
+  assert.deepEqual(images.map(x => [x.promptId, x.tag, x.imagePayload.index, x.imagePayload.data === onePixelPng]), on ? [[promptId, require('../adapters.cjs').promptTextTag(text), 0, true]] : []);
+  // 2.1.312 shows the prompt block itself, with its image; no second copy.
+  assert.equal(f.requests.some(r => r.kind === 'prompt-media'), on);
+});
+test('native 2.1.317: an image prompt typed while Claude works goes to its own -q row, named as the adapter names it (T-133)', async () => {
+  const f = await addressedMod('2.1.317'), images = [], first = randomUUID(), sid = f.r.record.nativeId, typed = '再看这张图 — check this.';
+  f.r.on('nativePromptImage', event => images.push(event));
+  await f.invoke('classic.UserPromptSubmit', { session_id: sid, prompt_id: first, prompt: 'Look at the board.' });
+  await f.invoke('turn.start', { turnId: 'first-turn', text: 'Look at the board.' });
+  await typedDuringTurn(f, first, typed);
+  await f.invoke('turn.complete', { turnId: 'first-turn', reason: 'answer' });
+  await f.append(imagePrompt(typed)); await flushZero(f);
+  assert.deepEqual(images.map(x => [x.promptId, x.tag]), [[first, require('../adapters.cjs').promptTextTag(typed)]]);
+});
+test('a prompt block with an image but no matching submitted text sends nothing (T-133)', async () => {
+  const f = await mod({ version: '2.1.317' }), images = [];
+  f.r.on('nativePromptImage', event => images.push(event));
+  await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: randomUUID(), prompt: 'One text.' });
+  await f.append(imagePrompt('Another text.')); await flushZero(f);
+  assert.deepEqual(images, []); assert.equal(f.requests.some(r => r.kind === 'prompt-media'), false);
+});
 test('tool result text keeps block order, excludes media bytes and marks nontext output', async () => {
   const f = await mod(), e = response();
   e.door = 'tool-result'; e.origin = { kind: 'tool', tool: 'Read' }; e.message = { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool', content: [{ type: 'text', text: 'first' }, { type: 'image', source: { data: 'secret-media' } }, { type: 'text', text: 'second' }] }] };

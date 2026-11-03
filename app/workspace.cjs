@@ -462,6 +462,35 @@ class Workspace extends EventEmitter {
       for (const m of s.messages) if (rows.has(m.id) && m.commandSource === 'userShell') linked = linkTurn(m, info.turnId) || linked;
       if (linked) this.changed();
     });
+    // T-133: an image in a prompt typed in the terminal (2.1.316/2.1.317) enriches that prompt's row: the row of
+    // the same prompt id (claude-prompt-<id> or its -q<tag> row, T-138) whose text has the same tag. No
+    // first-text memory is involved, so a reload or restart cannot misplace it. The row comes from the settings
+    // hook on its own socket and can land after the image: that waits, bounded.
+    const pendingPromptImages = new Map();
+    const textTag = require('./adapters.cjs').promptTextTag;
+    const promptRow = (promptId, tag) => s.messages.find(m => m.role === 'user' && m.origin === 'native' && typeof m.text === 'string' &&
+      (m.id === `claude-prompt-${promptId}` || m.id === `claude-prompt-${promptId}-q${tag}`) && textTag(m.text) === tag);
+    const applyPromptImage = (row, event) => {
+      if (!row || event.nativeId !== s.nativeId || row.nativeId && row.nativeId !== event.nativeId) return false;
+      row.nativeId = event.nativeId; // the image viewer checks the row's native session
+      return require('./native-images.cjs').applyImagePayload(row, event.imagePayload, this.dataDir, s.id);
+    };
+    on('nativePromptImage', event => {
+      const row = promptRow(event.promptId, event.tag);
+      if (row) { if (applyPromptImage(row, event)) this.changed(); return; }
+      if (event.nativeId !== s.nativeId) return;
+      const key = `${event.promptId}:${event.tag}`;
+      pendingPromptImages.set(key, [...(pendingPromptImages.get(key) || []), event].slice(0, 17));
+      while (pendingPromptImages.size > 8) pendingPromptImages.delete(pendingPromptImages.keys().next().value);
+    });
+    on('nativeInput', (text, item) => {
+      const promptId = /^claude-prompt-([a-f0-9-]{36})(?:-q[a-f0-9]{8})?$/i.exec(item?.id || '')?.[1], tag = promptId && typeof text === 'string' ? textTag(text) : null;
+      const waiting = tag && pendingPromptImages.get(`${promptId}:${tag}`);
+      if (!waiting) return;
+      pendingPromptImages.delete(`${promptId}:${tag}`);
+      // Runs after the input's own handler has stored its row.
+      queueMicrotask(() => { let changed = false; for (const event of waiting) changed = applyPromptImage(promptRow(promptId, tag), event) || changed; if (changed) this.changed(); });
+    });
     on('nativeInput', (text, item) => {
       const id = /^claude-prompt-(.+)$/.exec(item?.id || '')?.[1], pending = id && pendingPrompts.get(id);
       if (!pending) return;

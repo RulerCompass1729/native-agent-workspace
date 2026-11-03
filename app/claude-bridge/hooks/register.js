@@ -92,6 +92,18 @@ const nativeMediaVersion = version => ['2.1.312', '2.1.316', '2.1.317'].includes
 function mediaIncomplete(parts, binding, complete = true) {
   return Array.isArray(parts) && parts.some(part => part?.type !== 'text' && !(complete && binding?.nativeMedia && nativeImagePart(part)));
 }
+// T-133: images of a prompt shown from the settings hook, as media for its row; same limits as enqueueWithImages.
+function enqueuePromptImages($, key, parts, binding) {
+  let index = 0;
+  for (const part of parts) {
+    if (part?.type !== 'image') continue;
+    const imagePayload = index === 16 ? { index, unavailable: '其余图片超过本地预览上限，请在原生终端核对。' }
+      : !nativeImagePart(part) ? { index, unavailable: '原生图片超过 1 MB、格式不支持或不是本机图片内容。' }
+      : { index, mime: part.source.media_type, data: part.source.data };
+    enqueueBlock($, { id: `prompt:${key}`, kind: 'prompt-media', status: 'complete', mediaOnly: true, imagePayload }, binding);
+    if (++index > 16) break;
+  }
+}
 function enqueueWithImages($, row, parts, binding = rootBinding) {
   const count = binding?.nativeMedia && row.status === 'complete' && Array.isArray(parts) ? Math.min(17, parts.filter(part => part?.type === 'image').length) : 0;
   // The original frame already records missing media if a later frame is lost.
@@ -145,6 +157,8 @@ let queuedPrompts = [];
 // adapter stores it as `claude-prompt-<id>-q<tag>`, the tag made from its text by this same function
 // (adapters.cjs promptTextTag; a test pins the two equal), so a turn it starts can name its row with
 // no shared history: a hot reload here loses nothing.
+// T-133: each prompt text's id and text tag, for images its prompt block carries.
+const promptImageRows = new Map();
 const promptTextTag = text => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0; return h.toString(16).padStart(8, '0'); };
 // The foreign submissions now in flight, with their origins (UserPromptSubmit fires inside one): only
 // the person's own composer input can join the line. This mod's own submissions never reach this hook.
@@ -322,6 +336,13 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
       !(e.origin?.kind === 'plugin' && e.origin.name === 'native-workspace-submit')) {
       enqueueWithImages($, { id: `prompt:${result.uuid}`, kind: 'input', inputMode: 'native-prompt',
         text: text(message.content), status: 'complete', incomplete: mediaIncomplete(message.content, binding) }, message.content, binding);
+    }
+    // 2.1.316/2.1.317 (T-133, measured): a prompt typed in the terminal is shown from the settings hook, which
+    // carries no image. The person's prompt block (origin composer) does; its pixels go to that row, named
+    // at its UserPromptSubmit. The block comes before its turn starts, also for a prompt typed mid-turn.
+    if (!legacyOnly && !binding.nativePromptInput && binding.nativeMedia && e.door === 'prompt' && message.type === 'user' && e.origin?.kind === 'composer') {
+      const row = promptImageRows.get(text(message.content));
+      if (row?.binding === binding && message.content.some(part => part?.type === 'image')) { promptImageRows.delete(text(message.content)); enqueuePromptImages($, row.key, message.content, binding); }
     }
     // Display IDs and saved transcript IDs are different namespaces. Text is
     // collected from MessageDisplay only, not guessed equal to an append/Stop.
@@ -1062,6 +1083,13 @@ export function register(on) {
         // firstText: the text this id was first submitted with; a later, different one is a typed prompt (T-138 display).
         const firstText = rootPrompt?.id === e.prompt_id && rootPrompt.binding === binding ? rootPrompt.firstText : e.prompt;
         rootPrompt = { id: e.prompt_id, binding, pending: rootIdle, firstText };
+        // T-133: this prompt's id and text tag, for an image its prompt block may carry (2.1.316/2.1.317). NAW gives
+        // the image to the row of that prompt id whose own text has that tag; no one's memory decides, so a hot
+        // reload here cannot send the image to another row.
+        if (!legacyOnly && binding.nativeMedia && !binding.nativePromptInput && typeof e.prompt === 'string' && e.prompt && /^[a-f0-9-]{36}$/i.test(e.prompt_id || '')) {
+          promptImageRows.set(e.prompt, { binding, key: `${e.prompt_id}-q${promptTextTag(e.prompt)}` });
+          while (promptImageRows.size > 8) promptImageRows.delete(promptImageRows.keys().next().value);
+        }
         triggerTurn({ prompt: e.prompt_id }, binding);
         if (binding?.nativeTurnRecords) expectPrompt = binding;
       }

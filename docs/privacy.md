@@ -20,8 +20,9 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   provider credential files, full environment dumps or raw protocol traces.
 - native-image-cache/ holds local copies of images the conversation view shows
   from a native Claude main session: images a tool returned, for example a
-  screenshot Claude read (Claude Code 2.1.312, 2.1.316 and 2.1.317), and on
-  2.1.312 only, images in the person's prompts shown as native input. Each
+  screenshot Claude read (Claude Code 2.1.312, 2.1.316 and 2.1.317), and
+  images in the person's prompts: on 2.1.312 those shown as native input, on
+  2.1.316 and 2.1.317 those in a prompt typed in the Claude terminal. Each
   session has its own owner-only folder, and each file is named by the SHA-256
   of its image bytes. Each image is at most 1 MB and each session's folder at
   most 64 MB. Archiving a session keeps its folder, since the session can be
