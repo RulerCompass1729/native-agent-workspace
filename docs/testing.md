@@ -4279,3 +4279,19 @@ both live. The ordinary visible update kept fourteen session records with their
 native IDs, live process starts and drafts, and the seven other backends kept
 PID, start time and version; 150 seconds later they and all sixteen live native
 processes were unchanged and no move record existed.
+
+
+### Space rows, the narrowed follow guard and the saved filter - alpha.167
+
+Three commits from Claude 3 are integrated with identical changed lines. On main
+the full unit suite passes 2,194 checks without skips. Eight GUI scripts exit 0:
+multispace, sidebar membership rail, sidebar density, sidebar layout, grid
+follow with its new idle-column step, reading turns, daily use and collaboration
+overview. The reading script still stops waiting for its Markdown history at the
+step where it stopped before alpha.165. The reading pages script now passes the
+copy step the follow-guard commit repaired and stops at line 140, waiting for an
+unloaded original to scroll into view; in the author lane the repaired script
+also stops at line 140 on the code before T-134 (9c78f55), which the lane
+reviewer confirmed. In the author lanes the space-row change made the multispace
+and narrow-sidebar checks fail on the old code for the right reason, and the
+guard's new GUI step failed three times on main before it and passed after.
