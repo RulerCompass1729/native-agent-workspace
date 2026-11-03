@@ -134,7 +134,10 @@ function complete(w, s, r, info) {
   for (const row of s.messages || []) {
     const intent = row.wake;
     if (intent?.status !== 'staged' || intent.nativeId !== info.nativeId || intent.turnId !== info.turnId) continue;
-    if (info.status !== 'completed' || !sourceValid(w, s, r, intent)) { intent.status = 'cancelled'; row.text = `原生回合未正常结束或授权已变化；自动消息未投递。\n${intent.body}`; durable(w); continue; }
+    if (info.status !== 'completed' || !sourceValid(w, s, r, intent)) {
+      // T-141: `boundary` is a turn whose authority an input or permission boundary took mid-turn.
+      intent.status = 'cancelled'; row.text = `${info.status === 'boundary' ? '发送方这一轮中途有新的输入或权限确认' : '原生回合未正常结束或授权已变化'}；自动消息未投递。\n${intent.body}`; durable(w); continue;
+    }
     intent.status = 'sending'; durable(w);
     // Persist before the one transfer. Reopening never replays sending/staged rows.
     w.peerRunner.transferWake(intent).then(result => {
