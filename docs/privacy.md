@@ -110,6 +110,11 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   移除本应用记录**. This also removes matching saved window drafts. Shared-room
   records are separate: pause handoffs, then use **隐私与用量 → 清理与完全退出 → 清除共同工作记录**.
   Clearing shared records does not cancel a native task already in progress.
+  A space's shared record also lists the automatic messages agents send each
+  other (sender → recipient, the message and whether it was delivered). The
+  sender's backend writes them into the spaces both agents share, or the
+  sender's own spaces, and the sender's own record keeps the message too.
+  Clearing a space's shared records removes the space's copies.
   It also clears the local membership timeline and all saved note versions;
   a concurrent newer edit is preserved and reported instead of silently erased.
   Room names and archive indexes remain. Archiving only hides retained records
