@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Actual product UI and service with synthetic handshakes; no native/model tasks.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -24,7 +25,7 @@ async function create(provider, name) {
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Session ready');
   const s = (await snapshot()).sessions.find(s => s.name === name);
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); return s.id;
+  await joinSpace(page); return s.id;
 }
 (async () => {
   console.log('Evidence:', profile);

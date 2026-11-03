@@ -33,8 +33,8 @@ async function run() {
   let s = (await snapshot()).sessions[0]; const local = s.id, native = s.nativeId;
   assert.equal(s.model, 'synthetic-original'); assert.equal(s.roomId, null); assert.equal(s.messages.length, 2);
   await page.locator('#message-input').fill('后续还想安排路线，先不发送');
-  await page.locator(`[data-session-menu="${local}"]`).click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
-  await page.locator(`[data-session-menu="${local}"]`).click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click();
+  await page.locator(`[data-session-menu="${local}"]`).click(); await page.getByRole('menuitem', { name: '加入「共同工作」', exact: true }).click();
+  await page.locator(`[data-session-menu="${local}"]`).click(); await page.getByRole('menuitem', { name: '离开「共同工作」', exact: true }).click();
   await page.locator('#terminal-tab').click(); await page.locator('#terminal-area .xterm-helper-textarea').waitFor({ state: 'attached' });
   await page.locator('#chat-tab').click(); assert.equal(await page.locator('#message-input').inputValue(), '后续还想安排路线，先不发送');
   await shot('restored-history'); checks.push('Selected original identity, model and full fixture history load; join/detach and GUI/TUI switching retain unsent draft');

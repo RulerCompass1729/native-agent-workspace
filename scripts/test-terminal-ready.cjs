@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Headed desktop regression; real renderer/IPC with delayed synthetic terminals.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -35,7 +36,7 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   for (const provider of ['claude', 'codex']) {
     await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#session-name').fill(provider + ' terminal test'); await createIn(page, 'chat');
-    await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Created'); await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Created'); await joinSpace(page);
   }
   const [a, b] = (await snapshot()).sessions;
   await page.locator('#room-nav').click(); await page.locator(`[data-room-session="${a.id}"]`).click(); await checkLoading(a.id);

@@ -1,6 +1,7 @@
 // Owned Electron/service flow through the real Claude observation receiver.
 // Synthetic native transport only; no model, provider or daily-app operation.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
@@ -37,7 +38,7 @@ async function create(name) {
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Synthetic session ready');
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); return id;
+  await joinSpace(page); return id;
 }
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Own daemon ready');
@@ -86,7 +87,7 @@ async function run() {
   assert.equal(await row.locator('.message-heading strong').first().innerText(), '原生会话', 'Native accepted framing is not attributed to the human');
   assert.equal((await snapshot()).sessions.find(s => s.id === a).messages.filter(m => m.role === 'user').length, 3, 'One app task plus two actual native inputs, no hook or boundary rows');
   check('Duplicate UUID updates its original row; equal text under a second UUID remains distinct; another member stream preserves selected text and row identity');
-  await row.hover(); const copy = row.locator(':scope > .message-actions').getByRole('button', { name: '复制', exact: true });
+  await row.hover(); const copy = row.locator('.message-heading > .message-actions').first().getByRole('button', { name: /^复制：/ });
   if (installed) { await copy.focus(); assert.equal(await copy.isEnabled(), true); assert.equal(await row.locator('.message-body').textContent(), text); }
   else { await copy.click(); assert.equal(await app.evaluate(() => globalThis.inlineCopies.at(-1)), text); }
   await emit(a, { ...response, index: 1, delta: 'PRIVATE_CONTINUATION' });

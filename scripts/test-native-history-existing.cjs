@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 // Import a stopped, actual context-runner history into a completely fresh app.
 // Explicit owned fixture required; no normal profile. Optional cold continuation
 // serves only the explicitly sent draft with one fixed reply and at most one native title.
@@ -135,10 +136,10 @@ async function selectOriginal(accepted = true) {
   fs.writeFileSync(path.join(base, 'imported.json'), JSON.stringify(state, null, 2));
   await page.locator('#chat-tab').click();
   await page.locator('#message-input').fill(draft);
-  await page.getByRole('button', { name: '加入协作', exact: true }).click();
+  await joinSpace(page);
   await until(async () => (await snapshot()).sessions[0].roomId === 'shared', 'Original session joins');
   assert.ok(!(await snapshot()).room.messages.some(m => m.text?.includes('CONTEXT_TASK_1')));
-  await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+  await leaveSpace(page);
   await until(async () => !(await snapshot()).sessions[0].roomId, 'Original session detaches');
   assert.equal(await page.locator('#message-input').inputValue(), draft);
   await selectOriginal(); assert.equal((await snapshot()).sessions.length, 1, 'Reimport selects the existing reference');

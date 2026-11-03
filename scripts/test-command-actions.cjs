@@ -1,5 +1,6 @@
 // T29: actual source GUI + Codex adapter, synthetic transport, zero inference.
 const scratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient, fillRoomMessage } = require('./room-input.cjs');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -121,7 +122,7 @@ async function run() {
   assert.equal(commandStates.solo.sessions.find(s => s.id === a).messages.find(m => m.id.endsWith(':tool:cancel')).text, 'Partial before interrupt');
   checks.push('Assistant body breaks exploration; unknown shell-looking command stays Ran; failed and interrupted native content remains visible');
   await row('cancel').scrollIntoViewIfNeeded(); await shot('t29-interrupted-command');
-  for (const id of [a, b]) { await select(id); await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click(); }
+  for (const id of [a, b]) { await select(id); await joinSpace(page); }
   await select(a); await page.locator('#message-input').fill('Unsent private draft');
   await room(); await chooseRecipient(page, a); await fillRoomMessage(page, 'Inspect shared files'); await page.locator('#forward-button').click();
   await until(async () => (await native()).sends.length === 2, 'Directed shared task');

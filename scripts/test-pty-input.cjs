@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Actual hidden Electron, xterm and PTY process; no Claude/Codex model task.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
@@ -40,7 +41,7 @@ async function shot(name) { if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(pro
   const first = (await snapshot()).sessions[0], pid = first.pid;
   assert.ok(pid > 1); passed.push('ASCII slash text and Unicode reach the real PTY once, with exact visible echoes');
   await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('图形草稿保持未发送');
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); await page.getByRole('button', { name: '脱出协作', exact: true }).click();
+  await joinSpace(page); await leaveSpace(page);
   await page.locator('#terminal-tab').click(); await input('AFTER-VIEW-SWITCH'); await shot('pty-input');
   assert.equal((await snapshot()).sessions[0].pid, pid);
   await app.close(); app = null; await open(); await page.locator(`[data-session-id="${first.id}"]`).click();

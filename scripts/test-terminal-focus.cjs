@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 // Headed app/IPC/workspace with controlled snapshot and claim timing.
 // No native provider processes or model tasks are started.
@@ -31,7 +32,7 @@ async function run() {
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   for (const provider of ['claude', 'codex']) {
     await page.locator('#new-session').click(); await page.locator(`input[name="provider"][value="${provider}"]`).check(); await page.locator('#session-name').fill(provider + ' · 焦点测试'); await createIn(page, 'chat');
-    await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Created'); await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await until(async () => (await snapshot()).sessions.some(s => s.provider === provider), 'Created'); await joinSpace(page);
   }
   const [a, b] = (await snapshot()).sessions;
   await holdAndChoose(a.id); await until(async () => (await fixture('stats')).pending.includes(a.id), 'A snapshot'); await fixture('release', a.id);

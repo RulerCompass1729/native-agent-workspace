@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual hidden desktop, two independent local services and shipped routing.
@@ -39,7 +40,7 @@ async function create(provider, name) {
   await page.locator('#new-session').click(); await page.locator(`input[value="${provider}"][name="provider"]`).check();
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   let record; await until(async () => { record = (await snapshot()).sessions.find(s => !before.has(s.id)); return record?.chatAvailable && record.state === 'idle'; }, 'Session created');
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); return record;
+  await joinSpace(page); return record;
 }
 async function run(id, text) {
   await page.locator('#room-nav').click(); await page.locator('#room-record').click();
@@ -53,7 +54,7 @@ async function rejectHistoryClear() {
   const summary = page.getByText('清理与完全退出', { exact: true });
   if (!await summary.evaluate(el => el.parentElement.open)) await summary.click();
   await page.locator('#clear-shared-history').click();
-  await until(async () => (await page.locator('#toast').innerText()).includes('核对各后台'), 'Clear history preserves the unresolved pause warning');
+  await until(async () => (await page.locator('#trust-refresh-status').innerText()).includes('核对各后台'), 'Clear history preserves the unresolved pause warning');
   await page.locator('#close-privacy').click();
 }
 async function main() {
@@ -109,7 +110,7 @@ async function main() {
   await fixture(old, 'release', '权限变化后的原会话结果'); await delay(150); assert.equal((await fixture(next)).sends.length, 2);
   checks.push('Approval → idle inside one state batch cannot restore a revoked step');
   await run(a.id, '成员脱出后不要继续交接。'); await until(async () => (await fixture(old)).sends.length === 5, 'Departure scenario starts');
-  await page.locator(`[data-session-menu="${b.id}"]`).click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click();
+  await page.locator(`[data-session-menu="${b.id}"]`).click(); await page.getByRole('menuitem', { name: '离开「共同工作」', exact: true }).click();
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b.id).roomId, 'Member detached');
   await fixture(old, 'release', '脱出后的原会话结果'); await delay(150); assert.equal((await fixture(next)).sends.length, 2);
   state = await snapshot(); assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid]), identities);

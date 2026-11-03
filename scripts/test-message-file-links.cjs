@@ -1,5 +1,6 @@
 // Owned source GUI + real IPC/file guards; synthetic native events and OS opener sink.
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert=require('node:assert/strict'),{randomUUID,createHash}=require('node:crypto');
 const {execFileSync}=require('node:child_process');
 const scratch=require('./fixtures/test-scratch.cjs'),{createIn}=require('./fixtures/create-view.cjs');
@@ -22,7 +23,7 @@ const opens=()=>app.evaluate(()=>globalThis.messageFileOpens);
 const check=text=>{checks.push(text);console.log('PASS:',text);};
 const identity=s=>s.sessions.map(x=>[x.id,x.nativeId,x.owner,x.model]).sort();
 async function capture(name){if(process.env.NAW_SCREENSHOTS_DIR){fs.mkdirSync(process.env.NAW_SCREENSHOTS_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_SCREENSHOTS_DIR,name+'.png')});}}
-async function create(name){await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#session-name').fill(name);await createIn(page,'chat');await until(async()=>(await state()).sessions.some(s=>s.name===name&&s.state==='idle'),'Synthetic ready');const id=(await state()).sessions.find(s=>s.name===name).id;await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入协作',exact:true}).click();return id;}
+async function create(name){await page.locator('#new-session').click();await page.locator('input[name="provider"][value="codex"]').check();await page.locator('#session-name').fill(name);await createIn(page,'chat');await until(async()=>(await state()).sessions.some(s=>s.name===name&&s.state==='idle'),'Synthetic ready');const id=(await state()).sessions.find(s=>s.name===name).id;await joinSpace(page);return id;}
 async function select(id){await page.locator(`.session-link[data-session-id="${id}"]`).click();}
 const row=(id,host=page)=>host.locator(`[data-message-id="${id}"]`);
 async function activate(target,name){

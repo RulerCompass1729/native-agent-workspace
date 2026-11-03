@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real Electron + real Claude CLI; canned responses are served on loopback.
@@ -187,7 +188,7 @@ async function cleanup() {
   await nativeKey('x', /❯\s*x\s*$/);
   if (shared) {
     await page.locator('#message-input').fill('Private solo draft.');
-    await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     await inlineRecipient(page, before.id);
     await until(async () => (await page.locator(send).innerText()) === '等本轮结束后发送 ↑', 'Shared native waiting action');

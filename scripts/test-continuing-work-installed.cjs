@@ -1,6 +1,7 @@
 // Signed renderer/IPC/service acceptance; existing synthetic native transport.
 // Reuse source IPC-delay and clipboard proofs. This never writes OS clipboard.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const scratch = require('./fixtures/test-scratch.cjs'), { createIn } = require('./fixtures/create-view.cjs');
@@ -42,7 +43,7 @@ async function create(name) {
   await page.locator('#session-name').fill(name); await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions.some(s => s.name === name && s.state === 'idle'), 'Owned synthetic session ready');
   const id = (await snapshot()).sessions.find(s => s.name === name).id;
-  await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+  await joinSpace(page);
   return id;
 }
 async function capture(name) { await page.screenshot({ path: path.join(evidence, name + '.png') }); fs.writeFileSync(path.join(evidence, name + '.json'), JSON.stringify(await snapshot(), null, 2)); }
@@ -67,7 +68,7 @@ async function run() {
   await page.reload(); await page.locator('#new-session').waitFor();
   await until(() => picture().getAttribute('data-expanded').then(x => x === 'true'), 'Original image open choice survives reload');
   assert.equal(await page.locator('#message-input').inputValue(), 'OWNED_SOURCE_DRAFT');
-  await page.locator(`.session-more[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '脱出协作', exact: true }).click();
+  await page.locator(`.session-more[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '离开「共同工作」', exact: true }).click();
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b).roomId, 'Exact peer detached');
   assert.equal((await snapshot()).viewState.selected, a); assert.equal(await page.locator('#message-input').inputValue(), 'OWNED_SOURCE_DRAFT');
   checks.push('Image open choice and draft survive reload; detaching another member preserves the current original reader'); await capture('detached');

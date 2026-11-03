@@ -1,6 +1,7 @@
 // Black-box installed acceptance: renderer CDP, actual IPC/service/filesystem,
 // existing synthetic native transport. No main-process monkeypatch or clipboard.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const scratch = require('./fixtures/test-scratch.cjs');
@@ -95,7 +96,7 @@ async function run() {
   check('Normal owned GUI close/reopen preserves native identities, unsent draft, section sizing, archive and manual group choices');
   for (const s of [a, b]) {
     await page.locator(`[data-session-id="${s.id}"]`).click();
-    await page.locator('#session-header-more').click(); await page.getByRole('menuitem', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
   }
   await page.locator('#room-nav').click(); await page.locator('#room-overview').click();
   const noticeText = require('./fixtures/collaboration-notices.cjs').text;

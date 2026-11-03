@@ -1,5 +1,6 @@
 // Actual isolated source GUI/service. Only native output is synthetic.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
@@ -59,7 +60,7 @@ async function readingAnchor(host = page.locator('#messages')) {
 }
 async function copyOriginal(host, id, text) {
   const before = await app.evaluate(() => globalThis.pageCopies.length);
-  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: '复制', exact: true });
+  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: /^复制：/ });
   await copy.focus(); await copy.press('Enter');
   await until(async () => await app.evaluate((_, n) => globalThis.pageCopies.length === n + 1 && globalThis.pageCopies.at(-1), before) === text, 'One fresh original copy receipt');
 }
@@ -93,7 +94,7 @@ async function run() {
     const id=await create(labels[i]);ids.push(id);await fixture('history',id,Array.from({length:24},(_,j)=>({id:`compact-${i}-${j}`,type:'agentMessage',turnId:`compact-turn-${i}`,text:`Original member ${i} paragraph ${j}.\n\nKeep selected source unchanged.`})));
     await page.locator('#message-input').fill('Private compact draft '+i);
     await until(async()=>(await snapshot()).sessions.find(s=>s.id===id).liveDraft==='Private compact draft '+i,'Private draft saved');
-    await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入协作',exact:true}).click();
+    await joinSpace(page);
   }
   const [a,b,c,d]=ids,overview=page.locator('#collaboration-overview'),header=id=>overview.locator(`.collaboration-member-status[data-member-id="${id}"]`),name=id=>header(id).locator('.collaboration-member-name'),reader=id=>overview.locator(`.collaboration-member-reader[data-member-id="${id}"] .messages`);
   for (const i of [1,2,3]) await fixture('fleet',a,{event:'thread/started',id:'compact-unknown-'+i,stale:false});

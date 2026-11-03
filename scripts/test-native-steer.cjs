@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Codex and Electron with two canned loopback Responses streams.
@@ -98,7 +99,7 @@ const snapshot = () => page.evaluate(() => workspace.initial());
   assert.equal(await page.locator('#send-button').textContent(), '追加指令 ↑');
   if (shared) {
     await page.locator('#message-input').fill('Unsent private draft.');
-    await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     await inlineRecipient(page, before.id);
     assert.ok(!(await page.locator('#room-messages').innerText()).includes('NATIVE_STEER_PARTIAL'));

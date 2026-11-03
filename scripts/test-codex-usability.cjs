@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Real hidden Electron/DSH UI and service; synthetic history/output, no models.
@@ -61,13 +62,13 @@ async function run() {
   }
   const code=page.locator('#messages [data-message-id="reply-code"]');
   assert.match(await code.locator('pre').innerText(),/const n = 1;/);
-  await code.hover(); await code.locator('.message-actions').getByRole('button',{name:'复制',exact:true}).click();
+  await code.hover(); await code.locator('.message-actions').getByRole('button',{ name: /^复制：/ }).click();
   assert.match(await app.evaluate(()=>globalThis.copiedText.at(-1)),/第一段。\n\n第二段。/);
   assert.equal(await page.locator('#messages .native-turn').count(),0,'Missing native footer must not be reconstructed or translated from clocks');
   const originalFooter='✻ Cooked for 3s · done 4:55 PM';
   await fixture('nativeBlock',a,{id:'turn:raw-footer',kind:'turn',turnId:'raw-footer',text:originalFooter,status:'complete'});
   const boundary=page.locator('#messages .native-turn').filter({hasText:originalFooter});await boundary.waitFor();
-  await boundary.hover();await boundary.getByRole('button',{name:'复制',exact:true}).click();
+  await boundary.hover();await boundary.getByRole('button', { name: /^复制：/ }).click();
   assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),originalFooter,'Available original native text is copied verbatim');
   await fixture('nativeBlock',a,{id:'turn:raw-cut',kind:'turn',turnId:'raw-cut',text:' \n',status:'interrupted'});
   await page.locator('#messages .native-turn .message-body').getByText('interrupted',{exact:true}).waitFor();
@@ -84,7 +85,7 @@ async function run() {
   assert.equal(await command.locator('.process-tail').isVisible(),false);await command.locator('.process-details > summary').click();
   await search.locator('.process-details > summary').click();assert.match(await search.locator('.message-body').innerText(),/Exact native result, retained in full/);
   await reasoning.locator('.process-details > summary').focus();await page.keyboard.press('Enter');assert.match(await reasoning.locator('.message-body').innerText(),/原生摘要第二段。/);
-  await command.locator('.process-details > summary').click();await command.hover();await command.getByRole('button',{name:'复制',exact:true}).click();assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),'line one\nline two\nline three\nline four\nline five');
+  await command.locator('.process-details > summary').click();await command.hover();await command.getByRole('button', { name: /^复制：/ }).click();assert.equal(await app.evaluate(()=>globalThis.copiedText.at(-1)),'line one\nline two\nline three\nline four\nline five');
   await page.locator('#message-input').fill('终端加载期间仍可编辑的草稿');
   await until(async()=> (await fixture('stats')).pending.includes(a),'Passive same-session native attach');
   await fixture('release',a);await page.locator('#terminal-area .xterm-screen').waitFor();
@@ -97,7 +98,7 @@ async function run() {
   await page.locator('#message-input').fill('聊天输入不会送进终端');
   await page.locator('#message-input').press('Shift+Enter');
   assert.equal((await fixture('stats')).inputs.length,nativeCount);
-  await page.getByRole('button',{name:'加入协作',exact:true}).click();
+  await joinSpace(page);
   await nativeScreen.click();
   const paragraph=code.locator('.message-body p').first();await paragraph.scrollIntoViewIfNeeded();
   const paragraphBox=await paragraph.boundingBox();await page.mouse.click(paragraphBox.x+12,paragraphBox.y+8,{clickCount:3});
@@ -122,7 +123,7 @@ async function run() {
   await app.evaluate(({BrowserWindow},bounds)=>BrowserWindow.getAllWindows()[0].setBounds(bounds),originalBounds);
   await page.locator('#message-input').fill('');
   await capture('same-window-native-reader');
-  const b=await create('Codex B');await page.getByRole('button',{name:'加入协作',exact:true}).click();
+  const b=await create('Codex B');await joinSpace(page);
   await page.locator('#room-nav').click();await page.locator('#room-record').click();
   let input=page.locator('#shared-input');
   assert.equal(await page.locator('#mention-button').count(),0);
@@ -229,7 +230,7 @@ async function run() {
   assert.equal(await page.locator('#room-filter').inputValue(),a);await page.locator('#room-filter').selectOption('');
   await page.locator('#room-messages').hover();await page.mouse.wheel(0,2000);
   await capture('shared-short-long-interleaved');
-  await page.locator('[data-session-id="'+b+'"]').click();await page.getByRole('button',{name:'脱出协作',exact:true}).click();
+  await page.locator('[data-session-id="'+b+'"]').click();await leaveSpace(page);
   await fixture('nativeBlock',b,{id:'response:private',kind:'response',turnId:'private-b',text:'PRIVATE CONTINUATION',status:'complete'});
   await page.locator('#message-input').fill('私下继续核对的草稿');
   assert.ok(!(await snapshot()).room.messages.some(m=>m.text.includes('PRIVATE CONTINUATION')));

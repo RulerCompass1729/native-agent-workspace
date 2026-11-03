@@ -111,7 +111,7 @@ async function run() {
     try { await workspace.openExternal('file:///synthetic-private-file'); return false; } catch { return true; }
   });
   assert.equal(rejected, true); assert.equal((await app.evaluate(() => globalThis.privacyProbe.links)).length, 1);
-  await page.locator('[data-message-id="unsafe-markdown"] .message-actions').getByRole('button', { name: '复制', exact: true }).click();
+  await page.locator('[data-message-id="unsafe-markdown"] .message-actions').getByRole('button', { name: /^复制：/ }).click();
   assert.deepEqual((await app.evaluate(() => globalThis.privacyProbe.copies)), [text]);
   await body.getByRole('button', { name: '复制', exact: true }).click();
   assert.deepEqual(await page.evaluate(() => window.browserClipboardProbe), { reads: 0, copies: [codeText] });

@@ -1,5 +1,6 @@
 // Exercise the real desktop and existing idle native sessions. No prompt/input.
 const assert = require('node:assert/strict');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const snapshot = page => page.evaluate(() => workspace.initial());
 const identity = s => s.sessions.map(x => [x.id, x.nativeId, x.pid, x.messages.length]);
 const focus = (page, id) => page.waitForFunction(id => document.activeElement?.classList.contains('xterm-helper-textarea') && document.activeElement.closest('[data-terminal-id]')?.dataset.terminalId === id, id);
@@ -19,7 +20,7 @@ async function checkRoom(page, application, result) {
   result.changed = true; // Cleanup must also run if the next assertion fails.
   for (const person of people) {
     await page.locator(`[data-session-id="${person.id}"]`).click();
-    await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
     await page.waitForFunction(async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id);
   }
   await page.locator('#room-nav').click();
@@ -61,14 +62,14 @@ async function checkRoom(page, application, result) {
   } finally { await second.close(); }
   assert.equal(application.windows().length, 1);
 
-  await page.locator('#header-actions').getByRole('button', { name: '脱出协作', exact: true }).click();
+  await page.locator('#header-actions').getByRole('button', { name: '离开此空间', exact: true }).click();
   await page.locator('#solo-session #terminal-area').waitFor({ state: 'visible' });
   await focus(page, person.id);
   const detached = await snapshot(page);
   assert.equal(detached.sessions.find(s => s.id === person.id).roomId, null);
   assert.equal(detached.viewState.selected, person.id);
   assert.deepEqual(identity(detached), identity(before));
-  await page.locator('#header-actions').getByRole('button', { name: '加入协作', exact: true }).click();
+  await joinSpace(page);
   await page.waitForFunction(async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id);
   await page.locator('#room-nav').click();
   assert.equal(await page.locator('#room-view').isVisible(), true, 'Room navigation must open the room after rejoin');

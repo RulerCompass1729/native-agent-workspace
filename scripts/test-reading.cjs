@@ -112,11 +112,11 @@ async function run() {
   const after = await page.evaluate(() => ({ selection: window.getSelection().toString(), scroll: document.getElementById('messages').scrollTop, removed: window.readingMutations }));
   observations.push({ check: 'reading selection survives another message streaming', pass: after.selection === before.selection, before: before.selection, after: after.selection });
   observations.push({ check: 'reading position remains stable during streaming', pass: Math.abs(after.scroll - before.scroll) < 3, before: before.scroll, after: after.scroll });
-  const copy = historical().locator('.message-actions').getByRole('button', { name: '复制', exact: true }); await copy.focus();
+  const copy = historical().locator('.message-actions').getByRole('button', { name: /^复制：/ }); await copy.focus();
   await fixture('delta', id, { id: 'live-reply', text: 'More while copying.\n' }); await delay(120);
   observations.push({ check: 'historical action retains keyboard focus during streaming', pass: await copy.evaluate(el => document.activeElement === el) });
   await copy.click(); assert.equal(await app.evaluate(() => globalThis.copiedText.at(-1)), history[40].text, 'Copy uses exact historical text');
-  const liveCopy = page.locator('#messages [data-message-id="live-reply"] .message-actions').getByRole('button', { name: '复制', exact: true });
+  const liveCopy = page.locator('#messages [data-message-id="live-reply"] .message-actions').getByRole('button', { name: /^复制：/ });
   await page.locator('#messages [data-message-id="live-reply"]').hover(); await liveCopy.click();
   assert.equal(await app.evaluate(() => globalThis.copiedText.at(-1)), (await snapshot()).sessions.find(s => s.id === id).messages.find(m => m.id === 'live-reply').text, 'Reused action copies latest streaming payload');
   await resource('stream-complete');

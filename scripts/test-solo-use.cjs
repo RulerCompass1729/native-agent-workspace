@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace, leaveSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // A hidden Electron renderer and real persistence chain, with synthetic native transport.
@@ -111,7 +112,7 @@ async function run() {
   await page.keyboard.press('ArrowLeft'); await page.keyboard.press('Control+c');
   await until(async () => (await fixture()).inputs.map(x => x.data).join('') === 'NATIVE-DRAFT\x1b[D\x03', 'Native editing and interrupt keys pass through');
   await chat(a); assert.equal(await page.locator('#message-input').inputValue(), 'PRIVATE-UNSENT-中文');
-  await page.getByRole('button', { name: '加入协作', exact: true }).click(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await joinSpace(page); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   // Draft first, then select an unavailable recipient. Never inject it into TUI.
   await fillRoomMessage(page, 'ROOM-UNSENT'); await chooseRecipient(a);
   await page.locator('#forward-button').getByText('打开原生终端', { exact: true }).waitFor();
@@ -170,7 +171,7 @@ async function run() {
   await capture('idle-reopened');
   const after = await snapshot(); assert.deepEqual(after.sessions.map(s => [s.id, s.nativeId, s.messages, s.liveDraft]), before.sessions.map(s => [s.id, s.nativeId, s.messages, s.liveDraft]));
   // Membership changes clear an invalid recipient, never the draft body.
-  await page.getByRole('button', { name: '脱出协作', exact: true }).click(); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await leaveSpace(page); await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await until(async () => (await snapshot()).viewState.roomRecipient === '', 'Invalid recipient cleared');
   await checkSaved(a, 'REOPEN-PRIVATE-中文', 'REOPEN-ROOM-中文', '');
   await app.close(); app = null; await launch(); await delay(12000);

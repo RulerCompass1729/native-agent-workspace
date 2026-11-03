@@ -1,4 +1,5 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
+const { joinSpace } = require('./fixtures/space-membership.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
 const { chooseRecipient: inlineRecipient, fillRoomMessage, roomBody } = require('./room-input.cjs');
 // Actual Electron, Claude and Codex. Four task responses (five for native interruption),
@@ -219,7 +220,7 @@ async function openApplication() {
   if (peerRound) {
     const claude = await create('claude');
     if (peerReleased) assert.equal((await session(claude.id)).runtimeVersion, '0.1.0-alpha.84');
-    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
     await application.close(); application = null;
     // Exercise two supported independent services. This is not a claim that an
     // already-released backend acquired the new protocol without an upgrade.
@@ -236,7 +237,7 @@ async function openApplication() {
     }
     await openApplication(); const codex = await create('codex');
     if (peerReleased) assert.equal((await session(codex.id)).runtimeVersion, require(process.env.NAW_APP_EXECUTABLE ? path.resolve(process.env.NAW_APP_EXECUTABLE, '../../Resources/app/package.json') : '../package.json').version);
-    await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await joinSpace(page);
     const peerIdentity = s => [s.id, s.nativeId, s.provider === 'codex' ? s.serverIdentity?.pid : s.pid];
     const ids = (await snapshot()).sessions.map(peerIdentity);
     assert.equal(new Set((await snapshot()).sessions.map(s => s.handoffGroup)).size, 2);
@@ -290,7 +291,7 @@ async function openApplication() {
     assert.equal(await page.locator('#terminal-area .xterm-helper-textarea').isVisible(), false);
     await save('empty-terminal-guidance');
     await page.screenshot({ path: path.join(base, 'empty-terminal-guidance.png') });
-    await page.locator('#chat-tab').click(); await page.getByRole('button', { name: '加入协作', exact: true }).click();
+    await page.locator('#chat-tab').click(); await joinSpace(page);
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();
     await fillRoomMessage(page, 'Start the first Codex task.'); await inlineRecipient(page, codex.id); await page.locator('#forward-button').click();
     // Room member tabs intentionally open the native TUI. The same session's
