@@ -2993,3 +2993,145 @@ unchanged. It accepted the update operator as a substitution of the alpha.167
 one, noting that the private receipt states the `!` turn settle as fact. The
 operator ran once. Open: the daily wake between two sessions on alpha.168
 backends; T-141; T-143; the display half of T-138.
+
+
+### Another agent's cross-session message is not the person's input (T-137, item 2a)
+
+Claude Code 2.1.316 and 2.1.317 deliver a cross-session message from another
+Claude session as a submitted prompt. NAW treated it as the person's own input:
+it reset the wake count, paused running collaborations, raised the control
+revision and showed the message as 你 with its whole wrapper. The bridge plugin
+now tags a submission the engine marks with origin peer, without reading its
+text, so typed text that imitates the wrapper still counts as the person's. The
+workspace then treats it as another agent's input and shows 会话间消息 · 来自 X（未核实）
+with only the message. Every sender is marked unverified because the sender
+comes from the message text; control, zero-width and bidirectional characters
+are removed from the claimed name.
+
+Claude 2's lane reviewer asked for changes once. Its main finding was that a
+peer message still voids wakes staged by or for that session through the
+plugin's input boundary, which the first brief said it no longer did; that
+conservative behaviour is kept and pinned by a test. Lane evidence: the full
+suite passed 2,232 checks; with the tag or the peer source removed the tests
+fail; on real 2.1.317 and 2.1.316 with local replies and a cross-session message
+sent by hand, the control and wake revisions stayed unchanged, the peer revision
+rose by one and the sender was shown, while with the tag removed all three rose
+and the message showed as 你.
+
+Open, low: a claimed name can imitate the process-match marker; some invisible
+characters (U+2028, U+2029, U+00AD and a few fillers) are not removed. The
+integration reviewer added that a peer message still marks the session as
+working and, when it reaches a member of a running handoff that is not the one
+awaited, still pauses that backend's running handoffs; only unrelated handoffs
+are no longer paused. Not measured: a message held because the sessions use
+different permission modes and delivered later, which is the daily
+secretary-to-main case; senders on another backend show only their claimed name;
+Claude Code 2.1.310 to 2.1.312 are unchanged.
+
+
+### Cross-session messages are listed in the space's shared record (T-137, item 2b)
+
+When a Claude Code cross-session message reaches a session, the recipient's
+backend now writes a row 「sender（未核实） → recipient」 with the message into the
+space's shared record: into a space both share when the sender is a session on
+the same backend, otherwise into the recipient's spaces. The row is never passed
+to an agent, an unparsed message keeps its original text, the stored name keeps
+the unverified mark in merged copies, a repeated prompt id adds no second row,
+and clearing the space's shared records removes it. The rule for where the row
+goes is part of the person's choice in T-143.
+
+Claude 2's lane reviewer asked for changes once and then passed it. Lane
+evidence: the full suite passed 2,234 checks on the alpha.168 base; mutations
+for the narrowing and the duplicate guard fail their tests; on real 2.1.317 and
+2.1.316 with local replies and a message sent by hand, Receiver B's 共同工作 record
+showed 「Claude 2（未核实） → Receiver B」 with the message, it stayed under B's
+filter, and the item 2a checks still passed; with the write removed no row
+appeared. The red run and the 2.1.316 run used the previous patch, which differs
+in a name and a text. Not exercised: the sender filter with a NAW session as
+sender, held messages and senders on another backend. The integration reviewer
+noted that with no shared space the row goes into all of the recipient's spaces
+and that a space merge selects such rows by default; this stays open in T-143
+until the person answers. Not verified: a peer prompt that carries the running
+turn's prompt id gets neither a session row nor a space row, though it is still
+classified as a peer message and still voids wakes.
+
+
+### Each grid column's terminal height can be changed (T-135, 180f110; first 6845505)
+
+**Source.** User feedback 2026-11-02 (board T-135, screenshot under feedback): in a space grid each column's terminal is about five lines and cannot be made taller; columns should be adjustable one by one, with a way to make them all the same height, and no complex logic.
+
+**Change.**
+- A line above each column's terminal (a labelled separator) changes that column's height by dragging, or with ArrowUp/ArrowDown (16px), Home and End.
+- While the person changes it: at least 64px, at most what leaves the conversation 80px and the column's input whole (in a window too small for that, the old 112px stays possible).
+- On release or a key the height is kept per session with the window's view (the 200 most recently changed), and the native terminal is fitted once.
+- The column ⋯ menu offers 「所有列都用这个终端高度」 while the column shows its terminal.
+- A redraw or a smaller window lowers a tall height to what fits (not below 112px) without a native resize; the terminal scrolls in its box with the cursor in view.
+
+**Review.** A fresh read-only reviewer in the author lane, three rounds.
+- **Round 1, CHANGES:**
+  - High: the box changed but the native terminal was never fitted, so a taller terminal showed no more lines; the first GUI check measured only the box.
+  - Medium: no upper limit on redraw, so a tall height after a window shrink could cut off the input.
+  - Medium: the menu path skipped the 200-entry cap, which could make every later view save fail.
+  - Two Medium-Lows on stale and interrupted drags, and an inaccurate toast.
+  - All fixed, with a GUI check that one release causes one native resize and the rows fill the box.
+- **Round 2, PASS** with five Lows. Taken: ArrowUp could shorten the terminal in a very small window; a drag left set after leaving the room.
+- **Round 3, PASS** on that delta.
+
+**Evidence.**
+- Full suite: 2198/0.
+- Hidden synthetic GUI, 0 model:
+  - column-terminal 8/8: a drag of 112→192px moved the terminal's rows from 102 to 187px with one native resize; the smaller window lowered it to 154px with the input whole and no native resize.
+  - column-input 17/17 (including 850×600).
+  - grid-follow 7/7 and reading-turns 8/8 (at r5).
+
+**Open.**
+- L2: a redraw that changes the box height scrolls the terminal to its bottom. Trigger: a person reading scrollback when the window size changes.
+- L3: only a window resize redraws; a hand-resized shared composer can cut off a column's input until the next render. Trigger: if reported, watch `.collaboration-readers` with a ResizeObserver.
+- L4: the one-time resize permission can stay set when no fit runs (same as the existing activation path).
+- Not tested: after scrolling the conversation to the latest by hand, making the terminal taller before any redraw can leave the last lines below the bottom until the next redraw (the same as a window resize today).
+- Integration review, low: removing a session's records does not drop its saved terminal height, and the window sends its own copy back on the next save.
+- Integration: the new separator made test-collaboration-overview.cjs's column-width locator match two elements; main narrowed it to the vertical separator.
+- Replayed onto main 1af6800 as 180f110 (only a test-file insertion point differs); the same reviewer passed it in a fourth round.
+- Not verified:
+  - a state update during a drag (code reading only);
+  - four terminal columns at once;
+  - a real trackpad;
+  - a screen reader;
+  - the daily app.
+
+
+### A removed session's cached native images go with its records (T-140, bc19724)
+
+**Source.** Found during T-133 item 5 (board T-140). A native Claude session's tool images are copied into native-image-cache/<session>/ for the conversation view; 移除本应用记录… left them on disk until the whole data directory was deleted.
+
+**Change.**
+- Once a removal is saved, the session's cached images are deleted, except those a collaboration space's shared rows still show. The removal dialog promises shared content stays, and shared rows keep their own references.
+- Clearing the shared records that show them then deletes those too; the folder goes once empty. Archiving keeps everything.
+- Only files the cache wrote are deleted; a folder that is a link or not the person's own is left alone.
+- If files cannot be deleted, the records are still removed or cleared, and the app says so after its own cleanup.
+- docs/privacy.md updated.
+
+**Found while testing.** A first version also deleted, on removal, the folder an old compatibility reader uses under Main's data directory. The real GUI run showed that with the default service layout that is the same folder, so it deleted the shared row's image too. Removed; the reviewer later confirmed that reader never receives images.
+
+**Review.** A fresh read-only reviewer in the author lane, two rounds.
+- **Round 1, CHANGES:**
+  - Medium: the client layer dropped a service's "images left" report when clearing, so a failed delete was silent.
+  - Lows: privacy.md and commit-message wording; a label failure could hide the images message.
+  - Fixed, with client tests that fail without the fix, plus tests for removal with no shared images and an image shared in two spaces.
+- **Round 2, PASS.** Two nits left (below).
+
+**Evidence.**
+- Full suite: 2200/0.
+- New hidden synthetic GUI check test-forget-images, 4/4. It ends and removes a session through the real buttons and Main's real confirmations: the private image goes; the shared image stays and still opens and copies; another session is untouched. Clearing the shared record then removes the folder.
+
+**Open.**
+- A kept image whose shared row a space dropped under its tool-row limit stays until the data directory is removed.
+- The privacy sentence on that is conservative: such a file can also go when a shared record showing another image from that session is cleared.
+- In the clear path, if the room-state cleanup also fails, its message hides the images message.
+- Integration review, low: the check for images still shown reads only its own backend's spaces, so with several backends removing a session can delete an image that a merged copy on another backend still shows.
+- Imported images under Main's images/<id> (DOGFOOD-05) are out of scope.
+- Not verified:
+  - the daily app;
+  - a real native Claude session with tool images;
+  - a layout with several backends.
+- Found, not fixed: scripts/test-claude-image-reading.cjs is stale on current main (see the board row).

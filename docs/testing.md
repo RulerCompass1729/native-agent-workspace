@@ -4361,3 +4361,24 @@ PID, start time and version; 150 seconds later they and all sixteen live native
 processes were unchanged and no move record existed. The private install receipt
 describes `!` turns as settling to idle; as the candidate record says, that part
 is inferred from the source.
+
+
+### Cross-session messages, column terminal height and image removal - alpha.169
+
+Four commits, two from Claude 2 and two from Claude 3, are integrated with
+identical changed lines. On main the full unit suite passes 2,248 checks without
+skips. After rebuilding the UI bundle, the column terminal, column input, grid
+follow, reading turns, forget images, collaboration list name, multispace and
+session wake GUI scripts exit 0, and native blocks passes on real Claude Code
+2.1.317 with no paid calls. The unit run and UI build preceded the version bump.
+The collaboration overview script failed at its focus call (line 213): its
+locator for a member column's width separator also matched the new terminal
+height separator. Both separators have their own accessible names. With the
+locator limited to the vertical separator, collaboration overview and daily use
+exit 0. The space wake runner from alpha.168 ran again unchanged on main with
+2.1.317 and local replies: the wake between Sender A and Receiver B showed once
+in 共同工作's shared record as submitted, with three local responses and no paid or
+pbcopy call. The compat known-list check finds all 39 earlier main builds of the
+hook since 257c523 in the upgrade list and no other entries. The cross-session
+message changes were tested with a message sent by hand on real 2.1.317 and
+2.1.316 in the author lane only.

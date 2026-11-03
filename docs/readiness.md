@@ -4,6 +4,52 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.169 carries four reviewed changes. First, on Claude Code 2.1.316
+and 2.1.317 a cross-session message that another Claude session sends is no
+longer taken for the person's input: it no longer resets the wake count or shows
+as 你, a message to a session that is in no running handoff no longer pauses
+unrelated handoffs, and it appears as 会话间消息 · 来自 X（未核实） with only the message.
+It still marks the session as working, and a message to a member of a running
+handoff that is not the one awaited still pauses that backend's running
+handoffs. The engine's own mark decides this, not the text, so typed text
+imitating the wrapper still counts as the person's; such a message still voids
+wakes staged by or for that session, as before. Second, such a message is also
+listed in the shared record of the recipient's space as 「sender（未核实） →
+recipient」 with the message, written by the recipient's backend and removed with
+the space's shared records; when the two share no space it goes into all of the
+recipient's spaces, and a space merge selects such rows by default; where they
+should go is the person's open choice in T-143, and every sender is marked
+unverified. Third, each grid column's terminal can be made taller or shorter
+with a separator above it, by dragging or with the arrow, Home and End keys,
+within limits that keep the conversation and the input visible above the old
+112-pixel height; the native terminal is refitted once on release, the column ⋯
+menu can give every column the same height, and heights are kept per session.
+Fourth, removing a session's application records now deletes its local copies of
+native images, except those a space's shared rows still show, which go when
+those shared records are cleared; archiving deletes nothing, and only regular
+files named the way the cache names them, in a folder the person owns, are
+removed. With several backends, removing a session on one backend can delete an
+image that a merged copy on another backend still shows; nothing leaks, but that
+image no longer opens. Earlier records said removing records or clearing shared
+records did not delete these copies; from this candidate they do. Unverified: a
+held cross-session message delivered later, which is the daily secretary-to-main
+case; a sender on another backend, shown only by its claimed name; four terminal
+columns at once, real trackpads and screen readers; deleting images from a real
+native session or with several backends; and all four on the daily app. The
+plugin change reaches only sessions on an alpha.169 backend. Each change was
+reviewed in its author lane and is integrated with identical changed lines. The
+full unit suite passes 2,248 checks. With the UI bundle rebuilt, the column
+terminal, column input, grid follow, reading turns, forget images, collaboration
+list name, multispace and session wake GUI scripts exit 0, and native blocks
+passes on real 2.1.317 without paid calls. The collaboration overview script
+stopped because the new terminal separator made its column-width locator match
+two elements; with the locator narrowed to the vertical separator it exits 0,
+and so does the daily use script, both on the tree with that one test change. On
+main with real 2.1.317 and local replies, a wake between two members of 共同工作
+still showed in its shared record. The cross-session message checks need a
+message sent by hand and ran only in the author lane. Daily delivery remains
+pending; current daily remains alpha.168.
+
 Current daily GUI: alpha.168, committed build source `c52dde77`. It carries two
 reviewed changes from Claude 2. The first is for a prompt typed while Claude
 works (T-138, wake half). On Claude Code 2.1.316 and 2.1.317, when the person
@@ -50,10 +96,10 @@ older collaboration list script still stops where it stopped on alpha.156. The
 signed bundle passed one isolated launch. The ordinary visible update kept
 fourteen session records with their native IDs, live processes and drafts; the
 empty active backend was replaced in place, and the seven other backends kept
-PID, start time and version, also 150 seconds later, with no move started. No
-session runs on the new backend yet, so neither change has run on the daily app:
-the secretary and the main session stay on older backends until each is moved,
-and the daily wake between them remains unverified.
+PID, start time and version, also 150 seconds later, with no move started. At
+the post-update read no session ran on the new backend, so neither change had
+run on the daily app: the secretary and the main session stay on older backends
+until each is moved, and the daily wake between them remains unverified.
 
 The prior alpha.167 task, source `1af68000`, remains qualified. It carries three
 reviewed window changes. Every collaboration space in the sidebar now uses the
