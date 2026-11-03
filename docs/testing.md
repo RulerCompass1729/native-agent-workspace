@@ -4295,3 +4295,15 @@ also stops at line 140 on the code before T-134 (9c78f55), which the lane
 reviewer confirmed. In the author lanes the space-row change made the multispace
 and narrow-sidebar checks fail on the old code for the right reason, and the
 guard's new GUI step failed three times on main before it and passed after.
+
+The committed alpha.167 tree passes the same 2,194 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. An initial-only read before the update found the active backend empty
+and no backend that qualified for an automatic move, and the operator re-checked
+both live. The ordinary visible update kept fourteen session records with their
+native IDs, live process starts and drafts, and the seven other backends kept
+PID, start time and version; 150 seconds later they and all sixteen live native
+processes were unchanged and no move record existed. Afterwards an author-run
+check found no sidebarSpaceFilter in the daily view file; whether it was there
+before was not recorded.

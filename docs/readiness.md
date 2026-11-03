@@ -4,33 +4,39 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.167 carries three reviewed window changes. Every collaboration
-space in the sidebar now uses the same row: 共同工作 no longer has its own icon,
-member counts are hidden for all spaces in the narrow sidebar, and the drop hint
-sits below the list instead of between rows. The grid follow from alpha.165 is
-narrowed: a scroll without a key or pointer event is ignored only in a reader
-whose rows the latest render changed, so an idle following column can again be
-scrolled away that way. The reader whose rows do change, the working member's
-column or the single-session view while output streams, still ignores such a
-scroll between a render and its follow frame, the window the author estimated at
-five to fifteen percent of the time while output streams; a screen reader's
-scroll is one example of an input-less scroll, and none was tested. An old saved
-sidebar filter is now removed from the view file when the app starts, so
-returning to a build before alpha.163, which would apply it, is safe once this
-build has started. Unverified: daily use of all three, screen readers, real
-trackpads and mouse wheels, the macOS overlay scroll bar, and keys pressed with
-focus outside the reader. Known: blank space above the drop hint when there are
-few spaces, about 40 pixels in the test window and more in a taller sidebar, and
-the 全部空间 label 8 pixels left. Each change was reviewed in its author lane and is
-integrated with identical changed lines; one identity assertion in a test was
-added after the saved-filter change passed and was not re-reviewed. The full
-unit suite passes 2,194 checks, and multispace, sidebar membership rail, sidebar
-density, sidebar layout, grid follow, reading turns, daily use and collaboration
-overview exit 0; the reading and reading pages scripts still stop at steps that
-predate these changes. Daily delivery remains pending; current daily remains
-alpha.166.
+Current daily GUI: alpha.167, committed build source `1af68000`. It carries
+three reviewed window changes. Every collaboration space in the sidebar now uses
+the same row: 共同工作 no longer has its own icon, member counts are hidden for all
+spaces in the narrow sidebar, and the drop hint sits below the list instead of
+between rows. The grid follow from alpha.165 is narrowed: a scroll without a key
+or pointer event is ignored only in a reader whose rows the latest render
+changed, so an idle following column can again be scrolled away that way. The
+reader whose rows do change, the working member's column or the single-session
+view while output streams, still ignores such a scroll between a render and its
+follow frame, the window the author estimated at five to fifteen percent of the
+time while output streams; a screen reader's scroll is one example of an
+input-less scroll, and none was tested. An old saved sidebar filter is now
+removed from the view file when the app starts, so returning to a build before
+alpha.163, which would apply it, is safe once this build has started.
+Unverified: daily use of all three, screen readers, real trackpads and mouse
+wheels, the macOS overlay scroll bar, and keys pressed with focus outside the
+reader. Known: blank space above the drop hint when there are few spaces, about
+40 pixels in the test window and more in a taller sidebar, and the 全部空间 label 8
+pixels left. Each change was reviewed in its author lane and is integrated with
+identical changed lines; one identity assertion in a test was added after the
+saved-filter change passed and was not re-reviewed. The full unit suite passes
+2,194 checks, and multispace, sidebar membership rail, sidebar density, sidebar
+layout, grid follow, reading turns, daily use and collaboration overview exit 0;
+the reading and reading pages scripts still stop at steps that predate these
+changes. The signed bundle passed one isolated launch. The ordinary visible
+update kept fourteen session records with their native IDs, live processes and
+drafts; the empty active backend was replaced in place, and the seven other
+backends kept PID, start time and version, also 150 seconds later, long enough
+for two automatic-move checks, with no move started. After the update an
+author-run check found no sidebarSpaceFilter in the daily view file; whether it
+was there before was not recorded.
 
-Current daily GUI: alpha.166, committed build source `cb17a55b`. It turns on two
+The prior alpha.166 task, source `cb17a55b`, remains qualified. It turns on two
 more Claude Code 2.1.316 and 2.1.317 capabilities. When the person switches the
 model with /model in the native terminal, the conversation view's model now
 follows. When a Claude tool returns an image of at most 1 MB, such as a small
@@ -64,8 +70,9 @@ backend was replaced in place, and the seven other backends kept PID, start time
 and version, also 150 seconds later, long enough for two automatic-move checks,
 with no move started. At the update no Claude session ran on an alpha.166
 backend, so these capabilities and the extended image cache reach no daily
-session yet. alpha.163 to alpha.166 were each installed but none is published
-yet, pending the person's decision on the publication scan's size limit.
+session yet. The sources of alpha.163 to alpha.166 were pushed to GitHub main
+together on 11-02 after the publication scan's aggregate bound was raised; no
+builds were uploaded.
 
 The prior alpha.165 task, source `a835d37f`, remains qualified. It keeps a
 working member's reader in a space grid at its latest output: while it follows
