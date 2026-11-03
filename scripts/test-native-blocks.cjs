@@ -27,7 +27,9 @@ const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_M
 // Permission case: manual mode asks before a Bash command that writes a file
 // (read-only commands such as echo run without asking).
 const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
-assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial].filter(Boolean).length <= 1, 'One bounded case per run');
+// NAW_TEST_NATIVE_MODEL=1: only the zero-inference model switch (no task is sent), for versions whose queue is not qualified (T-133).
+const modelTrial = process.env.NAW_TEST_NATIVE_MODEL === '1';
+assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial, modelTrial].filter(Boolean).length <= 1, 'One bounded case per run');
 assert.ok(!/^2\.1\.312\b/.test(nativeVersion) || compatibilityTrial || scrollTrial, '312 requires a bounded qualified compatibility or basic-text scroll witness');
 let planFile = null, planNotes = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
@@ -150,6 +152,13 @@ async function cleanup() {
     assert.equal(calls, 1); assert.deepEqual(errors, []);
     console.log(JSON.stringify({ checks, nativeVersion, localResponses: calls, paidModelCalls: 0, physicalTrackpad: 'not tested', iTermComparison: 'not tested', evidence: base })); return;
   }
+  if (modelTrial) {
+    fs.writeFileSync(path.join(base, 'model-start.json'), JSON.stringify(before, null, 2));
+    await require('./native-model-check.cjs')({ page, snapshot, base, aliases: ['sonnet', 'haiku'] });
+    assert.equal(calls, 0, 'Native model commands make no model request'); assert.deepEqual(errors, []);
+    checks.push('Native /model switches reach the GUI header and survive reload with the same ID/PID/draft; task model returns to haiku');
+    console.log(JSON.stringify({ checks, nativeVersion, startModel: before.model, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+  }
   if (compatibilityTrial) {
     fs.writeFileSync(path.join(base, 'compat-start.json'), JSON.stringify(before, null, 2));
     assert.equal(before.queueAvailable, true, 'Qualified native queue is bound at startup');
@@ -210,7 +219,7 @@ async function cleanup() {
     if (answerMode === 'interrupt') {
       // Stopping the turn releases the held hook first, so native can end the turn.
       const stopped = Date.now(); await page.locator('#interrupt').click();
-      // On 2.1.316 the stop must settle through the native API: no 原生输入 lock left behind (T-133).
+      // On 2.1.316 and 2.1.317 the stop must settle through the native API: no 原生输入 lock left behind (T-133).
       await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && !s.claudeQuestion && (!/^2\.1\.31[67]\b/.test(nativeVersion) || (!s.nativeInputRequired && !s.interruptPending)); }, 'The turn stops while a question was held', 30000);
       assert.ok(Date.now() - stopped < 20000, 'Stopping does not wait for the hook timeout'); await sleep(1500); assert.equal(calls, 1, 'No answer was sent to the model');
       await until(() => page.locator('#approval').isHidden(), 'The question card clears');
@@ -442,9 +451,9 @@ async function cleanup() {
   await page.locator('#interrupt').click();
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.kind === 'turn' && m.status === 'interrupted'), 'Native interruption boundary');
   if (/^2\.1\.31[67]\b/.test(nativeVersion)) {
-    // T-133: 2.1.316 stops through the native API. Only that path clears nativeInputRequired;
+    // T-133: 2.1.316 and 2.1.317 stop through the native API. Only that path clears nativeInputRequired;
     // the Escape fallback leaves it set until the person types in the native terminal.
-    await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && !s.nativeInputRequired && !s.interruptPending; }, 'Native API abort settles and graphical input recovers (2.1.316)');
+    await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && !s.nativeInputRequired && !s.interruptPending; }, 'Native API abort settles and graphical input recovers (2.1.316/317)');
     checks.push('2.1.316/317: 停止 ends the turn through the native API and the chat input is usable again at once');
   }
   if (compatibilityTrial) {
