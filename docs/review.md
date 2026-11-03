@@ -3384,3 +3384,138 @@ default flow ran on 2.1.317 only. The operator checked the alpha.170 rollback
 archive's presence, not its hash, and after the run it is the only rollback.
 Open: T-143; daily checks once sessions are on an alpha.171 backend; the
 post-provider signature check.
+
+
+### GUI scripts must look up names the interface still shows (T-146, ab98b96)
+
+**Source.** Found while checking T-135: 47 GUI scripts still clicked the renamed 「加入协作」 and stopped while creating sessions, so their later checks never ran (board T-146).
+
+**Change.**
+- scripts/check-gui-names.cjs, run in the unit suite by app/tests/gui-names.test.cjs, compares every name GUI scripts and fixtures look up with the strings in the application source. It covers direct lookups, one-parameter helpers, for…of name lists and /^…/ fixed starts.
+- Main reported 73 (61 「加入协作」, 12 old 「脱出协作」 buttons); now 0. A rename probe of 「加入此空间」 is reported in 20 places, including the shared fixture.
+- Selectors only:
+  - joining and leaving through scripts/fixtures/space-membership.cjs, which waits until the change applied;
+  - the sidebar's 加入「…」/离开「…」;
+  - the message copy and share names 「复制：…」/「选择并分享：…」 in the row's own heading;
+  - check-room's leave button;
+  - peer-workflow reads the dialog's status line.
+
+**Review.** A fresh read-only reviewer in the author lane, three rounds.
+- **Round 1, CHANGES:**
+  - the member-card swap was not equivalent;
+  - several renames were missed;
+  - a leave-then-join race;
+  - five ways the check was too lenient.
+- **Round 2, CHANGES:** the new waits passed 加入此空间/离开此空间 as plain strings, so the check treated them as data and stopped checking those names. Fixed, with a guard and a test.
+- **Round 3, PASS.**
+
+**Evidence.**
+- Full suite: 2254/0.
+- Final runs of all 37 runnable scripts on the committed candidate:
+  - of the 33 that were stuck, 18 run through and 5 stop at real assertions;
+  - 10 more are now T-147 (hidden member tabs), T-148 (expectations older than paging) and T-149 (undiagnosed);
+  - the real-assertion failures go to T-150 to judge;
+  - the 14 that cannot run here go to T-151.
+
+**Open.**
+- The done clause is met on a narrowed basis that the board owner has to confirm.
+- The check cannot see aria-label overrides, names in variables, or which of two same-named controls is meant.
+- regexStart reads \n, \t and \x as letters (a loud false report, not a silent one).
+- The integration reviewer listed further ways a name can pass silently, none of which hides a miss today: a lookup that is not exact passes if the name appears inside any string under app/, backend files included; an exact control lookup is skipped when any string outside a lookup, in that script or in any fixture, equals its name, and a content lookup when such a string contains it; regex lookups without ^, or with a fixed start shorter than two characters, are not checked; and a lookup's role is not checked apart from the menu-only rule.
+- Of the four scripts changed only for the copy button's name, two run through; privacy-boundaries:117 stops at a real assertion (T-150) and reading:56 at a wait older than paging (T-148).
+
+
+### Five GUI scripts open members from their overview card (T-147)
+
+T-146 left five GUI scripts stopped at member tabs the interface now keeps
+hidden: desktop-workflow, native-version, pending-actions, terminal-ready and
+terminal-focus. Claude 2 rewrote those flows to open a member from its overview
+card, as the interface does now, and fixed stale expectations found on the way:
+a space's 文件… opens the space's file list first, Codex 0.165.0 is now verified
+and 0.166.0 stands for a future one, and terminal-focus follows the current 原生终端
+switch, which shows a terminal that is not ready only after control is confirmed
+and gives a ready terminal focus at once with input held. The property is
+unchanged (nothing typed before confirmation or after a failed or taken claim
+reaches the member), but after a failure it is now checked by typing into A's
+focused terminal rather than by where focus goes. The lane reviewer passed the
+script changes in two rounds; its suggestions to assert that A's terminal exists
+and to focus it before each typing step were added afterwards and checked only
+by a real run.
+
+The second round also showed that a status the author had read as held input was
+stale: after a failed claim the terminal keeps focus, typing is discarded, and
+the status still shows 「输入暂存，尚未发送」 until the next render, while nothing reaches
+the member. That is a product finding outside this scripts-only change; it is
+board row T-152. Other scripts that still use member tabs fail loudly rather
+than pass silently and belong to T-150, T-151 or the daily app;
+test-collaboration's tab drags (:160, :173) are tracked only by T-132's
+stale-script note, and what replaces dragging a tab out to leave is not yet
+checked. The integration reviewer also noted that in terminal-focus the check
+after a taken claim runs once, 150 ms after typing, while the check after a
+failed claim runs again later.
+
+
+### Four GUI scripts wait for the paged conversation (T-148)
+
+Four GUI scripts still waited for conversation rows that paging no longer mounts
+at once: long continuity, reading, search and storage. Claude 2 updated their
+waits: long continuity clicks 显示更早的记录 once and still waits for all 160
+paragraphs of its 80 records; reading's five reading-position checks now compare
+where record 40 sits on screen, because scrollTop jumps when a page is added
+(measured 0 to 16,159 while the record moved from 117 to 116.75 pixels), and it
+adds a check that returning shows the oldest page again, where the reader left
+off; search and storage gain a bounded loop that clicks 显示更早的记录 until the target
+record shows. Two expectations did change, which the lane reviewer judged
+correct: reading's Markdown check now covers each record on the shown page only,
+and its six round trips now require the oldest page instead of waiting for the
+latest record. Reading and search click copy buttons, which go to the test's
+replaced main-process clipboard function; on main the system clipboard's change
+count stayed the same before and after each run.
+
+The lane reviewer asked in round 1 that long continuity keep its original
+expectation, which was restored, and passed round 2. Lane evidence: all four
+scripts stopped at their old waits before the change and ran through after it,
+the full suite passed 2,267 checks and the name check reported nothing. Not run:
+reading's long mode with 2,480 records, whose page loop bound of 60 covers the
+about 48 clicks it needs on paper.
+
+
+### Two GUI scripts after a real run (T-149, scripts)
+
+Two scripts stopped at timeouts T-146 could not explain. Markdown copy looked
+for a code block's 复制 button in the shared record without opening it; it now
+clicks 共享记录 first and runs through. Peer workflow waited for 核对各后台 in the
+privacy dialog's status line when a clear of shared records is refused; the
+source and the stubbed run, which counted one confirmation before the refusal,
+show that the space path asks for the native confirmation before it checks for
+unconfirmed handoff pauses, so the refusal only comes after a confirmation
+nobody in the test clicked. As the lane reviewer asked, the script now replaces
+the system confirmation with a counting stub, written after that review and
+first reviewed at integration, and asserts that a refused clear asks for no
+confirmation first. It stops at that assertion until the product refuses first.
+That assertion should then pass unchanged, but the rest of the script, from :62
+on, has not run on current code. The stub counts dialog.showMessageBox only, so
+a future fix that confirmed through showMessageBoxSync or an in-app dialog would
+count none and pass; it stays installed for the rest of the run, where a
+confirmation not starting with 清除 fails loudly.
+
+The product fix is not part of this change. The recommendation on the T-149 row,
+pending the person or the board's 20-minute rule, is to check for unconfirmed
+handoff pauses before the confirmation using the client check that covers every
+backend, keep the check after confirmation because state can change while the
+dialog is open, and note that other spaces refuse with different text
+(workspace-client.cjs:642), which this script, targeting 共同工作 only, does not
+cover. Lane evidence: the full suite, including the name check, passed 2,267
+checks and the clipboard count did not change; an earlier claim that the run
+showed a real dialog on screen was withdrawn, since the test window is hidden
+and no screenshot showed it.
+
+
+### Integrated scripts-only batch after alpha.171
+
+Claude 3's name check and script fixes (T-146), Claude 2's five member-card
+scripts (T-147), four paging waits (T-148) and two scripts from a real run
+(T-149) are integrated on main with identical changed lines. None of them
+changes application code: only scripts, a fixture and one unit test, none of
+which is packaged, so no daily update follows. Peer workflow now stops at a real
+product assertion by design (T-149).
