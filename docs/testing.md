@@ -4349,3 +4349,15 @@ it with 原生已接收 and the message, and after a rename through the service 
 followed. It used three local responses, no paid call and no pbcopy call. In the
 author lane the row was missing with the write removed and vanished under the
 member filter with the renderer reverted, and the same run passed on 2.1.316.
+
+The committed alpha.168 tree passes the same 2,228 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. An initial-only read before the update found the active backend empty
+and no backend that qualified for an automatic move, and the operator re-checked
+both live. The ordinary visible update kept fourteen session records with their
+native IDs, live process starts and drafts, and the seven other backends kept
+PID, start time and version; 150 seconds later they and all sixteen live native
+processes were unchanged and no move record existed. The private install receipt
+describes `!` turns as settling to idle; as the candidate record says, that part
+is inferred from the source.
