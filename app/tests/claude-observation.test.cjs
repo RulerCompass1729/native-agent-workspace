@@ -232,7 +232,8 @@ test('native 2.1.316 binds the root so a main-turn workspace message reaches the
     if (url.endsWith('/addressed-message')) { staged.push(body); return { ok: true, text: JSON.stringify({ status: 'staged' }) }; }
   } });
   assert.equal(f.r.nativeBlocks, true);
-  for (const flag of ['nativeQueue', 'nativeCapacityAvailable', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia']) assert.notEqual(f.r[flag], true, flag);
+  for (const flag of ['nativeQueue', 'nativeCapacityAvailable', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  assert.equal(f.r.nativeMedia, true, 'Tool-result media is qualified on 2.1.316 (T-133)');
   for (const fn of f.clock.splice(0).filter(fn => fn.delay === 500)) await fn();
   assert.equal(f.r.addressedSendAvailable, true);
   const promptId = randomUUID();
@@ -343,7 +344,8 @@ test('native 2.1.317 binds and stages like 2.1.316: blocks, transitions, abort, 
   const f = await addressedMod('2.1.317'), promptId = randomUUID();
   assert.equal(f.r.nativeBlocks, true); assert.equal(f.r.nativeAbortAvailable, true); assert.notEqual(f.r.nativeCapacityAvailable, true);
   assert.equal(f.r.nativeTurnRecords, true); assert.equal(f.r.nativeNarration, true);
-  for (const flag of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia']) assert.notEqual(f.r[flag], true, flag);
+  for (const flag of ['nativeQueue', 'nativeInlineInput', 'nativePromptInput']) assert.notEqual(f.r[flag], true, flag);
+  assert.equal(f.r.nativeMedia, true, 'Tool-result media is qualified on 2.1.317 (T-133)');
   await f.invoke('classic.UserPromptSubmit', { session_id: f.r.record.nativeId, prompt_id: promptId, prompt: 'Wake the idle peer.' });
   await f.invoke('turn.start', { turnId: 'turn-317' });
   assert.equal((await wakeCall(f, 'call-317')).deny, undefined);
@@ -604,6 +606,19 @@ test('private hidden attachments, prompts, children, denied/changed rows and thi
   await f.append(response(), async e => ({ uuid: randomUUID(), message: e.message }));
   const e = response(); e.message.content = [{ type: 'thinking', thinking: 'never copy' }, { type: 'image', source: { data: 'never copy' } }]; await f.append(e);
   assert.equal(f.clock.length, 0); assert.equal(f.requests.length, 0);
+});
+// A 1x1 PNG. The mod's own binding must carry media, not only the flag sent to NAW (T-133).
+const onePixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+for (const [version, on] of [['2.1.312', true], ['2.1.316', true], ['2.1.317', true], ['2.1.311', false]]) test(`native ${version} ${on ? 'sends' : 'does not send'} a Read image with its tool row (T-133)`, async () => {
+  const f = await mod({ version }), e = response();
+  e.door = 'tool-result'; e.origin = { kind: 'tool', tool: 'Read' };
+  e.message = { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_img', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: onePixelPng } }] }] };
+  await f.append(e);
+  for (let i = 0; i < 5 && f.clock.some(fn => fn.delay === 0); i++) { const fn = f.clock.find(x => x.delay === 0); f.clock.splice(f.clock.indexOf(fn), 1); await fn(); }
+  const rows = f.requests.filter(r => r.id === 'tool:toolu_img'), original = rows.find(r => !r.mediaOnly);
+  assert.ok(original, 'The Read row is sent');
+  assert.equal(original.incomplete === true, !on);
+  assert.equal(rows.some(r => r.mediaOnly && r.imagePayload?.data === onePixelPng && r.imagePayload.mime === 'image/png'), on);
 });
 test('tool result text keeps block order, excludes media bytes and marks nontext output', async () => {
   const f = await mod(), e = response();

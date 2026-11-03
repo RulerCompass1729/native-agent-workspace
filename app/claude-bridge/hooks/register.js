@@ -86,6 +86,9 @@ function nativeImagePart(part) {
     ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(source.media_type) &&
     typeof source.data === 'string' && source.data.length > 0 && source.data.length <= nativeImageEncodedLimit;
 }
+// One list for every bind path (first bind, observer rebind), so they cannot disagree (T-133).
+// 2.1.316 and 2.1.317: the session-append, content-block and image types are as on 2.1.312.
+const nativeMediaVersion = version => ['2.1.312', '2.1.316', '2.1.317'].includes(version);
 function mediaIncomplete(parts, binding, complete = true) {
   return Array.isArray(parts) && parts.some(part => part?.type !== 'text' && !(complete && binding?.nativeMedia && nativeImagePart(part)));
 }
@@ -453,7 +456,7 @@ async function refreshLegacyObserver($, ownGeneration) {
       observerBindRequest = { token: binding.token, generation: ownGeneration,
         promise: request($, '/root-bind', { nativeBlocks, nativeQueue: version === '2.1.302',
           nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
-          nativePromptInput: false, nativeMedia: version === '2.1.312',
+          nativePromptInput: false, nativeMedia: nativeMediaVersion(version),
           nativeSharedDisplay: nativeBlocks && version === '2.1.302' }, binding).finally(() => { observationRequests--; }) };
     }
     const pending = observerBindRequest;
@@ -471,7 +474,7 @@ async function refreshLegacyObserver($, ownGeneration) {
     // still go to its old credential, never to this new observer.
     Object.assign(previous, binding, { lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
       nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: false,
-      nativeMedia: nativeBlocks && version === '2.1.312' && result.nativeMedia === true });
+      nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true });
     nativeReadImages.clear();
     for (const entry of observations) if (entry.binding === previous) {
       entry.row = { ...entry.row, epoch: previous.observationEpoch, sequence: ++previous.observationSequence, replayed: true };
@@ -594,7 +597,8 @@ async function bindRoot($, ownGeneration) {
   const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(version)),
     nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
-    nativeMedia: version === '2.1.312',
+    // On 2.1.316 and 2.1.317 only tool results carry images; prompt images need the input gates, which stay off.
+    nativeMedia: nativeMediaVersion(version),
     // 2.1.316 and 2.1.317: turn.abort is qualified (T-133). Capacity recovery, which reads the
     // native transcript and continues the session, is not yet; say so explicitly.
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
@@ -606,7 +610,7 @@ async function bindRoot($, ownGeneration) {
   nativeBlocks = nativeBlocks && result.nativeBlocks === true;
   rootBinding = { ...binding, lease: result.lease, observationEpoch: result.observationEpoch, observationSequence: 0,
     nativeInlineInput: nativeBlocks && result.nativeInlineInput === true, nativePromptInput: nativeBlocks && result.nativePromptInput === true,
-    nativeMedia: nativeBlocks && version === '2.1.312' && result.nativeMedia === true,
+    nativeMedia: nativeBlocks && nativeMediaVersion(version) && result.nativeMedia === true,
     nativeTurnRecords: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317'].includes(version) && result.nativeTurnRecords === true,
     nativeNarration: nativeBlocks && !legacyOnly && ['2.1.316', '2.1.317'].includes(version) && result.nativeNarration === true };
   nativeReadImages.clear();
@@ -1023,7 +1027,7 @@ export function register(on) {
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
       : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
     // 2.1.316 and 2.1.317 (2.1.317's engine API only adds to 2.1.316's, T-133): root binding, native
-    // blocks (turn identity for workspace messages), abort, usage and model; queue, inline input and media stay off.
+    // blocks (turn identity for workspace messages), abort, usage, model and media; queue and inline input stay off.
     contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));

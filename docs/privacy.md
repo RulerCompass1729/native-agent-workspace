@@ -18,6 +18,13 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   shared messages, drafts and bounded structured native tool records already displayed
   to the user. It does not contain raw terminal scrollback,
   provider credential files, full environment dumps or raw protocol traces.
+- native-image-cache/ holds local copies of the images that a native Claude tool
+  returned and the conversation view shows, for example a screenshot Claude read
+  (Claude Code 2.1.312, 2.1.316 and 2.1.317). Each session has its own owner-only
+  folder, and each file is named by the SHA-256 of its image bytes. Each image is at
+  most 1 MB and each session's folder at most 64 MB. Archiving a session or
+  using 移除本应用记录… does not delete its folder yet; removing the application
+  data directory does.
 - legacy-shared.json stores only native display blocks authorized by an explicit
   room send on inspected retained Claude connections. It is owner-only and atomic;
   already-displayed structured tool inputs/results are saved within the existing
