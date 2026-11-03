@@ -1,6 +1,6 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const { applyImagePayload, readImage, imageSource } = require('../native-images.cjs');
+const { applyImagePayload, readImage, imageSource, removeCachedImages, cachedImageKey } = require('../native-images.cjs');
 const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3ioAAAAASUVORK5CYII=', 'base64');
 const payload = (extra = {}) => ({ index: 0, mime: 'image/png', data: image.toString('base64'), ...extra });
 function fixture(t) {
@@ -81,4 +81,34 @@ test('out-of-order media slots preserve known originals while filling only their
   const third = structuredClone(f.row.images[2]); assert.ok(f.row.images[0].pending);
   applyImagePayload(f.row, payload({ index: 0 }), f.dir, 'session');
   assert.equal(f.row.images[0].unavailable, undefined); assert.deepEqual(f.row.images[2], third); assert.equal(f.row.images.length, 3);
+});
+
+test('removing a session\'s cached images keeps listed shared ones, other sessions and anything it did not write (T-140)', t => {
+  const f = fixture(t), second = Buffer.from(image); second[second.length - 1] ^= 1;
+  const row = (id, data) => { const r = { ...f.row, id }; applyImagePayload(r, payload({ data: data.toString('base64') }), f.dir, 'session'); return r.images[0]; };
+  const kept = row('a', image), gone = row('b', second);
+  const other = { ...f.row }; applyImagePayload(other, payload(), f.dir, 'other'); const otherFile = other.images[0].cachedPath;
+  const folder = path.dirname(kept.cachedPath);
+  assert.deepEqual(removeCachedImages(f.dir, 'session', new Set([cachedImageKey(kept)])), { removed: 1, kept: 1, failed: false });
+  assert.ok(fs.existsSync(kept.cachedPath)); assert.ok(!fs.existsSync(gone.cachedPath)); assert.ok(fs.existsSync(otherFile));
+  assert.deepEqual(removeCachedImages(f.dir, 'session'), { removed: 1, kept: 0, failed: false });
+  assert.ok(!fs.existsSync(folder), 'the empty folder goes'); assert.ok(fs.existsSync(otherFile), 'another session is untouched');
+  assert.deepEqual(removeCachedImages(f.dir, 'session'), { removed: 0, kept: 0, failed: false }, 'nothing cached is not a failure');
+  fs.writeFileSync(path.join(path.dirname(otherFile), 'notes.txt'), 'not ours');
+  assert.deepEqual(removeCachedImages(f.dir, 'other'), { removed: 1, kept: 1, failed: false });
+  assert.ok(fs.existsSync(path.join(path.dirname(otherFile), 'notes.txt')), 'a file it did not write stays, and so does its folder');
+  assert.equal(cachedImageKey({ kind: 'local', path: '/x.png' }), null);
+  assert.equal(cachedImageKey({ ...kept, cachedPath: path.join('/elsewhere/data/native-image-cache', path.basename(folder), path.basename(kept.cachedPath)) }), cachedImageKey(kept), 'a differently spelled data directory still matches');
+});
+test('a linked cache folder or root is refused and nothing outside it is removed (T-140)', t => {
+  const f = fixture(t), outside = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-native-media-outside-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  const row = { ...f.row }; applyImagePayload(row, payload(), f.dir, 'session');
+  const folder = path.dirname(row.images[0].cachedPath), victim = path.join(outside, path.basename(row.images[0].cachedPath));
+  fs.copyFileSync(row.images[0].cachedPath, victim);
+  fs.rmSync(folder, { recursive: true }); fs.symlinkSync(outside, folder);
+  assert.equal(removeCachedImages(f.dir, 'session').failed, true); assert.ok(fs.existsSync(victim));
+  fs.unlinkSync(folder); const base = path.dirname(folder); fs.renameSync(base, base + '-moved'); fs.mkdirSync(path.join(outside, path.basename(folder)));
+  fs.copyFileSync(victim, path.join(outside, path.basename(folder), path.basename(victim))); fs.symlinkSync(outside, base);
+  assert.equal(removeCachedImages(f.dir, 'session').failed, true); assert.ok(fs.existsSync(path.join(outside, path.basename(folder), path.basename(victim))));
 });
