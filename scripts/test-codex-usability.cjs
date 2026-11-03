@@ -21,6 +21,16 @@ function fixture(method, target, value) { const id = ++sequence; return new Prom
   child.on('message', cb); child.send({ id, method, target, value });
 }); }
 const snapshot = () => page.evaluate(() => workspace.initial());
+// T-150: since 5e0c1ed a native turn row shows only its native footer: the reported duration, then the native completion
+// time unless the reader drops it as a repeat of the final reply's clock. Nothing else may show (no invented caption).
+async function turnRows(scope){return page.locator(scope+' .native-turn').evaluateAll(rows=>rows.map(row=>{const f=row.querySelector(':scope > .reading-turn-footer');return{text:row.innerText.trim(),footer:f?f.innerText.trim():null,parts:f?[...f.children].map(c=>({tag:c.tagName,text:c.textContent,dateTime:c.dateTime||null})):[]};}));}
+function assertTurnRows(rows,expected,label){
+  assert.equal(rows.length,expected.length,label+': one row per native turn '+JSON.stringify(rows));
+  rows.forEach((row,i)=>{const [duration,completedMs]=expected[i];
+    assert.equal(row.text,row.footer,label+': the row shows only its footer '+JSON.stringify(row));
+    assert.deepEqual(row.parts[0],{tag:'SPAN',text:duration,dateTime:null},label+': native duration first '+JSON.stringify(row));
+    assert.ok(row.parts.length<=2&&row.parts.slice(1).every(part=>part.tag==='TIME'&&part.dateTime===new Date(completedMs).toISOString()),label+': at most the native completion time follows '+JSON.stringify(row));});
+}
 async function launch() {
   app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [root], ...(process.env.NAW_VIDEO_DIR?{recordVideo:{dir:process.env.NAW_VIDEO_DIR,size:{width:1280,height:900}}}:{}), env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(15000); page.on('pageerror', e => errors.push(e.message));
@@ -54,9 +64,12 @@ async function run() {
     const values=await page.evaluate(()=>{
       const u=document.querySelector('#messages .user'), a=document.querySelector('#messages .assistant');
       const ub=u.querySelector('.message-body'), ab=a.querySelector('.message-body');
-      return {humanHeight:u.getBoundingClientRect().height,humanWidth:u.getBoundingClientRect().width,readerWidth:u.parentElement.clientWidth,humanMargin:parseFloat(getComputedStyle(u).marginBottom),agentHeight:a.getBoundingClientRect().height,humanBackground:getComputedStyle(ub).backgroundColor,agentBackground:getComputedStyle(ab).backgroundColor,actionsOpacity:getComputedStyle(u.querySelector('.message-actions')).opacity};
+      return {humanHeadingHeight:u.querySelector('.message-heading')?.getBoundingClientRect().height||0,humanHeight:u.getBoundingClientRect().height,humanWidth:ub.getBoundingClientRect().width,readerWidth:u.parentElement.clientWidth,humanMargin:parseFloat(getComputedStyle(u).marginBottom),agentHeight:a.getBoundingClientRect().height,humanBackground:getComputedStyle(ub).backgroundColor,agentBackground:getComputedStyle(ab).backgroundColor,actionsOpacity:getComputedStyle(u.querySelector('.message-actions')).opacity};
     });
-    assert.ok(values.humanHeight+values.humanMargin<90,'Short human message fits compact reader'); assert.ok(values.agentHeight<65);
+    // T-150: since 5e0c1ed (T-104/T-105, asked for by the person) a human message has a heading row (你 · time · actions).
+    // The message itself keeps the original compact budget; the heading stays one compact row.
+    assert.ok(values.humanHeight-values.humanHeadingHeight+values.humanMargin<90,'Short human message fits compact reader'); assert.ok(values.humanHeadingHeight<=30,'Its heading is one compact row'); assert.ok(values.agentHeight<65);
+    // The visible bubble is the message body since 5e0c1ed (the message box itself is a transparent full-width row).
     assert.notEqual(values.humanBackground,values.agentBackground);assert.ok(values.humanWidth<values.readerWidth/2,'Short messages use their content width');
     geometry.push({scheme,...values}); await capture('codex-compact-'+scheme);
   }
@@ -64,7 +77,8 @@ async function run() {
   assert.match(await code.locator('pre').innerText(),/const n = 1;/);
   await code.hover(); await code.locator('.message-actions').getByRole('button',{ name: /^复制：/ }).click();
   assert.match(await app.evaluate(()=>globalThis.copiedText.at(-1)),/第一段。\n\n第二段。/);
-  assert.equal(await page.locator('#messages .native-turn').count(),0,'Missing native footer must not be reconstructed or translated from clocks');
+  // T-150: this fixture's turns report durationMs 2300 and 5000; no native footer text exists, so none may be reconstructed.
+  assertTurnRows(await turnRows('#messages'),[['2s',completedAt*1000],['5s',(completedAt+5)*1000]],'Missing native footer must not be reconstructed or translated from clocks');
   const originalFooter='✻ Cooked for 3s · done 4:55 PM';
   await fixture('nativeBlock',a,{id:'turn:raw-footer',kind:'turn',turnId:'raw-footer',text:originalFooter,status:'complete'});
   const boundary=page.locator('#messages .native-turn').filter({hasText:originalFooter});await boundary.waitFor();
@@ -73,11 +87,15 @@ async function run() {
   await fixture('nativeBlock',a,{id:'turn:raw-cut',kind:'turn',turnId:'raw-cut',text:' \n',status:'interrupted'});
   await page.locator('#messages .native-turn .message-body').getByText('interrupted',{exact:true}).waitFor();
   // Same-window task: full native originals, compact defaults, focused input only.
-  const search = page.locator('#messages .process').filter({hasText:'Seattle forecast'});
-  const reasoning = page.locator('#messages .process').filter({hasText:'原生摘要第一段。'});
-  const command = page.locator('#messages .process').filter({hasText:'check-document'});
-  assert.equal(await search.locator('.process-details').evaluate(el=>el.open),false);
-  assert.equal(await reasoning.locator('.process-details').evaluate(el=>el.open),false);
+  // T-150: since 6bf5ad0 (T-99) a turn's search, reasoning and command records sit in one process group, closed by
+  // default; each record keeps its own fold inside it (as test-command-actions and test-process-group-reading check).
+  const record = text => page.locator('#messages .process:not([data-process-group])').filter({hasText:text});
+  const search = record('Seattle forecast'), reasoning = record('原生摘要第一段。'), command = record('check-document');
+  const group = search.locator('xpath=ancestor::section[@data-process-group][1]');
+  assert.equal(await group.locator(':scope > details').evaluate(el=>el.open),false,'The finished process group starts closed');
+  await group.locator(':scope > details > summary').click();
+  assert.equal(await search.locator(':scope > .process-details').evaluate(el=>el.open),false);
+  assert.equal(await reasoning.locator(':scope > .process-details').evaluate(el=>el.open),false);
   // A finished command keeps its first two output lines and says how many more there are.
   assert.equal(await command.locator('.process-tail').innerText(),'line one\nline two');
   assert.equal(await command.locator('.process-more').innerText(),'+3 行');
@@ -103,7 +121,8 @@ async function run() {
   const paragraph=code.locator('.message-body p').first();await paragraph.scrollIntoViewIfNeeded();
   const paragraphBox=await paragraph.boundingBox();await page.mouse.click(paragraphBox.x+12,paragraphBox.y+8,{clickCount:3});
   const selectedText=await page.evaluate(()=>window.getSelection().toString());assert.ok(selectedText.includes('第一段。'));
-  await page.getByRole('button',{name:'分享选中内容',exact:true}).click();
+  // T-150: since ac9a014 the session header keeps 分享选中内容 in its ⋯ menu.
+  await page.locator('#session-header-more').click(); await page.getByRole('menuitem',{name:'分享选中内容',exact:true}).click();
   await page.locator('#share-dialog').waitFor({state:'visible'});
   assert.equal(await page.locator('#share-text').inputValue(),selectedText,'Reader selection supersedes the terminal input mode');
   await page.locator('#cancel-share').click();
@@ -135,7 +154,10 @@ async function run() {
   await input.press('ControlOrMeta+z');
   assert.equal(await input.inputValue(),'@正文保留','Native undo returns text before selecting a recipient');
   assert.equal(await page.locator('#recipient').inputValue(),'');assert.equal(await page.locator('#forward-button').isDisabled(),true);
-  await input.press('ControlOrMeta+Shift+z');assert.equal(await page.locator('#recipient').inputValue(),'','Redo text does not regain routing authority');
+  // T-150: since 524a72f native undo/redo restores the explicit recipient of this window's exact edit (docs/interaction.md;
+  // test-room-mention-edit checks it). Text alone still gains no routing authority: typing the same words routes nowhere.
+  await input.press('ControlOrMeta+Shift+z');assert.equal(await input.inputValue(),'@Codex A 正文保留');assert.equal(await page.locator('#recipient').inputValue(),a,'Redo restores the recipient the person chose');
+  await input.fill('');await input.fill('@Codex A 正文保留');assert.equal(await page.locator('#recipient').inputValue(),'','Typed text does not gain routing authority');
   await input.fill('@no-such-member'); await input.pressSequentially('x');
   assert.equal(await page.locator('#mention-list [role="option"]').count(),0); assert.equal(await input.getAttribute('aria-activedescendant'),null);
   await input.fill('中文输入法正文');await chooseRecipient(page,b);await input.evaluate(el=>el.setSelectionRange(el.value.length,el.value.length));await input.pressSequentially(' continues');
@@ -162,7 +184,8 @@ async function run() {
   await client.call('join',b,true);
   await until(()=>snapshot().then(s=>s.sessions.find(v=>v.id===b)?.roomId),'Rejoin observed');
   assert.equal(await page.locator('#recipient').inputValue(),'','Rejoin never reauthorizes the inactive address');
-  await page.locator('[data-room-session="'+b+'"]').waitFor();
+  // T-150: the member tabs are hidden since alpha.117 (T-53); the rejoined member shows up in the open @ menu.
+  await page.locator('[data-mention-id="'+b+'"]').waitFor();
   await page.locator('[data-mention-id="'+b+'"]').click();
   assert.equal((await roomBody(page)).trim(),'同名检查','Product reselect replaces only the trusted inactive range, with no obsolete address in native body');
   assert.equal(await page.locator('#recipient').inputValue(),b);
@@ -170,22 +193,33 @@ async function run() {
   assert.equal((await snapshot()).diagnostics.dispatches,0);assert.deepEqual(errors,[]);
   await page.evaluate(async ids=>{await workspace.rename(ids[0],'Codex A');await workspace.rename(ids[1],'Codex B');},[a,b]);
   const beforeTask=await snapshot();
-  await page.locator(`[data-room-session="${a}"]`).click();
+  // T-150: since the member overview replaced the tabs (alpha.117, T-53) the shared record no longer shows a member's
+  // terminal beside it; what remains to check is the record itself and its Send at the minimum window size.
+  await page.locator('#room-record').click();
   assert.equal(await page.locator('#room-messages').isVisible(),true);
-  assert.equal(await page.locator('#terminal-area').isVisible(),true);
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(850,600));
   await page.waitForTimeout(100);
   const roomFits=await page.locator('#forward-button').evaluate(el=>({bottom:el.getBoundingClientRect().bottom,paneBottom:document.getElementById('room-record-view').getBoundingClientRect().bottom,viewport:innerHeight}));
   assert.ok(roomFits.bottom<=roomFits.paneBottom+1 && roomFits.bottom<=roomFits.viewport,'Minimum-window shared Send remains visible: '+JSON.stringify(roomFits));
   await app.evaluate(({BrowserWindow},bounds)=>BrowserWindow.getAllWindows()[0].setBounds(bounds),originalBounds);
-  await chooseRecipient(page,b);await fillRoomMessage(page,'核对材料：12、18、25，文档声称总额60。');await page.locator('#forward-button').click();
-  assert.match(await page.locator('#native-pane-title').innerText(),/Codex A/,'Displaying A does not replace the addressed B');
-  assert.equal((await fixture('stats')).sends.at(-1).id,b);
+  await chooseRecipient(page,b);await fillRoomMessage(page,'核对材料：12、18、25，文档声称总额60。');
+  // T-150: no member terminal sits beside the record any more (T-53); showing A now means opening its card in 成员概览,
+  // and that must not change who the message is addressed to.
+  await page.locator('#room-overview').click();
+  await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${a}"] .collaboration-member-name`).click();
+  await page.locator('#conversation-pane').waitFor();
+  assert.equal(await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${a}"] .collaboration-member-name`).getAttribute('aria-pressed'),'true','A is the open member');
+  assert.equal(await page.locator('#recipient').inputValue(),b,'Showing A does not replace the addressed B');
+  await page.locator('#collaboration-overview').getByRole('button',{name:'← 返回共同工作',exact:true}).click();
+  await page.locator('#room-record').click(); await page.locator('#forward-button').click();
+  assert.deepEqual((await fixture('stats')).sends.at(-1),{id:b,text:'核对材料：12、18、25，文档声称总额60。'},'The message and its draft go to the addressed B');
   await fixture('replyBound',b,{turnId:'check-b'});
   await page.locator('#run-status').getByText('Codex B · 正在处理',{exact:false}).waitFor();
   const runningOutput = 'FIRST NATIVE LINE\n' + '逐项核对\n'.repeat(12) + 'LATEST ONE\nLATEST TWO';
   await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',toolKind:'commandExecution',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:runningOutput,status:'running'});
-  let process = page.locator('#room-messages .process').filter({hasText:'核对数字'});
+  // T-150: a command record shows its command (12 + 18 + 25), not the fixture's title; locate the record itself, not its group.
+  const checkRecord = () => page.locator('#room-messages .process:not([data-process-group])').filter({hasText:'12 + 18 + 25'});
+  let process = checkRecord();
   assert.equal(await process.locator('.process-details').evaluate(el=>el.open),false);
   assert.equal(await process.getAttribute('data-running'),'true');
   assert.equal(await process.locator('.process-tail').innerText(),'LATEST ONE\nLATEST TWO','A running folded command shows the newest output, not the first lines');
@@ -200,15 +234,20 @@ async function run() {
   await page.locator('#room-filter').selectOption(a);
   await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14)+'原生失败信息',status:'failed'});
   await page.locator('#room-filter').selectOption('');
-  await until(()=>process.locator('.process-details').evaluate(el=>el.open),'Native failure opens a previously collapsed process');
-  await process.locator('.process-details > summary').click();
+  // T-150: since T-66 (asked for by the person) a failed tool record does not open itself; the shared record must first
+  // show the failure, then still be closed.
+  const shows = async (word, text) => (await process.locator(':scope > .process-details > summary').textContent()).includes(word) && (await process.locator('.message-body').textContent()).includes(text);
+  await until(()=>shows('failed','原生失败信息'),'The shared record shows the native failure');
+  assert.equal(await process.locator('.process-details').evaluate(el=>el.open),false,'A failure does not open the record');
   await app.close();app=null;await launch();
-  process = page.locator('#room-messages .process').filter({hasText:'核对数字'});
-  assert.equal(await process.locator('.process-details').evaluate(el=>el.open),false,'Explicitly collapsing a known error survives whole-app close');
+  process = checkRecord();
+  assert.equal(await process.locator('.process-details').evaluate(el=>el.open),false,'A failed record is still closed after whole-app close (the next step checks the saved choice)');
   await fixture('nativeBlock',b,{id:'tool:check',kind:'tool',turnId:'check-b',title:'核对数字',input:'12 + 18 + 25',text:'逐项核对\n'.repeat(14)+'原生中断信息',status:'interrupted'});
-  await until(()=>process.locator('.process-details').evaluate(el=>el.open),'A different native error reopens the record');
+  await until(()=>shows('interrupted','原生中断信息'),'The shared record shows the native interruption');
+  assert.equal(await process.locator('.process-details').evaluate(el=>el.open),false,'A later error keeps the person\'s collapsed choice');
+  await process.locator('.process-details > summary').click(); assert.equal(await process.locator('.process-details').evaluate(el=>el.open),true);
   await app.close();app=null;await launch();
-  assert.equal(await page.locator('#room-messages .process').filter({hasText:'核对数字'}).locator('.process-details').evaluate(el=>el.open),true,'New error remains open even on immediate whole-app close');
+  assert.equal(await checkRecord().locator('.process-details').evaluate(el=>el.open),true,'A fold change made just before quitting survives an immediate whole-app close');
   await capture('shared-native-reader');
   await fixture('nativeBlock',b,{id:'response:check-b',kind:'response',turnId:'check-b',text:'核对中，正在检查材料中的合计。',status:'streaming'});
   await chooseRecipient(page,a);await fillRoomMessage(page,'独立复核这三个数字的合计。');await page.locator('#forward-button').click();
@@ -222,7 +261,8 @@ async function run() {
   await page.locator('#run-status').waitFor({state:'hidden'});
   assert.equal(await page.locator('#run-status').isVisible(),false,'Completed agents do not leave a stale activity label');
   await page.locator('#room-messages').getByText('已核实，总额应为55，建议将60改为55。',{exact:true}).waitFor();
-  assert.equal(await page.locator('#room-messages .native-turn').count(),0,'Shared history also omits invented native completion captions');
+  // T-150: shared turns show the same native footer (3400 and 5800 ms); the fed caption 原生本轮已结束 must not show.
+  assertTurnRows(await turnRows('#room-messages'),[['3s',completedAt*1000],['5s',(completedAt+2)*1000]],'Shared history also omits invented native completion captions');
   const publicTask=(await snapshot()).room.messages;
   assert.equal(publicTask.filter(m=>m.sharedStream&&m.role==='assistant').length,2,'Streaming updates stay in their original attributed blocks');
   assert.ok(publicTask.some(m=>m.kind==='tool'&&m.text.split('\n').length>=14),'Collapsed process retains the complete native original');
@@ -255,7 +295,7 @@ async function run() {
   assert.ok(!(await snapshot()).room.messages.some(m=>m.text.includes('PRIVATE AFTER INTERVENTION')));
   await fixture('complete',a,{messageId:'native:synthetic-'+a+':response:control',text:'PRIVATE AFTER INTERVENTION'});
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({geometry,checks:['Content-width human messages in light/dark; exact Markdown and native timing Copy','Native search/reasoning collapse by default; commands preview two lines with full expansion; full original Copy and keyboard expansion','Same-window native/reader focus, layout hide/maximize and actual DOM selected-share source','Fold choices persist during streaming; off-page failure opens; acknowledged error collapse and changed error survive full reopen','Inline mentions/Undo/Redo/composition guard; roster changes and reopen retain drafts','Two attributed agents check a document while displayed A and addressed B remain independent','Member trajectory filter, private departure and whole-app reopening preserve records/identity/draft','Same-turn private intervention hides native phase and freezes shared content'],dispatches:3,providerCalls:0,errors,profile},null,2));
+  console.log(JSON.stringify({geometry,checks:['Content-width human messages in light/dark; exact Markdown and native timing Copy','Native search/reasoning collapse by default; commands preview two lines with full expansion; full original Copy and keyboard expansion','Same-window native/reader focus, layout hide/maximize and actual DOM selected-share source','Fold choices persist during streaming and a later error; a failure does not open a record; a last-moment fold change survives an immediate reopen','Inline mentions/Undo/Redo/composition guard; roster changes and reopen retain drafts','Two attributed agents check a document while displayed A and addressed B remain independent','Member trajectory filter, private departure and whole-app reopening preserve records/identity/draft','Same-turn private intervention hides native phase and freezes shared content'],dispatches:3,providerCalls:0,errors,profile},null,2));
 }
 async function capture(name){if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(process.env.NAW_EVIDENCE_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.NAW_EVIDENCE_DIR,name+'.png')});}}
 run().catch(async error=>{console.error(error.stack);if(page&&!page.isClosed())await capture('usability-failed');process.exitCode=1}).finally(testScratch.cleanup(async()=>{try{if(app)await app.close();if(client){for(const s of(await client.call('initial')).sessions)await client.call('stop',s.id);await client.call('shutdown');client.close()}}finally{if(child.connected)child.disconnect();if(child.exitCode===null)child.kill('SIGTERM')}}));
