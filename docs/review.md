@@ -2979,3 +2979,17 @@ choice for wakes with no shared space is T-143, and the daily check across
 backends is still to do. The lane's first GUI round ran against a stale UI
 bundle; its final rounds rebuilt it, and every main GUI batch from alpha.158 on
 has a log of rebuilding the bundle before running; packaging always rebuilds it.
+
+
+### Integrated alpha.168 delivery
+
+A fresh read-only reviewer found both commits identical to the lane's and
+nothing that widens wake authority or lets a space row reach an agent. It held
+acceptance for two rounds, until the ledgers stopped calling the synthetic
+session wake script a real-CLI run, said which lane runs used an earlier round,
+separated measured from inferred effects, listed what a space row stores, named
+the wake tool in the privacy note and stopped calling a changed runner copy
+unchanged. It accepted the update operator as a substitution of the alpha.167
+one, noting that the private receipt states the `!` turn settle as fact. The
+operator ran once. Open: the daily wake between two sessions on alpha.168
+backends; T-141; T-143; the display half of T-138.
