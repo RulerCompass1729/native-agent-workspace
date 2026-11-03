@@ -742,7 +742,7 @@ function renderSpaceNavigation() {
     if (!row) {
       if (room.id === 'shared') row = { element: $('room-nav').parentElement, nav: $('room-nav'), name: $('room-nav-name'), count: $('member-count'), more: $('room-more') };
       else {
-        const element = node('div', undefined, 'room-row'), nav = button('', () => selectSpace(room.id), 'room-nav'), name = node('span', undefined, 'rail-label'), count = node('span');
+        const element = node('div', undefined, 'room-row'), nav = button('', () => selectSpace(room.id), 'room-nav'), name = node('span', undefined, 'rail-label space-name'), count = node('span', undefined, 'space-count');
         nav.append(node('span', '◉', 'rail-icon'), name, count);
         const more = button('⋯', () => openRoomMenu(undefined, more, room.id), 'session-more'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
         element.append(nav, more); $('additional-spaces').append(element); row = { element, nav, name, count, more };
@@ -757,11 +757,11 @@ function renderSpaceNavigation() {
     row.nav.className = `room-nav ${roomTone(room.id)}`; row.nav.classList.toggle('active', selected === 'room' && spaceId === room.id);
     if (selected === 'room' && spaceId === room.id) row.nav.setAttribute('aria-current', 'page'); else row.nav.removeAttribute('aria-current');
     row.nav.setAttribute('aria-label', `打开协作空间「${room.name}」 · ${members(room.id).length} 位成员`); row.nav.title = row.nav.getAttribute('aria-label');
-    row.name.textContent = room.id === 'shared' ? `◉ ${room.name}` : room.name; row.count.textContent = members(room.id).length;
+    row.name.textContent = room.name; row.count.textContent = members(room.id).length;
     row.more.setAttribute('aria-label', `空间操作：${room.name}`); row.more.title = row.more.getAttribute('aria-label');
   }
   const active = allSpaces().filter(r => !r.archived);
-  $('workspace-empty').hidden = Boolean(active.length); document.querySelector('.drop-hint').hidden = !active.length;
+  $('workspace-empty').hidden = Boolean(active.length);
   $('workspace-group-summary').textContent = `${active.length} 个空间`;
 }
 function openSpaceCreate() {
@@ -1583,6 +1583,8 @@ function renderSidebarGroups() {
   const working = visible.filter(s => s.state === 'working').length;
   $('session-group-summary').textContent = `${visible.length}${working ? ` · ${working} 工作中` : ''}`;
   $('workspace-group-summary').textContent = state.room.archived ? '0' : `${members().length} 成员`;
+  // The drop hint counts toward the section's fixed height, so it is shown or hidden before the layout measures (T-136).
+  document.querySelector('.drop-hint').hidden = !allSpaces().some(r => !r.archived);
   for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body'], ['archive', 'archive-button', 'archive-group-body']]) {
     const collapsed = section === 'archive' ? state.sidebar?.archiveCollapsed !== false : Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
     const name = { sessions: '会话', workspace: '协作空间', archive: '归档' }[section];

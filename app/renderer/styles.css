@@ -147,9 +147,14 @@ header h1, header p { overflow-wrap: anywhere; }
 .agent-icon { width: 26px; height: 26px; border-radius: 7px; font-size: 13px; }
 .room-row { display: flex; align-items: center; margin-left: 8px; gap: 2px; min-height: 36px; }
 .room-nav { flex: 1; min-width: 0; margin: 0; border: 0; padding: 8px; background: transparent; gap: 6px; }
-#room-nav-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#room-more { margin: 0; }
+/* T-136: every space row, the default one included, shares one name, count and ⋯ style. */
+.space-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-row .session-more { margin: 0; }
 .drop-hint { margin: 5px 8px 0; font-size: 10px; text-align: left; line-height: 1.5; }
+/* T-136: the hint sits after the whole space list, outside its scrolling area, so it
+   is always in view and never covers a row; it folds away with the list. */
+#workspace-group-body + .drop-hint { flex: none; margin: 0; padding: 5px 8px 0; }
+#workspace-group-body[hidden] + .drop-hint { display: none; }
 .nav-empty { margin: 0 8px; font-size: 11px; color: var(--muted); }
 .sidebar-tools { flex: none; border-top: 1px solid var(--border); padding-top: 8px; }
 #archive-button, #setup-button { display: block; width: 100%; border: 0; font-size: 12px; text-align: left; padding: 8px 4px; }
@@ -241,7 +246,7 @@ header h1, header p { overflow-wrap: anywhere; }
 &[data-native-surface="sidebar"][data-collapsed="true"] {
   .sidebar { padding: 18px 8px 12px; gap: 8px; }
   .brand { justify-content: center; padding: 0; margin-bottom: 14px; }
-  .brand .brand-info, .brand .brand-mark, .rail-label, kbd, .drop-hint, .nav-empty, .local-status, #member-count, .session-link .state-dot { display: none; }
+  .brand .brand-info, .brand .brand-mark, .rail-label, kbd, .drop-hint, .nav-empty, .local-status, .space-count, .session-link .state-dot { display: none; }
   #app-version-compact { display: block; max-width: 100%; max-height: 36px; overflow: hidden; overflow-wrap: anywhere; font-size: 11px; }
   .group-toggle { justify-content: center; padding: 4px 0; }
   .group-toggle > span:not(.group-chevron), .group-toggle small { display: none; }
@@ -260,7 +265,7 @@ header h1, header p { overflow-wrap: anywhere; }
   .session-more { width: 32px; height: 24px; margin: 0 0 2px; }
   .sidebar-bottom { display: block; }
   .room-row { flex-direction: column; margin: 0; }
-  #room-more { width: 32px; height: 24px; }
+  .room-row .session-more { width: 32px; height: 24px; margin: 0; }
   #archive-button { padding: 5px; width: 38px; height: 38px; }
   #solo-drop { min-height: 24px; margin: 0; }
   .dragging-session #solo-drop { background: var(--hover); }

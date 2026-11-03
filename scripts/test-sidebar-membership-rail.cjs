@@ -57,6 +57,9 @@ async function hiddenRailControls() {
     const loc = sidebar().locator(selector);
     for (let n = 0; n < await loc.count(); n++) assert.equal(await loc.nth(n).isVisible(), false, selector);
   }
+  // T-136: every space row follows one rule in the rail; no member count shows for any of them.
+  const counts = await sidebar().locator('.room-row').evaluateAll(rows => rows.filter(row => !row.hidden).map(row => { const count = row.querySelector('.room-nav > span:last-child'), box = count.getBoundingClientRect(); return getComputedStyle(count).display !== 'none' && box.width > 0; }));
+  assert.ok(counts.length >= 2, 'Several space rows in the rail'); assert.deepEqual(counts, counts.map(() => false), 'No space shows a member count in the rail');
   assert.equal(await sidebar().locator('.session-link').count() >= 7, true);
   for (const row of await sidebar().locator('.session-link').all()) {
     assert.ok(await row.getAttribute('aria-label')); assert.equal(await row.locator('.session-short-id').isVisible(), true);

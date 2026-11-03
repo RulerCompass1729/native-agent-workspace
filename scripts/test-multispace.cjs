@@ -37,7 +37,7 @@ async function choose(id, body) {
   await until(async () => (await page.evaluate(() => workspace.initial())).viewState.roomViews?.[(await page.evaluate(() => workspace.initial())).viewState.spaceId]?.roomMention?.id === id, 'Scoped mention persisted');
 }
 async function flow(name, run) {
-  assert.ok(checks.length < 15); assert.ok(Date.now() - started < 600000, 'Finite source GUI budget');
+  assert.ok(checks.length < 16, "Bounded flow count (15 + the T-136 space-row check)"); assert.ok(Date.now() - started < 600000, 'Finite source GUI budget');
   await run(); const state = await snapshot();
   assert.equal(state.sessions.length, 7); assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId]), originals);
   assert.deepEqual(state.sessions.map(s => s.liveDraft), ids.map((_, i) => `Private draft ${i}`));
@@ -116,6 +116,34 @@ async function run() {
     const s = await snapshot(); assert.equal(members(s, a).length, 3); assert.equal(members(s, b).length, 3); assert.equal(members(s, 'shared').length, 4);
   });
   await flow('05 rename captures target space', async () => { await roomRow(b).locator('.session-more').click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click(); await page.locator('#rename-name').fill('Delivery renamed'); await page.locator('#confirm-rename').click(); await until(() => fs.readFileSync(path.join(profile, 'collaboration-spaces.json'), 'utf8').includes('Delivery renamed'), 'Rename persisted'); });
+  await flow('05b every space row has the same shape, and the drop hint sits below the list (T-136)', async () => {
+    const rows = await page.locator('#workspace-group-body .room-row').evaluateAll(rows => rows.filter(r => !r.hidden).map(row => {
+      const nav = row.querySelector('.room-nav'), name = nav.querySelector('.rail-label'), count = nav.querySelector(':scope > span:last-child'), more = row.querySelector('.session-more');
+      const style = (el, keys) => Object.fromEntries(keys.map(k => [k, getComputedStyle(el)[k]]));
+      const box = el => { const r = el.getBoundingClientRect(); return { left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height) }; };
+      return { text: name.textContent, row: style(row, ['marginLeft', 'gap', 'minHeight']), nav: style(nav, ['paddingLeft', 'fontSize', 'gap']), name: style(name, ['fontSize', 'fontWeight', 'textOverflow', 'whiteSpace']),
+        count: style(count, ['fontSize', 'display']), more: { ...style(more, ['marginTop', 'marginRight']), ...box(more) }, nameLeft: box(name).left, countRight: Math.round(count.getBoundingClientRect().right), bottom: Math.round(row.getBoundingClientRect().bottom) };
+    }));
+    console.log('SPACE ROWS ' + JSON.stringify(rows));
+    assert.equal(rows.length, 3, 'Three spaces listed');
+    for (const r of rows) assert.ok(!r.text.includes('◉'), `No icon in the name: ${r.text}`);
+    for (const key of ['row', 'nav', 'name', 'count', 'more']) for (const r of rows.slice(1)) assert.deepEqual(r[key], rows[0][key], `${key} of ${r.text} matches ${rows[0].text}`);
+    for (const r of rows.slice(1)) { assert.equal(r.nameLeft, rows[0].nameLeft, 'Names start at the same x'); assert.equal(r.countRight, rows[0].countRight, 'Counts end at the same x'); }
+    // The hint follows the whole list outside its scrolling area: in view, and never over a row.
+    const hint = await page.locator('#workspace-group > .drop-hint').evaluate(el => { const r = el.getBoundingClientRect(), body = document.getElementById('workspace-group-body').getBoundingClientRect(), group = el.parentElement.getBoundingClientRect();
+      return { hidden: el.hidden, afterList: el.previousElementSibling?.id === 'workspace-group-body', top: Math.round(r.top), bottom: Math.round(r.bottom), bodyBottom: Math.round(body.bottom), groupBottom: Math.round(group.bottom), height: Math.round(r.height) }; });
+    console.log('DROP HINT ' + JSON.stringify(hint));
+    assert.equal(hint.hidden, false); assert.equal(hint.afterList, true, 'The drop hint follows the scrolling space list');
+    assert.ok(hint.height > 0 && hint.top >= hint.bodyBottom - 1 && hint.bottom <= hint.groupBottom + 1, 'The drop hint is in view below the list');
+    // A row the keyboard brings into view at the bottom of the list is not under anything.
+    await page.locator('#workspace-group-body').evaluate(el => { el.scrollTop = 0; });
+    const lastNav = page.locator('#workspace-group-body .room-row:not([hidden]) .room-nav').last(); await lastNav.focus();
+    assert.equal(await lastNav.evaluate(nav => { const r = nav.getBoundingClientRect(); return nav.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }), true, 'The focused last space row is hit at its centre');
+    // The hint folds away with the list.
+    // Folding is saved with the sidebar state and applied on the next render.
+    await page.locator('#workspace-toggle').click(); await page.locator('#workspace-group-body').waitFor({ state: 'hidden' }); assert.equal(await page.locator('#workspace-group > .drop-hint').isVisible(), false, 'Folded list hides the hint');
+    await page.locator('#workspace-toggle').click(); await page.locator('#workspace-group-body').waitFor({ state: 'visible' }); assert.equal(await page.locator('#workspace-group > .drop-hint').isVisible(), true, 'Unfolded list shows the hint');
+  });
   await flow('06 independent unsent shared drafts survive switching', async () => { await open(a); await page.locator('#shared-input').fill('A independent unsent'); await open(b); await page.locator('#shared-input').fill('B independent unsent'); await open(a); assert.equal(await page.locator('#shared-input').inputValue(), 'A independent unsent'); });
   await flow('07 notes are scoped and first notes remain intact', async () => { await roomAction('共享笔记'); await page.locator('#room-notes-text').fill('A local note'); await page.locator('#save-notes').click(); await open(b); await roomAction('共享笔记'); assert.equal(await page.locator('#room-notes-text').inputValue(), ''); await page.locator('#cancel-notes').click(); assert.equal(new RoomState(profile).value.notes, 'Original shared note'); });
   await flow('08 file references and original preview stay local to one space', async () => { await open(a); await roomAction('空间文件…'); await page.locator('#add-space-files').click(); await page.getByRole('button', { name: 'synthetic-result.md', exact: true }).click(); assert.equal(await page.locator('#file-content').innerText(), 'LOCAL SYNTHETIC RESULT'); await page.locator('#close-file').click(); await open(b); await roomAction('空间文件…'); assert.equal(await page.locator('.space-file-row').count(), 0); await page.locator('#close-space-files').click(); });

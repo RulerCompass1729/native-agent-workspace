@@ -36,7 +36,9 @@
     let gesture, keyboard, pending, sequence = 0, disposed = false;
     const removers = [];
     const listen = (el, name, fn) => { el.addEventListener(name, fn); removers.push(() => el.removeEventListener(name, fn)); };
-    const headers = () => groups.map(group => group.querySelector('.nav-label').getBoundingClientRect().height);
+    // A section's fixed part is its heading plus any visible hint after its list (T-136).
+    const fixed = group => [group.querySelector('.nav-label'), ...group.querySelectorAll(':scope > .drop-hint')].reduce((sum, el) => sum + (el ? el.getBoundingClientRect().height : 0), 0);
+    const headers = () => groups.map(fixed);
     const rail = () => navigation.closest('.naw')?.dataset.collapsed === 'true';
     const height = () => { const css = getComputedStyle(navigation); return Math.max(0, navigation.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom)); };
     function apply() {
