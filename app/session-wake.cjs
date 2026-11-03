@@ -124,7 +124,10 @@ async function stageOnce(w, s, r, native, args) {
   intent.targetKey = target.key; intent.targetProof = identity(target.session);
   const row = { id: intent.id, role: 'system', kind: 'notice', name: '自动消息', origin: 'agent-wake-intent', text: `发给 ${target.session.name} 的消息已登记，尚未投递。\n${args.message}`, status: 'complete', time: intent.time, wake: intent };
   s.messages.push(row);
-  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; throw e; }
+  // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
+  // push and the save, and an unsaved staged wake would still be sent when the turn ends.
+  w.mirrorWake?.(s, intent, target.session, row);
+  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; throw e; }
   return { status: 'staged', id: intent.id, message: '已保存，尚未投递。当前原生回合正常结束后只尝试一次；不要等待或重试。真人可随时撤销。' };
 }
 function complete(w, s, r, info) {

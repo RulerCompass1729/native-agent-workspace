@@ -1845,6 +1845,11 @@ function roomMessageLabel(m) {
   // Run notices describe coordination; streamed native system rows still belong
   // to their exact agent. Reuse the same identity in reading and copied records.
   if (m.role === 'system' && m.runId && !m.sharedStream) return m.name || '协作';
+  if (m.role === 'system' && m.wake) {
+    // An agent wake row: current names by ID, the stored names only when a session is gone (T-137).
+    const name = (id, stored) => { const s = state.sessions.find(x => x.id === id); return s ? participantLabel(s, state.sessions) : historicalParticipantLabel(stored || '历史会话', id); };
+    return `${name(m.wake.senderId, m.wake.senderName)} → ${name(m.wake.recipientId, m.wake.recipientName)}`;
+  }
   const person = state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
   if (person) return (m.role === 'human' ? '你 → ' : '') + participantLabel(person, state.sessions);
   const id = m.role === 'human' ? m.recipientId : m.sessionId;
@@ -1876,7 +1881,7 @@ function renderSnapshotMaterials() {
 }
 function filteredTimeline() {
   const id = $('room-filter').value, query = $('room-search').value.trim().toLocaleLowerCase();
-  return timeline().filter(m => (!roomThread || roomThreads.roots.get(m.id) === roomThread) && (!id || m.sessionId === id || m.recipientId === id || m.deliveries?.some(d => d.recipientId === id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
+  return timeline().filter(m => (!roomThread || roomThreads.roots.get(m.id) === roomThread) && (!id || m.sessionId === id || m.recipientId === id || m.deliveries?.some(d => d.recipientId === id) || m.wake?.senderId === id || m.wake?.recipientId === id) && (!query || m.text.toLocaleLowerCase().includes(query)));
 }
 function openThread(id) {
   const root = roomThreads.roots.get(id);

@@ -7,6 +7,8 @@ const revision = value => Number.isSafeInteger(value) && value >= 0;
 const invalid = () => Error('协作空间成员记录无法核对；原记录已保留，没有更改成员或共享授权。');
 function completedSharedRecord(message) {
   if (!message || message.incomplete || message.kind === 'gap') return false;
+  // An agent wake row is complete only once its sender's record shows a final state (T-137).
+  if (message.wake && !['submitted', 'cancelled', 'unconfirmed'].includes(message.wakeStatus)) return false;
   if (message.role === 'human') {
     const deliveries = message.deliveries;
     if (deliveries !== undefined && (!Array.isArray(deliveries) || deliveries.some(delivery => !delivery || typeof delivery !== 'object' || Array.isArray(delivery) || delivery.status !== 'submitted'))) return false;

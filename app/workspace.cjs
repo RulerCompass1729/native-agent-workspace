@@ -99,7 +99,7 @@ class Workspace extends EventEmitter {
     this.activityMarks = new Map([...this.sessions.values()].map(s => [s.id, activityMark(s)]));
   }
   snapshot() {
-    return { wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.room, rooms: [...this.rooms.values()], diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
+    return { wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     for (const s of this.sessions.values()) {
@@ -663,6 +663,34 @@ class Workspace extends EventEmitter {
     if (this.storageWarning) s.nativeContextPending = pending;
     else info.committed = true;
     this.changed();
+  }
+  // T-137: a resident wake also appears in the spaces its sender and recipient share (else in the
+  // sender's own), so the person can follow agent-to-agent messages where they collaborate. Only the
+  // sender's backend writes it. The row refers to the sender's wake record; its text, status and reason
+  // are read from that record when shown. As a system row with a fresh id and no finalReply, sourceTag or
+  // sessionId, no handoff or agent-input path reads it; clearing the space's shared history removes it.
+  mirrorWake(s, intent, target, row) {
+    // The sender's membership was checked when it loaded (a bad record blocks wakes); never let it fail staging.
+    let own; try { own = spaces.roomIds(s); } catch { return; }
+    // Another backend's record that cannot be read counts as sharing no space: fall back to the sender's own.
+    let theirs = new Set(); try { theirs = new Set(spaces.roomIds(target || {})); } catch { /* no shared space */ }
+    const common = own.filter(id => theirs.has(id));
+    for (const id of common.length ? common : own) {
+      const room = this.rooms.get(id);
+      // Participant IDs live inside `wake`, never at the top level, so no reply or handoff path treats the row as an agent's.
+      if (room) room.messages.push({ id: randomUUID(), role: 'system', kind: 'agent-wake', name: `${s.name || '会话'} → ${target?.name || '会话'}`,
+        wake: { id: intent.id, senderId: s.id, recipientId: intent.recipientId, senderName: s.name || '', recipientName: target?.name || '', body: intent.body },
+        text: String(row?.text || ''), time: intent.time });
+    }
+  }
+  wakeView(room) {
+    if (!Array.isArray(room?.messages) || !room.messages.some(m => m?.wake)) return room;
+    return { ...room, messages: room.messages.map(m => {
+      if (!m.wake) return m;
+      const record = this.sessions.get(m.wake.senderId)?.messages?.find(x => x.id === m.wake.id && x.wake);
+      // With the sender's record removed, its delivery result is no longer known; never show a stale state.
+      return { ...m, text: record ? record.text : `发送方会话记录已移除，无法确认投递结果。\n${m.wake.body || ''}`, wakeStatus: record ? record.wake.status : 'unknown' };
+    }) };
   }
   roomFor(id = 'shared', create = false) {
     if (!spaces.roomId(id)) throw Error('无效协作空间。');

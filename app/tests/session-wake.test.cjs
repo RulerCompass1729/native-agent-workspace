@@ -246,3 +246,87 @@ test('pointer hover over a terminal is not human input; a press still is', async
   assert.notEqual(g.target.get(g.b).controlRevision, control, 'A press is a human operation');
   await g.finish(); assert.equal(g.writes.filter(w => w.text.includes('Continue one bounded task.')).length, 0);
 });
+
+// T-137: a resident wake is also recorded in the spaces its sender and recipient share, written once by
+// the sender's backend; status and reason are read from the sender's own wake record when shown.
+const wakeRows = w => w.snapshot().rooms.flatMap(room => room.messages.filter(m => m.wake).map(m => ({ room: room.id, ...m })));
+async function joined(t, sender, receiver, provider) {
+  const f = await fixture(t, provider);
+  // roomId must agree with roomIds: it is 'shared' exactly when the session is in the default space.
+  const join = (s, ids) => { s.roomIds = ids; s.roomId = ids.includes('shared') ? 'shared' : null; };
+  if (sender) join(f.source.get(f.a), sender); if (receiver) join(f.target.get(f.b), receiver);
+  return f;
+}
+test('a wake appears in the shared space with its live status, written only by the sender\'s backend (T-137)', async t => {
+  const f = await joined(t, ['shared'], ['shared']);
+  assert.equal((await f.call()).status, 'staged');
+  let rows = wakeRows(f.source);
+  assert.equal(rows.length, 1); assert.equal(rows[0].room, 'shared'); assert.equal(rows[0].name, 'Sender → Receiver');
+  assert.equal(rows[0].role, 'system'); assert.equal(rows[0].wakeStatus, 'staged'); assert.match(rows[0].text, /已登记，尚未投递。\nContinue one bounded task\.$/);
+  for (const key of ['finalReply', 'sourceTag', 'sessionId', 'sharedStream', 'deliveryTracked']) assert.equal(rows[0][key], undefined, key);
+  assert.deepEqual(wakeRows(f.target), [], 'the receiver\'s backend writes no second copy');
+  await f.finish();
+  rows = wakeRows(f.source);
+  assert.equal(rows[0].wakeStatus, 'submitted'); assert.match(rows[0].text, /原生已接收/);
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'workspace.json')));
+  assert.equal(saved.room.messages.filter(m => m.wake).length, 1, 'kept with the space\'s record');
+  f.source.clearSharedHistory('shared');
+  assert.deepEqual(wakeRows(f.source), [], 'clearing the space\'s shared history removes it');
+});
+test('a cancelled wake shows its reason in the space (T-137)', async t => {
+  const f = await joined(t, ['shared'], ['shared'], 'claude');
+  assert.equal((await f.call()).status, 'staged');
+  f.ra.emit('state', 'approval');
+  const [row] = wakeRows(f.source);
+  assert.equal(row.wakeStatus, 'cancelled'); assert.match(row.text, /等待原生权限确认/);
+});
+test('with no shared space the wake goes to the sender\'s own spaces, and nowhere if it has none (T-137)', async t => {
+  const own = await joined(t, ['shared'], []);
+  await own.call(); assert.deepEqual(wakeRows(own.source).map(r => r.room), ['shared']);
+  const none = await joined(t, [], ['shared']);
+  await none.call(); assert.deepEqual(wakeRows(none.source), []);
+  assert.equal(none.source.get(none.a).messages.filter(m => m.wake).length, 1, 'the sender\'s own record stays');
+});
+const spaceX = '11111111-2222-4333-8444-555555555555', spaceY = '66666666-7777-4888-9999-aaaaaaaaaaaa';
+test('a wake goes only to the spaces both agents share, one row per space (T-137)', async t => {
+  const f = await joined(t, ['shared', spaceX, spaceY], [spaceX, spaceY]);
+  f.source.roomFor(spaceX, true); f.source.roomFor(spaceY, true);
+  assert.equal((await f.call()).status, 'staged');
+  const rows = wakeRows(f.source);
+  assert.deepEqual(rows.map(r => r.room).sort(), [spaceX, spaceY].sort(), 'not the sender\'s other space');
+  assert.notEqual(rows[0].id, rows[1].id);
+  assert.deepEqual(rows.map(r => [r.wake.senderId, r.wake.recipientId]), [[f.a, f.b], [f.a, f.b]], 'participant IDs for filters and current labels');
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'room-records.json')));
+  assert.equal(saved.rooms.flatMap(r => r.messages).filter(m => m.wake).length, 2, 'other spaces keep theirs in room-records.json');
+});
+test('a removed sender record and a reopened backend never show a stale state (T-137)', async t => {
+  const f = await joined(t, ['shared'], ['shared']);
+  assert.equal((await f.call()).status, 'staged');
+  const { Workspace } = require('../workspace.cjs');
+  f.source.close();
+  const reopened = new Workspace({ binaries: {}, close() {} }, f.root); t.after(() => reopened.close());
+  const [again] = wakeRows(reopened);
+  assert.equal(again.wakeStatus, 'unconfirmed', 'a wake staged before the reopen is unconfirmed, as the sender\'s own row is');
+  assert.match(again.text, /未确认/);
+  reopened.sessions.delete(f.a);
+  const [gone] = wakeRows(reopened);
+  assert.equal(gone.wakeStatus, 'unknown'); assert.match(gone.text, /^发送方会话记录已移除，无法确认投递结果。\nContinue one bounded task\.$/);
+});
+test('only a wake row with a final state counts as complete for a space merge (T-137)', async t => {
+  const { completedSharedRecord } = require('../collaboration-spaces.cjs');
+  const f = await joined(t, ['shared'], ['shared']);
+  await f.call(); assert.equal(completedSharedRecord(wakeRows(f.source)[0]), false, 'staged');
+  await f.finish(); assert.equal(completedSharedRecord(wakeRows(f.source)[0]), true, 'submitted');
+  assert.equal(completedSharedRecord({ ...wakeRows(f.source)[0], wakeStatus: undefined }), false, 'a raw stored row has no derived state');
+});
+test('the combined view of both backends shows the wake once (T-137)', async t => {
+  const { WorkspaceClient } = require('../workspace-client.cjs');
+  const f = await joined(t, ['shared'], ['shared']);
+  await f.call(); await f.finish();
+  const entry = (key, w) => { const client = new EventEmitter(); client.call = async method => { if (method === 'initial') return { ...w.snapshot(), capabilities: ['agentWakeV1', 'collaborationSpacesV1'] }; throw Error('Unexpected ' + method); }; client.close = () => client.emit('closed'); return { key, client, state: { ...w.snapshot(), capabilities: ['agentWakeV1', 'collaborationSpacesV1'] } }; };
+  const c = new WorkspaceClient([entry('.', f.source), entry('backends/aaaaaaaaaaaaaaaaaaaa', f.target)], '.', Symbol()); t.after(() => c.close());
+  const state = await c.call('initial');
+  const rows = [state.room, ...(state.rooms || [])].filter(Boolean).flatMap(r => r.messages || []).filter(m => m.wake);
+  assert.equal(new Set(rows.map(m => m.id)).size, 1, 'one wake, one row');
+  assert.equal(rows[0].wakeStatus, 'submitted');
+});
