@@ -4631,6 +4631,23 @@ system clipboard's change count stayed at 268 before and after each.
 Claude 2's second T-150 commit, which changes the codex usability script only,
 is integrated with identical changed lines. On main the full unit suite passes
 2,286 checks without skips, the name check reports nothing missing, and after
-rebuilding the UI bundle codex usability exits 0 without model calls, by its fixture that replaces native starts with synthetic runtimes, with the
-system clipboard's change count at 268 before and after. The daily app stays at
+rebuilding the UI bundle codex usability exits 0 without model calls, by its
+fixture that replaces native starts with synthetic runtimes, with the system
+clipboard's change count at 268 before and after. The daily app stays at
 alpha.173.
+
+Claude 2's third T-150 commit, which changes one check in the member actions
+script, is integrated with identical changed lines. On main the full unit suite
+passes 2,286 checks without skips, the name check reports nothing missing, and
+after rebuilding the UI bundle member actions exits 0, with the system
+clipboard's change count at 268 before and after. Each of the five scripts T-150
+listed has run through on main at its own integration, with no app/ change
+since. The daily app stays at alpha.173.
+
+Claude 2's T-158 commit, whose parent is main's member actions commit, was
+fast-forwarded onto main unchanged; it changes test-collaboration only. On main
+the full unit suite passes 2,286 checks without skips, the name check reports
+nothing missing, and after rebuilding the UI bundle test-collaboration exits 0,
+including the new steps that set the leaving member as the recipient before each
+drag out and wait for the saved recipient to clear, with the system clipboard's
+change count at 268 before and after.
