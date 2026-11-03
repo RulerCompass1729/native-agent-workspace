@@ -36,23 +36,29 @@ async function create(provider, name) {
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message));
   await page.locator('#new-session').waitFor();
   const a = await create('claude', 'A'), b = await create('codex', 'B');
-  await page.locator('#room-nav').click(); await page.locator(`[data-room-session="${b}"]`).click();
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
   await chooseRecipient(page, a); await fillRoomMessage(page, 'Keep the draft addressed to A.');
-  for (const version of ['0.163.0', '0.164.0']) {
+  // T-147: B is shown by opening its card in 成员概览 (the member tabs were replaced in alpha.117, T-53);
+  // the shared draft and its recipient stay, hidden, while a member is open.
+  await page.locator('#room-overview').click();
+  await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${b}"] .collaboration-member-name`).click();
+  await page.locator('#conversation-pane').waitFor();
+  // T-147: Codex 0.165.0 was qualified in f5942cc; 0.166.0 is now the unverified future version.
+  for (const version of ['0.163.0', '0.164.0', '0.165.0']) {
     await fixture('native-version', b, { version });
     await until(async () => (await snapshot()).sessions.find(s => s.id === b).nativeVersion === version, 'Running handshake visible');
     await until(async () => (await page.locator('#session-status').getAttribute('title')).includes(`Codex ${version} · 核心接口已验证`), 'Verified running handshake rendered');
     assert.ok(!(await page.locator('#session-status').innerText()).includes('尚未验证'));
     assert.match(await page.locator('#session-status').getAttribute('title'), /核心接口已验证/);
   }
-  await fixture('native-version', b, { version: '0.165.0' });
-  await until(async () => (await page.locator('#session-status').innerText()).includes('Codex 0.165.0 尚未验证'), 'Unverified running version is explicit');
+  await fixture('native-version', b, { version: '0.166.0' });
+  await until(async () => (await page.locator('#session-status').innerText()).includes('Codex 0.166.0 尚未验证'), 'Unverified running version is explicit');
   assert.match(await page.locator('#session-status').getAttribute('title'), /工作中追加.*上下文切换.*历史同步/);
   await fixture('set-state', b, 'approval');
   await until(async () => (await page.locator('#session-status').innerText()).includes('等待确认'), 'Native pending state remains visible');
   assert.ok((await page.locator('#session-status').innerText()).includes('尚未验证'));
-  await fixture('native-version', b, { version: '0.165.0', closed: true });
-  await until(async () => (await page.locator('#session-status').getAttribute('title')).includes('上次连接 Codex 0.165.0 · 当前未确认'), 'Disconnected version cannot certify the current connection');
+  await fixture('native-version', b, { version: '0.166.0', closed: true });
+  await until(async () => (await page.locator('#session-status').getAttribute('title')).includes('上次连接 Codex 0.166.0 · 当前未确认'), 'Disconnected version cannot certify the current connection');
   assert.ok(!(await page.locator('#session-status').innerText()).includes('尚未验证'));
   await fixture('native-version', b, { version: '0.164.0-beta PRIVATE' });
   await until(async () => (await page.locator('#session-status').innerText()).includes('版本未确认'), 'Prerelease or malformed version cannot borrow a verified release');

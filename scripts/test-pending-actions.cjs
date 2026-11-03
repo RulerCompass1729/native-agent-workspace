@@ -33,15 +33,19 @@ async function capture(name) { if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(pro
   app=await _electron.launch({executablePath:process.env.NAW_APP_EXECUTABLE||require('electron'),args:process.env.NAW_APP_EXECUTABLE?[]:[root],env:{...process.env,NAW_DATA_DIR:profile,NAW_TEST_PARENT_PID:String(process.pid)},timeout:70000});
   page=await app.firstWindow();page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));await page.locator('#new-session').waitFor();
   const a=await create('A'),b=await create('B'),c=await create('C');
-  await page.locator('#room-nav').click();await page.locator(`[data-room-session="${a}"]`).click();
+  await page.locator('#room-nav').click();await page.locator('#room-record').click();
   await chooseRecipient(page,c);await fillRoomMessage(page,'Keep this unsent draft for C.');
+  // T-147: members open from their card in 成员概览 (the member tabs were replaced in alpha.117, T-53).
+  // A is the open member; every member's card, with its state, stays listed.
+  const card=id=>page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${id}"]`);
+  await page.locator('#room-overview').click();await card(a).locator('.collaboration-member-name').click();await page.locator('#conversation-pane').waitFor();
   await request(b,1,'PRIVATE_B_FIRST');
   await event(b,{id:'1',method:'item/tool/requestUserInput',params:{isBlocking:false,questions:[{id:'choice',header:'PRIVATE_B_QUESTION',question:'Choose?',options:[{label:'One',description:'Synthetic'}]}]}});
-  await until(async()=>(await page.locator(`[data-room-session="${b}"]`).innerText()).includes('2 待处理'),'Unselected member pending actions are visible');
+  await until(async()=>(await card(b).innerText()).includes('2 项待处理'),'Unselected member pending actions are visible');
   assert.equal(await page.locator('#approval').isVisible(),false,'Unselected private request details stay out of the main room view');
   assert.ok(!(await page.locator('#room-messages').innerText()).includes('PRIVATE_B_'));
   await capture('three-member-pending');
-  await page.locator(`[data-room-session="${b}"]`).click();
+  await card(b).locator('.collaboration-member-name').click();
   await until(async()=>await page.locator('#approval-request option').count()===2,'Two original requests remain available');
   assert.equal((await snapshot()).viewState.roomRecipient,c);assert.equal(await roomBody(page),'Keep this unsent draft for C.');
   // Resolve the latest nonblocking question first: the older permission must reappear.
@@ -58,7 +62,8 @@ async function capture(name) { if(process.env.NAW_EVIDENCE_DIR){fs.mkdirSync(pro
   await page.locator('#approval').getByRole('button',{name:'拒绝',exact:true}).click();
   await until(async()=>(await fixture('stats')).decisions.length===2,'Second decision delivered once');
   await resolved(b,3);await event(b,{method:'thread/status/changed',params:{status:{type:'idle'}}});
-  await until(async()=>!(await page.locator(`[data-room-session="${b}"]`).innerText()).includes('待处理'),'Only resolved member cue clears');
+  // The cue is read from B's visible card. The card counts 「N 项待处理」 only from two, so B's own record must also hold no request.
+  await until(async()=>{const s=(await snapshot()).sessions.find(x=>x.id===b);return !(s.approvals?.length||s.nativeApproval?.requests?.length)&&await card(b).isVisible()&&(await card(b).innerText()).trim().length>0&&!(await card(b).innerText()).includes('待处理');},'Only resolved member cue clears');
   const final=await snapshot(),stats=await fixture('stats');
   assert.deepEqual(stats.decisions,[{id:1,result:{decision:'accept'}},{id:3,result:{decision:'decline'}}]);
   assert.equal(final.viewState.roomRecipient,c);assert.equal(await roomBody(page),'Keep this unsent draft for C.');
