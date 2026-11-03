@@ -4269,3 +4269,13 @@ new check failed on 2.1.317 with only its capability turned off and passed with
 it on. The cached image copies were not inspected on main; the limits are in the
 image cache code and covered by unit tests, and folder and file permissions were
 checked in source only.
+
+The committed alpha.166 tree passes the same 2,192 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. An initial-only read before the update found the active backend empty
+and no backend that qualified for an automatic move, and the operator re-checked
+both live. The ordinary visible update kept fourteen session records with their
+native IDs, live process starts and drafts, and the seven other backends kept
+PID, start time and version; 150 seconds later they and all sixteen live native
+processes were unchanged and no move record existed.

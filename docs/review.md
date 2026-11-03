@@ -2810,3 +2810,19 @@ as T-140, including what room rows show afterwards; images over 1 MB, resized by
 Claude, from MCP tools or read after /clear; the model header and a switch after
 /clear; /model in a teammate; the model block sent at bind, none of which ran or
 is checked; the native queue and direct input, which wait for T-138.
+
+
+### Integrated alpha.166 delivery
+
+A fresh read-only reviewer found the integrated code identical to the lane's and
+nothing unsafe, and held acceptance for two rounds until the ledgers said that
+images over 1 MB still show as unavailable, listed the cases that did not run,
+and the privacy notes said that on 2.1.312 prompt images are cached too and that
+shared room rows keep references to cached images. It accepted the update
+operator as a substitution of the alpha.165 one, and corrected the brief: an
+ordinary launch of the new window reconnects linked retained Claude sessions and
+can refresh or install their compatibility copies, as every daily launch already
+does, without starting Claude; the alpha.166 compatibility copy behaves like
+alpha.165's on every Claude version. The operator ran once. Open: deleting
+cached images with a session's records (T-140); the cases that did not run;
+publication of alpha.163 to alpha.166; the post-provider signature check.
