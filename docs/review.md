@@ -4126,3 +4126,22 @@ found again, the Git hint still invites a re-tick beside the locked form; after
 an unknown result, a retry that finds the first session in error says both 无法确认
 and that the session is kept. The main-checkout create space choice run covers
 both closed routes in one check.
+
+
+### Integrated alpha.177 delivery
+
+A fresh read-only reviewer accepted Claude 2's third T-115 follow-up after one
+held round: the headline said the dialog stops once a session from this opening
+exists, while 从已有 Claude 会话分支… and takeover in the same dialog never set that
+stop, so the records were narrowed to sessions that 创建 started and the branch
+path recorded as open. The update operator was held once because its receipt
+text kept the broader wording; it was corrected and its pinned hash renewed. Its
+first start stopped at the GUI test slot gate with nothing changed, because a
+lane test took the slot in the second between the author's wait and the
+operator's claim; the reviewer accepted one more start of the unchanged
+operator, which ran once. It deleted the previous app on success, so the
+alpha.176 archive, whose hash was checked just before the second start, is the
+only rollback. Afterwards searching by bundle identifier listed only the copy in
+/Applications. Open: the branch path, for which Claude 2 offered a0ef9fa, not
+yet integrated; T-115's A/B and C1/C2, where A and C1 applied under the
+20-minute rule; daily use.

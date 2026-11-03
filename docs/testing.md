@@ -4760,3 +4760,22 @@ create space choice, which now holds a create while the focused member leaves
 and loses a create reply while the read succeeds, passes 14 of 14; session
 directory, dialog lifecycle and daily use exit 0 without model calls, with the
 system clipboard's change count at 268 before and after every run.
+
+The committed alpha.177 tree passed all 2,286 unit checks, and its UI build log
+records the committed head. The signed bundle started once on an empty synthetic
+profile through its own service bootstrap and kept its strict signature and
+CDHash; no session or provider started, and the launch does not exercise the new
+stop. An initial-only read before the update found the active backend empty and
+no backend that qualified for an automatic move. The first start of the update
+stopped at its GUI test slot gate, because a lane's create space choice run took
+the slot in the second between the author's wait and the operator's own claim;
+it had only read files and state, wrote no output, and the daily GUI kept its
+process and version. The reviewer accepted one more start of the unchanged
+operator. Saved checks before it found no backend move record and an alpha.176
+rollback archive whose hash matched its recorded value. The ordinary visible
+update kept fourteen session records with their native IDs, live process starts
+and drafts, and the seven other backends kept PID, start time and version; 150
+seconds later they and all sixteen live native processes were unchanged and no
+move record existed. Saved checks afterwards found only the copy in
+/Applications when searching by its bundle identifier, and an empty rollback
+folder.
