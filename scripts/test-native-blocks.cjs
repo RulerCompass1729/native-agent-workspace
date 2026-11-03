@@ -29,9 +29,11 @@ const planTrial = process.env.NAW_TEST_NATIVE_PLAN === '1', planText = '# PLAN_M
 const permissionTrial = process.env.NAW_TEST_NATIVE_PERMISSION === '1';
 // NAW_TEST_NATIVE_MODEL=1: only the zero-inference model switch (no task is sent), for versions whose queue is not qualified (T-133).
 const modelTrial = process.env.NAW_TEST_NATIVE_MODEL === '1';
-assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial, modelTrial].filter(Boolean).length <= 1, 'One bounded case per run');
+// NAW_TEST_NATIVE_READ_IMAGE=1: Claude reads a PNG in its folder; the Read row must show that image (T-133).
+const readImageTrial = process.env.NAW_TEST_NATIVE_READ_IMAGE === '1';
+assert.ok([scrollTrial, compatibilityTrial, imageTrial, questionTrial, planTrial, permissionTrial, modelTrial, readImageTrial].filter(Boolean).length <= 1, 'One bounded case per run');
 assert.ok(!/^2\.1\.312\b/.test(nativeVersion) || compatibilityTrial || scrollTrial, '312 requires a bounded qualified compatibility or basic-text scroll witness');
-let planFile = null, planNotes = null; const planSteps = [];
+let planFile = null, planNotes = null, readImagePath = null; const planSteps = [];
 const answerMode=process.env.NAW_NATIVE_QUESTION_ANSWER||'first'; if(!['first','other','cancel','multi','gui','handback','interrupt'].includes(answerMode))throw Error('Unknown bounded native answer case');
 const nativeQuestion = { question: 'Which method should this check use?', header: 'Method', multiSelect: false, options: [{ label: 'Keep original', description: 'Continue in this same native session.' }, { label: 'Read only', description: 'Inspect the existing result.' }] };
 // The multi case asks two questions at once, the second multi-select.
@@ -56,7 +58,7 @@ const server = http.createServer((req, res) => {
     if (scrollTrial && number > 1) { unexpectedRequest = Error('Scroll budget exceeded: one local response only'); res.writeHead(429); res.end(); return; }
     if (compatibilityTrial && number > 3) { unexpectedRequest = Error('Compatibility budget exceeded: at most three local responses'); res.writeHead(429); res.end(); return; }
     if (number === 1 && process.env.NAW_TEST_NATIVE_PHASE === '1') await new Promise(resolve => { releaseStart = resolve; });
-    if (number > (imageTrial ? 1 : questionTrial || permissionTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
+    if (number > (imageTrial ? 1 : questionTrial || permissionTrial || readImageTrial ? 2 : planTrial ? 4 : 3)) { res.writeHead(429); res.end(); return; }
     const request = JSON.parse(body);
     fs.writeFileSync(path.join(base, `request-${number}.json`), body);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -65,6 +67,12 @@ const server = http.createServer((req, res) => {
       assert.match(request.model, /haiku/i);
       block(res, 0, { type: 'text', text: require('./native-scroll-check.cjs').reply('claude') });
       event(res, 'message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 2000 } });
+      event(res, 'message_stop', {}); res.end(); return;
+    }
+    if (readImageTrial) {
+      if (number === 1) block(res, 0, { type: 'tool_use', id: 'toolu_local_read_image', name: 'Read', input: { file_path: readImagePath } });
+      else block(res, 0, { type: 'text', text: 'NATIVE_READ_IMAGE_FINAL' });
+      event(res, 'message_delta', { delta: { stop_reason: number === 1 ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 10 } });
       event(res, 'message_stop', {}); res.end(); return;
     }
     if (imageTrial) {
@@ -158,6 +166,38 @@ async function cleanup() {
     assert.equal(calls, 0, 'Native model commands make no model request'); assert.deepEqual(errors, []);
     checks.push('Native /model switches reach the GUI header and survive reload with the same ID/PID/draft; task model returns to haiku');
     console.log(JSON.stringify({ checks, nativeVersion, startModel: before.model, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
+  }
+  if (readImageTrial) {
+    const original = Buffer.from([0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 255, 255]);
+    const bitmap = data => application.evaluate(({ nativeImage }, d) => nativeImage.createFromBuffer(Buffer.from(d, 'base64')).toBitmap().toString('base64'), data);
+    const png = await application.evaluate(({ nativeImage }, data) => nativeImage.createFromBitmap(Buffer.from(data), { width: 2, height: 2 }).toPNG().toString('base64'), Array.from(original));
+    readImagePath = path.join(fs.realpathSync(before.cwd), 'native-shot.png'); fs.writeFileSync(readImagePath, Buffer.from(png, 'base64'));
+    await page.locator('#chat-tab').click(); await page.locator('#message-input').fill('Read the local screenshot.'); await page.locator('#send-button').click();
+    await until(async () => { const s = (await snapshot()).sessions[0]; return calls === 2 && s.state === 'idle' && s.messages.some(m => m.text?.includes('NATIVE_READ_IMAGE_FINAL')); }, 'Claude reads the image and the fixed reply completes');
+    const request = JSON.parse(fs.readFileSync(path.join(base, 'request-2.json'), 'utf8'));
+    const sent = request.messages.flatMap(m => Array.isArray(m.content) ? m.content : []).filter(c => c.type === 'tool_result' && c.tool_use_id === 'toolu_local_read_image')
+      .flatMap(c => Array.isArray(c.content) ? c.content : []).filter(c => c.type === 'image');
+    assert.equal(sent.length, 1, 'Native Read returns the image to the model');
+    const message = (await snapshot()).sessions[0].messages.find(m => String(m.id).endsWith('tool:toolu_local_read_image'));
+    fs.writeFileSync(path.join(base, 'read-image-message.json'), JSON.stringify(message, null, 2));
+    assert.ok(message, 'The Read row reaches the conversation');
+    assert.notEqual(message.incomplete, true, 'The Read row is complete, not marked as partly unsynced');
+    const row = page.locator(`#messages [data-message-id="native:${before.nativeId}:tool:toolu_local_read_image"]`); await row.waitFor();
+    const disclosure = row.locator('details').first();
+    if (await disclosure.count() && !(await disclosure.evaluate(el => el.open))) await disclosure.locator(':scope > summary').click();
+    const img = row.locator('.native-image img').first(), toggle = row.locator('.native-image-toggle').first();
+    await until(async () => await img.count() && await img.evaluate(el => el.complete && el.naturalWidth > 0), 'The Read row shows the image thumbnail');
+    assert.equal(message.images?.[0]?.path, readImagePath, 'The image keeps the path Claude read it from');
+    assert.equal((await toggle.getAttribute('title')).split('\n')[0], readImagePath, 'The visible label names that file (its second line is the size)');
+    await toggle.click();
+    await until(async () => (await toggle.getAttribute('aria-expanded')) === 'true' && await img.evaluate(el => el.complete && el.naturalWidth > 0), 'The image opens');
+    const src = await img.evaluate(el => el.src); assert.match(src, /^data:image\/png;base64,/);
+    assert.equal(await bitmap(src.split(',')[1]), await bitmap(sent[0].source.data), 'The opened image has the pixels Claude read');
+    const unchanged = (await bitmap(sent[0].source.data)) === original.toString('base64');
+    assert.equal(calls, 2); assert.deepEqual(errors, []);
+    if (process.env.NAW_EVIDENCE_DIR) { fs.mkdirSync(process.env.NAW_EVIDENCE_DIR, { recursive: true }); await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'native-read-image.png') }); }
+    checks.push('A native Read of a local PNG shows that image, complete, in its own row; opening it gives the pixels Claude read');
+    console.log(JSON.stringify({ checks, nativeVersion, fileMatchesModelImage: unchanged, localResponses: calls, paidModelCalls: 0, evidence: base })); return;
   }
   if (compatibilityTrial) {
     fs.writeFileSync(path.join(base, 'compat-start.json'), JSON.stringify(before, null, 2));
