@@ -76,11 +76,17 @@ async function run() {
   await until(async () => (await snapshot()).sessions.find(s => s.id === 'synthetic-session-59').archived, 'Archived');
   if (await page.locator('#archive-button').getAttribute('aria-expanded') !== 'true') await page.locator('#archive-button').click();
   const archived = page.locator('[data-archived-session="synthetic-session-89"]');
+  const viewBefore = await page.locator('#title').innerText(); assert.notEqual(viewBefore, '学习项目 89');
   await archived.getByRole('button', { name: '恢复会话', exact: true }).click();
+  // T-159: since e32d515 (T-92, the person: 「我希望在哪个界面就一直在这个界面」) restoring keeps the current view; its
+  // notice offers 打开, which shows the restored history.
+  await until(async () => (await snapshot()).sessions.find(s => s.id === 'synthetic-session-89').archived === false, 'Restored');
+  assert.equal(await page.locator('#title').innerText(), viewBefore, 'Restoring keeps the current view');
+  await page.locator('#toast').getByRole('button', { name: /^打开 学习项目 89/ }).click();
   await until(() => inView('[data-session-row="synthetic-session-89"]', '#session-list'), 'Restored history and menu visible');
   assert.equal((await snapshot()).sessions.find(s => s.id === 'synthetic-session-89').nativeId, 'synthetic-native-89');
   assert.equal(await page.locator('#title').innerText(), '学习项目 89');
-  checks.push('An archive containing thirty-one records remains scrollable; restoring its last history reveals the same native identity without starting it');
+  checks.push('An archive containing thirty-one records remains scrollable; restoring its last history keeps the current view, and its 打开 shows the same native identity without starting it');
   const live = await create('正在进行的学习');
   await page.locator('#message-input').fill('这份草稿不会发送');
   const nativeId = (await snapshot()).sessions.find(s => s.id === live).nativeId;

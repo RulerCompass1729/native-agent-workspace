@@ -58,10 +58,13 @@ async function launch() {
   dialog.showOpenDialog = async (_win, options) => ({ canceled: false, filePaths: [options.properties.includes('openDirectory') ? paths.workspace : paths.file] });
   dialog.showSaveDialog = async () => ({ canceled: true });
   const preflight = { claude: true, codex: true, python: true, paths: {}, configured: {} };
-  for (const name of ['initial', 'create', 'preflight', 'runtimeLocation', 'roomNotes', 'join', 'viewState', 'chooseFolder', 'openLocalFile', 'closeLocalFile', 'importHistory', 'run', 'send', 'input', 'forward', 'approve', 'answer', 'queue', 'steer']) {
+  // T-159: since c9800cc (independent spaces) notes and invitations go through spaceAction; each of its actions is held
+  // and counted under its own name, spaceAction:<action>.
+  for (const name of ['initial', 'create', 'preflight', 'runtimeLocation', 'roomNotes', 'join', 'spaceAction', 'spaceCreate', 'spaceFiles', 'viewState', 'chooseFolder', 'openLocalFile', 'closeLocalFile', 'importHistory', 'run', 'send', 'input', 'forward', 'approve', 'answer', 'queue', 'steer']) {
    const key = 'workspace:' + name, original = ipcMain._invokeHandlers.get(key); if (!original) throw Error(key);
    t.counts[name] = 0; ipcMain.removeHandler(key);
    ipcMain.handle(key, async (...args) => {
+    const name = key === 'workspace:spaceAction' ? 'spaceAction:' + args[2] : key.slice('workspace:'.length);
     t.counts[name] = (t.counts[name] || 0) + 1;
     if (name === 'closeLocalFile') t.closedFiles++;
     const policy = t.policies[name]; delete t.policies[name];
@@ -112,7 +115,9 @@ async function notes() { if (!(await page.locator('#room-notes').isVisible())) a
 async function run() {
  setup(); await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Owned daemon ready'); await launch();
  const initial = await snapshot(); assert.ok(fs.realpathSync(initial.defaultWorkspace).startsWith(owned + path.sep));
- assert.equal(await page.locator('dialog[closedby="any"]').count(), 12);
+ // T-159: every light-dismiss dialog by name, so a new one fails here by name. Its cancellation belongs below; the space
+ // dialogs added on 10-30 (c9800cc, 3305174): space-create and space-files are checked below, space-merge is not yet.
+ assert.deepEqual(await page.locator('dialog[closedby="any"]').evaluateAll(dialogs => dialogs.map(d => d.id).sort()), ['context-dialog', 'create-dialog', 'file-dialog', 'invite-dialog', 'native-history-dialog', 'notes-dialog', 'privacy-dialog', 'run-dialog', 'search-dialog', 'setup-dialog', 'share-dialog', 'space-create-dialog', 'space-files-dialog', 'space-merge-dialog', 'terminal-display-dialog']);
  // All three ordinary cancellation paths discard inputs; no create or permissions.
  const count = initial.sessions.length;
  for (const kind of ['outside', 'escape', 'button']) {
@@ -125,6 +130,14 @@ async function run() {
  const ime = await page.context().newCDPSession(page); await page.locator('#session-name').focus(); await ime.send('Input.imeSetComposition', { text: '拼音', selectionStart: 2, selectionEnd: 2 }); await page.keyboard.press('Escape'); assert.equal(await page.locator('#create-dialog').evaluate(d => d.open), true);
  await ime.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 }); await closed('create-dialog', 'escape'); await ime.detach();
  check('Native backdrop/button/Escape discard private create fields without creating/approving; inside-drag stays open and CDP composing Escape is protected');
+ // T-159: 新建协作空间 cancelled each way creates no space.
+ const rooms = (await snapshot()).rooms.length, createCalls = () => app.evaluate(() => globalThis.t93.counts.spaceCreate), createBefore = await createCalls();
+ for (const kind of ['outside', 'escape', 'button']) {
+  await page.locator('#new-space').click(); await page.locator('#space-create-name').fill('Discarded space ' + kind);
+  await closed('space-create-dialog', kind, 'cancel-space-create');
+ }
+ assert.equal(await createCalls(), createBefore, 'No space creation was even requested'); assert.equal((await snapshot()).rooms.length, rooms); assert.ok((await snapshot()).rooms.every(r => !r.name.startsWith('Discarded space')));
+ check('新建协作空间 cancelled by backdrop, Escape or 取消 creates no space');
  const codex = await create('Fixture Codex', 'codex'), claude = await create('Fixture Claude', 'claude');
  const reportedAt = 1760000000000;
  const usage = { [codex]: { total: { inputTokens: 1200, cachedInputTokens: 300, outputTokens: 60 }, last: { inputTokens: 200, outputTokens: 10 }, modelContextWindow: 200000, reportedAt }, [claude]: { source: 'claude-session-usage', context: { tokens: 3200, window: 200000, percent: 1.6 }, costUsd: 0.0123, rateLimits: [], reportedAt } };
@@ -155,13 +168,13 @@ async function run() {
  await page.locator('#room-nav').click(); await page.locator('#room-advanced').evaluate(d => { d.open = true; });
  await notes(); await page.locator('#room-notes-text').fill('Saved original notes'); await page.locator('#save-notes').click(); await page.locator('#notes-dialog').waitFor({ state: 'hidden' });
  await notes(); assert.equal(await page.locator('#room-notes-text').inputValue(), 'Saved original notes'); await page.locator('#room-notes-text').fill('Cancelled notes'); await closed('notes-dialog'); assert.equal(await page.locator('#room-notes-text').inputValue(), '');
- await notes(); assert.equal(await page.locator('#room-notes-text').inputValue(), 'Saved original notes'); await page.locator('#room-notes-text').fill('Accepted first notes'); await arm('roomNotes'); await page.locator('#save-notes').click(); await held('roomNotes'); await closed('notes-dialog', 'escape');
- await notes(); await page.locator('#room-notes-text').fill('New unsaved notes'); await release('roomNotes'); await delay(100); assert.equal(await page.locator('#notes-dialog').evaluate(d => d.open), true); assert.equal(await page.locator('#room-notes-text').inputValue(), 'New unsaved notes'); await closed('notes-dialog', 'button', 'cancel-notes');
+ await notes(); assert.equal(await page.locator('#room-notes-text').inputValue(), 'Saved original notes'); await page.locator('#room-notes-text').fill('Accepted first notes'); await arm('spaceAction:notes'); await page.locator('#save-notes').click(); await held('spaceAction:notes'); await closed('notes-dialog', 'escape');
+ await notes(); await page.locator('#room-notes-text').fill('New unsaved notes'); await release('spaceAction:notes'); await delay(100); assert.equal(await page.locator('#notes-dialog').evaluate(d => d.open), true); assert.equal(await page.locator('#room-notes-text').inputValue(), 'New unsaved notes'); await closed('notes-dialog', 'button', 'cancel-notes');
  // Failure before persistence is separate from accepted persistence.
- await notes(); await arm('roomNotes', { before: true, fail: true }); await page.locator('#room-notes-text').fill('Old failure'); await page.locator('#save-notes').click(); await held('roomNotes'); await closed('notes-dialog'); await notes(); await page.locator('#room-notes-text').fill('Fresh error-free editor'); await release('roomNotes'); await delay(100); assert.equal(await page.locator('#notes-error').isVisible(), false); assert.equal(await page.locator('#room-notes-text').inputValue(), 'Fresh error-free editor'); await closed('notes-dialog', 'escape');
+ await notes(); await arm('spaceAction:notes', { before: true, fail: true }); await page.locator('#room-notes-text').fill('Old failure'); await page.locator('#save-notes').click(); await held('spaceAction:notes'); await closed('notes-dialog'); await notes(); await page.locator('#room-notes-text').fill('Fresh error-free editor'); await release('spaceAction:notes'); await delay(100); assert.equal(await page.locator('#notes-error').isVisible(), false); assert.equal(await page.locator('#room-notes-text').inputValue(), 'Fresh error-free editor'); await closed('notes-dialog', 'escape');
  check('Notes cancellation clears transient edits while saved notes survive; old save success/failure cannot close or write into a reopened editor');
  // Invite late acceptance must leave a reopened invitation intact.
- await page.locator('#manage-members').click(); await arm('join'); await page.locator(`[data-invite-session="${codex}"]`).click(); await held('join'); await closed('invite-dialog'); await page.locator('#manage-members').click(); await release('join'); await delay(100); assert.equal(await page.locator('#invite-dialog').evaluate(d => d.open), true); await closed('invite-dialog', 'button', 'close-invite'); assert.equal(await page.locator('#invite-list').textContent(), '');
+ await page.locator('#manage-members').click(); await arm('spaceAction:join'); await page.locator(`[data-invite-session="${codex}"]`).click(); await held('spaceAction:join'); await closed('invite-dialog'); await page.locator('#manage-members').click(); await release('spaceAction:join'); await delay(100); assert.equal(await page.locator('#invite-dialog').evaluate(d => d.open), true); await closed('invite-dialog', 'button', 'close-invite'); assert.equal(await page.locator('#invite-list').textContent(), '');
  await page.locator('#manage-members').click(); await page.locator(`[data-invite-session="${claude}"]`).click(); await page.locator('#invite-dialog').waitFor({ state: 'hidden' });
  // Context late persistence must not close a new editor. Draft insertion remains accepted.
  await page.locator('#room-advanced').evaluate(d => { d.open = true; }); await page.locator('#attach-context').click(); await page.locator('#context-text').fill('Accepted background'); await arm('viewState'); await page.locator('#insert-context').click(); await held('viewState'); await closed('context-dialog');
@@ -173,7 +186,15 @@ async function run() {
  await page.locator('#room-advanced').evaluate(d => { d.open = true; }); await page.locator('#run-button').click(); assert.equal(await page.locator('#run-mode').inputValue(), 'replies'); assert.equal(await page.locator('#run-limit').inputValue(), '3'); assert.equal(await page.locator('#confirm-run').isDisabled(), true); await closed('run-dialog', 'escape');
  check('Run cancellation clears consent/participants/task and restores fresh replies/3 defaults without dispatching or losing the actual draft');
  // Actual file preview uses a synthetic chooser result scoped inside owned workspace.
- await page.locator('#room-files').click(); await page.locator('#file-dialog').waitFor(); assert.equal(await page.locator('#file-content').textContent(), 'Synthetic file contents'); await closed('file-dialog'); for (const id of ['file-title','file-info','file-content','file-error']) assert.equal(await page.locator('#'+id).textContent(), ''); assert.ok(await app.evaluate(() => globalThis.t93.closedFiles) > 0);
+ // T-159: since c9800cc 文件… opens the space's file list; closing it any way adds nothing, and a listed file opens the preview.
+ const files = async () => ((await snapshot()).rooms.find(r => r.id === 'shared')?.files || []).length, before = await files();
+ const fileCalls = () => app.evaluate(() => globalThis.t93.counts.spaceFiles), fileCallsBefore = await fileCalls();
+ for (const kind of ['outside', 'escape', 'button']) { await page.locator('#room-files').click(); await closed('space-files-dialog', kind, 'close-space-files'); }
+ assert.equal(await fileCalls(), fileCallsBefore, 'No file was even requested'); assert.equal(await files(), before, 'Closing the file list adds no file');
+ await page.locator('#room-files').click(); await page.locator('#add-space-files').click();
+ await until(async () => await files() === before + 1, 'The added file is counted, so the count above is real');
+ assert.ok(await fileCalls() > fileCallsBefore, 'The spaceFiles counter sees 添加…, so its unchanged count above is real');
+ await page.locator('#space-files-list').getByRole('button', { name: 'fixture.txt', exact: true }).last().click(); await page.locator('#file-dialog').waitFor(); assert.equal(await page.locator('#file-content').textContent(), 'Synthetic file contents'); await closed('file-dialog'); for (const id of ['file-title','file-info','file-content','file-error']) assert.equal(await page.locator('#'+id).textContent(), ''); assert.ok(await app.evaluate(() => globalThis.t93.closedFiles) > 0);
  // Share selected reading text (no forward/copy).
  await row(codex).locator('.session-link').click(); await fixture('history', codex, [{ id: 'dialog-share', type: 'agentMessage', text: 'Synthetic reading text for sharing and search' }]); await page.locator('#messages [data-message-id="dialog-share"] .message-body').waitFor();
  await page.locator('#messages [data-message-id="dialog-share"] .message-body').evaluate(el => { const range = document.createRange(); range.selectNodeContents(el); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); });
@@ -198,7 +219,8 @@ async function run() {
  await page.locator('#message-input').fill('Persistent private fixture draft'); await until(async () => { const s = await snapshot(); return s.sessions.find(x=>x.id===s.viewState.selected)?.liveDraft === 'Persistent private fixture draft'; }, 'Private draft persisted');
  const beforeReopen = await snapshot(), stable = beforeReopen.sessions.map(({id,nativeId,owner,liveDraft,roomId})=>({id,nativeId,owner,liveDraft,roomId})); const shared = beforeReopen.viewState.sharedDraft, savedNotes = beforeReopen.room.notes;
  measurements.push({ stage:'final', stats: await fixture('stats'), ipc:await app.evaluate(()=>({counts:globalThis.t93.counts,clipboard:globalThis.t93.clipboard})) });
- const stats=measurements.at(-1).stats; for(const name of ['sends','inputs']) assert.equal(stats.stats[name],0); for(const name of ['send','input','forward','approve','answer','queue','steer']) assert.equal(stats.overviewCalls[name],0); for (const name of ['run','send','input','forward','approve','answer','queue','steer']) assert.equal(measurements.at(-1).ipc.counts[name],0); assert.equal(beforeReopen.diagnostics.dispatches,0); assert.equal(measurements.at(-1).ipc.clipboard,0);
+ // T-159: shared dispatch goes through spaceAction, so its run/forward/queue/steer actions count as dispatch too.
+ const stats=measurements.at(-1).stats; for(const name of ['sends','inputs']) assert.equal(stats.stats[name],0); for(const name of ['send','input','forward','approve','answer','queue','steer']) assert.equal(stats.overviewCalls[name],0); for (const name of ['run','send','input','forward','approve','answer','queue','steer','spaceAction:run','spaceAction:forward','spaceAction:queueShared','spaceAction:steerShared']) assert.equal(measurements.at(-1).ipc.counts[name] || 0,0,name); assert.equal(beforeReopen.diagnostics.dispatches,0); assert.equal(measurements.at(-1).ipc.clipboard,0);
  await capture('05-final-drafts'); await app.close(); await launch(); const reopened=await snapshot(); assert.deepEqual(reopened.sessions.map(({id,nativeId,owner,liveDraft,roomId})=>({id,nativeId,owner,liveDraft,roomId})),stable); assert.equal(reopened.viewState.sharedDraft,shared); assert.equal(reopened.room.notes,savedNotes); assert.equal(reopened.viewState.terminalDisplay.fontSize,19); assert.equal(await page.locator('dialog[open]').count(),0); assert.deepEqual(errors,[]);
  check('Full source window reopen preserves all session identities/membership/private+shared drafts/saved notes/preferences; zero native input/send/approval/run/OSclipboard');
 }
