@@ -1214,7 +1214,83 @@ function openCreate(provider = 'claude') {
   if (creatingSession) return;
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
   $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false;
+  $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
   resetCreateDirectory(); $('create-error').textContent = ''; openTransientDialog('create-dialog'); createReadiness();
+}
+// T-115: 开始一个会话 can also put the new session in a collaboration space. The order is session, then the space if it
+// is new, then the join. Each finished step stays on this opening's receipt, so 仅继续加入 runs only the steps left and
+// never creates the session or the space again. A choice that can't be valid creates nothing.
+const CREATE_SPACE_HELP = '只建立成员关系；不会分享私有历史、发消息或开始协作。';
+function createSpaceChoice() {
+  const kind = $('create-space-kind').value;
+  if (kind === 'independent') return { kind };
+  if (kind === 'existing') {
+    const room = spaceRecord($('create-space-existing').value);
+    if (!room || room.archived) throw Error('请选择一个还在的协作空间，或改成独立会话。');
+    return { kind, roomId: room.id, name: room.name };
+  }
+  if (kind !== 'new') throw Error('请重新选择协作空间。');
+  // The same rules as the space service (session-labels validateName), checked before anything is created.
+  const name = $('create-space-name').value.trim();
+  if (!name) throw Error('请输入新空间的名称。');
+  if (name.length > 60) throw Error('空间名称最多 60 个字符。');
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name)) throw Error('空间名称不能包含换行或控制字符。');
+  return { kind, name };
+}
+function renderCreateSpaces() {
+  if (!$('create-dialog').open) return;
+  const kind = $('create-space-kind').value, select = $('create-space-existing'), rooms = allSpaces().filter(room => !room.archived);
+  const roster = JSON.stringify(rooms.map(room => [room.id, room.name]));
+  if (select.dataset.roster !== roster) {
+    const chosen = select.value, named = name => rooms.filter(room => room.name === name).length > 1;
+    select.replaceChildren(new Option('选择一个空间', ''));
+    for (const room of rooms) select.add(new Option(named(room.name) ? `${room.name} · ${room.id.slice(0, 6)}` : room.name, room.id));
+    select.value = rooms.some(room => room.id === chosen) ? chosen : ''; select.dataset.roster = roster;
+    if (chosen && !select.value) createReadiness(); // the chosen space went away: 创建 must reflect it now
+  }
+  $('create-space-existing-wrap').hidden = kind !== 'existing'; $('create-space-new-wrap').hidden = kind !== 'new';
+  const locked = creatingSession || Boolean(dialogTickets.get($('create-dialog'))?.creation);
+  for (const id of ['create-space-kind', 'create-space-existing', 'create-space-name']) $(id).disabled = locked;
+}
+async function finishCreateSpace(ticket, revision) {
+  const creation = ticket.creation, fresh = () => currentDialogTicket(ticket) && revision === selectionRevision;
+  const kept = () => { const record = state.sessions.find(s => s.id === creation.sessionId), room = creation.roomId && spaceRecord(creation.roomId);
+    return `会话“${record?.name || sessionShortId(creation.sessionId)}”已保留在侧栏${room ? `，空间「${room.name}」也已保留` : ''}`; };
+  creatingSession = true; $('create-error').textContent = ''; createReadiness();
+  try {
+    updateState(await api.initial()); render(); // a retry starts from the current records: an earlier join or space may have landed
+    if (!creation.roomId) {
+      if (!fresh()) return toast(`${kept()}；对话框已关闭，没有新建空间。`);
+      // An error reply can follow a write that did happen. Spaces are compared with those before the first attempt, so a
+      // retry keeps the one new space with this name instead of creating another; several are never guessed between.
+      const adopted = () => {
+        const added = allSpaces().filter(room => !creation.priorRooms.includes(room.id) && room.name === creation.choice.name);
+        if (added.length > 1) throw Error('出现了多个同名的新空间，没有替你选；请关闭后在侧栏核对。');
+        return added[0]?.id || '';
+      };
+      if (creation.priorRooms) creation.roomId = adopted(); else creation.priorRooms = allSpaces().map(room => room.id);
+      if (!creation.roomId) {
+        try { creation.roomId = await api.spaceCreate(creation.choice.name); }
+        catch (error) { try { updateState(await api.initial()); render(); } catch {} creation.roomId = adopted(); if (!creation.roomId) throw error; }
+        updateState(await api.initial()); render();
+      }
+    }
+    const record = state.sessions.find(s => s.id === creation.sessionId), room = spaceRecord(creation.roomId);
+    if (!record || record.archived) throw Error('会话已移除或归档。');
+    if (!room || room.archived) throw Error('空间已归档或不存在。');
+    if (!window.nativeWorkspaceSpaces.canJoin(record, room.id)) throw Error(oldBackendJoin(record));
+    if (!inSpace(record, room.id)) {
+      if (!fresh()) return toast(`${kept()}；对话框已关闭，没有加入空间。`);
+      await api.spaceAction(room.id, 'join', [record.id, true]); updateState(await api.initial()); render();
+      if (!inSpace(state.sessions.find(s => s.id === record.id), room.id)) throw Error('加入没有生效。');
+    }
+    if (fresh()) { $('create-dialog').close(); await select(record.id, creation.view); }
+    toast(`新会话已加入「${room.name}」。`);
+  } catch (error) {
+    const reason = String(error.message || '操作未完成').replace(/[。.！!]?$/u, '。');
+    const message = `${kept()}；还没加入空间：${reason}可以点「仅继续加入」再试，不会重建会话或空间。`;
+    if (fresh()) $('create-error').textContent = message; else toast(message);
+  } finally { creatingSession = false; createReadiness(); }
 }
 function resetCreateDirectory() {
   invalidateGitPreview(true); $('git-worktree').checked = false; $('git-worktree-relative').value = '';
@@ -1860,6 +1936,7 @@ function renderSessions() {
 
 function createReadiness() {
   if (!$('create-dialog').open) return;
+  renderCreateSpaces();
   const historyProvider = document.querySelector('input[name="provider"]:checked').value;
   $('open-native-history').hidden = !state.capabilities?.includes(historyProvider === 'codex' ? 'nativeHistory' : 'claudeFork');
   $('claude-history-id-option').hidden = historyProvider !== 'claude' || !state.capabilities?.includes('claudeHistory');
@@ -1891,6 +1968,7 @@ function createReadiness() {
   $('create-permission-note').textContent = directoryNote + ($('skip-permissions').checked
     ? '这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
     : '原生可能要求确认文件夹信任；文件和命令权限仍由原生确认。');
+  createSpaceReadiness();
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
     $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';
@@ -1900,6 +1978,29 @@ function createReadiness() {
   const ready = state.preflight?.python && state.preflight?.[provider];
   $('confirm-create').disabled = creatingSession || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
   $('create-readiness').textContent = takeover && (newDirectory || gitSelected) ? '接管历史会话前，请选择原工作目录并取消 Git 副本。' : ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
+  createSpaceReadiness(true);
+}
+// T-115: a space choice locks nothing until the session exists; then everything but 仅继续加入 and 关闭 is locked.
+function createSpaceReadiness(final = false) {
+  const creation = dialogTickets.get($('create-dialog'))?.creation, spaced = $('create-space-kind').value !== 'independent';
+  const takeover = document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim();
+  for (const input of $('create-dialog').querySelectorAll('input[name="provider"], #session-name, #claude-history-id, #skip-permissions, #initial-view')) input.disabled = Boolean(creation);
+  $('cancel-create').textContent = creation ? '关闭，保留结果' : '取消';
+  // Continuing an existing session doesn't take the space choice yet; say so rather than drop it.
+  $('create-space-help').hidden = !spaced;
+  $('create-space-help').textContent = spaced ? CREATE_SPACE_HELP + '继续或接管已有会话时不能同时选空间：先继续，再从会话菜单加入空间。' : '';
+  if (spaced || creation) $('open-native-history').disabled = true;
+  if (creation) {
+    for (const id of ['choose-folder', 'new-folder', 'git-worktree', 'git-worktree-relative']) $(id).disabled = true;
+    $('confirm-create').textContent = '仅继续加入'; $('confirm-create').disabled = creatingSession;
+    if (final) $('create-readiness').textContent = '';
+    return;
+  }
+  $('confirm-create').textContent = spaced ? '创建并加入空间' : '创建会话';
+  if (!final) return;
+  let problem = spaced && takeover ? '接管已有 Claude 会话时不能同时选空间；请改成独立会话，接管后再从会话菜单加入空间。' : '';
+  if (!problem) try { createSpaceChoice(); } catch (error) { problem = error.message; }
+  if (problem) { $('confirm-create').disabled = true; if (!$('create-readiness').textContent) $('create-readiness').textContent = problem; }
 }
 function renderArchives() {
   const records = state.sessions.filter(s => s.archived), archivedRooms = allSpaces().filter(r => r.archived), count = records.length + archivedRooms.length;
@@ -2714,7 +2815,7 @@ function render() {
     $('alert').hidden = !warning; $('alert').textContent = warning || '';
     $('reconnect-button').hidden = !disconnected;
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
-    renderSessions();
+    renderSessions(); renderCreateSpaces();
     renderArchives(); renderSpaceNavigation(); renderSpaceFiles();
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
@@ -3243,22 +3344,30 @@ $('new-folder').onclick = () => { if (!creatingSession) { resetCreateDirectory()
 $('create-form').onsubmit = event => { event.preventDefault();
   const ticket = dialogTickets.get($('create-dialog')), revision = selectionRevision;
   if (creatingSession || !currentDialogTicket(ticket)) return;
+  if (ticket.creation) { attempt(() => finishCreateSpace(ticket, revision)); return; }
   if (document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim()) { $('open-native-history').click(); return; }
+  let choice; // T-115: an invalid space choice creates nothing, and its reason stays in the dialog
+  try { choice = createSpaceChoice(); } catch (error) { $('create-error').textContent = error.message; return; }
   attempt(async () => {
   const worktree = $('git-worktree').checked ? gitWorktreePlan : null;
   if ($('git-worktree').checked && (!worktree || newDirectory || gitPreviewLoading || !state.capabilities?.includes('gitWorktreeV1'))) throw Error('请先完成 Git 副本预览；没有改用原目录启动。');
   creatingSession = true; $('create-error').textContent = ''; createReadiness();
   const submittedFolder = worktree?.cwd || folder, priorIds = new Set(state.sessions.map(s => s.id));
-  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); updateState(await api.initial()); render(); if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, view); } else toast('此前创建的会话已保留在侧栏。'); }
+  try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); updateState(await api.initial()); render();
+    if (choice.kind !== 'independent') { ticket.creation = { choice, sessionId: id, view, roomId: choice.roomId || '' }; creatingSession = false; await finishCreateSpace(ticket, revision); return; }
+    if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, view); } else toast('此前创建的会话已保留在侧栏。'); }
   catch (error) {
     try { updateState(await api.initial()); render(); } catch {}
     const created = state.sessions.find(s => s.cwd === submittedFolder && !priorIds.has(s.id));
-    const message = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。${error.message}` : error.message;
+    // T-115: a session kept despite the error still gets the chosen space. Only exactly one new session at this path is
+    // adopted; 仅继续加入 then joins it instead of starting another session.
+    if (choice.kind !== 'independent' && created && state.sessions.filter(s => s.cwd === submittedFolder && !priorIds.has(s.id)).length === 1) ticket.creation = { choice, sessionId: created.id, view: preference, roomId: choice.roomId || '' };
+    const message = (created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。${error.message}` : error.message) + (ticket.creation ? ' 还没加入空间；可以点「仅继续加入」，不会重建会话。' : '');
     if (currentDialogTicket(ticket)) $('create-error').textContent = message; else toast(message);
     if (worktree && currentDialogTicket(ticket)) { invalidateGitPreview(); $('chosen-folder').textContent = folder; $('git-worktree-preview').textContent = '若已生成副本，其路径和分支会保留。要再创建，请明确重新选择仓库或重新勾选副本；不会自动重试。'; }
     // A failed/uncertain start may already own the displayed path. Preserve
     // that record and any files; a new explicit submit gets a fresh preview.
-    if (currentDialogTicket(ticket) && newDirectory) resetCreateDirectory();
+    if (currentDialogTicket(ticket) && newDirectory && !ticket.creation) resetCreateDirectory();
   }
   finally { creatingSession = false; createReadiness(); }
 }); };
@@ -3863,6 +3972,9 @@ $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').oncli
 $('close-setup').onclick = () => $('setup-dialog').close();
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
 $('claude-history-id').oninput = createReadiness;
+$('create-space-kind').onchange = () => { if ($('create-space-kind').value === 'new' && !$('create-space-name').dataset.edited) $('create-space-name').value = $('session-name').value.trim(); createReadiness(); };
+$('create-space-existing').onchange = createReadiness;
+$('create-space-name').oninput = () => { $('create-space-name').dataset.edited = 'true'; createReadiness(); };
 $('claude-history-id').onkeydown = event => {
   if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('open-native-history').click(); }
 };

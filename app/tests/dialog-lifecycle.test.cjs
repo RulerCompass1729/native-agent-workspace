@@ -89,6 +89,9 @@ test('a queued search render after close does not rebuild private results', () =
 test('a pending create keeps Cancel available while duplicate folder changes stay disabled', () => {
   const f = fixture(); f.$('create-dialog').showModal();
   Object.assign(f.context, { document: { querySelector: () => ({ value: 'codex' }) }, creatingSession: true, newDirectory: false });
+  // T-115: createReadiness also renders the space choice; an independent session (the default) leaves this check as it was.
+  Object.assign(f.context, { renderCreateSpaces() {}, createSpaceChoice: () => ({ kind: 'independent' }), CREATE_SPACE_HELP: '' });
+  f.$('create-space-kind').value = 'independent'; f.$('create-dialog').querySelectorAll = () => [];
   f.context.state.capabilities = ['nativePermissionDefaults', 'nativeHistory']; f.context.state.preflight = { codex: true, python: true };
   vm.runInContext(source.slice(source.indexOf('function createReadiness()'), source.indexOf('function renderArchives()')), f.context);
   f.context.createReadiness(); assert.equal(f.$('cancel-create').disabled, false); assert.equal(f.$('choose-folder').disabled, true); assert.equal(f.$('new-folder').disabled, true); assert.equal(f.$('confirm-create').disabled, true);
