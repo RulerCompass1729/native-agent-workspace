@@ -637,6 +637,33 @@ test('turn-end background reports follow native-typed and task-notification turn
   assert.equal(s.background, null); assert.equal(s.scheduled, null); assert.equal(s.backgroundKinds, null); assert.equal(s.backgroundAt, null); assert.equal(s.backgroundStale, false);
   assert.equal(fleetStatus(s, '就绪'), '就绪', 'A new native process starts unreported, not unconfirmed');
 });
+test('a cross-session message is another agent\'s, not the person\'s, and names its sender (T-137)', async t => {
+  const { workspace: w, ids } = await fixture(t, 2);
+  const { Claude } = require('../adapters.cjs');
+  const runtime = Object.create(Claude.prototype); EventEmitter.call(runtime);
+  runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
+  runtime.submission = { request: async () => ({ promptId: 'unused' }) }; runtime.terminal = { input() {} };
+  w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
+  const s = w.get(ids[0]), other = w.get(ids[1]), pauses = [], pause = w.pause.bind(w);
+  w.pause = reason => { pauses.push(reason); return pause(reason); };
+  other.provider = 'claude'; other.pid = 4242; other.name = 'Secretary';
+  const effects = () => [s.controlRevision, s.wakeHumanRevision || 0, pauses.length];
+  const wrap = (pid, name, body) => `<cross-session-message from="uds:/tmp/cc-socks/${pid}.sock" from-name="${name}" from-mode="bypass">\n${body}\n</cross-session-message>`;
+  const submit = (id, prompt, source) => { runtime.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: id, session_id: s.nativeId, prompt, ...(source ? { source } : {}) }); return s.messages.find(m => m.id === 'claude-prompt-' + id); };
+  let before = effects();
+  const known = submit('p1', wrap(4242, 'Claude 2', 'Please check the board.'), 'naw-peer');
+  assert.deepEqual(effects(), before, 'not a person at the terminal');
+  assert.deepEqual([known.role, known.inputSource, known.name, known.displayText], ['user', 'naw-peer', '会话间消息 · 来自 Secretary（按进程号对应，未核实）', 'Please check the board.'], 'a process-number match, still not verified');
+  assert.match(known.text, /^<cross-session-message /, 'the original stays for search and history');
+  const unknown = submit('p2', wrap(9999, 'Else\u202ewhere\n', 'Hello.'), 'naw-peer');
+  assert.equal(unknown.name, '会话间消息 · 来自 Elsewhere（未核实）', 'control and bidi characters are dropped from the claimed name');
+  const odd = submit('p3', 'not wrapped', 'naw-peer');
+  assert.deepEqual([odd.name, odd.displayText], ['会话间消息', undefined]);
+  before = effects();
+  const typed = submit('p4', wrap(4242, 'Claude 2', 'I typed this lookalike.'));
+  assert.deepEqual(effects(), [before[0] + 1, before[1] + 1, before[2] + 1], 'without the engine origin it is the person\'s input');
+  assert.equal(typed.inputSource, undefined);
+});
 test('machine-injected native turns keep their place, are not shown as the person, and do not count as a person interrupting', async t => {
   const { workspace: w, ids } = await fixture(t, 1);
   const { Claude } = require('../adapters.cjs');

@@ -549,7 +549,10 @@ class Workspace extends EventEmitter {
       // so a turn made only of notifications for tasks this session last reported in flight also counts.
       const blocks = text.match(/<task-notification>[\s\S]*?<\/task-notification>/g), onlyBlocks = Boolean(blocks) && !text.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
       const taskIds = onlyBlocks ? blocks.map(block => /<task-id>\s*([A-Za-z0-9_-]{1,64})\s*<\/task-id>/.exec(block)?.[1]) : [];
-      const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event'].includes(item?.source);
+      // `naw-peer`: a Claude Code cross-session message, tagged by NAW's mod from the engine's origin (T-137).
+      // Not the person: no wake.human, pause or controlRevision. Its submission still sends the mod's
+      // control:input boundary (nativeControlBoundary below), which voids wakes staged by or for this session.
+      const sourced = ['system', 'loop_wakeup', 'schedule_wakeup', 'poll_event', 'naw-peer'].includes(item?.source);
       const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
       if (reported) for (const id of taskIds) runtime.backgroundTaskIds.delete(id);
       const machine = sourced || reported, inputSource = sourced ? item.source : reported ? 'task-notification' : null;
@@ -562,7 +565,10 @@ class Workspace extends EventEmitter {
       // Machine turns keep their place but are not shown as the person's words.
       const summaries = machine && onlyBlocks ? blocks.map(block => /<summary>([\s\S]*?)<\/summary>/.exec(block)?.[1]?.trim()).filter(Boolean) : [];
       // The original text is kept for search and history; the summary is only what the reader shows.
-      const shown = summaries.length && summaries.length === blocks.length ? { name: '后台任务通知', displayText: summaries.join('\n') } : machine ? { name: inputSource.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入' } : {};
+      const peer = inputSource === 'naw-peer' ? this.peerMessage(text) : null;
+      const shown = summaries.length && summaries.length === blocks.length ? { name: '后台任务通知', displayText: summaries.join('\n') }
+        : peer ? { name: peer.name, ...(peer.body !== null ? { displayText: peer.body } : {}) }
+        : machine ? { name: inputSource.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入' } : {};
       if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource } : {}), time: Date.now() });
       this.changed();
     });
@@ -682,6 +688,21 @@ class Workspace extends EventEmitter {
         wake: { id: intent.id, senderId: s.id, recipientId: intent.recipientId, senderName: s.name || '', recipientName: target?.name || '', body: intent.body },
         text: String(row?.text || ''), time: intent.time });
     }
+  }
+  // T-137: the sender of a cross-session message, read only after the engine's origin proved it one.
+  // `from` and `from-name` are text inside the message; nothing shows the engine sets them from the
+  // connection, so every sender is marked 未核实. A `from` socket whose pid is a NAW Claude session here
+  // is shown by that session's name, as a process-number match.
+  peerMessage(text) {
+    const outer = /^\s*<cross-session-message((?:\s+[a-z-]{1,20}="[^"<>]{0,512}")*)\s*>\n?([\s\S]*?)\n?<\/cross-session-message>\s*$/.exec(String(text));
+    if (!outer) return { name: '会话间消息', body: null };
+    const attrs = Object.fromEntries([...outer[1].matchAll(/([a-z-]{1,20})="([^"<>]{0,512})"/g)].map(m => [m[1], m[2]]));
+    const pid = /^uds:\/tmp\/cc-socks\/(\d{1,10})\.sock$/.exec(attrs.from || '')?.[1];
+    const sender = pid ? [...this.sessions.values()].find(s => s.provider === 'claude' && String(s.pid) === pid) : null;
+    // No control or bidirectional-formatting characters: they could reorder or hide the marker.
+    const claimed = (attrs['from-name'] || '').replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '').trim().slice(0, 80);
+    const who = sender ? `${sender.name || '会话'}（按进程号对应，未核实）` : claimed ? `${claimed}（未核实）` : '未知会话';
+    return { name: `会话间消息 · 来自 ${who}`, body: outer[2] };
   }
   wakeView(room) {
     if (!Array.isArray(room?.messages) || !room.messages.some(m => m?.wake)) return room;
