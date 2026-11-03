@@ -4,52 +4,67 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.162 closes the wake route the alpha.161 review found: a prompt
-that the person's own settings hook blocks no longer becomes the prompt a later
-turn can stage a wake under. Only a prompt the hook lets through counts, and
-only for the first turn that starts after it; any later turn under it is treated
-as ambiguous and refused. By reading the code, a prompt typed while a turn is
-running and let through is still linked to the next turn, so a `!` command after
-that turn ends could stage a wake under it, as in alpha.161; this has not been
-checked on real 2.1.316. Like alpha.161, it reaches a session only after a
-backend running alpha.162 restarts it. In the author lane, on real Claude Code
-2.1.316 with local fixed replies, a blocked prompt followed by a `!` command
-staged a wake before the fix and was refused after it, while a typed turn's wake
-still arrived; probes there found that /cost, /context and `!` raise no
-prompt-submit hook. Unverified: inputs that are let through but start no turn,
-such as /compact or Esc before the turn starts; a real Claude Code 2.1.312
-session, which the main session uses, covered only by a unit fixture. Five more
-GUI scripts were brought up to date; in the author lane room waiting still stops
-at one assertion that shows a real issue, the space filter hiding the
-current-position frame. Both changes were reviewed in their author lane and are
-integrated with identical changed lines. The full unit suite passes 2,156
-checks, and the membership navigation, terminal selection, native blocks,
-compact header and session wake GUI scripts exit 0; native blocks runs real
-Claude Code 2.1.316 against three local fixed replies with no paid calls. Daily
-delivery remains pending; current daily remains alpha.161.
+Current daily GUI: alpha.162, committed build source `23f76b3b`. It closes the
+wake route the alpha.161 review found: a prompt that the person's own settings
+hook blocks no longer becomes the prompt a later turn can stage a wake under.
+Only a prompt the hook lets through counts, and only for the first turn that
+starts after it; any later turn under it is treated as ambiguous and refused. By
+reading the code, a prompt typed while a turn is running and let through is
+still linked to the next turn, so a `!` command after that turn ends could stage
+a wake under it, as in alpha.161; this has not been checked on real 2.1.316.
+Like alpha.161, it reaches a session only after a backend running alpha.162
+restarts it. In the author lane, on real Claude Code 2.1.316 with local fixed
+replies, a blocked prompt followed by a `!` command staged a wake before the fix
+and was refused after it, while a typed turn's wake still arrived; probes there
+found that /cost, /context and `!` raise no prompt-submit hook. Unverified:
+inputs that are let through but start no turn, such as /compact or Esc before
+the turn starts; a real Claude Code 2.1.312 session, which the main session
+uses, covered only by a unit fixture. Five more GUI scripts were brought up to
+date; in the author lane room waiting still stops at one assertion that shows a
+real issue, the space filter hiding the current-position frame. Both changes
+were reviewed in their author lane and are integrated with identical changed
+lines. The full unit suite passes 2,156 checks, and the membership navigation,
+terminal selection, native blocks, compact header and session wake GUI scripts
+exit 0; native blocks runs real Claude Code 2.1.316 against three local fixed
+replies with no paid calls. The signed bundle passed one isolated launch. The
+ordinary visible update kept fourteen session records with their native IDs,
+live processes and drafts; the empty active backend was replaced in place, and
+the seven other backends kept PID, start time and version, also 150 seconds
+later, long enough for two automatic-move checks, with no move started. Before
+it, at 16:20, the secretary's backend was moved to alpha.161 after the secretary
+asked the person to move it. An author-run check afterwards found the shared
+folder's compatibility hook rewritten at 16:20 with alpha.161's output and one
+wake record in the secretary's session with status cancelled; the secretary
+reports that this was its wake to the main session, no longer refused, and that
+it was cancelled with the generic reason that the native observation or control
+boundary had changed. Its cause is not yet known, the secretary's wake to the
+main session has not been delivered, and T-100 stays open. The secretary runs
+alpha.161's wake check and the main session alpha.159's; as of the install no
+session runs alpha.162's bridge.
 
-Current daily GUI: alpha.161, committed build source `9c78f558`. It removes the
-refusal that blocked agent wakes from the secretary. The secretary's running
-process, started at 15:28 on an alpha.160 backend, keeps the stale copy loaded,
-so its wakes stay refused until its session restarts on an alpha.161 backend.
-Its working folder still held a compatibility plugin that NAW had written there
-for retained sessions, Claude Code loads it too, and its hook refused every
-wake. That copy now leaves the wake tool to the plugin NAW launches Claude with.
-Whenever an alpha.161 backend starts or resumes Claude in a folder, or an
-alpha.161 window connects input to a retained Claude there, NAW's own byte-exact
-old copy in that folder is refreshed; a launch never creates one; connecting a
-retained Claude still installs it as before, and edited or unsafe copies are
-left alone. After that, any later process in the folder loads the new copy,
-whichever backend starts it. Only the turn linked to the last submitted prompt
-can stage a wake, so a `!` command after a typed prompt that already started its
-turn no longer can; one route stays open by reading the code: if the person's
-own settings hook blocks a prompt, the next turn without a prompt of its own,
-such as a `!` command, can still stage one. Sessions started on alpha.159 or
-alpha.160 backends keep the wider `!` hole until a backend running alpha.161
-restarts them. For the secretary that means moving its backend again, after it
-ends its own background wait and scheduled wakeups. A real installed wake from
-the secretary, on Claude Code 2.1.316, to the main session, on 2.1.312 and
-another backend, has not run, nor has a wake from a task-notification or
+The prior alpha.161 task, source `9c78f558`, remains qualified. It removes the
+refusal that blocked agent wakes from the secretary. At that delivery the
+secretary's running process, started at 15:28 on an alpha.160 backend, kept the
+stale copy loaded, so its wakes stayed refused until its session restarted on an
+alpha.161 backend. Its working folder still held a compatibility plugin that NAW
+had written there for retained sessions, Claude Code loads it too, and its hook
+refused every wake. That copy now leaves the wake tool to the plugin NAW
+launches Claude with. Whenever an alpha.161 backend starts or resumes Claude in
+a folder, or an alpha.161 window connects input to a retained Claude there,
+NAW's own byte-exact old copy in that folder is refreshed; a launch never
+creates one; connecting a retained Claude still installs it as before, and
+edited or unsafe copies are left alone. After that, any later process in the
+folder loads the new copy, whichever backend starts it. Only the turn linked to
+the last submitted prompt can stage a wake, so a `!` command after a typed
+prompt that already started its turn no longer can; one route stays open by
+reading the code: if the person's own settings hook blocks a prompt, the next
+turn without a prompt of its own, such as a `!` command, can still stage one.
+Sessions started on alpha.159 or alpha.160 backends keep the wider `!` hole
+until a backend running alpha.161 restarts them. For the secretary that meant
+moving its backend again, after it ended its own background wait and scheduled
+wakeups; that happened at 16:20. At that delivery a real installed wake from the
+secretary, on Claude Code 2.1.316, to the main session, on 2.1.312 and another
+backend, had not run, nor has a wake from a task-notification or
 scheduled-wakeup turn, and wakes do not yet appear on the space timeline. The
 change was reviewed in its author lane, which ran real Claude Code 2.1.316
 against local fixed replies before and after the fix, and is integrated with

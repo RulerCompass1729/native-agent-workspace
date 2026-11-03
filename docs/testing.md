@@ -4138,3 +4138,21 @@ turn's wake still arrived and the old compatibility copy was upgraded; a
 terminal probe found that /cost, /context and `!` raise no prompt-submit hook. A
 unit fixture for Claude Code 2.1.312 stages wakes from a typed turn and from a
 turn NAW submitted; no real 2.1.312 session ran.
+
+The committed alpha.162 tree passes the same 2,156 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. Before quitting, the operator required that no retained backend
+qualified for an automatic move; the active backend had no sessions and was
+replaced in place. The ordinary visible update kept fourteen session records
+with their native IDs, live process starts and drafts, and the seven other
+backends kept PID, start time and version; 150 seconds later they and all
+sixteen live native processes were unchanged and no move record existed. Between
+the two updates the secretary's backend was moved to alpha.161 at 16:20, after
+the secretary asked the person to move it, so a provider started from the
+alpha.161 bundle; its signature was not checked before this update replaced that
+bundle, and that check can no longer be made. An author-run read-only check
+after this update found the shared folder's compatibility hook rewritten at
+16:20 with alpha.161's output, and one wake record in the secretary's session
+with status cancelled; the secretary's log reports that it was its 16:21 wake to
+the main session and gives the cancellation reason. Its cause is not yet known.
