@@ -1256,11 +1256,14 @@ async function finishCreateSpace(ticket, revision) {
   const creation = ticket.creation, fresh = () => currentDialogTicket(ticket) && revision === selectionRevision;
   const kept = () => { const record = state.sessions.find(s => s.id === creation.sessionId), room = creation.roomId && spaceRecord(creation.roomId);
     return `会话“${record?.name || sessionShortId(creation.sessionId)}”已保留在侧栏${room ? `，空间「${room.name}」也已保留` : ''}`; };
+  // Not fresh means either the dialog closed or (still open) the selection moved; say which, and offer the retry if open.
+  const paused = step => currentDialogTicket(ticket) ? ($('create-error').textContent = `${kept()}；选中的内容变了，还没有${step}；可以点「仅继续加入」接着做。`)
+    : toast(`${kept()}；对话框已关闭，没有${step}。`);
   creatingSession = true; $('create-error').textContent = ''; createReadiness();
   try {
     updateState(await api.initial()); render(); // a retry starts from the current records: an earlier join or space may have landed
     if (!creation.roomId) {
-      if (!fresh()) return toast(`${kept()}；对话框已关闭，没有新建空间。`);
+      if (!fresh()) return paused('新建空间');
       // An error reply can follow a write that did happen. Spaces are compared with those before the first attempt, so a
       // retry keeps the one new space with this name instead of creating another; several are never guessed between.
       const adopted = () => {
@@ -1281,18 +1284,24 @@ async function finishCreateSpace(ticket, revision) {
     if (!room || room.archived) throw Object.assign(Error('空间已归档或不存在。'), { final: true });
     if (!window.nativeWorkspaceSpaces.canJoin(record, room.id)) throw Object.assign(Error(oldBackendJoin(record)), { final: true });
     if (!inSpace(record, room.id)) {
-      if (!fresh()) return toast(`${kept()}；对话框已关闭，没有加入空间。`);
+      if (!fresh()) return paused('加入空间');
       await api.spaceAction(room.id, 'join', [record.id, true]); updateState(await api.initial()); render();
       if (!inSpace(state.sessions.find(s => s.id === record.id), room.id)) throw Error('加入没有生效。');
     }
+    // Joined. If the selection moved meanwhile the dialog may still be open: close it too, since nothing is left to do here
+    // (branch table: E2, the join while the selection moved).
     if (fresh()) { $('create-dialog').close(); await select(record.id, creation.view); }
+    else if (currentDialogTicket(ticket)) $('create-dialog').close();
     toast(`新会话已加入「${room.name}」。`);
   } catch (error) {
     const reason = String(error.message || '操作未完成').replace(/[。.！!]?$/u, '。');
     if (error.final) creation.blocked = true;
-    const next = error.final ? '请关闭对话框；之后可以从会话菜单加入别的空间。' : fresh() ? '可以点「仅继续加入」再试，不会重建会话或空间。' : '可以打开这个会话，从会话菜单加入空间。';
+    // Whether the dialog is still open decides where the message goes and which retry it offers (a moved selection keeps
+    // it open; only a closed dialog points to the session menu).
+    const open = currentDialogTicket(ticket);
+    const next = error.final ? '请关闭对话框；之后可以从会话菜单加入别的空间。' : open ? '可以点「仅继续加入」再试，不会重建会话或空间。' : '可以打开这个会话，从会话菜单加入空间。';
     const message = `${kept()}；还没加入空间：${reason}${next}`;
-    if (fresh()) $('create-error').textContent = message; else toast(message);
+    if (open) $('create-error').textContent = message; else toast(message);
   } finally { creatingSession = false; createReadiness(); }
 }
 function resetCreateDirectory() {
@@ -3392,17 +3401,21 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // T-115: a session kept despite the error still gets the chosen space. A returned id is used as is; without one,
     // only exactly one new session at this path is adopted. 仅继续加入 then joins it instead of starting another session.
     const keptId = createdId || (created && state.sessions.filter(s => s.cwd === submittedFolder && !priorIds.has(s.id)).length === 1 ? created.id : '');
-    if (choice.kind !== 'independent' && keptId) ticket.creation = { choice, sessionId: keptId, view: preference, roomId: choice.roomId || '' };
+    // A session whose start failed (state error) is never adopted, with or without a space: the dialog stays retryable in a
+    // new folder and the failed record stays out of the space (branch table E2 F9, the same rule as E1 F9).
+    const usable = Boolean(createdId) || created?.state !== 'error';
+    if (choice.kind !== 'independent' && keptId && usable) ticket.creation = { choice, sessionId: keptId, view: preference, roomId: choice.roomId || '' };
     // An independent session that exists stops this dialog: by its returned id, or (I160) found again without one, unless
     // its start failed (state error), which stays retryable in a new folder as before.
-    else if (keptId && (createdId || created?.state !== 'error')) ticket.created = keptId;
+    else if (keptId && usable) ticket.created = keptId;
     // Without an id and without a fresh read, nobody can tell whether the session exists: ask for a look, don't invite a retry.
     const unknown = !createdId && !reread;
-    // I159: two cases where a session may exist without an id, so this dialog stops (ticket.created = 'unconfirmed'):
-    // a chosen existing folder, which other sessions may share, so a retry could add a second; and a retry after an
-    // unknown result that finds its own new folder already there (已存在), made by the first attempt.
+    // I159: cases where a session may exist without an id, so this dialog stops (ticket.created = 'unconfirmed'):
+    // a chosen existing folder, which other sessions may share, or a Git copy, whose retry needs a new preview at a new
+    // path, so neither can be told apart from a failure and a retry could add a second; and a retry after an unknown
+    // result in the automatic folder that finds its own new folder already there (已存在), made by the first attempt.
     const ownFolderTaken = !createdId && ticket.unsurePath === submittedFolder && /已存在/u.test(error.message || '');
-    const sharedFolder = unknown && !newDirectory && !worktree;
+    const sharedFolder = unknown && !newDirectory;
     if (!ticket.creation && !ticket.created && (ownFolderTaken || sharedFolder)) ticket.created = 'unconfirmed';
     if (unknown && newDirectory) ticket.unsurePath = submittedFolder;
     const kept = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。` : createdId ? `会话（${sessionShortId(createdId)}）已建好，保留在侧栏。`

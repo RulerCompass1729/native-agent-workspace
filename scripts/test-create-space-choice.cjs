@@ -35,7 +35,9 @@ async function instrument() {
       const key = 'workspace:' + name, original = ipcMain._invokeHandlers.get(key); if (!original) throw Error(key);
       ipcMain._invokeHandlers.set(key, async (event, ...args) => {
         const kind = name === 'spaceAction' ? (args[1] === 'join' ? 'join' : '') : name; if (kind) globalThis.t115Calls[kind]++;
-        const fault = kind && globalThis.t115Faults.findIndex(f => f.kind === kind), queued = fault >= 0 ? globalThis.t115Faults.splice(fault, 1)[0] : null;
+        // A sticky fault stays queued (every matching call fails) until the test clears it.
+        const fault = kind && globalThis.t115Faults.findIndex(f => f.kind === kind), found = fault >= 0 ? globalThis.t115Faults[fault] : null;
+        const queued = found && !found.sticky ? globalThis.t115Faults.splice(fault, 1)[0] : found;
         if (queued?.when === 'hold') await new Promise(resolve => { globalThis.t115Held = resolve; }); // released by the test
         if (queued?.when === 'before') return { ok: false, error: 'Synthetic ' + kind + ' failure' };
         const result = await original(event, ...args);
@@ -273,6 +275,64 @@ async function run() {
   await page.locator('#cancel-create').click(); assert.equal((await named('分支结果未知')).length, 1); const [forkUnknown] = await named('分支结果未知');
   check('从已有 Claude 会话分支… stops the dialog once its session exists, also when the selection moved, the next read failed, or its reply was lost');
 
+  // 4h. The remaining rows of the branch table (evidence t115f-branch-table-20261103/branch-table.md).
+  const release = () => app.evaluate(() => { const r = globalThis.t115Held; globalThis.t115Held = null; r(); });
+  const held = label => until(() => app.evaluate(() => Boolean(globalThis.t115Held)), label);
+  // E1-F3: the dialog is closed while 创建 is in flight: the session is kept, and the next opening starts fresh.
+  await fault('create', 'hold'); await open('关闭期间建好'); await page.locator('#confirm-create').click(); await held('Create held (close)');
+  await page.locator('#cancel-create').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' }); await release();
+  await until(async () => (await named('关闭期间建好')).length === 1, 'Kept while the dialog was closed');
+  await page.locator('#new-session').click(); assert.equal(await page.locator('#confirm-create').innerText(), '创建会话');
+  assert.equal(await page.locator('#session-name').isDisabled(), false, 'The next opening starts fresh'); await page.locator('#cancel-create').click();
+  const [closedKept] = await named('关闭期间建好');
+  // E2-F2: a spaced 创建 whose selection moved: the session exists, the join waits for 仅继续加入, nothing is created twice.
+  await open('焦点成员三'); const focusMember3 = await createdInto('焦点成员三', studyId);
+  await page.locator(`[data-space-id="${studyId}"] .room-nav`).first().click(); await page.locator('#room-overview').click();
+  await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${focusMember3.id}"] .collaboration-member-name`).click();
+  markCreate = await calls(); await fault('create', 'hold'); await open('空间视图变了'); await page.locator('#create-space-kind').selectOption('existing'); await page.locator('#create-space-existing').selectOption(studyId);
+  await page.locator('#confirm-create').click(); await held('Spaced create held');
+  await page.evaluate(([room, id]) => workspace.spaceAction(room, 'join', [id, false]), [studyId, focusMember3.id]);
+  await until(async () => (await spacesOf(focusMember3.id)).length === 0, 'The third focused member left'); await release();
+  await until(async () => /选中的内容变了，还没有加入空间/.test(await page.locator('#create-error').innerText()), 'A moved selection pauses before the join, in the open dialog');
+  assert.equal(await page.locator('#confirm-create').innerText(), '仅继续加入'); const [spacedMoved] = await named('空间视图变了'); assert.deepEqual(await spacesOf(spacedMoved.id), []);
+  await page.locator('#confirm-create').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' });
+  assert.deepEqual(await spacesOf(spacedMoved.id), [studyId]); assert.equal((await named('空间视图变了')).length, 1);
+  nowCreate = await calls(); assert.equal(nowCreate.create - markCreate.create, 1, 'One create for the spaced session');
+  // E3-F1: a Claude branch that succeeds closes the dialog with one session.
+  await pick(legacy); await open('分支成功', 'claude'); await page.locator('#choose-folder').click(); await page.locator('#open-native-history').click();
+  await page.locator('#create-dialog').waitFor({ state: 'hidden' }); assert.equal((await named('分支成功')).length, 1); const [forkOk] = await named('分支成功');
+  // E3-F6: a branch rejected before any write stays retryable, and the retry makes exactly one.
+  markCreate = await calls(); await fault('create', 'before'); await open('分支先失败', 'claude'); await page.locator('#choose-folder').click(); await page.locator('#open-native-history').click();
+  await until(async () => (await page.locator('#toast-text').innerText()).includes('Synthetic create failure'), 'The branch failure is shown');
+  await until(async () => !(await page.locator('#open-native-history').isDisabled()), 'Nothing was created, so the branch can be retried');
+  assert.doesNotMatch(await page.locator('#create-readiness').innerText(), /这里不会再建一个|无法确认/); assert.deepEqual(await named('分支先失败'), []);
+  await page.locator('#open-native-history').click(); await page.locator('#create-dialog').waitFor({ state: 'hidden' });
+  assert.equal((await named('分支先失败')).length, 1); nowCreate = await calls(); assert.equal(nowCreate.create - markCreate.create, 2);
+  const [forkRetried] = await named('分支先失败');
+  // E1-F8 (Git copy): an unknown result for a Git copy can't be told apart either (a retry previews a new path): it stops.
+  await pick(repo); await open('副本结果未知'); await page.locator('#choose-folder').click(); await page.locator('#git-worktree').check();
+  await until(async () => (await page.locator('#git-worktree-preview').innerText()).includes('工作目录：'), 'Second Git copy preview ready');
+  // Every state read fails until cleared. Even so, the service's state push usually delivers the new session before the
+  // catch runs (a Git copy takes a while), so the dialog stops by finding it (kept) rather than as unconfirmed; the
+  // unconfirmed rule for a Git copy is reached only when no push has listed it, and is checked in source, not here.
+  await fault('create', 'after'); await app.evaluate(() => { globalThis.t115Faults.push({ kind: 'initial', when: 'before', sticky: true }); });
+  await page.locator('#confirm-create').click();
+  await until(async () => /关闭对话框即可；这里不会再建一个|无法确认会话是否已经建好/.test(await page.locator('#create-readiness').innerText()), 'A Git copy whose reply and read were lost stops the dialog');
+  assert.equal(await page.locator('#confirm-create').isDisabled(), true); assert.doesNotMatch(await page.locator('#git-worktree-preview').innerText(), /要再创建/);
+  await app.evaluate(() => { globalThis.t115Faults = globalThis.t115Faults.filter(f => !f.sticky); });
+  await page.locator('#cancel-create').click(); assert.equal((await named('副本结果未知')).length, 1); const [copyUnknown] = await named('副本结果未知');
+  // E2, the join itself while the selection moves: the join completes, and the open dialog closes (nothing is left to do).
+  await open('焦点成员四'); const focusMember4 = await createdInto('焦点成员四', studyId);
+  await page.locator(`[data-space-id="${studyId}"] .room-nav`).first().click(); await page.locator('#room-overview').click();
+  await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${focusMember4.id}"] .collaboration-member-name`).click();
+  await fault('join', 'hold'); await open('加入时视图变了'); await page.locator('#create-space-kind').selectOption('existing'); await page.locator('#create-space-existing').selectOption(studyId);
+  await page.locator('#confirm-create').click(); await held('Join held');
+  await page.evaluate(([room, id]) => workspace.spaceAction(room, 'join', [id, false]), [studyId, focusMember4.id]);
+  await until(async () => (await spacesOf(focusMember4.id)).length === 0, 'The fourth focused member left'); await release();
+  await page.locator('#create-dialog').waitFor({ state: 'hidden' });
+  const [joinMoved] = await named('加入时视图变了'); assert.deepEqual(await spacesOf(joinMoved.id), [studyId]); assert.equal((await named('加入时视图变了')).length, 1);
+  check('Branch table rows: closed mid-create keeps one and reopens fresh; a moved spaced create waits for 仅继续加入; a branch succeeds once and retries after a pre-write failure; a Git copy whose reply and read were lost stops; a join finished after the selection moved closes the dialog');
+
   // 5. The space write happened but its reply was lost: the one new space is kept, not created again.
   let mark = await calls(); await fault('spaceCreate', 'after');
   await open('丢失回复'); await page.locator('#create-space-kind').selectOption('new');
@@ -323,7 +383,7 @@ async function run() {
   check('关闭，保留结果 keeps the session outside the space and starts no further step; the next opening starts fresh');
 
   // 9. Memberships survive a whole-app reopen.
-  const expected = { [solo.id]: [], [helper.id]: [studyId], [weekend.id]: [weekendRoom.id], [chosenFolder.id]: [studyId], [copy.id]: [weekendRoom.id], [skipped.id]: [studyId], [createRetry.id]: [studyId], [createLost.id]: [createLostRooms[0].id], [readFail.id]: [studyId], [readFailSolo.id]: [], [readFailFolder.id]: [], [unknownSolo.id]: [], [unknownShared.id]: [], [focusMember.id]: [], [movedView.id]: [], [foundAgain.id]: [], [focusMember2.id]: [], [forkMoved.id]: [], [forkReadFail.id]: [], [forkLost.id]: [], [forkUnknown.id]: [], [doomed.id]: [], [lost.id]: [lostRooms[0].id], [spaceFail.id]: [retryRooms[0].id], [joinFail.id]: [studyId], [closed.id]: [] };
+  const expected = { [solo.id]: [], [helper.id]: [studyId], [weekend.id]: [weekendRoom.id], [chosenFolder.id]: [studyId], [copy.id]: [weekendRoom.id], [skipped.id]: [studyId], [createRetry.id]: [studyId], [createLost.id]: [createLostRooms[0].id], [readFail.id]: [studyId], [readFailSolo.id]: [], [readFailFolder.id]: [], [unknownSolo.id]: [], [unknownShared.id]: [], [focusMember.id]: [], [movedView.id]: [], [foundAgain.id]: [], [focusMember2.id]: [], [forkMoved.id]: [], [forkReadFail.id]: [], [forkLost.id]: [], [forkUnknown.id]: [], [closedKept.id]: [], [focusMember3.id]: [], [spacedMoved.id]: [studyId], [forkOk.id]: [], [forkRetried.id]: [], [copyUnknown.id]: [], [focusMember4.id]: [], [joinMoved.id]: [studyId], [doomed.id]: [], [lost.id]: [lostRooms[0].id], [spaceFail.id]: [retryRooms[0].id], [joinFail.id]: [studyId], [closed.id]: [] };
   await app.close(); app = null; await launch();
   for (const [id, rooms] of Object.entries(expected)) assert.deepEqual(await spacesOf(id), rooms, 'Membership after reopen: ' + id);
   await page.locator(`[data-session-id="${helper.id}"]`).first().waitFor();
