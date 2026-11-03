@@ -83,7 +83,7 @@ async function readingAnchor(host = page.locator('#messages')) {
   });
 }
 async function copyOriginal(host, id, text) {
-  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: '复制', exact: true });
+  const copy = host.locator(`[data-message-id="${id}"] .message-actions`).getByRole('button', { name: /^复制：/ });
   if (installed) {
     // Keep the user's OS clipboard untouched. The unchanged source-mode copy
     // receipt is reused; this installed check covers focus, source and visibility.
@@ -113,8 +113,7 @@ async function run() {
   check('Recent segment renders fifty originals while all2480 local source records remain intact');
 
   let host = page.locator('#messages');
-  // A person leaves the latest with their own wheel; since T-134 a scroll without
-  // such input is read as layout and keeps a following reader at the latest.
+  // Leave the latest with a real wheel, as a person does.
   await host.hover(); await page.mouse.wheel(0, -300); await until(() => host.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight > 100), 'Wheel left the latest');
   const before = await host.evaluate(el => {
     el.scrollTop = 0;

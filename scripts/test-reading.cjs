@@ -66,7 +66,7 @@ async function run() {
   // "Jump to latest" appears only after leaving the newest output and returns there.
   const jump = page.locator('#messages').getByRole('button', { name: '↓ 跳到最新', exact: true });
   assert.equal(await jump.isVisible(), false);
-  // Leave with a real wheel: since T-134 a scroll without the person's input keeps a following reader at the latest.
+  // Leave the latest with a real wheel, as a person does.
   await page.locator('#messages').hover(); await page.mouse.wheel(0, -100000);
   await jump.waitFor({ state: 'visible' });
   if (process.env.NAW_EVIDENCE_DIR) await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'jump-latest.png') });

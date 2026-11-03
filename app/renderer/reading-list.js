@@ -103,6 +103,13 @@ function readingPageRange(data, previous, request, position = {}, pinned = false
   return { start, end, firstId: data.messages[start]?.id || '', lastId: data.messages[end - 1]?.id || '', tail: end === n };
 }
 function readingFollow(tail, nearEnd, selecting) { return tail === true && nearEnd && !selecting; }
+// What a render draws for one page of records, to tell a column whose rows changed
+// from one drawn again unchanged (the grid redraws every column on any update).
+function readingContentKey(messages) {
+  return messages.map(m => [m.id, m.role, m.kind, m.status, m.phase, m.turnId, m.displayTurnId, m.title, m.incomplete, m.nativeIndex,
+    typeof m.text === 'string' ? m.text.length : 0, typeof m.input === 'string' ? m.input.length : 0,
+    Array.isArray(m.images) ? m.images.map(image => image?.pending ? 'p' : image?.unavailable ? 'u' : 'i').join('') : '', m.nativeDurationMs, m.nativeCompletedAt].join('\u0001')).join('\u0002');
+}
 // A following render ignores scrolls until its follow frame (T-134), except while the
 // person is moving away: a held pointer, or shortly after a wheel-up or an away key.
 function followRenderGuard(view, now = performance.now()) { return !view.onScrollbar?.() && now - (view.awayAt ?? -Infinity) > 500; }
@@ -304,7 +311,7 @@ function readingView(el, key) {
   if (view.key !== key) {
     for (const entry of view.entries.values()) entry.images?.dispose();
     captureReading(view); ui.clearMarkdown(el); el.replaceChildren();
-    view.entries.clear(); view.groups.clear(); view.days.clear(); view.key = key; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
+    view.entries.clear(); view.groups.clear(); view.days.clear(); view.key = key; view.contentKey = null; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
     view.pageRange = null; view.pageRequest = null; view.pageChanging = false; view.autoPages = 4; view.reload = null; view.loadMessage = null;
     // The new list is empty until Markdown mounts; never capture that temporary
     // zero as this session's saved reading position.
@@ -537,7 +544,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   // reply re-laid out leave the content briefly shorter, the browser clamps the
   // position, and that scroll arrives before the follow frame (T-134). The
   // person's own wheel, pointer or key input clears this at once (interact).
-  if (!room && (view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId || intent.position.follow && followRenderGuard(view))) view.pageChanging = true;
+  // Only a render that changes this reader's rows can do that; a column drawn
+  // again unchanged keeps every scroll, including a screen reader's.
+  const contentKey = room ? '' : readingContentKey(messages.slice(range.start, range.end)), contentChanged = contentKey !== view.contentKey;
+  view.contentKey = contentKey;
+  if (!room && (view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId || intent.position.follow && contentChanged && followRenderGuard(view))) view.pageChanging = true;
   view.pageRange = range; view.pageRequest = null;
   const turnMarks = readingTurnMarks(messages.slice(range.start, range.end), room, originals);
   view.reload = () => { if (view.key === key && el.isConnected) messageList(el, sourceMessages, room, key, context); };

@@ -104,3 +104,11 @@ test('a press in the padding let go near the end does not start following', () =
   h.el.scrollTop = 2460; h.documentListeners.pointerup();
   assert.equal(h.view.intent, null);
 });
+test('the content key is equal for the same rows drawn again, and changes when a row a render draws changes', () => {
+  const { context } = harness(), key = rows => context.readingContentKey(rows);
+  const rows = [{ id: 'a', role: 'assistant', text: 'Hello', status: 'complete' }, { id: 'b', role: 'tool', kind: 'tool', title: 'Bash', input: 'ls', status: 'running' }];
+  assert.equal(key(structuredClone(rows)), key(rows), 'a fresh copy of the same rows (each state update) is unchanged');
+  for (const change of [r => { r[0].text += ' world'; }, r => { r[1].status = 'complete'; }, r => { r[0].images = [{ pending: true }]; }, r => { r.push({ id: 'c', role: 'assistant', text: '' }); }, r => { r[1].incomplete = true; }]) {
+    const next = structuredClone(rows); change(next); assert.notEqual(key(next), key(rows));
+  }
+});
