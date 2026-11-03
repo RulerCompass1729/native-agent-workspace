@@ -21,7 +21,7 @@ const fs = require('node:fs'), path = require('node:path'), { NativeHost } = req
 const original = NativeHost.prototype.create, held = new Map();
 NativeHost.prototype.create = function(record) {
   const r = original.call(this, record);
-  if (['Synthetic startup failure', 'Closed startup failure'].includes(record.name)) r.start = async () => {
+  if (['Synthetic startup failure', 'Closed startup failure', 'Spaced startup failure'].includes(record.name)) r.start = async () => {
     fs.writeFileSync(path.join(record.cwd, 'started.txt'), 'Retain native writes');
     if (record.name === 'Closed startup failure') await new Promise((resolve, reject) => held.set(record.id, () => reject(Error('Synthetic closed startup failed'))));
     throw Error('Synthetic native startup failed');
@@ -91,6 +91,16 @@ async function run() {
   assert.equal(failed.state, 'error'); assert.equal(fs.readFileSync(path.join(failedPath, 'started.txt'), 'utf8'), 'Retain native writes');
   assert.ok((await page.locator('#create-error').innerText()).includes(failed.id.replaceAll('-', '').slice(0, 6)), 'Failure identifies the exact saved row');
   assert.notEqual(await preview(), failedPath); await shot('03-startup-failure'); await page.locator('#cancel-create').click();
+  // T-115 branch table E2 F9: with a space chosen, a failed start is not adopted either. The dialog stays retryable (创建并加入空间,
+  // not 仅继续加入), the failed record stays out of the space, and the next attempt gets a new folder.
+  const spacedPath = await open('Spaced startup failure'); await page.locator('#create-space-kind').selectOption('existing'); await page.locator('#create-space-existing').selectOption('shared');
+  await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('Synthetic native startup failed'), 'Spaced startup failure visible');
+  await until(async () => !(await page.locator('#confirm-create').isDisabled()), 'A failed spaced start stays retryable');
+  assert.equal(await page.locator('#confirm-create').innerText(), '创建并加入空间'); assert.notEqual(await preview(), spacedPath, 'The retry gets a new folder');
+  const spacedFailed = (await state()).sessions.find(s => s.cwd === spacedPath); assert.equal(spacedFailed.state, 'error');
+  assert.equal(await page.evaluate(id => workspace.initial().then(s => window.nativeWorkspaceSpaces.isMember(s.sessions.find(x => x.id === id), 'shared')), spacedFailed.id), false, 'The failed record stays out of the space');
+  await page.locator('#cancel-create').click();
   const closedPath = await open('Closed startup failure'); await page.locator('#confirm-create').click();
   await until(() => fs.existsSync(path.join(closedPath, 'started.txt')), 'Held native startup has actually begun');
   const closed = (await client.call('initial')).sessions.find(s => s.cwd === closedPath);
