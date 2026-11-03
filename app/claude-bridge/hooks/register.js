@@ -135,6 +135,16 @@ function heartbeat($, binding, ownGeneration) {
 const displayTurns = new Map();
 const promptTurns = new Map(), displayTurnLinks = new Map();
 let rootPrompt = null;
+// T-138 (2.1.316, 2.1.317, measured): a prompt typed while a root turn runs raises UserPromptSubmit
+// once, at enqueue, with the running prompt's id. If no mid-turn point takes it (that is a
+// queued_command delivery into the running turn), it later starts its own turn, and that
+// turn.start's text is the prompt verbatim. Only that exact match with the first prompt still in
+// line lets the new turn act on it; anything else leaves the turn ambiguous, as before.
+let queuedPrompts = [];
+// The foreign submissions now in flight, with their origins (UserPromptSubmit fires inside one): only
+// the person's own composer input can join the line. This mod's own submissions never reach this hook.
+// A set, not a saved-and-restored value: interleaved submissions do not exit in reverse order.
+const foreignInFlight = new Set();
 // Turn records (2.1.316 and 2.1.317): the person's `!` commands, the inputs that start
 // a root turn and that turn's own clock. Order is the only link: an input taken
 // while no root turn runs belongs to the next root turn.start, and a turn this
@@ -271,6 +281,9 @@ function observeAppend($, e, result, binding, turnId, candidate, nativeApiError)
   if ((!contextTransitions && !nativeBlocks) || !binding || stopped || rootBinding !== binding || e.agentId ||
     result?.deny || result?.uuid !== e.uuid || !/^[a-f0-9-]{36}$/i.test(result?.uuid || '')) return;
   const message = result.message;
+  // A queued prompt taken into the running turn starts no turn of its own; which one was taken is
+  // not exact (the engine frames its text), so none of the line can head a later turn (T-138).
+  if (e.door === 'delivery' && message?.type === 'attachment' && message.name === 'queued_command') queuedPrompts = [];
   if (nativeBlocks && binding.nativeTurnRecords) observeShell($, e, result, binding);
   if (!message || message.isMeta || !Array.isArray(message.content)) return;
   const text = blocks => typeof blocks === 'string' ? blocks : Array.isArray(blocks)
@@ -871,6 +884,15 @@ export function register(on) {
   }).catch(($, e, next) => next(e));
   on('turn.start', ($, e, next) => {
     if (!e.agentId) {
+      // A new root turn after idle, with no newer UserPromptSubmit and not this mod's own
+      // submission, is a queued prompt's own turn only if its text is the first one in line.
+      let queuedTurn = false;
+      if (rootIdle && queuedPrompts.length) {
+        const first = queuedPrompts[0];
+        queuedTurn = !collecting && rootPrompt?.binding === rootBinding && !rootPrompt.pending && first.binding === rootBinding &&
+          first.promptId === rootPrompt.id && typeof e.text === 'string' && e.text === first.text;
+        queuedPrompts = queuedTurn ? queuedPrompts.slice(1) : [];
+      }
       activeTurn = e.turnId;
       lastPhase = null;
       flushShell($);
@@ -885,7 +907,7 @@ export function register(on) {
         const previous = promptTurns.get(rootPrompt.id);
         // A prompt heads one turn: a later start under it (a `!` command) is ambiguous.
         promptTurns.set(rootPrompt.id, { binding: rootBinding, turnId: e.turnId, promptId: rootPrompt.id,
-          ambiguous: Boolean(previous && previous.turnId !== e.turnId) || (!rootPrompt.pending && previous?.turnId !== e.turnId) }); trimLinks(promptTurns);
+          ambiguous: !queuedTurn && (Boolean(previous && previous.turnId !== e.turnId) || (!rootPrompt.pending && previous?.turnId !== e.turnId)) }); trimLinks(promptTurns);
         rootPrompt.pending = false;
       }
       if (collecting) collecting.turns.push(e.turnId);
@@ -979,8 +1001,9 @@ export function register(on) {
     foreignRevision++;
     if (collecting) collecting.invalid = true;
     enqueueBlock($, { id: 'control:input', kind: 'control', status: 'complete' });
+    const inFlight = { origin: e.origin?.kind || null }; foreignInFlight.add(inFlight);
     try { return await next(e); }
-    finally { foreignSubmissions--; }
+    finally { foreignSubmissions--; foreignInFlight.delete(inFlight); }
   }).catch(async ($, e, next) => {
     foreignRevision++;
     if (collecting) collecting.invalid = true;
@@ -990,6 +1013,9 @@ export function register(on) {
     const root = !e.agent_id && e.session_id === rootBinding?.sessionId && /^[a-f0-9-]{36}$/i.test(e.prompt_id || ''), binding = rootBinding;
     if (root && shellInput?.binding === binding) shellInput = null; // a typed lookalike, not a `!` command
     const candidate = collecting;
+    // Read before the settings hooks run (they can take seconds): the one foreign submission this
+    // prompt arrives in, if exactly one is in flight (T-138).
+    const composerTyped = foreignInFlight.size === 1 && [...foreignInFlight][0].origin === 'composer';
     if (candidate) {
       // Count all events, including malformed/unknown identities. Filtering
       // first could make an unrelated event look like the only candidate.
@@ -1003,7 +1029,15 @@ export function register(on) {
         // Only a prompt that goes on may name, and authorize, the turn it starts;
         // a blocked one must not become the prompt of a later `!` turn (T-100, I140).
         // A prompt delivered into a running root turn (2.1.312 queued_command,
-        // 2.1.316 mid-turn input) never starts its own turn, so it can head none (I141).
+        // 2.1.316 mid-turn input) heads no turn by its id (I141). On 2.1.316/2.1.317 one
+        // typed during the turn shares the running prompt's id; it is kept in line, and
+        // may head its own later turn only by an exact text match (T-138).
+        if (!rootIdle && rootPrompt?.binding === binding) {
+          // Only the person's composer input, under the running prompt's id; anything else drops the line.
+          if (rootPrompt.id === e.prompt_id && composerTyped && !candidate && typeof e.prompt === 'string' && e.prompt && queuedPrompts.length < 8)
+            queuedPrompts = [...queuedPrompts, { binding, promptId: e.prompt_id, text: e.prompt }];
+          else queuedPrompts = [];
+        } else if (rootIdle) queuedPrompts = [];
         rootPrompt = { id: e.prompt_id, binding, pending: rootIdle };
         triggerTurn({ prompt: e.prompt_id }, binding);
         if (binding?.nativeTurnRecords) expectPrompt = binding;
@@ -1017,7 +1051,7 @@ export function register(on) {
   });
   on('session.start', async ($, e, next) => {
     if (collecting) collecting.invalid = true;
-    rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null; pendingDrawings.clear();
+    rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null; pendingDrawings.clear(); queuedPrompts = [];
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
     // 2.1.316 and 2.1.317: the free status-line usage read, session.model() and the
