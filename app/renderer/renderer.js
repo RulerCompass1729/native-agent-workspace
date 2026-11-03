@@ -1376,17 +1376,31 @@ $('open-native-history').onclick = () => {
   // terminal, and the chosen session is forked while the original stays as is.
   if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
     const ticket = dialogTickets.get($('create-dialog')), revision = selectionRevision;
-    if (!currentDialogTicket(ticket) || creatingSession) return;
+    if (!currentDialogTicket(ticket) || creatingSession || ticket.created || ticket.creation) return;
     if (newDirectory) throw Error('从历史会话分支或接管前，请先选择原工作目录。');
     const nativeId = $('claude-history-id').value.trim();
     if (nativeId && !state.capabilities?.includes('claudeHistory')) throw Error('当前后台尚不支持 Claude 接管；保留输入，请先连接新版后台。');
     creatingSession = true; createReadiness();
+    const priorIds = new Set(state.sessions.map(s => s.id)); let forkId = '';
     try {
-    const id = nativeId ? await api.importHistory(nativeId, { provider: 'claude', cwd: folder, name: $('session-name').value, skipPermissions: $('skip-permissions').checked })
+    const id = forkId = nativeId ? await api.importHistory(nativeId, { provider: 'claude', cwd: folder, name: $('session-name').value, skipPermissions: $('skip-permissions').checked })
       : await api.create({ provider: 'claude', cwd: folder, name: $('session-name').value, view: 'terminal', fork: 'picker', skipPermissions: $('skip-permissions').checked || undefined });
+    // I161: like 创建, once the branched or taken-over session exists this opening makes no other, even if it stays open
+    // (the selection moved) or the next read fails; set before that read so the id is never lost.
+    ticket.created = id;
     updateState(await api.initial()); render();
     if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, 'terminal'); }
     else toast('此前请求的会话已保留在侧栏。');
+    } catch (error) {
+      // I161: a branch whose reply failed may still have made its session; the same rule as 创建's catch. Exactly one new
+      // working Claude session in this folder stops the dialog; without a fresh read nobody can tell (a chosen folder).
+      if (!forkId) {
+        let reread = true; try { updateState(await api.initial()); render(); } catch { reread = false; }
+        const found = state.sessions.filter(s => s.provider === 'claude' && s.cwd === folder && !priorIds.has(s.id));
+        if (!reread) ticket.created = 'unconfirmed';
+        else if (found.length === 1 && found[0].state !== 'error') ticket.created = found[0].id;
+      }
+      throw error;
     } finally { creatingSession = false; createReadiness(); }
   });
   if (historyImporting) return;
@@ -3401,7 +3415,7 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // Stopped at its own folder, the service's 已存在 advice (use another folder) would contradict the locked form (I160).
     const message = kept + (ownFolderTaken ? '' : error.message) + join + spaceLater;
     if (currentDialogTicket(ticket)) $('create-error').textContent = message; else toast(message);
-    if (worktree && currentDialogTicket(ticket) && !ticket.creation) { invalidateGitPreview(); $('chosen-folder').textContent = folder; $('git-worktree-preview').textContent = '若已生成副本，其路径和分支会保留。要再创建，请明确重新选择仓库或重新勾选副本；不会自动重试。'; }
+    if (worktree && currentDialogTicket(ticket) && !ticket.creation && !ticket.created) { invalidateGitPreview(); $('chosen-folder').textContent = folder; $('git-worktree-preview').textContent = '若已生成副本，其路径和分支会保留。要再创建，请明确重新选择仓库或重新勾选副本；不会自动重试。'; }
     // A failed/uncertain start may already own the displayed path. Preserve
     // that record and any files; a new explicit submit gets a fresh preview.
     // A known id means the session owns this path; keeping it makes another 创建 fail as 已存在 rather than add a second one.
