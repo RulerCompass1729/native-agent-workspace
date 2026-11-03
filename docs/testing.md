@@ -4382,3 +4382,14 @@ pbcopy call. The compat known-list check finds all 39 earlier main builds of the
 hook since 257c523 in the upgrade list and no other entries. The cross-session
 message changes were tested with a message sent by hand on real 2.1.317 and
 2.1.316 in the author lane only.
+
+The committed alpha.169 tree passes the same 2,248 unit checks. The signed
+bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. An initial-only read before the update found the active backend empty
+and no backend that qualified for an automatic move, and the operator re-checked
+both live; no backend move record was present before the run. The ordinary
+visible update kept fourteen session records with their native IDs, live process
+starts and drafts, and the seven other backends kept PID, start time and
+version; 150 seconds later they and all sixteen live native processes were
+unchanged and no move record existed.

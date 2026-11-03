@@ -25,7 +25,8 @@ Native Agent Workspace. Development/test profiles may override it. The in-app
   session has its own owner-only folder, and each file is named by the SHA-256
   of its image bytes. Each image is at most 1 MB and each session's folder at
   most 64 MB. Archiving a session keeps its folder, since the session can be
-  restored. 移除本应用记录… deletes the session's copies once the removal is saved,
+  restored. For a session whose backend runs alpha.169 or later, 移除本应用记录…
+  deletes the session's copies once the removal is saved,
   except those a collaboration space's shared rows on the same backend still
   show: the removal keeps shared content, so the space can still open them. A
   merged copy of such a row on another backend is not checked, so its image
