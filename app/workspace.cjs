@@ -946,6 +946,11 @@ class Workspace extends EventEmitter {
       if (roomId !== 'shared') { this.persist(); if (this.storageWarning) throw Error('空间记录未能保存，没有向原生派发。'); }
       await runtime.queue(text, tag, valid);
       message.status = 'submitted';
+      // The receipt comes when native starts this message's own turn (on 2.1.316/2.1.317 after the running turn
+      // ended, T-133). The conversation shows it there, after that turn's reply, as the native terminal does;
+      // it keeps the time it was sent. The space record stays in time order, with replies naming what they answer.
+      const at = s.messages.indexOf(message);
+      if (at >= 0 && at < s.messages.length - 1) { s.messages.splice(at, 1); s.messages.push(message); this.changed(); }
       this.deliveryStatus(tag, 'submitted');
       return tag;
     } catch (error) {

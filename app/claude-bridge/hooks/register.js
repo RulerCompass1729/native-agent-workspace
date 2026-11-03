@@ -444,7 +444,9 @@ async function abortNativeTurn($, binding, command) {
   if (stopped || binding !== rootBinding || rootEnds.has(binding.sessionId) ||
       command.epoch !== binding.observationEpoch || command.turnId !== activeTurn ||
       !/^[a-f0-9-]{36}$/i.test(command.id || '') || displayTurns.get(activeTurn)?.ended) return;
-  const pending = collecting;
+  // Only our submission that this turn belongs to is the stopped turn's. A queued one still waiting for its own
+  // turn (2.1.316/2.1.317, T-133) is not: native runs it after the stop, so waiting for it would never settle in time.
+  const pending = collecting?.turns.includes(command.turnId) ? collecting : null;
   const report = submitSettled => request($, '/abort-result', { id: command.id, epoch: command.epoch, turnId: command.turnId, status: 'aborted', submitSettled }, binding);
   try { await $.turn.abort({ turnId: command.turnId }); }
   catch { await request($, '/abort-result', { id: command.id, epoch: command.epoch, turnId: command.turnId, status: 'failed' }, binding); return; }
@@ -612,7 +614,10 @@ async function listen($, ownGeneration) {
 async function bindRoot($, ownGeneration) {
   const binding = await connection($);
   const version = (await $.session.version()).version;
-  const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(version)),
+  // 2.1.316 and 2.1.317 (T-133, measured): our submission made mid-turn waits for the running turn to end, then runs
+  // as its own turn under a new prompt id, and the submit resolves at that turn's start; it is never taken into the
+  // running turn. So its receipt names its own prompt and turn.
+  const result = await request($, '/root-bind', { nativeBlocks, addressedTool, nativeQueue: (legacyOnly ? version === '2.1.302' : ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version)),
     nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     // On 2.1.316 and 2.1.317 only tool results carry images; prompt images need the input gates, which stay off.

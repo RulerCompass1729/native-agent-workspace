@@ -100,6 +100,17 @@ test('private queued input retains native work, rejects duplicates and preserves
   assert.equal(w.snapshot().sessions[0].liveDraft, 'new draft');
   assert.equal(s.messages.at(-1).status, 'submitted'); assert.equal(r.pendingQueue, null);
 });
+test('a queued message moves to where its own turn begins, after the running turn\'s reply (T-133)', async t => {
+  const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
+  const s = w.get(id); s.state = 'working'; r.queueAvailable = true; let accept;
+  r.queue = () => new Promise(resolve => { accept = resolve; });
+  const sending = w.queue(id, 'next task', 'owner'), queued = s.messages.at(-1), sentAt = queued.time;
+  // The running turn's final reply arrives while the message waits (measured on 2.1.316/2.1.317).
+  s.messages.push({ id: 'running-reply', role: 'assistant', text: 'The running turn\'s reply.', time: Date.now() });
+  accept(); await sending;
+  assert.deepEqual(s.messages.slice(-2).map(m => m.id), ['running-reply', queued.id]);
+  assert.equal(queued.status, 'submitted'); assert.equal(queued.time, sentAt, 'it keeps the time it was sent');
+});
 test('uncertain queued input stays only in the record, without automatic retry', async t => {
   const { workspace: w, runtimes: [r], ids: [id] } = await fixture(t);
   const s = w.get(id); s.state = 'working'; r.queueAvailable = true;
