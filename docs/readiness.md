@@ -4,6 +4,57 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.171 carries three reviewed changes from Claude 2. The first lets
+the person send from NAW while Claude works (T-133, item 1). On Claude Code
+2.1.316 and 2.1.317 the send button used to be disabled while a turn ran. Now a
+message sent from the session chat or from a space waits for that turn, runs as
+its own turn with its reply attached to it, in the space record too, and stands
+after the previous reply in the session chat, as in the native terminal.
+Clicking 停止 while a message is queued no longer reports 原生中断结果未确认. 停止 stops only
+the running turn: the queued message then runs at once as its own turn, as Esc
+does in the native terminal; NAW cannot withdraw it. Kept under the existing
+rules: queueing in the session chat stops a shared reply in progress, and after
+queueing from a space and clicking 停止, the queued message's reply stays in the
+session and is not shared. Item 2, which would show prompts typed in the native
+terminal, and their images, from the plugin's own input records, stays off until
+it is aligned with T-99. The change runs in the session's backend, so it reaches
+only sessions on an alpha.171 backend. All three are integrated with identical
+changed lines. On main, the native blocks script's new queue mode passed in the
+session chat and from a space on real 2.1.317 and 2.1.316 with local replies, as
+did its default flow on 2.1.317, and the author's frozen stop runner showed no
+unconfirmed report and an idle session after 停止 while queued, in the session
+chat and from a space on 2.1.317 and in the session chat on 2.1.316. The session
+wake, reading turns, column input and daily use GUI scripts exit 0. Unverified:
+停止 while queued from a space on 2.1.316, and on 2.1.312; stopping a turn that
+something else started during the wait, which still reports unconfirmed; and
+daily use. The second always shows a cross-session sender's claimed name inside
+「」, such as 「「Claude 2」（未核实） → Receiver B」, so it cannot pass for NAW's own
+process-match marker, and removes a few invisible characters from it (T-137,
+item 2a follow-up); it was run with a real cross-session message only in the
+author lane. Its session row and stored space name are written by the receiving
+session's backend, so they change only for messages received on an alpha.171
+backend; the space label is drawn by the GUI, so after installation earlier rows
+from a claimed sender are quoted there too, while their session rows and merged
+copies keep the earlier unquoted text. The third shows an image the person
+pastes into a prompt in the Claude terminal, or drags in as a file, under that
+prompt in NAW's conversation, on 2.1.316 and 2.1.317, including a prompt typed
+while Claude works; before, NAW showed only the text and [Image #1]. The image
+opens with the pixels Claude received and is stored in the local native image
+cache, as privacy.md says. The prompt row keeps its source and turn linking is
+unchanged; 2.1.312 is unchanged. It runs in the session's backend, so it reaches
+only sessions on an alpha.171 backend. On main the native blocks script's new
+prompt-image mode, which pastes an image path through the terminal's own input
+without writing the clipboard, passed on real 2.1.317 and 2.1.316, and the
+default flow passed again on 2.1.317. Unverified: a real run of an image prompt
+typed while Claude works, several images in one prompt, images over 1 MB, and an
+image pasted from the clipboard; the runs pasted a file path so the clipboard
+stayed untouched. In a few rare cases the image can be lost; it never goes to a
+prompt with different text or to another session. The same text typed twice in
+one turn has one row, so the second one's image shows on that row, and a
+different image that row already showed is then marked as changed. With all
+three changes the full unit suite passes 2,270 checks. Daily delivery remains
+pending; current daily remains alpha.170.
+
 Current daily GUI: alpha.170, committed build source `eef94863`. It carries two
 reviewed changes from Claude 2. The first is for a wake that never resolved
 (T-141). When an agent staged a wake in a turn and, before that turn ended, the
