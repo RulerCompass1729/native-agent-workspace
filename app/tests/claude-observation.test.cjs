@@ -873,7 +873,7 @@ test('model metadata rejects invalid payloads and ignores offline replay without
 });
 
 
-for (const version of ['2.1.310', '2.1.312']) test('native model metadata updates the model block for a valid switch: ' + version, async () => {
+for (const version of ['2.1.310', '2.1.312', '2.1.316', '2.1.317']) test('native model metadata updates the model block for a valid switch: ' + version, async () => {
   const f = await mod({ version }), models = [];
   f.r.on('model', value => models.push(value)); f.setModelReader(async () => 'claude-sonnet-test');
   await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test' });
@@ -882,6 +882,23 @@ for (const version of ['2.1.310', '2.1.312']) test('native model metadata update
   assert.equal(f.requests[0].id, 'control:model'); assert.equal(f.requests[0].model, 'claude-sonnet-test');
 });
 
+// The reader exists from the start, so the bind-time read (not only the switch hook) is covered. The
+// fixture drops timers queued during startup, so the block that read sends is not visible here; the
+// switch tests above cover the same block path, and the real-CLI model run records the start model.
+for (const [version, on] of [['2.1.316', true], ['2.1.317', true], ['2.1.313', false]]) test(`native ${version} ${on ? 'reads' : 'does not read'} the model at bind (T-133)`, async () => {
+  let reads = 0;
+  await mod({ version, modelReader: async () => { reads++; return 'claude-sonnet-test'; } });
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.equal(reads > 0, on);
+});
+test('native 2.1.313 keeps model metadata off: no read, no block (T-133)', async () => {
+  let reads = 0;
+  const f = await mod({ version: '2.1.313', modelReader: async () => { reads++; return 'claude-sonnet-test'; } }), models = [];
+  f.r.on('model', value => models.push(value));
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test' });
+  for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r));
+  assert.equal(reads, 0); assert.deepEqual(models, []); assert.ok(!f.requests.some(x => x.id === 'control:model'));
+});
 test('native model metadata on 2.1.310 ignores invalid and oversized switch payloads', async () => {
   const f = await mod({ version: '2.1.310' }), models = [];
   f.r.on('model', value => models.push(value));

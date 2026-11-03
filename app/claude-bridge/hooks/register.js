@@ -595,7 +595,7 @@ async function bindRoot($, ownGeneration) {
     nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativeMedia: version === '2.1.312',
-    // 2.1.316: turn.abort is qualified (T-133). Capacity recovery, which reads the
+    // 2.1.316 and 2.1.317: turn.abort is qualified (T-133). Capacity recovery, which reads the
     // native transcript and continues the session, is not yet; say so explicitly.
     nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(version),
     nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
@@ -1016,13 +1016,14 @@ export function register(on) {
     rootIdle = true; turnTriggers = []; shellInput = null; shellTurn = null; expectPrompt = null; pendingDrawings.clear();
     const ownGeneration = ++generation;
     const nativeVersion = (await $.session.version()).version;
-    // 2.1.316: the free status-line usage read is declared unchanged (T-133).
+    // 2.1.316 and 2.1.317: the free status-line usage read, session.model() and the
+    // PostModelSwitch event are declared as on 2.1.312 (T-133).
     nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
-    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312'].includes(nativeVersion);
+    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
       : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
-    // 2.1.316 and 2.1.317 (declarations unchanged except additions, T-133): root binding, native
-    // blocks (turn identity for workspace messages), abort and usage; queue, inline input, media and model stay off.
+    // 2.1.316 and 2.1.317 (2.1.317's engine API only adds to 2.1.316's, T-133): root binding, native
+    // blocks (turn identity for workspace messages), abort, usage and model; queue, inline input and media stay off.
     contextTransitions = !legacyOnly && ['2.1.306', '2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
     const version = nativeVersion.match(/^(\d+)\.(\d+)\.(\d+)(?:$|[-+])/);
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
