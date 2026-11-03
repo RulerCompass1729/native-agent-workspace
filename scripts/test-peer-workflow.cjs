@@ -50,11 +50,15 @@ async function run(id, text) {
   await page.locator('#run-limit').selectOption('3'); await page.locator('#run-consent').check(); await page.locator('#confirm-run').click();
 }
 async function rejectHistoryClear() {
+  // T-149: count system confirmations instead of showing one. A refused clear must refuse before it asks
+  // (the older clear path refuses first); a confirmation counted here fails the check below.
+  await app.evaluate(({ dialog }) => { globalThis.clearConfirmations = 0; dialog.showMessageBox = async (_win, options) => { if (!String(options?.message || '').startsWith('清除')) throw Error('Unexpected system confirmation'); globalThis.clearConfirmations++; return { response: 1 }; }; });
   await page.locator('#privacy-button').click();
   const summary = page.getByText('清理与完全退出', { exact: true });
   if (!await summary.evaluate(el => el.parentElement.open)) await summary.click();
   await page.locator('#clear-shared-history').click();
   await until(async () => (await page.locator('#trust-refresh-status').innerText()).includes('核对各后台'), 'Clear history preserves the unresolved pause warning');
+  assert.equal(await app.evaluate(() => globalThis.clearConfirmations), 0, 'A refused clear asks for no confirmation first');
   await page.locator('#close-privacy').click();
 }
 async function main() {
