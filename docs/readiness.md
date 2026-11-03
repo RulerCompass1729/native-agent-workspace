@@ -4,6 +4,49 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.170 carries two reviewed changes from Claude 2. The first is for
+a wake that never resolved (T-141). When an agent staged a wake in a turn and,
+before that turn ended, the person typed another prompt or a cross-session
+message arrived, or a permission ask came before the wake was staged, the wake
+stayed 已登记，尚未投递 for good. Now that turn's end is reported once and the wake is
+withdrawn with the note 发送方这一轮中途有新的输入或权限确认；自动消息未投递. On its own this mitigates
+the underlying problem: a person's input in the middle of a turn gave the turn
+back its wake authority, and only this end stops the delivery. With the second
+change that remains only for a prompt identical to the running one, or when the
+backend has no record of the turn's first text, such as after a restart. Wakes
+staged after such a boundary, which used to hang, are now withdrawn; none was
+delivered before, but by NAW's own rules some of them, such as after a task
+notification or the native approval of the call itself, should be deliverable,
+which remains open. The change runs in the session's backend, so it reaches only
+sessions on an alpha.170 backend. It is integrated with identical changed lines.
+On main with real Claude Code 2.1.317 and local fixed replies, using the
+author's frozen runner, a wake staged in the first turn showed 已登记 while the
+turn was held, and after a second prompt typed into the terminal it ended
+withdrawn with that note, without waking the recipient. The second change gives
+a prompt typed while Claude works its own row in NAW's conversation view (T-138,
+display half). Before, it had no row at all; now it stands after the first
+turn's reply, at the head of its own turn, as in the native terminal, with the
+time it was typed, when it runs as its own turn; if the running turn takes it in
+instead, its row stays where it was typed, which is not measured. It also
+tightens the wake rule: after the person types a different prompt in the middle
+of a turn, a wake that turn then tries to stage is refused at once instead of
+being withdrawn at the end; only an identical prompt still restores the turn's
+wake authority, which the first change then withdraws. Cross-session messages,
+task notifications and blocked prompts that carry the running prompt's id now
+also get rows, and a cross-session message that arrives in the middle of a turn
+is then also copied into the recipient's spaces, as alpha.169 does for other
+cross-session messages; both are inferred and not measured. On main with real
+2.1.317 and local replies, the author's frozen checker found the typed prompt's
+single row in that place, the T-138 wake run still met its expectation, and the
+T-141 run on the combined tree still ended withdrawn with the note. Both changes
+run in the session's backend and reach only sessions on an alpha.170 backend.
+With both, the full unit suite passes 2,257 checks, native blocks passes on
+2.1.317 without paid calls, and the session wake and reading turns GUI scripts
+exit 0. Unverified: a real run with the boundary before staging or with a
+permission ask, Claude Code 2.1.316 on main, a backend restart in the middle of
+a turn, and daily use. Daily delivery remains pending; current daily remains
+alpha.169.
+
 Current daily GUI: alpha.169, committed build source `f987dcfd`. It carries four
 reviewed changes. First, on Claude Code 2.1.316 and 2.1.317 a cross-session
 message that another Claude session sends is no longer taken for the person's
