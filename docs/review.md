@@ -3245,3 +3245,123 @@ refused it, and the resent delta passed with one sentence correction, which was
 committed as given. The update operator was accepted as a substitution of the
 alpha.169 one and ran once. Open: T-143; daily checks once sessions are on an
 alpha.170 backend; the post-provider signature check.
+
+
+### A message can be queued while Claude works (T-133, item 1)
+
+On Claude Code 2.1.316 and 2.1.317 NAW disabled its send button while Claude
+worked, so the person could only type into the native terminal. Sending is now
+allowed from the session chat and from a space while a turn runs: the message
+waits until that turn ends, runs as its own turn, and its reply is attached to
+it, in the space record too; in the session chat it stands after the previous
+turn's reply, as in the native terminal. Clicking 停止 while a message is queued
+no longer reports 原生中断结果未确认: the stop no longer waits for a queued message that
+has not started its own turn. 停止 stops only the running turn: the queued message
+then runs at once as its own turn, as Esc does in the native terminal; NAW
+cannot withdraw it.
+
+Claude 2's lane reviewer asked for changes once: the probe it asked for showed
+the false 未确认 report after 停止, which was then fixed, and the second round
+passed. Three test assertions it suggested, one case per run, an exact request
+count and the shared row's delivery state, were added afterwards and checked
+only by real runs. Kept under the existing rules: queueing in the session chat
+stops a shared reply in progress, and after queueing from a space and clicking
+停止, the queued message's reply stays in the session and is not shared, because
+the stop withdraws that sharing grant.
+
+Lane evidence: the full suite passed 2,247 checks; four mutations fail their
+tests; native probes on real 2.1.316 and 2.1.317 measured how native handles the
+queued message. Before the change, the frozen runner (private and shared) and
+the script's queue mode (private) failed at the disabled send on 2.1.317;
+nothing was run before the change on 2.1.316. After it, both passed in private
+and shared form on both versions, and the default flow passed on 2.1.317. Open,
+low: stopping a turn that something other than a NAW message started during the
+wait, such as a prompt typed in the terminal, still reports unconfirmed; the row
+move follows a receipt that travels on a different channel from the rows, though
+every measured order was right; stopping a queued turn before its receipt
+arrives could leave the session needing input, not reachable at human speed; 停止
+while queued on 2.1.316 and 2.1.312 was not run. Item 2, which would show
+prompts typed in the native terminal, and their images, from the plugin's own
+input records, stays off until it is aligned with T-99. The integration reviewer
+added, all low or recorded only: the plugin's pending submission spans the whole
+wait, so a prompt typed or arriving during it leaves NAW's reply unattributed
+and turns off turn heading and typed-prompt linking for turns that start then;
+the stop fix still depends on arrival order, and the conservative unconfirmed
+report returns if the queued prompt's events land before the abort completes,
+though all five measured runs were in the right order; the row move also applies
+to 2.1.308 to 2.1.312, unmeasured; a wake staged after a queue from a space in
+the same running turn can still be delivered, as the existing rule says; the
+private queue check covers row order but not turn linkage; and a held question
+does not block queueing, though the queued message cannot answer it and native
+handling while the question hook blocks is not measured.
+
+
+### A cross-session sender's claimed name is always quoted (T-137, item 2a follow-up)
+
+A cross-session message carries the sender's claimed name, which NAW shows with
+未核实. Two low findings from the item 2a review remained: a claimed name could
+imitate NAW's own 「按进程号对应，未核实」 marker, and a few invisible characters, such as
+the line and paragraph separators, the soft hyphen and some filler spaces, were
+not removed. A claimed name is now always shown inside 「」, as in 「「Claude
+2」（未核实） → Receiver B」, so it cannot pass for that marker, and those characters
+are removed; other brackets in a claimed name stay. Claude 2's lane reviewer
+took three rounds: the first passed with low ways around the removal of brackets
+noted, the second found one around the removal of the marker words, and the
+third passed with the quotes it proposed; after that only a comment changed.
+
+Lane evidence: the full suite passed 2,247 checks, and with the quote characters
+allowed in a name the test fails; with the frozen v4 runner on real 2.1.317 and
+a cross-session message sent by hand, the session row read 会话间消息 · 来自 「Claude
+2」（未核实） and the space row 「Claude 2」（未核实） → Receiver B, without a paid or pbcopy
+call. By the lane's account, the earlier v3 runner asserts the old label and now
+fails by design. Open, low: a few rare look-alike closing brackets (⸥ ⸣ ⌟ ┘) are
+not removed, though the real quote still shows; a removed sender's stored name
+is shown without the id prefix other labels use; rows saved before this change
+keep their unquoted session-row and merged names; in the space they are now
+quoted, but their claimed name was cleaned the old way and can still contain 「」.
+The integration reviewer added: 』 (U+300F) belongs on the look-alike list too,
+combining marks at the start of a name can draw over NAW's opening 「 though it
+still shows, and the quoted renderer label has no unit test on main; only the
+lane's GUI assertion covers it. Not run on main: the cross-session message
+itself, which needs a message sent by hand from a session named in the runner.
+
+
+### An image in a prompt typed in the Claude terminal is shown (T-133, item 2)
+
+On Claude Code 2.1.316 and 2.1.317, when the person pasted a screenshot into a
+prompt in the Claude terminal or dragged an image file in, NAW's conversation
+showed only the text and [Image #1]. By the lane's account, a read-only probe
+showed that the plugin's prompt block holds the image while the hook NAW used
+sees only text. The plugin now sends that block's image pixels to NAW, keyed by
+the prompt id and a tag of the text, and the workspace attaches them to that
+prompt's row, including a prompt typed while Claude works; a row that has not
+arrived yet is waited for within a limit. As agreed with Claude 3 under T-99,
+the prompt row keeps its source, the two native prompt-input switches stay off
+on 2.1.316 and 2.1.317, and turn linking and machine-input classification are
+unchanged; 2.1.312 is unchanged and shows no second copy. The image is stored in
+the local native image cache, as privacy.md now says.
+
+Claude 2's lane reviewer asked for changes once, for the privacy note and for a
+plugin reload that could attach an image to the wrong row; with rows found by
+prompt id and text tag, the second round passed, and afterwards only a comment
+changed. Lane evidence: the full suite passed 2,256 checks; six mutations fail
+their tests; the native blocks script's new prompt-image mode types a prompt in
+NAW's native terminal and pastes an image path through the terminal's own input,
+without touching the clipboard, and failed before the change at the row with its
+image on 2.1.317; nothing was run before the change on 2.1.316. After it, it
+passed on real 2.1.317 and 2.1.316, and the default flow passed on 2.1.317;
+re-picked onto main as 1749707 with identical changed lines, it passed 2,270
+checks and the same runs. Open, low, an image can be lost but not misplaced: a
+queued image prompt taken into the running turn, a NAW send with the same text
+that runs first, a frame lost to a gap, and a plugin reload between the prompt
+and its block. An image it never goes to a prompt with different text or to
+another session. The same text typed twice in one turn has one row, so the
+second one's image shows on that row, and a different image that row already
+showed is then marked as changed. Not run: an image prompt typed while Claude
+works, several images in one prompt, images over 1 MB, and an image pasted from
+the clipboard; the runs pasted a file path so the clipboard stayed untouched.
+The integration reviewer also noted, from the source only: removing a session's
+records deletes its prompt images as T-140 does for tool images; pasted
+screenshots now count toward the 64 MB per-session cache, after which later
+images show as unavailable; and images still waiting for their row are limited
+by count, at most 8 prompts of 17 images in backend memory, not by time.

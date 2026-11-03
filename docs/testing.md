@@ -4445,3 +4445,56 @@ visible update kept fourteen session records with their native IDs, live process
 starts and drafts, and the seven other backends kept PID, start time and
 version; 150 seconds later they and all sixteen live native processes were
 unchanged and no move record existed.
+
+
+### Queueing a message while Claude works - alpha.171
+
+Claude 2's commit is integrated with identical changed lines. On main the full
+unit suite passes 2,261 checks without skips. After rebuilding the UI bundle,
+the native blocks script passed its default flow on real Claude Code 2.1.317,
+and its new queue mode, which sends a second message from NAW while the first
+turn's final reply is held, passed in the session chat and from a space on both
+2.1.317 and 2.1.316: the queued message ran as its own turn after the first
+reply, its reply was attached to it, from a space it was submitted once and both
+replies were attached to their own messages, and each run used three local
+responses with no paid or pbcopy call. The author's frozen stop runner,
+byte-equal to the lane copy, clicked 停止 while the message waited: in the session
+chat and from a space on 2.1.317 and in the session chat on 2.1.316, no
+unconfirmed report appeared and the session ended idle with no interrupt pending
+and no native input required. In each, the queued message's own request reached
+the local fixture 0.5 to 0.7 seconds after the click, so it ran right after the
+stop. Besides it, two local requests were counted, the held final reply among
+them, with no paid or pbcopy call. In the author lane the same runner showed the
+unconfirmed report before the fix. The session wake, reading turns, column input
+and daily use GUI scripts exit 0. The compat known-list check finds all 41
+earlier main builds of the hook since 257c523 in the upgrade list and no other
+entries.
+
+
+### Quoted cross-session sender names - alpha.171
+
+Claude 2's follow-up commit is integrated with identical changed lines on top of
+the queue commit, and the UI bundle was rebuilt. With both, the full unit suite
+passes 2,261 checks without skips, including the new cases for invisible
+characters, a claimed name that tries to close its quotes and a real name with
+brackets; the collaboration overview, multispace and session wake GUI scripts
+exit 0, and native blocks passes on real 2.1.317 with no paid calls. No
+cross-session message was sent on main: the author's frozen v4 runner waits for
+one sent by hand from a session with the name it asserts, and its lane run on
+real 2.1.317 showed the quoted name in the session row and in the space row.
+
+
+### An image in a terminal prompt - alpha.171
+
+Claude 2's commit, re-picked onto main's ca4fb5f in the author lane as 1749707
+with the reviewed changed lines, was fast-forwarded onto main unchanged, and the
+UI bundle was rebuilt. With all three commits the full unit suite passes 2,270
+checks without skips. The native blocks script's new prompt-image mode types a
+prompt into NAW's native terminal and pastes an image file path through the
+terminal's own input; it passed on real Claude Code 2.1.317 and 2.1.316: the
+prompt's conversation row showed the image, and opening it gave the pixels
+Claude received. The script reads the system clipboard's change count before and
+after and found it unchanged, and the fake pbcopy was not called. The default
+flow passed on 2.1.317, the session wake GUI script exits 0, and no run made a
+paid call. The compat known-list check finds all 42 earlier main builds of the
+hook since 257c523 in the upgrade list and no other entries.
