@@ -66,7 +66,10 @@ async function run() {
   await page.keyboard.press('Enter'); await page.locator('#notes-dialog').waitFor(); await page.locator('#cancel-notes').click();
   await hold(page.locator('#advanced-content').getByRole('button', { name: '带上协作背景…', exact: true }), () => update(b));
   await page.keyboard.press('Enter'); await page.locator('#context-dialog').waitFor();
-  assert.match(await page.locator('#context-text').inputValue(), /本会话仍参与该工作区/); await page.locator('#close-context').click();
+  // T-150: since 64420d2 the context is a snapshot; a session still in the space lists that space under its 归属.
+  const context = await page.locator('#context-text').inputValue();
+  assert.match(context, /^协作背景快照/); assert.match(context, new RegExp(`成员：[^\\n]*${b}\\n归属：[^\\n]*shared`), 'This session still belongs to the space');
+  await page.locator('#close-context').click();
   checks.push('Advanced notes/context actions retain focus through updates and open the intended local dialog without sending context');
 
   await page.locator('#room-nav').click();
