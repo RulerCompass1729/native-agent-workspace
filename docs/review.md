@@ -3672,3 +3672,73 @@ on a second run, while the committed tree passed on its first, and leaves out
 collaboration overview. Afterwards application search listed only the copy in
 /Applications. Open: T-154, T-155, T-156; daily checks of the sidebar and the
 terminal claim; the post-provider signature check.
+
+
+### A shown terminal that takes no keys says so (T-154, option A)
+
+**Source.** Review finding F3 in T-152. The user did not answer the [需用户] row within 20 minutes, so the recommendation (option A) took effect.
+
+**Change.** The status adds 「终端未接通，可点「原生终端」重试」, in one state only:
+- this window controls the session;
+- 原生终端 is the chosen view and its pane is visible;
+- the native view is not the terminal;
+- the terminal is ready;
+- no input is held and no claim is in flight;
+- the service is connected and the session is usable.
+
+**Review.** One round, PASS (claude-opus-5-5, the T-152 reviewer). The condition was checked against the not-ready path, a held input, a claim in flight, take-control, member view, startup and operateNative.
+
+**Correction (Claude 3).** I had claimed that test-compact-header:185 would change. A real run shows the mode is chat there, so it does not, and the script is unchanged.
+
+**Open.**
+- The reviewer suggests 「终端输入未接通…」 to set this apart from 「终端未连接…」; that wording is for the user to choose.
+- The suffix can linger for one round trip when a retry starts without a held input.
+- For a display that has exited but whose exit is not yet confirmed, the retry reports that state.
+- Not checked: narrow widths, the member-view display, screen-reader wording.
+
+
+### Renaming a space with 协作空间 folded (T-155)
+
+**Source.** The I153 integration review of alpha.172 found that the space's editor opened inside the row of a folded section, so it was hidden.
+
+**Change.** `openRename('room')` unfolds the section through `api.sidebar` (a saved unfold), then opens the editor.
+
+**Review.** One round, PASS (claude-opus-5-5, the T-142 reviewer).
+
+**Evidence.**
+- A new sidebar-status step fails on the old code and passes now.
+- inline-rename and sidebar-layout pass.
+- Full suite 2286/0.
+
+**Open.**
+- A second rename started during the unfold round trip can be replaced by this one.
+- The existing narrow-rail session case from the T-132 entry remains.
+- Only the heading ⋯ path is GUI-tested.
+- Integration review: the new step does not check which space's editor opened.
+
+
+### test-collaboration runs through again (T-157)
+
+**Source.** In T-149, test-collaboration stopped at :71 and had not been reaching its checks.
+
+**Change (script only).**
+- 用量 is opened from the compact session ⋯ or the space ⋯.
+- A member leaves the space by dragging its card name in the member strip.
+
+**Stale expectations translated, keeping their intent.**
+- The recipient is the inline @mention (f8d2336), so the test re-addresses before filtering.
+- The context preview lists each member (64420d2), so the check is that members are listed and the member who left is not.
+- Sends are trimmed (cleanText), so the expected text is `context.trim()`.
+- The second window opens 共享记录 before 共享笔记.
+
+**Review.** Two rounds with a fresh read-only reviewer (claude-opus-5-5).
+- **Round 1, CHANGES:** three intermediate runs never received B's reply. The cause was the author's own edit, a mid-line comment that commented out `reply()`. It is recorded with the line text and probe output, and was fixed from r7.
+- **Round 2, PASS.**
+
+**Evidence.** Two full passes in the author lane, r9 and r10; on main the integrated commit ran through as well.
+
+**Open.**
+- The recipient-empty checks at :192 and :211 now always pass. The claimed replacement, test-codex-usability:156, did not run at integration and that script stops later at :165 on hidden member tabs, and no unit test shows that leaving clears the room recipient or mention; so leaving clears a stale address has no check that currently runs (T-158).
+- The `#usage-button` branch of `openUsage` is not exercised.
+
+**Lesson.** Never append a line comment mid-line in these one-line-per-step scripts. Put comments on their own line.
