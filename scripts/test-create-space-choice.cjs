@@ -36,6 +36,7 @@ async function instrument() {
       ipcMain._invokeHandlers.set(key, async (event, ...args) => {
         const kind = name === 'spaceAction' ? (args[1] === 'join' ? 'join' : '') : name; if (kind) globalThis.t115Calls[kind]++;
         const fault = kind && globalThis.t115Faults.findIndex(f => f.kind === kind), queued = fault >= 0 ? globalThis.t115Faults.splice(fault, 1)[0] : null;
+        if (queued?.when === 'hold') await new Promise(resolve => { globalThis.t115Held = resolve; }); // released by the test
         if (queued?.when === 'before') return { ok: false, error: 'Synthetic ' + kind + ' failure' };
         const result = await original(event, ...args);
         if (queued?.when === 'after') return { ok: false, error: 'Synthetic ' + kind + ' reply lost' };
@@ -184,10 +185,13 @@ async function run() {
   await until(async () => (await page.locator('#create-error').innerText()).includes('无法确认会话是否已经建好'), 'An unknown result asks for a look');
   assert.equal(await page.locator('#chosen-folder').innerText(), unknownFolder, 'The folder is not replaced, so a retry cannot land elsewhere');
   await page.locator('#confirm-create').click();
-  await until(async () => (await page.locator('#create-error').innerText()).includes('已存在'), 'A retry stops at the folder the first attempt created');
-  // I159: that folder was made by the first attempt, so the session very likely exists; this dialog makes no third try.
-  assert.match(await page.locator('#create-error').innerText(), /会话很可能已经建好/); assert.equal(await page.locator('#chosen-folder').innerText(), unknownFolder, 'Still the same folder');
-  assert.equal(await page.locator('#confirm-create').isDisabled(), true); assert.match(await page.locator('#create-readiness').innerText(), /无法确认会话是否已经建好/);
+  // I159: the retry meets the folder the first attempt made, so the session very likely exists; no third try. I160: the
+  // service's advice to use another folder is not shown beside a locked form.
+  await until(async () => await page.locator('#confirm-create').isDisabled(), 'A retry stops at the folder the first attempt created');
+  assert.match(await page.locator('#create-error').innerText(), /会话很可能已经建好|已保留在侧栏/); assert.doesNotMatch(await page.locator('#create-error').innerText(), /请改用新目录/);
+  assert.equal(await page.locator('#chosen-folder').innerText(), unknownFolder, 'Still the same folder');
+  // Which of the two the retry reaches depends on whether a state push already listed the first session (then it is found and kept).
+  assert.equal(await page.locator('#confirm-create').isDisabled(), true); assert.match(await page.locator('#create-readiness').innerText(), /无法确认会话是否已经建好|会话已建好并保留在侧栏/);
   await page.locator('#cancel-create').click(); assert.equal((await named('结果未知')).length, 1, 'Still one session');
   // I159: with a chosen existing folder, which other sessions may share, an unknown result stops this dialog at once.
   await fault('create', 'after'); await fault('initial', 'before');
@@ -209,6 +213,28 @@ async function run() {
   assert.doesNotMatch(await page.locator('#create-error').innerText(), /可以点「仅继续加入」/); assert.equal(await page.locator('#confirm-create').isDisabled(), true);
   await page.locator('#cancel-create').click(); const [doomed] = await named('归档后加入'); assert.deepEqual(await spacesOf(doomed.id), []);
   check('When the space was archived meanwhile, the dialog says to close instead of retrying, and 仅继续加入 is off');
+
+  // 4f. I160 ①: the selection moves while an independent create is in flight (the focused member leaves its space).
+  await open('焦点成员'); const focusMember = await createdInto('焦点成员', studyId);
+  await page.locator(`[data-space-id="${studyId}"] .room-nav`).first().click(); await page.locator('#room-overview').click();
+  await page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${focusMember.id}"] .collaboration-member-name`).click();
+  await fault('create', 'hold'); await open('视图变了'); await page.locator('#confirm-create').click();
+  await until(() => app.evaluate(() => Boolean(globalThis.t115Held)), 'Create held');
+  await page.evaluate(([room, id]) => workspace.spaceAction(room, 'join', [id, false]), [studyId, focusMember.id]);
+  await until(async () => (await spacesOf(focusMember.id)).length === 0, 'The focused member left');
+  await app.evaluate(() => { const release = globalThis.t115Held; globalThis.t115Held = null; release(); });
+  await until(async () => (await named('视图变了')).length === 1, 'The held create finished');
+  await until(async () => await page.locator('#confirm-create').isDisabled(), 'The still-open dialog is stopped');
+  assert.equal(await page.locator('#create-dialog').evaluate(d => d.open), true, 'The moved selection kept the dialog open');
+  assert.match(await page.locator('#create-readiness').innerText(), /关闭对话框即可；这里不会再建一个/);
+  await page.locator('#cancel-create').click(); assert.equal((await named('视图变了')).length, 1); const [movedView] = await named('视图变了');
+  // 4f. I160 ②: no id came back, but the fresh read finds the new, working session: the dialog stops too.
+  markCreate = await calls(); await fault('create', 'after');
+  await open('找回会话'); await page.locator('#confirm-create').click();
+  await until(async () => (await page.locator('#create-error').innerText()).includes('已保留在侧栏'), 'The found session is reported kept');
+  assert.equal(await page.locator('#confirm-create').isDisabled(), true); await page.locator('#cancel-create').click();
+  assert.equal((await named('找回会话')).length, 1); const [foundAgain] = await named('找回会话');
+  check('A session from this opening stops the dialog even when the selection moved meanwhile or no id came back; the found session is not created twice');
 
   // 5. The space write happened but its reply was lost: the one new space is kept, not created again.
   let mark = await calls(); await fault('spaceCreate', 'after');
@@ -260,7 +286,7 @@ async function run() {
   check('关闭，保留结果 keeps the session outside the space and starts no further step; the next opening starts fresh');
 
   // 9. Memberships survive a whole-app reopen.
-  const expected = { [solo.id]: [], [helper.id]: [studyId], [weekend.id]: [weekendRoom.id], [chosenFolder.id]: [studyId], [copy.id]: [weekendRoom.id], [skipped.id]: [studyId], [createRetry.id]: [studyId], [createLost.id]: [createLostRooms[0].id], [readFail.id]: [studyId], [readFailSolo.id]: [], [readFailFolder.id]: [], [unknownSolo.id]: [], [unknownShared.id]: [], [doomed.id]: [], [lost.id]: [lostRooms[0].id], [spaceFail.id]: [retryRooms[0].id], [joinFail.id]: [studyId], [closed.id]: [] };
+  const expected = { [solo.id]: [], [helper.id]: [studyId], [weekend.id]: [weekendRoom.id], [chosenFolder.id]: [studyId], [copy.id]: [weekendRoom.id], [skipped.id]: [studyId], [createRetry.id]: [studyId], [createLost.id]: [createLostRooms[0].id], [readFail.id]: [studyId], [readFailSolo.id]: [], [readFailFolder.id]: [], [unknownSolo.id]: [], [unknownShared.id]: [], [focusMember.id]: [], [movedView.id]: [], [foundAgain.id]: [], [doomed.id]: [], [lost.id]: [lostRooms[0].id], [spaceFail.id]: [retryRooms[0].id], [joinFail.id]: [studyId], [closed.id]: [] };
   await app.close(); app = null; await launch();
   for (const [id, rooms] of Object.entries(expected)) assert.deepEqual(await spacesOf(id), rooms, 'Membership after reopen: ' + id);
   await page.locator(`[data-session-id="${helper.id}"]`).first().waitFor();
