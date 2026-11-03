@@ -2564,3 +2564,24 @@ text of its own; wakes from task-notification and scheduled-wakeup turns on real
 2.1.316; the installed secretary-to-main wake, until which T-100 stays open and
 the secretary's instruction to wake by message stays untrue; wakes on the space
 timeline; and older backends that still reset the shared wake boundary.
+
+
+### Integrated alpha.161 delivery
+
+A fresh read-only reviewer found no code blocker in the compatibility fix but
+held acceptance on four ledger points: by reading the code, a prompt blocked by
+the person's own settings hook still lets the next turn without a prompt of its
+own stage a wake; the refresh applies per folder, not per restarted session;
+sessions started on alpha.160 keep the wider hole too; and the open list was
+missing follow-ups the lane review had agreed. With those stated it accepted;
+the remaining code route is assigned to the author for the next batch. It
+accepted the update operator as a substitution of the alpha.160 one and found by
+reading the operator and the code that nothing in the install path refreshes a
+compatibility copy in a person's folder, given no alpha.2 retained Claude and no
+automatic move. The operator ran once. The alpha.160 post-provider signature
+check was not run before that bundle was replaced and is closed as not done.
+Open: moving the secretary's backend so its session restarts on alpha.161, after
+it ends its own background wait; a no-model probe of the wake check for Claude
+Code 2.1.312 before the main session's backend moves; the installed
+secretary-to-main wake; the blocked-prompt route; and the post-provider
+signature check for alpha.161.

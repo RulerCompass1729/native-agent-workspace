@@ -4,34 +4,43 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.161 removes the refusal that blocked agent wakes from the
-secretary. Its working folder still held a compatibility plugin that NAW had
-written there for retained sessions, Claude Code loads it too, and its hook
-refused every wake. That copy now leaves the wake tool to the plugin NAW
-launches Claude with. Whenever an alpha.161 backend starts or resumes Claude in
-a folder, or an alpha.161 window connects input to a retained Claude there,
-NAW's own byte-exact old copy in that folder is refreshed; a launch never
-creates one; connecting a retained Claude still installs it as before, and
-edited or unsafe copies are left alone. After that, any later process in the
-folder loads the new copy, whichever backend starts it. Only the turn linked to
-the last submitted prompt can stage a wake, so a `!` command after a typed
-prompt that already started its turn no longer can; one route stays open by
-reading the code: if the person's own settings hook blocks a prompt, the next
-turn without a prompt of its own, such as a `!` command, can still stage one.
-Sessions started on alpha.159 or alpha.160 backends keep the wider `!` hole
-until a backend running alpha.161 restarts them. For the secretary that means
-moving its backend again, after it ends its own background wait and scheduled
-wakeups. A real installed wake from the secretary, on Claude Code 2.1.316, to
-the main session, on 2.1.312 and another backend, has not run, nor has a wake
-from a task-notification or scheduled-wakeup turn, and wakes do not yet appear
-on the space timeline. The change was reviewed in its author lane, which ran
-real Claude Code 2.1.316 against local fixed replies before and after the fix,
-and is integrated with identical changed lines. The full unit suite passes 2,154
-checks; the session wake GUI script exits 0 but runs no real provider, so it
-covers neither the refresh nor the new check. Daily delivery remains pending;
-current daily remains alpha.160.
+Current daily GUI: alpha.161, committed build source `9c78f558`. It removes the
+refusal that blocked agent wakes from the secretary. The secretary's running
+process, started at 15:28 on an alpha.160 backend, keeps the stale copy loaded,
+so its wakes stay refused until its session restarts on an alpha.161 backend.
+Its working folder still held a compatibility plugin that NAW had written there
+for retained sessions, Claude Code loads it too, and its hook refused every
+wake. That copy now leaves the wake tool to the plugin NAW launches Claude with.
+Whenever an alpha.161 backend starts or resumes Claude in a folder, or an
+alpha.161 window connects input to a retained Claude there, NAW's own byte-exact
+old copy in that folder is refreshed; a launch never creates one; connecting a
+retained Claude still installs it as before, and edited or unsafe copies are
+left alone. After that, any later process in the folder loads the new copy,
+whichever backend starts it. Only the turn linked to the last submitted prompt
+can stage a wake, so a `!` command after a typed prompt that already started its
+turn no longer can; one route stays open by reading the code: if the person's
+own settings hook blocks a prompt, the next turn without a prompt of its own,
+such as a `!` command, can still stage one. Sessions started on alpha.159 or
+alpha.160 backends keep the wider `!` hole until a backend running alpha.161
+restarts them. For the secretary that means moving its backend again, after it
+ends its own background wait and scheduled wakeups. A real installed wake from
+the secretary, on Claude Code 2.1.316, to the main session, on 2.1.312 and
+another backend, has not run, nor has a wake from a task-notification or
+scheduled-wakeup turn, and wakes do not yet appear on the space timeline. The
+change was reviewed in its author lane, which ran real Claude Code 2.1.316
+against local fixed replies before and after the fix, and is integrated with
+identical changed lines. The full unit suite passes 2,154 checks; the session
+wake GUI script exits 0 but runs no real provider, so it covers neither the
+refresh nor the new check. The signed bundle passed one isolated launch. The
+ordinary visible update kept fourteen session records with their native IDs,
+live processes and drafts; the empty active backend was replaced in place, and
+the seven other backends kept PID, start time and version, also 150 seconds
+later, long enough for two automatic-move checks, with no move started. The
+update itself started or resumed no Claude, so it refreshed no copy; an
+author-run check at 16:14 found no session on the alpha.161 backend and the
+shared folder's compatibility hook still the one written on 10-26.
 
-Current daily GUI: alpha.160, committed build source `0f3a541a`. It carries six
+The prior alpha.160 task, source `0f3a541a`, remains qualified. It carries six
 reviewed changes. For Claude Code 2.1.316 sessions, the conversation view shows
 Claude's explanations between steps, which 2.1.316 records as thinking blocks
 and the terminal draws as text, where the terminal shows them; it shows a `!`
@@ -48,28 +57,28 @@ scripts run to the end again.
 The explanation, `!` command, turn head and clock changes run in the bridge
 plugin and the backend, so they reach only 2.1.316 sessions started on an
 alpha.160 backend. After this update that is only the empty active backend,
-which was replaced in place; the secretary's and the main session's backends run
-alpha.159 and record terminal input, and the main session's backend also holds a
-Codex session, so neither moves automatically and each needs the click again;
-the click is refused while a Claude session there has a background task or
-scheduled wakeup, including an agent's own background wait, so that agent must
-end its wait first. The menus, notices and paste guard are window code and apply
-to every session, and Codex rows that read You ran are labelled 你 in session
-views; on alpha.160 backends shared replies also leave out every provider's
-own-command rows, Codex included. Unverified: none of the 2.1.316 changes has
-run on a real `!` command or a real multi-step turn; their checks used the real
-plugin with synthetic engine events and no model. The cost of the new drawing
-hook to terminal responsiveness is unmeasured. Explanations are not shown in
-spaces or for turns the terminal does not draw, and earlier turns are not filled
-in; messages inserted while Claude works are still not shown on 2.1.316. Each
-change was reviewed in its author lane and is integrated with identical changed
-lines. The full unit suite passes 2,144 checks, and eleven GUI scripts exit 0,
-the column input script in all four of its cases. The signed bundle passed one
-isolated launch. The ordinary visible update kept fourteen session records with
-their native IDs, live processes and drafts; the seven other backends kept PID,
-start time and version, also 150 seconds later, long enough for two
-automatic-move checks, with no move started. None of this batch's behaviours has
-yet been used or checked in the daily app.
+which was replaced in place; at that delivery the secretary's and the main
+session's backends ran alpha.159 and recorded terminal input, and the main
+session's backend also holds a Codex session, so neither moves automatically and
+each needs the click again; the click is refused while a Claude session there
+has a background task or scheduled wakeup, including an agent's own background
+wait, so that agent must end its wait first. The menus, notices and paste guard
+are window code and apply to every session, and Codex rows that read You ran are
+labelled 你 in session views; on alpha.160 backends shared replies also leave out
+every provider's own-command rows, Codex included. Unverified: none of the
+2.1.316 changes has run on a real `!` command or a real multi-step turn; their
+checks used the real plugin with synthetic engine events and no model. The cost
+of the new drawing hook to terminal responsiveness is unmeasured. Explanations
+are not shown in spaces or for turns the terminal does not draw, and earlier
+turns are not filled in; messages inserted while Claude works are still not
+shown on 2.1.316. Each change was reviewed in its author lane and is integrated
+with identical changed lines. The full unit suite passes 2,144 checks, and
+eleven GUI scripts exit 0, the column input script in all four of its cases. The
+signed bundle passed one isolated launch. The ordinary visible update kept
+fourteen session records with their native IDs, live processes and drafts; the
+seven other backends kept PID, start time and version, also 150 seconds later,
+long enough for two automatic-move checks, with no move started. None of this
+batch's behaviours has yet been used or checked in the daily app.
 
 The prior alpha.159 task, source `cc2c4f5c`, remains qualified. It carries six
 reviewed changes. Sidebar rows take two lines, with the name and version mark

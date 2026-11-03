@@ -4101,3 +4101,21 @@ runs were not repeated on main. The retained-session native script needs Claude
 Code 2.1.302, which this machine no longer has, so it did not run. An author-run
 check compared every compatibility output of the bridge hook on main since the
 first install with the refresh's known list; none is missing.
+
+The committed alpha.161 tree passes the same 2,154 unit checks. The signed
+bundle, which includes the new compatibility module, started once on an empty
+synthetic profile through its own service bootstrap and kept its strict
+signature and CDHash; no session or provider started. Before quitting, the
+operator required that no retained backend qualified for an automatic move; the
+active backend had no sessions and was replaced in place. The ordinary visible
+update kept fourteen session records with their native IDs, live process starts
+and drafts, and the seven other backends kept PID, start time and version; 150
+seconds later they and all sixteen live native processes were unchanged and no
+move record existed. The update itself started or resumed no Claude; an
+author-run read-only check at 16:14 found no session on the alpha.161 backend
+and the shared folder's compatibility hook unchanged since 10-26, so the
+refresh, the new check, a real wake and the installed signature after a provider
+starts from this bundle are unverified. Correction to alpha.160: the person
+moved the secretary's backend to alpha.160 at 15:28, so a provider did start
+from that bundle; its signature was not checked after that before this update
+replaced it, and that check can no longer be made.
