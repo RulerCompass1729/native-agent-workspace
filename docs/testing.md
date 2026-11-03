@@ -4627,3 +4627,10 @@ at alpha.173. On main the full unit suite passes 2,286 checks without skips and
 the name check reports nothing missing. After rebuilding the UI bundle, control
 focus, privacy boundaries and room send exit 0 without model calls, and the
 system clipboard's change count stayed at 268 before and after each.
+
+Claude 2's second T-150 commit, which changes the codex usability script only,
+is integrated with identical changed lines. On main the full unit suite passes
+2,286 checks without skips, the name check reports nothing missing, and after
+rebuilding the UI bundle codex usability exits 0 without model calls, by its fixture that replaces native starts with synthetic runtimes, with the
+system clipboard's change count at 268 before and after. The daily app stays at
+alpha.173.
