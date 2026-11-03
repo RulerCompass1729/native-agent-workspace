@@ -32,6 +32,9 @@ let panorama, panoramaOrigin, roomReturnReading;
 let panoramaView = { layout: 'list', query: '', spaceId: '', top: 0, returning: false };
 let spaceId = 'shared', sidebarView = 'flat', hoverSpace = '';
 let sidebarCollapsedGroups = new Set();
+// T-135: each grid column's terminal height, by session, saved with this window's view.
+let columnTerminalHeights = {};
+const COLUMN_TERMINAL = { initial: 112, min: 64, most: 4000, step: 16, conversation: 80 };
 let roomViews = Object.create(null);
 const roomHistories = new Map(), spaceRows = new Map(), sidebarGroups = new Map();
 const inSpace = (s, id = spaceId) => window.nativeWorkspaceSpaces.isMember(s, id);
@@ -303,19 +306,94 @@ function renderColumnInput(host, record, visible) {
   if (binding !== soloComposer) {
     binding.column = true; binding.visible = visible;
     if (wasVisible && !visible) { binding.revision++; binding.resizeAllowed = false; cancelViewInput(terminals.get(record.id)); binding.ui.suspend(); const entry = terminals.get(record.id); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } }
-    if (visible) { if (binding.nativeHost.parentElement !== host) host.append(binding.nativeHost); if (binding.ui.form.parentElement !== host) host.append(binding.ui.form); }
+    if (visible) {
+      if (binding.nativeHost.parentElement !== host) host.append(binding.nativeHost); if (binding.ui.form.parentElement !== host) host.append(binding.ui.form);
+      const sash = columnTerminalSash(binding);
+      if (sash.nextSibling !== binding.nativeHost) host.insertBefore(sash, binding.nativeHost);
+    }
     else if (binding.ui.form.parentElement !== composerParking) composerParking.append(binding.ui.form);
     updateSessionComposer(binding, record, true);
   }
   const nativeVisible = visible && record.view === 'terminal' && binding !== soloComposer;
   binding.nativeVisible = nativeVisible; binding.nativeHost.hidden = !nativeVisible;
+  if (binding.nativeSash) {
+    binding.nativeSash.hidden = !nativeVisible;
+    binding.nativeSash.setAttribute('aria-label', `调整 ${participantLabel(record, state.sessions)} 的终端高度`);
+    if (!nativeVisible) binding.terminalDrag = null;
+    else if (!binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(record.id));
+  }
   if (nativeVisible && nativeUsable(record) && record.terminalState?.alive) ensureTerminal(record.id).catch(error => toast(error.message));
   syncTerminalMount(record.id);
   return nativeVisible;
 }
+// T-135: a column's terminal can be made taller or shorter by dragging the line above it or
+// with the keys. While the person changes it, it stays between 64px and the height that leaves
+// the conversation 80px and the column's input whole; on release the native terminal is fitted once.
+function columnTerminalLimits(binding) {
+  const input = binding.columnHost, reader = input?.closest('.collaboration-member-reader');
+  // Everything else in the column below the conversation: the line, the input, gaps and any footer.
+  const others = input ? input.offsetHeight - binding.nativeHost.offsetHeight + (reader.querySelector('.column-native-footer:not([hidden])')?.offsetHeight || 0) : 0;
+  const room = reader ? reader.clientHeight - COLUMN_TERMINAL.conversation - others : COLUMN_TERMINAL.initial;
+  return { min: COLUMN_TERMINAL.min, max: Math.min(COLUMN_TERMINAL.most, Math.max(COLUMN_TERMINAL.min, Math.floor(room))) };
+}
+function columnTerminalHeight(id) { return Number.isSafeInteger(columnTerminalHeights[id]) ? columnTerminalHeights[id] : COLUMN_TERMINAL.initial; }
+// The most recently changed heights are kept, at most 200 (the saved view refuses more).
+function rememberColumnTerminalHeight(id, value) {
+  delete columnTerminalHeights[id]; columnTerminalHeights[id] = value;
+  const ids = Object.keys(columnTerminalHeights); for (const old of ids.slice(0, Math.max(0, ids.length - 200))) delete columnTerminalHeights[old];
+}
+function fitColumnTerminal(binding) { binding.resizeAllowed = true; fitTerminal(binding.id); revealTerminalCursor(terminals.get(binding.id)); }
+// The tallest is what the limits allow, but never below the old 112px, so a small window
+// keeps the terminal as it was before heights could change. 'adjust' and 'save' are the
+// person's changes; 'save' also remembers the height and fits the native terminal to it. A
+// 'redraw' shows the remembered height and never resizes the native terminal: an undersized
+// box shows the terminal through its own scrolling, with the cursor kept in view.
+function columnTerminalTallest(binding) { return Math.max(columnTerminalLimits(binding).max, COLUMN_TERMINAL.initial); }
+function applyColumnTerminalHeight(binding, height, mode = 'redraw') {
+  const { min } = columnTerminalLimits(binding), top = columnTerminalTallest(binding);
+  const value = Math.max(min, Math.min(top, Math.round(height))), before = binding.terminalHeight;
+  binding.terminalHeight = value; binding.nativeHost.style.height = `${value}px`;
+  const sash = binding.nativeSash;
+  if (sash) { sash.setAttribute('aria-valuemin', String(min)); sash.setAttribute('aria-valuemax', String(top)); sash.setAttribute('aria-valuenow', String(value)); }
+  if (mode === 'save') { rememberColumnTerminalHeight(binding.id, value); attempt(persistView); fitColumnTerminal(binding); }
+  else if (mode === 'redraw' && before !== undefined && before !== value) revealTerminalCursor(terminals.get(binding.id));
+  return value;
+}
+function columnTerminalSash(binding) {
+  if (binding.nativeSash) return binding.nativeSash;
+  const sash = node('div', undefined, 'column-terminal-sash'); sash.tabIndex = 0;
+  sash.setAttribute('role', 'separator'); sash.setAttribute('aria-orientation', 'horizontal');
+  // The drag is kept on the binding so a redraw in the middle of it leaves the dragged height alone.
+  const finish = event => {
+    const drag = binding.terminalDrag; if (drag?.pointerId !== event.pointerId) return;
+    binding.terminalDrag = null; if (drag.value !== undefined && binding.nativeVisible) applyColumnTerminalHeight(binding, drag.value, 'save');
+  };
+  sash.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    event.preventDefault(); sash.setPointerCapture(event.pointerId);
+    binding.terminalDrag = { pointerId: event.pointerId, y: event.clientY, height: binding.terminalHeight ?? columnTerminalHeight(binding.id) };
+  });
+  sash.addEventListener('pointermove', event => {
+    const drag = binding.terminalDrag; if (drag?.pointerId !== event.pointerId) return;
+    if (!(event.buttons & 1)) return finish(event);
+    drag.value = applyColumnTerminalHeight(binding, drag.height + drag.y - event.clientY, 'adjust');
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) sash.addEventListener(type, finish);
+  sash.addEventListener('keydown', event => {
+    const now = binding.terminalHeight ?? columnTerminalHeight(binding.id);
+    const next = { ArrowUp: now + COLUMN_TERMINAL.step, ArrowDown: now - COLUMN_TERMINAL.step, Home: columnTerminalTallest(binding), End: COLUMN_TERMINAL.min }[event.key];
+    if (next === undefined) return;
+    event.preventDefault(); applyColumnTerminalHeight(binding, next, 'save');
+  });
+  return binding.nativeSash = sash;
+}
+// A smaller window lowers a tall terminal (not below 112px) so the input stays in the column.
+window.addEventListener('resize', () => {
+  for (const binding of sessionComposers.values()) if (columnTerminalBinding(binding.id) && !binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(binding.id));
+});
 function removeColumnInput(id) {
   const binding = sessionComposers.get(id); if (!binding) return;
-  binding.revision++; binding.visible = binding.nativeVisible = false; binding.resizeAllowed = false;
+  binding.revision++; binding.visible = binding.nativeVisible = false; binding.resizeAllowed = false; binding.terminalDrag = null;
   binding.ui.suspend(); if (binding !== soloComposer) composerParking.append(binding.ui.form);
   const entry = terminals.get(id); cancelViewInput(entry); if (entry) { cancelColumnComposition(entry); entry.term.blur(); } syncTerminalMount(id);
 }
@@ -725,7 +803,7 @@ function projectSpace(next) {
     return { ...s, peerIdentity: { ...identity, ...(spaceId === 'shared' ? {} : { roomId: spaceId, roomMemberRevision: pairRevision(s) }) }, sharedActivity: s.sharedActivities?.[spaceId] || (spaceId === 'shared' ? s.sharedActivity : null) };
   }), room: room || { id: spaceId, name: '空间资料未能读取', archived: true, unavailable: true, messages: [], events: [], notes: '', files: [], memberOrder: [] } };
 }
-function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarCollapsedGroups: [...sidebarCollapsedGroups], roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
+function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarCollapsedGroups: [...sidebarCollapsedGroups], columnTerminalHeights, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 // Opening a space never changes which sessions the sidebar lists (T-132).
 async function selectSpace(id) {
   if (!spaceRecord(id)) throw Error('这个空间的资料尚不可用，草稿保留。');
@@ -1383,6 +1461,7 @@ function openMemberMenu(id, anchor) {
   const close = ui.menu({
     contextElement: anchor,
     items: [{ id: 'detach', label: '脱出协作' }, { id: 'copy-id', label: '复制完整 NAW ID' },
+      ...(columnTerminalBinding(id) ? [{ id: 'terminal-height-all', label: '所有列都用这个终端高度' }] : []),
       ...(reorder && index > 0 ? [{ id: 'earlier', label: '上移' }] : []),
       ...(reorder && index < people.length - 1 ? [{ id: 'later', label: '下移' }] : [])],
     getAnchorRect: () => {
@@ -1397,6 +1476,17 @@ function openMemberMenu(id, anchor) {
     onSelect: action => {
       if (key !== memberMenuKey(id)) return toast('成员已变化，请重新打开菜单。');
       if (action === 'copy-id') attempt(() => api.copy(id));
+      else if (action === 'terminal-height-all') {
+        const source = columnTerminalBinding(id); if (!source) return toast('这一列现在没有显示终端，高度未更改。');
+        const height = source.terminalHeight ?? columnTerminalHeight(id), lower = [];
+        for (const member of orderedMembers()) {
+          const binding = columnTerminalBinding(member.id), value = binding ? applyColumnTerminalHeight(binding, height, 'adjust') : height;
+          rememberColumnTerminalHeight(member.id, value); if (binding) fitColumnTerminal(binding);
+          if (value !== height) lower.push(participantLabel(member, state.sessions));
+        }
+        attempt(persistView);
+        toast(lower.length ? `终端高度改为 ${height} 像素；${lower.join('、')} 放不下，用了能放下的最高值。` : `所有列的终端高度都改为 ${height} 像素。`);
+      }
       else if (action === 'detach') attempt(() => detach(id));
       else if (action === 'earlier' || action === 'later') {
         const people = orderedMembers(), index = people.findIndex(s => s.id === id), target = people[index + (action === 'earlier' ? -1 : 1)];
@@ -3725,6 +3815,7 @@ attempt(async () => {
   if (!roomViews.shared) roomViews.shared = Object.fromEntries(roomViewFields.filter(k => state.viewState[k] !== undefined).map(k => [k, state.viewState[k]]));
   spaceId = state.viewState.spaceId || 'shared'; sidebarView = state.viewState.sidebarView || 'flat';
   sidebarCollapsedGroups = new Set(state.viewState.sidebarCollapsedGroups || []);
+  columnTerminalHeights = { ...(state.viewState.columnTerminalHeights || {}) };
   state = projectSpace(state); const savedRoomView = roomViews[spaceId] || {};
   owner = state.owner; folder = state.defaultWorkspace; preference = state.viewState.preference || 'terminal'; mode = state.viewState.mode || preference;
   terminalLayout = ['hidden', 'split', 'maximized'].includes(state.viewState.terminalLayout) ? state.viewState.terminalLayout : 'split';

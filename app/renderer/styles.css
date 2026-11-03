@@ -462,7 +462,13 @@ header h1, header p { overflow-wrap: anywhere; }
 .collaboration-member-input .composer-footer{flex-wrap:wrap;gap:3px;justify-content:flex-end}
 .collaboration-member-input .session-compose-hint{flex:1 0 100%;font-size:12px;line-height:16px;max-height:32px;overflow:auto}
 .collaboration-member-input .composer-footer button{padding:3px 5px;font-size:12px;line-height:18px;min-width:0;white-space:normal}
-.column-native-host{height:112px;min-height:112px;min-width:0;background:#15191f;overflow:hidden}
+.column-native-host{height:112px;min-height:64px;min-width:0;background:#15191f;overflow:hidden}
+/* T-135: the line above a column's terminal changes its height by dragging or with the arrow keys. */
+.column-terminal-sash{height:8px;flex:none;position:relative;cursor:row-resize;touch-action:none;user-select:none;outline-offset:-2px}
+.column-terminal-sash::before{content:'';position:absolute;left:8px;right:8px;top:3px;border-top:1px solid var(--border)}
+.column-terminal-sash:hover::before,.column-terminal-sash:focus-visible::before{border-color:var(--ink);border-top-width:2px}
+.column-terminal-sash:focus-visible{outline:2px solid var(--ink)}
+.column-terminal-sash[hidden]{display:none}
 .column-native-host .terminal-host,.column-native-host .terminal-surface{width:100%;height:100%;min-height:0;margin:0;padding:0}
 .column-native-host .terminal-surface{overflow:auto}
 .column-native-host .terminal-input-recovery{position:absolute;inset:0;z-index:4;overflow:auto;padding:4px;background:var(--surface)}

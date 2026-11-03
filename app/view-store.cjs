@@ -25,6 +25,8 @@ function validViews(views) {
     if (view.sidebarView !== undefined && !['flat', 'grouped'].includes(view.sidebarView)) return false;
     if (view.sidebarSpaceFilter !== undefined && view.sidebarSpaceFilter !== '' && !roomId(view.sidebarSpaceFilter)) return false;
     if (view.sidebarCollapsedGroups !== undefined && (!Array.isArray(view.sidebarCollapsedGroups) || view.sidebarCollapsedGroups.length > 1000 || view.sidebarCollapsedGroups.some(id => id !== 'independent' && !roomId(id)) || new Set(view.sidebarCollapsedGroups).size !== view.sidebarCollapsedGroups.length)) return false;
+    if (view.columnTerminalHeights !== undefined && (!object(view.columnTerminalHeights) || Object.keys(view.columnTerminalHeights).length > 200 ||
+        Object.entries(view.columnTerminalHeights).some(([id, height]) => !text(id, 100) || !id || !Number.isSafeInteger(height) || height < 32 || height > 4000))) return false;
     if (view.panorama !== undefined) {
       const p = view.panorama;
       if (!object(p) || Object.keys(p).some(key => !['layout', 'query', 'spaceId', 'top', 'returning', 'focusId'].includes(key)) ||
