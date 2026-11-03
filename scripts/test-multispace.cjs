@@ -26,7 +26,8 @@ const snapshot = () => client.call('initial');
 const members = (s, id) => s.sessions.filter(r => r.roomIds ? r.roomIds.includes(id) : id === 'shared' && r.roomId === id);
 const roomRow = id => page.locator(`[data-space-id="${id}"]`);
 async function open(id, click = true) {
-  if (click) await roomRow(id).locator('.room-nav').click();
+  // T-145: in the grouped view a space is opened from its group heading; the 协作空间 rows are not repeated there.
+  if (click) await (await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true' ? page.locator(`#session-list [data-session-group="${id}"] .session-space-heading`) : roomRow(id).locator('.room-nav')).click();
   else await page.evaluate(id => workspace.viewState({ selected: 'room', mode: 'chat', spaceId: id }), id);
   await until(async () => (await page.evaluate(() => workspace.initial())).viewState.spaceId === id, 'Window space selection persisted');
 }
@@ -162,8 +163,8 @@ async function run() {
     await second.locator(`[data-space-id="${b}"] .room-nav`).click(); await second.locator('#shared-input').fill('Second window B draft');
     assert.equal(await page.locator('#shared-input').inputValue(), 'A independent unsent'); await second.close();
   });
-  await flow('13 drag adds membership, preserves old space and undo removes only this addition', async () => { await page.locator(`[data-session-group="shared"] [data-session-row="${ids[3]}"] .session-link`).dragTo(roomRow(a).locator('.room-nav')); await until(async () => members(await snapshot(), a).some(s => s.id === ids[3]), 'Drag add acknowledged'); assert.ok(members(await snapshot(), 'shared').some(s => s.id === ids[3])); await page.getByRole('button', { name: '撤销加入「Research A」', exact: true }).click(); await until(async () => !members(await snapshot(), a).some(s => s.id === ids[3]), 'Undo exact addition');
-    await page.locator(`[data-session-group="shared"] [data-session-row="${ids[3]}"] .session-link`).dragTo(roomRow(a).locator('.room-nav')); await page.getByRole('button', { name: '撤销加入「Research A」', exact: true }).waitFor();
+  await flow('13 drag adds membership, preserves old space and undo removes only this addition', async () => { await page.locator(`[data-session-group="shared"] [data-session-row="${ids[3]}"] .session-link`).dragTo(page.locator(`#session-list [data-session-group="${a}"] .session-space-heading`)) /* T-145: in the grouped view the space's group is its row */; await until(async () => members(await snapshot(), a).some(s => s.id === ids[3]), 'Drag add acknowledged'); assert.ok(members(await snapshot(), 'shared').some(s => s.id === ids[3])); await page.getByRole('button', { name: '撤销加入「Research A」', exact: true }).click(); await until(async () => !members(await snapshot(), a).some(s => s.id === ids[3]), 'Undo exact addition');
+    await page.locator(`[data-session-group="shared"] [data-session-row="${ids[3]}"] .session-link`).dragTo(page.locator(`#session-list [data-session-group="${a}"] .session-space-heading`)) /* T-145: in the grouped view the space's group is its row */; await page.getByRole('button', { name: '撤销加入「Research A」', exact: true }).waitFor();
     await page.evaluate(async ({ id, space }) => { await workspace.spaceAction(space, 'join', [id, false]); await workspace.spaceAction(space, 'join', [id, true]); }, { id: ids[3], space: a });
     await page.getByRole('button', { name: '撤销加入「Research A」', exact: true }).click(); await page.locator('#toast-text').filter({ hasText: '这次撤销没有执行' }).waitFor();
     assert.ok(members(await snapshot(), a).some(s => s.id === ids[3]));
@@ -197,8 +198,9 @@ async function run() {
     await fixture('storageRecovered', undefined, undefined, 't69'); await page.locator('#clear-shared-history').click();
     await until(async () => (await snapshot()).rooms.find(r => r.id === b).messages.length === 0, 'Only B cleared'); await page.locator('#close-privacy').click();
     assert.ok((await snapshot()).rooms.find(r => r.id === a).messages.some(m => m.text === 'Original A answer only'));
-    await roomRow(b).locator('.session-more').click(); await page.getByRole('menuitem', { name: '归档工作区', exact: true }).click();
-    await page.locator('#archive-button').click(); await page.locator(`[data-archived-room="${b}"]`).getByRole('button', { name: '恢复工作区', exact: true }).click(); await roomRow(b).waitFor();
+    // T-145: in the grouped view a space's ⋯ is on its group heading.
+    await (await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true' ? page.locator(`#session-list [data-session-group="${b}"] .space-group-more`) : roomRow(b).locator('.session-more')).click(); await page.getByRole('menuitem', { name: '归档工作区', exact: true }).click();
+    await page.locator('#archive-button').click(); await page.locator(`[data-archived-room="${b}"]`).getByRole('button', { name: '恢复工作区', exact: true }).click(); await (await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true' ? page.locator(`#session-list [data-session-group="${b}"]`) : roomRow(b)).waitFor(); // T-145: grouped shows the restored space as its group
     await page.locator('#sessions-flat').click();
     await page.locator(`[data-session-row="${ids[6]}"] .session-more`).click(); await page.getByRole('menuitem', { name: '归档会话', exact: true }).click();
     await page.locator(`[data-archived-session="${ids[6]}"]`).getByRole('button', { name: '恢复会话', exact: true }).click();

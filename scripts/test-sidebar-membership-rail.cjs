@@ -119,9 +119,13 @@ require(${JSON.stringify(path.join(root, 'app/main.cjs'))});`);
     assert.ok(await sidebar().locator('.session-row').count() > 7); assert.ok(await sidebar().locator('.session-space-group h3:visible').count() >= 2);
   });
   await group('04 grouped rail remains compact and returns to the same grouped membership and positive drafts', async () => {
-    const count = await sidebar().locator('.session-row').count(); await collapse(); await hiddenRailControls(); await capture('04-grouped-rail');
+    // Which group each row sits in is the grouped view's membership; it must be the same after the rail.
+    const placement = () => sidebar().locator('.session-row').evaluateAll(rows => rows.map(r => [r.closest('[data-session-group]')?.dataset.sessionGroup, r.dataset.sessionRow]).sort().map(p => p.join(' ')));
+    const before = await placement(), count = before.length; assert.ok(before.every(p => !p.startsWith('undefined')));
+    await collapse(); await hiddenRailControls(); await capture('04-grouped-rail');
     await expand(); assert.equal(await sidebar().locator('.session-row').count(), count); assert.equal(await page.locator('#sessions-grouped').getAttribute('aria-pressed'), 'true');
-    assert.equal(await page.locator('#new-space').isVisible(), true); assert.ok(await sidebar().locator('.session-space-badges:visible').count() >= 7);
+    assert.deepEqual(await placement(), before, 'Every session is back in the same groups');
+    assert.equal(await page.locator('#new-space').isVisible(), true); assert.equal(await sidebar().locator('.session-space-badges:visible').count(), 0, 'The grouped view does not repeat the space as a label (T-144)');
   });
   await group('05 folded groups still list their sessions in the narrow rail, which has no headings to unfold from (T-132)', async () => {
     await expand(); await page.locator('#sessions-grouped').click(); const toggles = sidebar().locator('.session-space-toggle'), total = await toggles.count(); assert.ok(total >= 3);

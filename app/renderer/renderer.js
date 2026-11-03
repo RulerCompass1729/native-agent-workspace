@@ -1514,7 +1514,7 @@ function backendVersionNotice(record, applicationVersion) {
   const alpha = value => value?.match(/^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-alpha\.(0|[1-9]\d*)$/);
   const from = alpha(backend), to = alpha(application);
   const old = from && to && from[1] === to[1] && Number.isSafeInteger(Number(from[2])) && Number.isSafeInteger(Number(to[2])) && Number(from[2]) < Number(to[2]);
-  return backend ? { kind: old ? 'old' : 'different', label: old ? '旧后台' : '版本不同', title: `后台 ${backend} · 应用 ${application || '版本未报告'}；${old ? '更新这个会话的后台后使用新版。' : '不能据此判断后台较旧。'}后台仅报告版本号。` }
+  return backend ? { kind: old ? 'old' : 'different', label: old ? '旧后台' : '版本不同', title: `后台 ${backend} · 应用 ${application || '版本未报告'}；${old ? '这个会话在旧版后台上，可在会话 ⋯ 里「结束并更新这个后台…」后使用新版。' : '不能据此判断后台较旧。'}后台仅报告版本号。` }
     : { kind: 'unknown', label: '版本未知', title: '这个会话的后台未报告版本，不能用新会话后台的版本代替。' };
 }
 function backendVersionSummary(records, applicationVersion) {
@@ -1550,11 +1550,15 @@ function sidebarPresentation(record) {
     ? facts.compactChild : base + (childrenActive ? ' · ' + facts.compactChild : '')) + recoveryStatusSuffix(recovery);
   const root = record.state === 'idle' && !reported && fleet.observed && live && !record.nativeContextPending && !waiting ? '主会话就绪' : base;
   const full = [root, facts.child, record.provider === 'claude' && record.nativeInputRequired && 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；这里的草稿保留，不会自动发送。'].filter(Boolean).join(' · ') + recoveryStatusSuffix(recovery);
-  const tone = !live || record.nativeContextPending ? 'disconnected' : waiting || recovery || fleet.unknown || record.state === 'error'
+  // Red (approval) is only for something that needs the person or failed (T-145): sub-tasks whose end was
+  // not observed are not that. An idle row with them, or with unconfirmed background work, gets the grey
+  // hollow mark and a ◌ in the rail (? is the rail's mark for an unreported backend version), so a folded
+  // group does not count it as needing attention.
+  const tone = !live || record.nativeContextPending ? 'disconnected' : waiting || recovery || record.state === 'error'
     ? 'approval' : fleet.running || ['working', 'starting', 'background'].includes(record.state) ? 'working' : record.state === 'idle' ? 'idle' : record.state || 'disconnected';
-  // An idle row with reported or unconfirmed background work is not plain ready.
-  const marker = tone === 'approval' || tone === 'disconnected' || workTone === 'bg-unknown' ? '!' : tone === 'working' || workTone === 'bg-work' ? '…' : '○';
-  return { compact, full, tone, workTone, marker,
+  const childTone = workTone || (tone === 'idle' && fleet.unknown ? 'bg-unknown' : '');
+  const marker = tone === 'approval' || tone === 'disconnected' ? '!' : tone === 'working' || childTone === 'bg-work' ? '…' : childTone === 'bg-unknown' ? '◌' : '○';
+  return { compact, full, tone, workTone: childTone, marker,
     detail: Boolean(waiting || childrenActive || reported || recovery || !['idle', 'working', 'starting'].includes(record.state) || !live || record.nativeContextPending || record.nativeInputRequired) };
 }
 function sidebarDetails(record) {
@@ -1669,6 +1673,8 @@ async function moveSidebarSession(id, target, after) {
   await api.sidebar({ type: 'move', id, target, after });
 }
 function renderSidebarGroups() {
+  // T-145: the grouped view's headings are the space list; the layout gives 协作空间 only its content height.
+  $('workspace-group').dataset.groupedSessions = String(sidebarView === 'grouped');
   const visible = state.sessions.filter(s => !s.archived);
   const working = visible.filter(s => s.state === 'working').length;
   $('session-group-summary').textContent = `${visible.length}${working ? ` · ${working} 工作中` : ''}`;
@@ -1712,7 +1718,8 @@ function renderSessions() {
   if (grouped) {
     const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, name: r.name, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
     // Every listed session appears at least once: a session left only in an archived or unknown space counts as independent.
-    groups.push({ id: '', name: '独立会话', people: visible.filter(s => !groups.some(group => inSpace(s, group.id))) });
+    const independent = visible.filter(s => !groups.some(group => inSpace(s, group.id)));
+    if (independent.length) groups.push({ id: '', name: '独立会话', people: independent });
     groups.forEach((group, index) => {
       let entry = sidebarGroups.get(group.id);
       if (!entry) {
@@ -1721,10 +1728,25 @@ function renderSessions() {
         const toggle = button('▾', () => toggleSidebarGroup(group.id), 'session-space-toggle'), attention = node('span', undefined, 'session-space-attention');
         body.id = `session-space-members-${crypto.randomUUID()}`; attention.id = `${body.id}-attention`;
         toggle.setAttribute('aria-controls', body.id); heading.append(toggle, title, attention); element.append(heading, body); element.dataset.sessionGroup = group.id || 'independent';
-        if (group.id) { bindSpaceHighlight(element, group.id); dropTarget(element, true, group.id); }
-        entry = { element, title, body, toggle, attention }; sidebarGroups.set(group.id, entry);
+        let more = null;
+        if (group.id) {
+          more = button('⋯', () => openRoomMenu(undefined, more, group.id), 'session-more space-group-more'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
+          // As on the 协作空间 row: right-click or Shift+F10 on the space's name opens the same menu.
+          title.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation(); if (!more.disabled) openRoomMenu({ x: event.clientX, y: event.clientY }, more, group.id); });
+          title.addEventListener('keydown', event => { if ((event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') && !more.disabled) { event.preventDefault(); event.stopPropagation(); openRoomMenu(undefined, more, group.id); } });
+          heading.append(more); bindSpaceHighlight(element, group.id); dropTarget(element, true, group.id);
+        }
+        entry = { element, title, body, toggle, attention, more }; sidebarGroups.set(group.id, entry);
+      }
+      // Group spaces are never archived (archived ones get no group), as on the 协作空间 row's ⋯.
+      if (entry.more) {
+        entry.more.setAttribute('aria-label', `空间操作：${group.name}`); entry.more.title = entry.more.getAttribute('aria-label');
+        entry.more.disabled = disconnected || renameTarget?.id === 'room' && renameTarget.roomId === group.id;
       }
       entry.title.textContent = `${group.name} · ${group.people.length}`; entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
+      // The open space is marked on its heading, as on its 协作空间 row (hidden in this view).
+      const open = Boolean(group.id) && selected === 'room' && spaceId === group.id;
+      entry.title.classList.toggle('active', open); if (open) entry.title.setAttribute('aria-current', 'page'); else entry.title.removeAttribute('aria-current');
       if (group.id) entry.title.setAttribute('aria-label', `打开协作空间「${group.name}」`);
       // A folded group hides only its own rows; its name, count and any rows needing attention stay visible.
       const closed = sidebarCollapsedGroups.has(group.id || 'independent');
@@ -1764,7 +1786,9 @@ function renderSessions() {
       const label = node('span', undefined, 'label'), name = node('span', undefined, 'session-title'), shortId = node('span', undefined, 'session-short-id'), status = node('small'), badges = node('span', undefined, 'session-space-badges'), dot = node('span'), version = node('span', undefined, 'session-backend-version');
       const metadata = node('span', undefined, 'session-metadata'), time = node('time', undefined, 'session-time'), marker = node('span', undefined, 'sidebar-state-marker');
       version.setAttribute('aria-hidden', 'true'); dot.setAttribute('aria-hidden', 'true'); marker.setAttribute('aria-hidden', 'true');
-      metadata.append(badges, status, time); label.append(name, version, shortId, metadata); link.append(icon(record.provider), label, dot, marker);
+      metadata.append(badges, status, time); label.append(name, version, shortId, metadata);
+      // T-142: the status mark sits on the avatar's top-right corner, where a glance finds it.
+      const avatar = icon(record.provider); avatar.append(dot); link.append(avatar, label, marker);
       const more = button('⋯', () => openSessionMenu(record.id, undefined, key), 'session-more'); more.dataset.sessionMenu = record.id;
       more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
       more.addEventListener('pointerdown', event => { if (sessionMenu?.rowKey === key) event.stopPropagation(); });
@@ -1780,9 +1804,11 @@ function renderSessions() {
     const version = backendVersionNotice(record, state.appVersion);
     row.link.disabled = false; row.link.setAttribute('aria-label', `${label} · ${association}${occurrence} · ${sessionTimes(record)}${version ? ' · ' + version.title : ''}`); row.link.title = `${label}\n${association}${occurrence}\n${sessionTimes(record)}${version ? '\n' + version.title : ''}`;
     const badgeKey = JSON.stringify(memberships.map(r => [r.id, r.name]));
+    row.badges.hidden = Boolean(grouped && group);
     if (row.badgeKey !== badgeKey) {
-      // One badge plus a count keeps membership on the shared second line; the full list is in the title and details.
-      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', r.name.length > 6 ? r.name.slice(0, 6) + '…' : r.name, `space-badge ${roomTone(r.id)}`); badge.title = r.name; return badge; }));
+      // One badge plus a count keeps membership on its line; the badge shows the space's whole name and CSS
+      // shortens it only by the width it has (T-144). The full list is in the title and details.
+      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', r.name, `space-badge ${roomTone(r.id)}`); badge.title = `空间：${r.name}`; return badge; }));
       if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); more.title = membershipNames; row.badges.append(more); }
       row.badges.setAttribute('aria-label', association); row.badgeKey = badgeKey;
     }

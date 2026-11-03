@@ -44,7 +44,16 @@
     function apply() {
       if (disposed) return;
       if (rail()) { for (const group of groups) group.style.height = ''; return; }
-      layout = geometry(height(), headers(), collapsed, preference);
+      // T-145: in the grouped session view 协作空间 lists no spaces, only 全部空间 and 新建空间; it takes just
+      // that content's height, so the session list (there also the space list) gets the rest.
+      const fitted = groups.map((group, i) => !collapsed[i] && group.dataset.groupedSessions === 'true');
+      // The body stretches to its section, so its content height is where its last shown child ends.
+      const content = body => {
+        const shown = body ? [...body.children].filter(child => child.getClientRects().length) : [];
+        return shown.length ? Math.ceil(Math.max(...shown.map(child => child.getBoundingClientRect().bottom)) - body.getBoundingClientRect().top + parseFloat(getComputedStyle(body).paddingBottom || 0)) : 0;
+      };
+      const parts = headers().map((size, i) => size + (fitted[i] ? content(groups[i].querySelector('.sidebar-group-body')) : 0));
+      layout = geometry(height(), parts, collapsed.map((c, i) => c || fitted[i]), preference);
       groups.forEach((group, i) => { group.style.height = `${layout.sizes[i]}px`; });
       sashes.forEach((sash, i) => {
         const candidate = layout.pairs[i], pair = candidate && layout.flexible >= 0.01 ? candidate : null; sash.tabIndex = pair ? 0 : -1; sash.setAttribute('aria-disabled', String(!pair));
@@ -107,6 +116,10 @@
       });
     });
     const observer = new ResizeObserver(() => { if (gesture && (height() !== gesture.shape[0] || navigation.clientWidth !== gesture.width || rail())) gesture.cancel(); if (keyboard) cancel(); apply(); }); observer.observe(navigation);
+    // A section that can be fitted to its content (协作空间 in the grouped session view) is re-measured when
+    // that content changes outside a render: a rename editor's error, or the note after the last space goes.
+    const contentObserver = new MutationObserver(() => { if (groups.some(group => group.dataset.groupedSessions === 'true')) apply(); });
+    for (const group of groups) if ('groupedSessions' in group.dataset || group.id === 'workspace-group') contentObserver.observe(group, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class'] });
     const update = value => {
       const next = weights(value?.weights), folded = [Boolean(value?.sessionsCollapsed), Boolean(value?.workspaceCollapsed), value?.archiveCollapsed !== false];
       if (gesture && folded.some((v, i) => v !== gesture.shape[i + 1])) gesture.cancel();
@@ -115,7 +128,7 @@
       apply();
     };
     apply();
-    return { update, dispose() { gesture?.cancel(); disposed = true; observer.disconnect(); removers.forEach(remove => remove()); } };
+    return { update, dispose() { gesture?.cancel(); disposed = true; observer.disconnect(); contentObserver.disconnect(); removers.forEach(remove => remove()); } };
   }
   const api = { defaults: Object.freeze(defaults), geometry, resize, separatorValues, bind };
   if (typeof module === 'object' && module.exports) module.exports = api;

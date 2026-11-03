@@ -90,8 +90,11 @@ async function run() {
     await until(async () => (await members()).includes(a), 'Joined by group heading'); assert.equal(await toastText(), '已加入「Claude 聊天室」；原来的空间归属保留。');
   });
   await check('03 drag onto the space row joins', async () => {
-    await independent(b).dragTo(page.locator(`[data-space-id="${space}"] .room-nav`));
+    // T-145: the grouped view does not repeat the space rows (its headings are the list), so this drop target is checked in the flat view.
+    await page.locator('#sessions-flat').click();
+    await page.locator(`#session-list [data-session-row="${b}"] .session-link`).dragTo(page.locator(`[data-space-id="${space}"] .room-nav`));
     await until(async () => (await members()).includes(b), 'Joined by space row'); assert.deepEqual(await members(), [a, b].sort());
+    await page.locator('#sessions-grouped').click();
   });
   await check('04 session menu joins', async () => {
     await page.locator(`[data-session-group="independent"] [data-session-row="${c}"] .session-more`).click();
@@ -105,12 +108,22 @@ async function run() {
     const text = await toastText();
     assert.ok(text.includes(`（${OLD_VERSION}）`) && text.includes('原会话与草稿保留') && text.includes('「旧版会话」里核对并更新连接'), text);
     await page.locator('#toast-close').click();
-    await independent(old).dragTo(page.locator(`[data-space-id="${space}"] .room-nav`));
+    // T-145: as in 03, the space row's drop is checked in the flat view (the grouped view does not repeat the rows).
+    await page.locator('#sessions-flat').click();
+    await page.locator(`#session-list [data-session-row="${old}"] .session-link`).dragTo(page.locator(`[data-space-id="${space}"] .room-nav`));
     await until(async () => (await toastText()).includes('连着旧版后台') && await page.locator('#toast').isVisible(), 'Drag refusal shown');
+    await page.locator('#toast-close').click(); await page.locator('#sessions-grouped').click();
+    // Grouped, the space's heading refuses it too. Fold the space's own group so the heading and the old session are both on screen.
+    const heading = page.locator(`#session-list [data-session-group="${space}"] .session-space-heading`);
+    if (await page.locator(`#session-list [data-session-group="${space}"] .session-space-toggle`).getAttribute('aria-expanded') === 'true') await page.locator(`#session-list [data-session-group="${space}"] .session-space-toggle`).click();
+    await independent(old).scrollIntoViewIfNeeded(); assert.ok(await heading.isVisible() && await independent(old).isVisible());
+    await independent(old).dragTo(heading);
+    await until(async () => (await toastText()).includes('连着旧版后台') && await page.locator('#toast').isVisible(), 'Grouped heading drop refused');
+    await page.locator(`#session-list [data-session-group="${space}"] .session-space-toggle`).click();
     assert.deepEqual(await members(), [a, b, c].sort());
   });
   await check('06 invite marks the old-backend session and shows a failed join inside the dialog', async () => {
-    await page.locator(`[data-space-id="${space}"] .room-nav`).click(); await page.locator('#manage-members').click(); await page.locator('#invite-dialog').waitFor();
+    await (await page.locator('#sessions-grouped').getAttribute('aria-pressed') === 'true' ? page.locator(`#session-list [data-session-group="${space}"] .session-space-heading`) : page.locator(`[data-space-id="${space}"] .room-nav`)).click(); await page.locator('#manage-members').click(); await page.locator('#invite-dialog').waitFor();
     const blocked = page.locator(`[data-invite-session="${old}"]`);
     assert.equal(await blocked.getAttribute('aria-disabled'), 'true'); assert.ok((await blocked.innerText()).includes('当前后台不可加入新空间'));
     assert.ok((await page.locator('#invite-list p').innerText()).includes('「旧版会话」里核对并更新连接'));

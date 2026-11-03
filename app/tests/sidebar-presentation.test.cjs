@@ -23,10 +23,10 @@ function harness(record, connected = true) {
 }
 const child = (id, kind, stale = false) => ({ event: 'subAgentActivity', nativeId: id, kind, stale });
 
-test('a ready root with mixed children keeps both counts and an attention cue', () => {
+test('a ready root with mixed children keeps both counts; children are work, not a call for the person (T-145)', () => {
   const s = row({ fleet: [child('running', 'started'), child('unknown', 'interacted')] }), before = JSON.stringify(s), p = harness(s).present();
-  assert.equal(p.tone, 'approval'); assert.equal(p.marker, '!'); assert.equal(p.detail, true);
-  assert.ok(p.compact.includes('1 进行中')); assert.ok(p.compact.includes('1 未知'));
+  assert.equal(p.tone, 'working'); assert.equal(p.marker, '…'); assert.equal(p.detail, true);
+  assert.ok(p.compact.includes('1 个子任务进行中')); assert.ok(p.compact.includes('1 个子任务状态未知'));
   assert.match(p.full, /部分/); assert.equal(JSON.stringify(s), before);
 });
 test('the ordinary ready row has no whole-goal completion claim', () => {
@@ -91,11 +91,20 @@ test('an idle Claude row with reported background work shows that work, not read
 });
 test('an idle Claude row whose background report is unconfirmed says so and is not plain ready', () => {
   const p = harness(row({ provider: 'claude', backgroundStale: true })).present();
-  assert.equal(p.compact, '后台状态待核对'); assert.equal(p.workTone, 'bg-unknown'); assert.equal(p.marker, '!'); assert.equal(p.detail, true);
+  assert.equal(p.compact, '后台状态待核对'); assert.equal(p.workTone, 'bg-unknown'); assert.equal(p.marker, '◌'); assert.equal(p.detail, true);
+});
+test('red and ! are only for what needs the person or failed; unknown children alone are a grey hollow ◌ (T-145)', () => {
+  const unknown = harness(row({ fleet: [child('unknown-1', 'interacted'), child('unknown-2', 'interacted')] })).present();
+  assert.equal(unknown.tone, 'idle'); assert.equal(unknown.workTone, 'bg-unknown'); assert.equal(unknown.marker, '◌', '? stays the rail mark for an unreported backend version');
+  assert.ok(unknown.compact.includes('2 个子任务状态未知'), unknown.compact);
+  const waiting = harness(row({ approval: { method: 'item/commandExecution/requestApproval' }, fleet: [child('unknown', 'interacted')] })).present();
+  assert.equal(waiting.tone, 'approval'); assert.equal(waiting.marker, '!');
+  const failed = harness(row({ state: 'error' })).present();
+  assert.equal(failed.tone, 'approval'); assert.equal(failed.marker, '!');
 });
 test('background work with running children keeps both facts', () => {
   const p = harness(row({ provider: 'claude', background: 1, backgroundKinds: ['shell'], backgroundAt: 0, fleet: [child('running', 'started')] })).present();
-  assert.ok(p.compact.startsWith('后台任务在跑 · 1 项（命令）')); assert.ok(p.compact.includes('1 进行中')); assert.equal(p.workTone, 'bg-work');
+  assert.ok(p.compact.startsWith('后台任务在跑 · 1 项（命令）')); assert.ok(p.compact.includes('1 个子任务进行中')); assert.equal(p.workTone, 'bg-work');
 });
 test('an interrupted Claude row keeps both the native-input request and the unconfirmed background state', () => {
   // A real interrupt sets nativeInputRequired while the earlier working state left backgroundStale.

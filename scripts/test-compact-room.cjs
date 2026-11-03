@@ -113,7 +113,7 @@ async function run() {
       assert.ok((Math.max(...colors.map(luminance))+0.05)/(Math.min(...colors.map(luminance))+0.05)>=4.5,'The selected layout remains readable after entering the nav');
       assert.ok(g.controls.every(x=>x.box.left>=g.header.left-1&&x.box.right<=g.header.right+1&&x.box.bottom<=g.header.bottom+1),'All controls fit the compact header');
       assert.ok(g.headers[0].box.height<=48,'Three unknown children fit the two-line card header');
-      assert.ok((await header(a).locator('.collaboration-member-child-compact').innerText()).includes('3 未知 · 部分观察'));
+      assert.ok((await header(a).locator('.collaboration-member-child-compact').innerText()).includes('3 个子任务状态未知')); // T-145 wording
       assert.ok((await header(a).locator('.collaboration-member-child').textContent()).includes('3 项状态未知（部分观察）'));
       if(layout==='列表')assert.ok(g.readers.every(r=>r.height>=22.4),'Four rows retain at least one original 14px text line');
       await capture(`01-${expanded?'expanded':'collapsed'}-${layout==='网格'?'grid':'list'}`);

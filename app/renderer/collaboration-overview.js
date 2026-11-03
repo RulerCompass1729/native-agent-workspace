@@ -30,7 +30,8 @@
     const state = !live ? '连接状态待核对' : record.nativeContextPending ? '原生上下文待核对' : record.claudeQuestion || question && record.approval.params?.isBlocking !== false
       ? '等待回答' : question ? `${base} · 有待回答问题` : base;
     const pending = record.nativeApproval?.requests?.length || record.approvals?.length || 0;
-    const compactChild = children.children.length ? [children.running && `${children.running} 进行中`, children.unknown && `${children.unknown} 未知`, !children.running && !children.unknown && `${children.children.length} 已结束`, '部分观察'].filter(Boolean).join(' · ') : '';
+    // Short form of the child facts: say what is running or unknown (T-145); the full text keeps 部分观察.
+    const compactChild = children.children.length ? [children.running && `${children.running} 个子任务进行中`, children.unknown && `${children.unknown} 个子任务状态未知`, !children.running && !children.unknown && `${children.children.length} 个子任务已结束`].filter(Boolean).join(' · ') : '';
     return { state: pending > 1 ? `${state} · ${pending} 项待处理` : state, child, freshness: `${stale ? '最后观察 · ' : ''}${time}`, stale,
       compactChild, freshnessReported: age !== null || stale };
   }
