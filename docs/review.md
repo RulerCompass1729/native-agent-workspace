@@ -3154,3 +3154,77 @@ session's records still leaves its cached images until its backend runs
 alpha.169. Open: T-143; the daily wake check between the secretary and the main
 session, which can run now, and the cross-session check, which needs both
 backends on alpha.169; the post-provider signature check.
+
+
+### A staged wake is withdrawn when an input boundary interrupts its turn (T-141)
+
+When an agent staged a wake in a turn and, before that turn ended, the person
+typed another prompt, a cross-session message arrived or a native permission ask
+came up before the wake was staged, the boundary cleared the turn record, so the
+turn never reported its end and the wake stayed 已登记，尚未投递 for good. The adapter
+now reports that turn's end once with a boundary status, and the wake is
+withdrawn with the note 发送方这一轮中途有新的输入或权限确认；自动消息未投递. A turn that already reported
+its end is not reported again.
+
+On its own this mitigates T-141 rather than fixing it: a person's input in the
+middle of a turn still gives that turn back its wake authority (the native start
+capture in the workspace), and only this boundary end stops the wake from being
+delivered. The display half of T-138 narrows that to a prompt identical to the
+running one, or a turn whose first text the adapter no longer has: after a
+backend restart, after 64 newer prompt ids, or when the first hook event was
+lost. Wakes staged after a boundary that came before staging, such as a
+cross-session message, a task notification or the native approval of the call
+itself, are now withdrawn instead of hanging; none of them was delivered before.
+By NAW's own rules those should be deliverable, so on Claude they remain an open
+limitation, not a regression. A permission ask after staging was already
+withdrawn. Claude 2's lane reviewer passed it in one round. Its concern that a
+second, boundary end after an end already reported could cancel a capacity
+recovery just scheduled on 2.1.310 to 2.1.312 is closed by the post-review
+additions; a boundary end still cancels capacity like any end that is not a
+failure, and capacity is off on 2.1.316 and 2.1.317. The addition that stops a
+failure end from being followed by a boundary end has no unit test and was
+checked by reading the source.
+
+Lane evidence: the full suite passed 2,238 checks; with the boundary end or its
+guard removed the tests fail; on real 2.1.317 and 2.1.316 with local replies,
+the wake stayed 已登记 before the fix and was withdrawn with the note after it,
+without waking the recipient. Open, low: the withdrawal note can appear when the
+turn record was cleared for another reason, such as a reconnect, a rebind, a
+context end or a failure for another prompt, though a pause normally withdraws
+the wake first in those cases; a completed turn whose display record is
+incomplete still reports no end; a real run with a boundary before staging or
+with a permission ask was not measured.
+
+
+### A prompt typed while Claude works has its own row (T-138, display half)
+
+On Claude Code 2.1.316 and 2.1.317 a prompt the person typed while a turn ran
+had no row in NAW's conversation view: the adapter gave it the running prompt's
+row id, and the workspace skips a row whose id already exists. Its row now gets
+its own id, derived from the running prompt's id and a short hash of its text,
+and when the prompt runs as its own turn it stands after the first turn's reply,
+at the head of that turn, as in the native terminal; if the running turn takes
+it in, the row stays where it was typed, which is not measured. Its time is when
+it was typed. The prompt's own later turn is linked only when its text matches.
+
+The wake rule becomes stricter: after the person types a different prompt in the
+middle of a turn, a wake that turn tries to stage is refused when it is staged,
+instead of being staged and withdrawn at the turn's end; only an identical
+prompt still gives the turn its wake authority back, which the T-141 boundary
+end then withdraws. Cross-session messages, task notifications and blocked
+prompts that carry the running prompt's id now also each get a row instead of
+being dropped, and such a cross-session message is then also copied into the
+recipient's spaces under the alpha.169 rule; this is inferred from the source
+and not measured, and the space copy was not part of the lane review. Claude 2's
+lane reviewer passed it in one round: ids can only disagree in ways that leave a
+row unlinked or missing as before, apart from a 32-bit hash collision.
+
+Lane evidence: the full suite passed 2,243 checks; six mutations fail their
+tests; with the unchanged T-138 runner on real 2.1.317 the row was missing
+before the change, and with the change a frozen checker found exactly one row,
+after the first reply and heading its own turn, on 2.1.317 and 2.1.316. The
+integration reviewer also noted that a row already linked to a turn now leaves
+an entry in the capped list of rows waiting to be linked, which can never link
+anything. Open, low: after a backend restart in the middle of a turn the typed
+prompt still loses its row, as before; the second turn's reply still starts its
+own reading group, which predates this change.

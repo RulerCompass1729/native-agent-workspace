@@ -4393,3 +4393,44 @@ visible update kept fourteen session records with their native IDs, live process
 starts and drafts, and the seven other backends kept PID, start time and
 version; 150 seconds later they and all sixteen live native processes were
 unchanged and no move record existed.
+
+
+### A staged wake withdrawn after an input boundary - alpha.170
+
+Claude 2's commit is integrated with identical changed lines. On main the full
+unit suite passes 2,252 checks without skips, native blocks passes on real
+Claude Code 2.1.317 with no paid calls, and the session wake GUI script exits 0.
+The author's frozen T-141 runner, byte-equal to the lane copy by its hash, ran
+once on main with 2.1.317 through the source app, local fixed replies, a
+temporary profile and a fake pbcopy. The sender staged a wake to Receiver B in
+its first turn, which the fixture held; the wake showed 已登记. The person then
+typed a second prompt and the turn was released. At its end the wake was
+cancelled with the note 发送方这一轮中途有新的输入或权限确认；自动消息未投递, and no further wake reached
+any session; the wake never reached sending. The run used nine local responses,
+no paid call and no pbcopy call. The lane's own runs before and after the fix on
+2.1.317 and 2.1.316 used the patch before two additions made after its review, a
+guard against a second end, unit-tested for a normal end and checked only by
+reading for a failure end, and a test that a wake staged after mid-turn input is
+withdrawn at the turn's end; this main run used the final bytes.
+
+
+### A typed prompt's own row - alpha.170
+
+Claude 2's display commit is integrated with identical changed lines on top of
+the T-141 commit, and the UI bundle was rebuilt. With both, the full unit suite
+passes 2,257 checks without skips, native blocks passes on real Claude Code
+2.1.317 with no paid calls, and the session wake and reading turns GUI scripts
+exit 0. The unchanged T-138 runner ran once on main with 2.1.317 and local
+replies, with the queued-prompt expectation, which it met; the wake to the
+recipient ended unconfirmed, most likely because it was staged about 12 to 16
+seconds after an earlier wake to the same recipient, inside its 60-second
+cooldown, which the run did not wait out. The author's frozen display checker,
+byte-equal to the lane copy, first failed because it was given the snapshot
+taken before the queued prompt; given the final snapshot it found exactly one
+row for the typed prompt, with its own id, after the first turn's reply and
+heading its own turn. The T-141 runner ran again on the combined tree and again
+ended withdrawn with the note, with nine local responses. Neither runner made a
+paid call or a pbcopy call, and native blocks made no paid call; the main run's
+screenshot is kept outside the repository. The compat known-list check finds all
+40 earlier main builds of the hook since 257c523 in the upgrade list and no
+other entries.
