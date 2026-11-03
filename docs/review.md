@@ -3135,3 +3135,22 @@ classified as a peer message and still voids wakes.
   - a real native Claude session with tool images;
   - a layout with several backends.
 - Found, not fixed: scripts/test-claude-image-reading.cjs is stale on current main (see the board row).
+
+
+### Integrated alpha.169 delivery
+
+A fresh read-only reviewer accepted the four integrated commits and the test
+locator fix, and asked before commit that the ledgers say exactly when a
+cross-session message still pauses handoffs, that a row with no shared space
+goes into all of the recipient's spaces and is merged by default, and that
+removing a session can stop a merged image copy on another backend from opening.
+It accepted the update operator as a substitution of the alpha.168 one and
+confirmed that a retained backend already at the installed version is checked
+like the others. The secretary's backend had moved to alpha.168 before the run,
+outside this delivery and not recorded on the board when it happened. The
+operator ran once. The records reviewer then asked that the ledgers say only the
+terminal height already reaches existing sessions; removing an existing
+session's records still leaves its cached images until its backend runs
+alpha.169. Open: T-143; the daily wake check between the secretary and the main
+session, which can run now, and the cross-session check, which needs both
+backends on alpha.169; the post-provider signature check.
