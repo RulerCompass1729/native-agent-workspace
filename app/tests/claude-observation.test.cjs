@@ -209,6 +209,19 @@ for (const version of ['2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2
   assert.equal(f.r.nativeQueue === true, version !== '2.1.313');
   assert.equal(f.r.nativeBlocks === true, version !== '2.1.313');
   assert.equal(f.r.nativeAbortAvailable === true, ['2.1.310', '2.1.311', '2.1.312'].includes(version));
+  assert.equal(f.r.nativeCapacityAvailable === true, ['2.1.310', '2.1.311', '2.1.312'].includes(version));
+});
+test('native 2.1.316 can abort its turn but does not yet arm capacity recovery (T-133)', async () => {
+  const f = await mod({ version: '2.1.316' });
+  assert.equal(f.r.nativeAbortAvailable, true); assert.notEqual(f.r.nativeCapacityAvailable, true);
+});
+test('a mod that predates nativeCapacity keeps capacity recovery with abort, as before', () => {
+  for (const [fields, capacity] of [[{ nativeAbort: true }, true], [{ nativeAbort: true, nativeCapacity: false }, false], [{ nativeAbort: false }, false]]) {
+    const r = Object.create(Claude.prototype); EventEmitter.call(r);
+    r.record = { nativeId: randomUUID() }; r.terminal = { alive: true }; r.submission = new SubmissionChannel();
+    r.bindRoot({ sessionId: r.record.nativeId, ...fields });
+    assert.equal(r.nativeCapacityAvailable, capacity, JSON.stringify(fields));
+  }
 });
 test('native 2.1.316 binds the root so a main-turn workspace message reaches the service', async () => {
   // Root binding and native blocks give the turn identity a wake needs; the
@@ -219,7 +232,7 @@ test('native 2.1.316 binds the root so a main-turn workspace message reaches the
     if (url.endsWith('/addressed-message')) { staged.push(body); return { ok: true, text: JSON.stringify({ status: 'staged' }) }; }
   } });
   assert.equal(f.r.nativeBlocks, true);
-  for (const flag of ['nativeQueue', 'nativeAbortAvailable', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia']) assert.notEqual(f.r[flag], true, flag);
+  for (const flag of ['nativeQueue', 'nativeCapacityAvailable', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia']) assert.notEqual(f.r[flag], true, flag);
   for (const fn of f.clock.splice(0).filter(fn => fn.delay === 500)) await fn();
   assert.equal(f.r.addressedSendAvailable, true);
   const promptId = randomUUID();
@@ -1063,7 +1076,7 @@ test('held usage metadata never blocks binding/input and coalesces reads', async
 function capacityFailure(t, rowChange = {}) {
   const r = adapter(), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-capacity-'));
   t.after(() => { r.submission.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  r.nativeBlocks = true; r.nativeAbortAvailable = true; r.submission.status(true);
+  r.nativeBlocks = true; r.nativeAbortAvailable = true; r.nativeCapacityAvailable = true; r.submission.status(true);
   const prompt = r.lastPromptId = randomUUID(), turnId = randomUUID(), messageId = randomUUID();
   const file = path.join(dir, r.record.nativeId + '.jsonl');
   const row = { uuid: messageId, sessionId: r.record.nativeId, type: 'assistant', isSidechain: false,
@@ -1094,7 +1107,7 @@ for (const boundary of ['replayed', 'gap', 'incomplete', 'child-hook', 'old-hook
 test('Claude capacity cannot infer a fresh failure through ' + boundary, t => {
   const f = capacityFailure(t);
   if (boundary === 'retained') f.r.retainedReader = true;
-  if (boundary === 'unqualified') f.r.nativeAbortAvailable = false;
+  if (boundary === 'unqualified') f.r.nativeCapacityAvailable = false;
   if (boundary === 'torn') fs.writeFileSync(f.file, JSON.stringify(f.row).slice(0, -2));
   if (boundary === 'missing') fs.unlinkSync(f.file);
   if (boundary === 'fifo') { fs.unlinkSync(f.file); require('node:child_process').execFileSync('mkfifo', [f.file]); }

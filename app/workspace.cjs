@@ -465,7 +465,7 @@ class Workspace extends EventEmitter {
     });
     on('nativeTurnEnd', info => {
       try { wake.complete(this, s, runtime, info); } catch { this.changed(); }
-      const qualified = s.provider === 'codex' ? ['0.164.0', '0.165.0'].includes(runtime.host?.rpc?.nativeVersion) : s.provider === 'claude' && runtime.nativeAbortAvailable && !runtime.retainedReader;
+      const qualified = s.provider === 'codex' ? ['0.164.0', '0.165.0'].includes(runtime.host?.rpc?.nativeVersion) : s.provider === 'claude' && runtime.nativeCapacityAvailable && !runtime.retainedReader;
       // Other is broad: admit only the observed native routing timeout verbatim.
       const reason = info.errorInfo === 'serverOverloaded' ? 'capacity' : s.provider === 'codex' && info.errorInfo === 'other' && info.errorMessage === 'workspace routing discovery timed out' ? 'routing' : null;
       if (qualified && info.nativeId === s.nativeId && info.status === 'failed' && reason) this.scheduleCapacity(s, runtime, info.turnId, reason);

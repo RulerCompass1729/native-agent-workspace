@@ -210,7 +210,8 @@ async function cleanup() {
     if (answerMode === 'interrupt') {
       // Stopping the turn releases the held hook first, so native can end the turn.
       const stopped = Date.now(); await page.locator('#interrupt').click();
-      await until(async () => (await snapshot()).sessions[0].state === 'idle' && !(await snapshot()).sessions[0].claudeQuestion, 'The turn stops while a question was held', 30000);
+      // On 2.1.316 the stop must settle through the native API: no 原生输入 lock left behind (T-133).
+      await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && !s.claudeQuestion && (!/^2\.1\.316\b/.test(nativeVersion) || (!s.nativeInputRequired && !s.interruptPending)); }, 'The turn stops while a question was held', 30000);
       assert.ok(Date.now() - stopped < 20000, 'Stopping does not wait for the hook timeout'); await sleep(1500); assert.equal(calls, 1, 'No answer was sent to the model');
       await until(() => page.locator('#approval').isHidden(), 'The question card clears');
       const after = (await snapshot()).sessions[0]; assert.equal(after.nativeId, before.nativeId); assert.deepEqual(errors, []);
@@ -447,6 +448,12 @@ async function cleanup() {
   if (compatibilityTrial) await page.locator('#message-input').fill('Unsent compatibility draft.');
   await page.locator('#interrupt').click();
   await until(async () => (await snapshot()).sessions[0].messages.some(m => m.kind === 'turn' && m.status === 'interrupted'), 'Native interruption boundary');
+  if (/^2\.1\.316\b/.test(nativeVersion)) {
+    // T-133: 2.1.316 stops through the native API. Only that path clears nativeInputRequired;
+    // the Escape fallback leaves it set until the person types in the native terminal.
+    await until(async () => { const s = (await snapshot()).sessions[0]; return s.state === 'idle' && !s.nativeInputRequired && !s.interruptPending; }, 'Native API abort settles and graphical input recovers (2.1.316)');
+    checks.push('2.1.316: 停止 ends the turn through the native API and the chat input is usable again at once');
+  }
   if (compatibilityTrial) {
     // Only the native API result + exact boundary + settled submission clear
     // this flag. Escape fallback leaves nativeInputRequired true.

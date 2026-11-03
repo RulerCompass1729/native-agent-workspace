@@ -595,7 +595,10 @@ async function bindRoot($, ownGeneration) {
     nativeInlineInput: ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativePromptInput: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativeMedia: version === '2.1.312',
-    nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
+    // 2.1.316: turn.abort is qualified (T-133). Capacity recovery, which reads the
+    // native transcript and continues the session, is not yet; say so explicitly.
+    nativeAbort: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312', '2.1.316'].includes(version),
+    nativeCapacity: !legacyOnly && ['2.1.310', '2.1.311', '2.1.312'].includes(version),
     nativeSharedDisplay: legacyOnly && nativeBlocks && version === '2.1.302',
     nativeTurnRecords: !legacyOnly && version === '2.1.316',
     nativeNarration: !legacyOnly && version === '2.1.316' }, binding);
