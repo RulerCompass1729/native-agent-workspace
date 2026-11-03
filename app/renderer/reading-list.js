@@ -103,6 +103,9 @@ function readingPageRange(data, previous, request, position = {}, pinned = false
   return { start, end, firstId: data.messages[start]?.id || '', lastId: data.messages[end - 1]?.id || '', tail: end === n };
 }
 function readingFollow(tail, nearEnd, selecting) { return tail === true && nearEnd && !selecting; }
+// A following render ignores scrolls until its follow frame (T-134), except while the
+// person is moving away: a held pointer, or shortly after a wheel-up or an away key.
+function followRenderGuard(view, now = performance.now()) { return !view.onScrollbar?.() && now - (view.awayAt ?? -Infinity) > 500; }
 function changeReadingPage(view, action, fromButton = false, automatic = false) {
   if (!view.reload || view.loadingPage || !view.el.isConnected) return;
   captureReading(view);
@@ -207,7 +210,9 @@ function scheduleReading(view, intent = view.intent) {
   if (view.frame) return;
   view.frame = requestAnimationFrame(() => {
     view.frame = 0;
-    if (!view.intent || !view.el.clientHeight || !view.el.getClientRects().length) return;
+    // Without an intent no frame will clear the following-render guard later.
+    if (!view.intent) { view.pageChanging = false; return; }
+    if (!view.el.clientHeight || !view.el.getClientRects().length) return;
     const el = view.el, p = view.intent.position;
     const anchor = readingEntry(view, p.anchor)?.item;
     if (anchor && !p.follow) {
@@ -243,13 +248,37 @@ function readingView(el, key) {
     view.jump = button('↓ 跳到最新', () => changeReadingPage(view, 'latest'), 'jump-latest');
     view.jumpBar = node('div', undefined, 'jump-bar'); view.jumpBar.append(view.jump); view.jumpBar.hidden = true;
     const interact = () => { view.intent = null; view.assignedTop = undefined; view.pageChanging = false; view.autoPages = 4; };
+    // While following, moving toward the latest is not leaving it, and must not drop
+    // the render guard above (T-134): a trackpad keeps sending wheel-downs at the end.
+    const toward = event => view.intent?.position.follow && (event.type === 'wheel' ? event.deltaY > 0
+      : ['ArrowDown', 'PageDown', ' '].includes(event.key) && !event.shiftKey && !event.target.closest?.('input,textarea,select,[contenteditable="true"]'));
+    const away = event => event.type === 'wheel' ? event.deltaY < 0 : ['ArrowUp', 'PageUp', 'Home'].includes(event.key) || event.key === ' ' && event.shiftKey;
+    // Only a press on the reader's scrollbar strip holds; a press on a row, a button
+    // such as 复制, or the padding between rows keeps the guard, so following
+    // survives a click. The strip covers classic and overlay scrollbars alike. The
+    // press only records where it was: reading the box here would force a layout
+    // before the browser handles the scrollbar press, and could move the thumb.
+    const press = event => { interact(); view.pointerHeld = event.target === el; view.pressX = event.clientX; };
+    view.onScrollbar = () => Boolean(view.pointerHeld && view.pressX >= el.getBoundingClientRect().right - 16);
+    // A scrollbar drag let go at the end starts following, like the wheel at the end.
+    const release = () => {
+      const bar = view.onScrollbar(); view.pointerHeld = false;
+      if (!bar) return;
+      view.intent = null; captureReading(view);
+      if (readingPositions[view.key]?.follow) view.intent = { position: readingPositions[view.key] };
+    };
+    const hover = event => { if (!event.buttons) release(); };
     const wheel = event => {
+      if (toward(event)) return;
+      if (away(event)) view.awayAt = performance.now();
       interact();
       if (!view.paged) return;
       if (event.deltaY < 0 && el.scrollTop <= 1 && view.pageRange.start) changeReadingPage(view, 'older');
       else if (event.deltaY > 0 && el.scrollHeight - el.scrollTop - el.clientHeight <= 1 && !view.pageRange.tail) changeReadingPage(view, 'newer');
     };
     const keydown = event => {
+      if (toward(event)) return;
+      if (away(event)) view.awayAt = performance.now();
       interact();
       if (!view.paged || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.shiftKey || event.altKey ||
           event.target.closest('input,textarea,select,[contenteditable="true"]') || !['Home', 'End'].includes(event.key)) return;
@@ -267,9 +296,9 @@ function readingView(el, key) {
       if (view.paged && el.scrollTop <= 1 && view.pageRange.start) changeReadingPage(view, 'older');
       else if (view.paged && el.scrollHeight - el.scrollTop - el.clientHeight <= 1 && !view.pageRange.tail) changeReadingPage(view, 'newer');
     };
-    el.addEventListener('pointerdown', interact); el.addEventListener('wheel', wheel, { passive: true }); el.addEventListener('keydown', keydown); el.addEventListener('scroll', scroll, { passive: true });
+    el.addEventListener('pointerdown', press); el.addEventListener('pointermove', hover, { passive: true }); el.ownerDocument.addEventListener('pointerup', release, true); el.ownerDocument.addEventListener('pointercancel', release, true); el.addEventListener('wheel', wheel, { passive: true }); el.addEventListener('keydown', keydown); el.addEventListener('scroll', scroll, { passive: true });
     view.observer = new ResizeObserver(() => scheduleReading(view)); view.observer.observe(el);
-    view.dispose = () => { for (const entry of view.entries.values()) entry.images?.dispose(); view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', interact); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
+    view.dispose = () => { for (const entry of view.entries.values()) entry.images?.dispose(); view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', press); el.removeEventListener('pointermove', hover); el.ownerDocument.removeEventListener('pointerup', release, true); el.ownerDocument.removeEventListener('pointercancel', release, true); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
     messageViews.set(el, view);
   }
   if (view.key !== key) {
@@ -504,7 +533,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     : readingPageRange(view.pageData, view.pageRange, view.pageRequest, intent.position, pinned);
   // Removing an old top row triggers browser scroll anchoring before our next
   // frame. It is layout, not a human scroll that revokes the follow/anchor.
-  if (!room && (view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId)) view.pageChanging = true;
+  // While following, any render can do the same: rows moved into a fold or a
+  // reply re-laid out leave the content briefly shorter, the browser clamps the
+  // position, and that scroll arrives before the follow frame (T-134). The
+  // person's own wheel, pointer or key input clears this at once (interact).
+  if (!room && (view.pageRange?.firstId !== range.firstId || view.pageRange?.lastId !== range.lastId || intent.position.follow && followRenderGuard(view))) view.pageChanging = true;
   view.pageRange = range; view.pageRequest = null;
   const turnMarks = readingTurnMarks(messages.slice(range.start, range.end), room, originals);
   view.reload = () => { if (view.key === key && el.isConnected) messageList(el, sourceMessages, room, key, context); };
