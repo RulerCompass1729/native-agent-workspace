@@ -3648,6 +3648,27 @@ Open:
 - The legacy `register('clearSharedHistory')` still uses the single-snapshot check. Nothing in the product calls it.
 - No GUI run refuses a named-space clear through the window.
 - No test changes state while the confirmation is open (lane reviewer).
-- The room-ipc test file that fails without the pre-check (mutation-no-precheck.txt) was written after the lane's round-2 review and has not been reviewed on its own.
+- The saved output of removing the pre-check line (mutation-no-precheck.txt), which shows the room-ipc test failing, was written after the lane's round-2 review and has not been reviewed on its own.
 - test-collaboration stops at :71 on `#usage-button`, the same kind of stale step as T-153.
 - Claude 2 delivered a second fix for the same item after Claude 3 had claimed it; the integrator took Claude 3's, which claimed first and also refuses a disconnected or updating backend before the dialog and tests the order in main.cjs.
+
+
+### Integrated alpha.172 delivery
+
+A fresh read-only reviewer accepted the four integrated commits from Claude 3:
+the sidebar status marks and grouped view, the failed terminal claim, two
+terminal scripts and the refused clear. Over two rounds it had the ledgers say
+that keys typed after a failed claim are still not kept, which rows move, that
+renaming in the grouped view needs the section open, that terminal IME's
+foreground-return step was skipped, that peer workflow now runs through, and
+that the first full unit run failed one unrelated test. It found an existing
+rename problem now easier to reach (T-155). Claude 2 had delivered a second fix
+for the T-149 item after Claude 3 claimed it; Claude 3's was taken. The update
+operator was accepted as a substitution of the alpha.171 one; before the run the
+alpha.171 rollback archive's hash was checked against its recorded value. The
+operator ran once and deleted the previous app on success, so the alpha.171
+archive is now the only rollback; its pinned receipt says the unit suite passed
+on a second run, while the committed tree passed on its first, and leaves out
+collaboration overview. Afterwards application search listed only the copy in
+/Applications. Open: T-154, T-155, T-156; daily checks of the sidebar and the
+terminal claim; the post-provider signature check.

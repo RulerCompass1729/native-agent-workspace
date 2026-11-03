@@ -4575,3 +4575,16 @@ skips. That test is recorded as intermittent. With the UI bundle rebuilt, peer
 workflow now runs through, including the steps after the refused clear that had
 not run on current code, and forget images, multispace and collaboration
 overview exit 0; the system clipboard's change count stayed at 268.
+
+The committed alpha.172 tree passed all 2,286 unit checks on its first run. The
+signed bundle started once on an empty synthetic profile through its own service
+bootstrap and kept its strict signature and CDHash; no session or provider
+started. An initial-only read before the update found the active backend empty
+and no backend that qualified for an automatic move, and the operator re-checked
+both live; saved checks found no backend move record and an alpha.171 rollback
+archive whose hash matched its recorded value. The ordinary visible update kept
+fourteen session records with their native IDs, live process starts and drafts,
+and the seven other backends kept PID, start time and version; 150 seconds later
+they and all sixteen live native processes were unchanged and no move record
+existed. Afterwards application search listed only the copy in /Applications,
+and the rollback folder was empty.
