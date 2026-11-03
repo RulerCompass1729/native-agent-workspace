@@ -38,6 +38,20 @@ async function terminal(id) {
   await page.locator(`[data-session-id="${id}"]`).click(); await page.locator('#terminal-tab').click();
   await until(() => input(id).evaluate(el => document.activeElement === el), 'Selected terminal focus');
 }
+// T-157: 用量 is a button in a full session header, an item in the compact session header's ⋯ (renderer.js
+// openHeaderMenu), and in the space view an item in the space's own ⋯ (openRoomMenu).
+async function openUsage() {
+  if (await page.locator('#usage-button').isVisible()) await page.locator('#usage-button').click();
+  else { await page.locator(await page.locator('#session-header-more').isVisible() ? '#session-header-more' : '#room-header-more').click(); await page.getByRole('menuitem', { name: '用量', exact: true }).click(); }
+  await page.locator('#privacy-dialog').waitFor();
+}
+// T-157: a member leaves by dragging its card's name in the space's member strip (shown on 成员概览 and above 共享记录)
+// out to the left; the member tabs were removed (T-53).
+async function dragMemberOut(id, target) {
+  if (!(await page.locator('#room-view').isVisible())) await page.locator('#room-nav').click();
+  if (!(await page.locator('#collaboration-overview').isVisible())) await page.locator('#room-overview').click();
+  await drag(page.locator(`#collaboration-overview .collaboration-member-status[data-member-id="${id}"] .collaboration-member-name`), page.locator(target));
+}
 async function reply(text) { await fixture('release', text); await until(async () => (await snapshot()).sessions.every(s => !s.pendingTag), 'Reply settled'); }
 const identities = state => state.sessions.map(s => [s.id, s.nativeId]);
 async function drag(source, target, cancel = false) {
@@ -68,7 +82,7 @@ async function run() {
     tokenUsage: { total: { inputTokens: 120, cachedInputTokens: 100, outputTokens: 20 }, last: { inputTokens: 80, outputTokens: 10 }, modelContextWindow: 200000 } } });
   await until(async () => (await snapshot()).sessions.find(s => s.id === b)?.usage?.total?.inputTokens === 120);
   const usageBefore = await snapshot();
-  await page.locator('#usage-button').click();
+  await openUsage();
   assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'usage');
   assert.equal(await page.locator('#trust-status [data-usage-session]').count(), 1);
   assert.equal(await page.locator('#trust-status [data-usage-session]').getAttribute('data-usage-session'), b);
@@ -82,7 +96,7 @@ async function run() {
   await capture('usage-single-session'); await page.locator('#close-privacy').click();
   const usageAfter = await snapshot(); assert.equal(usageAfter.viewState.selected, usageBefore.viewState.selected);
   assert.equal(usageAfter.diagnostics.dispatches, usageBefore.diagnostics.dispatches);
-  await page.locator(`[data-session-id="${a}"]`).click();await page.locator('#usage-button').click();
+  await page.locator(`[data-session-id="${a}"]`).click();await openUsage();
   assert.equal(await page.locator('#trust-status [data-usage-session]').count(), 1);
   assert.equal(await page.locator('#trust-status [data-usage-session]').getAttribute('data-usage-session'), a);
   assert.match(await page.locator('#trust-status').innerText(), /未报告.*不能据此判断为零/);
@@ -125,7 +139,11 @@ async function run() {
   await until(async () => (await fixture()).sends.length === 1, 'Mention sends exactly once'); assert.deepEqual((await fixture()).sends[0], { id: b, text: payload }); await reply('核查完成：只看到了明确分享的内容。\n\n' + '**长记录布局测试**\n\n'.repeat(80));
   await until(async () => await roomBody(page) === '', 'Accepted input clears');
   assert.equal((await snapshot()).room.messages.some(m => m.text.includes('PRIVATE-HISTORY')), false);
+  // T-157: since f8d2336 the recipient is the draft's inline @mention, so the sent draft took it along. Address B again,
+  // then filter to A: the filter must not retarget.
+  await chooseRecipient(b); assert.equal(await page.locator('#recipient').inputValue(), b);
   await page.locator('#room-filter').selectOption(a); assert.equal(await page.locator('#recipient').inputValue(), b, 'Filter never retargets');
+  await fillRoomMessage(page, '');
   assert.equal(await page.locator('#room-messages article.assistant').count(), 0);
   await page.locator('#room-filter').selectOption(b); await page.locator('#room-search').fill('核查完成'); await until(async () => await page.locator('#room-messages article').count() === 1, 'Filtered reply rendered');
   assert.equal(await page.locator('#room-messages time').count(), 1); await capture('filtered-timeline');
@@ -135,7 +153,7 @@ async function run() {
   assert.equal(await page.locator('#room-messages').evaluate(el => el.contains(document.activeElement) && document.activeElement.tagName === 'ARTICLE'), true, 'Filtered context restores and focuses the original row');
   passed.push('Duplicate labels are disambiguated by provider/ID; keyboard @ selects one recipient, exact explicit send, time and member filtering never reroute');
   await fillRoomMessage(page, '用量查看时保留的草稿'); const populatedUsageBefore = await snapshot();
-  await page.locator('#usage-button').click();
+  await openUsage();
   assert.equal(await page.locator('#trust-status [data-usage-session]').count(), 2);
   assert.match(await page.locator('#trust-status').innerText(), /原生用量未报告；不能据此判断为零/);
   assert.equal(await page.locator('#quit-service').isVisible(), false);
@@ -146,9 +164,13 @@ async function run() {
   await fillRoomMessage(page, '');
   await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('共同目标：比较两种学习方法。\n决定：先核对证据，再写结论。'); await page.locator('#save-notes').click();
   assert.equal((await fixture()).sends.length, 1, 'Notes save does not call model');
-  await page.locator('#room-advanced summary').click(); await page.locator('#attach-context').click(); const context = await page.locator('#context-text').inputValue(); assert.ok(context.includes('共同目标')); assert.ok(context.includes('当前参与会话')); assert.ok(!context.includes('PRIVATE-'));
+  await page.locator('#room-advanced summary').click(); await page.locator('#attach-context').click(); const context = await page.locator('#context-text').inputValue(); assert.ok(context.includes('共同目标'));
+  // T-157: since 64420d2 the preview lists each member (成员：name · provider · id) instead of one 当前参与会话 line.
+  for (const id of [a, b]) assert.ok(context.includes(`成员：`) && context.includes(` · ${id}\n归属：`), 'The context lists every current member: ' + id);
+  assert.ok(!context.includes('PRIVATE-'));
   await page.locator('#insert-context').click(); assert.equal(await roomBody(page), context); assert.equal((await fixture()).sends.length, 1);
-  await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 2, 'Explicit context submission'); assert.deepEqual((await fixture()).sends[1], { id: b, text: context }); await reply('本条背景已接收。');
+  // T-157: every send is trimmed (workspace.cjs cleanText), and since 64420d2 the preview ends in a newline.
+  await page.locator('#forward-button').click(); await until(async () => (await fixture()).sends.length === 2, 'Explicit context submission'); assert.deepEqual((await fixture()).sends[1], { id: b, text: context.trim() }); await reply('本条背景已接收。');
   await page.locator('#room-search').fill('本条背景已接收');
   const secondContext=page.locator('#room-messages').getByRole('button', { name: '查看上下文', exact: true });
   await secondContext.locator('xpath=ancestor::article').hover(); await secondContext.click();
@@ -157,24 +179,26 @@ async function run() {
   const contextTarget = page.locator('#room-messages article').filter({ has: page.getByText('本条背景已接收。', { exact: true }) });
   assert.equal(await contextTarget.evaluate(el => { const box = el.getBoundingClientRect(), list = el.parentElement.getBoundingClientRect(); return document.activeElement === el && box.top >= list.top && box.top < list.bottom - 30; }), true, 'Context target remains visible after preceding Markdown mounts');
   // A session detaches without erasing its already received context or drafts.
-  await drag(page.locator(`[data-room-session="${b}"]`), page.locator('#solo-drop'));
+  await dragMemberOut(b, '#solo-drop');
   await until(async () => (await snapshot()).sessions.find(s => s.id === b).roomId === null, 'Mouse drag out');
   await terminal(b); await page.keyboard.type('-CONTINUE');
   assert.equal((await fixture()).inputs.filter(x => x.id === b).map(x => x.data).join(''), 'UNSUBMITTED-CONTINUE');
   await page.locator('#chat-tab').click(); assert.equal(await page.locator('#message-input').inputValue(), 'PRIVATE-DRAFT');
   await page.locator('#advanced summary').click(); await page.getByRole('button', { name: '带上协作背景…', exact: true }).click();
-  assert.match(await page.locator('#context-text').inputValue(), /已独立使用/); await page.locator('#close-context').click();
-  assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context));
+  // T-157: since 64420d2 a session that left is simply not a member in the space's context (was 「已独立使用」).
+  { const after = await page.locator('#context-text').inputValue(); assert.ok(after.includes(` · ${a}\n归属：`) && !after.includes(` · ${b}\n归属：`), 'The left session is no longer listed as a member'); }
+  await page.locator('#close-context').click();
+  assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context.trim()));
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); assert.equal(await page.locator('#recipient').inputValue(), '');
   await page.locator('#room-filter').selectOption(b); assert.ok((await page.locator('#room-messages').innerText()).includes('本条背景已接收')); assert.ok((await page.locator('#room-messages').innerText()).includes('离开了工作区'));
   passed.push('Shared notes persist locally; only an explicit send transmits visible context once; drag out preserves terminal, private draft and received native history');
   await page.locator('#room-filter').selectOption(''); await chooseRecipient(a); await fillRoomMessage(page, '尚在执行的共享任务'); await page.locator('#forward-button').click();
   await until(async () => (await fixture()).sends.length === 3, 'Pending task');
-  await drag(page.locator(`[data-room-session="${a}"]`), page.locator('#session-list'));
+  await dragMemberOut(a, '#session-list');
   await until(async () => (await snapshot()).sessions.find(s => s.id === a).roomId === null, 'Active session detached'); await reply('PRIVATE-AFTER-LEAVE');
   assert.equal((await snapshot()).room.messages.some(m => m.text === 'PRIVATE-AFTER-LEAVE'), false); assert.ok((await snapshot()).sessions.find(s => s.id === a).messages.some(m => m.text === 'PRIVATE-AFTER-LEAVE'));
   await page.locator('#room-nav').click(); await page.locator('#room-record').click(); await fillRoomMessage(page, '保留的合作草稿'); const before = await snapshot(); await capture('collaboration-ready');
-  await page.locator('#usage-button').click();
+  await openUsage();
   assert.equal(await page.locator('#privacy-dialog').getAttribute('data-mode'), 'usage');
   assert.equal(await page.locator('#trust-status [data-usage-session]').count(), before.sessions.filter(s => s.roomId === 'shared' && !s.archived).length);
   await page.locator('#refresh-trust').click(); await page.locator('#close-privacy').click();
@@ -190,7 +214,8 @@ async function run() {
   await until(() => app.windows().length === 2, 'Intentional observer window'); const second = app.windows().find(w => w !== page); await second.locator('#new-session').waitFor();
   await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '重命名…', exact: true }).click(); await page.locator('#rename-name').fill('共享复盘'); await page.locator('#confirm-rename').click();
   await until(async () => (await second.locator('#room-nav').getAttribute('aria-label')).includes('「共享复盘」'), 'Other window sees rename');
-  await second.locator('#room-nav').click(); await second.locator('#room-notes').click(); await second.locator('#room-notes-text').fill('OTHER-UNSAVED');
+  // T-157: a space opens on 成员概览; 共享笔记 is in the 共享记录 toolbar.
+  await second.locator('#room-nav').click(); await second.locator('#room-record').click(); await second.locator('#room-notes').click(); await second.locator('#room-notes-text').fill('OTHER-UNSAVED');
   await page.locator('#room-notes').click(); await page.locator('#room-notes-text').fill('先保存的版本'); await page.locator('#save-notes').click();
   await second.locator('#save-notes').click(); await second.locator('#notes-error').waitFor(); assert.equal(await second.locator('#room-notes-text').inputValue(), 'OTHER-UNSAVED'); assert.equal((await snapshot()).room.notes, '先保存的版本');
   await second.locator('#cancel-notes').click();
@@ -248,7 +273,7 @@ async function run() {
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1 }); });
   await page.locator('#privacy-button').click(); await page.locator('#privacy-dialog summary').filter({ hasText: '清理与完全退出' }).click(); await page.locator('#clear-shared-history').click();
   await until(async () => { const s = await snapshot(); return !s.room.messages.length && !s.room.events.length && !s.room.notes; }, 'All shared data cleared');
-  assert.equal((await snapshot()).room.name, '共享复盘'); assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context));
+  assert.equal((await snapshot()).room.name, '共享复盘'); assert.ok((await snapshot()).sessions.find(s => s.id === b).messages.some(m => m.text === context.trim()));
   assert.deepEqual(errors, []); assert.equal((await fixture()).sends.length, 4);
   passed.push('Shared-history deletion includes new timeline and notes, keeps native history and room name; no hidden dispatch');
   console.log(JSON.stringify({ passed, errors, syntheticDispatches: 4, nativeProcesses: 0, modelCalls: 0, oneWindow: app.windows().length === 1 }, null, 2));
