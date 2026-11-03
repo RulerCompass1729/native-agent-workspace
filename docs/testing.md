@@ -4509,3 +4509,42 @@ ordinary visible update kept fourteen session records with their native IDs,
 live process starts and drafts, and the seven other backends kept PID, start
 time and version; 150 seconds later they and all sixteen live native processes
 were unchanged and no move record existed.
+
+
+### GUI script names and member cards - after alpha.171
+
+Claude 3's T-146 and Claude 2's T-147 commits are integrated on main with
+identical changed lines; they change scripts, a fixture and one unit test only,
+and by the packager's file list, which a saved listing of the installed
+alpha.171 bundle agrees with, no tests or scripts are packaged. On main the full
+unit suite passes 2,276 checks without skips, and the name check reports no name
+missing from the interface source across 520 lookups in 174 scripts. After
+rebuilding the UI bundle, fifteen GUI scripts exit 0 on main without any model
+call: the five T-147 rewrote (desktop workflow, native version, pending actions,
+terminal ready and terminal focus) and ten that T-146 fixed and its lane ran
+through (active process fold, bounded away, capacity room, collaboration list,
+collaboration notices, command actions, member order, six-session workflow, solo
+use and PTY input). The collaboration list script, which, as recorded since
+alpha.156, stopped at its 加入协作 item, now runs through. In the T-146 lane, 20 of
+the 37 runnable scripts ran through (18 of the 33 stuck at 加入协作); 6 stopped at
+real assertions (T-150), 5 at the member tabs T-147 then fixed, 4 at waits
+written before paging (T-148) and 2 at undiagnosed timeouts (T-149). Not re-run
+on main: ten scripts that ran through in that lane (compact room, message file
+links, native context, native history, Claude image reading, failed tool
+reading, inline input reading, native image reading, process group reading and
+column input) and the fourteen T-151 scripts, including check-room.
+
+Claude 2's T-148 commit, which updates four scripts' waits for the paged
+conversation, is integrated with identical changed lines on top of the other
+two. On main the full unit suite passes the same 2,276 checks and the name check
+still reports nothing missing, and the long continuity, reading, search and
+storage GUI scripts exit 0 without model calls. The system clipboard's change
+count, read before and after each of those four runs, stayed at 268; the copies
+made by reading and search go to the test's replaced clipboard function.
+
+Claude 2's T-149 script commit is integrated with identical changed lines on
+top. On main the name check still reports nothing missing. Markdown copy exits
+0. Peer workflow exits 1 at its new assertion that a refused clear asks for no
+confirmation first, with one confirmation counted, as in the author lane; that
+is the product order recorded on the T-149 row, not a script fault. The system
+clipboard's change count stayed at 268 across both runs.
