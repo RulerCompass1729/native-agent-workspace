@@ -60,7 +60,7 @@ silently turn off this guard's secret scan.
 
 At this preparation stage, database/export/log files, credentials, screenshots,
 archives, external symlinks, submodules, and non-UTF-8/binary content are blocked.
-The current finite limits are 2 MiB per scanned item and 256 MiB per scan;
+The current finite limits are 2 MiB per scanned item and 512 MiB per scan;
 exceeding either blocks rather than skips. On 2026-10-24, complete history reached
 67,690,301 bytes across 110 commits and 1,860 unique blobs, exceeding the old
 64 MiB total. On 2026-10-28, 301 reachable commits contained 2,691 unique
@@ -80,13 +80,26 @@ not produce a secret-scan pass. The current tool deadline is 120 seconds, with a
 ref, tree, historical patch, message, identity or secret-check coverage. Tool
 failures and either timeout still block publication.
 Later on 2026-10-30, complete history exceeded the 192 MiB aggregate bound and
-publication was blocked without silently skipping content. The current aggregate
-bound is 256 MiB; only that finite bound changes. Tests place clean content,
+publication was blocked without silently skipping content. The aggregate
+bound then became 256 MiB; only that finite bound changed. Tests place clean content,
 private data and a default-rule secret beyond the former 192 MiB boundary, and
 retain the new-bound overflow and per-item refusal checks. Ref, tree, historical
 patch, identity, message and secret coverage are unchanged. The 120-second tool
 and 135-second outer deadlines remain finite; a successful full scan must still
 be observed before publication.
+On 2026-11-02 the complete-history scan of all 23 local refs reached
+257.3 MiB across 602 commits and 4,119 unique blobs and was blocked without
+skipping content; the scan of main alone, which the push hook performs for a
+main update, was 216.0 MiB. With the person's approval the aggregate bound is
+512 MiB; only that finite bound changes. Tests place clean content, private
+data and a default-rule secret beyond the former 256 MiB boundary and keep the
+new-bound overflow and per-item refusal checks. Ref, tree, historical patch,
+identity, message and secret coverage, and the 120-second tool and 135-second
+outer deadlines, are unchanged; a successful full scan must still be observed
+before publication. A complete scan with the new bound covered 264.1 MiB
+across 622 commits and 4,180 unique blobs, and its gitleaks step took 88.3
+seconds, so at this rate the 120-second tool deadline, not the byte bound, is
+likely to block first, at roughly 350 MiB; a timeout still blocks publication.
 A future asset or larger repository requires another reviewed handling decision,
 not an unbounded scan, skipped history or publication bypass.
 
