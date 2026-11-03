@@ -4156,3 +4156,22 @@ after this update found the shared folder's compatibility hook rewritten at
 16:20 with alpha.161's output, and one wake record in the secretary's session
 with status cancelled; the secretary's log reports that it was its 16:21 wake to
 the main session and gives the cancellation reason. Its cause is not yet known.
+
+
+### Space opening, 2.1.316 stop and the native question checks - alpha.163
+
+Three commits from Claude 3 and Claude 2 are integrated with identical changed
+lines. On main the full unit suite passes 2,162 checks without skips. Eleven GUI
+scripts exit 0: room waiting, now to the end, sidebar membership rail,
+multispace, sidebar density, session menu, sidebar, context menu, inline rename,
+compact versions, member header menu, and native blocks in its default mode and
+with a held native question stopped by 停止. Both native-blocks runs used real
+Claude Code 2.1.316 against local fixed replies, three and one, with no paid
+calls. In the author lanes the space change also passed coordinator context,
+graphical followthrough, progress reading and daily use, which did not run on
+main, before its last narrow-rail fix, and a behaviour test of the real list
+code that fails on the old code; the stop change failed its stop-settles check
+on the old code and passed after it, and five runs of the held-question stop
+each made one model request. In the author lane the collaboration script still
+stops at line 71; the permission and plan modes of native blocks did not run on
+main, and continuation after an overload on 2.1.316 is unverified.

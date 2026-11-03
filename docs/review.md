@@ -2640,3 +2640,38 @@ mid-turn route, and the blocked-prompt route that stays open in the secretary's
 alpha.161 session; the wider `!` gap in the main session's alpha.159 session; a
 real Claude Code 2.1.312 run before the main session's backend moves; and the
 post-provider signature check for alpha.162, whose bridge no session runs yet.
+
+
+### Opening a space no longer filters the session list (T-132)
+
+Clicking a space's name silently filtered the sidebar to that space, and in a
+narrow window the rail hid 显示全部 while the filter stayed on, so other sessions
+seemed to disappear; the filter style also hid the current space's frame. The
+board's recommendation A, applied after twenty minutes without a reply, removes
+the filter: opening a space leaves the list unchanged, the grouped view folds
+other groups to focus on one, and an old saved filter is read but ignored. This
+drops one part of T-108, which can return in another form. The lane reviewer
+passed the first round with conditions, asked for changes in the second after
+the narrow-rail fix closed menus, and passed the third. The integration reviewer
+noted that an old saved space filter stays in the view file, so a rollback to
+alpha.162 would apply it again. Open: renaming from a folded group's row in the
+narrow rail, then widening the sidebar, hides the field under the fold, with the
+text kept; the collaboration script stops at line 71.
+
+
+### 停止 aborts a Claude Code 2.1.316 turn through the native interface (T-133 item 1)
+
+On real 2.1.316, stopping a turn while a native question was held in the
+conversation view sent one more model request, because the hook's refusal became
+the tool result, and NAW then stayed busy; 2.1.316 had no qualified native
+abort, so 停止 typed Esc. Abort is now qualified on 2.1.316, whose interface
+declares it unchanged since 2.1.312, and automatic continuation after an
+overload is split from it and stays limited to 2.1.310 to 2.1.312. The lane
+reviewer first rejected a claim that rested on one run of a race and a check
+that could not tell a settled abort from a locked input; after five clean runs
+and a tighter check it passed. The integration reviewer noted that a stopped
+2.1.316 session is now wake-eligible right away, as on 2.1.312. Open: the
+held-question stop still releases the hook before the abort, and if any run
+shows more than one model request or a gap, the abort should start first; 停止
+during a native permission prompt or after a display gap still falls back to Esc
+and may not return to idle; continuation after an overload on 2.1.316.

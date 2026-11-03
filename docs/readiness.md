@@ -4,6 +4,30 @@ As of 2026-11-02. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.163 carries two reviewed changes. Clicking a space's name in the
+sidebar now only opens the space and no longer filters the session list; 显示全部 is
+gone, leaving the flat and grouped views, and the grouped view can fold the
+other groups; an old saved filter is read but no longer applied, and the current
+space's frame shows again. In the grouped view, sessions that belong only to
+archived or unknown spaces are listed under independent sessions, so both views
+list the same sessions and counts. On Claude Code 2.1.316, 停止 now aborts the
+turn through the native interface instead of typing Esc, so the conversation
+input is usable right after stopping; with a native question held, stopping sent
+no further model request in six local runs, but the question is still released
+before the abort, so this is not guaranteed. A stopped 2.1.316 session can now
+be woken by an agent again right away, within the usual limits, as on 2.1.312,
+where before it waited until the person typed in its terminal; this reaches a
+2.1.316 session only after a backend running alpha.163 restarts it. Automatic
+continuation after an overload stays limited to 2.1.310 to 2.1.312 and is
+unverified on 2.1.316. Unverified: 停止 during a native permission prompt or after
+a display gap on 2.1.316, which still falls back to Esc, so NAW may stay at
+正在处理. Both changes were reviewed in their author lanes and are integrated with
+identical changed lines, with a third commit that updates one GUI script. The
+full unit suite passes 2,162 checks and eleven GUI scripts exit 0, among them
+room waiting to the end and native blocks in its default and question-interrupt
+modes on real Claude Code 2.1.316 with local fixed replies and no paid calls.
+Daily delivery remains pending; current daily remains alpha.162.
+
 Current daily GUI: alpha.162, committed build source `23f76b3b`. It closes the
 wake route the alpha.161 review found: a prompt that the person's own settings
 hook blocks no longer becomes the prompt a later turn can stage a wake under.
