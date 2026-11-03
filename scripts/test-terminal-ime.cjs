@@ -8,6 +8,12 @@ const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-ime-profile-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+// 显示… is in the terminal's ⋯ menu while the session header is compact (renderer.js, compact-session), a button otherwise.
+const openTerminalDisplay = async page => {
+  if (await page.locator('#terminal-more').isVisible()) { await page.locator('#terminal-more').click(); await page.getByRole('menuitem', { name: '显示…', exact: true }).click(); }
+  else await page.locator('#terminal-display').click();
+  await page.locator('#terminal-display-dialog').waitFor();
+};
 let app, page, client, sequence = 0; const errors = [], passed = [], skipped = [];
 let osReturnAttempt = false;
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -259,7 +265,7 @@ async function run() {
   await recovery.getByRole('button', { name: '关闭提示', exact: true }).click();
   passed.push('Replacing a connection cancels old queued input and carries its copy into the new terminal surface');
   // Click terminal output after another control owns focus.
-  await page.locator('#terminal-display').click(); await page.locator('#close-terminal-display').click();
+  await openTerminalDisplay(page); await page.locator('#close-terminal-display').click();
   await page.locator(`[data-terminal-id="${id}"] .xterm-screen`).click({ position: { x: 40, y: 30 } });
   await page.keyboard.type('MOUSE-A');
   await until(async () => (await fixture()).inputs.filter(x => x.id === id).map(x => x.data).join('').endsWith('MOUSE-A'), 'Mouse target');

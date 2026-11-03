@@ -9,6 +9,12 @@ const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-terminal-layout-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_WORKSPACE: profile, NAW_TEST_APP_ROOT: code }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+// 显示… is in the terminal's ⋯ menu while the session header is compact (renderer.js, compact-session), a button otherwise.
+const openTerminalDisplay = async page => {
+  if (await page.locator('#terminal-more').isVisible()) { await page.locator('#terminal-more').click(); await page.getByRole('menuitem', { name: '显示…', exact: true }).click(); }
+  else await page.locator('#terminal-display').click();
+  await page.locator('#terminal-display-dialog').waitFor();
+};
 const delay = ms => new Promise(r => setTimeout(r, ms));
 let app, page, client, sequence = 0;
 const errors = [], observations = [];
@@ -129,7 +135,7 @@ async function run() {
     if (overflow) await fixture('terminal', target, { data: '\x1b[?1000l\x1b[?1006l', sequence: ++nativeSequence });
   }
   const win = await app.browserWindow(page);
-  const setFont = async size => { await page.locator('#terminal-display').click(); await page.locator('#terminal-font-size').fill(String(size)); await page.locator('#terminal-font-size').press('Tab'); await page.locator('#close-terminal-display').click(); };
+  const setFont = async size => { await openTerminalDisplay(page); await page.locator('#terminal-font-size').fill(String(size)); await page.locator('#terminal-font-size').press('Tab'); await page.locator('#close-terminal-display').click(); };
   async function edges(target, provider) {
     const stable = s => [s.id, s.nativeId, s.pid, s.owner, s.liveDraft], original = stable((await snap()).sessions.find(s => s.id === target));
     const check = label => edge(provider + '-' + label, target), divider = page.locator('#session-layout > .split-divider');
