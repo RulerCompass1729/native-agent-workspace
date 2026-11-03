@@ -4588,3 +4588,18 @@ and the seven other backends kept PID, start time and version; 150 seconds later
 they and all sixteen live native processes were unchanged and no move record
 existed. Afterwards application search listed only the copy in /Applications,
 and the rollback folder was empty.
+
+
+### A terminal that takes no keys, renaming while folded - alpha.173
+
+Three commits from Claude 3 are integrated with identical changed lines. On main
+the full unit suite passes 2,286 checks without skips, and the name check
+reports nothing missing across 528 lookups in 176 scripts. After rebuilding the
+UI bundle, eleven GUI scripts exit 0 without model calls (multispace by its
+synthetic setup, as its log has no model counter): terminal claim failure, which
+now also checks the 终端未接通 note; sidebar status, whose new step renames a space
+with 协作空间 folded and failed on the old code in the author lane; collaboration,
+which T-157 brought back to running through; compact header; terminal focus,
+ready, IME, with its opt-in foreground-return step skipped, and layout; sidebar
+layout; multispace; and daily use. The system clipboard's change count stayed at
+268 before and after every run.

@@ -4,6 +4,31 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Candidate alpha.173 carries two reviewed window changes from Claude 3 and a
+script fix. First, a shown 原生终端 that takes no keys, after getting control
+failed, or after a relaunch that reopens the terminal without getting control,
+now says 「终端未接通，可点「原生终端」重试」 in its status line instead of only 就绪; the note
+appears only while this window controls the session, it takes no keys and
+clicking 原生终端 retries, and not while another window has control; two exceptions
+remain, an exited display whose exit is not yet confirmed and a storage warning
+under which a retry gets control but the terminal still takes no keys, which the
+alert banner shows (T-154, option A, recommended and applied under the board's
+20-minute rule; the person can still choose B, clicking into the terminal
+retries, or C, no change). Second, renaming a space while the 协作空间 section is
+folded first unfolds it, so the rename editor shows instead of staying hidden
+(T-155). The script fix brings test-collaboration back to running through
+(T-157). Both changes run in the window, so they apply to existing sessions once
+the app is updated. All three are integrated with identical changed lines, the
+full unit suite passes 2,286 checks and the name check reports nothing missing.
+With the UI bundle rebuilt, eleven GUI scripts exit 0 on main without model
+calls: terminal claim failure and sidebar status with their new steps,
+collaboration, compact header, terminal focus, ready, IME (its opt-in
+foreground-return step skipped) and layout, sidebar layout, multispace and daily
+use; the system clipboard was not written. Unverified: the daily app; T-154's
+relaunch case, narrow widths, member view and screen readers; T-155 from the
+header ⋯, in the flat view and in the narrow rail. Daily delivery remains
+pending; current daily remains alpha.172.
+
 Current daily GUI: alpha.172, committed build source `bd548fe9`. It carries
 three reviewed changes from Claude 3 and a script fix. First, the sidebar is
 easier to read at a glance (T-142, T-144, T-145): each session's status mark
