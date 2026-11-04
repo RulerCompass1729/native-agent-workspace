@@ -4348,3 +4348,14 @@ source-cleared recovery control. New-image preview refusal and actual-target
 validation stay intact. Signed-class proof is explicitly not a human GUI
 recovery test. Visible alpha.183 retention and signature are program-checked;
 whole-task daily operation and the original goal remain open.
+
+
+I171 source adoption: an earlier folded-space rename can replace a newer
+session editor after unfolding returns, or reopen one after cancellation.
+The exact independently reviewed two-line revision guard and nine-case test
+are adopted unchanged. Current signed alpha.183 reproduces the replacement
+through the real renderer and a held synthetic daemon response. The source
+author's six GUI checks and independent review are reused; installed repair
+acceptance remains pending. The first old-version trial's shutdown race and
+verified eventual cleanup are retained in private evidence. Navigation and
+refolding without another rename remain unchanged and outside this repair.
