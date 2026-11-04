@@ -4567,10 +4567,21 @@ The first trial missed the follow assertion despite recording the fault; its
 nominal zero exit is not a pass. A private attribution build-path failure is
 retained separately; corrected generated instrumentation identifies the paging
 call that saved false. No provider or model requests were made. Signed installed
-acceptance and independent delivery judgment are pending.
+acceptance and independent delivery judgment are recorded below.
 
 An independent Fable checkpoint approved the source change after reading the
 actual paging function/callers, red/green checks and raw browser evidence. Its
 scope excludes signed installed acceptance and the whole user issue. Read-only
 tool inventory, unchanged source/index/HEAD and version-only manifest changes
 were verified mechanically. Signed acceptance follows from the committed source.
+
+The same independent checkpoint approved the signed candidate scope. It noted
+an unresolved-promise wait and fabricated internal-frame fields in the test, not
+the product; those waits/labels were corrected before actual installed replay,
+which also records the follower's unsaved state before output. Its request for
+post-journey signature proof is closed with an explicit strict verification and
+CDHash comparison after each signed journey. The actual daily executable passes
+the corrected journey. Source/payload hashes stay bound to `90eff945`; signature,
+identity/draft counts, unchanged occupied backends and active original goal are
+verified by program. The reproduced producer is fixed; broader T134 observations
+and original native lifecycle/physical-input milestones remain open.

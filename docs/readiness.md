@@ -4,7 +4,20 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.187, committed build source `66c63a5`. A session can
+Current daily GUI: alpha.188, committed build source `90eff945`. A newly opened
+reader keeps its live follow target when folded native process records make the
+current page short and automatic paging fills it. Manual reading stays independent;
+Home, JumpLatest and native completion retain their existing behavior. The actual
+installed executable passes this five-member, paged reading journey with synthetic
+native output and no provider/model calls; its signature is rechecked afterwards.
+Independent source and signed-path review pass. The ordinary visible update retains
+14 records, 16 live native identities, 12 window draft scopes and seven occupied
+older backends over 150 seconds. The original goal stays active. This closes the
+reproduced automatic-fill producer, not every earlier grid-jump report, old-backend
+adoption or the whole dogfood milestone. The trusted historical compatibility-hook
+repair is included unchanged; native provider qualification is not expanded.
+
+Previously qualified alpha.187, committed build source `66c63a5`. A session can
 move between Independent and one space without changing its native identity,
 draft or history. Undo and archive restore preserve later placements; old shared
 records stay in their original spaces. The grouped sidebar reuses space headings,

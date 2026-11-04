@@ -5068,3 +5068,34 @@ original active goal after 150 seconds. The source/affected signed-path
 independent review is reused; unchanged update-template and receipt facts
 are checked by program. This does not certify the native-client menu, a real
 account probe, physical input, 318 context transitions or the whole goal.
+
+
+### 2026-11-04 — alpha.188 new-reader follow through native process paging
+
+Committed build `90eff945`; exact signed candidate and actual installed executable
+replay the same five-member reading journey. Each member has 110 synthetic history
+records; one receives 60 native tool records crossing the paging boundary, then a
+native completion and 12 later tools while reading an older segment. The follower
+has no saved reading position before output, remains at the latest line after
+folded-page fill, and respects Home/JumpLatest/PageDown. Other manual text anchors
+stay fixed; the tested historical offset is identical before/after new output.
+Four new unit cases include two pre-fix failures; all 56 affected tests pass.
+
+The first source trial recorded the fault but missed its assertion; its nominal
+zero exit is not a pass. A private attribution build-path error and a signed
+launcher language/evidence-path failure are retained as failed preparation. The
+corrected signed run uses the existing scratch/renderer launcher, actual saved
+reading metadata and DOM geometry, with no fabricated internal-frame states.
+The failed owned profile was reconciled by its launch and service receipts and
+removed before the next trial. All passing runs remove their owned processes,
+profiles and GUI lease; strict signature/CDHash are checked after the journey.
+No product inference, native input or synthetic send occurs. Viewport automation
+does not certify physical input, assistive technology or every original producer.
+
+Independent Fable review approves source and the signed scope. Its final reported
+cumulative CLI list cost is 0.9103442, not an invoice or a sum across resumed runs.
+Explicit post-journey signature output closes its evidence question by program.
+The ordinary visible daily update preserves 14 records, 16 live native identities,
+12 view drafts and seven occupied older backends after 150 seconds. Installed
+source/hash/count records and the original active goal are verified mechanically;
+no peer backend is retired and the whole milestone remains open.
