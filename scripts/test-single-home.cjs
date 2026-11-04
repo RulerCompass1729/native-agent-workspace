@@ -3,8 +3,8 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const assert = require('node:assert/strict'), { randomUUID } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const root = path.resolve(process.env.NAW_TEST_APP_ROOT || path.join(__dirname, '..')), scratch = require('./fixtures/test-scratch.cjs');
-const { connectService } = require('../app/service-connection.cjs'), { writeLayout } = require('../app/service-layout.cjs');
-const { _electron } = scratch.playwright(require('playwright'));
+const { connectService } = require(path.join(root, 'app/service-connection.cjs')), { writeLayout, readLayout } = require(path.join(root, 'app/service-layout.cjs'));
+const { _electron } = scratch.playwright(process.env.NAW_APP_EXECUTABLE ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.resolve(common, '..', '.local/gui-test-slot.lock'), token = randomUUID(), owner = randomUUID();
 const evidence = process.env.NAW_EVIDENCE_DIR, checks = [], errors = [], delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -70,13 +70,16 @@ async function run() {
   lease = true; fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'CodexMain', task: 'I182 single-home installed journey', token, pid: process.pid, time: new Date().toISOString() }));
   fs.mkdirSync(evidence, { recursive: true, mode: 0o700 });
   const entry = await seed(), [a, b, c, d] = backends.New.ids, [old] = backends.Old.ids;
-  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }), timeout: 70000 });
+  app = await _electron.launch({ executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'), args: process.env.NAW_APP_EXECUTABLE ? [] : [entry], env: env({ NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid), NAW_EVIDENCE_DIR:evidence, ...(process.env.NAW_TEST_EXPECTED_SOURCE?{NAW_TEST_EXPECTED_SOURCE:process.env.NAW_TEST_EXPECTED_SOURCE}:{}), ...(process.env.NAW_TEST_EXPECTED_CDHASH?{NAW_TEST_EXPECTED_CDHASH:process.env.NAW_TEST_EXPECTED_CDHASH}:{}) }), timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(8000); page.on('pageerror', error => errors.push(error.message)); await page.locator('#new-session').waitFor();
   const identity = new Map((await snapshot()).sessions.map(s => [s.id, { nativeId:s.nativeId, draft:s.liveDraft, model:s.model }]));
   const home = async id => (await snapshot()).sessions.find(s => s.id === id).roomIds || [];
   const row = id => page.locator(`#session-list [data-session-row="${id}"] .session-link`);
   const heading = id => page.locator(`#session-list [data-session-group="${id}"] .session-space-heading`);
   async function unique() {
+    assert.deepEqual((await snapshot()).sessions.map(s=>s.id).sort(),[a,b,c,d,old].sort(),'No extra or missing sessions');
+    assert.deepEqual(readLayout(profile).entries.slice().sort(),['.',CURRENT_KEY].sort(),'No replacement or extra backend');
+    for(const [key,entry] of Object.entries(backends)){const directory=key==='Old'?profile:path.join(profile,CURRENT_KEY);assert.equal(JSON.parse(fs.readFileSync(path.join(directory,'connection.json'))).pid,entry.child.pid,'Exact owned daemon remains');}
     for (const id of [a,b,c,d,old]) assert.equal(await page.locator(`#session-list [data-session-row="${id}"]`).count(), 1, 'A native session is listed once');
     for (const s of (await snapshot()).sessions) assert.deepEqual({ nativeId:s.nativeId,draft:s.liveDraft,model:s.model }, identity.get(s.id));
   }
@@ -124,7 +127,8 @@ async function run() {
     await page.reload(); await page.locator('#new-session').waitFor(); await placement(a,[roomB]); assert.equal(await page.locator('#new-space').isVisible(),true);
   });
   assert.deepEqual(errors, []);
-  const installed = await app.evaluate(({app})=>({executable:app.getPath('exe'),version:app.getVersion()}));
+  const installed = process.env.NAW_APP_EXECUTABLE ? { executable:app.process().spawnfile,version:(await snapshot()).appVersion } : await app.evaluate(({app})=>({executable:app.getPath('exe'),version:app.getVersion()}));
+  assert.equal(installed.version,require(path.join(root,'package.json')).version);
   fs.writeFileSync(path.join(evidence,'runtime.json'),JSON.stringify({installed,profile,expectedBackends:Object.fromEntries(Object.entries(backends).map(([k,v])=>[k,v.child.pid])), productModelTurns:0,providerStarts:0,checks:checks.length},null,2));
 }
 const cleanup = scratch.cleanup(async () => { for (const entry of Object.values(backends)) { if (entry.client && entry.child?.connected) await entry.client.call('shutdown').catch(() => {}); entry.client?.close(); } });
@@ -136,6 +140,13 @@ const cleanup = scratch.cleanup(async () => { for (const entry of Object.values(
       catch (recordError) { failure ||= recordError; process.exitCode = 1; }
       if (page && !page.isClosed()) fs.writeFileSync(path.join(evidence,'final-ui.json'),JSON.stringify(await page.evaluate(()=>({html:document.querySelector('.sidebar').outerHTML,boxes:[...document.querySelectorAll('.sidebar > *, .sidebar-group, .sidebar-sash, #new-space')].map(e=>({id:e.id,cls:e.className,hidden:e.hidden,box:e.getBoundingClientRect().toJSON(),flex:getComputedStyle(e).flex})),toast:document.getElementById('toast-text').textContent})),null,2));
       await cleanup();
+      if(process.env.NAW_APP_EXECUTABLE){
+        const bundle=path.resolve(path.dirname(process.env.NAW_APP_EXECUTABLE),'../..');
+        execFileSync('/usr/bin/codesign',['--verify','--deep','--strict',bundle]);
+        const sig=require('node:child_process').spawnSync('/usr/bin/codesign',['-d','--verbose=4',bundle],{encoding:'utf8'});assert.equal(sig.status,0);
+        const cdhash=sig.stderr.match(/^CDHash=(\w+)$/m)?.[1];assert.ok(cdhash);if(process.env.NAW_TEST_EXPECTED_CDHASH)assert.equal(cdhash,process.env.NAW_TEST_EXPECTED_CDHASH);
+        fs.writeFileSync(path.join(evidence,'signature-after-gui.json'),JSON.stringify({strictSignature:true,cdhash,afterOwnedCleanup:true},null,2));
+      }
       assert.equal(JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'), 'utf8')).token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
       fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedProfileGone: !fs.existsSync(profile) }, null, 2));
     }
