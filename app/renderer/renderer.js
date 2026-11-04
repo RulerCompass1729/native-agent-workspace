@@ -3345,7 +3345,7 @@ async function ensureTerminal(id, explicit = false) {
       if (event.type === 'keydown') term.input(nativeKey, true);
       return false;
     }
-    if (event.type === 'keydown' && event.metaKey && event.key.toLowerCase() === 'c' && term.hasSelection()) { attempt(() => api.copy(term.getSelection())); return false; }
+    if (event.type === 'keydown' && event.metaKey && event.key.toLowerCase() === 'c' && term.hasSelection()) { event.preventDefault(); attempt(() => api.copy(term.getSelection())); return false; }
     return true;
   });
   entry.pending = (async () => {

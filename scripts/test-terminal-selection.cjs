@@ -6,7 +6,9 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const { connect } = require(path.join(code, 'app/service-client.cjs'));
-const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-terminal-selection-'));
+const testDirectory = testScratch.directory(path.join(os.tmpdir(), 'naw-terminal-selection-'));
+const profile = path.join(testDirectory, 'profile');
+fs.mkdirSync(profile, { mode: 0o700 });
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_APP_VERSION: require(path.join(code, 'package.json')).version, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: profile }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
 const checks = [], observations = [], errors = [], delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const context = 'COPY-THIS-CONTEXT 你好';
@@ -65,8 +67,9 @@ async function run() {
       assert.equal(await app.evaluate(() => globalThis.selectionCopies.at(-1)), context);
       // Untrusted key dispatch exercises the actual shortcut handler without a
       // browser/menu default copy that could overwrite the person's clipboard.
-      await page.evaluate(id => window.selectionTerms.get(id).textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', metaKey: true, bubbles: true, cancelable: true })), id);
+      const uncancelled = await page.evaluate(id => window.selectionTerms.get(id).textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', metaKey: true, bubbles: true, cancelable: true })), id);
       await until(async () => await copyCount() === beforeCopy + 2, 'Synthetic Cmd+C reaches actual xterm shortcut/native IPC');
+      assert.equal(uncancelled, false, 'Terminal copy must cancel the browser default copy');
       assert.equal(await app.evaluate(() => globalThis.selectionCopies.at(-1)), context);
       observations.push({ provider, mode, ordinaryNativeMouseInputs: native.after - native.before, forcedNativeMouseInputs: forced.after - forced.before, selected: forced.text, copiedExactly: true });
       assert.deepEqual(stable((await snapshot()).sessions.find(s => s.id === id)), original);
