@@ -4186,3 +4186,26 @@ was reviewed, and later operators are compared by program. The operator ran
 once. It deleted the previous app on success, so the alpha.177 archive is the
 only rollback. Open: the rows the branch table marks as source only; T-115's A/B
 and C1/C2, where A and C1 applied under the 20-minute rule; daily use.
+
+
+## I163 — signed installed workflow checks
+
+T-151's two signed-bundle checks now run against the existing alpha.178 build
+(source `16531fbc`); no product runtime or version changes. The first stopped on
+an obsolete auto-expand expectation: `2eaab0d` already default-folded active
+process groups with a live original tail. The runner now checks that interaction,
+manual expansion through completion, every original, and draft/view retention.
+Independent review found one low-severity test gap (Main owner): checking a closed
+group after reopen could match the default. It is closed after waiting for a saved
+non-default open choice, checking that choice and the visible group after reopen,
+then checking a later manual close is saved; the same review checkpoint passed
+the delta. Failure capture now runs before closing an available owned page.
+
+The final workspace runner passes six signed GUI flows; the unchanged image and
+continuity runner passes three, including fixture pixel decoding and restoring a
+peer without losing the current conversation/draft. Strict signature and owned
+profile cleanup pass. The entire unchanged reader source matches the signed
+client. These use synthetic native transport: real-provider lifecycle, physical
+input/clipboard, daily-profile acceptance and the remaining T-151 checks stay
+separate. Neither these checks nor this test-only correction closes the dogfood
+milestone. Raw failures, successful runs and both review rounds remain private.

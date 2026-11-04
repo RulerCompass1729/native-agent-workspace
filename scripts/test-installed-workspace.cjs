@@ -80,20 +80,35 @@ async function run() {
   const emit = (id, status, text) => fixture('nativeBlock', b.id, { id, kind: 'tool', title: 'Read', turnId: 'installed-native-turn', status, text });
   await emit('tool:one', 'complete', 'EXACT_FIRST_ORIGINAL'); await emit('tool:two', 'running', 'EXACT_SECOND_ORIGINAL 你好🙂');
   const group = page.locator('#messages [data-process-group]').first(); await group.waitFor();
-  await until(() => group.locator(':scope > details').evaluate(el => el.open), 'Running process group open');
+  // Active groups have defaulted to a folded summary and live tail since 2eaab0d.
+  // Opening is the person's reading choice, including after the native turn ends.
+  await until(async () => await group.getAttribute('data-running') === 'true' &&
+    !await group.locator(':scope > details').evaluate(el => el.open), 'Running process group stays folded');
+  const latest = group.locator(':scope > .process-latest');
+  await until(async () => await latest.isVisible() && (await latest.innerText()).includes('EXACT_SECOND_ORIGINAL 你好🙂'), 'Folded group shows its live original tail');
+  await shot('01b-installed-active-group-folded');
+  await group.locator(':scope > details > summary').click();
+  assert.equal(await group.locator(':scope > details').evaluate(el => el.open), true);
   await emit('tool:two', 'complete', 'EXACT_SECOND_ORIGINAL 你好🙂');
   await fixture('nativeBlock', b.id, { id: 'turn:installed-native-turn', kind: 'turn', turnId: 'installed-native-turn', status: 'complete', text: '' });
-  await until(() => group.locator(':scope > details').evaluate(el => !el.open), 'Native turn closes group');
-  await group.locator(':scope > details > summary').click(); assert.match(await group.innerText(), /2 次读取/);
+  await until(async () => await group.getAttribute('data-running') === 'false' &&
+    await group.locator(':scope > details').evaluate(el => el.open), 'Native completion preserves the person’s open choice');
+  assert.match(await group.innerText(), /2 次读取/);
   const rows = group.locator('[data-message-id]'); assert.equal(await rows.count(), 2);
   for (const row of await rows.all()) { const details = row.locator(':scope > details'); if (!await details.evaluate(el => el.open)) await details.locator(':scope > summary').click(); }
   assert.match(await group.innerText(), /EXACT_FIRST_ORIGINAL/); assert.match(await group.innerText(), /EXACT_SECOND_ORIGINAL 你好🙂/);
-  await group.locator(':scope > details > summary').click(); check('Original tool messages stream inside one group, native completion closes it, user can expand every exact original');
+  const groupId = await group.getAttribute('data-process-group');
+  await until(async () => (await state()).viewState.readingPositions?.[b.id]?.folds?.[groupId] === true, 'Manual expansion saved before closing');
+  check('A folded active group shows its original live tail, manual expansion survives native completion, and every original remains readable');
   await shot('02-installed-native-process-group'); await app.close(); app = null; await launch();
   assert.deepEqual(ids(await state()), original); assert.deepEqual((await state()).sidebar.weights, savedWeights);
   assert.equal((await state()).sidebar.archiveCollapsed, false); assert.equal(await page.locator('#message-input').inputValue(), 'UNSENT_INSTALLED_DRAFT');
-  await until(() => page.locator('#messages [data-process-group]').first().locator(':scope > details').evaluate(el => !el.open), 'Manual close survives reopen');
-  check('Normal owned GUI close/reopen preserves native identities, unsent draft, section sizing, archive and manual group choices');
+  const restoredGroup = page.locator('#messages [data-process-group]').first();
+  await until(() => restoredGroup.locator(':scope > details').evaluate(el => el.open), 'Non-default manual expansion survives reopen');
+  assert.equal((await state()).viewState.readingPositions?.[b.id]?.folds?.[groupId], true);
+  await restoredGroup.locator(':scope > details > summary').click();
+  await until(async () => (await state()).viewState.readingPositions?.[b.id]?.folds?.[groupId] === false, 'Later manual close saved');
+  check('Normal owned GUI close/reopen preserves native identities, unsent draft, section sizing, archive and non-default manual expansion');
   for (const s of [a, b]) {
     await page.locator(`[data-session-id="${s.id}"]`).click();
     await joinSpace(page);
@@ -117,7 +132,13 @@ async function run() {
   assert.deepEqual(errors, []); const stats = await fixture('stats'); assert.equal(stats.stats.inputs, 0); assert.equal(stats.stats.sends, 0);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, errors, launches, stats, profile, productModelCalls: 0, providers: 0, osClipboardOperations: 0, limits: ['Synthetic native transport', 'No OS picker or physical input', 'Native-provider recovery qualified separately'] }, null, 2));
 }
-run().catch(error => { console.error(error.stack); process.exitCode = 1; }).finally(async () => {
+run().catch(async error => {
+  console.error(error.stack); process.exitCode = 1;
+  if (page && !page.isClosed()) {
+    await shot('failure').catch(() => {});
+    await state().then(value => fs.writeFileSync(path.join(evidence, 'failure-state.json'), JSON.stringify(value, null, 2))).catch(() => {});
+  }
+}).finally(async () => {
   try { if (app) await app.close(); await scratch.release(); assert.equal(fs.existsSync(profile), false); const owner = JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))); assert.equal(owner.token, token); fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot); }
   catch (error) { console.error('Cleanup failed: ' + error.stack); process.exitCode = 1; }
 });
