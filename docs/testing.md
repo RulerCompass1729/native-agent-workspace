@@ -4960,3 +4960,11 @@ seven occupied old backends and the original active goal. One app-search entry
 and the verified previous archive remain; no occupied backend is migrated.
 The known false refusal is fixed in adopted code; daily operation, human GUI
 recovery, real-provider/physical coverage and the whole dogfood goal stay open.
+
+
+I171 rename intent: current-source nine cases pass without skipped checks.
+The author's unchanged six real source GUI checks and independent source
+review are reused. A private signed alpha.183 trial through real IPC and a
+one-shot held synthetic daemon response reproduces the stale editor override.
+The old-version failure and eventual owned cleanup are retained. Packaged
+repair acceptance is pending; no product-model inference is used.

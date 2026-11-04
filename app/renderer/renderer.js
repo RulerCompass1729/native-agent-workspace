@@ -2246,7 +2246,7 @@ function roomMessageLabel(m) {
     // A cross-session message: the recipient by its current name; the sender is never verified (T-137).
     const p = m.peerMessage, s = p.senderId && state.sessions.find(x => x.id === p.senderId), r = state.sessions.find(x => x.id === p.recipientId);
     // A name the sender only claimed stays inside 「」, so nothing in it can pass for NAW's own marker.
-    const sender = s ? participantLabel(s, state.sessions) : p.senderId ? p.senderName || uiText('identity.historicalSession') : p.senderName ? `「${p.senderName}」` : uiText('identity.unknownSession');
+    const sender = s ? participantLabel(s, state.sessions) : p.senderId ? historicalParticipantLabel(p.senderName || uiText('identity.historicalSession'), p.senderId) : p.senderName ? `「${p.senderName}」` : uiText('identity.unknownSession');
     return uiText('identity.unverifiedSender', { name: sender, recipient: r ? participantLabel(r, state.sessions) : historicalParticipantLabel(p.recipientName || uiText('identity.historicalSession'), p.recipientId) });
   }
   const person = state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
