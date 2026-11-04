@@ -4533,3 +4533,15 @@ flows; runtime review is reused unchanged. Old archive metadata was inspected
 read-only: no archived spaces needing unproven restoration in the current profile.
 No native lifecycle or whole-goal completion is claimed. The compat-hook upgrade
 failure remains open; no push was authorized or performed.
+
+
+I184 / existing compat-hook upgrade failure: the exact legacy image-hook copy
+from commit `1749707` was missing from the trusted-content allowlist. Reproduced
+at unchanged HEAD, then corrected by adding only its transformed SHA-256. Unknown,
+edited, symlinked and foreign-owned copies remain refused. The existing 51-check
+plugin suite and full 2,588-check suite pass with no skips or provider/model turns.
+A fresh read-only independent checkpoint approved the source; the initial turn
+cap produced no verdict and was not treated as a pass. Its conclusion resume
+reported cumulative list cost 0.5698338, not an invoice. Source/index hashes were
+unchanged during review. This is source-only, pending the next substantive runtime
+batch; installed alpha.187 and Claude capability qualification remain unchanged.
