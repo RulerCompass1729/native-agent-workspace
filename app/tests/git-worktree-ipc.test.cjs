@@ -1,10 +1,11 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const {uiError}=require('../ui-errors.cjs');
 const source=fs.readFileSync(path.join(__dirname,'../main.cjs'),'utf8');
 function handler(name,extra={}) {
   const prefix=`  register('${name}', `, start=source.indexOf(prefix), end=source.indexOf('\n  });',start);
   assert.ok(start>=0&&end>start); const expression=source.slice(start+prefix.length,end+4);
-  return vm.runInNewContext('('+expression+')',{assertNativeCreation:()=>{},...extra});
+  return vm.runInNewContext('('+expression+')',{assertNativeCreation:()=>{},uiError,displayText:(key,params)=>require('../ui-locale.js').format('zh',key,params),...extra});
 }
 function context() {
   const calls=[],pending=[];

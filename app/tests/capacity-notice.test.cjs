@@ -2,6 +2,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { Workspace } = require('../workspace.cjs');
+const locale = require('../ui-locale.js');
 const app = path.resolve(__dirname, '..');
 const main = fs.readFileSync(path.join(app, 'main.cjs'), 'utf8');
 const renderer = fs.readFileSync(path.join(app, 'renderer/renderer.js'), 'utf8');
@@ -13,7 +14,7 @@ function section(start, end) {
   assert.ok(a >= 0 && b > a, 'Actual production function exists: ' + start);
   return main.slice(a, b);
 }
-function harness() {
+function harness(language = 'zh') {
   const notifications = [], delivered = [], sent = [], callbacks = new Map();
   let supported = true, failDelivery = false, shows = 0, destroyed = false, activations = 0;
   class Notification extends EventEmitter {
@@ -28,6 +29,7 @@ function harness() {
     roomState: { assertAvailable() {} }, displayState: value => value,
     notifyToolWait() {}, register: (name, callback) => callbacks.set(name, callback),
     applicationBuild: null, appBuildInfo: async () => ({}), app: { getVersion: () => 'synthetic' },
+    displayText: (key, params) => locale.format(language, key, params), localeWarning: null,
     dataDir: '/synthetic/profile', preflight: () => ({ synthetic: true }) };
   vm.createContext(sandbox);
   const notifier = section('function notifyCapacity(', '\nfunction bindClient(');
@@ -40,11 +42,11 @@ function harness() {
     set supported(value) { supported = value; }, set failDelivery(value) { failDelivery = value; },
     set destroyed(value) { destroyed = value; }, get shows() { return shows; }, get activations() { return activations; } };
 }
-function status(row, badge = true, connected = true) {
+function status(row, badge = true, connected = true, language = 'zh') {
   const prefix = renderer.slice(0, renderer.indexOf('\nlet state, owner,'));
   assert.ok(prefix.includes('const sessionStatus ='));
   return vm.runInNewContext(prefix + '\nconst disconnected = !connected; sessionStatus(row, badge);',
-    { window: { workspace: {}, nativeWorkspaceFleet: require('../renderer/fleet-observation.js') }, row, badge, connected });
+    { ui: { language: { text: (key, params) => locale.format(language, key, params) } }, window: { workspace: {}, nativeWorkspaceFleet: require('../renderer/fleet-observation.js') }, row, badge, connected });
 }
 test('the actual recovery descriptor carries only its failed native identity and existing facts', () => {
   const value = { ...record().capacityRecovery, runtime: { private: true }, owner: 'window' };
@@ -127,4 +129,16 @@ test('capacity opt-in preserves native fleet facts and selected-header scope', (
   // Sidebar recovery text now comes from sidebarPresentation (sidebar-presentation.test.cjs);
   // literal call-site counts are not the user-facing recovery contract.
   assert.ok(renderer.includes('sessionStatus(s)')); assert.ok(!renderer.includes('sessionStatus(s, true)'));
+});
+
+test('capacity notices localize only owned labels without changing raw recovery facts or notification delivery', () => {
+  for (const language of ['zh', 'en']) {
+    const row = record(), before = JSON.stringify(row), h = harness(language); h.fire([row]);
+    assert.deepEqual(h.delivered.map(value => ({ ...value })), [{ title: locale.format(language, 'os.capacityTitle'), body: locale.format(language, 'os.capacityBody') }]);
+    const capacity = status(row, true, true, language), routing = status(record({ capacityRecovery: { ...row.capacityRecovery, reason: 'routing' } }), true, true, language);
+    assert.ok(capacity.includes(locale.format(language, 'capacityBadge.capacityStopped')));
+    assert.ok(routing.includes(locale.format(language, 'capacityBadge.routingStopped')));
+    assert.ok(capacity.endsWith(locale.format(language, 'capacityBadge.retried', { count: 3 })));
+    h.fire([row]); assert.equal(h.delivered.length, 1); assert.equal(JSON.stringify(row), before);
+  }
 });

@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 // Window copies are recovery data, never instructions to overwrite a session.
 function backups(view) {
   if (!view.draftBackups || typeof view.draftBackups !== 'object' || Array.isArray(view.draftBackups)) view.draftBackups = {};
@@ -30,7 +31,7 @@ function forgetDraft(view, id) {
 }
 function retainRecovery(view, id, text) {
   const entry = backups(view)[id];
-  if (!entry || typeof text !== 'string' || !text || text.length > 16000) throw Error('找不到有效的草稿副本。');
+  if (!entry || typeof text !== 'string' || !text || text.length > 16000) throw uiError("error.drafts.invalidRecoveryCopy");
   if (!Array.isArray(entry.recoveries)) entry.recoveries = [];
   if (entry.discarded && entry.text === text) return entry.recoveries;
   if (!entry.recoveries.includes(text)) entry.recoveries.push(text);

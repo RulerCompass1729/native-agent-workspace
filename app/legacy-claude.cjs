@@ -1,3 +1,5 @@
+const { displayMessage } = require('./ui-locale.js');
+const { uiError, uiNotice } = require('./ui-errors.cjs');
 // Same-process, private reader for the inspected retained Claude host. Native
 // hooks still own lifecycle, permissions and fleet. This cannot start a CLI.
 const { Claude } = require('./adapters.cjs');
@@ -15,13 +17,13 @@ class LegacyClaude extends Claude {
     const saved = readReaderCache(this.filename, record);
     if (saved) {
       this.record.messages = saved.messages; this.nativeInputRequired = saved.nativeInputRequired === true; this.initialized = true;
-      this.gap('观察连接已重新打开；接入前或超出缓存的临时内容，请在原生终端核对。');
+      this.gap('观察连接已重新打开；接入前或超出缓存的临时内容，请在原生终端核对。', uiNotice('notice.reader.reopened').uiMessage);
     }
     this.on('nativeBlock', event => {
       // A late result from a tool started before this observer is not a new
       // tool invocation. Do not invent its turn or merge it with another tool.
       if (event.kind === 'tool' && !event.input && !this.record.messages.some(m => m.id === `native:${this.record.nativeId}:${event.id}`)) {
-        this.gap('收到接入前工具的结果；该工具的起点未被观察，请在原生终端核对。'); return;
+        this.gap('收到接入前工具的结果；该工具的起点未被观察，请在原生终端核对。', uiNotice('notice.reader.earlierTool').uiMessage); return;
       }
       if (event.kind === 'input' && event.inputTag) {
         const pending = this.record.messages.find(m => m.id === event.inputTag && m.inputMode === 'queue' && m.nativeId === event.nativeId && m.text === event.text);
@@ -34,11 +36,11 @@ class LegacyClaude extends Claude {
     });
     this.on('inputRequired', () => { this.scheduleSave(); this.emit('change'); });
     this.on('usage', usage => { this.usage = usage; this.emit('change'); });
-    this.on('model', model => { this.model = model; this.emit('change'); });
+    this.on('model', (model, uiMessage) => { this.model = model; this.modelUiMessage = displayMessage(uiMessage, 'notice.', model) || undefined; this.emit('change'); });
     this.on('capability', () => this.emit('change'));
     this.on('state', () => this.emit('change'));
     this.on('progress', update => { if (update.kind === 'gap') this.emit('change'); });
-    this.on('contextEnd', () => { this.gap('原生上下文已结束或切换；此处保留原记录，请在原生终端继续。'); });
+    this.on('contextEnd', () => { this.gap('原生上下文已结束或切换；此处保留原记录，请在原生终端继续。', uiNotice('notice.reader.contextEnded').uiMessage); });
   }
   async bindRoot(message) {
     if (this.disposed || message.nativeBlocks !== true) throw Error('Reader unavailable');
@@ -53,7 +55,7 @@ class LegacyClaude extends Claude {
       this.record.messages = structuredClone(latest.messages || []);
       this.markReader?.();
       this.initialized = true;
-      this.gap('已接入原生实时内容；接入前未记录的临时过程仍需在原生终端查看。');
+      this.gap('已接入原生实时内容；接入前未记录的临时过程仍需在原生终端查看。', uiNotice('notice.reader.connected').uiMessage);
     }
     this.scheduleSave(); this.emit('change'); return result;
   }
@@ -75,11 +77,11 @@ class LegacyClaude extends Claude {
   get sharedReplyAvailable() { return Boolean(this.queueAvailable && this.nativeSharedDisplay); }
   get pendingQueue() { return this.submission.pending?.waitForNativeTurn ? this.submission.pending.tag : null; }
   async queue(text, tag, guard) {
-    if (!this.queueAvailable || this.submission.pending || !guard()) throw Error('原生等待输入暂不可用；草稿保留。');
+    if (!this.queueAvailable || this.submission.pending || !guard()) throw uiError("error.nativeWaitingInputUnavailable");
     const row = { id: tag, role: 'user', kind: 'input', nativeId: this.record.nativeId, text, status: 'awaiting-native', inputMode: 'queue', time: Date.now() };
     this.record.messages.push(row); this.save(); this.emit('change');
     try {
-      if (this.storageError) throw Error('等待输入未能保存；没有发送，草稿保留。');
+      if (this.storageError) throw uiError("error.legacy.waitingInputSaveFailed");
       const pending = this.submission.request(text, tag, guard, true); this.emit('change');
       const receipt = await pending;
       if (row.status === 'awaiting-native') row.status = 'submitted';
@@ -91,13 +93,13 @@ class LegacyClaude extends Claude {
   }
   interrupt() { throw Error('Native lifecycle belongs to the original host'); }
   stop() { throw Error('Native lifecycle belongs to the original host'); }
-  gap(text) {
+  gap(text, uiMessage) {
     this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
     for (const row of this.record.messages) if (['streaming', 'running', 'awaiting-native'].includes(row.status)) row.status = 'unconfirmed';
     const id = `retained-gap:${this.record.nativeId}`;
     let row = this.record.messages.find(m => m.id === id);
     if (!row) { row = { id, role: 'system', kind: 'gap', time: Date.now() }; this.record.messages.push(row); }
-    row.text = text; row.incomplete = true; this.emit('readerBlock', row); this.scheduleSave(); this.emit('change');
+    row.text = text; row.uiMessage = displayMessage(uiMessage, 'notice.', text) || undefined; row.incomplete = true; this.emit('readerBlock', row); this.scheduleSave(); this.emit('change');
   }
   scheduleSave() {
     if (this.disposed || this.saveTimer || !this.initialized) return;

@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
@@ -32,7 +33,7 @@ class CodexTerminalBridge {
     });
     const state = { client, upstream, pending: new Map(), queue: [], queuedBytes: 0 };
     const rpc = { reply(id, result) {
-      if (upstream.readyState !== WebSocket.OPEN || client.readyState !== WebSocket.OPEN) throw Error('原生终端连接已变化；没有发送决定。');
+      if (upstream.readyState !== WebSocket.OPEN || client.readyState !== WebSocket.OPEN) throw uiError("error.terminalConnectionChangedNoDecision");
       upstream.send(JSON.stringify({ id, result }));
     }, get connected() { return upstream.readyState === WebSocket.OPEN && client.readyState === WebSocket.OPEN; } };
     this.connections.add(state);

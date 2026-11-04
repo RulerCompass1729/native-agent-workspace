@@ -226,3 +226,29 @@ test('native input ABA before the second initial read cannot refresh the authori
   const start = f.runner.start('owner', f.spec); await wait(() => waiting);
   f.b.w.get(f.b.id).controlRevision++; release(); await assert.rejects(start, /身份|控制权|就绪/); assert.equal(f.sends.length, 0);
 });
+
+
+test('peer pause display metadata preserves the existing remote generic receipt and never resends native input', async t => {
+  const f = await fixture(t), locale = require('../ui-locale.js'); await f.runner.start('owner', f.spec);
+  assert.equal(f.sends.length, 1); assert.equal(f.sends[0].text, f.spec.goal);
+  const identities = [f.a, f.b].map(service => { const s = service.w.get(service.id); return [s.id, s.nativeId, s.owner, s.name]; });
+  await f.runner.pause(); assert.equal(f.runner.run.status, 'paused');
+  assert.equal(locale.displayText('en', f.runner.run.reason, f.runner.run.reasonUiMessage), 'You paused handoffs across backends. Already accepted native work is retained.');
+  for (const service of [f.a, f.b]) {
+    const lease = service.w.peerLeases.snapshot().find(g => g.id === f.runner.run.id); assert.equal(lease.status, 'paused');
+    assert.equal(lease.reason, '跨后台交接已暂停');
+    assert.equal(locale.displayText('en', lease.reason, lease.reasonUiMessage), 'Handoffs across backends paused');
+  }
+  const event = f.b.w.room.messages.findLast(m => m.role === 'system');
+  assert.equal(locale.displayText('en', event.text, event.uiMessage), 'Revoking further handoff authorization. Already accepted native work may still continue.');
+  assert.equal(f.sends.length, 1); assert.deepEqual([f.a, f.b].map(service => { const s = service.w.get(service.id); return [s.id, s.nativeId, s.owner, s.name]; }), identities);
+});
+
+test('observed native work carries its own reason through the existing peer completion receipt without another handoff', async t => {
+  const f = await fixture(t), locale = require('../ui-locale.js'); await f.runner.start('owner', f.spec); const sent = f.sends[0];
+  f.a.r.emit('background', { count: 1, scheduled: 0 }); assert.equal(f.sends.length, 1);
+  f.finish(sent, 'RAW final reply 中文', { background: 1 }); await wait(() => f.runner.run.status === 'paused');
+  assert.equal(f.sends.length, 1); assert.equal(f.runner.run.reason, '原生报告仍有后台或定时工作，请核对后再交接。');
+  assert.equal(locale.displayText('en', f.runner.run.reason, f.runner.run.reasonUiMessage), 'Native reports background or scheduled work. Check it before handing off again.');
+  assert.ok(f.a.w.room.messages.some(row => row.text === 'RAW final reply 中文')); assert.equal(sent.text, f.spec.goal);
+});

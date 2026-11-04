@@ -1,6 +1,6 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-const context = vm.createContext({});
+const context = vm.createContext({ uiText: (key, params) => require('../ui-locale.js').format('zh', key, params) });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/reading-list.js'), 'utf8'), context);
 function groups(messages, originals = messages) {
   context.messages = messages; context.originals = originals;

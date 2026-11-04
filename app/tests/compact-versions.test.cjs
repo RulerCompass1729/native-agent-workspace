@@ -1,7 +1,9 @@
+const localeUI = require('./fixtures/locale-ui.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
-const context = vm.createContext({});
+const locale = require('../ui-locale.js');
+const context = vm.createContext({ uiText: (key, params) => locale.format('zh', key, params) });
 vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf('function renderVersions(')), context);
 const plain = value => JSON.parse(JSON.stringify(value));
 const current = '0.1.0-alpha.139';
@@ -44,6 +46,7 @@ function mainOptions(client, version = current, profile) {
   assert.ok(start >= 0 && end > start);
   const fn = vm.runInNewContext(main.slice(start, end) + ';connectionUpdateOptions', {
     continuationStatus: require('../service-client.cjs').continuationStatus, backendSwitch: require('../backend-switch.cjs'),
+    uiError: require('../ui-errors.cjs').uiError,
   });
   return plain(fn(client, version, profile));
 }
@@ -88,6 +91,8 @@ function handlers(client, answer, events) {
   const scope = { register: (name, handler) => registered[name] = handler, roomState: undefined,
     app: { getVersion: () => current }, connectionUpdateOptions: (c, version) => mainOptions(c, version),
     continuationStatus: require('../service-client.cjs').continuationStatus,
+    uiError: require('../ui-errors.cjs').uiError,
+    displayText: (key, params) => locale.format('zh', key, params), uiLocale: locale, displayLanguage: () => 'zh',
     dialog: { async showMessageBox() { events.dialog++; return answer(); } },
     async continueService() { events.update++; throw Error('Unexpected backend write'); },
     dataDir: 'synthetic-profile', process: { execPath: 'synthetic-node' } };
@@ -123,16 +128,22 @@ test('cancellation preserves the connection; a new active turn or identity after
   }
 });
 
+const bootstrap = fs.readFileSync(require.resolve('../dsh/bootstrap.js'), 'utf8');
+const helperStart = bootstrap.indexOf('    function createDisplayBindings('), helperEnd = bootstrap.indexOf('    function mountWorkspace(', helperStart);
+assert.ok(helperStart >= 0 && helperEnd > helperStart);
+const createBindings = vm.runInNewContext('(' + bootstrap.slice(helperStart, helperEnd).trim() + ')');
 function menuFixture() {
-  let resolve, requestCount = 0, menu;
-  const pending = new Promise(value => resolve = value), control = { isConnected: true, hidden: false }, calls = { updates: [], toasts: [], renders: 0, settings: [], switches: [] };
+  let resolve, requestCount = 0, menu, language = 'zh';
+  const uiText = (key, params) => locale.format(language, key, params), display = createBindings(uiText);
+  const pending = new Promise(value => resolve = value), control = { isConnected: true, hidden: false }, toast = { childElementCount: 0 }, calls = { updates: [], toasts: [], renders: 0, settings: [], switches: [] };
   const settings = { auto: true, interrupted: [] };
-  const c = vm.createContext({ checkingBackendVersions: false, backendVersionMenu: null, backendVersionTicket: 0, selectionRevision: 1, disconnected: false, state: {},
-    $: () => control, document: { activeElement: control, querySelector: () => null },
+  const toastClose = {}, toastContainer = { childElementCount: 2, children: [toast, toastClose] };
+  const c = vm.createContext({ uiText, toastMessage: (key, params) => calls.toasts.push(uiText(key, params)), checkingBackendVersions: false, backendVersionMenu: null, backendVersionTicket: 0, selectionRevision: 1, disconnected: false, state: {},
+    $: id => id === 'toast' ? toastContainer : id === 'toast-text' ? toast : control, document: { activeElement: control, querySelector: () => null },
     api: { connectionUpdates() { requestCount++; return pending; }, async continueConnection(...args) { calls.updates.push(args); return false; },
       async backendSwitchSettings(value) { calls.settings.push(value); if (typeof value === 'boolean') settings.auto = value; return { ...settings }; },
       async switchBackend(value) { calls.switches.push(value); return { key: value.backendKey, resumed: ['s'], left: [] }; } },
-    ui: { menu(value) { menu = value; return () => {}; } }, renderVersions() { calls.renders++; },
+    ui: { display, menu(value) { menu = value; return () => {}; } }, renderVersions() { calls.renders++; },
     versionValue: value => value, toast: value => calls.toasts.push(value), attempt: work => work() });
   vm.runInContext(source.slice(source.indexOf('function compactAppVersion('), source.indexOf('function backendVersionNotice(')), c);
   vm.runInContext(source.slice(source.indexOf('function backendSwitchedText('), source.indexOf("$('backend-version-summary').onclick")), c);
@@ -140,10 +151,25 @@ function menuFixture() {
   // contract test, not a claim that a real Chromium GUI has been exercised.
   let disabled = false;
   Object.defineProperty(control, 'disabled', { get: () => disabled, set(value) { disabled = value; if (value) c.document.activeElement = {}; } });
-  control.attributes = {}; control.setAttribute = (name, value) => control.attributes[name] = value;
+  for (const el of [control, toast]) {
+    el.attributes = {}; el.setAttribute = (name, value) => el.attributes[name] = value;
+    el.childElementCount = 0; el.getAttribute = name => el.attributes[name] ?? null; el.removeAttribute = name => delete el.attributes[name];
+  }
+  const showStart = bootstrap.indexOf('function showError('), showEnd = bootstrap.indexOf('const language = {', showStart);
+  assert.ok(showStart > 0 && showEnd > showStart);
+  c.ui.showError = vm.runInNewContext('(' + bootstrap.slice(showStart, showEnd).trim() + ')', { window: { nativeWorkspaceLocale: locale }, display, errorText: error => locale.errorText(language, error) });
   vm.runInContext(source.slice(source.indexOf('async function openBackendVersions('), source.indexOf("$('backend-version-summary').onclick")) + ';this.open = openBackendVersions;', c);
-  return { c, control, calls, settings, resolve, get requests() { return requestCount; }, get menu() { return menu; } };
+  return { c, control, toast, toastContainer, toastClose, calls, settings, resolve, switch(value) { language = value; display.refresh({ querySelectorAll: () => [control, toast] }); }, get requests() { return requestCount; }, get menu() { return menu; } };
 }
+test('changing language during a version check preserves the pending request, focus, menu actions and exact option identity', async () => {
+  const f = menuFixture(), opening = f.c.open(); f.switch('en');
+  assert.equal(f.control.textContent, 'Checking backends…'); assert.equal(f.requests, 1); assert.equal(f.c.document.activeElement, f.control); assert.equal(f.control.disabled, false);
+  const option = { id: 'session-original', backendKey: 'backend-original', nativeId: 'native-original', version: '0.1.0-alpha.120', count: 1, ready: true }, before = structuredClone(option);
+  f.resolve([option]); await opening; const action = f.menu.items[0], select = f.menu.onSelect;
+  assert.equal(action.id, '0'); assert.match(action.labelRead(), /Review and update connection… · Sessions: 1/);
+  f.switch('zh'); assert.match(action.labelRead(), /核对并更新连接… · 1 个会话/); assert.equal(f.menu.items[0], action); assert.equal(f.menu.onSelect, select);
+  assert.equal(f.requests, 1); assert.equal(f.calls.updates.length, 0); assert.deepEqual(option, before); assert.equal(f.c.document.activeElement, f.control);
+});
 test('an earlier read-only version check cannot open a menu after navigation or focus leaves its button', async () => {
   for (const change of [f => f.c.selectionRevision++, f => f.c.document.activeElement = {}, f => f.c.backendVersionTicket++]) {
     const f = menuFixture(), opening = f.c.open(); change(f);
@@ -167,7 +193,7 @@ test('an idle old backend offers one explicit end-and-update, and the automatic 
   const stops = [{ id: 's', nativeId: 'native-s', provider: 'claude', name: 'Claude 2', owner: 'view' }];
   f.resolve([{ id: 's', backendKey: 'old', nativeId: 'native-s', version: '0.1.0-alpha.120', count: 1, ready: false, reason: 'Working connection retained',
     switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]); await opening;
-  assert.deepEqual(plain(f.menu.items.map(item => item.label)), ['α120 · 结束并更新… · 1 个会话', '空闲时自动更新：开（点此关闭）']);
+  assert.deepEqual(plain(f.menu.items.map(item => item.labelRead ? item.labelRead() : item.label)), ['α120 · 结束并更新… · 1 个会话', '空闲时自动更新：开（点此关闭）']);
   await f.menu.onSelect('0');
   assert.deepEqual(plain(f.calls.switches), [{ backendKey: 'old', switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]);
   assert.equal(f.calls.updates.length, 0); assert.deepEqual(f.calls.toasts, ['后台已更新，会话已按原身份接回；NAW 没有向它们发送任何内容。']);
@@ -187,8 +213,8 @@ test('sessions ended by an unfinished update are named in the menu even with no 
 });
 
 test('sessions an unfinished move ended keep the old-sessions control visible after every old backend is gone', () => {
-  const elements = {}, $ = id => elements[id] ||= { id, hidden: false, textContent: '', title: '', disabled: false, attributes: {}, setAttribute(k, v) { this.attributes[k] = v; } };
-  const c = vm.createContext({ $, state: { appVersion: '0.1.0-alpha.157', sessions: [{ id: 'a', runtimeVersion: '0.1.0-alpha.157' }], switchEnded: [{ id: 'a', name: 'Claude 2' }, { id: 'b', name: 'Codex 秘书' }] },
+  const elements = {}, $ = id => elements[id] ||= { id, hidden: false, textContent: '', title: '', disabled: false, attributes: {}, setAttribute(k, v) { this.attributes[k] = v; }, getAttribute(k) { return this.attributes[k] ?? null; }, removeAttribute(k) { delete this.attributes[k]; } };
+  const c = vm.createContext({ ...localeUI(), $, state: { appVersion: '0.1.0-alpha.157', sessions: [{ id: 'a', runtimeVersion: '0.1.0-alpha.157' }], switchEnded: [{ id: 'a', name: 'Claude 2' }, { id: 'b', name: 'Codex 秘书' }] },
     disconnected: false, checkingBackendVersions: false, backendVersionTicket: 0, backendVersionMenu: null });
   vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf("$('app-version').onclick")) + ';this.render = renderVersions;', c);
   c.render();
@@ -240,7 +266,7 @@ test('a session\'s own menu runs the update of the backend that holds it, or say
 });
 test('the session menu offers the update right under its version fact, only for an older backend', () => {
   const start = source.indexOf('function sessionMenuModel('), end = source.indexOf('function openSessionMenu(');
-  const c = vm.createContext({ state: { appVersion: current, sessions: [], capabilities: [] }, disconnected: false, allSpaces: () => [], inSpace: () => false,
+  const c = vm.createContext({ ...localeUI(), state: { appVersion: current, sessions: [], capabilities: [] }, disconnected: false, allSpaces: () => [], inSpace: () => false,
     orderedMembers: () => [], sidebarSessions: () => [], sidebarDetails: record => ['fact ' + record.id] });
   vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf('function backendVersionSummary(')) + source.slice(start, end), c);
   const ids = record => { c.state.sessions = [record]; return c.sessionMenuModel(record.id, { spaceId: null }).items.map(item => item.id); };
@@ -259,4 +285,14 @@ test('a session blocked by its own work says exactly why, end to end from the ma
   // A backend that cannot take the one-step move at all keeps the earlier, manual guidance.
   const early = mainOptions({ ...client, entries: [{ key: 'old', state: { ...entry.state, capabilities: [] } }] });
   assert.equal(early[0].switch, null);
+});
+
+
+test('a known refused connection stays retained while its existing toast switches without another check or update', async () => {
+  const error = require('../ui-errors.cjs').uiError('error.connection.updating'), option = { id: 's', backendKey: 'old', nativeId: 'native-s', version: 'old', count: 1, ready: false, reason: error.message, reasonUiMessage: error.uiMessage }, before = JSON.stringify(option);
+  const f = menuFixture(), opening = f.c.open(); f.resolve([option]); await opening; f.menu.onSelect('0');
+  assert.equal(f.toast.textContent, error.message); f.switch('en');
+  assert.equal(f.toast.textContent, 'This backend connection is updating or disconnected. The original session is retained.');
+  assert.deepEqual(f.toastContainer.children, [f.toast, f.toastClose]); assert.equal(f.toastContainer.childElementCount, 2);
+  assert.equal(f.requests, 1); assert.equal(f.calls.updates.length, 0); assert.deepEqual(f.calls.toasts, [error.message]); assert.equal(JSON.stringify(option), before);
 });

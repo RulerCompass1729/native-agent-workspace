@@ -41,7 +41,7 @@ test('the default replacement check does not mistake unavailable process inspect
   const f = ready(t), before = f.read(), module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../mobile-access.cjs'), 'utf8'), {
     module, exports: module.exports, process, Buffer, URL,
-    require(name) { return name === './platform.cjs' ? { processIdentity: () => null, processMayBeAlive: () => true } : require(name); },
+    require(name) { return name === './platform.cjs' ? { processIdentity: () => null, processMayBeAlive: () => true } : require(name.startsWith('./') ? path.join(__dirname, '..', name) : name); },
   });
   const next = new module.exports.MobileAccess(f.root, { ...f.config, identity: { pid: 900002, started: 'synthetic-next' } });
   assert.throws(() => next.initialize(), /手机授权/); assert.equal(f.read(), before);

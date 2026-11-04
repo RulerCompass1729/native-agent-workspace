@@ -1,24 +1,26 @@
+const localeUI = require('./fixtures/locale-ui.cjs');
 // T-134: the real reading-view wheel and key handlers, with a stubbed element.
 // While following, moving toward the latest neither ends following nor drops the
 // render guard (pageChanging); moving away ends it, as before.
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 function harness() {
+  const displayFixture = localeUI();
   const frames = [], saved = [], clock = { now: 10000 };
-  const element = () => ({ hidden: false, dataset: {}, append() {}, onclick: null });
-  const context = vm.createContext({
+  const element = () => ({ hidden: false, dataset: {}, attrs: {}, setAttribute(k,v) { this.attrs[k]=String(v); }, getAttribute(k) { return this.attrs[k]??null; }, removeAttribute(k) { delete this.attrs[k]; }, append() {}, onclick: null });
+  const context = vm.createContext({ ...displayFixture,
     Map, Set, Object, Number, Math, JSON, structuredClone, performance: { now: () => clock.now },
     window: { getSelection: () => ({ isCollapsed: true }) }, document: { activeElement: null },
     requestAnimationFrame: fn => { frames.push(fn); return frames.length; }, cancelAnimationFrame() {},
     ResizeObserver: class { observe() {} disconnect() {} },
     button: (text, onclick) => ({ ...element(), text, onclick }), node: () => element(),
-    ui: { clearMarkdown() {} }, api: { readingState: positions => saved.push(JSON.parse(JSON.stringify(positions))) }, attempt: fn => fn(),
+    ui: { ...displayFixture.ui, clearMarkdown() {} }, api: { readingState: positions => saved.push(JSON.parse(JSON.stringify(positions))) }, attempt: fn => fn(),
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/reading-list.js'), 'utf8'), context);
   const listeners = {}, documentListeners = {}, row = { closest: selector => selector === '[data-message-id]' ? row : null };
   const el = {
     scrollTop: 0, scrollHeight: 3000, clientHeight: 500, isConnected: true, attrs: {}, tabIndex: -1,
-    hasAttribute(name) { return name in this.attrs; }, setAttribute(name, value) { this.attrs[name] = value; },
+    hasAttribute(name) { return name in this.attrs; }, getAttribute(name) { return this.attrs[name] ?? null; }, removeAttribute(name) { delete this.attrs[name]; }, setAttribute(name, value) { this.attrs[name] = value; },
     addEventListener(type, fn) { listeners[type] = fn; }, removeEventListener() {}, replaceChildren() {},
     getClientRects: () => [{}], getBoundingClientRect: () => ({ top: 0, bottom: 500, left: 0, right: 400 }), querySelectorAll: () => [],
     contains: node => node === row,

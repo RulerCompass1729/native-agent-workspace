@@ -1,3 +1,4 @@
+const { uiError, uiNotice } = require('./ui-errors.cjs');
 // Explicit native tool intent, not a parser for prose, mentions or terminal text.
 // A call reserves at most one handoff. Workspace.advance owns actual delivery
 // after the same native turn finishes and rechecks the human authorization.
@@ -21,15 +22,16 @@ function authorized(workspace, session, runtime, identity) {
   if (workspace.expireRun(run) || !run || run.mode !== 'directed' || run.status !== 'running' ||
     awaiting?.sessionId !== session.id || workspace.runtimes.get(session.id) !== runtime ||
     identity?.nativeId !== session.nativeId || !identity.turnId || !identity.callId ||
-    typeof identity.callId !== 'string' || identity.callId.length > 160) throw Error('没有适用于本次原生回合的定向协作授权。');
+    typeof identity.callId !== 'string' || identity.callId.length > 160) throw uiError("error.directedTurnUnauthorized");
   const grant = workspace.sharedReplies.grants.get(awaiting.tag);
   if (!grant || !workspace.sharedReplies.valid(grant) || !grant.turnId || grant.turnId !== identity.turnId ||
-    (session.provider === 'claude' && (!grant.promptId || grant.promptId !== identity.promptId))) throw Error('本次回复归属尚未确认，未安排转交。');
+    (session.provider === 'claude' && (!grant.promptId || grant.promptId !== identity.promptId))) throw uiError("error.replyOriginUnconfirmed");
   return { run, awaiting };
 }
 function failed(workspace, session, runtime, identity) {
   const { run } = authorized(workspace, session, runtime, identity);
   run.stopAfterReply = '原生工具未获准或消息未能登记；没有继续转交。请核对原生会话。';
+  run.stopAfterReplyUiMessage = uiNotice('notice.run.directedFailed').uiMessage;
   run.pendingHandoff = null; workspace.changed();
   return { status: 'not-sent' };
 }
@@ -39,14 +41,14 @@ function accept(workspace, session, runtime, identity, args) {
   const { run, awaiting } = authorized(workspace, session, runtime, identity);
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !['recipient_id', 'message'].includes(k)) ||
     typeof args.recipient_id !== 'string' || typeof args.message !== 'string' || !args.message.trim() || args.message.length > 6000 ||
-    /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(args.message)) throw Error('请提供准确的接收者 ID 和不超过 6000 字符的完整消息。');
-  if (run.steps + 1 >= run.maxSteps) throw Error('本轮回复上限已到，不再安排后续转交。');
+    /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(args.message)) throw uiError("error.handoffRecipientAndBodyRequired");
+  if (run.steps + 1 >= run.maxSteps) throw uiError("error.handoffReplyLimit");
   const target = run.peerLease ? run.participants?.[args.recipient_id] : workspace.sessions.get(args.recipient_id);
-  if (!target || target.id === session.id || !run.ids.includes(target.id) || (!run.peerLease && !isMember(target, run.roomId || 'shared'))) throw Error('接收者不在本次已授权成员中。');
+  if (!target || target.id === session.id || !run.ids.includes(target.id) || (!run.peerLease && !isMember(target, run.roomId || 'shared'))) throw uiError("error.handoffRecipientUnauthorized");
   const previous = run.pendingHandoff;
   if (previous) {
     if (previous.sourceTag === awaiting.tag && previous.callId === identity.callId && previous.recipientId === target.id && previous.text === args.message) return { status: 'staged', message: '同一调用已登记，尚未投递；不会重复登记。' };
-    throw Error('这个回复已经登记了一次转交；未追加或替换。');
+    throw uiError("error.handoffAlreadyRegistered");
   }
   run.pendingHandoff = { sourceTag: awaiting.tag, senderId: session.id, callId: identity.callId,
     turnId: identity.turnId, ...(identity.promptId ? { promptId: identity.promptId } : {}), recipientId: target.id, text: args.message,

@@ -1,8 +1,18 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
+const locale = require('../ui-locale.js');
+const bootstrap = fs.readFileSync(require.resolve('../dsh/bootstrap.js'), 'utf8');
+const helperStart = bootstrap.indexOf('    function createDisplayBindings('), helperEnd = bootstrap.indexOf('    function mountWorkspace(', helperStart);
+assert.ok(helperStart >= 0 && helperEnd > helperStart);
+const createBindings = vm.runInNewContext('(' + bootstrap.slice(helperStart, helperEnd).trim() + ')');
 class Element {
-  constructor(text = '') { this.textContent = text; this.open = false; this.isConnected = true; this.children = []; this.value = ''; this.hidden = true; this.disabled = false; }
+  constructor(text = '') { this.textContent = text; this.open = false; this.isConnected = true; this.children = []; this.value = ''; this.hidden = true; this.disabled = false; this.attributes = new Map(); }
+  get childElementCount() { return this.children.length; }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
+  removeAttribute(name) { this.attributes.delete(name); }
+  querySelector(selector) { assert.equal(selector, '.rail-label'); return this.rail ||= new Element(); }
   append(...values) { this.children.push(...values); }
   replaceChildren(...values) { this.children = values; }
   showModal() { this.open = true; }
@@ -12,11 +22,18 @@ const pending = () => { let resolve, reject; const promise = new Promise((a, b) 
 function fixture() {
   const elements = new Map(), calls = [], messages = [];
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const context = vm.createContext({ $, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
-    toast: text => messages.push(text), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
+  $('ui-language').options = [{ value: 'zh' }, { value: 'en' }];
+  const uiText = (key, params) => locale.format('zh', key, typeof params === 'function' ? params() : params);
+  const ui = { display: createBindings(uiText), errorText: error => locale.errorText('zh', error), language: { text: uiText, getSnapshot: () => ({ active: 'zh' }) } };
+  const showStart = bootstrap.indexOf('        function showError('), showEnd = bootstrap.indexOf('        const language =', showStart);
+  assert.ok(showStart >= 0 && showEnd > showStart);
+  ui.showError = vm.runInNewContext(bootstrap.slice(showStart, showEnd) + ';showError', { window: { nativeWorkspaceLocale: locale }, display: ui.display });
+  const context = vm.createContext({ $, uiError: locale.createError, spaceId: 'shared', spaceRecord: () => context.state.room, state: { appVersion: 'fixture', room: { id: 'shared', name: 'Synthetic space', notes: 'Saved original', metadataRevision: 7 } }, notesRevision: 0,
+    ui, uiText,
+    toast: text => messages.push(text), toastMessage: (key, params) => messages.push(locale.format('zh', key, typeof params === 'function' ? params() : params)), node: (_tag, text) => new Element(text), button: (text, onclick) => Object.assign(new Element(text), { onclick }), createReadiness() {},
     api: Object.fromEntries(['preflight', 'spaceAction', 'runtimeLocation'].map(method => [method, (...args) => { const request = pending(); calls.push({ method, args, ...request }); return request.promise; }])) });
   vm.runInContext(source.slice(source.indexOf('const dialogTickets ='), source.indexOf('let trustScope =')), context);
-  vm.runInContext(source.slice(source.indexOf('async function showSetup()'), source.indexOf('function populateSelect(')), context);
+  vm.runInContext(source.slice(source.indexOf('// Language controls use the existing Host mirror;'), source.indexOf('// End language/settings display controls.')), context);
   vm.runInContext(source.slice(source.indexOf('function openNotes('), source.indexOf('function openContext()')), context);
   vm.runInContext(source.slice(source.indexOf("$('room-notes').onclick"), source.indexOf("$('attach-context').onclick")), context);
   const openNotes = text => { context.openNotes(); if (text !== undefined) $('room-notes-text').value = text; };

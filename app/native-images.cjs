@@ -1,3 +1,5 @@
+const { uiError } = require('./ui-errors.cjs');
+const unavailableImage = key => { const error = uiError(key); return { unavailable: error.message, unavailableUiMessage: error.uiMessage }; };
 // Display references only. No provider upload, file watcher or model call.
 const fs = require('node:fs'), path = require('node:path'), { randomUUID, createHash } = require('node:crypto');
 const MAX_IMAGES = 16, MAX_BYTES = 20 * 1024 * 1024, MAX_PIXELS = 16 * 1024 * 1024;
@@ -10,24 +12,24 @@ function userImageReferences(content) {
   const images = [];
   for (const part of content) {
     if (!['localImage', 'image'].includes(part?.type)) continue;
-    if (images.length === MAX_IMAGES) { images.push({ unavailable: '其余图片超过本地预览上限，请在原生终端核对。' }); break; }
-    images.push(part.type === 'localImage' && validPath(part.path) ? { path: part.path } : { unavailable: '原生记录没有提供可读的本机图片路径。' });
+    if (images.length === MAX_IMAGES) { images.push(unavailableImage('error.nativeImages.morePreviewLimit')); break; }
+    images.push(part.type === 'localImage' && validPath(part.path) ? { path: part.path } : unavailableImage('error.nativeImages.nativeLocalPathMissing'));
   }
   return images;
 }
 function imageReferences(images, cwd, previous = [], observedAt = Date.now()) {
   if (!Array.isArray(previous)) previous = [];
-  if (!Array.isArray(images) || !images.length) return previous.map(ref => ({ ...ref, unavailable: '图片记录未完整同步，请核对原生会话。' }));
+  if (!Array.isArray(images) || !images.length) return previous.map(ref => ({ ...ref, ...unavailableImage('error.nativeImages.incompleteReference') }));
   const refs = images.slice(0, MAX_IMAGES + 1).map((image, index) => {
     const local = validPath(image?.path), old = previous[index];
     if (old && local && old.path === image.path) return { ...old };
-    if (old && local && validPath(old.path) && old.path !== image.path) return { ...old, unavailable: '原生图片引用已变化，请重新核对原生记录。' };
-    if (!local) return { ...(old && validPath(old.path) ? old : {}), unavailable: typeof image?.unavailable === 'string' ? image.unavailable.slice(0, 200) : '图片没有有效的本机路径。' };
+    if (old && local && validPath(old.path) && old.path !== image.path) return { ...old, ...unavailableImage('error.nativeImages.referenceChanged') };
+    if (!local) return { ...(old && validPath(old.path) ? old : {}), ...(typeof image?.unavailable === 'string' ? { unavailable: image.unavailable.slice(0, 200), unavailableUiMessage: image.unavailableUiMessage || null } : unavailableImage('error.nativeImages.localPathInvalid')) };
     const ref = { path: image.path, ...(validPath(cwd) && path.isAbsolute(cwd) ? { cwd } : {}), observedAt };
     // Pin the file observed with this native reference. An older file moved
     // under the same path (including through an ancestor symlink) is not it.
     try { ref.fileIdentity = fileIdentity(fs.statSync(resolvedImagePath(ref))); }
-    catch { ref.unavailable = '原图片在记录时不存在或无法读取，请重新在原生会话查看。'; }
+    catch { Object.assign(ref, unavailableImage('error.nativeImages.originalFileAbsent')); }
     return ref;
   });
   return refs;
@@ -47,28 +49,28 @@ function imageSource(snapshot, source) {
     [source.sessionId, source.messageId, source.nativeId].some(id => !id || id.length > 512) ||
     !Number.isSafeInteger(source.index) || source.index < 0 || source.index > MAX_IMAGES ||
     source.roomId !== undefined && (source.kind !== 'room' || !require('./collaboration-spaces.cjs').roomId(source.roomId)) ||
-    Object.keys(source).some(key => !['kind', 'roomId', 'sessionId', 'nativeId', 'messageId', 'index'].includes(key))) throw Error('图片来源无效。');
+    Object.keys(source).some(key => !['kind', 'roomId', 'sessionId', 'nativeId', 'messageId', 'index'].includes(key))) throw uiError("error.nativeImages.invalidSource");
   const session = snapshot?.sessions?.find(s => s.id === source.sessionId);
   const message = source.kind === 'room'
     ? (snapshot?.rooms || [snapshot?.room]).find(r => (r?.id || 'shared') === (source.roomId || 'shared'))?.messages?.find(m => m.id === source.messageId && m.sessionId === source.sessionId && m.sharedStream === true)
     : session?.messages?.find(m => m.id === source.messageId);
   if (!message || message.nativeId !== source.nativeId || !['complete', 'submitted'].includes(message.status) ||
-    !(message.role === 'user' || message.kind === 'tool') || !Array.isArray(message.images)) throw Error('原图片记录已变化或原生读取尚未确认。');
+    !(message.role === 'user' || message.kind === 'tool') || !Array.isArray(message.images)) throw uiError("error.nativeImages.originalReadUnconfirmed");
   const ref = message.images[source.index];
-  if (!ref) throw Error('原图片记录已变化。');
+  if (!ref) throw uiError("error.nativeImages.originalChanged");
   // A shared row is its own authority. Never follow nativeMessageId into the
   // complete private session to obtain an image that wasn't on the shared row.
   return { ...ref };
 }
 function resolvedImagePath(ref) {
-  if (ref?.unavailable) throw Error(ref.unavailable);
+  if (ref?.unavailable) throw Object.assign(Error(ref.unavailable), ref.unavailableUiMessage ? { uiMessage: ref.unavailableUiMessage } : {});
   if (ref?.kind === 'native-pixels') {
-    if (!validPath(ref.cachedPath) || !path.isAbsolute(ref.cachedPath) || !/^[a-f0-9]{64}$/.test(ref.pixelSha256 || '')) throw Error('原生图片缓存来源无效。');
+    if (!validPath(ref.cachedPath) || !path.isAbsolute(ref.cachedPath) || !/^[a-f0-9]{64}$/.test(ref.pixelSha256 || '')) throw uiError("error.nativeImages.invalidCacheSource");
     return ref.cachedPath;
   }
-  if (!validPath(ref?.path)) throw Error('图片没有有效的本机路径。');
+  if (!validPath(ref?.path)) throw uiError("error.nativeImages.localPathMissing");
   if (path.isAbsolute(ref.path)) return path.normalize(ref.path);
-  if (typeof ref.cwd !== 'string' || !path.isAbsolute(ref.cwd)) throw Error('原生记录未保存这张图片的工作目录。');
+  if (typeof ref.cwd !== 'string' || !path.isAbsolute(ref.cwd)) throw uiError("error.nativeImages.originalDirectoryMissing");
   return path.resolve(ref.cwd, ref.path);
 }
 function validImagePayload(payload) {
@@ -84,19 +86,19 @@ function nativePixelReference(dataDir, sessionId, payload, previous) {
   if (payload.unavailable) return { ...original, unavailable: payload.unavailable };
   let bytes, digest;
   try {
-    if (payload.data.length % 4 || !/^[a-zA-Z0-9+/]+={0,2}$/.test(payload.data)) throw Error('原生图片编码无法核验。');
+    if (payload.data.length % 4 || !/^[a-zA-Z0-9+/]+={0,2}$/.test(payload.data)) throw uiError("error.nativeImages.encodingUnverifiable");
     bytes = Buffer.from(payload.data, 'base64');
-    if (!bytes.length || bytes.length > MAX_NATIVE_BYTES || bytes.toString('base64') !== payload.data) throw Error('原生图片超过 1 MB 或编码无法核验。');
+    if (!bytes.length || bytes.length > MAX_NATIVE_BYTES || bytes.toString('base64') !== payload.data) throw uiError("error.nativeImages.encodedSizeLimit");
     imageDimensions(bytes);
     const mime = bytes[0] === 0x89 ? 'image/png' : bytes[0] === 0xff ? 'image/jpeg' : bytes.toString('ascii', 0, 3) === 'GIF' ? 'image/gif' : 'image/webp';
-    if (mime !== payload.mime) throw Error('原生图片类型与文件头不符。');
+    if (mime !== payload.mime) throw uiError("error.nativeImages.headerTypeMismatch");
     digest = createHash('sha256').update(bytes).digest('hex');
-    if (previous && !previous.pending && previous.pixelSha256 !== digest) return { ...previous, unavailable: '原生图片内容已变化，请核对原生会话。' };
-    if (typeof dataDir !== 'string' || !path.isAbsolute(dataDir) || typeof sessionId !== 'string' || !sessionId) throw Error('原生图片缺少本机存储位置。');
+    if (previous && !previous.pending && previous.pixelSha256 !== digest) return { ...previous, ...unavailableImage('error.nativeImages.contentChanged') };
+    if (typeof dataDir !== 'string' || !path.isAbsolute(dataDir) || typeof sessionId !== 'string' || !sessionId) throw uiError("error.nativeImages.storageLocationMissing");
     const safeDirectory = (directory, create) => {
       if (create) try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
       const stat = fs.lstatSync(directory);
-      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('原生图片缓存目录无法核验。');
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw uiError("error.nativeImages.cacheDirectoryUnverifiable");
       return directory;
     };
     safeDirectory(dataDir, false);
@@ -108,19 +110,19 @@ function nativePixelReference(dataDir, sessionId, payload, previous) {
       const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       try {
         stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.size !== bytes.length) throw Error('原生图片缓存已变化。');
+        if (!stat.isFile() || stat.size !== bytes.length) throw uiError("error.nativeImages.cacheChanged");
         const stored = Buffer.alloc(bytes.length + 1); let offset = 0;
         while (offset < stored.length) { const read = fs.readSync(fd, stored, offset, stored.length - offset, offset); if (!read) break; offset += read; }
-        if (offset !== bytes.length || !stored.subarray(0, offset).equals(bytes) || JSON.stringify(fileIdentity(stat)) !== JSON.stringify(fileIdentity(fs.fstatSync(fd)))) throw Error('原生图片缓存已变化。');
+        if (offset !== bytes.length || !stored.subarray(0, offset).equals(bytes) || JSON.stringify(fileIdentity(stat)) !== JSON.stringify(fileIdentity(fs.fstatSync(fd)))) throw uiError("error.nativeImages.cacheChanged");
       } finally { fs.closeSync(fd); }
     } else {
       let stored = 0;
       for (const name of fs.readdirSync(folder)) {
         const value = fs.lstatSync(path.join(folder, name));
-        if (!CACHED_IMAGE_NAME.test(name) || !value.isFile() || value.isSymbolicLink()) throw Error('原生图片缓存目录无法核验。');
+        if (!CACHED_IMAGE_NAME.test(name) || !value.isFile() || value.isSymbolicLink()) throw uiError("error.nativeImages.cacheDirectoryUnverifiable");
         stored += value.size;
       }
-      if (stored + bytes.length > 64 * 1024 * 1024) throw Error('本会话原生图片已达 64 MB 上限。');
+      if (stored + bytes.length > 64 * 1024 * 1024) throw uiError("error.nativeImages.sessionCacheLimit");
       const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
       const created = fs.fstatSync(fd);
       try { fs.writeFileSync(fd, bytes); stat = fs.fstatSync(fd); }
@@ -131,7 +133,7 @@ function nativePixelReference(dataDir, sessionId, payload, previous) {
     }
     return previous && !previous.pending && previous.cachedPath ? previous : { ...original, kind: 'native-pixels', pixelSha256: digest, cachedPath: file, observedAt: Date.now(), fileIdentity: fileIdentity(stat) };
   } catch (error) {
-    return { ...(previous && !previous.pending ? previous : original), ...(!previous?.pixelSha256 && digest ? { kind: 'native-pixels', pixelSha256: digest } : {}), unavailable: error.code ? '原生图片无法存入本机缓存。' : error.message };
+    return { ...(previous && !previous.pending ? previous : original), ...(!previous?.pixelSha256 && digest ? { kind: 'native-pixels', pixelSha256: digest } : {}), ...(error.code ? unavailableImage('error.nativeImages.cacheWriteFailed') : { unavailable: error.message, unavailableUiMessage: error.uiMessage || null }) };
   }
 }
 // Each session's cached native images live in native-image-cache/<SHA-256 of the session id>/,
@@ -169,7 +171,7 @@ function applyImagePayload(row, payload, dataDir, sessionId) {
   const promptRow = row.role === 'user' && row.origin === 'native' && typeof row.id === 'string' && row.id.startsWith('claude-prompt-');
   if (!validImagePayload(payload) || !(['tool', 'input'].includes(row.kind) || promptRow) || !['complete', 'submitted'].includes(row.status)) return false;
   if (!Array.isArray(row.images)) row.images = [];
-  while (row.images.length <= payload.index) row.images.push({ pending: true, unavailable: '图片尚未完整同步。' });
+  while (row.images.length <= payload.index) row.images.push({ pending: true, ...unavailableImage('error.nativeImages.payloadPending') });
   row.images[payload.index] = nativePixelReference(dataDir, sessionId, payload, row.images[payload.index]);
   if (row.images[payload.index].unavailable) row.incomplete = true;
   return true;
@@ -178,9 +180,9 @@ function applyImagePayload(row, payload, dataDir, sessionId) {
 // Static PNG/JPEG/GIF/WebP only; unknown or animated containers fail closed.
 // This is a dimension/resource guard, not a replacement image decoder.
 function imageDimensions(b) {
-  const invalid = () => { throw Error('图片文件头不完整、格式不支持或是动画。'); };
+  const invalid = () => { throw uiError("error.nativeImages.headerUnsupported"); };
   const dimensions = (width, height) => {
-    if (!width || !height || width > 10000 || height > 10000 || width * height > MAX_PIXELS) throw Error('图片尺寸超过 10000 像素或总像素超过 16 Mi 像素。');
+    if (!width || !height || width > 10000 || height > 10000 || width * height > MAX_PIXELS) throw uiError("error.nativeImages.pixelLimit");
     return { width, height };
   };
   if (!Buffer.isBuffer(b) || b.length < 10) return invalid();
@@ -258,14 +260,14 @@ function imageDimensions(b) {
 }
 async function readImage(ref, nativeImage) {
   const file = resolvedImagePath(ref);
-  if (!Number.isFinite(ref.observedAt) || ref.observedAt < 0) throw Error('图片记录缺少来源时间，请重新在原生会话查看。');
+  if (!Number.isFinite(ref.observedAt) || ref.observedAt < 0) throw uiError("error.nativeImages.sourceTimeMissing");
   let handle;
   try {
     handle = await fs.promises.open(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const before = await handle.stat();
-    if (!before.isFile() || before.size <= 0 || before.size > (ref.kind === 'native-pixels' ? MAX_NATIVE_BYTES : MAX_BYTES)) throw Error('图片须为本机大小限制内的普通文件（本机文件 20 MB，原生缓存 1 MB）。');
-    if (!Array.isArray(ref.fileIdentity) || ref.fileIdentity.length !== 5) throw Error('图片记录缺少文件来源，请重新在原生会话查看。');
-    if (ref.kind !== 'native-pixels' && JSON.stringify(fileIdentity(before)) !== JSON.stringify(ref.fileIdentity)) throw Error('图片在这条记录后已变化，请重新在原生会话查看。');
+    if (!before.isFile() || before.size <= 0 || before.size > (ref.kind === 'native-pixels' ? MAX_NATIVE_BYTES : MAX_BYTES)) throw uiError("error.nativeImages.regularFileRequired");
+    if (!Array.isArray(ref.fileIdentity) || ref.fileIdentity.length !== 5) throw uiError("error.nativeImages.sourceFileMissing");
+    if (ref.kind !== 'native-pixels' && JSON.stringify(fileIdentity(before)) !== JSON.stringify(ref.fileIdentity)) throw uiError("error.nativeImages.changedSinceRecord");
     const buffer = Buffer.alloc(before.size + 1); let offset = 0;
     while (offset < buffer.length) {
       const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
@@ -274,21 +276,21 @@ async function readImage(ref, nativeImage) {
     }
     const after = await handle.stat();
     if (offset !== before.size || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw Error('图片在读取时已变化。');
+      before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw uiError("error.nativeImages.changedWhileReading");
     const encoded = buffer.subarray(0, offset);
-    if (ref.kind === 'native-pixels' && createHash('sha256').update(encoded).digest('hex') !== ref.pixelSha256) throw Error('原生图片缓存已变化。');
+    if (ref.kind === 'native-pixels' && createHash('sha256').update(encoded).digest('hex') !== ref.pixelSha256) throw uiError("error.nativeImages.cacheChanged");
     const declared = imageDimensions(encoded);
     const image = nativeImage.createFromBuffer(encoded), size = image.getSize();
     if (image.isEmpty() || !size.width || !size.height || size.width > 10000 || size.height > 10000 || size.width * size.height > MAX_PIXELS ||
-      !(size.width === declared.width && size.height === declared.height || size.width === declared.height && size.height === declared.width)) throw Error('图片无法解码或尺寸与文件头不符。');
+      !(size.width === declared.width && size.height === declared.height || size.width === declared.height && size.height === declared.width)) throw uiError("error.nativeImages.decodeMismatch");
     const png = image.toPNG();
-    if (!png.length || png.length > MAX_BYTES) throw Error('解码后的图片超过本地预览上限。');
+    if (!png.length || png.length > MAX_BYTES) throw uiError("error.nativeImages.decodedPreviewLimit");
     const scale = Math.min(1, 256 / size.width, 192 / size.height);
     const thumbnail = image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }).toPNG();
-    if (!thumbnail.length || thumbnail.length > MAX_BYTES) throw Error('图片缩略图无法读取。');
+    if (!thumbnail.length || thumbnail.length > MAX_BYTES) throw uiError("error.nativeImages.thumbnailUnreadable");
     return { png, thumbnail: `data:image/png;base64,${thumbnail.toString('base64')}`, width: size.width, height: size.height };
   } catch (error) {
-    if (['ENOENT', 'EACCES', 'EPERM', 'ELOOP', 'ENOTDIR'].includes(error.code)) throw Error('图片不存在、无权读取或是符号链接。');
+    if (['ENOENT', 'EACCES', 'EPERM', 'ELOOP', 'ENOTDIR'].includes(error.code)) throw uiError("error.nativeImages.unavailable");
     throw error;
   } finally { await handle?.close(); }
 }
@@ -298,27 +300,27 @@ class ImagePreviews {
     this.entries = new Map(); this.bytes = 0; this.closed = false; this.pending = 0; this.readTail = Promise.resolve();
   }
   async source(source) {
-    if (this.closed) throw Error('图片窗口已关闭。');
+    if (this.closed) throw uiError("error.nativeImages.windowClosed");
     const snapshot = await this.snapshot();
-    if (this.closed) throw Error('图片窗口已关闭。');
+    if (this.closed) throw uiError("error.nativeImages.windowClosed");
     return imageSource(snapshot, source);
   }
   async preview(source) {
     source = { ...source };
-    if (this.closed || this.pending >= 64) throw Error('图片预览暂时繁忙，请稍后重新打开。');
+    if (this.closed || this.pending >= 64) throw uiError("error.nativeImages.previewBusy");
     this.pending++;
     const preceding = this.readTail; let release;
     this.readTail = new Promise(resolve => { release = resolve; });
     try {
       await preceding;
       const ref = await this.source(source);
-      if (this.closed) throw Error('图片窗口已关闭。');
+      if (this.closed) throw uiError("error.nativeImages.windowClosed");
       const image = await readImage(ref, this.nativeImage);
       // Keep decoded data inside the bounded operation while the fresh
       // authority check waits on the service; do not admit another decode yet.
       const current = await this.source(source);
-      if (this.closed || JSON.stringify(ref) !== JSON.stringify(current)) throw Error('原图片记录已变化。');
-      if (image.png.length > this.maxBytes) throw Error('图片超过当前窗口的预览上限。');
+      if (this.closed || JSON.stringify(ref) !== JSON.stringify(current)) throw uiError("error.nativeImages.originalChanged");
+      if (image.png.length > this.maxBytes) throw uiError("error.nativeImages.windowPreviewLimit");
       while (this.entries.size && (this.entries.size >= this.maxEntries || this.bytes + image.png.length > this.maxBytes)) this.release(this.entries.keys().next().value);
       const token = randomUUID(); this.entries.set(token, { source: { ...source }, ref, png: image.png }); this.bytes += image.png.length;
       const key = 'image:' + createHash('sha256').update(JSON.stringify([source.kind, source.sessionId, source.nativeId, source.messageId, source.index])).digest('hex').slice(0, 32);
@@ -327,9 +329,9 @@ class ImagePreviews {
   }
   async entry(token) {
     const entry = this.entries.get(token);
-    if (!entry) throw Error('图片预览已失效，请重新打开原图片。');
+    if (!entry) throw uiError("error.nativeImages.previewExpired");
     const current = await this.source(entry.source);
-    if (this.closed || this.entries.get(token) !== entry || JSON.stringify(current) !== JSON.stringify(entry.ref)) throw Error('图片预览已失效，请重新打开原图片。');
+    if (this.closed || this.entries.get(token) !== entry || JSON.stringify(current) !== JSON.stringify(entry.ref)) throw uiError("error.nativeImages.previewExpired");
     return entry;
   }
   async expand(token) { return `data:image/png;base64,${(await this.entry(token)).png.toString('base64')}`; }

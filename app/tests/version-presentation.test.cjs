@@ -1,7 +1,8 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
-const context = vm.createContext({});
+const locale = require('../ui-locale.js');
+const context = vm.createContext({ uiText: (key, params) => locale.format('zh', key, params) });
 vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf('function renderVersions(')), context);
 const plain = value => value === null ? null : JSON.parse(JSON.stringify(value));
 test('a backend version is compared only to the application, with no other backend fallback', () => {
@@ -33,7 +34,7 @@ test('malformed metadata never turns into paths, extra report lines or an invent
 });
 test('version copy reports one acknowledged success or one readable failure without a raw-error replacement', async () => {
   const control = {}, toasts = []; let fail = true, copies = 0;
-  Object.assign(context, { $: () => control, ui: {}, state: { appVersion: '1.0.0' }, toast: text => toasts.push(text), api: { async copy() { if (fail) throw Error('Synthetic raw clipboard error'); copies++; } } });
+  Object.assign(context, { $: () => control, ui: {}, state: { appVersion: '1.0.0' }, toast: text => toasts.push(text), toastMessage: (key, params) => toasts.push(locale.format('zh', key, params)), api: { async copy() { if (fail) throw Error('Synthetic raw clipboard error'); copies++; } } });
   vm.runInContext(source.slice(source.indexOf('ui.copyCode = async'), source.indexOf("$('toast-close').onclick")), context);
   vm.runInContext(source.slice(source.indexOf('async function attempt(action)'), source.indexOf('function persistView()')), context);
   vm.runInContext(source.split('\n').find(line => line.startsWith("$('app-version').onclick")), context);

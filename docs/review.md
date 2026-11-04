@@ -4209,3 +4209,30 @@ client. These use synthetic native transport: real-provider lifecycle, physical
 input/clipboard, daily-profile acceptance and the remaining T-151 checks stay
 separate. Neither these checks nor this test-only correction closes the dogfood
 milestone. Raw failures, successful runs and both review rounds remain private.
+
+
+## I164 — interface-language integration
+
+The first T-60 batch keeps the old installation's Chinese preference, follows
+the system for a new profile, and offers the existing manual language setting.
+Codex 4's two exact commits are integrated with every author file byte-matched,
+apart from the held isolated-test visibility switch. Its author review and
+unchanged 2,475-check result are reused. Later added Chinese strings and stale
+menu facts remain the next batch; this is not full T-60 completion.
+
+The held visibility switch only applies to a validated private test profile
+when explicitly requested; default tests remain hidden. Main adapted its old
+runner to the canonical GUI lease. Independent integration review found a
+medium test defect: that new finalizer did not match the cleanup census, and
+the earlier green run preceded the adaptation. The exact census reproduced
+the failure; the corrected cleanup-first try/catch passes all 52 checks, then
+the three visible/reopen/default-hidden checks pass again. The same reviewer
+closed the finding. Main's other 168 affected checks and UI build pass.
+
+The window-focus assertion only observes its own windows; it does not prove
+the operating system's foreground application stayed unchanged. These tests
+create no native session. Independent source review also checked locale
+packaging, retained-backend runtime copies and version-only metadata changes.
+Signed installed migration/manual/new-profile acceptance is still pending at
+this source checkpoint. Raw source comparisons, failures, successful runs and
+review output remain private.

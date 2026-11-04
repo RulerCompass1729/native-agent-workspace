@@ -11,6 +11,15 @@ function fixture(t, state = 'idle') {
   return { record, dir, create, r: create() };
 }
 async function bind(f) { return { sessionId: f.record.nativeId, ...await f.r.bindRoot({ sessionId: f.record.nativeId, nativeBlocks: true }) }; }
+
+test('retained reader gap labels follow real bind and context-end producers, while an unknown replacement clears the old label', async t => {
+  const locale = require('../ui-locale.js'), f = fixture(t); await bind(f);
+  const row = f.r.record.messages.find(m => m.kind === 'gap'), id = row.id, time = row.time;
+  assert.equal(locale.displayText('en', row.text, row.uiMessage), 'Live native content is connected. View earlier unrecorded activity in the native terminal.');
+  f.r.emit('contextEnd'); assert.equal(locale.displayText('en', row.text, row.uiMessage), 'The native context ended or switched. Earlier records are retained here; continue in the native terminal.');
+  f.r.gap('RAW native gap 中文', row.uiMessage); assert.equal(row.text, 'RAW native gap 中文'); assert.equal(row.uiMessage, undefined);
+  assert.equal(row.id, id); assert.equal(row.time, time); assert.equal(row.incomplete, true);
+});
 function block(f, b, sequence, extra) { return f.r.observeRoot({ ...b, epoch: b.observationEpoch, sequence, block: true, id: 'display:visible', kind: 'response', turnId: 'turn-1', promptId: 'prompt-1', index: 0, delta: 'visible prefix', status: 'streaming', ...extra }); }
 
 test('attach-only reader waits for old work to finish and never starts or controls a CLI', async t => {

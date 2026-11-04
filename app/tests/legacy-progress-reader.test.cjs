@@ -2,10 +2,11 @@ const test = require('node:test'), assert = require('node:assert/strict'), fs = 
 const source = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
 const functions = source.slice(source.indexOf('const legacyProgress ='), source.indexOf('const inputRecoveries ='));
 const tick = () => new Promise(resolve => setImmediate(resolve));
+const ui = { createNotice: require('../ui-locale.js').createNotice };
 test('legacy bridge needs no observe capability; a new generation rejects old snapshot and lower revision journal is accepted', async () => {
   const pending = [], context = { state: { capabilities: [] }, disconnected: false, mode: 'chat', activeSessionId: () => 's', render() {},
     api: { observe: () => new Promise(resolve => pending.push(resolve)) } };
-  vm.createContext(context); vm.runInContext(functions + ';globalThis.read = readLegacyProgress; globalThis.rows = sessionMessages; globalThis.update = updateLegacyProgress;', context);
+  context.ui = ui; vm.createContext(context); vm.runInContext(functions + ';globalThis.read = readLegacyProgress; globalThis.rows = sessionMessages; globalThis.update = updateLegacyProgress;', context);
   const old = { id: 's', nativeId: 'old', connectionRevision: 1, legacyProgress: true, serviceCapabilities: [], messages: [] };
   context.state.sessions = [old]; context.read(old); assert.equal(pending.length, 1);
   context.update({ id: 's', revision: 100, item: { id: 'old', text: 'OLD' } });
@@ -18,7 +19,7 @@ test('legacy bridge needs no observe capability; a new generation rejects old sn
 test('an in-flight journal snapshot merges earlier rows with newer live output and reports sequence gaps', async () => {
   let release; const s = { id: 's', nativeId: 'root', legacyProgress: true, messages: [] };
   const context = { state: { capabilities: [], sessions: [s] }, disconnected: false, mode: 'chat', activeSessionId: () => 's', render() {}, api: { observe: () => new Promise(resolve => { release = resolve; }) } };
-  vm.createContext(context); vm.runInContext(functions + ';globalThis.read = readLegacyProgress; globalThis.rows = sessionMessages; globalThis.update = updateLegacyProgress;', context);
+  context.ui = ui; vm.createContext(context); vm.runInContext(functions + ';globalThis.read = readLegacyProgress; globalThis.rows = sessionMessages; globalThis.update = updateLegacyProgress;', context);
   context.read(s); context.update({ id: 's', revision: 11, item: { id: 'live', text: 'live' } });
   release({ progress: { revision: 10, items: Array.from({ length: 10 }, (_, i) => ({ id: 'old' + i, text: 'old ' + i })) } }); await tick();
   assert.equal(context.rows(s).length, 11); assert.equal(context.rows(s)[0].text, 'old 0'); assert.equal(context.rows(s).at(-1).text, 'live');
@@ -30,7 +31,7 @@ test('legacy disconnect freezes last records, rejects late snapshot/live and re-
   for (const failure of ['global', 'transportDisconnected', 'backendUnavailable', 'state', 'legacyProgress']) {
     const pending = [], s = { id: 's', nativeId: 'root', legacyProgress: true, state: 'working', messages: [] };
     const context = { state: { sessions: [s] }, disconnected: false, mode: 'chat', activeSessionId: () => 's', render() {}, api: { observe: () => new Promise(resolve => pending.push(resolve)) } };
-    vm.createContext(context); vm.runInContext(functions + ';globalThis.read = readLegacyProgress; globalThis.rows = sessionMessages; globalThis.update = updateLegacyProgress;', context);
+    context.ui = ui; vm.createContext(context); vm.runInContext(functions + ';globalThis.read = readLegacyProgress; globalThis.rows = sessionMessages; globalThis.update = updateLegacyProgress;', context);
     context.read(s);
     const original = { id: 'tool', text: 'before disconnect', status: 'running' };
     context.update({ id: 's', revision: 1, item: original });

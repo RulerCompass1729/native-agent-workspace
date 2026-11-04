@@ -72,12 +72,13 @@ for (const [before, after] of columnFix) {
 const viewportBackground = 'this._scrollableElement.getDomNode().style.backgroundColor=n.colors.background.css';
 if (xterm.split(viewportBackground).length !== 2) throw Error('Pinned terminal viewport source changed; requalify background coverage.');
 xterm = xterm.replace(viewportBackground, viewportBackground + ',e.querySelector(".xterm-viewport").style.backgroundColor=n.colors.background.css');
+const localeSource = read('app/ui-messages.js') + '\n' + read('app/ui-locale.js');
 const terminal = xterm + '\n' + licensed('@xterm/addon-fit', 'lib/addon-fit.js');
 const source = bootstrap
   .replace('/* SIDEBAR_TEMPLATE */', () => JSON.stringify(sidebar))
   .replace('/* MAIN_TEMPLATE */', () => JSON.stringify(main))
   .replace('/* LOCAL_STYLES */', () => JSON.stringify(css + '\n' + read('node_modules/@xterm/xterm/css/xterm.css')))
   .replace('/* WORKSPACE_VIEW */', () => renderer);
-new (require('node:vm').Script)(terminal + '\n' + source, { filename: 'dsh/client.js' });
-fs.writeFileSync(path.join(root, 'app/dsh/client.js'), terminal + '\n' + source);
+new (require('node:vm').Script)(terminal + '\n' + localeSource + '\n' + source, { filename: 'dsh/client.js' });
+fs.writeFileSync(path.join(root, 'app/dsh/client.js'), terminal + '\n' + localeSource + '\n' + source);
 console.log('Built DSH native-workspace client plugin');

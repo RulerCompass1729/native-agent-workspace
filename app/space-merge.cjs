@@ -1,3 +1,5 @@
+const { uiError } = require('./ui-errors.cjs');
+const { displayMessage } = require('./ui-locale.js');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { roomId, roomIds, membershipRevision, completedSharedRecord: completed } = require('./collaboration-spaces.cjs');
@@ -6,15 +8,16 @@ const { REQUEST_BYTES, RESPONSE_BYTES } = require('./service-transport.cjs');
 
 // Pure snapshot contract. Callers must recapture trusted shared room records;
 // neither this module nor a preview grants delivery or changes native sessions.
-const failure = () => Error('合并资料无法核对；原空间与草稿已保留，请重新预览。');
+const failure = () => uiError("error.merge.dataUnverifiable");
 const object = value => value && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 512 && !/[\u0000-\u001f]/u.test(value);
 const revision = value => Number.isSafeInteger(value) && value >= 0;
+const displayFields = { uiMessage: 'text', uiTitleMessage: 'title', uiNameMessage: 'name', sharingStoppedUiMessage: 'sharingStopped' };
 const fields = ['id', 'role', 'text', 'input', 'name', 'time', 'sessionId', 'recipientId', 'replyTo',
   'status', 'kind', 'title', 'toolKind', 'commandActions', 'commandSource', 'exitCode', 'incomplete',
   'nativeMessageId', 'nativeId', 'turnId', 'displayTurnId', 'nativeStatus', 'nativeStartedAt',
   'nativeCompletedAt', 'nativeDurationMs', 'sharingStopped', 'finalReply', 'images', 'inputMode',
-  'addressed', 'manualReply', 'deliveryTracked'];
+  'addressed', 'manualReply', 'deliveryTracked', 'uiMessage', 'uiTitleMessage', 'uiNameMessage', 'sharingStoppedUiMessage'];
 const deliveryFields = ['id', 'recipientId', 'recipientName', 'text', 'status', 'time'];
 
 function json(value) {
@@ -28,6 +31,14 @@ function json(value) {
 const hash = value => createHash('sha256').update(JSON.stringify(json(value))).digest('hex');
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, json(value[key])]));
 
+function displayMetadata(row) {
+  const result = {};
+  for (const [field, raw] of Object.entries(displayFields)) {
+    const message = displayMessage(row[field], 'notice.', row[raw]) || displayMessage(row[field], 'error.', row[raw]);
+    if (message) result[field] = json(message);
+  }
+  return result;
+}
 function captureSource(room, sessions) {
   if (!object(room) || !roomId(room.id) || room.unavailable || !revision(room.metadataRevision) ||
       !revision(room.revision) || typeof room.notes !== 'string' || room.notes.length > 8000 ||
@@ -37,7 +48,7 @@ function captureSource(room, sessions) {
     if (!object(message) || !id(message.id) || seen.has(message.id) ||
         !['human', 'assistant', 'tool', 'system'].includes(message.role) || typeof message.text !== 'string') throw failure();
     seen.add(message.id);
-    const payload = pick(message, fields);
+    const payload = { ...pick(message, fields.filter(key => !Object.hasOwn(displayFields, key))), ...displayMetadata(message) };
     if (Array.isArray(message.deliveries)) payload.deliveries = message.deliveries.map(delivery => pick(delivery, deliveryFields));
     const origin = message.snapshotOrigin ?? { roomId: room.id, messageId: message.id };
     if (!object(origin) || !roomId(origin.roomId) || !id(origin.messageId) ||
@@ -145,7 +156,7 @@ function prepareBatch(sources, spec, maxBytes = REQUEST_BYTES) {
     selected.entries = selected.entries.filter(entry => {
       const key = JSON.stringify(entry.origin), previous = origins.get(key);
       if (!previous) { origins.set(key, entry); return true; }
-      if (previous.hash !== entry.hash) throw Error('同一来源条目的内容不一致；没有合并或覆盖原文，请回到原空间核对。');
+      if (previous.hash !== entry.hash) throw uiError("error.merge.sourceEntryConflict");
       selected.references.push(pick(entry, ['origin', 'sourceMessageId', 'sourceIndex', 'hash']));
       return false;
     });
@@ -158,7 +169,7 @@ function prepareBatch(sources, spec, maxBytes = REQUEST_BYTES) {
     blocks,
   };
   const encoded = JSON.stringify(batch), bytes = Buffer.byteLength(encoded, 'utf8');
-  if (bytes > maxBytes) throw Error('选中的合并快照超过本次传输上限；没有裁剪原文或更改原空间，请缩小选择后重新预览。');
+  if (bytes > maxBytes) throw uiError("error.merge.transferLimit");
   return { ...batch, bytes, binding: hash(batch) };
 }
 
@@ -220,6 +231,8 @@ function validateBatch(batch) {
           !['human', 'assistant', 'tool', 'system'].includes(payload.role) || typeof payload.text !== 'string' ||
           Object.keys(payload).some(key => ![...fields, 'deliveries'].includes(key)) ||
           !completed(payload) || hash(payload) !== entry.hash || origins.has(JSON.stringify(entry.origin))) throw failure();
+      const normalizedDisplay = displayMetadata(payload);
+      if (Object.keys(displayFields).some(key => payload[key] !== undefined && (!normalizedDisplay[key] || hash(payload[key]) !== hash(normalizedDisplay[key])))) throw failure();
       if (payload.deliveries !== undefined && (!Array.isArray(payload.deliveries) || payload.deliveries.some(delivery =>
         !object(delivery) || Object.keys(delivery).some(key => !deliveryFields.includes(key))))) throw failure();
       origins.set(JSON.stringify(entry.origin), entry.hash);
@@ -232,7 +245,7 @@ function validateBatch(batch) {
 
 function materializeBatch(batch) {
   validateBatch(batch);
-  if (batch.conflicts.length) throw Error('原生身份归属存在冲突，没有导入或派发。');
+  if (batch.conflicts.length) throw uiError("error.merge.nativeIdentityConflict");
   const messages = [], sourceIds = new Map();
   for (const block of batch.blocks) for (const entry of block.entries) {
     const message = { ...json(entry.payload), id: `snapshot:${batch.operationId}:${messages.length}`,

@@ -1,3 +1,5 @@
+const { uiError, uiNotice } = require('./ui-errors.cjs');
+const liveUnsavedActivity = uiNotice('notice.activity.liveUnsaved');
 const { codexVersionInfo } = require('./native-history.cjs');
 const { EventEmitter } = require('node:events');
 const { submissionState, assertSubmission, assertSharing, assertAutomaticRun, assertNativeCreation } = require('./submission-policy.cjs');
@@ -66,7 +68,7 @@ class WorkspaceClient extends EventEmitter {
   }
   replaceService(key, client, state) {
     const entry = this.entries.find(e => e.key === key);
-    if (!entry || this.closing) { client.close(); throw new Error('窗口连接已变化，请重新连接。'); }
+    if (!entry || this.closing) { client.close(); throw uiError("error.client.windowConnectionChanged"); }
     const old = entry.client;
     for (const s of entry.state.sessions) { this.legacyObservers.get(s.id)?.dispose(); this.legacyObservers.delete(s.id); }
     this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1);
@@ -78,7 +80,7 @@ class WorkspaceClient extends EventEmitter {
     this.socket.destroyed = this.entries.some(e => e.closed);
   }
   maintainService(key) {
-    if (this.control.maintenance.has(key)) throw new Error('这个连接已在更新，请稍候。');
+    if (this.control.maintenance.has(key)) throw uiError("error.client.connectionAlreadyUpdating");
     this.control.maintenance.add(key);
     this.control.generations.set(key, (this.control.generations.get(key) || 0) + 1); this.control.revision++; this.control.manualEpoch++;
     return () => {
@@ -91,8 +93,8 @@ class WorkspaceClient extends EventEmitter {
   operationGuard(entry) {
     const client = entry.client, generation = this.control.generations.get(entry.key) || 0;
     return () => {
-      if (this.control.maintenance.has(entry.key)) throw new Error('这个连接正在更新，请稍候；没有发送输入。');
-      if (entry.client !== client || (this.control.generations.get(entry.key) || 0) !== generation || entry.closed || this.closing) throw new Error('连接已变化，原操作没有重发；请重新确认。');
+      if (this.control.maintenance.has(entry.key)) throw uiError("error.client.connectionUpdatingNoInput");
+      if (entry.client !== client || (this.control.generations.get(entry.key) || 0) !== generation || entry.closed || this.closing) throw uiError("error.client.connectionChangedNoReplay");
     };
   }
   sessionState(record) { return this.control.legacyInput?.effectiveState?.(record) || record?.state; }
@@ -102,7 +104,7 @@ class WorkspaceClient extends EventEmitter {
     for (const e of this.entries) {
       const state = submissionState(e.state);
       for (const s of state.sessions) {
-        if (ids.has(s.id)) throw new Error('会话归属冲突；未向任何原生会话发送输入。');
+        if (ids.has(s.id)) throw uiError("error.client.sessionOwnershipConflict");
         const bridge = this.control.legacyInput;
         const failedTurnInputAvailable = s.state === 'error' && Boolean(bridge?.target(s)?.failedTurnInputId);
         const legacySubmit = legacyInputEligible(e.state, s) && (['idle', 'working', 'approval', 'starting'].includes(s.state) || failedTurnInputAvailable) && !!bridge?.connected(s);
@@ -127,16 +129,17 @@ class WorkspaceClient extends EventEmitter {
           legacySharedQueue: Boolean(legacySubmit && s.provider === 'claude' && bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError),
           ...(s.provider === 'claude' && legacySubmit ? { state: this.sessionState(s), nativeInputRequired: Boolean(bridge.target(s)?.nativeInputRequired), queueAvailable: Boolean(bridge.target(s)?.queueAvailable), pendingQueue: bridge.target(s)?.pendingQueue || null } : {}),
           ...(reader?.initialized ? { nativeBlockMapping: true, messages: reader.record.messages,
-            ...(s.provider === 'claude' ? { model: reader.model || '原生未报告', usage: reader.usage || null, sharedActivity: bridge?.sharedReplies?.activity(reader.record) || null, nativeActivity: reader.nativeActivity, nativeApproval: reader.nativeApproval, activeTurnId: reader.turnId } : {}),
-            ...(reader.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : {}) } : {}),
+            ...(s.provider === 'claude' ? { model: reader.model || '原生未报告', modelUiMessage: reader.model ? reader.modelUiMessage || null : uiNotice('notice.model.nativeUnreported').uiMessage, usage: reader.usage || null, sharedActivity: bridge?.sharedReplies?.activity(reader.record) || null, nativeActivity: reader.nativeActivity, nativeApproval: reader.nativeApproval, activeTurnId: reader.turnId } : {}),
+            ...(reader.storageError ? { activity: liveUnsavedActivity.text, activityUiMessage: liveUnsavedActivity.uiMessage } : {}) } : {}),
           ...(bridge?.readerUnavailable?.(s) ? { nativeBlockMapping: true, messages: [{ id: 'retained-reader-unavailable', role: 'system', kind: 'gap', incomplete: true,
-            text: '原生阅读记录暂不可用；没有以旧后台内容替换，请在原生终端继续。' }] } : {}),
-          ...(legacyCodex && native ? { ...codexVersionInfo(native.rpc, native.connected && !native.closed), nativeBlockMapping: true, nativeSettings: native.nativeSettings, sharedActivity: bridge?.sharedReplies?.activity(native.record) || null, nativeActivity: native.connected && !native.closed ? native.nativeActivity : null, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告', usage: native.usage || null,
-            ...(native.storageError ? { activity: '实时内容尚未保存，请在原生终端核对；原会话继续保留。' } : native.connected ? { activity: native.activity || '' } : {}) } : {}),
-          ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null,
+            text: '原生阅读记录暂不可用；没有以旧后台内容替换，请在原生终端继续。', uiMessage: uiNotice('notice.client.readerUnavailable').uiMessage }] } : {}),
+          ...(legacyCodex && native ? { ...codexVersionInfo(native.rpc, native.connected && !native.closed), nativeBlockMapping: true, nativeSettings: native.nativeSettings, sharedActivity: bridge?.sharedReplies?.activity(native.record) || null, nativeActivity: native.connected && !native.closed ? native.nativeActivity : null, steerAvailable: Boolean(native.steerAvailable), activeTurnId: native.turnId, pendingSteer: native.pendingSteer || null, messages: native.record.messages, model: native.model || '原生未报告', modelUiMessage: native.model ? native.modelUiMessage || null : uiNotice('notice.model.nativeUnreported').uiMessage, usage: native.usage || null,
+            ...(native.storageError ? { activity: liveUnsavedActivity.text, activityUiMessage: liveUnsavedActivity.uiMessage } : native.connected ? { activity: native.activity || '', activityUiMessage: native.activityUiMessage || null } : {}) } : {}),
+          ...(legacySubmit ? { chatAvailable: true, shareAvailable: true, submissionNotice: null, submissionNoticeUiMessage: null,
             sharingNotice: bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError
               ? '只发送选定的内容；对应的原生回复实时显示在共同消息流中，不自动交给其他 agent。'
-              : '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。', ...(native?.state ? { state: native.state } : {}),
+              : '只发送你选定的内容。回复在成员视图查看；再次分享由你选择，不会自动转发私人回复。',
+            sharingNoticeUiMessage: uiNotice(bridge.target(s)?.sharedReplyAvailable && !bridge.sharedReplies?.storageError ? 'notice.client.sharingLive' : 'notice.client.sharingPrivate').uiMessage, ...(native?.state ? { state: native.state } : {}),
             pendingTag: bridge.target(s)?.submission.pending?.tag || s.pendingTag } : {}),
           ...(legacyCodex
             ? { approval: native?.connected ? native.approval : null, approvalResolved: Boolean(native?.connected && native.approvalResolved) } : {}),
@@ -145,28 +148,29 @@ class WorkspaceClient extends EventEmitter {
           }).decisions : [] })), approvalOverflow,
           approvalDecisionAvailable, approvalDecisions: approvalOverflow ? [] : approvalDecisions,
           approvalNotice: s.provider === 'codex' && !approvalDecisionAvailable ? '旧连接无法核实这项确认的最新状态，请在原生终端核对。原会话继续保留。' : null,
+          approvalNoticeUiMessage: s.provider === 'codex' && !approvalDecisionAvailable ? uiNotice('notice.client.approvalUnverified').uiMessage : null,
           handoffGroup: this.entries.indexOf(e), serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
       }
       for (const m of state.room.messages || []) {
-        if (messages.has(m.id)) throw new Error('共享记录归属冲突；原记录已保留。');
+        if (messages.has(m.id)) throw uiError("error.client.sharedRecordOwnershipConflict");
         messages.set(m.id, m);
       }
       if (state.room.run) runs.push(state.room.run);
       for (const room of backendRooms(state)) if (room?.id && room.id !== 'shared') {
-        if (!spaces.roomId(room.id) || !state.capabilities?.includes('collaborationSpacesV1')) throw Error('空间后台能力或记录归属未能核对。');
+        if (!spaces.roomId(room.id) || !state.capabilities?.includes('collaborationSpacesV1')) throw uiError("error.client.spaceOwnershipUnverifiable");
         if (!additional.has(room.id)) additional.set(room.id, { id: room.id, revision: 0, messages: new Map(), runs: [], snapshotBatches: [] });
         const combined = additional.get(room.id); combined.revision += room.revision || 0;
-        if (room.snapshotBatches !== undefined && !Array.isArray(room.snapshotBatches)) throw Error('合并快照归属未能核对。');
+        if (room.snapshotBatches !== undefined && !Array.isArray(room.snapshotBatches)) throw uiError("error.client.mergeSnapshotOwnershipUnverifiable");
         for (const marker of room.snapshotBatches || []) {
-          if (combined.snapshotBatches.some(value => value.operationId === marker.operationId)) throw Error('合并快照由多个后台声明拥有；没有派发。');
+          if (combined.snapshotBatches.some(value => value.operationId === marker.operationId)) throw uiError("error.client.mergeSnapshotMultipleOwners");
           combined.snapshotBatches.push({ ...marker });
         }
-        for (const m of room.messages || []) { if (combined.messages.has(m.id)) throw Error('空间记录归属冲突；原记录已保留。'); combined.messages.set(m.id, m); }
+        for (const m of room.messages || []) { if (combined.messages.has(m.id)) throw uiError("error.client.spaceRecordOwnershipConflict"); combined.messages.set(m.id, m); }
         if (room.run) combined.runs.push(room.run);
       }
     }
     for (const message of this.control.legacyInput?.sharedMessages?.() || []) {
-      if (messages.has(message.id)) throw Error('共享记录归属冲突；原记录已保留。');
+      if (messages.has(message.id)) throw uiError("error.client.sharedRecordOwnershipConflict");
       messages.set(message.id, message);
     }
     const memberServices = this.entries.filter(e => e.state.sessions.some(s => spaces.isMember(s, roomId)));
@@ -186,21 +190,26 @@ class WorkspaceClient extends EventEmitter {
           Boolean(b.snapshotBatch) - Boolean(a.snapshotBatch) || (a.snapshotBatch && b.snapshotBatch
             ? r.snapshotBatches.findIndex(marker => marker.operationId === a.snapshotBatch) - r.snapshotBatches.findIndex(marker => marker.operationId === b.snapshotBatch) || a.snapshotOrder - b.snapshotOrder
             : (a.time || 0) - (b.time || 0))) }))];
+    const warningParts = [...this.entries.map(e => ({ message: e.state.storageWarning, uiMessage: e.state.storageWarningUiMessage })),
+      ...this.entries.map(e => ({ message: e.state.wakePolicy?.warning, uiMessage: e.state.wakePolicy?.warningUiMessage })),
+      { message: this.control.legacyInput?.storageWarning, uiMessage: this.control.legacyInput?.storageWarningUiMessage },
+      ...(this.control.legacyInput?.sharedReplies?.storageError ? [uiError('error.warning.sharedReplyUnsaved')] : [])].filter(part => part.message);
+    const storageDisplay = uiError('error.warningLines', { warnings: warningParts.map(part => part.message).join('\n') }, { parts: warningParts, param: 'warnings', separator: '\n' });
     return { ...this.active.state, wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
       rooms, room: rooms.find(r => r.id === roomId) || { id: roomId, revision: 0, run: null, messages: [] },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
-      storageWarning: [...this.entries.map(e => e.state.storageWarning), ...this.entries.map(e => e.state.wakePolicy?.warning), this.control.legacyInput?.storageWarning,
-        this.control.legacyInput?.sharedReplies?.storageError ? '本地共享回复未能保存；后续内容留在原会话，请检查磁盘与文件权限。' : null].filter(Boolean).join('\n') || null,
+      storageWarning: storageDisplay.message || null, storageWarningUiMessage: storageDisplay.uiMessage || null,
       storageRetryable: this.entries.some(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave')),
       services: this.entries.map(e => ({ version: e.state.runtimeVersion, active: e === this.active, sessions: e.state.sessions.length })),
       peerHandoffsAvailable: this.active.state.capabilities?.includes(PEER_HANDOFFS) === true,
       peerDirectedAvailable: this.active.state.capabilities?.includes(PEER_DIRECTED) === true,
       handoffNotice: memberServices.length > 1 && !memberServices.every(e => e.state.capabilities?.includes(PEER_HANDOFFS)) ? '成员使用不同版本的后台，自动交接暂不可用。可在同一协作视图查看终端、选择内容并定向分享。' : null,
+      handoffNoticeUiMessage: memberServices.length > 1 && !memberServices.every(e => e.state.capabilities?.includes(PEER_HANDOFFS)) ? uiError('error.client.mixedBackends').uiMessage : null,
     };
   }
   route(id) {
     const matches = this.entries.filter(e => e.state.sessions.some(s => s.id === id));
-    if (matches.length !== 1) throw new Error('找不到唯一的会话归属；没有发送输入。');
+    if (matches.length !== 1) throw uiError("error.client.uniqueSessionOwnerMissing");
     return matches[0];
   }
   observeLegacyOwners(entry) {
@@ -251,11 +260,11 @@ class WorkspaceClient extends EventEmitter {
         // connection to close before another window sends the pause.
         if (!arm.entry.closed) {
           let timer;
-          try { await Promise.race([arm.entry.closedPromise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('原窗口尚未确认断开；输入未发送，请重新连接。')), 2500); })]); }
+          try { await Promise.race([arm.entry.closedPromise, new Promise((_, reject) => { timer = setTimeout(() => reject(uiError("error.client.originalWindowDisconnectUnconfirmed")), 2500); })]); }
           finally { clearTimeout(timer); }
         }
         const replacement = [...this.control.views].filter(view => !view.closing && !view.socket.destroyed).flatMap(view => view.entries).find(e => e.key === entry.key && !e.closed && !e.closing);
-        if (!replacement) throw new Error('没有可确认暂停的连接；输入未发送，请重新连接。');
+        if (!replacement) throw uiError("error.client.noPausableConnection");
         arm.entry = replacement;
       }
       return scoped ? this.invoke(arm.entry, arm.roomId || 'shared', 'pause', [], true) : arm.entry.client.call('pause', ...(explicit ? [{ withdrawWakes: true }] : []));
@@ -288,8 +297,8 @@ class WorkspaceClient extends EventEmitter {
     if (strictWake || revokeWakes) {
       if (typeof this.scope === 'string' && (strictWake || this.entries.some(e => e.state.capabilities?.includes('agentWakeV1')))) {
         const confirmed = require('./session-wake.cjs').revoke({ dataDir: this.scope, sessions: new Map() });
-        if (strictWake && confirmed !== true) throw Object.assign(Error('旧自动消息授权未能确认撤销，手机输入没有派发。'), { notSent: true });
-      } else if (strictWake) throw Object.assign(Error('手机入口的本机范围未确认，没有派发。'), { notSent: true });
+        if (strictWake && confirmed !== true) throw Object.assign(uiError("error.client.mobileRevocationUnconfirmed"), { notSent: true });
+      } else if (strictWake) throw Object.assign(uiError("error.client.mobileLocalScopeUnconfirmed"), { notSent: true });
     }
     this.control.revision++;
     // Waiting shared input is not a native interruption. Keep the original
@@ -320,7 +329,7 @@ class WorkspaceClient extends EventEmitter {
       const current = entry.state.sessions.find(s => s.id === id);
       if (!current || current.owner !== entry.state.owner || current.owner !== expected.owner
         || current.nativeId !== expected.nativeId || current.pid !== expected.pid
-        || this.control.legacyOwners.get(id)?.revision !== ownerRevision || !valid(current)) throw Error('会话控制权或草稿已变化；此窗口的草稿保留为恢复副本，没有覆盖原会话。');
+        || this.control.legacyOwners.get(id)?.revision !== ownerRevision || !valid(current)) throw uiError("error.client.sessionOwnerOrDraftChanged");
       return entry.client.call('draft', id, text);
     });
   }
@@ -365,7 +374,7 @@ class WorkspaceClient extends EventEmitter {
     return this.clearRefusal(roomId, state, entries);
   }
   callSpace(roomId, method, args) {
-    if (!spaces.roomId(roomId) || !SPACE_METHODS.has(method) || !Array.isArray(args)) return Promise.reject(Error('无效协作空间操作。'));
+    if (!spaces.roomId(roomId) || !SPACE_METHODS.has(method) || !Array.isArray(args)) return Promise.reject(uiError("error.invalidSpaceAction"));
     return this.callScoped(roomId, method, [...args], true);
   }
   invoke(entry, roomId, method, args, scopedPause = false) {
@@ -376,21 +385,21 @@ class WorkspaceClient extends EventEmitter {
     return entry.client.call('spaceAction', roomId, method, args, expected);
   }
   async callScoped(roomId, method, args, scoped = false) {
-    if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
+    if (this.socket.destroyed) throw uiError("error.client.serviceNotConnected");
     this.authorizeOperation?.(method, args, roomId);
     if (method === 'gitWorktreePreview') {
       const entry = this.active, guard = this.operationGuard(entry);
       guard(); await this.refresh(); guard();
-      if (!entry.state.capabilities?.includes('gitWorktreeV1')) throw Error('当前后台不支持 Git 工作副本，请重新连接新版后台；未使用原目录启动。');
+      if (!entry.state.capabilities?.includes('gitWorktreeV1')) throw uiError("error.client.backendGitUnsupportedReconnect");
       const plan = await entry.client.call(method, ...args); guard(); return plan;
     }
     if (method === 'mergeSnapshot') {
-      if (roomId !== 'shared' || args.length !== 1) throw Error('无效合并快照请求。');
+      if (roomId !== 'shared' || args.length !== 1) throw uiError("error.client.invalidMergeSnapshot");
       const batch = require('./space-merge.cjs').validateBatch(args[0]);
       const owners = this.entries.filter(entry => backendRooms(entry.state).some(room => room?.snapshotBatches?.some(marker => marker.operationId === batch.operationId)));
-      if (owners.length > 1) throw Error('合并快照归属冲突；没有重放。');
+      if (owners.length > 1) throw uiError("error.client.mergeSnapshotOwnershipConflict");
       const target = owners[0] || this.active;
-      if (!target.state.capabilities?.includes('spaceMergeV1') || batch.memberIds.some(id => !this.route(id).state.capabilities?.includes('collaborationSpacesV1'))) throw Error('目标后台或成员尚不支持多个空间的合并；原空间与草稿保留。');
+      if (!target.state.capabilities?.includes('spaceMergeV1') || batch.memberIds.some(id => !this.route(id).state.capabilities?.includes('collaborationSpacesV1'))) throw uiError("error.client.mergeMultipleSpacesUnsupported");
       const guards = this.entries.map(entry => this.operationGuard(entry)); guards.forEach(check => check());
       const result = await target.client.call('mergeSnapshot', batch);
       guards.forEach(check => check()); await this.refresh(); guards.forEach(check => check());
@@ -405,7 +414,7 @@ class WorkspaceClient extends EventEmitter {
     }
     if (method === 'wakePolicy') {
       const entry = args[0] === null ? this.entries.find(e => e.state.capabilities?.includes('agentWakeV1')) : this.route(args[0]);
-      if (!entry?.state.capabilities?.includes('agentWakeV1')) throw Error('该后台尚未接通自动消息设置。');
+      if (!entry?.state.capabilities?.includes('agentWakeV1')) throw uiError("error.client.automaticMessagesUnsupported");
       const result = await entry.client.call(method, ...args); await this.refresh(roomId); return result;
     }
     if (['mobileRead', 'mobileSendReceipt', 'mobileAnswerReceipt', 'mobileSend', 'mobileAnswer'].includes(method)) {
@@ -413,24 +422,24 @@ class WorkspaceClient extends EventEmitter {
       const check = () => {
         guard(); this.authorizeOperation?.(method, args, roomId);
         const current = target.state.sessions.find(s => s.id === id);
-        if (this.route(id) !== target || target.key !== ticket.serviceKey || current?.nativeId !== ticket.nativeId || current.nativeContextPending || !target.state.capabilities?.includes('humanMobileV1')) throw Error('手机目标的原生身份或后台能力已变化，没有重新派发。');
+        if (this.route(id) !== target || target.key !== ticket.serviceKey || current?.nativeId !== ticket.nativeId || current.nativeContextPending || !target.state.capabilities?.includes('humanMobileV1')) throw uiError("error.client.mobileTargetChanged");
       };
       check();
       if (method !== 'mobileSend' && method !== 'mobileAnswer') return origin.call(method, ...args);
-      if (!target.state.capabilities.includes('humanMobilePreparedV1')) throw Error('这个后台尚不支持手机输入的预备确认；原会话和草稿保留。');
+      if (!target.state.capabilities.includes('humanMobilePreparedV1')) throw uiError("error.client.mobilePreparationUnsupported");
       const action = method === 'mobileSend' ? 'Send' : 'Answer', originalManual = this.manualGuard(id);
       const ready = await origin.call('mobilePrepare' + action, ticket, spec);
       if (ready?.prepared !== true) {
-        if (!ready || !Object.hasOwn(ready, 'receipt')) throw Error('手机预备回执未确认，没有重新派发。');
+        if (!ready || !Object.hasOwn(ready, 'receipt')) throw uiError("error.client.mobilePreparationUnconfirmed");
         return ready.receipt;
       }
-      if (typeof ready.lease !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(ready.lease)) throw Error('手机预备凭证未确认，没有提交。');
+      if (typeof ready.lease !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(ready.lease)) throw uiError("error.client.mobileCredentialUnconfirmed");
       const checkProof = () => {
         const current = target.state.sessions.find(s => s.id === id), proof = spec?.proof;
-        if (!proof || proof.nativeId !== current?.nativeId || proof.controlRevision !== (current.controlRevision ?? 0) || proof.connectionRevision !== (current.connectionRevision ?? 0)) throw Error('预备期间原会话已发生新的操作，手机输入没有派发。');
-        if (typeof this.scope !== 'string') throw Error('手机入口的本机范围未确认，没有派发。');
+        if (!proof || proof.nativeId !== current?.nativeId || proof.controlRevision !== (current.controlRevision ?? 0) || proof.connectionRevision !== (current.connectionRevision ?? 0)) throw uiError("error.client.mobileSessionChangedDuringPreparation");
+        if (typeof this.scope !== 'string') throw uiError("error.client.mobileLocalScopeUnconfirmed");
         const layout = require('./service-layout.cjs').readLayout(this.scope);
-        if (layout.pending || JSON.stringify([...layout.entries].sort()) !== JSON.stringify(this.entries.map(e => e.key).sort())) throw Error('后台列表已变化，请重新连接手机入口；输入没有派发。');
+        if (layout.pending || JSON.stringify([...layout.entries].sort()) !== JSON.stringify(this.entries.map(e => e.key).sort())) throw uiError("error.client.mobileBackendListChanged");
         // This broker runs in the issuing app itself. Its positive PID/start
         // identity is stable for this process lifetime; do not spawn ps per click.
         if (!Object.hasOwn(this.control, 'mobileIssuerIdentity')) this.control.mobileIssuerIdentity = require('./platform.cjs').processIdentity(process.pid);
@@ -441,12 +450,12 @@ class WorkspaceClient extends EventEmitter {
       };
       let commitStarted = false;
       try {
-        check(); checkProof(); if (!originalManual()) throw Error('预备期间发生了新的真人操作，手机输入没有派发。');
+        check(); checkProof(); if (!originalManual()) throw uiError("error.client.mobileHumanInputDuringPreparation");
         return await this.intervene(async () => {
           const manual = this.manualGuard(id);
           await this.pauseExcept(null); await this.refresh(roomId);
           check(); checkProof();
-          if (!manual() || this.entries.some(e => e.state.room.run?.status === 'running' || e.state.room.run?.pausePending || e.state.room.run?.pauseUnconfirmed || e.state.peerLeases?.some(g => g.status === 'running'))) throw Error('旧接力尚未确认全部暂停，手机输入没有派发。');
+          if (!manual() || this.entries.some(e => e.state.room.run?.status === 'running' || e.state.room.run?.pausePending || e.state.room.run?.pauseUnconfirmed || e.state.peerLeases?.some(g => g.status === 'running'))) throw uiError("error.client.mobileRelayPauseUnconfirmed");
           commitStarted = true;
           return origin.call('mobileCommit' + action, ticket, ready.lease);
         }, id, false, true);
@@ -454,22 +463,22 @@ class WorkspaceClient extends EventEmitter {
         // After writing commit, its outcome may be native work. Never abort or replay.
         if (commitStarted) throw error;
         try { return await origin.call('mobileCancel' + action, ticket, ready.lease, String(error.message || error).slice(0, 16000)); }
-        catch { throw Object.assign(Error(`${error.message}\n取消回执未能确认；提交没有发出，请保留手机草稿并核对。`), { notSent: true }); }
+        catch { throw Object.assign(uiError("error.mobileCancelUnconfirmed", { reason: error.message }, { cause: error, param: 'reason' }), { notSent: true }); }
       }
     }
     // Capture the context displayed when the human acted, before refresh,
     // pause or an earlier private ACK can yield to a native /clear.
     const replyTo = ['forward', 'run', 'queueShared', 'steerShared'].includes(method) ? require('./room-threads.js').replyReference(args[method === 'run' ? 6 : method === 'steerShared' ? 4 : 3]) : '';
     const replyGuard = () => {
-      if (scoped && ['forward', 'run', 'queueShared', 'steerShared'].includes(method) && spaceRevision !== (this.control.spaceRevisions.get(roomId) || 0)) throw Error('这个空间的共享授权已变化；草稿保留，没有发送。');
-      if (replyTo && !this.snapshot(roomId).room.messages.some(m => m.id === replyTo)) throw Error('原讨论记录已移除；草稿保留，没有发送。');
+      if (scoped && ['forward', 'run', 'queueShared', 'steerShared'].includes(method) && spaceRevision !== (this.control.spaceRevisions.get(roomId) || 0)) throw uiError("error.client.spaceAuthorizationChanged");
+      if (replyTo && !this.snapshot(roomId).room.messages.some(m => m.id === replyTo)) throw uiError("error.client.originalDiscussionRemoved");
     };
     replyGuard();
     let contextGuard = replyGuard, runIdentities;
     const displayedIdentities = method === 'run' ? args[7] : undefined;
     if (['send', 'forward', 'run'].includes(method)) {
       const ids = method === 'run' ? args[0] : [args[0]], index = method === 'run' ? 5 : 2;
-      if (!Array.isArray(ids)) throw Error('无效会话选择。');
+      if (!Array.isArray(ids)) throw uiError("error.invalidSessionSelection");
       const supplied = args[index];
       const expected = ids.flatMap(id => {
         // Retained pre-transition services historically discover run members
@@ -486,9 +495,9 @@ class WorkspaceClient extends EventEmitter {
         replyGuard();
         for (const { id, entry, nativeId, member } of expected) {
           const current = entry.state.sessions.find(s => s.id === id);
-          if (method === 'run' && displayedIdentities && JSON.stringify(peerIdentity(current || {}, roomId)) !== JSON.stringify(runIdentities[id])) throw Error('成员的输入、控制权或加入状态已变化，请重新预览授权。');
-          if (!current || current.nativeContextPending || current.nativeId !== nativeId) throw Error('原生上下文已变化，请重新查看后发送；草稿保留。');
-          if (roomId !== 'shared' && ['forward', 'run'].includes(method) && (!spaces.isMember(current, roomId) || spaces.membershipRevision(current, roomId) !== member)) throw Error('这个空间的成员关系已变化，请重新核对；草稿保留。');
+          if (method === 'run' && displayedIdentities && JSON.stringify(peerIdentity(current || {}, roomId)) !== JSON.stringify(runIdentities[id])) throw uiError("error.client.memberInputOrMembershipChanged");
+          if (!current || current.nativeContextPending || current.nativeId !== nativeId) throw uiError("error.client.nativeContextChanged");
+          if (roomId !== 'shared' && ['forward', 'run'].includes(method) && (!spaces.isMember(current, roomId) || spaces.membershipRevision(current, roomId) !== member)) throw uiError("error.client.spaceMembershipChanged");
         }
       };
       contextGuard();
@@ -501,7 +510,7 @@ class WorkspaceClient extends EventEmitter {
       if (replyTo) {
         const targets = expected.map(e => e.entry);
         const bridged = method === 'forward' && this.control.legacyInput?.connected(targets[0]?.state.sessions.find(s => s.id === args[0]));
-        if (!bridged && targets.some(e => !e.state.capabilities?.includes('replyThreads'))) throw Error('这个保留连接尚不支持回复关联；草稿保留，没有发送。');
+        if (!bridged && targets.some(e => !e.state.capabilities?.includes('replyThreads'))) throw uiError("error.client.replyBindingUnsupported");
         if (!bridged) args[method === 'run' ? 6 : 3] = replyTo;
       }
     }
@@ -513,7 +522,7 @@ class WorkspaceClient extends EventEmitter {
       if (roomId === 'shared' && bridge?.target(original)?.queueAvailable) {
         const expected = { ...original };
         if (expected.nativeId !== nativeId || this.sessionState(expected) !== 'working' || (shared &&
-          (expected.roomId !== 'shared' || !bridge.target(original).sharedReplyAvailable || bridge.sharedReplies.storageError))) throw Error('原生回合或共享连接已变化；草稿保留。');
+          (expected.roomId !== 'shared' || !bridge.target(original).sharedReplyAvailable || bridge.sharedReplies.storageError))) throw uiError("error.client.nativeTurnOrSharedConnectionChanged");
         return this.intervene(async () => {
           const manualValid = this.manualGuard(id);
           const draftRevision = this.control.draftVersions?.get(id) || 0;
@@ -527,7 +536,7 @@ class WorkspaceClient extends EventEmitter {
               ['idle', 'working'].includes(this.sessionState(current)) && bridge.target(current)?.queueAvailable &&
               (!shared || shareAuthority());
           };
-          const refresh = async () => { await this.refresh(roomId); if (!valid()) throw Error('原会话或控制权已变化；草稿保留。'); };
+          const refresh = async () => { await this.refresh(roomId); if (!valid()) throw uiError("error.client.originalSessionOrControlChanged"); };
           await this.pauseExcept(undefined, scoped && shared ? roomId : undefined, id); await refresh();
           const record = target.state.sessions.find(s => s.id === id);
           const draft = record.liveDraft;
@@ -537,24 +546,24 @@ class WorkspaceClient extends EventEmitter {
           return tag;
         }, id, shared, false, scoped && shared ? roomId : undefined);
       }
-      if (!target.state.capabilities?.includes(shared ? 'nativeSharedQueue' : 'nativeQueue') || original?.nativeId !== nativeId || (shared && (!original || !spaces.isMember(original, roomId)))) throw Error('此连接暂不支持原生等待输入；草稿保留。');
+      if (!target.state.capabilities?.includes(shared ? 'nativeSharedQueue' : 'nativeQueue') || original?.nativeId !== nativeId || (shared && (!original || !spaces.isMember(original, roomId)))) throw uiError("error.client.nativeWaitingInputUnsupported");
       return this.intervene(async () => {
         const manualValid = this.manualGuard(id), control = original.controlRevision, member = spaces.membershipRevision(original, roomId);
         await this.pauseExcept(undefined, scoped && shared ? roomId : undefined, id); await this.refresh(roomId); guard(); replyGuard(); this.authorizeOperation?.(method, args, roomId);
         const current = target.state.sessions.find(s => s.id === id);
         if (!manualValid() || current?.controlRevision !== control || current?.nativeId !== nativeId || current?.nativeContextPending || current?.owner !== target.state.owner || current?.state !== 'working' || current?.approval || current?.pendingQueue || !current?.queueAvailable ||
-          (shared && (!spaces.isMember(current, roomId) || spaces.membershipRevision(current, roomId) !== member))) throw Error('当前原生会话或控制权已变化，草稿保留。');
+          (shared && (!spaces.isMember(current, roomId) || spaces.membershipRevision(current, roomId) !== member))) throw uiError("error.client.currentNativeSessionOrControlChanged");
         return this.invoke(target, roomId, method, [id, text, nativeId, ...(shared ? [replyTo] : [])]);
       }, id, shared, false, scoped && shared ? roomId : undefined);
     }
     if (method === 'steer' || method === 'steerShared') {
       const [id, text, nativeId, turnId] = args, target = this.route(id), guard = this.operationGuard(target);
       const original = target.state.sessions.find(s => s.id === id);
-      if (typeof turnId !== 'string' || !turnId || turnId.length > 160 || original?.nativeId !== nativeId) throw Error('当前原生回合已变化，草稿保留。');
+      if (typeof turnId !== 'string' || !turnId || turnId.length > 160 || original?.nativeId !== nativeId) throw uiError("error.client.nativeTurnChanged");
       const shared = method === 'steerShared';
       const bridged = roomId === 'shared' && target.state.runtimeVersion === '0.1.0-alpha.2' && this.control.legacyInput?.target(original)?.native;
-      if (shared && (!(bridged?.sharedReplyAvailable && !this.control.legacyInput.sharedReplies.storageError || target.state.capabilities?.includes('nativeSharedSteer')) || (!original || !spaces.isMember(original, roomId)))) throw Error('此连接暂不支持共享追加指令；草稿保留。');
-      if (!(bridged?.steerAvailable || target.state.capabilities?.includes('nativeSteer'))) throw Error('此连接暂不支持工作中追加指令；请在原生终端继续。');
+      if (shared && (!(bridged?.sharedReplyAvailable && !this.control.legacyInput.sharedReplies.storageError || target.state.capabilities?.includes('nativeSharedSteer')) || (!original || !spaces.isMember(original, roomId)))) throw uiError("error.client.sharedSteeringUnsupported");
+      if (!(bridged?.steerAvailable || target.state.capabilities?.includes('nativeSteer'))) throw uiError("error.client.workingSteeringUnsupported");
       return this.intervene(async () => {
         const manualValid = this.manualGuard(id), control = original.controlRevision, member = spaces.membershipRevision(original, roomId);
         const draftRevision = this.control.draftVersions?.get(id) || 0;
@@ -569,12 +578,12 @@ class WorkspaceClient extends EventEmitter {
             (!shared || (spaces.isMember(raw, roomId) && spaces.membershipRevision(raw, roomId) === member));
         };
         await this.pauseExcept(null, scoped && shared ? roomId : undefined, id); await this.refresh(roomId);
-        if (!valid()) throw Error('当前回合或控制权已变化；草稿保留，没有另开回合。');
+        if (!valid()) throw uiError("error.client.currentTurnOrControlChanged");
         if (!bridged) return this.invoke(target, roomId, method, args);
         // A draft write already queued before this send may have completed
         // during refresh. Read its text now, retaining the click-time revision.
         const draft = target.state.sessions.find(s => s.id === id)?.liveDraft;
-        const refresh = async () => { await this.refresh(roomId); if (!valid()) throw Error('原生状态已变化'); };
+        const refresh = async () => { await this.refresh(roomId); if (!valid()) throw uiError("error.client.nativeStateChanged"); };
         const shareAuthority = shared ? this.legacyShareAuthority(target, original) : undefined;
         const tag = await this.control.legacyInput.send(original, text, refresh, valid, shared, replyTo, turnId, false, shareAuthority);
         if (!shared && draft?.trim() === text.trim()) await this.legacyDraft(target, id, '', original, current =>
@@ -585,25 +594,25 @@ class WorkspaceClient extends EventEmitter {
     if (method === 'initial') return this.refresh(roomId);
     if (method === 'nativeHistory') {
       const guard = this.operationGuard(this.active); guard();
-      if (!this.active.state.capabilities?.includes('nativeHistory')) throw Error('请重新打开应用连接新版后台；已有会话保持原样。');
+      if (!this.active.state.capabilities?.includes('nativeHistory')) throw uiError("error.client.reopenForBackend");
       const result = await this.active.client.call(method, ...args); guard();
       const snapshot = await this.refresh(roomId); guard();
       return { ...result, data: result.data.map(row => ({ ...row, existingIds: snapshot.sessions.filter(s => s.provider === 'codex' && s.nativeId === row.nativeId).map(s => s.id) })) };
     }
     if (method === 'importHistory') {
-      if (args[1] != null && (typeof args[1] !== 'object' || Array.isArray(args[1]))) throw Error('无效的历史接入请求。');
+      if (args[1] != null && (typeof args[1] !== 'object' || Array.isArray(args[1]))) throw uiError("error.client.invalidHistoryImport");
       const options = args[1] == null ? undefined : { ...args[1] };
       const provider = options?.provider ?? 'codex';
-      if (!['codex', 'claude'].includes(provider)) throw Error('无效的原生会话类型。');
+      if (!['codex', 'claude'].includes(provider)) throw uiError("error.client.invalidNativeProvider");
       const native = provider === 'claude' && typeof args[0] === 'string' ? args[0].toLowerCase() : args[0];
       const guard = this.operationGuard(this.active);
       const operation = creationQueue.then(async () => {
         guard(); const snapshot = await this.refresh(roomId); guard();
         const existing = snapshot.sessions.filter(s => s.provider === provider && s.nativeId === native);
-        if (existing.length > 1) throw Error('已有记录归属冲突；没有恢复第二个连接。');
+        if (existing.length > 1) throw uiError("error.client.existingRecordOwnershipConflict");
         if (existing.length) return existing[0].id;
         assertNativeCreation(snapshot);
-        if (!snapshot.capabilities.includes(provider === 'claude' ? 'claudeHistory' : 'nativeHistory')) throw Error('当前后台尚不支持这类原生历史接入。');
+        if (!snapshot.capabilities.includes(provider === 'claude' ? 'claudeHistory' : 'nativeHistory')) throw uiError("error.client.historyImportUnsupported");
         const id = await this.active.client.call(method, native, ...(options ? [options] : []));
         await this.refresh(roomId); return id;
       });
@@ -611,14 +620,14 @@ class WorkspaceClient extends EventEmitter {
     }
     if (method === 'retrySave') {
       const targets = this.entries.filter(e => e.state.storageRetryable && e.state.capabilities?.includes('retrySave'));
-      if (!targets.length) throw new Error('当前没有支持重试的保存失败；原记录保持不变。');
+      if (!targets.length) throw uiError("error.client.noRetryableStorageFailure");
       const targetsWithGuards = targets.map(entry => ({ entry, guard: this.operationGuard(entry) }));
       let failed = false;
       for (const { entry, guard } of targetsWithGuards) {
         try { guard(); await entry.client.call('retrySave'); } catch { failed = true; }
       }
       await this.refresh(roomId);
-      if (failed) throw new Error('部分记录仍未保存，请保留窗口并检查磁盘空间和写入权限。');
+      if (failed) throw uiError("error.client.recordsStillUnsaved");
       return true;
     }
     if (method === 'pause') {
@@ -626,7 +635,7 @@ class WorkspaceClient extends EventEmitter {
         const entries = this.entries.filter(e => roomId === 'shared' || e.state.capabilities?.includes('collaborationSpacesV1'));
         const guards = entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
         const results = await Promise.allSettled(entries.map(e => this.invoke(e, roomId, 'pause', [], true)));
-        if (results.some(r => r.status === 'rejected')) throw Error('部分后台尚未确认这个空间的交接已暂停；未重发任务。');
+        if (results.some(r => r.status === 'rejected')) throw uiError("error.client.spacePauseUnconfirmed");
         for (const entry of entries) if (this.control.armed.get(entry.key)?.roomId === roomId) this.control.armed.delete(entry.key);
         await this.refresh(roomId); guards.forEach(check => check());
       }, undefined, false, false, roomId);
@@ -645,8 +654,8 @@ class WorkspaceClient extends EventEmitter {
         guard();
         const state = await this.refresh(roomId); assertNativeCreation(state);
         guard();
-        if (args[0]?.newDirectory != null && !state.capabilities?.includes('newSessionDirectory')) throw new Error('当前后台尚不支持自动新建目录，请重新打开应用连接新版后台。');
-        if (args[0]?.gitWorktree != null && !state.capabilities?.includes('gitWorktreeV1')) throw new Error('当前后台不支持 Git 工作副本，未使用原目录启动。');
+        if (args[0]?.newDirectory != null && !state.capabilities?.includes('newSessionDirectory')) throw uiError("error.client.newDirectoryUnsupported");
+        if (args[0]?.gitWorktree != null && !state.capabilities?.includes('gitWorktreeV1')) throw uiError("error.client.backendGitUnsupported");
         const id = await this.active.client.call(method, ...args); await this.refresh(roomId); return id;
       });
       creationQueue = operation.catch(() => {}); return operation;
@@ -659,20 +668,20 @@ class WorkspaceClient extends EventEmitter {
         const refreshed = await this.refresh(roomId); guards.forEach(check => check());
         const refusal = this.clearRefusal(roomId, refreshed, entries); if (refusal) throw Error(refusal);
         const results = await Promise.allSettled(entries.map(e => this.invoke(e, roomId, 'clearSharedHistory', [])));
-        if (results.some(r => r.status === 'rejected')) throw Error('部分后台未确认清除；其他空间未清除，未自动重试。');
+        if (results.some(r => r.status === 'rejected')) throw uiError("error.client.clearPartiallyUnconfirmed");
         await this.refresh(roomId); return results.some(r => r.value?.imagesLeft) ? { imagesLeft: true } : true;
       }
       this.control.revision++; this.control.manualEpoch++;
       const sharedIds = this.control.legacyInput?.sharedMessages?.().map(message => message.id) || [];
       const guards = this.entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
       const state = await this.refresh(roomId);
-      if (method === 'shutdown' && state.sessions.some(s => !['ended', 'background'].includes(s.state))) throw new Error('请先结束各原生会话，再关闭运行服务。');
+      if (method === 'shutdown' && state.sessions.some(s => !['ended', 'background'].includes(s.state))) throw uiError("error.endNativeSessionsBeforeBackend");
       if (method === 'clearSharedHistory') { const refusal = this.clearRefusal(roomId, state); if (refusal) throw new Error(refusal); }
       // These are explicit user actions. Partial failure must remain visible.
       guards.forEach(check => check());
       const results = await Promise.allSettled(this.entries.map(e => method === 'clearSharedHistory'
         && e.state.runtimeVersion === '0.1.0-alpha.2' && !e.state.room.messages?.length ? Promise.resolve() : e.client.call(method)));
-      if (results.some(r => r.status === 'rejected')) throw new Error('部分后台未确认操作；请重新连接核对，未自动重试。');
+      if (results.some(r => r.status === 'rejected')) throw uiError("error.client.actionPartiallyUnconfirmed");
       if (method === 'clearSharedHistory') this.control.legacyInput?.clearSharedHistory(sharedIds);
       // A service reports cached images of removed sessions it could not delete (T-140).
       return results.some(r => r.value?.imagesLeft) ? { imagesLeft: true } : true;
@@ -683,13 +692,13 @@ class WorkspaceClient extends EventEmitter {
       this.control.manualEpoch++;
       const interventions = [...this.control.interventions];
       const state = await this.refresh(roomId);
-      if (scoped && state.rooms?.some(r => r.id !== roomId && r.run?.status === 'running')) throw Error('另一个空间正在核查；请先在原空间明确暂停，再开始这一轮。原生任务保持不变。');
-      if (this.entries.some(e => backendRooms(e.state).some(r => r?.run?.pausePending || r?.run?.pauseUnconfirmed))) throw Error('请先核对各后台已撤销后续交接授权，再开始新的协作。');
-      if (!Array.isArray(args[0]) || args[0].length < 2 || args[0].length > 6 || new Set(args[0]).size !== args[0].length) throw new Error('请选择 2–6 个不同会话。');
+      if (scoped && state.rooms?.some(r => r.id !== roomId && r.run?.status === 'running')) throw uiError("error.client.anotherSpaceChecking");
+      if (this.entries.some(e => backendRooms(e.state).some(r => r?.run?.pausePending || r?.run?.pauseUnconfirmed))) throw uiError("error.client.revokeBeforeNewCollaboration");
+      if (!Array.isArray(args[0]) || args[0].length < 2 || args[0].length > 6 || new Set(args[0]).size !== args[0].length) throw uiError("error.client.selectDistinctSessions");
       const targets = args[0].map(id => this.route(id));
       const guard = guards.get(targets[0].key); guard();
       const crossService = targets.some(target => target !== targets[0]);
-      if (crossService && (!['replies', 'directed'].includes(args[3]) || args[3] === 'directed' && (!this.active.state.capabilities?.includes(PEER_DIRECTED) || targets.some(t => !t.state.capabilities?.includes(PEER_DIRECTED))) || !this.active.state.capabilities?.includes(PEER_HANDOFFS) || targets.some(t => !t.state.capabilities?.includes(PEER_HANDOFFS)))) throw new Error('跨版本/跨后台协作尚不支持这些连接的可撤销顺序核查；原生会话保留，可人工分享。');
+      if (crossService && (!['replies', 'directed'].includes(args[3]) || args[3] === 'directed' && (!this.active.state.capabilities?.includes(PEER_DIRECTED) || targets.some(t => !t.state.capabilities?.includes(PEER_DIRECTED))) || !this.active.state.capabilities?.includes(PEER_HANDOFFS) || targets.some(t => !t.state.capabilities?.includes(PEER_HANDOFFS)))) throw uiError("error.client.crossBackendRevocationUnsupported");
       assertAutomaticRun(state, args[3], args[0]); assertSharing(state, args[0]);
       await Promise.all(interventions);
       await this.pauseExcept(crossService ? null : targets[0]);
@@ -697,13 +706,13 @@ class WorkspaceClient extends EventEmitter {
       if (previousArm?.entry.closing || previousArm?.entry.closed) await this.pauseEntry(targets[0]);
       const previousPause = this.control.armed.get(targets[0].key)?.pause;
       if (previousPause) await previousPause;
-      if (revision !== this.control.revision || this.socket.destroyed) throw new Error('真人操作已使这次交接失效；请重新确认任务。');
+      if (revision !== this.control.revision || this.socket.destroyed) throw uiError("error.client.handoffInvalidatedByHuman");
       this.authorizeOperation?.(method, args, roomId);
       guard(); contextGuard();
-      if (this.entries.some(e => backendRooms(e.state).some(r => r?.run?.pausePending || r?.run?.pauseUnconfirmed))) throw Error('请先核对各后台已撤销后续交接授权，再开始新的协作。');
+      if (this.entries.some(e => backendRooms(e.state).some(r => r?.run?.pausePending || r?.run?.pauseUnconfirmed))) throw uiError("error.client.revokeBeforeNewCollaboration");
       if (crossService) {
-        if (roomId !== 'shared' && !this.active.state.capabilities?.includes('collaborationSpacesV1')) throw Error('协调后台尚不支持多个协作空间；没有派发。');
-        for (const id of args[0]) if (JSON.stringify(peerIdentity(this.route(id).state.sessions.find(s => s.id === id), roomId)) !== JSON.stringify(runIdentities[id])) throw Error('成员输入或控制权已变化，请重新授权。');
+        if (roomId !== 'shared' && !this.active.state.capabilities?.includes('collaborationSpacesV1')) throw uiError("error.client.coordinatorMultipleSpacesUnsupported");
+        for (const id of args[0]) if (JSON.stringify(peerIdentity(this.route(id).state.sessions.find(s => s.id === id), roomId)) !== JSON.stringify(runIdentities[id])) throw uiError("error.client.memberInputOrControlChanged");
         const activeGuard = guards.get(this.active.key); activeGuard();
         const arm = { entry: this.active, roomId }; this.control.armed.set(this.active.key, arm);
         return this.active.client.call('peerRun', { ids: args[0], goal: args[1], maxSteps: args[2], mode: args[3], labels: args[4] || {},
@@ -714,7 +723,7 @@ class WorkspaceClient extends EventEmitter {
       this.control.armed.set(targets[0].key, arm);
       return this.invoke(arm.entry, roomId, method, args);
     }
-    if (!['prepareInput', 'observe', 'unobserve', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'forward', 'approve', 'answer', 'stop', 'resume', 'forget'].includes(method)) throw new Error('不支持的本地操作。');
+    if (!['prepareInput', 'observe', 'unobserve', 'join', 'claim', 'send', 'draft', 'terminal', 'terminalSnapshot', 'input', 'resize', 'interrupt', 'forward', 'approve', 'answer', 'stop', 'resume', 'forget'].includes(method)) throw uiError("error.unsupportedLocalAction");
     const target = this.route(args[0]);
     const guard = this.operationGuard(target); guard();
     if (method === 'join' && scoped) return this.intervene(async () => {
@@ -725,13 +734,13 @@ class WorkspaceClient extends EventEmitter {
       const expected = { ...target.state.sessions.find(s => s.id === args[0]) };
       const owned = expected.owner === target.state.owner;
       const ownerRevision = this.control.legacyOwners.get(args[0])?.revision;
-      if (method === 'interrupt' && !owned) throw Error('请先接管会话，再停止原生任务。');
+      if (method === 'interrupt' && !owned) throw uiError("error.client.takeControlBeforeInterrupt");
       const operation = () => this.legacyMutation(target, async () => {
         if (!owned || method === 'interrupt') await this.pauseExcept(null);
         guard(); await this.refresh(roomId); guard(); this.authorizeOperation?.(method, args, roomId);
         const current = target.state.sessions.find(s => s.id === args[0]);
         if (!current || current.owner !== expected.owner || current.nativeId !== expected.nativeId || current.pid !== expected.pid
-          || this.control.legacyOwners.get(args[0])?.revision !== ownerRevision) throw Error('会话已由其他窗口接管；请重新确认控制权。');
+          || this.control.legacyOwners.get(args[0])?.revision !== ownerRevision) throw uiError("error.client.sessionTakenElsewhere");
         const result = await target.client.call(method, ...args);
         await this.refresh(roomId); guard(); return result;
       });
@@ -740,27 +749,27 @@ class WorkspaceClient extends EventEmitter {
     if (method === 'prepareInput') {
       await this.refresh(roomId); guard();
       const record = target.state.sessions.find(s => s.id === args[0]);
-      if (record?.owner !== target.state.owner || !this.control.legacyInput) throw Error('请先在此窗口接管原会话。');
+      if (record?.owner !== target.state.owner || !this.control.legacyInput) throw uiError("error.client.takeControlHere");
       return this.control.legacyInput.prepare(target, record);
     }
     if (method === 'approve' && legacy && target.state.sessions.find(s => s.id === args[0])?.provider === 'codex' &&
-      !(typeof args[1] === 'string' && args[1].startsWith('legacy:'))) throw Error('原生确认连接已变化；请在原生终端查看，不会执行旧后台的确认。');
+      !(typeof args[1] === 'string' && args[1].startsWith('legacy:'))) throw uiError("error.client.nativeApprovalConnectionChanged");
     if (method === 'approve' && typeof args[1] === 'string' && args[1].startsWith('legacy:')) {
       await this.refresh(roomId); guard(); this.authorizeOperation?.(method, args, roomId);
       const record = target.state.sessions.find(s => s.id === args[0]);
-      if (record?.owner !== target.state.owner) throw Error('会话控制权已变化，请重新查看。');
+      if (record?.owner !== target.state.owner) throw uiError("error.client.sessionControlChanged");
       const native = this.control.legacyInput?.target(record)?.native;
-      if (!native) throw Error('原生确认连接已变化，没有将确认交给其他连接。');
+      if (!native) throw uiError("error.client.nativeApprovalConnectionChangedNoReroute");
       return native.approve(args[1], args[2]);
     }
-    if (method === 'answer' && !target.state.capabilities?.includes('nativeQuestionAnswer')) throw Error('这个后台不能在对话里回答原生问题，请在原生终端回答；没有发送回答。');
+    if (method === 'answer' && !target.state.capabilities?.includes('nativeQuestionAnswer')) throw uiError("error.client.nativeQuestionGuiUnsupported");
     if (method === 'approve' && !target.state.capabilities?.includes('nativeApprovalSync')) {
-      throw Error('旧连接无法核实这项确认的最新状态，请在原生终端核对；没有发送决定。');
+      throw uiError("error.client.legacyApprovalUnverifiable");
     }
     if (method === 'approve' && !target.state.capabilities?.includes('nativeApprovalLocalDecisions')) {
       const approval = target.state.sessions.find(s => s.id === args[0])?.approval;
       if (!nativeApprovalPolicy(approval, { localDecisions: false }).decisions.includes(args[2])) {
-        throw Error('旧后台不支持这项确认方式，请在原生终端处理；没有发送决定。');
+        throw uiError("error.client.legacyApprovalModeUnsupported");
       }
     }
     if (roomId === 'shared' && ['send', 'forward'].includes(method) && this.control.legacyInput?.connected(target.state.sessions.find(s => s.id === args[0]))) {
@@ -770,7 +779,7 @@ class WorkspaceClient extends EventEmitter {
         await this.pauseExcept(null, scoped && shared ? roomId : undefined, args[0]); await this.refresh(roomId); guard();
         contextGuard();
         const record = target.state.sessions.find(s => s.id === args[0]);
-        if (shared && record?.roomId !== 'shared') throw Error('接收方已离开共同工作。');
+        if (shared && record?.roomId !== 'shared') throw uiError("error.client.recipientLeftSharedWork");
         const control = record.controlRevision, member = record.memberRevision;
         const failedTurn = record.state === 'error' ? this.control.legacyInput.target(record)?.failedTurnInputId : null;
         const draft = record.liveDraft, draftRevision = this.control.draftVersions?.get(record.id) || 0;
@@ -783,8 +792,8 @@ class WorkspaceClient extends EventEmitter {
             && (this.sessionState(current) === 'idle' || current.state === 'error' && failedTurn && this.control.legacyInput.target(current)?.failedTurnInputMatches(failedTurn))
             && !this.control.legacyInput.target(current)?.nativeInputRequired && !current.pendingTag && !current.approval;
         };
-        if (!valid()) throw Error('原会话状态或控制权已变化，草稿已保留。');
-        const refresh = async () => { await this.refresh(roomId); if (!valid()) throw Error('原会话已变化'); };
+        if (!valid()) throw uiError("error.client.originalSessionStateChanged");
+        const refresh = async () => { await this.refresh(roomId); if (!valid()) throw uiError("error.client.originalSessionChanged"); };
         // Native hooks remain the sole writer of conversation history.
         // Never call the old paste/Enter sender or launch a replacement CLI.
         const shareAuthority = this.legacyShareAuthority(target, record);
@@ -806,11 +815,11 @@ class WorkspaceClient extends EventEmitter {
       const id = args[0], record = target.state.sessions.find(s => s.id === id);
       const native = this.control.legacyInput?.target(record)?.native;
       if (native?.connected) return native.observe();
-      if (!supportsLegacyObservation(target.state, record)) throw Error('此连接尚无安全的只读观察接口。');
+      if (!supportsLegacyObservation(target.state, record)) throw uiError("error.client.safeObservationUnavailable");
       let observer = this.legacyObservers.get(id);
       if (!observer) {
         for (const [oldId, oldObserver] of this.legacyObservers) if (!oldObserver.watching && this.legacyObservers.size >= 12) { oldObserver.dispose(); this.legacyObservers.delete(oldId); }
-        if (this.legacyObservers.size >= 12) throw Error('观察数量已达上限，请关闭不需要的视图。');
+        if (this.legacyObservers.size >= 12) throw uiError("error.client.observationLimit");
         const source = target.client;
         observer = new LegacyObservation(async () => { guard(); const frame = await source.call('terminalSnapshot', id); guard(); return frame; }, event => { if (!this.closing && !target.closed && target.client === source) this.emit('terminal', { id, ...event }); });
         this.legacyObservers.set(id, observer);
@@ -827,7 +836,7 @@ class WorkspaceClient extends EventEmitter {
       const record = target.state.sessions.find(s => s.id === args[0]);
       const result = await target.client.call(method, ...args);
       try { this.control.legacyInput?.forgetReader(record); }
-      catch { throw Error('会话已移除，但本地阅读副本未能全部清理。请检查本机数据权限与磁盘空间。'); }
+      catch { throw uiError("error.client.forgottenReadingCleanupFailed"); }
       return result;
     }
     if (['send', 'forward'].includes(method)) assertSubmission(target.state, [args[0]]);

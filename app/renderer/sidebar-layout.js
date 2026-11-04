@@ -31,7 +31,7 @@
     const [left, right] = pair, total = layout.bodies[left] + layout.bodies[right];
     return { now: Math.round(layout.bodies[left] / total * 100), min: Math.round(layout.minimum / total * 100), max: Math.round((total - layout.minimum) / total * 100) };
   }
-  function bind({ navigation, groups, sashes, onCommit, onError }) {
+  function bind({ navigation, groups, sashes, onCommit, onError, displayTitle }) {
     let preference = [...defaults], external = [...defaults], collapsed = [false, false, true], layout;
     let gesture, keyboard, pending, sequence = 0, disposed = false;
     const removers = [];
@@ -64,7 +64,8 @@
         sash.setAttribute('aria-valuenow', String(values.now));
         sash.setAttribute('aria-valuemin', String(values.min));
         sash.setAttribute('aria-valuemax', String(values.max));
-        sash.title = `拖动调整${label.textContent}与${other.textContent}的高度；上下键调整，Home/End 到边界，双击均分`;
+        if (displayTitle) displayTitle(sash, () => ({ first: label.textContent, second: other.textContent }));
+        else sash.title = `拖动调整${label.textContent}与${other.textContent}的高度；上下键调整，Home/End 到边界，双击均分`;
       });
     }
     function revealEditor() {

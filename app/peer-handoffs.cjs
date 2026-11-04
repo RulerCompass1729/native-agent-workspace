@@ -1,3 +1,5 @@
+const { uiError, uiNotice, uiActivity } = require('./ui-errors.cjs');
+const { displayMessage } = require('./ui-locale.js');
 // A finite sequence across existing local services. No provider process, model
 // router, replay worker or external endpoint is created here.
 const path = require('node:path');
@@ -22,19 +24,19 @@ class PeerLeases {
   constructor(workspace) { this.w = workspace; this.leases = new Map(); this.cancelled = new WeakMap(); }
   prepare(client, owner, spec) {
     const { id, ids, expected, deadline, maxSteps, names, mode = 'replies', participants, roomId = 'shared' } = spec || {};
-    if (!spaces.roomId(roomId)) throw Error('无效协作空间。');
+    if (!spaces.roomId(roomId)) throw uiError("error.main.invalidSpace");
     if (!/^[a-f0-9-]{36}$/i.test(id || '') || !Array.isArray(ids) || ids.length < 2 || ids.length > 6 || new Set(ids).size !== ids.length ||
       !ids.every(id => typeof id === 'string' && id.length <= 100) || ![2, 3, 4, 5, 6].includes(maxSteps) || maxSteps < ids.length ||
       !Number.isSafeInteger(deadline) || deadline <= Date.now() || deadline > Date.now() + 600000 || !expected || !names ||
       Object.keys(expected).length === 0 || Object.keys(expected).some(id => !ids.includes(id)) ||
-      ids.some(id => typeof names[id] !== 'string' || !names[id].trim() || names[id].length > 160 || /[\x00-\x1f\x7f]/.test(names[id]))) throw Error('跨后台授权无效。');
-    if (!['replies', 'directed'].includes(mode) || mode === 'directed' && (!participants || ids.some(id => !participants[id] || participants[id].id !== id || !participants[id].nativeId))) throw Error('定向协作成员身份未确认。');
-    if (this.cancelled.get(client)?.has(id) || this.leases.has(id) || [...this.leases.values()].some(g => g.status === 'running') || allRooms(this.w).some(r => r.run?.status === 'running' || r.run?.pausePending || r.run?.pauseUnconfirmed)) throw Error('已有协作或授权已撤销，请重新确认。');
-    if (this.w.storageWarning) throw Error('请先处理本地保存问题。');
+      ids.some(id => typeof names[id] !== 'string' || !names[id].trim() || names[id].length > 160 || /[\x00-\x1f\x7f]/.test(names[id]))) throw uiError("error.peer.invalidAuthorization");
+    if (!['replies', 'directed'].includes(mode) || mode === 'directed' && (!participants || ids.some(id => !participants[id] || participants[id].id !== id || !participants[id].nativeId))) throw uiError("error.peer.memberIdentityUnconfirmed");
+    if (this.cancelled.get(client)?.has(id) || this.leases.has(id) || [...this.leases.values()].some(g => g.status === 'running') || allRooms(this.w).some(r => r.run?.status === 'running' || r.run?.pausePending || r.run?.pauseUnconfirmed)) throw uiError("error.peer.authorizationRevoked");
+    if (this.w.storageWarning) throw uiError("error.peer.storageIssue");
     for (const [sessionId, proof] of Object.entries(expected)) {
       const s = this.w.sessions.get(sessionId), r = this.w.runtimes.get(sessionId);
       if ((proof.roomId || 'shared') !== roomId || !sameIdentity(s, proof) || s.owner !== owner || !spaces.isMember(s, roomId) || s.state !== 'idle' || s.pendingTag || s.approval ||
-        s.nativeContextPending || r?.nativeInputRequired || !r || r.chatAvailable === false || mode === 'directed' && r.addressedSendAvailable !== true || [s.background, s.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) throw Error('成员的原生身份、控制权或就绪状态已变化。');
+        s.nativeContextPending || r?.nativeInputRequired || !r || r.chatAvailable === false || mode === 'directed' && r.addressedSendAvailable !== true || [s.background, s.scheduled].some(n => Number.isSafeInteger(n) && n > 0)) throw uiError("error.peer.memberStateChanged");
     }
     const g = { peerLease: true, roomId, id, ids: [...ids], expected, names, participants, mode, deadline, maxSteps, status: 'running', owner, client, steps: 0, dispatchedSteps: new Set(), awaiting: null, result: null };
     for (const [key, previous] of this.leases) if (this.leases.size >= 32 && previous.status !== 'running') this.leases.delete(key);
@@ -48,52 +50,55 @@ class PeerLeases {
           !['ended', 'recoverable', 'disconnected', 'error', 'approval', 'stopping'].includes(s.state) && !!r && r.chatAvailable !== false && !r.nativeInputRequired && (g.mode !== 'directed' || r.addressedSendAvailable === true);
       });
   }
-  pause(client, id, reason = '跨后台交接已暂停') {
+  pause(client, id, reason = '跨后台交接已暂停', uiMessage) {
+    if (arguments[2] === undefined) uiMessage = uiActivity('notice.peer.leasePaused')[1];
+    uiMessage = displayMessage(uiMessage, 'notice.', reason) || displayMessage(uiMessage, 'error.', reason);
     let stopped = this.cancelled.get(client); if (!stopped) this.cancelled.set(client, stopped = new Set());
     stopped.add(id); while (stopped.size > 32) stopped.delete(stopped.values().next().value);
     const g = this.leases.get(id);
-    if (g?.client === client && g.status === 'running') { g.status = 'paused'; g.reason = reason; this.w.changed(); }
+    if (g?.client === client && g.status === 'running') { g.status = 'paused'; g.reason = reason; if (uiMessage) g.reasonUiMessage = uiMessage; else delete g.reasonUiMessage; this.w.changed(); }
     return true;
   }
-  revoke(reason, id, roomId) {
-    for (const g of this.leases.values()) if (g.status === 'running' && (!id || g.ids.includes(id)) && (!roomId || (g.roomId || 'shared') === roomId)) this.pause(g.client, g.id, reason);
+  revoke(reason, id, roomId, uiMessage) {
+    for (const g of this.leases.values()) if (g.status === 'running' && (!id || g.ids.includes(id)) && (!roomId || (g.roomId || 'shared') === roomId)) this.pause(g.client, g.id, reason, uiMessage);
   }
-  observedWork(id, reason) {
+  observedWork(id, reason, uiMessage) {
+    uiMessage = displayMessage(uiMessage, 'notice.', reason) || displayMessage(uiMessage, 'error.', reason);
     for (const g of this.leases.values()) if (g.status === 'running' && g.ids.includes(id)) {
-      if (g.awaiting?.sessionId === id) g.stopAfterReply = reason; else this.pause(g.client, g.id, reason);
+      if (g.awaiting?.sessionId === id) { g.stopAfterReply = reason; if (uiMessage) g.stopAfterReplyUiMessage = uiMessage; else delete g.stopAfterReplyUiMessage; } else this.pause(g.client, g.id, reason, uiMessage);
     }
   }
-  working(id) { for (const g of this.leases.values()) if (g.status === 'running' && g.expected[id] && g.awaiting?.sessionId !== id) this.pause(g.client, g.id, '成员开始了授权之外的工作。'); }
+  working(id) { for (const g of this.leases.values()) if (g.status === 'running' && g.expected[id] && g.awaiting?.sessionId !== id) this.pause(g.client, g.id, '成员开始了授权之外的工作。', uiActivity('notice.peer.outsideAuthorization')[1]); }
   directed(id) { return [...this.leases.values()].find(g => g.mode === 'directed' && g.awaiting?.sessionId === id && this.valid(g)); }
-  disconnected(client) { for (const g of this.leases.values()) if (g.client === client) this.pause(client, g.id, '协调连接已断开；未重发任务。'); }
+  disconnected(client) { for (const g of this.leases.values()) if (g.client === client) this.pause(client, g.id, '协调连接已断开；未重发任务。', uiActivity('notice.peer.coordinatorDisconnected')[1]); }
   snapshot() {
-    for (const g of this.leases.values()) if (g.status === 'running' && !this.valid(g)) this.pause(g.client, g.id, '成员状态、连接或授权期限已变化。');
-    return [...this.leases.values()].map(g => ({ id: g.id, roomId: g.roomId || 'shared', status: g.status, reason: g.reason, awaiting: g.awaiting, result: g.result }));
+    for (const g of this.leases.values()) if (g.status === 'running' && !this.valid(g)) this.pause(g.client, g.id, '成员状态、连接或授权期限已变化。', uiActivity('notice.peer.stateChanged')[1]);
+    return [...this.leases.values()].map(g => ({ id: g.id, roomId: g.roomId || 'shared', status: g.status, reason: g.reason, reasonUiMessage: g.reasonUiMessage || null, awaiting: g.awaiting, result: g.result }));
   }
   async send(client, owner, spec) {
     const { runId, step, sessionId, text, sourceId, senderId, displayText } = spec || {}, g = this.leases.get(runId);
     if (!g || g.client !== client || g.owner !== owner || !this.valid(g) || !Number.isInteger(step) || step < 1 || step > g.maxSteps ||
       g.dispatchedSteps.has(step) || (g.lastStep && step <= g.lastStep) || g.awaiting || (g.mode === 'replies' && g.ids[(step - 1) % g.ids.length] !== sessionId) || !g.expected[sessionId] ||
       !clean(text, 16000) || !clean(displayText, 16000) || !/^[a-f0-9-]{36}$/i.test(sourceId || '') ||
-      (step === 1 ? senderId !== null : g.mode === 'directed' ? !g.ids.includes(senderId) || senderId === sessionId : senderId !== g.ids[(step - 2) % g.ids.length])) throw Error('跨后台派发已失效或已经申请；未自动重试。');
+      (step === 1 ? senderId !== null : g.mode === 'directed' ? !g.ids.includes(senderId) || senderId === sessionId : senderId !== g.ids[(step - 2) % g.ids.length])) throw uiError("error.peer.dispatchExpired");
     const s = this.w.get(sessionId);
-    if (s.state !== 'idle' || s.pendingTag || s.approval || this.w.runtime(sessionId).pendingQueue) throw Error('接收方尚未就绪。');
+    if (s.state !== 'idle' || s.pendingTag || s.approval || this.w.runtime(sessionId).pendingQueue) throw uiError("error.peer.recipientNotReady");
     g.dispatchedSteps.add(step); g.lastStep = step; g.steps = step - 1; g.result = null; g.pendingHandoff = null;
     const source = { id: randomUUID(), role: senderId ? 'assistant' : 'human', ...(senderId ? { sessionId: senderId } : { recipientId: sessionId }),
-      name: senderId ? g.names[senderId] : '你', text: displayText, status: 'complete', time: Date.now(), runId,
+      name: senderId ? g.names[senderId] : '你', ...(!senderId ? { uiNameMessage: uiNotice('notice.name.you').uiMessage } : {}), text: displayText, status: 'complete', time: Date.now(), runId,
       handoffFrom: sourceId, peerHandoff: true, deliveryTracked: true };
     roomAt(this.w, g.roomId).messages.push(source); this.w.changed();
     try {
       const tag = await this.w.send(sessionId, text, null, g, null, source);
-      if (!this.valid(g)) throw Error('本次输入可能已由原生接收，后续交接已停止；请核对发送详情。');
+      if (!this.valid(g)) throw uiError("error.peer.nativeReceiptUncertain");
       return { tag, sourceId: source.id };
-    } catch (error) { this.pause(client, runId, error.message); throw error; }
+    } catch (error) { this.pause(client, runId, error.message, error.uiMessage); throw error; }
   }
   take(client, spec) {
     const g = this.leases.get(spec?.id), result = g?.result;
-    if (!g || g.client !== client || !this.valid(g) || !result || result.step !== spec.step || result.tag !== spec.tag || result.consumed) throw Error('源回复的交接凭据已撤销或已经使用。');
+    if (!g || g.client !== client || !this.valid(g) || !result || result.step !== spec.step || result.tag !== spec.tag || result.consumed) throw uiError("error.peer.sourceReceiptRevoked");
     const message = roomAt(this.w, g.roomId).messages.find(m => m.id === result.sourceId && m.sourceTag === result.tag && m.finalReply);
-    if (!message || (g.mode === 'directed' ? typeof message.text !== 'string' : !clean(message.text, 10000))) throw Error('源回复不再完整或过长，请人工查看。');
+    if (!message || (g.mode === 'directed' ? typeof message.text !== 'string' : !clean(message.text, 10000))) throw uiError("error.peer.sourceReplyIncomplete");
     result.consumed = true; this.w.changed();
     return { ...result, ...(g.mode === 'directed' ? { completionOnly: true } : { text: message.text }) };
   }
@@ -101,9 +106,9 @@ class PeerLeases {
     const g = [...this.leases.values()].find(g => g.awaiting?.sessionId === s.id && g.awaiting.tag === info.tag);
     if (!g || !this.valid(g)) return;
     const message = this.w.sharedReplies.final(s, info, g);
-    if (!message || !message.finalReply || typeof info.text !== 'string' || !info.text.trim() && !(g.mode === 'directed' && g.pendingHandoff)) return this.pause(g.client, g.id, '原生回复归属未确认。');
+    if (!message || !message.finalReply || typeof info.text !== 'string' || !info.text.trim() && !(g.mode === 'directed' && g.pendingHandoff)) return this.pause(g.client, g.id, '原生回复归属未确认。', uiActivity('notice.peer.replyUnconfirmed')[1]);
     const intent = g.mode === 'directed' && g.pendingHandoff?.sourceTag === info.tag ? { ...g.pendingHandoff } : null;
-    g.result = { tag: info.tag, sessionId: s.id, sourceId: message.id, nativeId: s.nativeId, step: g.lastStep, nativeWork: counts(info), stopAfterReply: g.stopAfterReply || null, ...(intent ? { intent } : {}) };
+    g.result = { tag: info.tag, sessionId: s.id, sourceId: message.id, nativeId: s.nativeId, step: g.lastStep, nativeWork: counts(info), stopAfterReply: g.stopAfterReply || null, ...(g.stopAfterReply && g.stopAfterReplyUiMessage ? { stopAfterReplyUiMessage: g.stopAfterReplyUiMessage } : {}), ...(intent ? { intent } : {}) };
     g.pendingHandoff = null;
     g.awaiting = null; this.w.changed();
   }
@@ -118,7 +123,7 @@ class PeerRunner {
       this.lastChannels = (this.run.peerServices || []).map(key => ({ key, owner: 'peer-pause-verification' }));
     }
     this.w.on('change', () => {
-      if (this.run?.status === 'running' && roomAt(this.w, this.run.roomId).run !== this.run) this.pause('协作已被替换').catch(() => {});
+      if (this.run?.status === 'running' && roomAt(this.w, this.run.roomId).run !== this.run) this.pause('协作已被替换', uiActivity('notice.peer.replaced')[1]).catch(() => {});
       else if (this.run && this.run.status !== 'running' && this.channels.size) this.revoke().catch(() => {});
     });
   }
@@ -133,39 +138,39 @@ class PeerRunner {
       try {
         const state = await client.call('initial'), session = state.sessions.find(s => s.id === id);
         if (session) {
-          if (found || !state.capabilities?.includes('agentWakeV1') || state.storageWarning) throw Error('接收者后台尚未接通自动消息或身份有冲突。');
+          if (found || !state.capabilities?.includes('agentWakeV1') || state.storageWarning) throw uiError("error.peer.recipientBackendUnavailable");
           found = { key, session };
         }
       } finally { client.close(); }
     }
-    if (!found) throw Error('没有找到准确的原会话 ID。');
+    if (!found) throw uiError("error.peer.exactSessionMissing");
     return found;
   }
   async transferWake(intent) {
     const root = this.root(), layout = readLayout(root), sourceKey = path.relative(root, this.dataDir) || '.';
-    if (!layout.entries.includes(sourceKey) || !layout.entries.includes(intent.targetKey)) throw Error('后台归属已变化，未重发自动消息。');
+    if (!layout.entries.includes(sourceKey) || !layout.entries.includes(intent.targetKey)) throw uiError("error.peer.backendOwnershipChangedNoReplay");
     const client = await this.connect(path.join(root, intent.targetKey), 'workspace-wake-transfer');
     try { return await client.call('wakeReceive', { id: intent.id, sourceKey, senderId: intent.senderId, recipientId: intent.recipientId }); }
     finally { client.close(); }
   }
   async takeWake(spec) {
     const root = this.root(), layout = readLayout(root), targetKey = path.relative(root, this.dataDir) || '.';
-    if (!layout.entries.includes(spec.sourceKey) || !layout.entries.includes(targetKey)) throw Error('自动消息后台归属未确认。');
+    if (!layout.entries.includes(spec.sourceKey) || !layout.entries.includes(targetKey)) throw uiError("error.peer.backendOwnershipUnconfirmed");
     const client = await this.connect(path.join(root, spec.sourceKey), 'workspace-wake-receipt');
     try { return await client.call('wakeTake', { id: spec.id, senderId: spec.senderId, recipientId: spec.recipientId, targetKey }); }
     finally { client.close(); }
   }
   async start(owner, spec) {
-    if (this.starting || this.processing || this.run?.pauseUnconfirmed || this.run?.status === 'running' || allRooms(this.w).some(r => r.run?.status === 'running') || this.revoking) throw Error('已有协作或正在暂停，请稍候。');
+    if (this.starting || this.processing || this.run?.pauseUnconfirmed || this.run?.status === 'running' || allRooms(this.w).some(r => r.run?.status === 'running') || this.revoking) throw uiError("error.peer.collaborationOrPausePending");
     const { ids, goal, maxSteps, mode, labels, contexts, routes, replyTo, identities, roomId = 'shared' } = spec || {};
-    if (!spaces.roomId(roomId)) throw Error('无效协作空间。');
+    if (!spaces.roomId(roomId)) throw uiError("error.main.invalidSpace");
     if (!['replies', 'directed'].includes(mode) || !Array.isArray(ids) || ids.length < 2 || ids.length > 6 || new Set(ids).size !== ids.length ||
-      ![2, 3, 4, 5, 6].includes(maxSteps) || maxSteps < ids.length || !clean(goal, 6000) || !routes || !contexts || !labels || !identities) throw Error('跨后台目前支持明确授权的有限顺序核查。');
+      ![2, 3, 4, 5, 6].includes(maxSteps) || maxSteps < ids.length || !clean(goal, 6000) || !routes || !contexts || !labels || !identities) throw uiError("error.peer.finiteSequentialOnly");
     const root = this.root(), layout = readLayout(root);
-    if (path.resolve(root, layout.active) !== path.resolve(this.dataDir) || ids.some(id => !layout.entries.includes(routes[id]))) throw Error('后台归属已变化，请重新连接。');
+    if (path.resolve(root, layout.active) !== path.resolve(this.dataDir) || ids.some(id => !layout.entries.includes(routes[id]))) throw uiError("error.peer.backendOwnershipChanged");
     const epoch = ++this.revision, runId = randomUUID(), deadline = Date.now() + 600000;
     this.run = null; this.channels = new Map(); this.pendingRunId = runId;
-    const valid = () => { if (epoch !== this.revision || this.w.storageWarning) throw Error('真人操作或保存问题使授权失效。'); };
+    const valid = () => { if (epoch !== this.revision || this.w.storageWarning) throw uiError("error.peer.revokedByHumanOrStorage"); };
     this.starting = (async () => {
       try {
         const records = new Map();
@@ -173,16 +178,16 @@ class PeerRunner {
           const client = await this.connect(path.join(root, key), owner);
           const channel = { client, key, owner }; this.channels.set(key, channel); valid();
           channel.state = await client.call('initial'); valid();
-          if (roomId !== 'shared' && !channel.state.capabilities?.includes('collaborationSpacesV1') || !channel.state.capabilities?.includes(CAPABILITY) || mode === 'directed' && !channel.state.capabilities.includes(DIRECTED) || channel.state.storageWarning) throw Error('有后台缺少本次可撤销交接接口；原会话保留，可人工分享。');
+          if (roomId !== 'shared' && !channel.state.capabilities?.includes('collaborationSpacesV1') || !channel.state.capabilities?.includes(CAPABILITY) || mode === 'directed' && !channel.state.capabilities.includes(DIRECTED) || channel.state.storageWarning) throw uiError("error.peer.revocableInterfaceMissing");
           for (const id of ids.filter(id => routes[id] === key)) {
             const s = channel.state.sessions.find(s => s.id === id);
-            if ((identities[id]?.roomId || 'shared') !== roomId || !sameIdentity(s, identities[id] || {}) || s.nativeId !== contexts[id] || s.owner !== owner || !spaces.isMember(s, roomId) || s.state !== 'idle' || s.pendingTag || s.approval || s.nativeInputRequired || s.chatAvailable === false || mode === 'directed' && !s.addressedSendAvailable) throw Error('请先接管并核对所选会话的原生身份和就绪状态。');
+            if ((identities[id]?.roomId || 'shared') !== roomId || !sameIdentity(s, identities[id] || {}) || s.nativeId !== contexts[id] || s.owner !== owner || !spaces.isMember(s, roomId) || s.state !== 'idle' || s.pendingTag || s.approval || s.nativeInputRequired || s.chatAvailable === false || mode === 'directed' && !s.addressedSendAvailable) throw uiError("error.peer.takeControlAndCheck");
             records.set(id, s);
           }
         }
         const names = Object.fromEntries(ids.map(id => {
           const s = records.get(id), name = labels[id] ?? s.name;
-          if (!clean(name, 60) || /[\r\n]/.test(name)) throw Error('参与者名称已变化。');
+          if (!clean(name, 60) || /[\r\n]/.test(name)) throw uiError("error.peer.participantNamesChanged");
           return [id, `${name} · ${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${id.slice(0, 6)}`];
         }));
         const participants = Object.fromEntries(ids.map(id => [id, { id, ...identities[id] }]));
@@ -190,30 +195,30 @@ class PeerRunner {
           valid(); const expected = Object.fromEntries(ids.filter(id => routes[id] === channel.key).map(id => [id, identities[id]]));
           await channel.client.call('peerPrepare', { id: runId, roomId, ids, expected, deadline, maxSteps, names, mode, ...(mode === 'directed' ? { participants } : {}) }); valid();
           channel.client.on('state', state => { channel.state = { ...channel.state, ...state }; this.schedule(); });
-          channel.client.on('closed', () => { if (this.run?.id === runId && this.run.status === 'running') this.pause('后台连接断开；未重发任务。').catch(() => {}); });
+          channel.client.on('closed', () => { if (this.run?.id === runId && this.run.status === 'running') this.pause('后台连接断开；未重发任务。', uiActivity('notice.peer.backendDisconnected')[1]).catch(() => {}); });
         }
         valid();
-        const source = { id: randomUUID(), role: 'human', name: '你', text: goal.trim(), time: Date.now(), runId, deliveryTracked: true, ...(replyTo ? { replyTo } : {}) };
+        const source = { id: randomUUID(), role: 'human', name: '你', uiNameMessage: uiNotice('notice.name.you').uiMessage, text: goal.trim(), time: Date.now(), runId, deliveryTracked: true, ...(replyTo ? { replyTo } : {}) };
         this.run = { id: runId, roomId, ids, names, goal: goal.trim(), maxSteps, mode, kind: 'cross-service', steps: 0, status: 'running',
           startedAt: Date.now(), deadline, peerServices: [...this.channels.keys()], sourceId: source.id, awaiting: null, replies: {} };
         const room = this.w.roomFor ? this.w.roomFor(roomId, true) : this.w.room;
         this.routes = routes; this.identities = identities; room.run = this.run; room.messages.push(source); this.w.changed();
-        this.w.runEvent(`已授权跨后台${mode === 'directed' ? '由 agent 选择接收者' : '按顺序核查'}，最多 ${maxSteps} 次回复、10 分钟；原生进程保持不变。`, roomId);
+        this.w.runEvent(`已授权跨后台${mode === 'directed' ? '由 agent 选择接收者' : '按顺序核查'}，最多 ${maxSteps} 次回复、10 分钟；原生进程保持不变。`, roomId, uiActivity(mode === 'directed' ? 'notice.peer.authorizedDirected' : 'notice.peer.authorizedReplies', { maxSteps })[1]);
         this.w.persist(); valid();
         await this.deliver(ids[0], mode === 'directed' ? addressed.taskText(this.run, this.run.goal) : this.run.goal, source.id, null, this.run.goal);
         return true;
-      } catch (error) { await this.pause(error.message); throw error; }
+      } catch (error) { await this.pause(error.message, error.uiMessage); throw error; }
     })();
     try { return await this.starting; } finally { this.starting = null; }
   }
   active(run = this.run) { return this.run === run && run?.status === 'running' && roomAt(this.w, run?.roomId).run === run && !this.w.storageWarning && Date.now() < run.deadline; }
   async deliver(id, text, sourceId, senderId, displayText) {
-    if (!this.active()) throw Error('交接授权已失效。');
+    if (!this.active()) throw uiError("error.peer.authorizationExpired");
     const run = this.run, channel = this.channels.get(this.routes[id]);
     run.awaiting = { sessionId: id, pending: true, step: run.steps + 1 }; this.w.changed();
     const result = await channel.client.call('peerSend', { runId: run.id, step: run.steps + 1, sessionId: id, text, sourceId, senderId, displayText });
     if (!this.active(run)) return;
-    if (typeof result?.tag !== 'string') throw Error('原生接收凭据未确认；未重发。');
+    if (typeof result?.tag !== 'string') throw uiError("error.peer.nativeReceiptUnconfirmed");
     run.awaiting = { sessionId: id, tag: result.tag, step: run.steps + 1 }; this.w.changed(); this.schedule();
   }
   schedule() {
@@ -222,14 +227,14 @@ class PeerRunner {
     if (this.scheduled) return;
     this.scheduled = true;
     const run = this.run;
-    queueMicrotask(() => { this.scheduled = false; if (!this.active(run)) return; this.processing = this.advance().catch(error => this.run === run ? this.pause(error.message) : undefined).finally(() => { this.processing = null; if (this.dirty) { this.dirty = false; this.schedule(); } }); });
+    queueMicrotask(() => { this.scheduled = false; if (!this.active(run)) return; this.processing = this.advance().catch(error => this.run === run ? this.pause(error.message, error.uiMessage) : undefined).finally(() => { this.processing = null; if (this.dirty) { this.dirty = false; this.schedule(); } }); });
   }
   async advance() {
     if (!this.active()) return;
     const run = this.run, awaiting = run.awaiting;
     for (const channel of this.channels.values()) {
       const lease = channel.state.peerLeases?.find(g => g.id === run.id);
-      if (lease && lease.status !== 'running') return this.pause(lease.reason || '成员授权已变化。');
+      if (lease && lease.status !== 'running') return this.pause(lease.reason || '成员授权已变化。', lease.reason ? lease.reasonUiMessage : uiActivity('notice.peer.memberAuthorizationChanged')[1]);
     }
     if (!awaiting || awaiting.pending) return;
     const channel = this.channels.get(this.routes[awaiting.sessionId]);
@@ -240,26 +245,26 @@ class PeerRunner {
     // observer retirement before this point irreversibly rejects the ticket.
     const proof = await channel.client.call('peerTake', { id: run.id, step: awaiting.step, tag: awaiting.tag });
     if (!this.active(run)) return;
-    if (proof.sourceId !== result.sourceId || proof.nativeId !== result.nativeId || (run.mode === 'directed' ? proof.completionOnly !== true : !clean(proof.text, 10000))) return this.pause('完整回复未能确认或回复过长，请人工查看。');
+    if (proof.sourceId !== result.sourceId || proof.nativeId !== result.nativeId || (run.mode === 'directed' ? proof.completionOnly !== true : !clean(proof.text, 10000))) return this.pause('完整回复未能确认或回复过长，请人工查看。', uiActivity('notice.peer.replyIncomplete')[1]);
     const source = { id: proof.sourceId, text: proof.text };
     run.awaiting = null; run.steps++; this.w.changed();
     run.nativeWorkUnknown = result.nativeWork?.stopHookActive !== false || ['background', 'scheduled', 'fleetPending'].some(k => !Number.isSafeInteger(result.nativeWork?.[k]));
-    if (result.stopAfterReply) return this.pause(result.stopAfterReply);
-    if (hasWork(result.nativeWork || {})) return this.pause('原生仍报告后台、团队或定时工作，请人工核对后继续。');
-    if (run.steps >= run.maxSteps) { run.status = 'completed'; run.reason = '已达到本轮回复上限，跨后台交接结束。'; this.w.runEvent(run.reason, run.roomId); this.w.changed(); await this.revoke(); return; }
+    if (result.stopAfterReply) return this.pause(result.stopAfterReply, result.stopAfterReplyUiMessage);
+    if (hasWork(result.nativeWork || {})) return this.pause('原生仍报告后台、团队或定时工作，请人工核对后继续。', uiActivity('notice.peer.workPresent')[1]);
+    if (run.steps >= run.maxSteps) { run.status = 'completed'; run.reason = '已达到本轮回复上限，跨后台交接结束。'; run.reasonUiMessage = uiActivity('notice.peer.replyLimit')[1]; this.w.runEvent(run.reason, run.roomId, run.reasonUiMessage); this.w.changed(); await this.revoke(); return; }
     if (run.mode === 'directed') {
       const intent = proof.intent;
-      if (!intent) { run.status = 'completed'; run.reason = '本次回复面向你，没有请求继续转交。'; this.w.runEvent(run.reason, run.roomId); this.w.changed(); await this.revoke(); return; }
-      if (intent.sourceTag !== awaiting.tag || intent.senderId !== awaiting.sessionId || !run.ids.includes(intent.recipientId) || intent.recipientId === awaiting.sessionId || !clean(intent.text, 6000)) return this.pause('原生定向消息归属未确认，没有转交。');
+      if (!intent) { run.status = 'completed'; run.reason = '本次回复面向你，没有请求继续转交。'; run.reasonUiMessage = uiActivity('notice.run.noDirectedRequest')[1]; this.w.runEvent(run.reason, run.roomId, run.reasonUiMessage); this.w.changed(); await this.revoke(); return; }
+      if (intent.sourceTag !== awaiting.tag || intent.senderId !== awaiting.sessionId || !run.ids.includes(intent.recipientId) || intent.recipientId === awaiting.sessionId || !clean(intent.text, 6000)) return this.pause('原生定向消息归属未确认，没有转交。', uiActivity('notice.peer.directedUnconfirmed')[1]);
       const expected = this.identities[intent.recipientId];
-      if (intent.nativeId !== expected.nativeId || intent.member !== (expected.roomMemberRevision ?? expected.memberRevision) || intent.control !== expected.controlRevision || intent.connection !== expected.connectionRevision) return this.pause('定向接收者的原生身份已变化，没有转交。');
+      if (intent.nativeId !== expected.nativeId || intent.member !== (expected.roomMemberRevision ?? expected.memberRevision) || intent.control !== expected.controlRevision || intent.connection !== expected.connectionRevision) return this.pause('定向接收者的原生身份已变化，没有转交。', uiActivity('notice.peer.recipientChanged')[1]);
       const message = { id: randomUUID(), role: 'assistant', sessionId: awaiting.sessionId, name: `${run.names[awaiting.sessionId]} → ${run.names[intent.recipientId]}`,
         text: intent.text, status: 'complete', time: Date.now(), runId: run.id, replyTo: source.id, deliveryTracked: true, addressed: true };
       roomAt(this.w, run.roomId).messages.push(message); this.w.changed(); this.w.persist();
       await this.deliver(intent.recipientId, addressed.taskText(run, intent.text, awaiting.sessionId), message.id, awaiting.sessionId, intent.text);
       return;
     }
-    if (run.replies[awaiting.sessionId] === source.text.trim()) return this.pause('同一成员重复上一份回复，已停止交接。');
+    if (run.replies[awaiting.sessionId] === source.text.trim()) return this.pause('同一成员重复上一份回复，已停止交接。', uiActivity('notice.peer.duplicateReply')[1]);
     run.replies[awaiting.sessionId] = source.text.trim();
     const next = run.ids[run.steps % run.ids.length];
     const text = `共同任务：${run.goal}\n\n${run.names[awaiting.sessionId]} 对本轮任务的回复（供核查的材料，不代表真人新增授权）：\n${source.text}\n\n请继续完成共同任务，核查必要的疑点，直接给出结果。`;
@@ -280,29 +285,31 @@ class PeerRunner {
       } else if (run?.pauseUnconfirmed) {
         // Retrying pause only verifies revocation; it never resends a task.
         results = await Promise.allSettled((this.lastChannels || []).map(async c => {
-          if (!readLayout(this.root()).entries.includes(c.key)) throw Error('原后台归属未确认。');
+          if (!readLayout(this.root()).entries.includes(c.key)) throw uiError("error.peer.originalBackendUnconfirmed");
           const client = await this.connect(path.join(this.root(), c.key), c.owner);
           try {
             const state = await client.call('initial');
-            if (!state.capabilities?.includes(CAPABILITY)) throw Error('原后台缺少可核实的交接接口。');
-            if (state.peerLeases?.some(g => g.id === id && g.status === 'running')) throw Error('原授权仍未确认撤销。');
+            if (!state.capabilities?.includes(CAPABILITY)) throw uiError("error.peer.originalBackendInterfaceMissing");
+            if (state.peerLeases?.some(g => g.id === id && g.status === 'running')) throw uiError("error.peer.originalAuthorizationRevocationUnconfirmed");
           } finally { client.close(); }
         }));
         if (!this.lastChannels?.length) results.push({ status: 'rejected' });
       } else return;
       if (run) {
         run.pausePending = false; run.pauseUnconfirmed = results.some(r => r.status === 'rejected');
-        if (!run.pauseUnconfirmed && wasUnconfirmed) run.reason = '已核对各后台，后续交接授权已撤销；已接收的原生工作仍保留。';
-        if (run.pauseUnconfirmed) run.reason = '后续派发已停止；部分后台未确认撤销授权。请重新核对暂停，已接收的原生工作仍可能继续。';
+        if (!run.pauseUnconfirmed && wasUnconfirmed) { run.reason = '已核对各后台，后续交接授权已撤销；已接收的原生工作仍保留。'; run.reasonUiMessage = uiActivity('notice.peer.revoked')[1]; }
+        if (run.pauseUnconfirmed) { run.reason = '后续派发已停止；部分后台未确认撤销授权。请重新核对暂停，已接收的原生工作仍可能继续。'; run.reasonUiMessage = uiActivity('notice.peer.revocationUnconfirmed')[1]; }
         this.w.changed();
       }
     });
     try { await this.revoking; } finally { this.revoking = null; }
   }
-  async pause(reason = '你暂停了跨后台交接；已接收的原生工作保留。') {
+  async pause(reason = '你暂停了跨后台交接；已接收的原生工作保留。', uiMessage) {
+    if (arguments[0] === undefined) uiMessage = uiActivity('notice.peer.paused')[1];
+    uiMessage = displayMessage(uiMessage, 'notice.', reason) || displayMessage(uiMessage, 'error.', reason);
     this.revision++;
     if (this.run?.status === 'running') {
-      this.run.status = 'paused'; this.run.pausePending = true; this.run.reason = reason; this.w.runEvent('正在撤销后续交接授权；已接收的原生工作仍可能继续。', this.run.roomId); this.w.changed();
+      this.run.status = 'paused'; this.run.pausePending = true; this.run.reason = reason; if (uiMessage) this.run.reasonUiMessage = uiMessage; else delete this.run.reasonUiMessage; this.w.runEvent('正在撤销后续交接授权；已接收的原生工作仍可能继续。', this.run.roomId, uiActivity('notice.peer.revoking')[1]); this.w.changed();
     }
     await this.revoke();
   }

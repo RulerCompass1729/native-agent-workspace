@@ -173,3 +173,23 @@ for (const mode of ['saved', 'result-write-failed', 'cleanup-unconfirmed', 'owne
     }
   } finally { fs.rmSync(outer, { recursive: true, force: true }); }
 });
+
+test('isolated Electron fixtures seed Chinese once, preserve existing preference and leave system-default trials unseeded', () => {
+  const r = probe(`
+    const assert=require('node:assert/strict');let launches=0;
+    const electron=scratch.playwright({_electron:{async launch(){launches++;return{process:()=>({exitCode:0,signalCode:null}),async close(){}};}}})._electron;
+    (async()=>{
+      await electron.launch({env:{NAW_DATA_DIR:root}});
+      const patch=path.join(root,'dsh','cordis.patch.yml'), first=fs.readFileSync(patch,'utf8');
+      assert.match(first,/preference: "zh"/);
+      fs.writeFileSync(patch,first.replace('preference: "zh"','preference: "en"'));
+      const accepted=fs.readFileSync(patch,'utf8');await electron.launch({env:{NAW_DATA_DIR:root}});assert.equal(fs.readFileSync(patch,'utf8'),accepted);
+      const system=scratch.directory(path.join(os.tmpdir(),'naw-system-locale-'));
+      await electron.launch({env:{NAW_DATA_DIR:system,NAW_TEST_UI_LANGUAGE:'system'}});assert.equal(fs.existsSync(path.join(system,'dsh')),false);
+      const foreign=fs.mkdtempSync(path.join(os.tmpdir(),'naw-not-owned-by-helper-'));
+      try{await assert.rejects(electron.launch({env:{NAW_DATA_DIR:foreign}}),/owned test profile/);assert.deepEqual(fs.readdirSync(foreign),[]);}finally{fs.rmSync(foreign,{recursive:true});}
+      assert.equal(launches,3);
+    })().finally(scratch.cleanup(async()=>{}));
+  `, {env:{NAW_TEST_UI_LANGUAGE:undefined}});
+  assert.equal(r.status,0,r.stderr); assert.equal(fs.existsSync(r.root),false,r.stderr);
+});

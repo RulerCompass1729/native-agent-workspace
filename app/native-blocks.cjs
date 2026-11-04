@@ -1,3 +1,5 @@
+const { uiNotice, uiError } = require('./ui-errors.cjs');
+const { displayMessage } = require('./ui-locale.js');
 // Native display records are private session history. They never authorize a
 // send, a shared reply, or completion of background work.
 function codexTurnBlock(nativeId, turn) {
@@ -42,15 +44,25 @@ function applyNativeBlock(session, event, imageDataDir) {
     if (event.index !== (row.nativeIndex ?? -1) + 1) row.incomplete = true;
     row.nativeIndex = event.index;
   }
-  if (typeof event.text === 'string') row.text = event.text;
-  if (typeof event.delta === 'string') row.text += event.delta;
+  if (typeof event.text === 'string') { row.text = event.text; delete row.uiMessage; }
+  if (typeof event.delta === 'string') { row.text += event.delta; delete row.uiMessage; }
+  const ownLegacyText = event.source === 'claude-native-message' && ['notice.legacy.nonText', 'notice.legacy.gapText'].includes(event.uiMessage?.key);
+  if ((row.role === 'system' || ownLegacyText) && typeof event.text === 'string' && typeof event.delta !== 'string') {
+    const message = displayMessage(event.uiMessage, 'notice.', row.text) || displayMessage(event.uiMessage, 'error.', row.text);
+    if (message) row.uiMessage = message;
+  }
   for (const field of ['title', 'status', 'turnId', 'displayTurnId', 'promptId', 'inputTag', 'toolKind']) if (typeof event[field] === 'string') row[field] = event[field];
+  if (typeof event.title === 'string') {
+    delete row.uiTitleMessage;
+    const message = displayMessage(event.uiTitleMessage, 'notice.', row.title);
+    if (message) row.uiTitleMessage = message;
+  }
   if (event.kind === 'input' && ['native-inline', 'native-prompt'].includes(event.inputMode)) row.inputMode = event.inputMode;
   if (event.kind === 'response' && event.phase === 'commentary') row.phase = 'commentary';
   if (Object.hasOwn(event, 'images')) row.images = require('./native-images.cjs').imageReferences(event.images, event.imageCwd || session.cwd, row.images);
   if (Number.isSafeInteger(event.imageCount) && event.imageCount > 0 && event.imageCount <= 17 && ['tool', 'input'].includes(row.kind) && row.status === 'complete') {
     if (!Array.isArray(row.images)) row.images = [];
-    while (row.images.length < event.imageCount) row.images.push({ pending: true, unavailable: '图片尚未完整同步。' });
+    while (row.images.length < event.imageCount) { const error = uiError('error.nativeImages.payloadPending'); row.images.push({ pending: true, unavailable: error.message, unavailableUiMessage: error.uiMessage }); }
   }
   if (event.kind === 'turn') for (const field of ['nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) {
     if (Number.isFinite(event[field]) && (field === 'nativeDurationMs' ? Number.isSafeInteger(event[field]) && event[field] >= 0 : Math.abs(event[field]) <= 8640000000000000)) row[field] = event[field];
@@ -83,17 +95,24 @@ function trimVolatileRows(messages, gapId = 'native-cache-gap') {
   const tools = messages.filter(m => m.volatile);
   const size = m => Buffer.byteLength(JSON.stringify(m));
   let bytes = tools.reduce((n, m) => n + size(m), 0), count = tools.length;
+  const gapNotice = uiNotice('notice.nativeCacheGap'), existingGap = tools.find(tool => tool.id === gapId);
+  const gapGrowth = existingGap ? Math.max(0, size({ ...existingGap, ...gapNotice, incomplete: true }) - size(existingGap)) : 0;
+  let gapPresent = Boolean(existingGap);
+  // An already bounded legacy marker needs no rewrite or eviction.
+  if (gapPresent && bytes + count + 1 <= 1024 * 1024 && count <= 200) return messages;
   const removed = new Set();
-  // Reserve room for one gap marker. Count all fields, not just body text.
+  // Reserve a new gap once. An existing marker already consumes its real
+  // bytes and row; reserving it again would discard another tool on each save.
   for (const tool of tools) {
-    if (bytes <= 1024 * 1024 - 2048 && count < 200) break;
+    if (bytes + count + 1 <= 1024 * 1024 - (gapPresent ? gapGrowth : 2048) && count <= (gapPresent ? 200 : 199)) break;
     removed.add(tool.id); bytes -= size(tool); count--;
+    if (tool.id === gapId) gapPresent = false;
   }
   if (removed.size) {
     messages = messages.filter(m => !removed.has(m.id));
     let gap = messages.find(m => m.id === gapId);
     if (!gap) { gap = { id: gapId, role: 'system', volatile: true, kind: 'gap', time: Date.now() }; messages.push(gap); }
-    gap.text = '部分工具记录超过本地保留上限，请在原生终端核对。'; gap.incomplete = true;
+    Object.assign(gap, gapNotice); gap.incomplete = true;
   }
   return messages;
 }
@@ -156,6 +175,7 @@ function applyCodexHistory(s, items, runtime, submitted = () => {}, turns, recov
     // history. Live items received on this connection still take precedence.
     if (own && (s.recovering || recovery) && item.type === 'agentMessage' && !runtime.liveMessageItems?.has(item.id)) {
       const interrupted = own.status === 'interrupted';
+      delete own.uiMessage;
       Object.assign(own, { text: interrupted ? own.text : item.text || '',
         status: interrupted ? 'interrupted' : item.turnId && item.turnId === runtime.turnId ? 'streaming' : 'complete', phase: item.phase });
     }
@@ -231,7 +251,7 @@ function applyCodexTurnHistory(s, turns, runtime) {
   if (turns !== undefined) {
     const id = `native:${s.nativeId}:turn-metadata-unavailable`;
     s.messages = s.messages.filter(m => m.id !== id);
-    if (turns === null) s.messages.push({ id, role: 'system', kind: 'notice', text: '原生回合时间暂未同步；正文保留，可在原生终端核对。' });
+    if (turns === null) s.messages.push({ id, role: 'system', kind: 'notice', ...uiNotice('notice.turnTimeUnavailable') });
   }
 }
 // A native interrupt fixes the observed text cut. Late deltas/completion and
@@ -245,7 +265,7 @@ function applyCodexDelta(s, item) {
   let message = s.messages.find(m => (m.nativeItemId || m.id) === item.id && (!m.nativeId || m.nativeId === s.nativeId));
   if (codexInterrupted(s, item, message)) return null;
   if (!message) { message = { id: s.messages.some(m => m.id === item.id) ? `native:${s.nativeId}:message:${item.id}` : item.id, nativeItemId: item.id, role: 'assistant', text: '', status: 'streaming' }; s.messages.push(message); }
-  message.text += item.text;
+  message.text += item.text; delete message.uiMessage;
   if (item.turnId) message.turnId = item.turnId;
   message.nativeId = s.nativeId;
   if (typeof item.inputTag === 'string') message.inputTag = item.inputTag;
@@ -273,6 +293,7 @@ function applyCodexMessage(s, item) {
       s.messages.splice(index, 0, m);
     } else s.messages.push(m);
   }
+  delete m.uiMessage;
   Object.assign(m, { text: item.text, status: 'complete', nativeId: item.nativeId || s.nativeId, phase: item.phase, ...(typeof item.inputTag === 'string' ? { inputTag: item.inputTag } : {}), ...(item.turnId ? { turnId: item.turnId } : {}) });
   return m;
 }

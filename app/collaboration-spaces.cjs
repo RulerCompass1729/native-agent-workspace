@@ -1,10 +1,12 @@
 (function (target) {
+const uiError = typeof module === 'object' && module.exports ? require('./ui-errors.cjs').uiError : target.nativeWorkspaceLocale?.createError;
 // Shared data contract only. Existing profile/service writers own persistence.
 const DEFAULT_ROOM_ID = 'shared';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const roomId = value => value === DEFAULT_ROOM_ID || typeof value === 'string' && UUID.test(value);
 const revision = value => Number.isSafeInteger(value) && value >= 0;
-const invalid = () => Error('协作空间成员记录无法核对；原记录已保留，没有更改成员或共享授权。');
+// The standalone data contract also runs without the application formatter.
+const invalid = () => uiError ? uiError('error.spaceMembershipUnverifiable') : Error('协作空间成员记录无法核对；原记录已保留，没有更改成员或共享授权。');
 function completedSharedRecord(message) {
   if (!message || message.incomplete || message.kind === 'gap') return false;
   // An agent wake row is complete only once its sender's record shows a final state (T-137).

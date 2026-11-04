@@ -39,8 +39,26 @@ function own(child) {
   return child;
 }
 const childProcess = { ...cp, fork: (...args) => own(cp.fork(...args)), spawn: (...args) => own(cp.spawn(...args)) };
+function seedTestLanguage(options) {
+  const profile = options?.env?.NAW_DATA_DIR;
+  const language = options?.env?.NAW_TEST_UI_LANGUAGE ?? process.env.NAW_TEST_UI_LANGUAGE ?? 'zh';
+  if (!profile || language === 'system') return;
+  if (!['zh', 'en'].includes(language)) throw Error('Test UI language must be zh, en or system');
+  const real = canonical(profile);
+  if (![...roots].some(([root, identity]) => inside(root, real) && same(root, identity))) throw Error('Language seeding requires an owned test profile');
+  const dsh = path.join(real, 'dsh');
+  try {
+    const current = fs.lstatSync(dsh);
+    if (!current.isDirectory() || current.isSymbolicLink()) throw Error('Expected an owned test profile directory');
+    return; // An existing profile keeps its saved choice, including English or system default.
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  fs.mkdirSync(dsh, { mode: 0o700 });
+  const name = require.resolve('@deepseek-ai/dsh-client-locale');
+  fs.writeFileSync(path.join(dsh, 'cordis.patch.yml'), '- id: locale\n  name: ' + JSON.stringify(name) + '\n  config:\n    preference: ' + JSON.stringify(language) + '\n', { mode: 0o600, flag: 'wx' });
+}
 function playwright(module) {
   return { ...module, _electron: { launch: async (...args) => {
+    seedTestLanguage(args[0]);
     const app = await module._electron.launch(...args); const child = app.process(); applications.set(app, child); own(child); return app;
   } } };
 }

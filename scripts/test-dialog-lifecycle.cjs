@@ -151,7 +151,7 @@ async function run() {
  await arm('initial'); await page.locator('#refresh-trust').click(); await held('initial'); await closed('privacy-dialog'); await release('initial'); await delay(80); assert.equal(await page.locator('#trust-status').textContent(), ''); assert.equal(await page.locator('#trust-refresh-status').textContent(), '');
  for (const id of [codex, claude]) {
   await row(id).locator('.session-link').click(); await usageDialog(); await until(async () => (await page.locator('#trust-refresh-status').innerText()).startsWith('已刷新本机状态'), 'Scoped usage');
-  assert.equal(await page.locator('[data-usage-session]').count(), 1); assert.equal(await page.locator('[data-usage-session]').getAttribute('data-usage-session'), id); const text = await page.locator('#trust-status').innerText(); assert.ok(text.includes(new Date(reportedAt).toLocaleString()));
+  assert.equal(await page.locator('[data-usage-session]').count(), 1); assert.equal(await page.locator('[data-usage-session]').getAttribute('data-usage-session'), id); const text = await page.locator('#trust-status').innerText(); assert.ok(text.includes(new Date(reportedAt).toLocaleString('zh')));
   await capture(id === codex ? '03-codex-scoped' : '04-claude-scoped'); await closed('privacy-dialog', 'escape');
  }
  await app.evaluate((_, id) => { globalThis.t93.usage[id] = null; }, claude); await usageDialog(); await until(async () => (await page.locator('#trust-status').innerText()).includes('原生用量未报告；不能据此判断为零。'), 'Unknown usage reason'); await closed('privacy-dialog', 'button', 'close-privacy');

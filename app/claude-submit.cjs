@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 // Private Unix-socket transport for Claude's native prompt.submit API.
 // No terminal writes, TCP listener, model calls, or automatic send retries.
 const http = require('node:http');
@@ -11,7 +12,7 @@ class SubmissionChannel extends EventEmitter {
     // The native listener asks for another command only after the previous
     // submit/result attempt has settled. If its result was lost, end this
     // uncertain wait; never redeliver the already-authorized native input.
-    if (this.pending?.waitForNativeTurn && this.pending.delivered && this.pending.authorized) this.finish(new Error('原生等待输入的结果未确认；不会重发，请核对原生会话，草稿保留。'));
+    if (this.pending?.waitForNativeTurn && this.pending.delivered && this.pending.authorized) this.finish(uiError("error.nativeWaitingInputUnconfirmed"));
     if (this.poll) this.poll.end(JSON.stringify({ idle: true }));
     this.poll = response; this.status(true);
     const timer = setTimeout(() => { if (this.poll === response) { this.poll = null; response.end(JSON.stringify({ idle: true })); } }, 20000);
@@ -19,10 +20,10 @@ class SubmissionChannel extends EventEmitter {
     this.flush();
   }
   request(text, tag, guard, waitForNativeTurn = false) {
-    if (!this.connected) return Promise.reject(Object.assign(new Error('安全发送连接尚未就绪；请在原生终端继续，草稿已保留。'), { notSent: true }));
-    if (this.pending) return Promise.reject(Object.assign(new Error('上一条发送仍待原生确认。'), { notSent: true }));
+    if (!this.connected) return Promise.reject(Object.assign(uiError("error.safeSubmissionNotReady"), { notSent: true }));
+    if (this.pending) return Promise.reject(Object.assign(uiError("error.previousSubmissionPending"), { notSent: true }));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.finish(new Error('原生提交未确认；不会自动重发，请检查原生会话。')), this.timeout);
+      const timer = setTimeout(() => this.finish(uiError("error.nativeSubmissionUnconfirmed")), this.timeout);
       this.pending = { text, tag, guard, resolve, reject, timer, delivered: false, authorized: false, waitForNativeTurn, deadline: Date.now() + this.timeout };
       this.flush();
     });
@@ -30,7 +31,7 @@ class SubmissionChannel extends EventEmitter {
   flush() {
     const p = this.pending, response = this.poll;
     if (!p || !response || p.delivered) return;
-    if (!p.guard()) return this.finish(new Error('真人操作或协作变更已撤销这次发送；草稿已保留。'));
+    if (!p.guard()) return this.finish(uiError("error.submissionRevokedByHuman"));
     p.delivered = true; this.poll = null;
     response.end(JSON.stringify({ id: p.tag, text: p.text }));
   }
@@ -53,7 +54,7 @@ class SubmissionChannel extends EventEmitter {
     });
     else {
       const notSent = message.status === 'draft' || message.status === 'blocked';
-      this.finish(Object.assign(new Error(message.status === 'draft' ? '原生终端里还有未发送的草稿。请先在那里处理；两边草稿均已保留。' : notSent ? '原生未接受这次发送；草稿已保留，请查看原生会话。' : '原生提交结果未确认；不会自动重发，请查看原生会话。'), { notSent }));
+      this.finish(Object.assign(uiError(message.status === 'draft' ? 'error.submission.nativeDraft' : notSent ? 'error.submission.nativeRejected' : 'error.submission.nativeResultUnconfirmed'), { notSent }));
     }
     return true;
   }
@@ -64,7 +65,7 @@ class SubmissionChannel extends EventEmitter {
     if (error) error.notSent ??= !p.authorized;
     this.pending = null; clearTimeout(p.timer); error ? p.reject(error) : p.resolve(receipt);
   }
-  close() { this.status(false); this.finish(new Error('安全发送连接已关闭；不会自动重发。')); this.poll?.end(JSON.stringify({ closed: true })); this.poll = null; }
+  close() { this.status(false); this.finish(uiError("error.safeSubmissionClosed")); this.poll?.end(JSON.stringify({ closed: true })); this.poll = null; }
 }
 
 function createSubmissionServer(filename, targets) {
@@ -96,7 +97,7 @@ function createSubmissionServer(filename, targets) {
       }
       if (req.url === '/addressed-message' || req.url === '/addressed-failed') {
         try {
-          if (!target.addressedSendAvailable || !target.validRootBinding(message) || message.epoch !== target.observationEpoch || !target.addressedCall) throw Error('当前原生连接不支持定向协作。');
+          if (!target.addressedSendAvailable || !target.validRootBinding(message) || message.epoch !== target.observationEpoch || !target.addressedCall) throw uiError("error.nativeDirectedUnsupported");
           const identity = { nativeId: message.sessionId, turnId: message.turnId, promptId: message.promptId, callId: message.callId };
           const result = req.url === '/addressed-failed' ? target.addressedFailed(identity) : target.addressedCall(identity, message.arguments);
           if (result?.then) return result.then(value => res.end(JSON.stringify(value)), error => res.end(JSON.stringify({ status: 'unconfirmed', message: error.message })));

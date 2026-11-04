@@ -1,7 +1,8 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../renderer/reading-list.js'), 'utf8');
-function reader(extra = {}) { const c = vm.createContext({ ...extra }); vm.runInContext(source, c); return c; }
+const locale = require('../ui-locale.js');
+function reader(extra = {}) { const c = vm.createContext({ uiText: (key, params) => locale.format('zh', key, params), toastMessage: (key, params) => extra.toast?.(locale.format('zh', key, typeof params === 'function' ? params() : params)), ...extra }); vm.runInContext(source, c); return c; }
 test('important message clocks use only valid recorded times and local 24-hour dates', () => {
   const r = reader(), now = new Date(2026, 9, 29, 22, 10).getTime(), time = new Date(2026, 9, 29, 9, 5).getTime();
   const clock = r.readingMessageClock({ role: 'user', time }, now);
@@ -18,14 +19,14 @@ test('tools, thinking, native boundaries and commentary do not acquire heading c
 });
 test('copy acknowledgement preserves clicked payload and target even while a live row changes', async () => {
   let resolve, actual; const notices = [], r = reader({api:{copy:text=>{actual=text;return new Promise(r=>resolve=r);}},toast:text=>notices.push(text)});
-  const entry = {message:{text:'original'}, displayText:'exact output\n  whitespace\n', actionLabel:'这条命令的输出'};
+  const entry = {message:{text:'original'}, displayText:'exact output\n  whitespace\n', copyLabel:()=>r.readingActionLabel({toolKind:'commandExecution'},'Original')};
   const copied = r.copyReadingMessage(entry); assert.equal(actual, entry.displayText); assert.deepEqual(notices, []);
-  entry.displayText = 'new streamed output'; entry.actionLabel = 'Other reply'; resolve(); await copied;
+  entry.displayText = 'new streamed output'; entry.copyLabel = () => 'Other reply'; resolve(); await copied;
   assert.deepEqual(notices, ['已复制：这条命令的输出']);
 });
 test('rejected copy never reports success', async () => {
   const notices = [], error = Error('Owned copy failure'), r = reader({api:{copy:async()=>{throw error;}},toast:text=>notices.push(text)});
-  await assert.rejects(r.copyReadingMessage({message:{text:'body'},actionLabel:'你的输入'}), e=>e===error); assert.deepEqual(notices, []);
+  await assert.rejects(r.copyReadingMessage({message:{text:'body'},copyLabel:()=>r.readingActionLabel({role:'user'},'你')}), e=>e===error); assert.deepEqual(notices, []);
 });
 const native = (id, extra={}) => ({id,nativeId:'N',turnId:'T',nativeBlock:true,kind:'response',role:'assistant',status:'complete',text:id,...extra});
 const plain = value => JSON.parse(JSON.stringify(value));

@@ -56,14 +56,15 @@
     return { ...fleet, children, settled: children.length < fleet.children.length, work,
       running: children.filter(c => c.status === 'running').length, unknown: children.filter(c => c.status === 'unknown').length };
   }
-  function fleetStatus(record, base, connected = true) {
+  // `text` renders catalog keys in the display language (T-60); without it the Chinese originals stay.
+  function fleetStatus(record, base, connected = true, text) {
     const fleet = currentFleet(record, connected), idle = record.state === 'idle';
     // A mixed fleet keeps both facts: running children never hide unknown ones.
-    const children = (fleet.running ? ` · ${fleet.running} 个子任务进行中` : '') + (fleet.unknown ? ' · 子任务状态待核对' : '');
+    const children = (fleet.running ? text ? text('fleet.running', { count: fleet.running }) : ` · ${fleet.running} 个子任务进行中` : '') + (fleet.unknown ? text ? text('fleet.unknown') : ' · 子任务状态待核对' : '');
     if (idle && fleet.work.count) return fleet.work.text;
     if (idle && fleet.work.unconfirmed) return fleet.work.text + children;
     if (!fleet.observed || fleet.settled && !fleet.children.length) return base;
-    return (idle ? '主会话就绪' : base) + children;
+    return (idle ? text ? text('fleet.rootReady') : '主会话就绪' : base) + children;
   }
   // Green means idle with nothing reported in flight. Codex has no turn-end report, so its dot is unchanged.
   function workTone(record, connected = true) {

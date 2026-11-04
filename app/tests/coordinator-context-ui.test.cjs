@@ -1,8 +1,12 @@
+const localeUI = require('./fixtures/locale-ui.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
 class Element {
   constructor() { this.value = ''; this.hidden = false; this.disabled = false; this.open = false; this.isConnected = true; this.children = []; this.textContent = ''; this.events = {}; this.dataset = {}; }
+  setAttribute(k, v) { (this.attrs ||= {})[k] = String(v); }
+  getAttribute(k) { return this.attrs?.[k] ?? null; }
+  removeAttribute(k) { if (this.attrs) delete this.attrs[k]; }
   addEventListener(name, fn) { this.events[name] = fn; }
   querySelectorAll(selector) { return selector === 'input:checked' ? this.children.filter(child => child.checked) : this.children; }
   showModal() { this.open = true; }
@@ -12,9 +16,9 @@ class Element {
 function fixture() {
   const elements = new Map(), copies = [], problems = [], writes = [], builds = [];
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const context = vm.createContext({ $, selected: 'room', spaceId: 'shared', mode: 'chat', roomSession: '', contextTarget: { room: true, roomId: 'shared' },
+  const context = vm.createContext({ ...localeUI(), $,  selected: 'room', spaceId: 'shared', mode: 'chat', roomSession: '', contextTarget: { room: true, roomId: 'shared' },
     selectionRevision: 1, roomDraftRevision: 0, state: { fixture: true }, disconnected: false,
-    attempt: action => action(), render() {}, toast: text => problems.push(text), roomRecipient: () => '',
+    attempt: action => action(), render() {}, toast: text => problems.push(text), toastMessage: (key, params) => problems.push(localeUI().uiText(key, params)), roomRecipient: () => '',
     persistView: async () => writes.push($('shared-input').value), api: { copy: async text => copies.push(text) },
     window: { nativeWorkspaceContextSnapshot: { build: (state, ids, options) => { builds.push({ state, ids: [...ids], options }); return { text: 'Generated ' + ids.join(','), spaceIds: [...ids] }; } } },
   });

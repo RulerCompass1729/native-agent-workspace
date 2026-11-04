@@ -5,7 +5,10 @@ const component = bootstrap.slice(bootstrap.indexOf('function MessageMarkdown(')
 function harness() {
   let cursor = 0, effects = [], hooks = [];
   const states = [], calls = [], Provider = Symbol('provider'), Markdown = Symbol('markdown');
+  let language = 'zh';
+  const locale = require('../ui-locale.js');
   const React = {
+    useSyncExternalStore(_subscribe, getSnapshot) { return getSnapshot(); },
     createElement(type, props, ...children) { return { type, props: props || {}, children }; },
     useRef(value) { const index = cursor++; return hooks[index] ||= { current: value }; },
     useState(value) { const index = cursor++; if (!(index in hooks)) hooks[index] = value; return [hooks[index], next => { hooks[index] = next; states.push(next); }]; },
@@ -14,9 +17,9 @@ function harness() {
   };
   const window = { workspace: { openMessageFile: (...args) => { calls.push(args); return Promise.resolve({ accepted: true, lineNavigation: false }); }, openExternal: () => Promise.resolve() } };
   class Element {}
-  const renderComponent = vm.runInNewContext(`(${component})`, { React, window, MarkdownDelegateProvider: Provider, MarkdownText: Markdown, Element, ui: {} });
+  const renderComponent = vm.runInNewContext(`(${component})`, { React, window, MarkdownDelegateProvider: Provider, MarkdownText: Markdown, Element, ui: {}, subscribeLocale: () => () => {}, localeSnapshot: () => ({ active: language }), t: (key, params) => locale.format(language, key, params) });
   const find = (tree, type) => tree?.type === type ? tree : tree?.children?.map(child => find(child, type)).find(Boolean);
-  return { calls, states, window, Element, render(source, text = '[Report](report.md)') { cursor = 0; effects = []; const tree = renderComponent({ text, streaming: false, source }); for (const effect of effects) effect(); return { tree, delegate: find(tree, Provider).props }; } };
+  return { calls, states, window, Element, setLanguage(value) { language = value; }, render(source, text = '[Report](report.md)') { cursor = 0; effects = []; const tree = renderComponent({ text, streaming: false, source }); for (const effect of effects) effect(); return { tree, delegate: find(tree, Provider).props, markdown: find(tree, Markdown).props }; } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const source = id => ({ kind: 'session', sessionId: id, messageId: 'reply', nativeId: 'native-' + id, cwd: '/example/' + id });
@@ -55,7 +58,8 @@ test('duplicate activation is bounded and failure is contained in the originatin
 test('a current failure is visible and HTTP hover exposes the actual full URL', async () => {
   const h = harness(); h.window.workspace.openMessageFile = () => Promise.reject(Error('Missing file'));
   const current = h.render(source('a')); current.delegate.openFile('missing.md'); await flush();
-  assert.ok(h.states.some(value => typeof value === 'string' && value.includes('Missing file')));
+  assert.ok(h.states.some(value => value?.params?.error === 'Missing file'));
+  assert.ok(h.render(source('a')).tree.children.some(child => child?.props?.role === 'status' && child.children[0].includes('Missing file')));
   const anchor = { title: '', getAttribute: () => 'https://example.com/full/path?q=1' };
   const target = new h.Element(); target.closest = () => anchor;
   const event = { target, currentTarget: { contains: () => true } };
@@ -76,9 +80,10 @@ test('the actual reading render updates a cached row when its message source cha
   const sourceText=fs.readFileSync(path.join(__dirname,'../renderer/reading-list.js'),'utf8');
   const start=sourceText.indexOf('    const displayText = nativeCompletionText(m);'), end=sourceText.indexOf('    const footer = readingTurnFooter(m);',start);
   assert.ok(start>=0 && end>start,'Keep the file-origin probe on the actual Markdown rendering block');
-  const block='{'+sourceText.slice(start,end)+'}';
+  const owned = sourceText.slice(sourceText.indexOf('function readingOwnMessage('), sourceText.indexOf('function readingOwnText('));
+  const block=owned+'{'+sourceText.slice(start,end)+'}';
   const entry={body:{}},calls=[],a={id:'a',nativeId:'native-a',cwd:'/example/a'},b={id:'b',nativeId:'native-b',cwd:'/example/b'};
-  const context={entry,room:false,session:a,state:{sessions:[a,b]},m:{id:'same-row',role:'assistant',text:'[Report](report.md)',status:'complete',nativeId:'native-a'},nativeCompletionText:m=>m.text,ui:{markdown:(...args)=>calls.push(args),clearMarkdown(){}},view:{key:'view'},key:'view',scheduleReading(){}};
+  const context={entry,room:false,session:a,state:{sessions:[a,b]},m:{id:'same-row',role:'assistant',text:'[Report](report.md)',status:'complete',nativeId:'native-a'},nativeCompletionText:m=>m.text,ui:{display:{unbind(){}},markdown:(...args)=>calls.push(args),clearMarkdown(){}},view:{key:'view'},key:'view',scheduleReading(){}};
   vm.runInNewContext(block,context);
   context.session=b;context.m={...context.m,nativeId:'native-b'};vm.runInNewContext(block,context);
   context.room=true;context.session=null;context.m={...context.m,sessionId:'a',nativeId:'native-a'};vm.runInNewContext(block,context);
@@ -93,4 +98,26 @@ test('the actual reading render updates a cached row when its message source cha
   let changes=0;context.m={id:'plain-tool',role:'tool',text:'ORIGINAL TOOL TEXT',status:'complete'};context.entry={body:{set textContent(value){changes++;}}};context.room=false;context.session=a;
   vm.runInNewContext(block,context);context.session=b;vm.runInNewContext(block,context);
   assert.equal(changes,1,'Plain native text is not replaced on file-origin metadata changes');
+});
+
+test('language updates only Markdown controls and keep the exact original body and pending file identity', async () => {
+  const h = harness(), original = '<native> 中文 English {name}\n[Report](report.md)';
+  let reject;
+  h.window.workspace.openMessageFile = (...args) => { h.calls.push(args); return new Promise((_resolve, fail) => { reject = fail; }); };
+  const first = h.render(source('a'), original);
+  first.delegate.openFile('report.md'); await flush();
+  assert.equal(first.markdown.text, original);
+  assert.equal(first.markdown.labels.code.copyLabel, '复制');
+  h.setLanguage('en');
+  const translated = h.render(source('a'), original);
+  assert.equal(translated.markdown.text, original);
+  assert.equal(translated.markdown.labels.code.copyLabel, 'Copy');
+  assert.equal(h.calls.length, 1);
+  reject(Error('ORIGINAL ERROR 中文 {error}')); await flush();
+  const failed = h.render(source('a'), original);
+  const paragraph = failed.tree.children.find(child => child?.props?.role === 'status');
+  assert.equal(paragraph.children[0], 'Could not open file: ORIGINAL ERROR 中文 {error}');
+  assert.equal(failed.markdown.text, original);
+  assert.equal(h.calls[0][0].sessionId, 'a');
+  assert.equal(h.calls.length, 1, 'Language changes cannot repeat a file action');
 });

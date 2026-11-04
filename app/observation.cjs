@@ -1,4 +1,5 @@
 const { randomUUID } = require('node:crypto');
+const { displayMessage } = require('./ui-locale.js');
 
 // Volatile private evidence, never a source for task completion or handoff.
 class TerminalJournal {
@@ -34,8 +35,17 @@ class ProgressJournal {
     const previous = this.items.get(id);
     const next = { ...previous, id, time: previous?.time || Date.now(), updatedAt: Date.now() };
     for (const key of ['source', 'kind', 'status', 'turnId', 'title']) if (typeof item[key] === 'string') next[key] = item[key].slice(0, 300);
-    if (typeof item.text === 'string') next.text = item.text.slice(-12000);
-    if (typeof item.delta === 'string') next.text = ((previous?.text || '') + item.delta).slice(-12000);
+    if (typeof item.title === 'string') {
+      delete next.uiTitleMessage;
+      const message = displayMessage(item.uiTitleMessage, 'notice.', next.title);
+      if (message) next.uiTitleMessage = message;
+    }
+    if (typeof item.text === 'string') {
+      next.text = item.text.slice(-12000); delete next.uiMessage;
+      const message = displayMessage(item.uiMessage, 'notice.', next.text);
+      if (message) next.uiMessage = message;
+    }
+    if (typeof item.delta === 'string') { next.text = ((previous?.text || '') + item.delta).slice(-12000); delete next.uiMessage; }
     next.truncated = previous?.truncated || item.truncated === true || (typeof item.text === 'string' && item.text.length > 12000) || (typeof item.delta === 'string' && (previous?.text?.length || 0) + item.delta.length > 12000);
     this.items.set(id, next);
     let size = 0; const removed = [];

@@ -9,7 +9,7 @@ function preflight() {
     const paths = { python: pythonExecutable(), claude: executable('claude'), codex: executable('codex') };
     const configured = readLocations();
     return { ...Object.fromEntries(Object.entries(paths).map(([key, value]) => [key, Boolean(value)])), paths, configured };
-  } catch (error) { return { python: false, claude: false, codex: false, paths: {}, configured: {}, error: error.message }; }
+  } catch (error) { return { python: false, claude: false, codex: false, paths: {}, configured: {}, error: error.message, errorUiMessage: error.uiMessage || null }; }
 }
 async function appBuildInfo(app, dataDir) {
   const info = { version: null, commit: null, installedAt: null };

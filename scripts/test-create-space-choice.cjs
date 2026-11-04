@@ -12,7 +12,7 @@ if (evidence) { assert.ok(!path.resolve(evidence).startsWith(root + path.sep)); 
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; no application or fixture started.'); process.exit(75); }
-fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Claude 2', task: 'T-115 create space choice', token, pid: process.pid, createdAt: new Date().toISOString() }));
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: process.env.NAW_TEST_OWNER || 'test-create-space-choice', task: 'T-115 create space choice', token, pid: process.pid, createdAt: new Date().toISOString() }));
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-create-space-'));
 const legacy = path.join(profile, 'workspace'); fs.mkdirSync(legacy);
 const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [profile], { execArgv: ['--require', path.join(__dirname, 'fixtures/loading-terminal.cjs')], env: { ...process.env, NAW_TEST_APP_ROOT: code, NAW_WORKSPACE: legacy, NAW_APP_VERSION: require(path.join(code, 'package.json')).version }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
@@ -189,7 +189,10 @@ async function run() {
   await page.locator('#confirm-create').click();
   // I159: the retry meets the folder the first attempt made, so the session very likely exists; no third try. I160: the
   // service's advice to use another folder is not shown beside a locked form.
-  await until(async () => await page.locator('#confirm-create').isDisabled(), 'A retry stops at the folder the first attempt created');
+  // Disabled is also true while the request is still pending; wait for its reported stop.
+  await until(async () => await page.locator('#confirm-create').isDisabled() &&
+    /会话很可能已经建好|已保留在侧栏/.test(await page.locator('#create-error').innerText()),
+  'A retry reports its stop at the folder the first attempt created');
   assert.match(await page.locator('#create-error').innerText(), /会话很可能已经建好|已保留在侧栏/); assert.doesNotMatch(await page.locator('#create-error').innerText(), /请改用新目录/);
   assert.equal(await page.locator('#chosen-folder').innerText(), unknownFolder, 'Still the same folder');
   // Which of the two the retry reaches depends on whether a state push already listed the first session (then it is found and kept).

@@ -224,6 +224,36 @@ test('sharing closure between completed items remains visible without calling a 
   assert.equal(w.room.messages.at(-1).sharingStopped, undefined, 'Normal final does not show an interrupted-sharing warning');
 });
 
+test('sharing stop labels follow their raw write, retaining an earlier completed-row reason and clearing stale labels on replacement', () => {
+  const { SharedReplies } = require('../shared-replies.cjs'), locale = require('../ui-locale.js');
+  const sharing = new SharedReplies({});
+  const prior = locale.createNotice('notice.turnTimeUnavailable').uiMessage;
+  const completed = { status: 'complete', text: 'RAW native 中文', sharingStopped: 'RAW previous reason', sharingStoppedUiMessage: prior };
+  sharing.grants.set('completed', { rows: new Map([['one', completed]]), closed: false });
+  sharing.close('completed');
+  assert.equal(completed.sharingStopped, 'RAW previous reason'); assert.equal(completed.sharingStoppedUiMessage, prior);
+  assert.equal(completed.status, 'complete'); assert.equal(completed.text, 'RAW native 中文');
+  const row = { status: 'streaming', text: 'RAW partial 中文', sharingStoppedUiMessage: prior };
+  sharing.grants.set('default', { rows: new Map([['one', row]]), closed: false }); sharing.close('default');
+  assert.equal(row.sharingStopped, '后续内容留在原会话'); assert.equal(row.status, 'unconfirmed');
+  assert.equal(locale.displayText('en', row.sharingStopped, row.sharingStoppedUiMessage), 'Further content stays in the original session');
+  sharing.grants.set('unknown', { rows: new Map([['one', row]]), closed: false }); row.status = 'running';
+  sharing.close('unknown', 'RAW native <reason>中文', prior);
+  assert.equal(row.sharingStopped, 'RAW native <reason>中文'); assert.equal(row.sharingStoppedUiMessage, undefined);
+  assert.equal(row.text, 'RAW partial 中文'); assert.equal(row.status, 'unconfirmed');
+});
+
+test('an actual native observation gap labels only the sharing boundary and retains raw content and grant revocation', async t => {
+  const locale = require('../ui-locale.js'), { w, ids, bind, block, sent } = await fixture(t);
+  await w.forward(ids[0], 'RAW request 中文', 'owner'); bind(0);
+  block(0, { id: 'display:partial', kind: 'response', text: 'RAW output 中文', status: 'streaming' });
+  const row = w.room.messages.find(m => m.text === 'RAW output 中文');
+  block(0, { id: 'gap:one', kind: 'gap', text: 'RAW provider gap 中文' });
+  assert.equal(locale.displayText('en', row.sharingStopped, row.sharingStoppedUiMessage), 'Some content is not synchronized. Check the original session');
+  assert.equal(row.text, 'RAW output 中文'); assert.equal(row.status, 'unconfirmed'); assert.equal(row.incomplete, true);
+  assert.equal(w.sharedReplies.grants.get(row.sourceTag).closed, true); assert.equal(sent.length, 1);
+});
+
 
 test('native failure details require the exact live grant and never advance an exchange', async t => {
   const { w, ids, sent, bind, block, runtimes: [a] } = await fixture(t);

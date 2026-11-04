@@ -1,3 +1,4 @@
+const { uiError, uiNotice } = require('./ui-errors.cjs');
 // Retained hosts use the same room-message projection as current services.
 // Only a new explicit send can grant display; persisted rows never grant work.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
@@ -14,7 +15,7 @@ class LegacyShared extends SharedReplies {
       const rows = JSON.parse(fs.readFileSync(this.filename, 'utf8'));
       if (!Array.isArray(rows)) throw Error('Invalid shared cache');
       this.workspace.room.messages = rows.map(row => ['streaming', 'running'].includes(row.status)
-        ? { ...row, status: 'unconfirmed', sharingStopped: '观察连接已关闭；后续内容留在原会话' } : row);
+        ? { ...row, status: 'unconfirmed', sharingStopped: '观察连接已关闭；后续内容留在原会话', sharingStoppedUiMessage: uiNotice('notice.sharing.connectionClosed').uiMessage } : row);
     } catch (error) { if (error.code !== 'ENOENT') this.storageError = true; }
   }
   authorize(record, runtime, tag, source, authority) {
@@ -39,11 +40,11 @@ class LegacyShared extends SharedReplies {
     }
     catch { return false; }
   }
-  close(tag, reason) { super.close(tag, reason); this.scheduleSave(); }
-  revoke(id, reason) { for (const g of this.grants.values()) if (g.sessionId === id) this.close(g.tag, reason); }
+  close(tag, reason, uiMessage) { super.close(tag, reason, uiMessage); this.scheduleSave(); }
+  revoke(id, reason, uiMessage) { for (const g of this.grants.values()) if (g.sessionId === id) this.close(g.tag, reason, uiMessage); }
   receipt(tag, identity) {
     const g = this.grants.get(tag); if (!g || g.closed) return;
-    if (!identity?.turnId || !identity?.promptId) { this.close(tag, '回复归属未确认'); return; }
+    if (!identity?.turnId || !identity?.promptId) { this.close(tag, '回复归属未确认', uiNotice('notice.sharing.originUnconfirmed').uiMessage); return; }
     g.receipt = { ...identity, nativeId: g.nativeId }; this.bindAccepted(g);
   }
   bindAccepted(g) {
@@ -63,7 +64,7 @@ class LegacyShared extends SharedReplies {
     // Completion only finalizes an already attributed native block. No raw fallback.
     if (g?.runtime === runtime && this.valid(g) && row?.role === 'assistant' && row.turnId === g.turnId) {
       super.final(this.workspace.sessions.get(g.sessionId), { ...info, text: row.text }); this.scheduleSave();
-    } else if (g) this.close(g.tag, '原生回复归属未确认');
+    } else if (g) this.close(g.tag, '原生回复归属未确认', uiNotice('notice.sharing.nativeOriginUnconfirmed').uiMessage);
   }
   observed(runtime, message) {
     const s = this.workspace.sessions.get(runtime.record.id);
@@ -71,7 +72,7 @@ class LegacyShared extends SharedReplies {
     s.messages = runtime.record.messages;
     if (message.kind === 'input') {
       for (const g of this.grants.values()) if (g.sessionId === s.id && !g.closed) {
-        if (message.inputTag !== g.tag) this.close(g.tag, '原生已接收其他输入；后续内容留在原会话');
+        if (message.inputTag !== g.tag) this.close(g.tag, '原生已接收其他输入；后续内容留在原会话', uiNotice('notice.sharing.foreignInput').uiMessage);
         else { g.acceptedInput = true; this.bindAccepted(g); }
       }
     } else this.record(s, message);
@@ -86,7 +87,7 @@ class LegacyShared extends SharedReplies {
       if (this.valid(g) && message.status === 'complete' && proof?.ended && !proof.incomplete &&
         proof.promptId === g.promptId && typeof proof.safeText === 'string' && g.rows.get(proof.messageId)?.role === 'assistant') {
         super.final(s, { tag: g.tag, messageId: proof.messageId, text: proof.safeText });
-      } else this.close(g.tag, '原生本轮已结束；未确认内容留在原会话');
+      } else this.close(g.tag, '原生本轮已结束；未确认内容留在原会话', uiNotice('notice.sharing.nativeTurnEnded').uiMessage);
     }
   }
   snapshot() { this.refresh(); return this.workspace.room.messages; }
@@ -106,7 +107,7 @@ class LegacyShared extends SharedReplies {
     }, 150);
   }
   save() {
-    if (this.storageError) throw Error('本地共享回复记录无法保存；后续内容留在原会话。');
+    if (this.storageError) throw uiError("error.legacy.sharedReplySaveFailed");
     const temporary = this.filename + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
     try {
       fs.writeFileSync(temporary, JSON.stringify(persistedMessages(this.workspace.room.messages, 'shared-native-cache-gap')), { mode: 0o600, flag: 'wx' });

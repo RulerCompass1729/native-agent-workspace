@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -6,15 +7,15 @@ function readLayout(dataDir) {
   const file = path.join(dataDir, 'services.json');
   let stat;
   try { stat = fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return { format: 1, active: '.', entries: ['.'] }; throw error; }
-  if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('后台列表权限不安全；原会话未改动。');
+  if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw uiError("error.service.layoutPermissions");
   const layout = JSON.parse(fs.readFileSync(file, 'utf8'));
   const validKey = key => typeof key === 'string' && (key === '.' || /^backends\/[a-f0-9]{20}$/.test(key));
-  if (layout.format !== 1 || !Array.isArray(layout.entries) || !layout.entries.length || new Set(layout.entries).size !== layout.entries.length || !layout.entries.includes(layout.active) || layout.entries.some(key => !validKey(key)) || (layout.pending !== undefined && (!validKey(layout.pending) || layout.entries.includes(layout.pending)))) throw new Error('后台列表无效；原会话未改动。');
+  if (layout.format !== 1 || !Array.isArray(layout.entries) || !layout.entries.length || new Set(layout.entries).size !== layout.entries.length || !layout.entries.includes(layout.active) || layout.entries.some(key => !validKey(key)) || (layout.pending !== undefined && (!validKey(layout.pending) || layout.entries.includes(layout.pending)))) throw uiError("error.service.invalidLayout");
   for (const key of [...layout.entries, ...(layout.pending ? [layout.pending] : [])]) {
     const dir = path.join(dataDir, key), parent = path.dirname(dir);
     for (const candidate of key === '.' ? [dir] : [parent, dir]) {
       const s = fs.lstatSync(candidate);
-      if (!s.isDirectory() || s.uid !== process.getuid() || (s.mode & 0o077)) throw new Error('后台目录权限不安全；原会话未改动。');
+      if (!s.isDirectory() || s.uid !== process.getuid() || (s.mode & 0o077)) throw uiError("error.service.backendDirectoryPermissions");
     }
   }
   return layout;

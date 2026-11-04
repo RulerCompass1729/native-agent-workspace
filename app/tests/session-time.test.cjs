@@ -4,7 +4,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const source = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
 const start = source.indexOf('function sessionTime('), end = source.indexOf('function renderDraftRecovery(', start);
 assert.ok(start >= 0 && end > start);
-const { sessionTime, sessionActivityTime, sessionTimes } = vm.runInNewContext(source.slice(start, end) + ';({sessionTime,sessionActivityTime,sessionTimes})', { Date });
+const { sessionTime, sessionActivityTime, sessionTimes } = vm.runInNewContext(source.slice(start, end) + ';({sessionTime,sessionActivityTime,sessionTimes})', { Date, uiText: (key, params) => require('../ui-locale.js').format('zh', key, params), ui: { language: { getSnapshot: () => ({ active: 'zh' }) } } });
 const time = Date.UTC(2026, 9, 29, 9, 5), later = time + 3600000;
 test('reported backend activity remains authoritative over message and creation times', () => {
   assert.equal(sessionActivityTime({ createdAt: later, lastActivityAt: time, messages: [{ time: later }] }), sessionTime(time));

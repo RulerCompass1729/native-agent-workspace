@@ -7,12 +7,92 @@ window.__ModuleLoader__.load({
     const { MarkdownText, MarkdownDelegateProvider, Menu } = require('@deepseek-ai/dsh-client-ui-primitives');
     const templates = { sidebar: /* SIDEBAR_TEMPLATE */, main: /* MAIN_TEMPLATE */ };
     const styles = /* LOCAL_STYLES */;
+    // Only project-template nodes registered before native content is inserted
+    // can be refreshed. An identical attribute in a native reply grants nothing.
+    function createDisplayBindings(translate) {
+      const owned = new WeakMap();
+      const attributes = ['aria-label', 'title', 'placeholder', 'aria-description', 'data-order-hint', 'alt'];
+      const marker = 'data-naw-i18n-bound';
+      const paint = (element, slot, entry) => {
+        const value = entry.read ? entry.read() : translate(entry.key, typeof entry.params === 'function' ? entry.params() : entry.params);
+        if (slot === 'text') {
+          if (element.childElementCount) throw new Error('NAW display text must target a leaf node.');
+          if (element.textContent !== value) element.textContent = value;
+        } else if (element.getAttribute(slot) !== value) element.setAttribute(slot, value);
+      };
+      function bind(element, slot, key, params, read) {
+        if (slot !== 'text' && !attributes.includes(slot)) throw new Error('Unsupported NAW display attribute.');
+        const entry = { key, params, read };
+        paint(element, slot, entry);
+        let slots = owned.get(element);
+        if (!slots) { slots = new Map(); owned.set(element, slots); element.setAttribute(marker, ''); }
+        slots.set(slot, entry);
+      }
+      function unbind(element, slot = 'text') {
+        const slots = owned.get(element);
+        slots?.delete(slot);
+        if (!slots?.size) { owned.delete(element); element.removeAttribute(marker); }
+      }
+      function template(root) {
+        for (const element of root.querySelectorAll('[data-naw-text], [data-naw-aria-label], [data-naw-title], [data-naw-placeholder], [data-naw-aria-description], [data-naw-data-order-hint]')) {
+          for (const slot of ['text', ...attributes]) {
+            const attribute = 'data-naw-' + slot;
+            if (!element.hasAttribute(attribute)) continue;
+            bind(element, slot, element.getAttribute(attribute)); element.removeAttribute(attribute);
+          }
+        }
+      }
+      function refresh(root) {
+        for (const element of root.querySelectorAll('[' + marker + ']')) {
+          for (const [slot, entry] of owned.get(element) || []) paint(element, slot, entry);
+        }
+      }
+      return { text: (element, key, params) => bind(element, 'text', key, params),
+        // Project callbacks format own compound labels and recorded dates. They
+        // must be pure; never pass a native action, actor or API call here.
+        computed: (element, slot, read) => bind(element, slot, undefined, undefined, read),
+        attribute: bind, unbind, template, refresh };
+    }
     function mountWorkspace(ui) {
       /* WORKSPACE_VIEW */
     }
     return {
-      inject: ['slots', 'layout', 'locale'],
+      inject: ['slots', 'layout', 'locale', 'configForms'],
       apply(ctx) {
+        ctx.effect(() => ctx.locale.register('naw', window.nativeWorkspaceMessages));
+        const t = ctx.locale.bind('naw');
+        const subscribeLocale = callback => ctx.locale.subscribe(callback);
+        const localeSnapshot = () => ctx.locale.getSnapshot();
+        const display = createDisplayBindings(t);
+        ctx.effect(() => subscribeLocale(() => display.refresh(document)));
+        const errorText = error => window.nativeWorkspaceLocale.errorText(localeSnapshot().active, error);
+        const displayText = (raw, message) => window.nativeWorkspaceLocale.displayText(localeSnapshot().active, raw, message);
+        function showError(element, error) {
+          const candidate = window.nativeWorkspaceLocale.displayMessage(error?.uiMessage);
+          const message = candidate && ['zh', 'en'].some(locale => window.nativeWorkspaceLocale.format(locale, candidate.key, candidate.params) === error?.message) ? candidate : null;
+          if (message?.cause || message?.parts) {
+            const original = { message: error.message, uiMessage: message };
+            display.computed(element, 'text', () => errorText(original));
+          }
+          else if (message) display.text(element, message.key, message.params);
+          else {
+            display.unbind(element);
+            if (typeof error?.message === 'string' && error.message) element.textContent = error.message;
+            else display.text(element, 'error.operation');
+          }
+        }
+        const language = {
+          text: t, subscribe: subscribeLocale, getSnapshot: localeSnapshot,
+          preference: () => ctx.configForms.get('locale').getSnapshot().value?.preference,
+          async set(id) {
+            if (!['zh', 'en'].includes(id)) throw new Error(t('locale.notSaved'));
+            let accepted = false;
+            try { accepted = await ctx.configForms.get('locale').set('preference', id); } catch {}
+            // LocaleRuntime adopts only the Host's accepted mirror. Never call
+            // its optimistic setLocale or treat changed paint as a save receipt.
+            if (accepted !== true) throw new Error(t('locale.notSaved'));
+          },
+        };
         // The workspace occupies a DSH global panel. It has native sessions,
         // not DSH model-loop sessions; expose explicit absence to the shell.
         if (!ctx.get('uiSession')) {
@@ -26,9 +106,16 @@ window.__ModuleLoader__.load({
           }));
           ctx.effect(() => ctx.slots.provideRoot({ hooks: { sessions: source({ byId: {} }) } }));
         }
+        // Keep the existing menu and its focused item mounted. Only its label
+        // child observes locale; action IDs, enablement and callbacks stay fixed.
+        function MenuMessage({ item }) {
+          React.useSyncExternalStore(subscribeLocale, localeSnapshot, localeSnapshot);
+          return item.labelRead ? item.labelRead() : t(item.labelKey, item.labelParams);
+        }
         let mounted = 0, cleanup;
         const markdownRoots = new Map();
         function MessageMarkdown({ text, streaming, onLayout, source }) {
+          React.useSyncExternalStore(subscribeLocale, localeSnapshot, localeSnapshot);
           const pendingCopy = React.useRef(new WeakSet());
           const pendingFile = React.useRef(null), alive = React.useRef(true);
           const [fileStatus, setFileStatus] = React.useState(''), [fileBusy, setFileBusy] = React.useState(false);
@@ -45,8 +132,8 @@ window.__ModuleLoader__.load({
             const original = source && { ...source };
             Promise.resolve().then(() => window.workspace.openMessageFile(original, file, options)).then(result => {
               if (result?.accepted !== true) throw Error('系统打开结果未确认，请先检查系统窗口。');
-              if (requestVisible() && options?.line) setFileStatus('文件已交给系统打开；行号暂未定位。');
-            }).catch(error => { if (requestVisible()) setFileStatus(`无法打开文件：${error.message || error}`); }).finally(() => {
+              if (requestVisible() && options?.line) setFileStatus({ key: 'markdown.fileOpened' });
+            }).catch(error => { if (requestVisible()) setFileStatus({ key: 'markdown.openFileFailed', params: { error: error.message || String(error) } }); }).finally(() => {
               const current = requestVisible();
               if (pendingFile.current === request) pendingFile.current = null;
               if (current) setFileBusy(false);
@@ -72,11 +159,12 @@ window.__ModuleLoader__.load({
           };
           return React.createElement('div', { className: 'naw-markdown', onClickCapture: copy, onMouseOverCapture: showTarget, onFocusCapture: showTarget, 'aria-busy': fileBusy || undefined },
             React.createElement(MarkdownDelegateProvider, { openFile, openExternalLink: href => {
-              Promise.resolve().then(() => window.workspace.openExternal(href)).catch(error => { if (stillVisible()) setFileStatus(`无法打开链接：${error.message || error}`); });
-            } }, React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: '复制', copiedLabel: '已复制' }, footnotes: '注释' } })),
-            fileStatus ? React.createElement('p', { role: 'status' }, fileStatus) : null);
+              Promise.resolve().then(() => window.workspace.openExternal(href)).catch(error => { if (stillVisible()) setFileStatus({ key: 'markdown.openLinkFailed', params: { error: error.message || String(error) } }); });
+            } }, React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: t('markdown.copy'), copiedLabel: t('markdown.copied') }, footnotes: t('markdown.footnotes') } })),
+            fileStatus ? React.createElement('p', { role: 'status' }, t(fileStatus.key, fileStatus.params)) : null);
         }
         const ui = {
+          language, display, displayText, errorText, showError, createError: window.nativeWorkspaceLocale.createError, createNotice: window.nativeWorkspaceLocale.createNotice,
           revealSidebar() {
             if (document.querySelector('.naw[data-native-surface="sidebar"]')?.dataset.collapsed === 'true') ctx.layout.toggleSidebar();
           },
@@ -123,7 +211,7 @@ window.__ModuleLoader__.load({
                 return () => cancelAnimationFrame(frame);
               }, []);
               return React.createElement(Menu, {
-                open: true, portal: !modal, autoFocus: true, items, getAnchorRect,
+                open: true, portal: !modal, autoFocus: true, items: items.map(item => item.labelKey || item.labelRead ? { ...item, label: React.createElement(MenuMessage, { item }) } : item), getAnchorRect,
                 listClassName: 'naw-session-menu', onClose: close,
                 onSelect: action => { close(); onSelect(action); },
               });
@@ -145,6 +233,7 @@ window.__ModuleLoader__.load({
           React.useLayoutEffect(() => {
             // These templates are build-time project markup, never model text.
             const parsed = new DOMParser().parseFromString(templates[kind], 'text/html');
+            display.template(parsed.body);
             ref.current.replaceChildren(...parsed.body.childNodes);
             mounted++;
             if (mounted === 2) cleanup = mountWorkspace(ui);

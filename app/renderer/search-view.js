@@ -14,7 +14,8 @@ function openSearch(scope = 'all') {
     roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread };
   const currentOption = $('search-scope').querySelector('[value="current"]');
   currentOption.disabled = !current();
-  currentOption.textContent = current() ? `当前会话：${current().name}` : '当前会话';
+  const focused = current();
+  ui.display.computed(currentOption, 'text', () => focused ? uiText('search.currentName', { name: focused.name }) : uiText('search.current'));
   $('search-scope').value = scope === 'current' && !current() ? 'room' : scope;
   $('search-input').value = ''; $('search-archived').checked = Boolean(current()?.archived);
   $('search-options').open = false;
@@ -30,17 +31,22 @@ function renderSearch() {
   for (const result of results) {
     const row = button('', () => openSearchResult(result), 'search-result');
     row.dataset.searchKey = result.key;
-    const source = result.provider ? `${result.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(result.sessionId)}` : '协作空间';
-    row.append(node('strong', result.name), node('small', `${source}${result.archived ? ' · 已归档' : ''}${result.role ? ` · ${result.role === 'user' || result.role === 'human' ? '你' : result.role === 'system' ? '事件' : 'Agent'}` : ''}`));
+    const metadata = node('small');
+    ui.display.computed(metadata, 'text', () => {
+      const source = result.provider ? (result.provider === 'claude' ? 'Claude' : 'Codex') + ' · ' + sessionShortId(result.sessionId) : uiText('search.sharedSpace');
+      return [source, result.archived && uiText('search.archivedFlag'), result.role && uiText(['user', 'human'].includes(result.role) ? 'reading.you' : result.role === 'system' ? 'search.event' : 'search.agent')].filter(Boolean).join(' · ');
+    });
+    row.append(node('strong', result.name), metadata);
     if (result.kind === 'message' || result.kind === 'shared') row.append(node('span', result.text));
     list.append(row);
   }
-  $('search-count').textContent = total ? `${Math.min(total, searchLimit)} / ${total} 条结果` : '没有匹配记录';
-  $('search-options-summary').textContent = `${{ all: '全部记录', current: '当前会话', room: '共享记录' }[$('search-scope').value]}${$('search-archived').checked ? ' · 含归档' : ''}`;
+  const shown = Math.min(total, searchLimit);
+  ui.display.computed($('search-count'), 'text', () => { const number = new Intl.NumberFormat(ui.language.getSnapshot().active); return total ? uiText('search.count', { shown: number.format(shown), total: number.format(total) }) : uiText('search.empty'); });
+  ui.display.computed($('search-options-summary'), 'text', () => [uiText({ all: 'search.allRecords', current: 'search.current', room: 'search.shared' }[$('search-scope').value] || 'search.allRecords'), $('search-archived').checked && uiText('search.includeArchived')].filter(Boolean).join(' · '));
   $('search-more').hidden = total <= searchLimit;
   $('search-more').disabled = searchLimit >= 600;
-  $('search-more').textContent = searchLimit >= 600 ? '请缩小搜索范围' : '显示更多';
-  if (!total) list.append(node('p', '试试会话名称或正文中的关键词。归档内容可在上方勾选。', 'quiet'));
+  ui.display.text($('search-more'), searchLimit >= 600 ? 'search.narrow' : 'common.more');
+  if (!total) { const label = node('p', undefined, 'quiet'); ui.display.text(label, 'search.emptyHelp'); list.append(label); }
 }
 function searchInputKey(event) {
   if (event.isComposing || event.keyCode === 229) return;
@@ -62,11 +68,11 @@ function searchResultKey(event) {
 }
 function finishSearch() {
   if ($('search-dialog').open) return;
-  clearTimeout(searchTimer); ui.clearMarkdown($('search-preview-body')); $('search-preview-body').textContent = '';
+  clearTimeout(searchTimer); ui.clearMarkdown($('search-preview-body')); ui.display.unbind($('search-preview-body')); ui.display.unbind($('search-preview-title')); $('search-preview-body').textContent = '';
   $('search-input').value = ''; $('search-archived').checked = false; $('search-scope').value = 'all'; $('search-options').open = false;
-  $('search-results').replaceChildren(); $('search-count').textContent = ''; $('search-preview-title').textContent = '';
+  $('search-results').replaceChildren(); ui.display.unbind($('search-count')); $('search-count').textContent = ''; $('search-preview-title').textContent = '';
   $('search-preview-copy').onclick = null; $('search-preview').hidden = true; $('search-more').hidden = true;
-  $('search-options-summary').textContent = '全部记录'; searchLimit = 60;
+  ui.display.text($('search-options-summary'), 'search.allRecords'); searchLimit = 60;
   if (!searchNavigating) (searchOpener?.isConnected && searchOpener.getClientRects().length ? searchOpener : $('search-button')).focus();
 }
 function pointToMessage(element, key, id, query = '') {
@@ -85,21 +91,24 @@ async function openSearchResult(result) {
   clearTimeout(searchTimer);
   if (result.kind === 'shared' || result.kind === 'room') {
     const room = spaceRecord(result.roomId || 'shared'), records = room ? [...room.messages, ...(room.events || [])] : [];
-    if (!room || result.messageId && !records.some(m => m.id === result.messageId)) { renderSearch(); toast('这条共享记录已移除，搜索结果已更新。'); return; }
+    if (!room || result.messageId && !records.some(m => m.id === result.messageId)) { renderSearch(); toast(uiText('search.sharedRemoved')); return; }
     if (room.archived) {
       const message = result.messageId ? records.find(m => m.id === result.messageId) : null;
-      const text = message?.text ?? `${room.name}\n\n${room.messages.length} 条共享消息。${room.notes ? `\n\n共享笔记：\n${room.notes}` : ''}`;
-      const body = $('search-preview-body'); ui.clearMarkdown(body);
-      body.textContent = text;
-      $('search-preview-title').textContent = `${room.name} · 已归档，只读`;
-      $('search-preview-copy').onclick = () => attempt(() => api.copy(text));
+      const previewText = () => message?.text ?? uiText('search.roomPreview', { name: room.name, count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(room.messages.length), notes: room.notes ? uiText('search.notes', { notes: room.notes }) : '' });
+      const body = $('search-preview-body'); ui.clearMarkdown(body); ui.display.unbind(body);
+      if (message) body.textContent = message.text;
+      else ui.display.computed(body, 'text', previewText);
+      ui.display.text($('search-preview-title'), 'search.archivedTitle', { name: room.name });
+      // Copy the current visible summary. The original recorded body is never
+      // translated, and an in-flight copy retains the text captured on click.
+      $('search-preview-copy').onclick = () => attempt(() => api.copy(previewText()));
       $('search-results').hidden = true; $('search-more').hidden = true; $('search-preview').hidden = false;
       $('search-preview-back').focus();
       return;
     }
   } else {
     const s = state.sessions.find(s => s.id === result.sessionId);
-    if (!s || (result.messageId && !s.messages.some(m => m.id === result.messageId))) { renderSearch(); toast('记录已变化，搜索结果已更新。'); return; }
+    if (!s || (result.messageId && !s.messages.some(m => m.id === result.messageId))) { renderSearch(); toast(uiText('search.changed')); return; }
   }
   const origin = searchOrigin, query = $('search-input').value;
   searchNavigating = true;
@@ -124,8 +133,8 @@ async function openSearchResult(result) {
 }
 async function returnToReading() {
   const target = searchReturn; if (!target) return;
-  if (target.selected !== 'room' && target.selected && !state.sessions.some(s => s.id === target.selected)) { toast('原会话已移除。'); return; }
-  if (target.selected === 'room' && (!spaceRecord(target.spaceId || 'shared') || spaceRecord(target.spaceId || 'shared').archived)) { toast('原工作区已归档或资料不可用。'); return; }
+  if (target.selected !== 'room' && target.selected && !state.sessions.some(s => s.id === target.selected)) { toast(uiText('search.sessionRemoved')); return; }
+  if (target.selected === 'room' && (!spaceRecord(target.spaceId || 'shared') || spaceRecord(target.spaceId || 'shared').archived)) { toast(uiText('search.roomUnavailable')); return; }
   searchReturn = null; $('return-reading').hidden = true;
   document.querySelectorAll('[data-search-target]').forEach(el => delete el.dataset.searchTarget);
   if (spaceId !== (target.spaceId || 'shared')) await selectSpace(target.spaceId || 'shared');

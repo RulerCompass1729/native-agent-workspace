@@ -1,9 +1,14 @@
 /* Views consume session capabilities; they never own native processes. */
 const api = window.workspace;
+const uiText = (key, params) => ui.language.text(key, params);
+const uiError = (key, params) => ui.createError(key, params);
 const $ = id => document.getElementById(id);
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 const button = (text, action, cls) => { const el = node('button', text, cls); el.type = 'button'; el.addEventListener('click', () => attempt(action)); return el; };
-const states = { starting: '正在启动', idle: '就绪', working: '正在工作', approval: '等待确认', stopping: '等待原生退出确认', disconnected: '已断开 · 原生尚未释放', recoverable: '等待恢复', ended: '已结束', background: '已转到后台运行', error: '需要检查' };
+const uiNode = (tag, key, params, cls) => { const el = node(tag, undefined, cls); ui.display.text(el, key, params); return el; };
+const uiButton = (key, action, cls, params) => { const el = button('', action, cls); ui.display.text(el, key, params); return el; };
+const states = { starting: 'state.starting', idle: 'state.idle', working: 'state.working', approval: 'state.approval', stopping: 'state.stopping', disconnected: 'state.disconnected', recoverable: 'state.recoverable', ended: 'state.ended', background: 'state.background', error: 'state.error' };
+const stateText = record => uiText(states[record.state] || 'state.unknown');
 // An unfollowed native /resume leaves the process running in another session.
 const switchedAway = record => record.state === 'stopping' && record.nativeContextPending?.reason === 'resume';
 function exhaustedRecovery(record) {
@@ -16,16 +21,16 @@ function exhaustedRecovery(record) {
   return recovery;
 }
 function recoveryStatusSuffix(recovery, prefix = true) {
-  return recovery ? (prefix ? ' · ' : '') + (recovery.reason === 'routing' ? '路由超时停下' : '满载停下') + ' · 已重试 ' + recovery.attempt + ' 次' : '';
+  return recovery ? (prefix ? ' · ' : '') + uiText(recovery.reason === 'routing' ? 'capacityBadge.routingStopped' : 'capacityBadge.capacityStopped') + uiText('capacityBadge.retried', { count: recovery.attempt }) : '';
 }
 const sessionStatus = (record, recoveryBadge = false) => {
-  const status = window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? '原生已切换会话' : record.claudeQuestion ? '等待回答' : states[record.state], !disconnected);
+  const status = window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? uiText('state.switched') : record.claudeQuestion ? uiText('state.question') : stateText(record), !disconnected, uiText);
   return status + recoveryStatusSuffix(recoveryBadge && exhaustedRecovery(record));
 };
 let state, owner, selected = '', mode = 'terminal', preference = 'terminal', folder = '', disconnected = false;
 let newDirectory = false, creatingSession = false;
 let gitWorktreePlan = null, gitWorktreeNonce = '', gitPreviewRevision = 0, gitPreviewLoading = false, gitPreviewTimer;
-let latestViewStorage;
+let latestViewStorage, latestViewStorageUiMessage;
 let roomSession = '', selectionRevision = 0, pendingMode;
 let roomSurface = 'overview', roomOverview;
 let panorama, panoramaOrigin, roomReturnReading;
@@ -89,14 +94,14 @@ function oldBackendJoin(record) {
 }
 async function addToSpace(id, destination) {
   const room = spaceRecord(destination), record = state.sessions.find(s => s.id === id);
-  if (!room || room.archived || !record || record.archived) throw Error('空间或会话已变化，没有加入。');
+  if (!room || room.archived || !record || record.archived) throw uiError("error.spaceChanged");
   if (!window.nativeWorkspaceSpaces.canJoin(record, destination)) throw Error(oldBackendJoin(record));
   const receipt = await api.spaceAction(destination, 'join', [id, true]);
   updateState(await api.initial()); render();
-  if (!receipt?.changed) return toast(`已在「${room.name}」中，其他归属保留。`);
-  toast(`已加入「${room.name}」；原来的空间归属保留。`, { label: '撤销加入', name: `撤销加入「${room.name}」`, run: async () => {
+  if (!receipt?.changed) return toastMessage("toast.alreadyMember", { arg1: room.name });
+  toastMessage("toast.joinedSpace", { arg1: room.name }, { label: uiText('action.undoJoin'), labelKey: 'action.undoJoin', nameKey: 'action.undoJoinName', params: { name: room.name }, run: async () => {
     await api.spaceAction(destination, 'join', [id, false, { revision: receipt.revision, nativeId: receipt.nativeId }]);
-    updateState(await api.initial()); render(); toast(`已撤销这次加入「${spaceRecord(destination)?.name || room.name}」。`);
+    updateState(await api.initial()); render(); toastMessage("toast.undoJoinDone", { arg1: spaceRecord(destination)?.name || room.name });
   } });
 }
 let sidebarLayout;
@@ -162,10 +167,10 @@ function sessionMessages(s) {
   if (legacyProgressOffline(s)) freezeLegacyProgress(s);
   const stale = cache.suspended || cache.refreshing || cache.unavailable;
   const rows = [...cache.items.values()].map(item => ({ ...item, id: `legacy-observation:${item.id}`, role: 'tool',
-    title: `${item.title || '原生过程'} · ${stale ? '最后记录' : '旧连接记录'}`, status: stale && ['running', 'streaming'].includes(item.status) ? 'unconfirmed' : item.status,
+    title: `${item.title || '原生过程'} · ${stale ? '最后记录' : '旧连接记录'}`, legacyOriginalTitle: item.title || '', legacyOriginalTitleUiMessage: item.uiTitleMessage, uiTitleMessage: ui.createNotice('notice.legacyTitle', { title: '', status: stale ? 'last' : 'old' }).uiMessage, status: stale && ['running', 'streaming'].includes(item.status) ? 'unconfirmed' : item.status,
     volatile: true, incomplete: item.truncated }));
-  if (stale) rows.push({ id: 'legacy-observation-offline', role: 'system', text: '连接状态尚未确认。保留最后收到的过程记录，当前运行情况未知。' });
-  if (cache.unavailable || cache.truncated) rows.push({ id: 'legacy-observation-gap', role: 'system', text: '旧连接的过程记录不完整，请核对原生终端。', incomplete: true });
+  if (stale) rows.push({ id: 'legacy-observation-offline', role: 'system', ...ui.createNotice('notice.legacyOffline') });
+  if (cache.unavailable || cache.truncated) rows.push({ id: 'legacy-observation-gap', role: 'system', ...ui.createNotice('notice.legacyGap'), incomplete: true });
   // Legacy records have no authoritative ordering against saved final replies.
   // Keep their own original order, rather than inventing a merged chronology.
   return s.messages.concat(rows);
@@ -206,8 +211,8 @@ function getSessionComposer(id) {
   for (const el of [form, ...form.querySelectorAll('[id]')]) el.removeAttribute('id');
   form.dataset.composerSession = id;
   binding = { id, column: false, visible: false, revision: 0, changing: false };
-  binding.ui = window.nativeWorkspaceComposer.create({ form,
-    onInput: () => saveSessionDraft(binding), onError: error => toast(error.message || '操作未完成。'),
+  binding.ui = window.nativeWorkspaceComposer.create({ form, nativeText: uiText('composer.nativeInput'),
+    onInput: () => saveSessionDraft(binding), onError: error => toastError(error),
     onFocus: () => { if (!binding.column && mode !== 'chat' && inputFocusAllowed()) attempt(() => switchMode('chat')); },
     onCompositionEnd: () => { if (binding.syncAfterComposition) { binding.syncAfterComposition = false; binding.ui.setValue(state.sessions.find(s => s.id === id)?.liveDraft || ''); } },
     onSubmit: () => submitSession(binding), onAction: () => sessionComposerAction(binding),
@@ -282,7 +287,7 @@ async function sessionComposerAction(binding) {
     if (revision !== selectionRevision || !composerCurrent(binding)) return;
     if (s.provider === 'codex') { updateState(await api.initial()); render(); if (composerCurrent(binding) && !binding.ui.input.readOnly && inputFocusAllowed()) binding.ui.input.focus(); return; }
     await switchMode('terminal');
-    if (current()?.id === s.id && mode === 'terminal') toast('请在此会话运行 /reload-plugins；连接成功后即可切回对话输入。');
+    if (current()?.id === s.id && mode === 'terminal') toastMessage("toast.reloadInputPlugin");
   } else if (action.kind === 'claim') await switchMode(s.chatAvailable === false && !s.legacyInputEligible ? 'terminal' : 'chat', true);
   else if (action.kind === 'resume') await api.resume(s.id);
 }
@@ -322,7 +327,7 @@ function renderColumnInput(host, record, visible) {
     if (!nativeVisible) binding.terminalDrag = null;
     else if (!binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(record.id));
   }
-  if (nativeVisible && nativeUsable(record) && record.terminalState?.alive) ensureTerminal(record.id).catch(error => toast(error.message));
+  if (nativeVisible && nativeUsable(record) && record.terminalState?.alive) ensureTerminal(record.id).catch(error => toastError(error));
   syncTerminalMount(record.id);
   return nativeVisible;
 }
@@ -485,7 +490,7 @@ async function returnToPanorama() {
 }
 function renderPanorama() {
   if (!panorama) panorama = window.nativeWorkspacePanorama.create({
-    host: $('panorama-view'), view: panoramaView,
+    host: $('panorama-view'), view: panoramaView, display: ui.display,
     label: s => participantLabel(s, state.sessions),
     onChange: next => {
       if (selected !== 'panorama' || panoramaView.returning) return;
@@ -499,13 +504,13 @@ function renderPanorama() {
       if (!record) throw Error('原会话已不可用，没有改为打开同名会话。');
       rememberPanoramaOrigin();
       await select(id, 'chat', roomSession, true);
-      if (source && !pointToMessage($('messages'), id, source.messageId)) toast('原文已不在当前保留记录中，没有打开其他消息。');
+      if (source && !pointToMessage($('messages'), id, source.messageId)) toastMessage('toast.selectionMissing');
     }),
     onSpace: id => attempt(async () => {
       if (!spaceRecord(id) || spaceRecord(id).archived) throw Error('原空间已不可用，没有改为打开其他空间。');
       rememberPanoramaOrigin(); await selectSpace(id);
     }),
-    onReadingLost: () => toast('原文已变化，原选区没有替换成其他内容。'),
+    onReadingLost: () => toastMessage('toast.selectionChanged'),
   });
   panorama.update(state, !disconnected);
 }
@@ -525,8 +530,9 @@ function renderRoomOverview() {
   const removedFocus = oldHeader && !members().some(s => s.id === oldHeader.dataset.memberId);
   if (!roomOverview) roomOverview = window.nativeWorkspaceCollaboration.create({
     host: $('collaboration-overview'), roomId: state.room.id,
+    display: ui.display, language: ui.language, showError: ui.showError,
     onMove: moveRoomMember,
-    onOrderError: error => toast(error.message || '顺序未更改。'),
+    onOrderError: error => error.message ? toastError(error) : toastMessage('collab.orderUnchanged'),
     label: s => participantLabel(s, state.sessions), messages: s => sessionMessages(s),
     renderMessages: (el, s, rows, key) => messageList(el, rows, false, key, { session: s, passive: true }),
     disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
@@ -536,7 +542,7 @@ function renderRoomOverview() {
     decorateHeader: (handle, record) => draggableSession(handle, record.id),
     onMemberMenu: openMemberMenu,
     onSource: (el, key, source) => {
-      if (!pointToMessage(el, key, source.messageId)) toast('这段原文已不在当前保留的记录中；没有改为打开其他消息。');
+      if (!pointToMessage(el, key, source.messageId)) toastMessage("toast.originalRemoved");
       attempt(persistView);
     },
   });
@@ -564,7 +570,7 @@ function updateState(next) {
   const before = new Map((state?.sessions || []).map(s => [s.id, s]));
   state = projectSpace({ ...state, ...next });
   for (const s of state.sessions || []) if (legacyProgressOffline(s)) freezeLegacyProgress(s);
-  if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
+  if (latestViewStorage !== undefined) { state.viewStorageWarning = latestViewStorage; state.viewStorageWarningUiMessage = latestViewStorageUiMessage; }
   for (const [id, binding] of sessionComposers) {
     const previous = before.get(id), after = state.sessions.find(s => s.id === id);
     if (previous && after && (previous.owner !== owner || after.owner !== owner)) {
@@ -613,7 +619,7 @@ function sessionTime(value) {
   if (!Number.isFinite(value)) return '';
   const date = new Date(value), now = new Date();
   if (!Number.isFinite(date.getTime())) return '';
-  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const time = date.toLocaleTimeString(ui.language.getSnapshot().active, { hour: '2-digit', minute: '2-digit' });
   return date.toDateString() === now.toDateString() ? time : `${date.getMonth() + 1}/${date.getDate()}${date.getFullYear() === now.getFullYear() ? '' : `/${date.getFullYear()}`} ${time}`;
 }
 function sessionActivityTime(s) {
@@ -623,9 +629,9 @@ function sessionActivityTime(s) {
   for (const m of Array.isArray(s.messages) ? s.messages : []) {
     if (!m?.volatile && m?.kind !== 'gap' && Number.isFinite(m?.time) && Number.isFinite(new Date(m.time).getTime())) latest = latest === null ? m.time : Math.max(latest, m.time);
   }
-  return latest === null ? '时间未知' : `推算 ${sessionTime(latest)}`;
+  return latest === null ? uiText('time.unknown') : uiText('time.estimated', { time: sessionTime(latest) });
 }
-const sessionTimes = s => `创建 ${sessionTime(s.createdAt) || '未记录'} · 最后活动 ${sessionActivityTime(s)}`;
+const sessionTimes = s => uiText('time.session', { created: sessionTime(s.createdAt) || uiText('time.unrecorded'), activity: sessionActivityTime(s) });
 function renderDraftRecovery(id) {
   const copies = draftRecoveries.get(id) || [], list = $('draft-recovery-list');
   $('draft-recovery').hidden = !copies.length;
@@ -636,8 +642,8 @@ function renderDraftRecovery(id) {
     const row = node('div', undefined, 'draft-recovery-copy'), area = node('textarea');
     area.value = text; area.readOnly = true; area.rows = 3; area.className = 'draft-recovery-text';
     if (!index) area.id = 'draft-recovery-text';
-    area.setAttribute('aria-label', `草稿副本 ${index + 1}`);
-    row.append(area, button('复制副本', () => api.copy(text), 'small'), button('删除此副本', () => changeDraftRecovery(id, 'discardDraftRecovery', text), 'small'));
+    ui.display.attribute(area, 'aria-label', 'draft.copyAria', { index: index + 1 });
+    row.append(area, uiButton('draft.copy', () => api.copy(text), 'small'), uiButton('draft.discard', () => changeDraftRecovery(id, 'discardDraftRecovery', text), 'small'));
     list.append(row);
   });
 }
@@ -686,32 +692,33 @@ function claimView(id, next, revision, takeControl = false, contextCurrent) {
   operation.then(clear, clear); return operation;
 }
 function soloAction(s, context = {}) {
-  if (!s || disconnected || s.archived) return { kind: 'none', label: s?.archived ? '已归档' : '未连接', hint: s?.archived ? '恢复会话后继续，草稿保留。' : '重新连接本机服务后继续，草稿保留。' };
-  if (s.transportDisconnected && canResume(s)) return { kind: 'resume', label: '继续原生会话', hint: '图形连接已断开；重接同一后台与会话，已有终端和草稿保留，不重发任务。' };
-  if (!nativeUsable(s)) return canResume(s)
-    ? { kind: 'resume', label: '继续原生会话', hint: '记录和草稿已保留；恢复不会重发旧任务。' }
-    : { kind: 'none', label: '暂不可发送', hint: '请检查原生会话状态。记录和草稿保留，不会自动重发。' };
-  if (s.owner !== owner) return { kind: 'claim', label: '接管此窗口', hint: '此窗口只读。接管后继续使用原会话，草稿保留。' };
-  if (interruptPending(s)) return { kind: 'send', label: '等待中断确认', hint: '正在等待原生中断确认，可以继续编辑草稿；不会自动发送。' };
-  if (s.nativeInputRequired) return { kind: 'terminal', label: '打开原生终端', hint: 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；这里的草稿保留，不会自动发送。' };
-  if (s.state === 'error' && s.failedTurnInputAvailable) return { kind: 'send', label: '发送 ↑', hint: '上次请求失败。可以编辑并发送新消息；不会自动重试或继续交接。' };
-  if (s.state === 'error' && (s.chatAvailable !== false || !s.legacyInputEligible || s.legacyInputPrepared)) return { kind: 'terminal', label: '打开原生终端', hint: '原生请求未完成。请查看上方的失败记录；草稿保留，不会自动重试。需要处理原生设置时可打开终端。' };
-  if (s.chatAvailable === false && s.legacyInputEligible && s.provider === 'codex') return { kind: 'connect', label: '接通原会话输入', hint: '连接正在运行的原生 Codex 会话，保留上下文、模型与权限设置；不会新建对话。' };
-  if (s.chatAvailable === false && s.legacyInputEligible) return s.legacyInputPrepared
-    ? { kind: 'terminal', label: '打开原生终端', hint: '在此会话运行一次 /reload-plugins，即可回到这里输入；无需重启。若原生提示需要 --force，请先保留现状。' }
-    : { kind: 'connect', label: '接通原会话输入', hint: '在当前工作目录添加本地输入插件，再在原生终端加载一次。保留当前进程、历史和草稿。' };
-  if (s.chatAvailable === false || s.state === 'starting') return { kind: 'terminal', label: '打开原生终端', hint: '请在原生终端继续。这里的草稿保留，不会自动粘贴或发送。' };
-  if ((context.column || focusedRoomMember()) && (context.mode || mode) === 'chat' && s.view !== 'chat') return { kind: 'chat', label: '启用对话输入', hint: '正在查看原会话；明确启用后可在这里输入，草稿保留。' };
-  if (s.legacyReaderPending && s.state === 'idle') return { kind: 'send', label: '发送 ↑', hint: '输入已接通；实时过程尚待更新。在原生终端运行 /reload-plugins 后生效，无需重启。' };
+  const choice = value => ({ ...value, label: uiText(value.labelKey), hint: uiText(value.hintKey) });
+  if (!s || disconnected || s.archived) return choice({ kind: 'none', labelKey: s?.archived ? 'composer.archived' : 'composer.disconnected', hintKey: s?.archived ? 'composer.archivedHint' : 'composer.disconnectedHint' });
+  if (s.transportDisconnected && canResume(s)) return choice({ kind: 'resume', labelKey: 'composer.resume', hintKey: 'composer.connectionLostHint' });
+  if (!nativeUsable(s)) return choice(canResume(s)
+    ? { kind: 'resume', labelKey: 'composer.resume', hintKey: 'composer.resumeHint' }
+    : { kind: 'none', labelKey: 'composer.unavailable', hintKey: 'composer.unavailableHint' });
+  if (s.owner !== owner) return choice({ kind: 'claim', labelKey: 'composer.claim', hintKey: 'composer.readOnlyHint' });
+  if (interruptPending(s)) return choice({ kind: 'send', labelKey: 'composer.waitInterrupt', hintKey: 'composer.interruptHint' });
+  if (s.nativeInputRequired) return choice({ kind: 'terminal', labelKey: 'composer.terminal', hintKey: 'composer.nativeInputHint' });
+  if (s.state === 'error' && s.failedTurnInputAvailable) return choice({ kind: 'send', labelKey: 'composer.send', hintKey: 'composer.failedHint' });
+  if (s.state === 'error' && (s.chatAvailable !== false || !s.legacyInputEligible || s.legacyInputPrepared)) return choice({ kind: 'terminal', labelKey: 'composer.terminal', hintKey: 'composer.errorHint' });
+  if (s.chatAvailable === false && s.legacyInputEligible && s.provider === 'codex') return choice({ kind: 'connect', labelKey: 'composer.connect', hintKey: 'composer.codexConnectHint' });
+  if (s.chatAvailable === false && s.legacyInputEligible) return choice(s.legacyInputPrepared
+    ? { kind: 'terminal', labelKey: 'composer.terminal', hintKey: 'composer.reloadHint' }
+    : { kind: 'connect', labelKey: 'composer.connect', hintKey: 'composer.pluginHint' });
+  if (s.chatAvailable === false || s.state === 'starting') return choice({ kind: 'terminal', labelKey: 'composer.terminal', hintKey: 'composer.useTerminalHint' });
+  if ((context.column || focusedRoomMember()) && (context.mode || mode) === 'chat' && s.view !== 'chat') return choice({ kind: 'chat', labelKey: 'composer.enableChat', hintKey: 'composer.enableChatHint' });
+  if (s.legacyReaderPending && s.state === 'idle') return choice({ kind: 'send', labelKey: 'composer.send', hintKey: 'composer.readerPendingHint' });
   // Native runs a plugin's queued prompt only once idle; text typed in the TUI reaches the running turn.
-  if (s.pendingQueue) return { kind: 'send', label: '等待原生接收', hint: '要等 Claude 空闲后才发送；想中途插话，请在原生终端输入。可先编辑后续草稿。' };
-  if (s.state === 'working' && s.queueAvailable && !s.approval) return { kind: 'send', label: '等本轮结束后发送 ↑', hint: '使用原生等待队列；保留当前工作，不强制中断。' };
-  if (s.state === 'working' && s.steerAvailable && s.activeTurnId && !s.approval) return { kind: 'send', label: '追加指令 ↑', hint: '发送到当前原生回合；不会另开回合或强制中断。' };
-  return { kind: 'send', label: '发送 ↑', hint: s.state === 'approval'
-    ? s.approvalResolved ? '确认已处理，等待原生状态更新；可以继续编辑草稿。'
-      : s.approval?.pending ? '已提交决定，等待原生确认；可以继续编辑草稿。'
-        : '请核对上方的原生确认；可以保留下一条草稿。'
-    : s.state === 'working' || s.pendingTag ? '正在回复，可以先编辑下一条。' : 'Enter 发送 · Shift Enter 换行' };
+  if (s.pendingQueue) return choice({ kind: 'send', labelKey: 'composer.waitNative', hintKey: 'composer.queuePendingHint' });
+  if (s.state === 'working' && s.queueAvailable && !s.approval) return choice({ kind: 'send', labelKey: 'composer.queue', hintKey: 'composer.queueHint' });
+  if (s.state === 'working' && s.steerAvailable && s.activeTurnId && !s.approval) return choice({ kind: 'send', labelKey: 'composer.steer', hintKey: 'composer.steerHint' });
+  return choice({ kind: 'send', labelKey: 'composer.send', hintKey: s.state === 'approval'
+    ? s.approvalResolved ? 'composer.approvedHint'
+      : s.approval?.pending ? 'composer.decisionPendingHint'
+        : 'composer.approvalHint'
+    : s.state === 'working' || s.pendingTag ? 'composer.workingHint' : 'composer.keyboardHint' });
 }
 function renderComposer(s) {
   renderDraftRecovery(s?.id);
@@ -722,33 +729,52 @@ function updateSessionComposer(binding, s, column) {
   const legacyDraft = (s?.legacyInputEligible || s?.nativeInputRequired) && s.owner === owner && !disconnected && !s.archived && ['connect', 'terminal'].includes(action.kind);
   const disabled = action.kind === 'none' || (action.kind === 'send' && (interruptPending(s) || s.pendingQueue || (s.state === 'working' && s.queueAvailable ? false : (s.state === 'working' && s.steerAvailable && s.activeTurnId ? s.pendingSteer : (s.state !== 'idle' && !(s.state === 'error' && s.failedTurnInputAvailable)) || s.pendingTag)) || s.approval || !binding.ui.input.value.trim() || pendingMode?.id === s.id || binding.changing || inputRecoveries.get(s.id)?.text.value));
   const identity = participantLabel(s, state.sessions);
+  const placeholderKey = column ? 'composer.placeholderName' : action.kind === 'send' ? 'composer.placeholder' : legacyDraft ? 'composer.editableDraft' : 'composer.preservedDraft';
+  const inputKey = column ? 'composer.inputName' : 'composer.input';
+  const hintKey = inputRecoveries.get(s.id)?.text.value ? 'composer.unconfirmedHint' : binding.changing || pendingMode?.id === s.id ? 'composer.changingHint' : column && action.hintKey === 'composer.keyboardHint' ? null : action.hintKey;
+  const actionName = () => ({ action: uiText(action.labelKey), name: identity });
   binding.ui.update({ readOnly: action.kind !== 'send' && !legacyDraft, submit: action.kind === 'send', disabled,
-    label: action.label, actionLabel: column ? `${action.label}：${identity}` : '',
-    placeholder: column ? `发送给 ${identity}…` : action.kind === 'send' ? '直接说你想做什么…' : legacyDraft ? '可以继续编辑草稿。' : '草稿保留在这里；请使用下方操作继续。',
-    inputLabel: column ? `发送给 ${identity} 的消息` : '发送给当前 agent 的消息',
-    hint: inputRecoveries.get(s.id)?.text.value ? '上一段原生输入未确认。草稿保留；请查看本会话的原生输入。' : binding.changing || pendingMode?.id === s.id ? '正在切换输入方式，草稿保留。' : column && action.hint === 'Enter 发送 · Shift Enter 换行' ? '' : action.hint,
+    label: action.label, actionLabel: column ? uiText('composer.actionName', actionName()) : '',
+    placeholder: uiText(placeholderKey, { name: identity }),
+    inputLabel: uiText(inputKey, { name: identity }),
+    hint: hintKey ? uiText(hintKey) : '',
     showNative: column && action.kind === 'send' && s.owner === owner, nativeDisabled: binding.changing || disconnected,
-    nativeLabel: `${identity}：原生输入`,
+    nativeLabel: uiText('composer.nativeName', { name: identity }),
   });
+  // Only presentation is subscribed. Never re-run this update or a native
+  // action when the locale changes; the same input and composition stay live.
+  ui.display.text(binding.ui.send, action.labelKey);
+  if (column) ui.display.attribute(binding.ui.send, 'aria-label', 'composer.actionName', actionName);
+  else ui.display.unbind(binding.ui.send, 'aria-label');
+  ui.display.attribute(binding.ui.input, 'placeholder', placeholderKey, { name: identity });
+  ui.display.attribute(binding.ui.input, 'aria-label', inputKey, { name: identity });
+  if (hintKey) ui.display.text(binding.ui.hint, hintKey);
+  else ui.display.unbind(binding.ui.hint);
+  ui.display.text(binding.ui.native, 'composer.nativeInput');
+  ui.display.attribute(binding.ui.native, 'aria-label', 'composer.nativeName', { name: identity });
 }
 function toast(text, action) {
   clearTimeout(toastTimer);
   const old = $('toast').querySelector('.toast-action');
   if (old === document.activeElement) $('toast-close').focus({ preventScroll: true });
-  old?.remove(); $('toast-text').textContent = text; $('toast').hidden = false;
+  old?.remove(); ui.display.unbind($('toast-text')); $('toast-text').textContent = text; $('toast').hidden = false;
   if (action) {
     const open = button(action.label, () => {
       if (!open.isConnected || $('toast').hidden) return;
       $('toast').hidden = true; return action.run();
     }, 'toast-action');
-    open.setAttribute('aria-label', action.name || action.label); $('toast').insertBefore(open, $('toast-close'));
+    if (action.labelKey) ui.display.text(open, action.labelKey, action.params);
+    if (action.nameKey) ui.display.attribute(open, 'aria-label', action.nameKey, action.params);
+    else if (action.labelKey && !action.name) ui.display.attribute(open, 'aria-label', action.labelKey, action.params);
+    else open.setAttribute('aria-label', action.name || action.label);
+    $('toast').insertBefore(open, $('toast-close'));
   } else toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500);
 }
 function sessionNotice(text, id) {
   const record = state.sessions.find(s => s.id === id);
-  toast(text, record && selected !== id && { label: '打开', name: `打开 ${participantLabel(record, state.sessions)}`, run: () => {
+  toast(text, record && selected !== id && { label: uiText('common.open'), labelKey: 'common.open', nameKey: 'action.openSession', params: { name: participantLabel(record, state.sessions) }, run: () => {
     if (selected === id) return;
-    if (!state.sessions.some(s => s.id === id)) throw Error('原会话记录已不可用。');
+    if (!state.sessions.some(s => s.id === id)) throw uiError("error.recordMissing");
     return select(id);
   } });
 }
@@ -765,8 +791,8 @@ function focusRemainingMember(origin, index) {
   focusAfterRemoval(origin, [cards[index]?.querySelector('.collaboration-member-more'), cards[index - 1]?.querySelector('.collaboration-member-more'), $('manage-members')]);
 }
 ui.copyCode = async text => {
-  try { await api.copy(text); toast('已复制'); }
-  catch (error) { toast('复制失败，请重试。'); throw error; }
+  try { await api.copy(text); toastMessage("toast.copied"); }
+  catch (error) { toastMessage("toast.copyFailed"); throw error; }
 };
 $('toast-close').onclick = () => { clearTimeout(toastTimer); $('toast').hidden = true; };
 // T-128: a notice with an action keeps no time limit, so keyboard and screen-
@@ -777,7 +803,10 @@ document.addEventListener('pointerdown', event => {
   if ($('toast').hidden || !$('toast').querySelector('.toast-action')) return;
   if (!(event.target instanceof Element && $('toast').contains(event.target) && event.target.closest('button'))) $('toast').hidden = true;
 }, true);
-async function attempt(action) { try { return await action(); } catch (error) { toast(error.message || '操作未完成。'); } }
+function toastMessage(key, params, action) { toast('', action); ui.display.text($('toast-text'), key, params); }
+function toastError(error) { toast(''); ui.showError($('toast-text'), error); }
+function sessionNoticeMessage(key, params, id) { sessionNotice('', id); ui.display.text($('toast-text'), key, params); }
+async function attempt(action) { try { return await action(); } catch (error) { toastError(error); } }
 function captureRoomView() {
   const view = roomViews[spaceId] ||= {};
   Object.assign(view, { sharedDraft: $('shared-input').value, roomSession, roomRecipient: roomRecipient(), roomMention: roomMention && { ...roomMention }, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo, roomSurface, draftRevision: roomDraftRevision, submitting: roomSubmitting });
@@ -806,7 +835,7 @@ function projectSpace(next) {
 function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarCollapsedGroups: [...sidebarCollapsedGroups], columnTerminalHeights, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 // Opening a space never changes which sessions the sidebar lists (T-132).
 async function selectSpace(id) {
-  if (!spaceRecord(id)) throw Error('这个空间的资料尚不可用，草稿保留。');
+  if (!spaceRecord(id)) throw uiError("error.spaceUnavailable");
   if (spaceId !== id) {
     captureReadingViews(); captureRoomView(); closeMentions(); suspendColumnInputs();
     roomOverview?.dispose(); roomOverview = null; spaceId = id; state = projectSpace(state); restoreRoomView();
@@ -834,13 +863,13 @@ function renderSpaceNavigation() {
     row.nav.disabled = Boolean(room.archived); row.more.disabled = disconnected || Boolean(room.archived) || renameTarget?.id === 'room' && renameTarget.roomId === room.id;
     row.nav.className = `room-nav ${roomTone(room.id)}`; row.nav.classList.toggle('active', selected === 'room' && spaceId === room.id);
     if (selected === 'room' && spaceId === room.id) row.nav.setAttribute('aria-current', 'page'); else row.nav.removeAttribute('aria-current');
-    row.nav.setAttribute('aria-label', `打开协作空间「${room.name}」 · ${members(room.id).length} 位成员`); row.nav.title = row.nav.getAttribute('aria-label');
+    const navParams = () => ({ name: room.name, count: members(room.id).length }); ui.display.attribute(row.nav, 'aria-label', 'sidebar.spaceNav', navParams); ui.display.attribute(row.nav, 'title', 'sidebar.spaceNav', navParams);
     row.name.textContent = room.name; row.count.textContent = members(room.id).length;
-    row.more.setAttribute('aria-label', `空间操作：${room.name}`); row.more.title = row.more.getAttribute('aria-label');
+    ui.display.attribute(row.more, 'aria-label', 'sidebar.spaceActions', { name: room.name }); ui.display.attribute(row.more, 'title', 'sidebar.spaceActions', { name: room.name });
   }
   const active = allSpaces().filter(r => !r.archived);
   $('workspace-empty').hidden = Boolean(active.length);
-  $('workspace-group-summary').textContent = `${active.length} 个空间`;
+  ui.display.text($('workspace-group-summary'), 'sidebar.spaceCount', { count: active.length });
 }
 function openSpaceCreate() {
   $('space-create-name').value = ''; $('space-create-error').hidden = true; $('confirm-space-create').disabled = false;
@@ -854,7 +883,7 @@ function mergeCheckbox(text, checked, change) {
   const label = node('label', undefined, 'merge-option'), input = node('input'); input.type = 'checkbox'; input.checked = checked;
   input.onchange = () => change(input.checked); label.append(input, node('span', text)); return { label, input };
 }
-function mergeError(message) { $('space-merge-error').textContent = message || ''; $('space-merge-error').hidden = !message; }
+function mergeError(message) { if (message && typeof message !== 'string') ui.showError($('space-merge-error'), message); else { ui.display.unbind($('space-merge-error')); $('space-merge-error').textContent = message || ''; } $('space-merge-error').hidden = !message; }
 function mergeButtons(preview, record = false) {
   $('space-merge-options').hidden = preview; $('space-merge-preview').hidden = !preview;
   $('preview-space-merge').hidden = preview; $('back-space-merge').hidden = !preview || record;
@@ -868,53 +897,56 @@ function renderMergeChoices() {
   for (const session of state.sessions.filter(session => !session.archived && chosen.some(room => inSpace(session, room.id)))) {
     const available = Boolean(session.nativeId) && (!Array.isArray(session.serviceCapabilities) || session.serviceCapabilities.includes('collaborationSpacesV1'));
     if (!draft.memberChoices.has(session.id)) draft.memberChoices.set(session.id, available);
-    const field = mergeCheckbox(participantLabel(session, state.sessions) + (!available ? ' · 当前后台不可加入新空间' : ''), available && draft.memberChoices.get(session.id), checked => draft.memberChoices.set(session.id, checked));
+    const field = mergeCheckbox('', available && draft.memberChoices.get(session.id), checked => draft.memberChoices.set(session.id, checked));
+    ui.display.computed(field.label.lastElementChild, 'text', () => participantLabel(session, state.sessions) + (!available ? uiText('merge.memberUnavailable') : ''));
     field.input.disabled = !available; field.input.dataset.mergeMember = session.id; $('space-merge-members').append(field.label);
   }
   for (const room of chosen) {
     const eligible = room.messages.filter(window.nativeWorkspaceSpaces.completedSharedRecord);
     if (!draft.selections.has(room.id)) draft.selections.set(room.id, { messages: new Set(eligible.map(message => message.id)), files: new Set((room.files || []).map(file => file.id)), events: new Set((room.events || []).map(event => event.id)), notes: true });
-    const choice = draft.selections.get(room.id), details = node('details'), summary = node('summary', `${mergeSourceLabel(room, draft.rooms)} · ${eligible.length} 条完整记录`), body = node('div');
+    const choice = draft.selections.get(room.id), details = node('details'), summary = uiNode('summary', 'merge.selectionSummary', () => ({ name: mergeSourceLabel(room, draft.rooms), count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(eligible.length) })), body = node('div');
     details.append(summary, body); let built = false;
     details.ontoggle = () => {
       if (!details.open || built) return; built = true;
-      if (room.notes) body.append(mergeCheckbox('原空间笔记', choice.notes, checked => choice.notes = checked).label);
+      if (room.notes) { const field = mergeCheckbox('', choice.notes, checked => choice.notes = checked); ui.display.text(field.label.lastElementChild, 'merge.sourceNotes'); body.append(field.label); }
       for (const [title, records, selectedIds, text] of [
-        ['共享记录', eligible, choice.messages, message => `${message.name || message.role} · ${message.text.slice(0, 140) || '原生状态记录'}`],
-        ['本机文件引用', room.files || [], choice.files, file => file.name],
-        ['空间历史事件', room.events || [], choice.events, event => event.text.slice(0, 140)],
+        ['merge.records', eligible, choice.messages, message => `${message.name || message.role} · ${message.text.slice(0, 140) || uiText('merge.nativeStatus')}`],
+        ['merge.files', room.files || [], choice.files, file => file.name],
+        ['merge.events', room.events || [], choice.events, event => ui.displayText(event.text, event.uiMessage).slice(0, 140)],
       ]) {
         if (!records.length) continue;
-        const section = node('fieldset'), legend = node('legend', title), inputs = [];
-        section.append(legend, mergeCheckbox('全部选择', records.every(record => selectedIds.has(record.id)), checked => {
+        const section = node('fieldset'), legend = uiNode('legend', title), inputs = [];
+        const all = mergeCheckbox('', records.every(record => selectedIds.has(record.id)), checked => {
           for (const record of records) checked ? selectedIds.add(record.id) : selectedIds.delete(record.id);
           for (const input of inputs) input.checked = checked;
-        }).label);
+        });
+        ui.display.text(all.label.lastElementChild, 'merge.selectAll'); section.append(legend, all.label);
         for (const record of records) {
           const field = mergeCheckbox(text(record), selectedIds.has(record.id), checked => checked ? selectedIds.add(record.id) : selectedIds.delete(record.id));
-          field.input.setAttribute('aria-label', `导入 ${room.name} ${title} ${record.id}`); inputs.push(field.input); section.append(field.label);
-          if (record.text) { const full = node('details'), label = node('summary', '原文'); full.append(label, node('pre', record.text)); section.append(full); }
+          ui.display.computed(field.label.lastElementChild, 'text', () => text(record));
+          ui.display.attribute(field.input, 'aria-label', 'merge.importAction', () => ({ name: room.name, kind: uiText(title), id: record.id })); inputs.push(field.input); section.append(field.label);
+          if (record.text) { const full = node('details'), label = uiNode('summary', 'merge.original'); full.append(label, node('pre', record.text)); section.append(full); }
         }
         body.append(section);
       }
       const omitted = room.messages.length - eligible.length;
-      if (omitted) body.append(node('p', `${omitted} 条未完成或未确认的记录留在原空间。`, 'quiet'));
+      if (omitted) body.append(uiNode('p', 'merge.omitted', () => ({ count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(omitted) }), 'quiet'));
     };
     $('space-merge-selection').append(details);
   }
   $('preview-space-merge').disabled = chosen.length < 2 || disconnected;
 }
 function openSpaceMerge(origin = spaceId) {
-  if (!state.capabilities?.includes('spaceMergeV1')) return toast('当前后台尚不支持合并快照；原空间与草稿保留。');
+  if (!state.capabilities?.includes('spaceMergeV1')) return toastMessage('merge.unsupported');
   const rooms = allSpaces().filter(room => !room.archived && !room.unavailable);
-  if (rooms.length < 2) return toast('请先准备至少两个协作空间。');
+  if (rooms.length < 2) return toastMessage('merge.needTwo');
   const ticket = openTransientDialog('space-merge-dialog');
   mergeDialog = { ticket, rooms: structuredClone(rooms), sourceInputs: new Map(), memberChoices: new Map(), selections: new Map(), batch: null, record: null };
-  $('space-merge-title').textContent = '合并协作空间'; $('space-merge-name').value = '合并空间'; $('space-merge-disposition').value = 'keep';
-  $('space-merge-sources').replaceChildren(); $('space-merge-preview').replaceChildren(); mergeError(''); mergeButtons(false);
+  ui.display.text($('space-merge-title'), 'merge.title'); $('space-merge-name').value = uiText('merge.defaultName'); $('space-merge-disposition').value = 'keep';
+  $('space-merge-sources').replaceChildren(); ui.display.unbind($('space-merge-preview')); $('space-merge-preview').replaceChildren(); mergeError(''); mergeButtons(false);
   for (const room of rooms) {
     const label = mergeSourceLabel(room, rooms), field = mergeCheckbox(label, room.id === origin, renderMergeChoices); field.input.value = room.id;
-    field.input.setAttribute('aria-label', `来源空间：${label}`); mergeDialog.sourceInputs.set(room.id, field.input); $('space-merge-sources').append(field.label);
+    ui.display.attribute(field.input, 'aria-label', 'merge.sourceAction', { name: label }); mergeDialog.sourceInputs.set(room.id, field.input); $('space-merge-sources').append(field.label);
   }
   renderMergeChoices(); $('space-merge-name').focus();
 }
@@ -925,44 +957,50 @@ function mergeSpec() {
     selections: sourceIds.map(roomId => { const choice = draft.selections.get(roomId); return { roomId, messageIds: [...choice.messages], fileIds: [...choice.files], eventIds: [...choice.events], includeNotes: choice.notes }; }) };
 }
 function renderMergeBatch(batch, record) {
-  const element = $('space-merge-preview'); element.replaceChildren(node('h3', batch.name));
-  element.append(node('p', `${batch.memberIds.length} 个成员 · ${batch.blocks.reduce((n, block) => n + block.entries.length, 0)} 条完整记录 · ${(batch.bytes / 1024).toFixed(1)} KB`));
-  element.append(node('p', batch.disposition === 'archive' ? '确认后归档原空间，暂停它们的后续交接；已开始的工作可能继续。原记录可恢复。' : '原空间继续独立使用；后续新内容不会自动同步到新空间。'));
+  const element = $('space-merge-preview'); ui.display.unbind(element); element.replaceChildren(node('h3', batch.name));
+  element.append(uiNode('p', 'merge.previewSummary', () => { const number = new Intl.NumberFormat(ui.language.getSnapshot().active); return { members: number.format(batch.memberIds.length), records: number.format(batch.blocks.reduce((n, block) => n + block.entries.length, 0)), size: new Intl.NumberFormat(ui.language.getSnapshot().active, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(batch.bytes / 1024) }; }));
+  element.append(uiNode('p', batch.disposition === 'archive' ? 'merge.archiveHelp' : 'merge.keepHelp'));
   for (const block of batch.blocks) {
-    const section = node('details'), summary = node('summary', `${mergeSourceLabel({ id: block.roomId, name: block.name }, batch.sources)} · ${block.entries.length} 条记录 · ${block.files.length} 个文件引用`); section.append(summary);
-    if (block.notes) { section.append(node('h4', '原笔记'), node('pre', block.notes)); }
-    for (const entry of block.entries) { const original = node('details'); original.append(node('summary', `${entry.payload.name || entry.payload.role} · ${entry.payload.text.slice(0, 100) || '原生状态记录'}`), node('pre', entry.payload.text)); section.append(original); }
+    const section = node('details'), summary = uiNode('summary', 'merge.blockSummary', () => { const number = new Intl.NumberFormat(ui.language.getSnapshot().active); return { name: mergeSourceLabel({ id: block.roomId, name: block.name }, batch.sources), records: number.format(block.entries.length), files: number.format(block.files.length) }; }); section.append(summary);
+    if (block.notes) { section.append(uiNode('h4', 'merge.originalNotes'), node('pre', block.notes)); }
+    for (const entry of block.entries) { const original = node('details'); const label = node('summary'); ui.display.computed(label, 'text', () => (entry.payload.name || entry.payload.role) + ' · ' + (entry.payload.text.slice(0, 100) || uiText('merge.nativeStatus'))); original.append(label, node('pre', entry.payload.text)); section.append(original); }
     for (const file of block.files) section.append(node('p', file.name));
-    if (block.omitted.length) section.append(node('p', `${block.omitted.length} 条未完成或未确认记录留在来源中。`, 'quiet'));
-    if (block.pending) section.append(node('p', '来源仍有工作；晚到输出不会补入这个快照。', 'quiet'));
+    if (block.omitted.length) section.append(uiNode('p', 'merge.omittedSource', () => ({ count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(block.omitted.length) }), 'quiet'));
+    if (block.pending) section.append(uiNode('p', 'merge.pending', undefined, 'quiet'));
     element.append(section);
   }
   $('confirm-space-merge').disabled = Boolean(batch.conflicts.length);
-  if (batch.conflicts.length) element.append(node('p', '同一原生会话存在多个归属记录，请先核对；没有合并或派发。', 'warning'));
+  if (batch.conflicts.length) element.append(uiNode('p', 'merge.conflict', undefined, 'warning'));
   if (record) {
-    const stage = { preparing: '目标保存待核对', joining: '成员待核对', archiving: '来源归档中', ready: '新空间已保存', partial: '有步骤待核对', failed: '合并未完成', undoing: '正在撤销组织关系', undone: '已撤销合并组织，来源与后来工作保留' }[record.stage];
-    element.prepend(node('p', stage || record.stage));
-    for (const source of record.sources) element.append(node('p', `${batch.sources.find(value => value.id === source.id)?.name || '来源'}：${batch.disposition === 'keep' ? '保留使用' : ({ done: '已归档', restored: '已恢复', pending: '未归档', failed: '待核对', changed: '后来有变化，保留现状' }[source.status] || source.status)}${source.error ? ` · ${source.error}` : ''}`));
+    const stage = ['preparing', 'joining', 'archiving', 'ready', 'partial', 'failed', 'undoing', 'undone'].includes(record.stage) ? 'merge.stage.' + record.stage : null;
+    element.prepend(stage ? uiNode('p', stage) : node('p', record.stage));
+    for (const source of record.sources) element.append(uiNode('p', 'merge.sourceStatus', () => ({
+      name: batch.sources.find(value => value.id === source.id)?.name || uiText('merge.sourceFallback'),
+      status: batch.disposition === 'keep' ? uiText('merge.source.kept') : ['done', 'restored', 'pending', 'failed', 'changed'].includes(source.status) ? uiText('merge.source.' + source.status) : source.status,
+      error: source.error ? ' · ' + (source.errorUiMessage ? ui.displayText(source.error, source.errorUiMessage) : source.error) : '',
+    })));
     $('recover-space-merge').hidden = !['failed', 'partial', 'preparing', 'joining'].includes(record.stage) || record.undoStarted;
     $('undo-space-merge').hidden = record.stage === 'undone';
-    mergeError(record.warning || record.failures.join('\n'));
+    const failureText = record.warning || record.failures.join('\n'), failureMessage = record.warning ? record.warningUiMessage : record.failuresUiMessage;
+    mergeError(failureText && failureMessage ? { message: failureText, uiMessage: failureMessage } : failureText);
   }
 }
 async function openMergeRecord(id) {
   const room = spaceRecord(id); if (!room?.merge) return;
   const ticket = openTransientDialog('space-merge-dialog'); mergeDialog = { ticket, record: null, batch: null, targetId: id };
-  $('space-merge-title').textContent = '合并详情'; mergeButtons(true, true); mergeError(''); $('space-merge-preview').textContent = '正在核对保存记录…';
+  ui.display.text($('space-merge-title'), 'merge.details'); mergeButtons(true, true); mergeError('');
+  ui.display.unbind($('space-merge-preview')); $('space-merge-preview').replaceChildren(); ui.display.text($('space-merge-preview'), 'merge.checking');
   for (const key of ['open-space-merge-target', 'undo-space-merge', 'recover-space-merge']) $(key).disabled = true;
   try {
     const record = await api.spaceMerge('status', { operationId: room.merge.operationId });
     if (!currentDialogTicket(ticket)) return;
     mergeDialog.record = record; mergeDialog.batch = record.batch; renderMergeBatch(record.batch, record);
     for (const key of ['open-space-merge-target', 'undo-space-merge', 'recover-space-merge']) $(key).disabled = false;
-  } catch (error) { if (currentDialogTicket(ticket)) mergeError(error.message); else toast(error.message); }
+  } catch (error) { if (currentDialogTicket(ticket)) mergeError(error); else toastError(error); }
 }
 function openSpaceRegionMenu(point, anchor = $('new-space')) {
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
-  roomMenu = ui.menu({ items: [{ id: 'create', label: '新建协作空间…' }, { id: 'merge', label: '合并协作空间…', disabled: allSpaces().filter(room => !room.archived).length < 2 }], getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(), onSelect: action => action === 'merge' ? openSpaceMerge() : openSpaceCreate(), onClose: () => { roomMenu = null; if (anchor.isConnected) anchor.focus({ preventScroll: true }); } });
+  roomMenu = ui.menu({ items: [{ id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }], getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(), onSelect: action => action === 'merge' ? openSpaceMerge() : openSpaceCreate(), onClose: () => { roomMenu = null; if (anchor.isConnected) anchor.focus({ preventScroll: true }); } });
 }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession, passive = false) {
@@ -1012,7 +1050,7 @@ async function detach(id, source = spaceId) {
   await api.spaceAction(source, 'join', [id, false]);
   // State reconciliation removes the reader in place. Opening its original
   // session is a separate human action, never another input/view claim.
-  sessionNotice('已脱出协作', id);
+  sessionNoticeMessage("toast.detached", undefined, id);
 }
 function focusTerminal(id = activeSessionId()) {
   if ((terminalCanInput(id) || canCaptureTerminal(id)) && inputFocusAllowed()) terminals.get(id).term.focus();
@@ -1036,7 +1074,7 @@ function canCaptureTerminal(id) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id), pending = entry?.viewInput;
   return Boolean(pending && currentTerminalDisplay(entry, record) && pending.revision === selectionRevision && id === activeSessionId() && mode === 'terminal' && entry.ready && entry.generation === (record?.connectionRevision || 0) && nativeUsable(record) && record.owner === pending.owner && !state?.roomStorageWarning && !disconnected);
 }
-function cancelViewInput(entry, error = new Error('切换已取消；这段输入没有发送。')) {
+function cancelViewInput(entry, error = uiError("error.switchCancelled")) {
   const pending = entry?.viewInput; if (!pending) return;
   entry.viewInput = null; pending.cancelled = true;
   if (pending.text) entry.preserveUnconfirmed(pending.text, error);
@@ -1073,10 +1111,10 @@ function applyTerminalDisplay() {
 }
 function pasteTerminal(text, id = activeSessionId()) {
   const entry = terminals.get(id);
-  if (!terminalCanInput(id)) throw new Error('请先连接并接管这个终端。');
+  if (!terminalCanInput(id)) throw uiError("error.terminalControl");
   if (!text) return;
-  if (text.length > 65500) throw new Error('粘贴内容过长，请分段粘贴。');
-  if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw new Error('原生程序尚未启用多行粘贴保护，请先分行粘贴。');
+  if (text.length > 65500) throw uiError("error.pasteTooLong");
+  if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw uiError("error.multilineProtection");
   entry.term.paste(text); focusTerminal(id);
 }
 const imageFiles = transfer => Array.from(transfer?.files || []).filter(file => file.type.startsWith('image/'));
@@ -1085,7 +1123,7 @@ async function pasteImages(files, staged, id = activeSessionId()) {
   const revision = selectionRevision, intended = state.sessions.find(s => s.id === id);
   if (column) {
     const fresh = await api.initial();
-    if (!composerCurrent(binding) || !binding.column || binding.revision !== bindingRevision) throw Error('此列已变化，图片没有放入。');
+    if (!composerCurrent(binding) || !binding.column || binding.revision !== bindingRevision) throw uiError("error.imageColumnChanged");
     updateState(fresh);
   }
   const s = state.sessions.find(s => s.id === id), nativeId = intended?.nativeId, control = s?.controlRevision, generation = intended?.connectionRevision || 0;
@@ -1094,19 +1132,19 @@ async function pasteImages(files, staged, id = activeSessionId()) {
     return fresh?.nativeId === nativeId && fresh.controlRevision === control && (fresh.connectionRevision || 0) === generation && !fresh.nativeContextPending && fresh.owner === owner && fresh.terminalState?.alive && ['idle', 'working'].includes(fresh.state) &&
       (column ? composerCurrent(binding) && binding.column && binding.revision === bindingRevision : selectionRevision === revision && activeSessionId() === id);
   };
-  if (!s || !['codex', 'claude'].includes(s.provider) || !valid()) throw Error('请先连接并接管原生终端；图片没有放入。');
-  if (!staged && (files.length > 4 || files.reduce((n, file) => n + file.size, 0) > 20 * 1024 * 1024)) throw Error('每次可放入 1–4 张图片，总大小不超过 20 MB。');
+  if (!s || !['codex', 'claude'].includes(s.provider) || !valid()) throw uiError("error.imageNeedsControl");
+  if (!staged && (files.length > 4 || files.reduce((n, file) => n + file.size, 0) > 20 * 1024 * 1024)) throw uiError("error.imageSize");
   const paths = staged || await api.stageImages(id, nativeId, await Promise.all(files.map(async file => new Uint8Array(await file.arrayBuffer()))));
-  if (!valid()) throw Error('会话或控制权已变化，图片没有放入终端。');
+  if (!valid()) throw uiError("error.imageOwnerChanged");
   let terminalRevision = revision;
-  if (column) { if (!await activateColumnNative(binding)) throw Error('未能启用此列的原生输入，图片没有放入。'); }
+  if (column) { if (!await activateColumnNative(binding)) throw uiError("error.imageInputUnavailable"); }
   else { const switching = switchMode('terminal'); terminalRevision = selectionRevision; await switching; }
   const fresh = state.sessions.find(s => s.id === id);
   if (fresh?.nativeId !== nativeId || fresh.nativeContextPending || fresh.owner !== owner || !['idle', 'working'].includes(fresh.state) ||
-      (column ? !composerCurrent(binding) || binding.revision !== bindingRevision : selectionRevision !== terminalRevision || activeSessionId() !== id) || !terminalCanInput(id)) throw Error('原生输入已变化，图片没有放入终端。');
+      (column ? !composerCurrent(binding) || binding.revision !== bindingRevision : selectionRevision !== terminalRevision || activeSessionId() !== id) || !terminalCanInput(id)) throw uiError("error.imageInputChanged");
   for (const file of paths) pasteTerminal(JSON.stringify(file), id);
   revealTerminalCursor(terminals.get(id));
-  toast('图片已放入本会话的原生输入框，确认后发送。对话草稿保留，分开发送。');
+  toastMessage("toast.imageStaged");
 }
 function bindImageInput(element, id) {
   element.addEventListener('paste', event => {
@@ -1132,10 +1170,10 @@ function revealTerminalCursor(entry) {
 function nativeVersionText(s) {
   if (s?.provider !== 'codex') return '';
   const status = disconnected && s.nativeVersion ? 'last-known' : s.nativeVersionStatus;
-  if (status === 'last-known') return `上次连接 Codex ${s.nativeVersion} · 当前未确认`;
-  if (status === 'verified') return `Codex ${s.nativeVersion} · 核心接口已验证`;
-  if (status === 'unverified') return `Codex ${s.nativeVersion || '版本未确认'} · 此版本尚未验证：工作中追加、原生上下文切换和历史同步请在终端核对`;
-  return 'Codex 原生版本未报告';
+  if (status === 'last-known') return uiText('native.versionLast', { version: s.nativeVersion });
+  if (status === 'verified') return uiText('native.versionVerified', { version: s.nativeVersion });
+  if (status === 'unverified') return uiText('native.versionUnverified', { version: s.nativeVersion || uiText('native.versionMissing') });
+  return uiText('native.versionNotReported');
 }
 // A late acknowledgement belongs to the opening that submitted it.
 const dialogTickets = new WeakMap();
@@ -1153,50 +1191,52 @@ async function showTrust(options) {
   const generation = ++trustRevision;
   const scope = options?.usageScope || (wasOpen ? trustScope : null);
   if (!wasOpen) trustClearRoom = spaceId;
-  $('clear-shared-history').textContent = `清除「${spaceRecord(trustClearRoom)?.name || '空间'}」的共享记录…`;
+  ui.display.text($('clear-shared-history'), 'trust.clearSpace', () => ({ name: spaceRecord(trustClearRoom)?.name || uiText('sidebar.space') }));
   trustScope = scope; dialog.dataset.mode = scope ? 'usage' : 'privacy';
-  dialog.querySelector('h2').textContent = scope ? `${scope.name} · 用量` : '隐私与用量';
+  ui.display.text(dialog.querySelector('h2'), scope ? 'trust.namedUsage' : 'privacy.open', scope ? () => ({ name: scope.kind === 'room' && scope.unavailable ? uiText('space.unavailable') : scope.name }) : undefined);
   if (!wasOpen) dialog.showModal();
   trustLoading = true;
-  $('refresh-trust').disabled = true; $('refresh-trust').textContent = '正在刷新…';
-  $('trust-refresh-status').textContent = '正在读取本机状态…';
+  $('refresh-trust').disabled = true; ui.display.text($('refresh-trust'), 'trust.refreshing');
+  ui.display.text($('trust-refresh-status'), 'trust.reading');
   dialog.setAttribute('aria-busy', 'true');
   const fresh = () => dialog.isConnected && dialog.open && generation === trustRevision;
   try {
   const snapshot = await api.initial();
   if (!fresh()) return;
-  if (scope && revision !== selectionRevision) { $('trust-refresh-status').textContent = '查看范围已变化，请关闭后重新查看。'; return; }
+  if (scope && revision !== selectionRevision) { ui.display.text($('trust-refresh-status'), 'trust.scopeChanged'); return; }
   const content = $('trust-status'); content.replaceChildren();
-  const section = (title, text) => { const item = node('section'); item.append(node('h3', title), node('p', text)); content.append(item); return item; };
+  const section = (titleKey, textKey, params) => { const item = node('section'); item.append(uiNode('h3', titleKey), uiNode('p', textKey, params)); content.append(item); return item; };
   if (!scope) {
-  section('数据去向', '会话副本和草稿保存在本机。原始终端画面只在本机内存暂存；对话中已显示的结构化工具输入与结果会随记录保存在本机，受保留上限约束，不自动分享。你发出的任务由所选原生服务处理；工具还可能访问其他网站。加入协作不会自动分享私人历史。');
-  section('模型调用与费用', '外壳未启用自动标题、摘要或模型路由。每轮核查由你确认 2–6 次回复上限和 10 分钟期限；原生工具和子 agent 的用量不受这些交接限制约束。');
+  section('trust.destinations', 'trust.destinationsHelp');
+  section('trust.modelCosts', 'trust.modelCostsHelp');
   const dispatches = snapshot.diagnostics?.dispatches;
-  section('应用派发记录', `${Number.isSafeInteger(dispatches) ? dispatches + ' 次' : '未报告'}。包含未确认或被拒绝的尝试，不代表付费调用；不含原生终端直接输入，也不是总用量或账单。普通后台计数从本次运行开始，旧会话输入连接保留本地发送计数。`);
-  if (snapshot.sessions.some(s => s.legacyInputEligible)) section('原会话输入连接', '接通 Claude 会在其工作目录添加本地插件，代码不含凭据；Codex 连接原生私有接口，不安装 Claude 插件。连接凭据留在本机私有目录。加载插件和切换界面不发起模型任务。独立输入仅记录派发元数据；你明确共享的正文、收件人名称会本地保存。清除共享记录会移除这些正文，保留派发计数；不会撤回 agent 已收到的内容。');
+  section('trust.dispatches', 'trust.dispatchesHelp', () => ({ count: Number.isSafeInteger(dispatches) ? uiText('trust.dispatchCount', { count: dispatches.toLocaleString(ui.language.getSnapshot().active) }) : uiText('version.unreported') }));
+  if (snapshot.sessions.some(s => s.legacyInputEligible)) section('trust.originalInput', 'trust.originalInputHelp');
   }
-  const usage = section(scope ? '原生读数' : '原生报告的用量', '来自原生接口的最近读数，可能延迟或缺少子任务。上下文占用、累计 token 和额度是不同指标；金额请在提供商账户核对。刷新此页不会发起模型请求。');
+  const usage = section(scope ? 'trust.readings' : 'trust.nativeUsage', 'trust.usageHelp');
   const sessions = !scope ? snapshot.sessions : scope.kind === 'room'
     ? snapshot.sessions.filter(s => inSpace(s, scope.roomId) && !s.archived)
     : snapshot.sessions.filter(s => s.id === scope.id && s.nativeId === scope.nativeId && !s.nativeContextPending);
   for (const s of sessions) {
     const item = node('section'); item.dataset.usageSession = s.id;
-    item.append(node('h4', participantLabel(s, snapshot.sessions)), node('p', s.nativeContextPending ? '原生上下文待核对' : s.model || '模型未报告'));
-    for (const line of window.nativeWorkspaceUsage.usageLines(s.provider, s.nativeContextPending ? null : s.usage)) item.append(node('p', line));
+    const model = s.model ? node('p') : null; if (model) ui.display.computed(model, 'text', () => ui.displayText(s.model, s.modelUiMessage));
+    item.append(node('h4', participantLabel(s, snapshot.sessions)), s.nativeContextPending ? uiNode('p', 'trust.contextPending') : model || uiNode('p', 'trust.modelMissing'));
+    const usageValue = s.nativeContextPending ? null : s.usage;
+    for (const [index] of window.nativeWorkspaceUsage.usageLines(s.provider, usageValue).entries()) { const line = node('p'); ui.display.computed(line, 'text', () => window.nativeWorkspaceUsage.usageLines(s.provider, usageValue, ui.language.getSnapshot().active)[index]); item.append(line); }
     usage.append(item);
   }
-  if (!sessions.length) usage.append(node('p', scope?.kind === 'session' ? '原会话或原生上下文已变化，请关闭后重新查看。' : '当前范围尚无会话。'));
+  if (!sessions.length) usage.append(uiNode('p', scope?.kind === 'session' ? 'trust.sessionChanged' : 'trust.noSessions'));
   if (!scope) {
-  section('后台与权限', `${snapshot.sessions.filter(s => !['ended', 'recoverable'].includes(s.state)).length} 个会话尚未确认结束。关闭窗口仍可能继续执行。原生进程、团队状态与权限请在终端核对；此处未测量 CPU、内存或完整网络出口。`);
-  section('版本与核查', `应用 ${snapshot.appVersion || '未报告'} · 新会话后台 ${snapshot.runtimeVersion || '未报告'}。${snapshot.services?.length > 1 ? `另保留 ${snapshot.services.length - 1} 个后台连接原有会话；没有复制原生会话。` : ''}可查看本机数据和公开实现。本地版本号不是签名验证；独立安全审计、完整流量与费用对账尚未完成。`);
+  section('trust.permissions', 'trust.permissionsHelp', { count: snapshot.sessions.filter(s => !['ended', 'recoverable'].includes(s.state)).length });
+  section('trust.versions', 'trust.versionsHelp', () => ({ app: snapshot.appVersion || uiText('version.unreported'), backend: snapshot.runtimeVersion || uiText('version.unreported'), retained: snapshot.services?.length > 1 ? uiText('trust.retainedBackends', { count: snapshot.services.length - 1 }) : '' }));
   }
   dialog.scrollTop = wasOpen ? scroll : 0;
-  $('trust-refresh-status').textContent = '已刷新本机状态 · ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const refreshedAt = Date.now(); ui.display.text($('trust-refresh-status'), 'trust.refreshed', () => ({ time: new Date(refreshedAt).toLocaleTimeString(ui.language.getSnapshot().active, { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }));
   } catch (error) {
-    if (fresh()) $('trust-refresh-status').textContent = '读取本机状态失败：' + (error.message || '请重试。');
+    if (fresh()) ui.display.text($('trust-refresh-status'), 'trust.failed', () => ({ error: error.message ? ui.errorText(error) : uiText('trust.retry') }));
   } finally {
     if (fresh()) {
-      trustLoading = false; $('refresh-trust').disabled = false; $('refresh-trust').textContent = '刷新状态';
+      trustLoading = false; $('refresh-trust').disabled = false; ui.display.text($('refresh-trust'), 'trust.refresh');
       dialog.removeAttribute('aria-busy');
     }
   }
@@ -1204,9 +1244,9 @@ async function showTrust(options) {
 $('privacy-dialog').addEventListener('close', event => {
   const dialog = event.currentTarget; if (dialog.open || !dialog.isConnected) return;
   trustRevision++; trustScope = null; trustLoading = false;
-  $('trust-status').replaceChildren(); $('trust-refresh-status').textContent = '';
-  $('refresh-trust').disabled = false; $('refresh-trust').textContent = '刷新状态';
-  dialog.querySelector('h2').textContent = '隐私与用量'; dialog.scrollTop = 0; dialog.removeAttribute('aria-busy');
+  $('trust-status').replaceChildren(); ui.display.unbind($('trust-refresh-status')); $('trust-refresh-status').textContent = '';
+  $('refresh-trust').disabled = false; ui.display.text($('refresh-trust'), 'trust.refresh');
+  ui.display.text(dialog.querySelector('h2'), 'privacy.open'); dialog.scrollTop = 0; dialog.removeAttribute('aria-busy');
   for (const detail of dialog.querySelectorAll('details')) detail.open = false;
 });
 
@@ -1215,7 +1255,7 @@ function openCreate(provider = 'claude') {
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
   $('initial-view').value = preference; $('session-name').value = ''; $('claude-history-id').value = ''; $('skip-permissions').checked = false;
   $('create-space-kind').value = 'independent'; $('create-space-existing').value = ''; $('create-space-name').value = ''; delete $('create-space-name').dataset.edited;
-  resetCreateDirectory(); $('create-error').textContent = ''; openTransientDialog('create-dialog'); createReadiness();
+  resetCreateDirectory(); ui.display.unbind($('create-error')); $('create-error').textContent = ''; openTransientDialog('create-dialog'); createReadiness();
 }
 // T-115: 开始一个会话 can also put the new session in a collaboration space. The order is session, then the space if it
 // is new, then the join. Each finished step stays on this opening's receipt, so 仅继续加入 runs only the steps left and
@@ -1321,22 +1361,22 @@ async function refreshGitPreview() {
   const ticket = dialogTickets.get($('create-dialog')), revision = gitPreviewRevision;
   const source = folder, relative = $('git-worktree-relative').value, nonce = gitWorktreeNonce;
   const current = () => currentDialogTicket(ticket) && revision === gitPreviewRevision && folder === source && $('git-worktree').checked;
-  gitPreviewLoading = true; $('git-worktree-preview').textContent = '正在读取已提交快照；尚未创建目录或分支。'; createReadiness();
+  gitPreviewLoading = true; ui.display.text($('git-worktree-preview'), 'create.gitReading'); createReadiness();
   try {
     const plan = await api.gitWorktreePreview(source, nonce, relative);
     if (!current()) return;
     gitWorktreePlan = plan;
-    $('git-worktree-preview').textContent = `来源：${plan.repository}\n提交：${plan.revision.slice(0, 12)} · 新分支：${plan.branch}\n工作目录：${plan.cwd}`;
+    ui.display.text($('git-worktree-preview'), 'create.gitPlan', { repository: plan.repository, revision: plan.revision.slice(0, 12), branch: plan.branch, cwd: plan.cwd });
     $('chosen-folder').textContent = plan.cwd;
   } catch (error) {
-    if (current()) { gitWorktreePlan = null; $('git-worktree-preview').textContent = error.message; }
+    if (current()) { gitWorktreePlan = null; ui.showError($('git-worktree-preview'), error); }
   } finally { if (current()) { gitPreviewLoading = false; createReadiness(); } }
 }
 function scheduleGitPreview() {
   invalidateGitPreview();
   $('chosen-folder').textContent = folder;
   if ($('git-worktree').checked) {
-    $('git-worktree-preview').textContent = '等你填写后读取副本内目录…';
+    ui.display.text($('git-worktree-preview'), 'create.gitWaiting');
     gitPreviewTimer = setTimeout(() => { gitPreviewTimer = null; refreshGitPreview(); }, 250);
   }
   createReadiness();
@@ -1352,7 +1392,12 @@ function renderNativeHistory() {
     const label = node('label', undefined, 'native-history-row'), input = document.createElement('input');
     input.type = 'radio'; input.name = 'native-history-choice'; input.value = row.nativeId; input.checked = row.nativeId === historySelected;
     input.disabled = historyLoading || historyImporting || row.existingIds?.length > 1;
-    const text = node('span'); text.append(node('strong', row.name || '未命名 Codex 会话'), node('small', row.cwd), node('small', `${row.updatedAt ? new Date(row.updatedAt * 1000).toLocaleString() : '更新时间未报告'}${row.existingIds?.length ? ' · 已在工作台中' : ''}`));
+    const text = node('span'), stamp = node('small');
+    ui.display.computed(stamp, 'text', () => {
+      const time = Number.isFinite(row.updatedAt) && Math.abs(row.updatedAt * 1000) <= 8640000000000000 ? new Date(row.updatedAt * 1000).toLocaleString(ui.language.getSnapshot().active) : uiText('history.unknownTime');
+      return [time, row.existingIds?.length && uiText('history.inWorkspace')].filter(Boolean).join(' · ');
+    });
+    text.append(row.name ? node('strong', row.name) : uiNode('strong', 'history.unnamed'), node('small', row.cwd), stamp);
     label.append(input, text); list.append(label);
     input.onchange = () => { historySelected = row.nativeId; updateNativeHistoryControls(); };
   }
@@ -1362,7 +1407,7 @@ function updateNativeHistoryControls() {
   if (!$('native-history-dialog').open) return;
   const row = historyRows.find(r => r.nativeId === historySelected), busy = historyLoading || historyImporting;
   $('confirm-native-history').disabled = busy || !row || row.existingIds?.length > 1;
-  $('confirm-native-history').textContent = historyImporting ? '正在连接…' : row?.existingIds?.length ? '查看已有会话' : '继续所选会话';
+  ui.display.text($('confirm-native-history'), historyImporting ? 'history.connecting' : row?.existingIds?.length ? 'history.existing' : 'history.continue');
   $('more-native-history').hidden = !historyCursor; $('more-native-history').disabled = busy;
   $('search-native-history').disabled = busy; $('native-history-search').disabled = busy;
   $('close-native-history').disabled = historyImporting;
@@ -1371,13 +1416,13 @@ async function loadNativeHistory(more = false) {
   if (historyLoading || historyImporting || !$('native-history-dialog').open) return;
   const generation = ++historyGeneration; historyLoading = true;
   if (!more) { historySearch = $('native-history-search').value; historyRows = []; historySelected = null; historyCursor = null; }
-  renderNativeHistory(); $('native-history-status').textContent = '正在读取本机原生索引…';
+  renderNativeHistory(); ui.display.text($('native-history-status'), 'history.loading');
   try {
     const result = await api.nativeHistory({ search: historySearch, ...(more ? { cursor: historyCursor } : {}) });
     if (generation !== historyGeneration || !$('native-history-dialog').open) return;
     const seen = new Set(historyRows.map(r => r.nativeId)); historyRows.push(...result.data.filter(r => !seen.has(r.nativeId))); historyCursor = result.nextCursor;
-    $('native-history-status').textContent = historyRows.length ? `已显示 ${historyRows.length} 个会话` : '没有找到会话。可修改名称重试；这里只读取原生索引，不修复或扫描历史文件。';
-  } catch (error) { if (generation === historyGeneration && $('native-history-dialog').open) $('native-history-status').textContent = error.message; }
+    ui.display.text($('native-history-status'), historyRows.length ? 'history.count' : 'history.empty', historyRows.length ? () => ({ count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(historyRows.length) }) : undefined);
+  } catch (error) { if (generation === historyGeneration && $('native-history-dialog').open) ui.showError($('native-history-status'), error); }
   finally { if (generation === historyGeneration) { historyLoading = false; renderNativeHistory(); } }
 }
 $('open-native-history').onclick = () => {
@@ -1386,9 +1431,9 @@ $('open-native-history').onclick = () => {
   if (document.querySelector('input[name="provider"]:checked').value === 'claude') return attempt(async () => {
     const ticket = dialogTickets.get($('create-dialog')), revision = selectionRevision;
     if (!currentDialogTicket(ticket) || creatingSession || ticket.created || ticket.creation) return;
-    if (newDirectory) throw Error('从历史会话分支或接管前，请先选择原工作目录。');
+    if (newDirectory) throw uiError("error.historyDirectory");
     const nativeId = $('claude-history-id').value.trim();
-    if (nativeId && !state.capabilities?.includes('claudeHistory')) throw Error('当前后台尚不支持 Claude 接管；保留输入，请先连接新版后台。');
+    if (nativeId && !state.capabilities?.includes('claudeHistory')) throw uiError("error.takeoverUnsupported");
     creatingSession = true; createReadiness();
     const priorIds = new Set(state.sessions.map(s => s.id)); let forkId = '';
     try {
@@ -1399,7 +1444,7 @@ $('open-native-history').onclick = () => {
     ticket.created = id;
     updateState(await api.initial()); render();
     if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, 'terminal'); }
-    else toast('此前请求的会话已保留在侧栏。');
+    else toastMessage("toast.requestedSessionRetained");
     } catch (error) {
       // I161: a branch whose reply failed may still have made its session; the same rule as 创建's catch. Exactly one new
       // working Claude session in this folder stops the dialog; without a fresh read nobody can tell (a chosen folder).
@@ -1423,27 +1468,27 @@ $('native-history-dialog').addEventListener('cancel', event => { if (historyImpo
 $('native-history-dialog').addEventListener('close', () => {
   if ($('native-history-dialog').open) return;
   historyGeneration++; historyLoading = false; historyRows = []; historySelected = null; historyCursor = null; historySearch = '';
-  $('native-history-list').replaceChildren(); $('native-history-search').value = ''; $('native-history-status').textContent = '';
+  $('native-history-list').replaceChildren(); $('native-history-search').value = ''; ui.display.unbind($('native-history-status')); $('native-history-status').textContent = '';
 });
 $('confirm-native-history').onclick = async () => {
   if (!$('native-history-dialog').open || historyImporting || historyLoading || !historyRows.some(r => r.nativeId === historySelected)) return;
   const generation = historyGeneration, revision = selectionRevision;
   const fresh = () => $('native-history-dialog').open && generation === historyGeneration;
-  historyImporting = true; renderNativeHistory(); $('native-history-status').textContent = '正在连接所选原生历史；不会重发旧任务。';
+  historyImporting = true; renderNativeHistory(); ui.display.text($('native-history-status'), 'history.importing');
   try {
     const id = await api.importHistory(historySelected); updateState(await api.initial()); render();
     if (fresh() && revision === selectionRevision) { $('native-history-dialog').close(); await select(id, 'chat'); }
-    else toast('此前连接的原会话已保留在侧栏。');
-    if (state.sessions.find(s => s.id === id)?.archived) toast('这是已归档的原会话；可从“归档”恢复，没有创建副本。');
-  } catch (error) { if (fresh()) $('native-history-status').textContent = error.message; else toast(error.message); }
+    else toastMessage('history.retained');
+    if (state.sessions.find(s => s.id === id)?.archived) toastMessage('history.archived');
+  } catch (error) { if (fresh()) ui.showError($('native-history-status'), error); else toastError(error); }
   finally { historyImporting = false; renderNativeHistory(); }
 };
 function openRename(id, origin, roomId = spaceId) {
   const record = id === 'room' ? spaceRecord(roomId) : state.sessions.find(s => s.id === id); if (!record) return;
-  if (renaming) return toast('名称正在保存，请稍候。');
+  if (renaming) return toastMessage("toast.nameSaving");
   if (renameTarget) {
     if (renameTarget.id === id && (id !== 'room' || renameTarget.roomId === roomId) || $('rename-name').value !== renameTarget.originalName) {
-      ui.revealSidebar(); $('rename-name').focus(); return toast('请先保存或取消正在编辑的名称。');
+      ui.revealSidebar(); $('rename-name').focus(); return toastMessage("toast.finishRename");
     }
     closeRename(false);
   }
@@ -1460,8 +1505,8 @@ function openRename(id, origin, roomId = spaceId) {
   if (!row || record.archived || id === 'room' && spaceRecord(roomId)?.archived) return;
   renameTarget = { id, roomId, origin, originalName: record.name, row, label: id === 'room' ? spaceRows.get(roomId).name : [...sessionRows.values()].find(r => r.element === row).name };
   renameRevision++; renameComposing = false; $('rename-name').value = record.name;
-  $('rename-label').textContent = id === 'room' ? '工作区名称' : '会话名称';
-  $('rename-error').hidden = true; $('rename-error').textContent = '';
+  ui.display.text($('rename-label'), id === 'room' ? 'rename.workspace' : 'rename.session');
+  $('rename-error').hidden = true; ui.display.unbind($('rename-error')); $('rename-error').textContent = '';
   row.classList.add('is-renaming'); renameTarget.label.hidden = true;
   row.append($('rename-editor')); $('rename-editor').hidden = false; ui.revealSidebar();
   render(); $('rename-name').focus(); $('rename-name').select();
@@ -1469,13 +1514,14 @@ function openRename(id, origin, roomId = spaceId) {
 function renameProblem(target = renameTarget) {
   if (!target) return '';
   const record = target.id === 'room' ? spaceRecord(target.roomId) : state.sessions.find(s => s.id === target.id);
-  if (!record || record.archived) return '原记录已归档或不可用。输入保留，可取消编辑或恢复原记录后重试。';
-  if (record.name !== target.originalName) return '名称已在另一处更改。输入保留，请取消后重新编辑。';
-  if (disconnected) return '本地服务未连接，名称输入已保留。';
+  if (!record || record.archived) return uiError('error.renameUnavailable');
+  if (record.name !== target.originalName) return uiError('error.renameChanged');
+  if (disconnected) return uiError('error.renameDisconnected');
   return '';
 }
 function showRenameError(message, kind = 'save') {
-  if ($('rename-error').textContent !== message) $('rename-error').textContent = message;
+  if (typeof message === 'string') { ui.display.unbind($('rename-error')); if ($('rename-error').textContent !== message) $('rename-error').textContent = message; }
+  else ui.showError($('rename-error'), message);
   $('rename-error').dataset.kind = kind; $('rename-error').hidden = false;
 }
 function renderRename() {
@@ -1487,7 +1533,7 @@ function renderRename() {
   $('rename-name').readOnly = renaming; $('rename-form').setAttribute('aria-busy', String(renaming));
   const record = state.sessions.find(s => s.id === renameTarget.id), row = sessionRow(renameTarget.id);
   if (row && (!record || record.archived)) {
-    row.status.textContent = record?.archived ? '已归档 · 名称尚未保存' : '记录不可用 · 名称尚未保存';
+    ui.display.text(row.status, record?.archived ? 'rename.archivedPending' : 'rename.unavailablePending');
     row.link.disabled = !record; row.more.disabled = true;
   }
 }
@@ -1510,7 +1556,7 @@ function openRoomMenu(point, anchor, id = spaceId) {
   roomMenu?.(); sessionMenu?.close(); anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const key = roomMenuKey(id);
   roomMenu = ui.menu({
-    items: [{ id: 'create', label: '新建协作空间…' }, { id: 'merge', label: '合并协作空间…', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: '合并详情…' }] : []), { id: 'rename', label: '重命名…' }, { id: 'notes', label: '共享笔记' }, { id: 'files', label: '空间文件…' }, { id: 'usage', label: '用量' }, { id: 'about', label: '协作说明' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: state.wakePolicy.enabled ? '关闭所有 agent 自动消息' : '允许 agent 自动消息' }] : []), { id: 'archive', label: '归档工作区' }],
+    items: [{ id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: uiText('menu.mergeDetails'), labelKey: 'menu.mergeDetails' }] : []), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, { id: 'notes', label: uiText('menu.notes'), labelKey: 'menu.notes' }, { id: 'files', label: uiText('menu.spaceFiles'), labelKey: 'menu.spaceFiles' }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage' }, { id: 'about', label: uiText('menu.collaborationAbout'), labelKey: 'menu.collaborationAbout' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: uiText(state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll'), labelKey: state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll' }] : []), { id: 'archive', label: uiText('menu.archiveWorkspace'), labelKey: 'menu.archiveWorkspace' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(),
     onClose: () => { roomMenu = null; anchor.setAttribute('aria-expanded', 'false'); if (key === roomMenuKey(id) && anchor.isConnected && anchor.getClientRects().length && !anchor.disabled) anchor.focus({ preventScroll: true }); },
     onSelect: action => {
@@ -1523,8 +1569,8 @@ function openRoomMenu(point, anchor, id = spaceId) {
       else if (action === 'notes') openNotes(id);
       else if (action === 'files') attempt(async () => { await selectSpace(id); openSpaceFiles(); });
       else if (action === 'usage') attempt(() => showTrust({ usageScope: { kind: 'room', roomId: id, name: room.name } }));
-      else if (action === 'about') toast('你决定谁参与、分享什么、什么时候停。成员原文和状态分别来自各自的原生会话；子任务状态只包含已观察到的部分。');
-      else if (action === 'archive') attempt(async () => { await api.spaceAction(id, 'archive', []); toast('工作区已归档。原生任务仍可能运行，可从归档列表恢复。'); });
+      else if (action === 'about') toastMessage("toast.collaborationAbout");
+      else if (action === 'archive') attempt(async () => { await api.spaceAction(id, 'archive', []); toastMessage("toast.workspaceArchived"); });
     },
   });
   roomMenu.key = key; roomMenu.anchor = anchor; roomMenu.roomId = id;
@@ -1534,11 +1580,11 @@ function openRoomMenu(point, anchor, id = spaceId) {
 function sessionMenuModel(id, row) {
   const record = state.sessions.find(s => s.id === id), group = row.spaceId;
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
-  const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: `${inSpace(record, r.id) ? '离开' : '加入'}「${r.name}」` }));
+  const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: r.name }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: r.name } }));
   // Right under the version fact that says this backend is older (T-131).
   const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: '结束并更新这个后台…' }] : [];
-  const actions = [...update, { id: 'rename', label: '重命名…' }, ...(index > 0 ? [{ id: 'up', label: '上移' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: '下移' }] : []), { id: 'copy-id', label: '复制完整 NAW ID' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: '复制完整原生 ID' }] : []), ...roomItems, { id: 'window', label: '在独立窗口打开' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: record.wakeDisabled ? '允许其他 agent 叫醒' : '禁止其他 agent 叫醒' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: '更新原会话连接' }]), { id: 'archive', label: '归档会话' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
-  return { record, group, visible, index, actionsKey: JSON.stringify([actions, visible.map(s => s.id)]),
+  const actions = [...update, { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
 function openSessionMenu(id, point, rowKey = id) {
@@ -1567,7 +1613,7 @@ function openSessionMenu(id, point, rowKey = id) {
       else if (action === 'rename') openRename(id, row.more);
       else if (action === 'continue') attempt(() => api.continueConnection(id));
       else if (action === 'window') attempt(() => api.newWindow(id));
-      else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toast('会话已归档。原生任务仍可能运行，可从归档列表恢复。'); });
+      else if (action === 'archive') attempt(async () => { await api.archiveSession(id); toastMessage("toast.sessionArchived"); });
     },
   });
   sessionMenu = { id, rowKey, row, close, kind: 'session', factsKey: sidebarFactsKey(record), actionsKey: model.actionsKey };
@@ -1592,10 +1638,10 @@ function openMemberMenu(id, anchor) {
   const people = orderedMembers(), index = people.findIndex(s => s.id === id), reorder = roomSurface === 'overview' && !roomSession;
   const close = ui.menu({
     contextElement: anchor,
-    items: [{ id: 'detach', label: '脱出协作' }, { id: 'copy-id', label: '复制完整 NAW ID' },
+    items: [{ id: 'detach', label: uiText('menu.detach'), labelKey: 'menu.detach' }, { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' },
       ...(columnTerminalBinding(id) ? [{ id: 'terminal-height-all', label: '所有列都用这个终端高度' }] : []),
-      ...(reorder && index > 0 ? [{ id: 'earlier', label: '上移' }] : []),
-      ...(reorder && index < people.length - 1 ? [{ id: 'later', label: '下移' }] : [])],
+      ...(reorder && index > 0 ? [{ id: 'earlier', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []),
+      ...(reorder && index < people.length - 1 ? [{ id: 'later', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : [])],
     getAnchorRect: () => {
       const rect = anchor.getBoundingClientRect(), band = (anchor.closest('.collaboration-statuses') || anchor.closest('.collaboration-member-status') || anchor).getBoundingClientRect();
       return { left: rect.left, right: rect.right, top: band.bottom, bottom: band.bottom };
@@ -1606,10 +1652,10 @@ function openMemberMenu(id, anchor) {
       focusMemberAction(key === memberMenuKey(id) ? anchor : null);
     },
     onSelect: action => {
-      if (key !== memberMenuKey(id)) return toast('成员已变化，请重新打开菜单。');
+      if (key !== memberMenuKey(id)) return toastMessage("toast.memberChanged");
       if (action === 'copy-id') attempt(() => api.copy(id));
       else if (action === 'terminal-height-all') {
-        const source = columnTerminalBinding(id); if (!source) return toast('这一列现在没有显示终端，高度未更改。');
+        const source = columnTerminalBinding(id); if (!source) return toastMessage('toast.terminalHidden');
         const height = source.terminalHeight ?? columnTerminalHeight(id), lower = [];
         for (const member of orderedMembers()) {
           const binding = columnTerminalBinding(member.id), value = binding ? applyColumnTerminalHeight(binding, height, 'adjust') : height;
@@ -1622,8 +1668,8 @@ function openMemberMenu(id, anchor) {
       else if (action === 'detach') attempt(() => detach(id));
       else if (action === 'earlier' || action === 'later') {
         const people = orderedMembers(), index = people.findIndex(s => s.id === id), target = people[index + (action === 'earlier' ? -1 : 1)];
-        if (!target) return toast('已经位于列表边界，顺序未更改。');
-        attempt(async () => { captureReadingViews(); restoreOverviewReading(); toast(await moveRoomMember(id, target.id, action === 'later')); });
+        if (!target) return toastMessage("toast.orderBoundary");
+        attempt(async () => { captureReadingViews(); restoreOverviewReading(); toastMessage('collab.memberMoved', await moveRoomMember(id, target.id, action === 'later')); });
       }
     },
   });
@@ -1646,8 +1692,8 @@ function backendVersionNotice(record, applicationVersion) {
   const alpha = value => value?.match(/^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-alpha\.(0|[1-9]\d*)$/);
   const from = alpha(backend), to = alpha(application);
   const old = from && to && from[1] === to[1] && Number.isSafeInteger(Number(from[2])) && Number.isSafeInteger(Number(to[2])) && Number(from[2]) < Number(to[2]);
-  return backend ? { kind: old ? 'old' : 'different', label: old ? '旧后台' : '版本不同', title: `后台 ${backend} · 应用 ${application || '版本未报告'}；${old ? '这个会话在旧版后台上，可在会话 ⋯ 里「结束并更新这个后台…」后使用新版。' : '不能据此判断后台较旧。'}后台仅报告版本号。` }
-    : { kind: 'unknown', label: '版本未知', title: '这个会话的后台未报告版本，不能用新会话后台的版本代替。' };
+  return backend ? { kind: old ? 'old' : 'different', label: uiText(old ? 'version.oldLabel' : 'version.differentLabel'), title: uiText('version.comparisonTitle', { backend, app: application || uiText('version.appUnknown'), advice: uiText(old ? 'version.oldAdvice' : 'version.differentAdvice') }) }
+    : { kind: 'unknown', label: uiText('version.kindUnknown'), title: uiText('version.backendUnknownHelp') };
 }
 function backendVersionSummary(records, applicationVersion) {
   const unique = new Map(records.filter(record => !record.archived).map(record => [record.id, record]));
@@ -1656,7 +1702,7 @@ function backendVersionSummary(records, applicationVersion) {
     const notice = backendVersionNotice(record, applicationVersion);
     if (notice) { result[notice.kind]++; result.count++; }
   }
-  result.label = [result.old && `${result.old} 个旧后台会话`, result.different && `${result.different} 个版本不同`, result.unknown && `${result.unknown} 个版本未知`].filter(Boolean).join(' · ');
+  result.label = [result.old && uiText('version.oldSessions', { count: result.old }), result.different && uiText('version.differentSessions', { count: result.different }), result.unknown && uiText('version.unknownSessions', { count: result.unknown })].filter(Boolean).join(' · ');
   return result;
 }
 // Presentation only: existing native observation facts remain the source of truth.
@@ -1664,7 +1710,7 @@ function backendVersionSummary(records, applicationVersion) {
 function sidebarPresentation(record) {
   const live = Object.hasOwn(states, record.state) && !disconnected && !record.backendUnavailable && !record.transportDisconnected &&
     !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
-  const facts = window.nativeWorkspaceCollaboration.statusFacts(record, !disconnected, Date.now());
+  const facts = window.nativeWorkspaceCollaboration.statusFacts(record, !disconnected, Date.now(), ui.language.getSnapshot().active);
   const fleet = window.nativeWorkspaceFleet.currentFleet(record, !disconnected), work = fleet.work, recovery = exhaustedRecovery(record);
   const workTone = window.nativeWorkspaceFleet.workTone(record, !disconnected);
   const waiting = Boolean(record.approval || record.approvalOverflow || record.claudeQuestion || record.nativeApproval?.requests?.length || record.nativeInputRequired);
@@ -1704,24 +1750,24 @@ function sidebarFactsKey(record) {
   return JSON.stringify([disconnected, sidebarDetails(record)]);
 }
 function appVersionReport(snapshot) {
-  const version = versionValue(snapshot.appVersion) || '未报告', commit = snapshot.appBuild?.commit;
+  const version = versionValue(snapshot.appVersion) || uiText('version.unreported'), commit = snapshot.appBuild?.commit;
   const installedAt = snapshot.appBuild?.installedAt;
   const installation = typeof installedAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(installedAt) &&
-    Number.isFinite(Date.parse(installedAt)) && new Date(installedAt).toISOString() === installedAt ? installedAt : '未记录';
-  const lines = ['Native Agent Workspace', '应用版本：' + version,
-    '提交号：' + (typeof commit === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commit) ? commit : '未记录'),
-    '安装时间：' + installation, '后台仅报告版本号，未报告提交号。'];
+    Number.isFinite(Date.parse(installedAt)) && new Date(installedAt).toISOString() === installedAt ? installedAt : uiText('time.unrecorded');
+  const lines = ['Native Agent Workspace', uiText('version.appReport', { version }),
+    uiText('version.commit', { commit: typeof commit === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(commit) ? commit : uiText('time.unrecorded') }),
+    uiText('version.installed', { time: installation }), uiText('version.backendReportHelp')];
   for (const [i, service] of (Array.isArray(snapshot.services) ? snapshot.services : []).entries()) {
-    lines.push(`后台 ${i + 1}：${versionValue(service.version) || '未报告'} · ${service.active ? '新会话' : '保留会话'} · ${Number.isSafeInteger(service.sessions) && service.sessions >= 0 ? service.sessions : '未知'} 个会话`);
+    lines.push(uiText('version.service', { index: i + 1, version: versionValue(service.version) || uiText('version.unreported'), kind: uiText(service.active ? 'version.newSessions' : 'version.retainedSessions'), count: Number.isSafeInteger(service.sessions) && service.sessions >= 0 ? service.sessions : uiText('version.unknown') }));
   }
   return lines.join('\n');
 }
 function renderVersions() {
-  const version = versionValue(state.appVersion) || '未报告', control = $('app-version');
-  $('app-version-label').textContent = 'v' + version;
+  const version = () => versionValue(state.appVersion) || uiText('version.unreported'), control = $('app-version');
+  ui.display.computed($('app-version-label'), 'text', () => 'v' + version());
   $('app-version-compact').textContent = compactAppVersion(state.appVersion);
-  control.setAttribute('aria-label', `应用 ${version}，复制版本信息`);
-  control.title = `应用 ${version} · 点击复制版本信息`;
+  ui.display.attribute(control, 'aria-label', 'version.copyAria', () => ({ version: version() }));
+  ui.display.attribute(control, 'title', 'version.copyTitle', () => ({ version: version() }));
   const summary = backendVersionSummary(state.sessions, state.appVersion), action = $('backend-version-summary');
   // Sessions an unfinished move ended keep the control reachable even with no old backend left.
   const ended = Array.isArray(state.switchEnded) ? state.switchEnded.length : 0;
@@ -1739,14 +1785,14 @@ async function openBackendVersions() {
   if (checkingBackendVersions || disconnected || !state) return;
   backendVersionMenu?.(); backendVersionMenu = null;
   const ticket = ++backendVersionTicket, revision = selectionRevision;
-  checkingBackendVersions = true; control.setAttribute('aria-disabled', 'true'); control.setAttribute('aria-busy', 'true'); control.textContent = '正在核对后台…';
+  checkingBackendVersions = true; control.setAttribute('aria-disabled', 'true'); control.setAttribute('aria-busy', 'true'); ui.display.text(control, 'version.checking');
   try {
     const [options, settings] = await Promise.all([api.connectionUpdates(), api.backendSwitchSettings()]);
     if (ticket !== backendVersionTicket || revision !== selectionRevision || disconnected || !control.isConnected || document.activeElement !== control || document.querySelector('dialog[open]')) return;
     const interrupted = settings.interrupted.length ? `上次更新时结束了 ${settings.interrupted.join('、')}，可在会话里点“继续原生会话”接回` : '';
-    if (!options.length && !interrupted) return toast('当前没有需要核对的旧后台连接。');
+    if (!options.length && !interrupted) return toastMessage('version.noneToCheck');
     backendVersionMenu = ui.menu({
-      items: [...options.map((option, index) => ({ id: String(index), label: backendOptionLabel(option) })),
+      items: [...options.map((option, index) => ({ id: String(index), labelRead: () => backendOptionLabel(option) })),
         ...(interrupted ? [{ id: 'interrupted', label: interrupted }] : []),
         { id: 'auto', label: settings.auto ? '空闲时自动更新：开（点此关闭）' : '空闲时自动更新：关（点此打开）' }],
       getAnchorRect: () => control.getBoundingClientRect(),
@@ -1769,22 +1815,25 @@ function backendOptionLabel(option) {
   const shown = id => state.sessions?.find(record => record.id === id)?.name;
   const short = name => name.length > 16 ? name.slice(0, 16) + '…' : name;
   const names = [...new Set(Array.isArray(option.sessions) ? option.sessions.map(s => shown(s.id) || s.name).filter(Boolean) : [])].slice(0, 3);
-  const who = names.length ? `：${names.map(short).join('、')}${option.count > names.length ? ' 等' : ''}` : '';
-  return `${option.version ? compactAppVersion(option.version) : '版本未知'} · ${option.ready ? '核对并更新连接…' : option.switch?.ready ? '结束并更新…' : '保留连接，查看原因'} · ${option.count} 个会话${who}`;
+  const who = names.length ? uiText('version.optionNames', { names: names.map(short).join('、'), more: option.count > names.length ? uiText('version.moreNames') : '' }) : '';
+  return uiText('version.connectionOption', { version: option.version ? compactAppVersion(option.version) : uiText('version.kindUnknown'), action: uiText(option.ready ? 'version.updateAction' : option.switch?.ready ? 'version.endUpdateAction' : 'version.keepAction'), count: option.count, who });
 }
 function runBackendOption(option) {
   if (!option.ready && option.switch?.ready) return attempt(async () => { const result = await api.switchBackend({ backendKey: option.backendKey, switch: option.switch }); if (result) toast(backendSwitchedText(result)); });
-  if (!option.ready) return toast(option.switch?.reason && !option.switch.ready ? option.switch.reason : option.reason);
+  if (!option.ready) {
+    const switchBlocked = option.switch?.reason && !option.switch.ready, message = switchBlocked ? option.switch.reason : option.reason;
+    toast(message); ui.showError($('toast-text'), { message, uiMessage: switchBlocked ? option.switch.reasonUiMessage : option.reasonUiMessage }); return;
+  }
   return attempt(async () => {
     const updated = await api.continueConnection(option.id, { backendKey: option.backendKey, nativeId: option.nativeId, version: option.version });
-    if (updated) toast('这个后台的连接已更新；原生任务没有自动重发。');
+    if (updated) toastMessage('version.updated');
   });
 }
 // From a session's own menu: find the backend that holds it now, then act as the sidebar would.
 async function updateSessionBackend(id) {
   const options = await api.connectionUpdates();
   const option = options.find(o => Array.isArray(o.sessions) && o.sessions.some(s => s.id === id));
-  if (!option) return toast('这个会话的后台现在不需要更新，或它已经在新版后台上。');
+  if (!option) return toastMessage('version.noUpdateNeeded');
   return runBackendOption(option);
 }
 function backendSwitchedText(result) {
@@ -1809,19 +1858,19 @@ function renderSidebarGroups() {
   $('workspace-group').dataset.groupedSessions = String(sidebarView === 'grouped');
   const visible = state.sessions.filter(s => !s.archived);
   const working = visible.filter(s => s.state === 'working').length;
-  $('session-group-summary').textContent = `${visible.length}${working ? ` · ${working} 工作中` : ''}`;
-  $('workspace-group-summary').textContent = state.room.archived ? '0' : `${members().length} 成员`;
+  ui.display.computed($('session-group-summary'), 'text', () => working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
+  ui.display.computed($('workspace-group-summary'), 'text', () => state.room.archived ? '0' : uiText('sidebar.memberCount', { count: members().length }));
   // The drop hint counts toward the section's fixed height, so it is shown or hidden before the layout measures (T-136).
   document.querySelector('.drop-hint').hidden = !allSpaces().some(r => !r.archived);
   for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body'], ['archive', 'archive-button', 'archive-group-body']]) {
     const collapsed = section === 'archive' ? state.sidebar?.archiveCollapsed !== false : Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
-    const name = { sessions: '会话', workspace: '协作空间', archive: '归档' }[section];
-    toggle.setAttribute('aria-label', section === 'archive' ? `归档 · ${state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived))} 项` : `${name} · ${$(section === 'sessions' ? 'session-group-summary' : 'workspace-group-summary').textContent}`);
+    const name = () => uiText({ sessions: 'sidebar.sessions', workspace: 'sidebar.spaces', archive: 'sidebar.archive' }[section]);
+    ui.display.computed(toggle, 'aria-label', () => section === 'archive' ? uiText('sidebar.archiveAria', { count: state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived)) }) : uiText('sidebar.groupAria', { name: name(), summary: section === 'sessions' ? working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length) : uiText('sidebar.spaceCount', { count: allSpaces().filter(room => !room.archived).length }) }));
     toggle.setAttribute('aria-expanded', String(!collapsed));
     toggle.querySelector('.group-chevron').textContent = collapsed ? '▸' : '▾';
     if (collapsed && $(body).contains(document.activeElement)) { sessionMenu?.close(); roomMenu?.(); toggle.focus(); }
     $(body).hidden = collapsed;
-    toggle.title = `${collapsed ? '展开' : '折叠'}${section === 'sessions' ? '会话；把协作成员拖到这里独立使用' : name}`;
+    ui.display.attribute(toggle, 'title', collapsed ? 'sidebar.expand' : 'sidebar.collapse', () => ({ name: section === 'sessions' ? uiText('sidebar.sessionDrop') : name() }));
   }
   sidebarLayout?.update(state.sidebar);
 }
@@ -1830,7 +1879,7 @@ function toggleSidebarGroup(id) {
   const key = id || 'independent';
   if (sidebarCollapsedGroups.has(key)) sidebarCollapsedGroups.delete(key);
   else {
-    if (sidebarCollapsedGroups.size >= 1000) { toast('已记住 1000 个收起的分组。先展开一个分组，再收起这里。'); return; }
+    if (sidebarCollapsedGroups.size >= 1000) { toastMessage('toast.foldLimit'); return; }
     sidebarCollapsedGroups.add(key);
   }
   renderSessions(); attempt(persistView);
@@ -1851,7 +1900,7 @@ function renderSessions() {
     const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, name: r.name, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
     // Every listed session appears at least once: a session left only in an archived or unknown space counts as independent.
     const independent = visible.filter(s => !groups.some(group => inSpace(s, group.id)));
-    if (independent.length) groups.push({ id: '', name: '独立会话', people: independent });
+    if (independent.length) groups.push({ id: '', name: null, people: independent });
     groups.forEach((group, index) => {
       let entry = sidebarGroups.get(group.id);
       if (!entry) {
@@ -1875,11 +1924,11 @@ function renderSessions() {
         entry.more.setAttribute('aria-label', `空间操作：${group.name}`); entry.more.title = entry.more.getAttribute('aria-label');
         entry.more.disabled = disconnected || renameTarget?.id === 'room' && renameTarget.roomId === group.id;
       }
-      entry.title.textContent = `${group.name} · ${group.people.length}`; entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
+      ui.display.text(entry.title, 'sidebar.groupCount', () => ({ name: group.name ?? uiText('sidebar.independent'), count: group.people.length })); entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
       // The open space is marked on its heading, as on its 协作空间 row (hidden in this view).
       const open = Boolean(group.id) && selected === 'room' && spaceId === group.id;
       entry.title.classList.toggle('active', open); if (open) entry.title.setAttribute('aria-current', 'page'); else entry.title.removeAttribute('aria-current');
-      if (group.id) entry.title.setAttribute('aria-label', `打开协作空间「${group.name}」`);
+      if (group.id) ui.display.attribute(entry.title, 'aria-label', 'sidebar.openSpace', { name: group.name });
       // A folded group hides only its own rows; its name, count and any rows needing attention stay visible.
       const closed = sidebarCollapsedGroups.has(group.id || 'independent');
       // The narrow rail still lists a folded group's rows (T-132), so an open menu or focus there stays put.
@@ -1930,11 +1979,11 @@ function renderSessions() {
     }
     const memberships = allSpaces().filter(r => !r.archived && inSpace(record, r.id)), membershipNames = memberships.map(r => r.name).join('、');
     const presentation = sidebarPresentation(record);
-    const label = `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${presentation.full}`;
-    const association = memberships.length ? `所属空间：${membershipNames}` : '独立会话';
-    const occurrence = grouped && memberships.length > 1 ? ' · 同一会话在多个空间显示，原生身份相同' : '';
-    const version = backendVersionNotice(record, state.appVersion);
-    row.link.disabled = false; row.link.setAttribute('aria-label', `${label} · ${association}${occurrence} · ${sessionTimes(record)}${version ? ' · ' + version.title : ''}`); row.link.title = `${label}\n${association}${occurrence}\n${sessionTimes(record)}${version ? '\n' + version.title : ''}`;
+    const label = () => `${record.name} · ${record.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(record.id)} · ${sidebarPresentation(record).full}`;
+    const association = () => memberships.length ? uiText('sidebar.memberships', { names: membershipNames }) : uiText('sidebar.independent');
+    const occurrence = () => grouped && memberships.length > 1 ? uiText('sidebar.sameIdentity') : '';
+    const version = () => backendVersionNotice(record, state.appVersion);
+    row.link.disabled = false; ui.display.computed(row.link, 'aria-label', () => `${label()} · ${association()}${occurrence()} · ${sessionTimes(record)}${version() ? ' · ' + version().title : ''}`); ui.display.computed(row.link, 'title', () => `${label()}\n${association()}${occurrence()}\n${sessionTimes(record)}${version() ? '\n' + version().title : ''}`);
     const badgeKey = JSON.stringify(memberships.map(r => [r.id, r.name]));
     row.badges.hidden = Boolean(grouped && group);
     if (row.badgeKey !== badgeKey) {
@@ -1942,19 +1991,20 @@ function renderSessions() {
       // shortens it only by the width it has (T-144). The full list is in the title and details.
       row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', r.name, `space-badge ${roomTone(r.id)}`); badge.title = `空间：${r.name}`; return badge; }));
       if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); more.title = membershipNames; row.badges.append(more); }
-      row.badges.setAttribute('aria-label', association); row.badgeKey = badgeKey;
+      row.badgeKey = badgeKey;
     }
+    ui.display.computed(row.badges, 'aria-label', association);
     // Compact version marks keep the three cases apart: older alpha, different, unreported.
-    const versionMark = version ? { old: '↑', different: '≠', unknown: '?' }[version.kind] : '';
-    row.version.textContent = versionMark; row.version.dataset.marker = versionMark; row.version.title = version?.title || ''; row.version.hidden = !version;
+    const notice = version(), versionMark = notice ? { old: '↑', different: '≠', unknown: '?' }[notice.kind] : '';
+    row.version.textContent = versionMark; row.version.dataset.marker = versionMark; ui.display.computed(row.version, 'title', () => version()?.title || ''); row.version.hidden = !notice;
     row.link.classList.toggle('active', record.id === selected); row.element.classList.toggle('active', record.id === selected);
     if (record.id === selected) row.link.setAttribute('aria-current', 'page'); else row.link.removeAttribute('aria-current');
-    row.more.setAttribute('aria-label', `会话操作：${record.name} · ${sessionShortId(record.id)}${group ? ` · ${spaceRecord(group)?.name}` : ''}`); row.more.title = row.more.getAttribute('aria-label'); row.more.disabled = renameTarget?.id === record.id;
+    const moreParams = { name: record.name, id: sessionShortId(record.id), space: group ? ` · ${spaceRecord(group)?.name}` : '' }; ui.display.attribute(row.more, 'aria-label', 'sidebar.sessionActions', moreParams); ui.display.attribute(row.more, 'title', 'sidebar.sessionActions', moreParams); row.more.disabled = renameTarget?.id === record.id;
     row.more.setAttribute('aria-description', sidebarDetails(record).join(' · '));
-    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); row.status.textContent = presentation.compact;
+    row.name.textContent = record.name; row.shortId.textContent = sessionShortId(record.id); ui.display.computed(row.status, 'text', () => sidebarPresentation(record).compact);
     row.time.textContent = sessionActivityTime(record); row.time.title = sessionTimes(record);
-    row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; row.dot.title = presentation.full; row.dot.dataset.nativeState = record.state;
-    row.marker.textContent = presentation.marker; row.marker.title = presentation.full; row.element.classList.toggle('has-status-detail', presentation.detail);
+    row.dot.className = `state-dot ${presentation.tone}${presentation.workTone ? ' ' + presentation.workTone : ''}`; ui.display.computed(row.dot, 'title', () => sidebarPresentation(record).full); row.dot.dataset.nativeState = record.state;
+    row.marker.textContent = presentation.marker; ui.display.computed(row.marker, 'title', () => sidebarPresentation(record).full); row.element.classList.toggle('has-status-detail', presentation.detail);
     const index = positions.get(container) || 0, slot = container.children[index]; if (slot !== row.element) container.insertBefore(row.element, slot || null); positions.set(container, index + 1);
   }
   highlightSpace(hoverSpace);
@@ -1983,11 +2033,11 @@ function createReadiness() {
   if (gitSelected && !gitSupported) {
     invalidateGitPreview();
     $('chosen-folder').textContent = folder;
-    $('git-worktree-preview').textContent = '后台不支持此工作副本。请重新连接，或明确取消这个选项后使用原目录；不会自动改用原目录。';
+    ui.display.text($('git-worktree-preview'), 'create.gitUnsupported');
   }
-  $('open-native-history').textContent = historyProvider === 'codex' ? '继续已有 Codex 会话…' : takeover ? '接管此 Claude 会话' : '从已有 Claude 会话分支…';
+  ui.display.text($('open-native-history'), historyProvider === 'codex' ? 'create.codexHistory' : takeover ? 'create.claudeTakeover' : 'create.claudeFork');
   $('open-native-history').disabled = creatingSession || gitSelected || (historyProvider === 'claude' && newDirectory);
-  if (historyProvider === 'claude' && newDirectory) $('open-native-history').textContent = '选择原目录后分支或接管…';
+  if (historyProvider === 'claude' && newDirectory) ui.display.text($('open-native-history'), 'create.chooseOriginal');
   $('new-folder').hidden = !state.capabilities?.includes('newSessionDirectory');
   $('new-folder').disabled = $('choose-folder').disabled = creatingSession;
   $('cancel-create').disabled = false;
@@ -1997,20 +2047,20 @@ function createReadiness() {
   // Only a service that applies the choice may offer it; an older one would silently ignore it.
   $('skip-permissions-option').hidden = !state.capabilities?.includes('createSkipPermissions');
   if ($('skip-permissions-option').hidden) $('skip-permissions').checked = false;
-  const directoryNote = gitSelected ? '只在副本准备完成后启动一个新的原生会话。' : newDirectory ? '创建时自动新建此空目录。' : '使用上方已有目录，多个会话可能共用。';
-  $('create-permission-note').textContent = directoryNote + ($('skip-permissions').checked
-    ? '这个会话里 agent 运行命令、改文件都不再问你，plan 模式也不拦；只在信任的文件夹里使用。'
-    : '原生可能要求确认文件夹信任；文件和命令权限仍由原生确认。');
+  const directoryKey = gitSelected ? 'create.directoryCopy' : newDirectory ? 'create.directoryNew' : 'create.directoryExisting';
+  const permissionKey = $('skip-permissions').checked ? 'create.permissionsSkipped' : 'create.permissionsNative';
+  ui.display.computed($('create-permission-note'), 'text', () => uiText('create.permissionNote', { directory: uiText(directoryKey), permission: uiText(permissionKey) }));
   createSpaceReadiness();
   if (!state.capabilities?.includes('nativePermissionDefaults')) {
     $('confirm-create').disabled = true;
-    $('create-readiness').textContent = '新版后台尚未连接，暂不能新建。请重新打开应用连接；已有原生会话会继续保留。';
+    ui.display.text($('create-readiness'), 'create.backendMissing');
     return;
   }
   const provider = document.querySelector('input[name="provider"]:checked').value;
   const ready = state.preflight?.python && state.preflight?.[provider];
   $('confirm-create').disabled = creatingSession || !ready || Boolean(takeover && (newDirectory || gitSelected)) || (gitSelected && (newDirectory || !gitSupported || gitPreviewLoading || !gitWorktreePlan));
-  $('create-readiness').textContent = takeover && (newDirectory || gitSelected) ? '接管历史会话前，请选择原工作目录并取消 Git 副本。' : ready ? '' : '还需要安装所选 agent 或 Python 3。点击“检查安装”查看入口。';
+  const readinessKey = takeover && (newDirectory || gitSelected) ? 'create.takeoverDirectory' : ready ? null : 'create.missingPrograms';
+  ui.display.computed($('create-readiness'), 'text', () => readinessKey ? uiText(readinessKey) : '');
   createSpaceReadiness(true);
 }
 // T-115: a space choice locks nothing until the session exists; then everything but 仅继续加入 and 关闭 is locked.
@@ -2019,42 +2069,43 @@ function createSpaceReadiness(final = false) {
   const takeover = document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim();
   const stopped = Boolean(creation || ticket?.created); // a session from this opening exists, or may (I159)
   for (const input of $('create-dialog').querySelectorAll('input[name="provider"], #session-name, #claude-history-id, #skip-permissions, #initial-view')) input.disabled = stopped;
-  $('cancel-create').textContent = creation || ticket?.created ? '关闭，保留结果' : '取消';
+  ui.display.text($('cancel-create'), stopped ? 'create.closeKeep' : 'common.cancel');
   // Continuing an existing session doesn't take the space choice yet; say so rather than drop it.
   $('create-space-help').hidden = !spaced;
   $('create-space-help').textContent = spaced ? CREATE_SPACE_HELP + '继续或接管已有会话时不能同时选空间：先继续，再从会话菜单加入空间。' : '';
   if (spaced || stopped) $('open-native-history').disabled = true; // continuing or branching would add another session
   if (stopped) for (const id of ['choose-folder', 'new-folder', 'git-worktree', 'git-worktree-relative']) $(id).disabled = true;
   if (creation) {
-    $('confirm-create').textContent = '仅继续加入'; $('confirm-create').disabled = creatingSession || Boolean(creation.blocked);
-    if (final) $('create-readiness').textContent = '';
+    ui.display.text($('confirm-create'), 'create.joinOnly'); $('confirm-create').disabled = creatingSession || Boolean(creation.blocked);
+    if (final) { ui.display.unbind($('create-readiness'), 'text'); $('create-readiness').textContent = ''; }
     return;
   }
-  $('confirm-create').textContent = spaced ? '创建并加入空间' : '创建会话';
+  ui.display.text($('confirm-create'), spaced ? 'create.spaceConfirm' : 'create.confirm');
   if (!final) return;
-  if (ticket?.created) { $('confirm-create').disabled = true; $('create-readiness').textContent = ticket.created === 'unconfirmed' ? '无法确认会话是否已经建好；请在侧栏核对，侧栏里没有的话，关掉对话框重新打开再建。这里不会再建一个。' : '会话已建好并保留在侧栏，关闭对话框即可；这里不会再建一个。'; return; }
+  if (ticket?.created) { $('confirm-create').disabled = true; ui.display.text($('create-readiness'), ticket.created === 'unconfirmed' ? 'create.startedUnconfirmed' : 'create.startedRetained'); return; }
   let problem = spaced && takeover ? '接管已有 Claude 会话时不能同时选空间；请改成独立会话，接管后再从会话菜单加入空间。' : '';
   if (!problem) try { createSpaceChoice(); } catch (error) { problem = error.message; }
-  if (problem) { $('confirm-create').disabled = true; if (!$('create-readiness').textContent) $('create-readiness').textContent = problem; }
+  if (problem) { $('confirm-create').disabled = true; if (!$('create-readiness').textContent) { ui.display.unbind($('create-readiness'), 'text'); $('create-readiness').textContent = problem; } }
 }
 function renderArchives() {
   const records = state.sessions.filter(s => s.archived), archivedRooms = allSpaces().filter(r => r.archived), count = records.length + archivedRooms.length;
   const running = records.filter(s => ['working', 'approval', 'starting', 'stopping', 'disconnected'].includes(s.state)).length;
-  $('archive-label').textContent = `归档${count ? ` · ${count}` : ''}${running ? ` · ${running} 个待查看` : ''}`;
-  $('archive-button').title = `归档 ${count} 项${running ? `，${running} 个原生会话仍需查看状态` : ''}`;
+  ui.display.text($('archive-label'), 'archive.label', () => ({ count: count ? ` · ${count}` : '', running: running ? uiText('archive.pending', { count: running }) : '' }));
+  ui.display.attribute($('archive-button'), 'title', 'archive.title', () => ({ count, running: running ? uiText('archive.runningHelp', { count: running }) : '' }));
   if ($('archive-group-body').hidden) return;
   const list = $('archive-list');
   const origin = document.activeElement, oldRow = origin?.closest('.archive-item'), oldIndex = oldRow ? [...list.children].indexOf(oldRow) : -1;
   const signature = JSON.stringify([archivedRooms.map(r => [r.id, r.name]), records.map(s => [s.id, s.name, s.state, sessionTimes(s)]), state.sessions.map(s => [s.id, s.name])]);
   if (list.dataset.signature === signature) return; list.dataset.signature = signature; list.replaceChildren();
   for (const room of archivedRooms) {
-    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = room.id; row.append(node('strong', room.name), node('small', '工作区 · 记录与笔记已保留'), button('恢复工作区', () => restoreArchivedRoom(room.id))); list.append(row);
+    const row = node('div', undefined, 'archive-item'); row.dataset.archivedRoom = room.id; row.append(node('strong', room.name), uiNode('small', 'archive.roomInfo'), uiButton('archive.restoreRoom', () => restoreArchivedRoom(room.id))); list.append(row);
   }
   for (const s of records) {
     const row = node('div', undefined, 'archive-item'); row.dataset.archivedSession = s.id;
-    row.append(node('strong', participantLabel(s, state.sessions)), node('small', `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${states[s.state]}${['ended', 'recoverable'].includes(s.state) ? ' · 需继续原生历史' : ' · 归档未结束原生进程'} · ${sessionTimes(s)}`), button('恢复会话', () => restoreArchivedSession(s.id))); list.append(row);
+    const info = node('small'); ui.display.computed(info, 'text', () => `${s.provider === 'claude' ? 'Claude' : 'Codex'} · ${stateText(s)}${uiText(['ended', 'recoverable'].includes(s.state) ? 'archive.continueHistory' : 'archive.processRetained')} · ${sessionTimes(s)}`);
+    row.append(node('strong', participantLabel(s, state.sessions)), info, uiButton('archive.restoreSession', () => restoreArchivedSession(s.id))); list.append(row);
   }
-  if (!count) list.append(node('p', '还没有归档内容。使用会话或工作区旁的 ⋯ 菜单归档。'));
+  if (!count) list.append(uiNode('p', 'archive.empty'));
   if (oldRow) {
     const rows = [...list.children], same = rows.find(row => oldRow.dataset.archivedSession ? row.dataset.archivedSession === oldRow.dataset.archivedSession : row.dataset.archivedRoom === oldRow.dataset.archivedRoom);
     focusAfterRemoval(origin, [same?.querySelector('button'), rows[oldIndex]?.querySelector('button'), rows[oldIndex - 1]?.querySelector('button'), $('archive-button')]);
@@ -2064,36 +2115,88 @@ async function restoreArchivedSession(id) {
   const origin = document.activeElement, surface = JSON.stringify([selected, roomSession, roomSurface, mode]);
   await api.restoreSession(id); updateState(await api.initial()); render();
   if (surface === JSON.stringify([selected, roomSession, roomSurface, mode])) focusAfterRemoval(origin, [$('session-header-more'), $('archive-button')]);
-  sessionNotice('会话已恢复', id);
+  sessionNoticeMessage("toast.sessionRestored", undefined, id);
 }
 async function restoreArchivedRoom(id = spaceId) {
   await api.spaceAction(id, 'restore', []); updateState(await api.initial()); render();
-  toast('工作区已恢复', { label: '打开', name: `打开 ${spaceRecord(id)?.name || '空间'}`, run: () => selectSpace(id) });
+  toastMessage("toast.workspaceRestored", undefined, { label: uiText('common.open'), labelKey: 'common.open', nameKey: 'action.openSession', params: () => ({ name: spaceRecord(id)?.name || uiText('sidebar.space') }), run: () => selectSpace(id) });
 }
 
-async function showSetup() {
-  const ticket = openTransientDialog('setup-dialog');
-  $('setup-status').replaceChildren(node('p', '正在检查本机程序…'));
-  try {
-  const preflight = await api.preflight(); if (!currentDialogTicket(ticket)) return;
-  state.preflight = preflight;
+// Language controls use the existing Host mirror; no native/session operations.
+let changingLanguage = false, languageFailed = false, languageWarning = null, notifiedLanguageWarning;
+function reportLanguageWarning() {
+  if (!state || !languageWarning || languageWarning === notifiedLanguageWarning) return;
+  notifiedLanguageWarning = languageWarning;
+  toast(uiText(languageWarning === 'migrationNotSaved' ? 'locale.migrationNotSaved' : 'locale.unavailable'));
+}
+let setupTicket, setupLoading = false, setupFailure = null, setupRows = [];
+function renderInterfaceLanguage() {
+  const control = $('ui-language');
+  control.value = ui.language.getSnapshot().active;
+  control.setAttribute('aria-busy', String(changingLanguage));
+  control.setAttribute('aria-disabled', String(changingLanguage));
+  $('ui-language-label').textContent = uiText('locale.language');
+  for (const option of control.options) option.textContent = uiText(option.value === 'zh' ? 'locale.chinese' : 'locale.english');
+  const warningKey = languageFailed ? 'locale.notSaved' : languageWarning === 'migrationNotSaved' ? 'locale.migrationNotSaved' : languageWarning === 'unavailable' ? 'locale.unavailable' : null;
+  const status = $('ui-language-status');
+  status.textContent = warningKey ? uiText(warningKey) : ''; status.hidden = !warningKey;
+  $('setup-title').textContent = uiText('common.settings');
+  $('setup-intro').textContent = uiText('setup.intro');
+  $('refresh-setup').textContent = uiText('setup.recheck'); $('close-setup').textContent = uiText('common.done');
+  const entry = $('setup-button');
+  entry.querySelector('.rail-label').textContent = uiText('common.settings');
+  entry.setAttribute('aria-label', uiText('common.settings')); entry.title = uiText('common.settings');
+}
+async function changeInterfaceLanguage(value) {
+  if (changingLanguage) { renderInterfaceLanguage(); return; }
+  changingLanguage = true; languageFailed = false; renderInterfaceLanguage();
+  try { await ui.language.set(value); languageWarning = null; }
+  catch { languageFailed = true; }
+  finally { changingLanguage = false; renderInterfaceLanguage(); }
+}
+function renderSetupPrograms(localeOnly = false) {
+  if (!setupTicket || !currentDialogTicket(setupTicket)) return;
+  if (setupLoading) { $('setup-status').replaceChildren(node('p', uiText('setup.checking'))); return; }
+  if (setupFailure) { $('setup-status').replaceChildren(node('p', uiText('setup.failed', { error: typeof setupFailure === 'string' ? setupFailure : setupFailure.message ? ui.displayText(String(setupFailure.message), setupFailure.uiMessage) : uiText('common.retry') }))); return; }
+  const ticket = setupTicket;
+  const versionText = () => { $('version-info').textContent = uiText('setup.version', { app: state.appVersion || uiText('setup.development'), backend: state.runtimeVersion || uiText('setup.oldBackend') }); };
+  if (localeOnly) {
+    for (const row of setupRows) { row.heading.textContent = uiText('setup.program', { program: row.label, status: uiText(row.found ? 'setup.found' : 'setup.missing') }); for (const [control, key] of row.actions) control.textContent = uiText(key); }
+    versionText(); return;
+  }
+  setupRows = [];
   const entries = [['claude', 'Claude Code', 'https://code.claude.com/docs/en/setup'], ['codex', 'Codex CLI', 'https://developers.openai.com/codex/cli/'], ['python', 'Python 3', 'https://www.python.org/downloads/macos/']];
   $('setup-status').replaceChildren(...entries.map(([key, label, url]) => {
     const setting = key === 'python' ? 'python3' : key;
     const row = node('div', undefined, 'setup-program');
-    row.append(node('strong', `${label}：${state.preflight[key] ? '已找到' : '尚未找到'}`));
+    const heading = node('strong', uiText('setup.program', { program: label, status: uiText(state.preflight[key] ? 'setup.found' : 'setup.missing') }));
+    row.append(heading);
+    const display = { heading, label, found: Boolean(state.preflight[key]), actions: [] }; setupRows.push(display);
     const location = state.preflight.paths?.[key] || state.preflight.configured?.[setting];
     if (location) row.append(node('p', location, 'program-path'));
     const actions = node('div', undefined, 'actions');
-    actions.append(button('安装说明', () => api.openExternal(url)), button('选择已有程序…', async () => { await api.runtimeLocation(setting); if (currentDialogTicket(ticket)) await showSetup(); }));
-    if (state.preflight.configured?.[setting]) actions.append(button('自动查找', async () => { await api.runtimeLocation(setting, true); if (currentDialogTicket(ticket)) await showSetup(); }));
+    const install = button(uiText('setup.install'), () => api.openExternal(url));
+    const choose = button(uiText('setup.choose'), async () => { await api.runtimeLocation(setting); if (currentDialogTicket(ticket)) await showSetup(); });
+    actions.append(install, choose); display.actions.push([install, 'setup.install'], [choose, 'setup.choose']);
+    if (state.preflight.configured?.[setting]) { const automatic = button(uiText('setup.automatic'), async () => { await api.runtimeLocation(setting, true); if (currentDialogTicket(ticket)) await showSetup(); }); actions.append(automatic); display.actions.push([automatic, 'setup.automatic']); }
     row.append(actions); return row;
   }));
-  if (state.preflight.error) $('setup-status').append(node('p', state.preflight.error));
-  $('version-info').textContent = `应用 ${state.appVersion || '开发版'} · 后台 ${state.runtimeVersion || '旧版（会话保留中）'}。这里只检查程序文件，不代表已登录或版本兼容。已有会话保留原进程；Codex 后台已运行时，更换程序位置需先结束原会话并完全退出后台。`;
-  createReadiness();
-  } catch (error) { if (currentDialogTicket(ticket)) $('setup-status').replaceChildren(node('p', '检查失败：' + (error.message || '请重试。'))); }
+  if (state.preflight.error) { const error = node('p'); ui.display.computed(error, 'text', () => ui.displayText(state.preflight.error, state.preflight.errorUiMessage)); $('setup-status').append(error); }
+  versionText();
 }
+async function showSetup() {
+  const ticket = setupTicket = openTransientDialog('setup-dialog');
+  setupLoading = true; setupFailure = null;
+  renderInterfaceLanguage(); renderSetupPrograms();
+  try {
+    const preflight = await api.preflight(); if (!currentDialogTicket(ticket)) return;
+    state.preflight = preflight; setupLoading = false; renderSetupPrograms(); createReadiness();
+  } catch (error) {
+    if (currentDialogTicket(ticket)) { setupLoading = false; setupFailure = { message: error.message || '', uiMessage: error.uiMessage || null }; renderSetupPrograms(); }
+  }
+}
+// End language/settings display controls.
+
 function populateSelect(el, items) {
   const old = el.value;
   const hadChoices = el.dataset.hadChoices === 'true';
@@ -2106,7 +2209,7 @@ function populateSelect(el, items) {
   if (items.some(s => s.id === old)) el.value = old;
   else if (hadChoices) {
     // Losing a recipient must not silently redirect a private draft.
-    const placeholder = node('option', '请选择接收方'); placeholder.value = ''; placeholder.disabled = true;
+    const placeholder = uiNode('option', 'room.pickRecipient'); placeholder.value = ''; placeholder.disabled = true;
     el.prepend(placeholder); el.value = '';
   }
   el.title = el.selectedOptions[0]?.textContent || '';
@@ -2115,18 +2218,19 @@ function participantLabel(session, people = members()) {
   return people.filter(s => s.name === session.name).length > 1 ? `${session.name} · ${session.provider === 'claude' ? 'Claude' : 'Codex'} · ${sessionShortId(session.id)}` : session.name;
 }
 function historicalParticipantLabel(name, id) {
-  return `${name || '历史成员'}${typeof id === 'string' && id ? ` · ${id.slice(0, 6)}` : ' · 身份未记录'}`;
+  return `${name || uiText('identity.historicalMember')}${typeof id === 'string' && id ? ` · ${id.slice(0, 6)}` : uiText('identity.unrecorded')}`;
 }
 function roomMessageLabel(m) {
+  const displayName = ui.displayText(m.name, m.uiNameMessage);
   if (m.snapshotBatch) {
-    const id = m.role === 'human' ? m.recipientId : m.sessionId, label = m.name || (m.role === 'human' ? '你' : historicalParticipantLabel('', m.sessionId));
+    const id = m.role === 'human' ? m.recipientId : m.sessionId, label = displayName || (m.role === 'human' ? uiText('reading.you') : historicalParticipantLabel('', m.sessionId));
     const actors = new Set((state.room?.messages || []).filter(row => row.snapshotBatch && row.role === m.role && row.name === m.name)
       .map(row => row.role === 'human' ? row.recipientId : row.sessionId).filter(Boolean));
     return id && actors.size > 1 ? `${label} · ${id.slice(0, 8)}` : label;
   }
   // Run notices describe coordination; streamed native system rows still belong
   // to their exact agent. Reuse the same identity in reading and copied records.
-  if (m.role === 'system' && m.runId && !m.sharedStream) return m.name || '协作';
+  if (m.role === 'system' && m.runId && !m.sharedStream) return displayName || uiText('identity.collaboration');
   if (m.role === 'system' && m.wake) {
     // An agent wake row: current names by ID, the stored names only when a session is gone (T-137).
     const name = (id, stored) => { const s = state.sessions.find(x => x.id === id); return s ? participantLabel(s, state.sessions) : historicalParticipantLabel(stored || '历史会话', id); };
@@ -2140,10 +2244,10 @@ function roomMessageLabel(m) {
     return `${sender}（未核实） → ${r ? participantLabel(r, state.sessions) : historicalParticipantLabel(p.recipientName || '历史会话', p.recipientId)}`;
   }
   const person = state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
-  if (person) return (m.role === 'human' ? '你 → ' : '') + participantLabel(person, state.sessions);
+  if (person) return (m.role === 'human' ? uiText('identity.youTo') : '') + participantLabel(person, state.sessions);
   const id = m.role === 'human' ? m.recipientId : m.sessionId;
-  if (id) return (m.role === 'human' ? '你 → ' : '') + historicalParticipantLabel(m.role === 'human' ? m.deliveries?.find(d => d.recipientId === id)?.recipientName || '历史接收者' : m.name, id);
-  return m.name || (m.role === 'human' ? '你' : '工作区');
+  if (id) return (m.role === 'human' ? uiText('identity.youTo') : '') + historicalParticipantLabel(m.role === 'human' ? m.deliveries?.find(d => d.recipientId === id)?.recipientName || uiText('identity.historicalRecipient') : m.name, id);
+  return displayName || uiText(m.role === 'human' ? 'reading.you' : 'identity.workspace');
 }
 function timeline() {
   const imported = state.room.messages.filter(message => message.snapshotBatch);
@@ -2157,14 +2261,14 @@ function renderSnapshotMaterials() {
   element.dataset.signature = signature; element.replaceChildren();
   if (!merge) return;
   const row = node('div', undefined, 'snapshot-origin');
-  row.append(node('span', merge.stage === 'undone' ? '合并组织已撤销，来源与后来工作保留' : ['ready', 'archiving'].includes(merge.stage) ? '来自所选空间的独立快照' : '合并有步骤待核对'), button('合并详情', () => openMergeRecord(state.room.id), 'small'));
+  row.append(uiNode('span', merge.stage === 'undone' ? 'snapshot.undone' : ['ready', 'archiving'].includes(merge.stage) ? 'snapshot.independent' : 'snapshot.pending'), uiButton('snapshot.details', () => openMergeRecord(state.room.id), 'small'));
   element.append(row);
   for (const source of merge.sources) {
     const note = merge.notes.find(note => note.roomId === source.id), events = merge.events.find(value => value.roomId === source.id)?.events || [];
     if (!note && !events.length) continue;
-    const details = node('details'); details.append(node('summary', `${source.name} · 原笔记与空间记录`));
+    const details = node('details'); details.append(uiNode('summary', 'snapshot.sourceRecords', { name: source.name }));
     if (note) details.append(node('pre', note.text));
-    for (const event of events) details.append(node('p', event.text));
+    for (const event of events) { const text = node('p'); ui.display.computed(text, 'text', () => ui.displayText(event.text, event.uiMessage)); details.append(text); }
     element.append(details);
   }
 }
@@ -2174,7 +2278,7 @@ function filteredTimeline() {
 }
 function openThread(id) {
   const root = roomThreads.roots.get(id);
-  if (!root) return toast('这条讨论已移除。草稿仍保留。');
+  if (!root) return toastMessage("toast.threadRemoved");
   captureReadingViews(); roomThread = root; roomReplyTo = root;
   // Reply chooses an association, never a new recipient or extra model context.
   roomDraftRevision++; $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = '';
@@ -2185,35 +2289,35 @@ function renderTimeline() {
   roomThreads = window.nativeWorkspaceThreads.threadIndex(timeline());
   $('thread-heading').hidden = !roomThread;
   const root = roomThreads.rows.get(roomThread);
-  $('thread-title').textContent = roomThread ? (root ? `讨论 · ${root.text.slice(0, 80)}` : '原讨论已移除 · 返回全部讨论查看现有记录') : '';
+  ui.display.computed($('thread-title'), 'text', () => roomThread ? root ? uiText('room.threadTitle', { text: root.text.slice(0, 80) }) : uiText('room.threadMissingTitle') : '');
   $('reply-context').hidden = !roomReplyTo;
   const reply = roomThreads.rows.get(roomReplyTo);
-  $('reply-label').textContent = roomReplyTo ? (reply ? `回复讨论：${reply.text.slice(0, 80)} · 历史不会自动附上` : '原讨论已移除。取消回复后可将草稿作为新消息发送。') : '';
+  ui.display.computed($('reply-label'), 'text', () => roomReplyTo ? reply ? uiText('room.replyTitle', { text: reply.text.slice(0, 80) }) : uiText('room.replyMissing') : '');
   const candidates = new Map();
   for (const s of members()) candidates.set(s.id, s.name);
   for (const m of timeline()) {
     const id = m.sessionId || m.recipientId;
-    if (id && !candidates.has(id)) candidates.set(id, state.sessions.find(s => s.id === id)?.name || m.name || '历史成员');
-    for (const d of m.deliveries || []) if (!candidates.has(d.recipientId)) candidates.set(d.recipientId, state.sessions.find(s => s.id === d.recipientId)?.name || d.recipientName || '历史成员');
+    if (id && !candidates.has(id)) candidates.set(id, state.sessions.find(s => s.id === id)?.name || m.name || null);
+    for (const d of m.deliveries || []) if (!candidates.has(d.recipientId)) candidates.set(d.recipientId, state.sessions.find(s => s.id === d.recipientId)?.name || d.recipientName || null);
   }
   const filter = $('room-filter'), chosen = filter.value || pendingRoomFilter; pendingRoomFilter = '';
   const filterSignature = JSON.stringify([...candidates]);
   if (filter.dataset.signature !== filterSignature) {
-    filter.replaceChildren(node('option', '全部成员'));
+    filter.replaceChildren(uiNode('option', 'room.allMembers'));
     filter.firstChild.value = '';
-    for (const [id, name] of candidates) { const option = node('option', `${name}${members().some(s => s.id === id) ? '' : ' · 已脱出'} · ${id.slice(0, 6)}`); option.value = id; filter.append(option); }
+    for (const [id, name] of candidates) { const option = node('option'); ui.display.computed(option, 'text', () => `${name || uiText('identity.historicalMember')}${members().some(s => s.id === id) ? '' : uiText('room.detachedSuffix')} · ${id.slice(0, 6)}`); option.value = id; filter.append(option); }
     filter.value = candidates.has(chosen) ? chosen : ''; filter.dataset.signature = filterSignature;
   }
   const messages = filteredTimeline();
   const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name]), filter.value, $('room-search').value, roomThread, [...roomThreads.groups].map(([id, rows]) => [id, rows.length])]);
   if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true, roomReadingKey()); lastRoomMessages = signature; }
-  $('timeline-count').textContent = `${messages.length} 条`; $('copy-timeline').disabled = !messages.length;
+  ui.display.text($('timeline-count'), 'room.recordCount', { count: messages.length }); $('copy-timeline').disabled = !messages.length;
 }
 async function moveRoomMember(id, target, after, destination = spaceId) {
   await api.spaceAction(destination, 'memberOrder', [{ id, target, after }]);
   const people = orderedMembers(destination), index = people.findIndex(s => s.id === id);
-  if (index < 0) throw Error('成员已离开，顺序请以当前列表为准。');
-  return `${participantLabel(people[index])} 已移到第 ${index + 1} 位，共 ${people.length} 位成员`;
+  if (index < 0) throw uiError("error.memberOrderChanged");
+  return { name: participantLabel(people[index]), index: index + 1, count: people.length };
 }
 function draggableSession(element, id, reorder = false, sourceSpace = selected === 'room' ? spaceId : '') {
   element.draggable = true;
@@ -2256,7 +2360,7 @@ function dropTarget(element, join, destination = 'shared') {
     if (join) attempt(() => addToSpace(id, destination));
     else {
       const source = event.dataTransfer.getData('application/x-native-source-space') || (inSpace(record) ? spaceId : window.nativeWorkspaceSpaces.roomIds(record).length === 1 ? window.nativeWorkspaceSpaces.roomIds(record)[0] : '');
-      if (!source) return toast('请选择具体空间的“离开”操作；其他空间归属保留。');
+      if (!source) return toastMessage("toast.chooseSpaceToLeave");
       attempt(() => detach(id, source));
     }
   });
@@ -2264,7 +2368,7 @@ function dropTarget(element, join, destination = 'shared') {
 function openNotes(id = spaceId) {
   const room = spaceRecord(id); if (!room) return;
   notesRevision = room.metadataRevision;
-  $('room-notes-text').value = room.notes || ''; $('notes-heading').textContent = `共享笔记 · ${room.name}`; $('notes-error').hidden = true; $('save-notes').disabled = false;
+  $('room-notes-text').value = room.notes || ''; ui.display.text($('notes-heading'), 'notes.titleName', { name: room.name }); $('notes-error').hidden = true; $('save-notes').disabled = false;
   const ticket = openTransientDialog('notes-dialog'); ticket.roomId = id;
 }
 let contextSnapshot = null;
@@ -2334,7 +2438,7 @@ function showMentions(force = false) {
     entry.id = `mention-${i}`; entry.setAttribute('role', 'option'); entry.dataset.mentionId = s.id;
     entry.addEventListener('mousedown', event => event.preventDefault()); return entry;
   }));
-  if (!mentionOptions.length) $('mention-list').append(node('p', '没有匹配的成员。先邀请会话加入工作区。'));
+  if (!mentionOptions.length) $('mention-list').append(uiNode('p', 'mention.noMatches'));
   $('mention-list').hidden = false; input.setAttribute('aria-expanded', 'true'); highlightMention();
 }
 function highlightMention() {
@@ -2353,7 +2457,7 @@ function normalizeRoomMention() {
 }
 function chooseMention(id) {
   const person = members().find(s => s.id === id);
-  if (!person) { closeMentions(); return toast('这个会话已离开，请重新选择接收者。'); }
+  if (!person) { closeMentions(); return toastMessage("toast.recipientLeft"); }
   const input = $('shared-input'), old = nativeWorkspaceMentions.valid(roomMention, input.value) ? roomMention : null;
   let range = mentionRange || (old ? { start: old.start, end: old.end } : { start: input.selectionStart, end: input.selectionEnd });
   let text = input.value;
@@ -2364,7 +2468,7 @@ function chooseMention(id) {
   const token = '@' + participantLabel(person);
   const suffix = text.slice(range.end), separator = suffix && /^\s/u.test(suffix) ? '' : ' ';
   const next = text.slice(0, range.start) + token + separator + suffix;
-  if (next.length > 16000) return toast('草稿已达长度上限，请先缩短再选择成员。');
+  if (next.length > 16000) return toastMessage("toast.draftLimit");
   const before = input.value, prior = roomMention && { ...roomMention };
   input.focus(); input.setSelectionRange(0, input.value.length);
   // Chromium owns text and undo. Record this explicit identity occurrence,
@@ -2381,7 +2485,7 @@ function chooseMention(id) {
 }
 function share(text) {
   shareSpaceId = spaceId;
-  if (!members().length) return toast('先把接收方加入共同工作，再分享选定内容。');
+  if (!members().length) return toastMessage("toast.addShareRecipient");
   shareRevision++;
   $('share-text').value = text; populateSelect($('share-recipient'), members()); $('share-dialog').showModal(); updateSharingControls();
 }
@@ -2389,8 +2493,13 @@ function updateSharingControls() {
   if (!$('share-dialog').open) return;
   const target = members().find(s => s.id === $('share-recipient').value);
   $('confirm-share').disabled = Boolean(sharePending) || !$('share-text').value.trim() || !target || interruptPending(target) || target.nativeInputRequired || target.shareAvailable === false || target.chatAvailable === false || disconnected;
-  $('confirm-share').textContent = sharePending ? '发送中…' : '发送这段内容';
-  $('share-help').textContent = sharePending ? '正在发送刚才确认的内容；你可以继续编辑，新的修改不会随这次发送。' : interruptPending(target) ? '正在等待原生中断确认；所选内容保留，不会自动发送。' : target?.nativeInputRequired ? 'Claude 已停止本轮；请在原生终端输入一次后继续，所选内容保留。' : target?.sharingNotice || target?.submissionNotice || (target?.chatAvailable === false ? '请先在原生终端完成连接。' : '检查内容，选择共同工作中的接收方。');
+  ui.display.text($('confirm-share'), sharePending ? 'common.sending' : 'share.send');
+  const key = sharePending ? 'share.sendingHelp' : interruptPending(target) ? 'share.interruptHelp' : target?.nativeInputRequired ? 'share.nativeInputHelp' : null;
+  const raw = !key && (target?.sharingNotice || target?.submissionNotice);
+  const message = target?.sharingNotice ? target.sharingNoticeUiMessage : target?.submissionNoticeUiMessage;
+  if (raw && message) ui.display.computed($('share-help'), 'text', () => ui.displayText(raw, message));
+  else if (raw) { ui.display.unbind($('share-help')); $('share-help').textContent = raw; }
+  else ui.display.text($('share-help'), key || (target?.chatAvailable === false ? 'share.connectHelp' : 'share.help'));
 }
 function visibleSelectionTerminal() {
   const s = current(); if (!s || s.archived) return null;
@@ -2436,8 +2545,8 @@ function openHeaderMenu(anchor, terminal = false) {
   if (sessionMenu?.anchor === anchor) return sessionMenu.close();
   contentMenu?.close(); sessionMenu?.close(); roomMenu?.();
   const key = headerMenuKey(), h = headerControls;
-  const actions = terminal ? [{ id: 'display', label: '显示…', control: $('terminal-display') }]
-    : [{ id: 'membership', label: h.membership.textContent, control: h.membership }, { id: 'share', label: '分享选中内容', control: h.selectedText }, { id: 'usage', label: '用量', control: h.usage }];
+  const actions = terminal ? [{ id: 'display', label: uiText('header.display'), labelKey: 'header.display', control: $('terminal-display') }]
+    : [{ id: 'membership', label: h.membership.textContent, labelRead: () => h.membership.textContent, control: h.membership }, { id: 'share', label: uiText('header.share'), labelKey: 'header.share', control: h.selectedText }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage', control: h.usage }];
   const items = actions.filter(item => terminal || !current().archived || item.id === 'usage');
   anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const close = ui.menu({
@@ -2484,19 +2593,24 @@ function renderHeaderLayout(s, inRoom) {
   $('conversation-pane-toolbar').hidden = !compact;
   $('terminal-more').hidden = !compact;
   $('title').tabIndex = compact || compactRoom ? 0 : -1;
-  $('title').title = compact ? s.name : compactRoom ? state.room.name : '';
+  ui.display.computed($('title'), 'title', () => compact ? s.name : compactRoom ? state.room.unavailable ? uiText('space.unavailable') : state.room.name : '');
   $('title').onfocus = () => { if (header.classList.contains('compact-room')) { captureReadingViews(); restoreOverviewReading(); header.classList.add('reveal-room-title'); } };
   $('title').onblur = () => { if (header.classList.contains('reveal-room-title')) { captureReadingViews(); restoreOverviewReading(); header.classList.remove('reveal-room-title'); } };
   if (!compactRoom) header.classList.remove('reveal-room-title');
   const settings = s?.nativeSettings?.nativeId === s?.nativeId ? [s?.nativeSettings?.mode === 'plan' ? 'Plan' : '', s?.nativeSettings?.effort].filter(Boolean) : [];
-  const values = s ? [s.provider === 'claude' ? 'Claude Code' : 'Codex', sessionShortId(s.id), s.model, ...settings, window.nativeWorkspaceSpaces.roomIds(s).length ? '参与协作，也可单独操作' : '独立会话'] : [];
-  const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, compactRoom && members().length]);
+  const values = s ? [s.provider === 'claude' ? 'Claude Code' : 'Codex', sessionShortId(s.id), s.model, ...settings, window.nativeWorkspaceSpaces.roomIds(s).length ? 'header.collaborating' : 'header.independent'] : [];
+  const subtitle = $('subtitle'), signature = JSON.stringify([compact, compactRoom, inRoom, values, s?.modelUiMessage, compactRoom && members().length]);
   if (subtitle.dataset.identity !== signature) {
+    ui.display.unbind(subtitle); subtitle.replaceChildren();
     if (compact) subtitle.replaceChildren(...values.map((value, index) => {
-      const field = node('span', value, `identity-value${index === 2 ? ' identity-model' : ''}`);
-      field.tabIndex = 0; field.title = value; field.setAttribute('aria-label', value); return field;
+      const field = node('span', index === values.length - 1 ? undefined : value, `identity-value${index === 2 ? ' identity-model' : ''}`);
+      field.tabIndex = 0;
+      if (index === values.length - 1) { ui.display.text(field, value); ui.display.attribute(field, 'title', value); ui.display.attribute(field, 'aria-label', value); }
+      else if (index === 2) for (const slot of ['text', 'title', 'aria-label']) ui.display.computed(field, slot, () => ui.displayText(value, s.modelUiMessage));
+      else { field.title = value; field.setAttribute('aria-label', value); }
+      return field;
     }));
-    else subtitle.textContent = compactRoom ? `${members().length} 位成员` : s ? values.join(' · ') : inRoom ? '你决定谁参与、分享什么、什么时候停。' : '从一个会话开始，需要时再邀请另一个。';
+    else ui.display.computed(subtitle, 'text', () => compactRoom ? uiText('header.members', { count: members().length }) : s ? values.slice(0, -1).map((value, index) => index === 2 ? ui.displayText(value, s.modelUiMessage) : value).concat(uiText(values.at(-1))).join(' · ') : uiText(inRoom ? 'header.roomHelp' : 'header.welcomeHelp'));
     subtitle.dataset.identity = signature;
   }
   if (sessionMenu?.anchor && sessionMenu.key !== (sessionMenu.kind === 'member' ? memberMenuKey(sessionMenu.id) : headerMenuKey())) sessionMenu.close();
@@ -2505,25 +2619,25 @@ function renderHeaderLayout(s, inRoom) {
 }
 function renderHeader(s, inRoom) {
   if (!headerControls) {
-    const resume = button('继续原生会话', () => { const s = current(); if (s && canResume(s)) return api.resume(s.id); }, 'primary');
+    const resume = uiButton('header.resume', () => { const s = current(); if (s && canResume(s)) return api.resume(s.id); }, 'primary');
     const membership = button('', () => { const s = current(); if (s && !s.archived) return inSpace(s) ? detach(s.id) : addToSpace(s.id, spaceId); });
-    const selectedText = button('分享选中内容', () => {
+    const selectedText = uiButton('header.share', () => {
       const s = current(); if (!s || s.archived) return;
       const text = selectedSharingText();
-      text?.trim() ? share(text) : toast('先用鼠标选择需要分享的文字。');
+      text?.trim() ? share(text) : toastMessage('header.selectFirst');
     });
-    const usage = button('用量', () => {
+    const usage = uiButton('header.usage', () => {
       const target = current();
       if (!sharedSurface() && !target) return;
-      return showTrust({ usageScope: sharedSurface() ? { kind: 'room', roomId: state.room.id, name: state.room.name }
+      return showTrust({ usageScope: sharedSurface() ? { kind: 'room', roomId: state.room.id, name: state.room.name, unavailable: state.room.unavailable === true }
         : { kind: 'session', id: target.id, nativeId: target.nativeId, name: target.name } });
     });
-    usage.id = 'usage-button'; usage.setAttribute('aria-label', '查看原生用量');
-    const restore = button('恢复会话', () => { const s = current(); if (s?.archived) return restoreArchivedSession(s.id); }, 'primary');
-    const more = button('⋯', () => openRoomMenu(null, more)); more.id = 'room-header-more'; more.setAttribute('aria-label', '工作区菜单'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
+    usage.id = 'usage-button'; ui.display.attribute(usage, 'aria-label', 'header.usageAria');
+    const restore = uiButton('archive.restoreSession', () => { const s = current(); if (s?.archived) return restoreArchivedSession(s.id); }, 'primary');
+    const more = button('⋯', () => openRoomMenu(null, more)); more.id = 'room-header-more'; ui.display.attribute(more, 'aria-label', 'header.roomMenu'); more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-expanded', 'false');
     more.onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
     const compactMore = button('⋯', () => openHeaderMenu(compactMore));
-    compactMore.id = 'session-header-more'; compactMore.setAttribute('aria-label', '会话更多操作'); compactMore.setAttribute('aria-haspopup', 'menu'); compactMore.setAttribute('aria-expanded', 'false');
+    compactMore.id = 'session-header-more'; ui.display.attribute(compactMore, 'aria-label', 'header.sessionMenu'); compactMore.setAttribute('aria-haspopup', 'menu'); compactMore.setAttribute('aria-expanded', 'false');
     compactMore.onpointerdown = event => { if (sessionMenu?.anchor === compactMore) event.stopPropagation(); };
     for (const control of [membership, selectedText, usage]) control.classList.add('header-secondary');
     headerControls = { resume, membership, selectedText, restore, more, usage, compactMore };
@@ -2538,7 +2652,7 @@ function renderHeader(s, inRoom) {
   h.usage.hidden = !s && !inRoom;
   h.resume.hidden = !s || !canResume(s) || mode !== 'terminal';
   h.membership.hidden = h.selectedText.hidden = !s || !!s.archived;
-  h.membership.textContent = s && inSpace(s) ? '离开此空间' : '加入此空间';
+  ui.display.text(h.membership, s && inSpace(s) ? 'header.leave' : 'header.join');
   h.restore.hidden = !s?.archived;
   h.more.hidden = !inRoom || !!s;
   h.more.disabled = disconnected || state.room.archived || renameTarget?.id === 'room' && renameTarget.roomId === spaceId;
@@ -2571,11 +2685,11 @@ function appendQuestionForm(parent, questions, disabled, submit) {
   const form = node('form', undefined, 'question-form'), chosen = new Map(), typed = new Map(), key = q => q.id ?? q.question;
   const values = q => [...(chosen.get(key(q)) || []), ...(typed.get(key(q))?.trim() ? [typed.get(key(q)).trim()] : [])];
   const ready = () => questions.every(q => values(q).length);
-  const send = button('提交回答', () => submit(Object.fromEntries(questions.map(q => [key(q), values(q)]))));
+  const send = uiButton('approval.submit', () => submit(Object.fromEntries(questions.map(q => [key(q), values(q)]))));
   const update = () => { send.disabled = disabled || !ready(); };
   questions.forEach((q, index) => {
     const group = node('fieldset', undefined, 'native-question'), name = `native-question-${index}`;
-    group.append(node('legend', q.header || `问题 ${index + 1}`), node('p', q.question));
+    group.append(q.header ? node('legend', q.header) : uiNode('legend', 'approval.questionNumber', { index: index + 1 }), node('p', q.question));
     let other = null;
     for (const option of q.options || []) {
       const label = node('label'), input = document.createElement('input');
@@ -2590,7 +2704,8 @@ function appendQuestionForm(parent, questions, disabled, submit) {
     }
     if (q.isOther || !(q.options || []).length) {
       other = document.createElement('input'); other.type = 'text'; other.disabled = disabled;
-      other.placeholder = (q.options || []).length ? '其他…' : '你的回答'; other.setAttribute('aria-label', `${q.header || q.question}：${other.placeholder}`);
+      const placeholderKey = (q.options || []).length ? 'approval.other' : 'approval.answer';
+      ui.display.attribute(other, 'placeholder', placeholderKey); ui.display.attribute(other, 'aria-label', 'approval.answerAria', () => ({ question: q.header || q.question, placeholder: uiText(placeholderKey) }));
       other.oninput = () => { if (!q.multiSelect) { for (const input of group.querySelectorAll('input[type="radio"]')) input.checked = false; chosen.delete(key(q)); } typed.set(key(q), other.value); update(); };
       group.append(other);
     }
@@ -2600,13 +2715,13 @@ function appendQuestionForm(parent, questions, disabled, submit) {
   form.append(send); update(); parent.append(form);
 }
 function nativeApprovalPreview(request) {
-  const raw = typeof request.input === 'string' ? request.input : '', title = request.title || '原生请求';
+  const raw = typeof request.input === 'string' ? request.input : '', title = request.title || uiText('approval.nativeRequest');
   let fields;
   try { const value = JSON.parse(raw); if (value && typeof value === 'object' && !Array.isArray(value)) fields = value; } catch { /* Original native input remains readable. */ }
   let detail = '', kind = 'raw', before, after, command, scope = '';
   if (title === 'Edit' && typeof fields?.file_path === 'string' && typeof fields.old_string === 'string' && typeof fields.new_string === 'string') {
     detail = fields.file_path; kind = 'edit'; before = fields.old_string; after = fields.new_string;
-    scope = fields.replace_all === true ? '全部匹配' : fields.replace_all === false ? '单处' : '';
+    scope = fields.replace_all === true ? uiText('approval.replaceAll') : fields.replace_all === false ? uiText('approval.replaceOne') : '';
   } else if (title === 'Bash' && typeof fields?.command === 'string') {
     detail = fields.command; kind = 'command'; command = fields.command;
   } else if (title === 'AskUserQuestion' && Array.isArray(fields?.questions)) {
@@ -2646,16 +2761,17 @@ function renderNativeOnlyApproval(el, s, stale) {
       row = node('details', undefined, 'native-approval-request process-details');
       row.nativeRequestSignature = signature; row.dataset.nativeRequestId = request.id || '';
       const summary = node('summary'), author = node('span', undefined, 'native-approval-author'), label = node('span', undefined, 'native-approval-label'), content = node('div', undefined, 'native-approval-content');
-      const status = node('span', request.title === 'AskUserQuestion' ? '待回答' : '待批准', 'native-approval-status');
+      const status = uiNode('span', request.title === 'AskUserQuestion' ? 'approval.waitAnswer' : 'approval.waitApprove', undefined, 'native-approval-status');
       row.nativeAuthor = author; row.nativeLabel = label; row.dataset.incomplete = String(Boolean(request.incomplete)); summary.append(author, status, label); row.append(summary, content);
-      if (request.incomplete) { summary.append(node('span', '内容未完整同步', 'native-approval-incomplete')); content.append(node('p', '请求内容未完整同步，请在原生终端核对。')); }
+      if (request.incomplete) { summary.append(uiNode('span', 'approval.incomplete', undefined, 'native-approval-incomplete')); content.append(uiNode('p', 'approval.incompleteHelp')); }
       const preview = nativeApprovalPreview(request);
       if (preview.kind === 'edit') {
-        if (preview.scope) summary.append(node('span', preview.scope, 'native-approval-scope'));
+        if (preview.scope) { const scope = node('span', undefined, 'native-approval-scope'); ui.display.computed(scope, 'text', () => nativeApprovalPreview(request).scope); summary.append(scope); }
         const excerpts = nativeApprovalChangeExcerpts(preview.before, preview.after);
-        for (const [name, excerpt, cls] of [['修改前', excerpts.before, 'native-approval-before'], ['修改后', excerpts.after, 'native-approval-after']]) {
+        for (const [name, excerpt, cls] of [['approval.before', excerpts.before, 'native-approval-before'], ['approval.after', excerpts.after, 'native-approval-after']]) {
           const group = node('div', undefined, cls);
-          group.append(node('strong', name + (excerpt.truncated ? '（节选）' : '')), node('pre', excerpt.text, 'approval-command')); content.append(group);
+          const label = node('strong'); ui.display.computed(label, 'text', () => excerpt.truncated ? uiText('approval.excerpt', { label: uiText(name) }) : uiText(name));
+          group.append(label, node('pre', excerpt.text, 'approval-command')); content.append(group);
         }
       } else if (preview.kind === 'command') content.append(node('pre', preview.command, 'approval-command'));
       else if (preview.kind === 'questions') {
@@ -2663,22 +2779,22 @@ function renderNativeOnlyApproval(el, s, stale) {
       } else if (preview.raw) content.append(node('pre', preview.raw, 'approval-command native-approval-raw-body'));
       if (preview.kind !== 'raw') {
         const original = node('details', undefined, 'native-approval-original');
-        original.append(node('summary', '完整原始请求'), node('pre', preview.raw, 'approval-command native-approval-raw-body')); content.append(original);
+        original.append(uiNode('summary', 'approval.original'), node('pre', preview.raw, 'approval-command native-approval-raw-body')); content.append(original);
       }
     }
-    const preview = nativeApprovalPreview(request), description = preview.label, caption = `${s.name} · ${request.title === 'AskUserQuestion' ? '等待你回答' : '等你批准'} · ${description}${preview.scope ? ' · ' + preview.scope : ''}`;
+    const description = () => nativeApprovalPreview(request).label, caption = () => { const preview = nativeApprovalPreview(request); return `${s.name} · ${uiText(request.title === 'AskUserQuestion' ? 'approval.yourAnswer' : 'approval.yourApproval')} · ${description()}${preview.scope ? ' · ' + preview.scope : ''}`; };
     if (row.nativeAuthor.textContent !== s.name) row.nativeAuthor.textContent = s.name;
     row.nativeAuthor.title = s.name;
-    if (row.nativeLabel.textContent !== description) row.nativeLabel.textContent = description;
-    row.firstChild.title = caption; row.firstChild.setAttribute('aria-label', caption); rows.push(row);
+    ui.display.computed(row.nativeLabel, 'text', description);
+    ui.display.computed(row.firstChild, 'title', caption); ui.display.computed(row.firstChild, 'aria-label', caption); rows.push(row);
   }
   let terminal = el.querySelector(':scope > .native-approval-terminal');
   if (!terminal) terminal = button('', () => operateNative(s.id), 'native-approval-terminal');
-  const action = `在 ${s.name} 的原生终端处理`; if (terminal.textContent !== '去终端') terminal.textContent = '去终端';
-  terminal.setAttribute('aria-label', action);
-  terminal.title = action + '；请求正在等待你处理，这里不会代发批准。'; rows.push(terminal);
+  ui.display.text(terminal, 'approval.goTerminal');
+  ui.display.attribute(terminal, 'aria-label', 'approval.inTerminal', { name: s.name });
+  ui.display.attribute(terminal, 'title', 'approval.inTerminalHelp', { name: s.name }); rows.push(terminal);
   let notice = el.querySelector(':scope > .native-approval-stale');
-  if (!notice) notice = node('p', '原生状态待核验，请在原生终端核对。', 'native-approval-stale');
+  if (!notice) notice = uiNode('p', 'approval.stale', undefined, 'native-approval-stale');
   notice.hidden = !stale; rows.push(notice);
   // Keep unchanged native request nodes connected: receipt/owner updates must
   // not collapse an open request or discard a selection in its original text.
@@ -2698,7 +2814,7 @@ function renderApproval(s, own) {
   const stale = !nativeStatusFresh(s?.nativeApproval);
   const { observedAt, ...nativeApprovalContent } = s?.nativeApproval || {};
   el.classList.toggle('native-only', nativeOnly);
-  const signature = JSON.stringify([s?.id, s?.nativeId, s?.name, s?.state, own, s?.claudeQuestion, s?.approval, requests, s?.approvalOverflow, s?.approvalNotice, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
+  const signature = JSON.stringify([s?.id, s?.nativeId, s?.name, s?.state, own, s?.claudeQuestion, s?.approval, requests, s?.approvalOverflow, s?.approvalNotice, s?.approvalNoticeUiMessage, s?.approvalResolved, s?.approvalDecisions, s?.nativeApproval ? nativeApprovalContent : null, stale]);
   if (el.dataset.signature === signature) return;
   el.dataset.signature = signature;
   if (!nativeOnly || el.hidden) { el.replaceChildren(); delete el.nativeApprovalContext; }
@@ -2706,9 +2822,9 @@ function renderApproval(s, own) {
   if (s.claudeQuestion) {
     // Held before the native dialog opens: answer here, or let the terminal ask it.
     const { requestId, questions } = s.claudeQuestion;
-    el.append(node('strong', `${s.name} · 等待你回答`));
+    el.append(uiNode('strong', 'approval.namedStatus', () => ({ name: s.name, status: uiText('approval.yourAnswer') })));
     appendQuestionForm(el, questions.map(q => ({ ...q, isOther: true })), !own, answers => api.answer(s.id, requestId, answers));
-    el.append(button('去终端回答', async () => { await api.answer(s.id, requestId, null); await switchMode('terminal'); }));
+    el.append(uiButton('approval.terminalAnswer', async () => { await api.answer(s.id, requestId, null); await switchMode('terminal'); }));
     return;
   }
   if (s.nativeApproval?.nativeOnly) {
@@ -2716,70 +2832,68 @@ function renderApproval(s, own) {
     return;
   }
   if (requests.length > 1) {
-    const select = document.createElement('select'); select.id = 'approval-request'; select.setAttribute('aria-label', '待处理请求');
+    const select = document.createElement('select'); select.id = 'approval-request'; ui.display.attribute(select, 'aria-label', 'approval.pending');
     requests.forEach((request, index) => {
-      const text = request.method === 'item/tool/requestUserInput' ? '问题' : '确认';
-      const detail = request.params?.command || request.params?.questions?.[0]?.header || request.params?.reason || '';
-      const option = node('option', `${index + 1}. ${text}${detail ? ' · ' + detail.split('\n')[0].slice(0, 90) : ''}${request.pending ? ' · 已提交' : ''}`);
+      const textKey = request.method === 'item/tool/requestUserInput' ? 'approval.question' : 'approval.confirm';
+      const detail = () => request.params?.command || request.params?.questions?.[0]?.header || ui.displayText(request.params?.reason, request.method === 'native/requestAmbiguous' ? request.params?.reasonUiMessage : undefined) || '';
+      const option = node('option'); ui.display.computed(option, 'text', () => `${index + 1}. ${uiText(textKey)}${detail() ? ' · ' + detail().split('\n')[0].slice(0, 90) : ''}${request.pending ? uiText('approval.submitted') : ''}`);
       option.value = request.requestId; select.append(option);
     });
     select.value = s.approval.requestId;
     select.onchange = () => { approvalViews.set(s.id, select.value); render(); $('approval-request')?.focus(); };
     el.append(select);
   }
-  const heading = node('strong', `${s.name} · ${s.approvalNotice ? '原生确认状态待核对' : s.approvalResolved ? '这项原生确认已处理' : s.approval?.pending ? '等待原生确认结果' : '需要你确认'}`);
+  const heading = uiNode('strong', 'approval.namedStatus', () => ({ name: s.name, status: uiText(s.approvalNotice ? 'approval.unverified' : s.approvalResolved ? 'approval.resolved' : s.approval?.pending ? 'approval.waitResult' : 'approval.needed') }));
   el.append(heading);
-  if (s.approvalOverflow) el.append(node('p', '待处理请求未完整同步，请在原生终端核对；这里不会代发决定。'));
-  if (s.approvalNotice) el.append(node('p', s.approvalNotice));
-  if (s.approvalResolved) el.append(node('p', '等待原生状态更新；已处理不代表工具执行成功。'));
+  if (s.approvalOverflow) el.append(uiNode('p', 'approval.overflow'));
+  if (s.approvalNotice) { const notice = node('p'); ui.display.computed(notice, 'text', () => ui.displayText(s.approvalNotice, s.approvalNoticeUiMessage)); el.append(notice); }
+  if (s.approvalResolved) el.append(uiNode('p', 'approval.resolvedHelp'));
   if (s.approval) {
     const policy = window.nativeWorkspaceApproval.nativeApprovalPolicy(s.approval);
     if (policy.questions) {
-      heading.textContent = `${s.name} · ${s.approval.params.isBlocking === false ? '问题 · 不阻塞本轮' : '等待你回答'}`;
+      ui.display.text(heading, 'approval.namedStatus', () => ({ name: s.name, status: uiText(s.approval.params.isBlocking === false ? 'approval.nonBlocking' : 'approval.yourAnswer') }));
       const requestId = s.approval.requestId;
       if (s.provider === 'codex' && (s.serviceCapabilities || state.capabilities || []).includes('nativeQuestionAnswer') && !policy.questions.some(q => q.isSecret)) {
         appendQuestionForm(el, policy.questions, !own || Boolean(s.approval.pending) || s.state !== 'approval' || Boolean(s.approvalOverflow), answers => api.answer(s.id, requestId, answers));
       } else appendNativeQuestions(el, policy.questions);
-    } else if (policy.notice) el.append(node('p', policy.notice));
+    } else if (policy.notice) el.append(policy.noticeKey ? uiNode('p', policy.noticeKey) : node('p', policy.notice));
     if (policy.command) el.append(node('pre', policy.command, 'approval-command'));
-    if (policy.cwd) el.append(node('p', '工作目录：' + policy.cwd));
-    if (policy.reason) el.append(node('p', '原因：' + policy.reason));
+    if (policy.cwd) el.append(uiNode('p', 'approval.cwd', { cwd: policy.cwd }));
+    if (policy.reason) el.append(uiNode('p', 'approval.reason', () => ({ reason: ui.displayText(policy.reason, policy.reasonUiMessage) })));
     const requestId = s.approval.requestId;
-    if (s.approval.params?.environmentId === 'local') el.append(node('p', '执行位置：本机'));
+    if (s.approval.params?.environmentId === 'local') el.append(uiNode('p', 'approval.local'));
     for (const decision of (s.approvalDecisions || []).filter(d => policy.decisions.includes(d))) {
-      const action = button({ accept: '允许这一次', decline: '拒绝', cancel: '取消本轮' }[decision], () => api.approve(s.id, requestId, decision));
+      const action = uiButton({ accept: 'approval.accept', decline: 'approval.decline', cancel: 'approval.cancel' }[decision], () => api.approve(s.id, requestId, decision));
       action.disabled = !own || Boolean(s.approval.pending) || s.state !== 'approval' || Boolean(s.approvalOverflow); el.append(action);
     }
   }
-  el.append(button(`在 ${s.name} 的原生终端处理`, () => operateNative(s.id)));
+  el.append(uiButton('approval.inTerminal', () => operateNative(s.id), undefined, { name: s.name }));
 }
 function renderAdvanced(s) {
   if (advancedControls?.id !== s.id) {
     const info = node('div'), usage = node('div'), fleet = node('div');
-    const stop = button(s.provider === 'codex' ? '断开本应用连接…' : '结束这个原生会话…', () => api.stop(s.id), 'small');
-    const forget = button('移除本应用记录…', () => api.forget(s.id), 'small');
-    $('advanced-content').replaceChildren(info, usage, button('查看协作笔记', openNotes, 'small'), button('带上协作背景…', openContext, 'small'), fleet, stop, forget);
+    const stop = uiButton(s.provider === 'codex' ? 'advanced.disconnect' : 'advanced.end', () => api.stop(s.id), 'small');
+    const forget = uiButton('advanced.forget', () => api.forget(s.id), 'small');
+    $('advanced-content').replaceChildren(info, usage, uiButton('advanced.notes', openNotes, 'small'), uiButton('advanced.context', openContext, 'small'), fleet, stop, forget);
     advancedControls = { id: s.id, info, usage, fleet, stop, forget };
   }
   const a = advancedControls;
-  a.info.textContent = `原生 ID：${s.nativeId || '正在建立'}\n运行进程：${s.pid || '未连接'}${s.provider === 'codex' ? '\n' + nativeVersionText(s) : ''}\n后台版本：${s.runtimeVersion || '未报告'}\n工作目录：${s.cwd}${s.nativeContexts?.length ? '\n此前上下文（仅历史）：' + s.nativeContexts.map(c => c.nativeId).join('、') : ''}\n后台工作：${s.background ?? '原生未报告'} · 定时任务：${s.scheduled ?? '原生未报告'}`;
-  a.usage.hidden = false; a.usage.textContent = window.nativeWorkspaceUsage.usageLines(s.provider, s.usage).join('\n');
-  a.fleet.replaceChildren(...s.fleet.slice(-8).map(event => node('div', `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${event.name}${event.model ? ' · ' + event.model : ''}`)));
+  ui.display.text(a.info, 'advanced.info', () => ({ id: s.nativeId || uiText('advanced.establishing'), pid: s.pid || uiText('advanced.disconnected'), version: s.provider === 'codex' ? '\n' + nativeVersionText(s) : '', backend: s.runtimeVersion || uiText('version.unreported'), cwd: s.cwd, contexts: s.nativeContexts?.length ? uiText('advanced.oldContexts', { ids: s.nativeContexts.map(c => c.nativeId).join('、') }) : '', background: s.background ?? uiText('advanced.nativeMissing'), scheduled: s.scheduled ?? uiText('advanced.nativeMissing') }));
+  a.usage.hidden = false; ui.display.computed(a.usage, 'text', () => window.nativeWorkspaceUsage.usageLines(s.provider, s.usage, ui.language.getSnapshot().active).join('\n'));
+  a.fleet.replaceChildren(...s.fleet.slice(-8).map(event => { const label = node('div'); ui.display.computed(label, 'text', () => `${event.event}${event.kind ? ' / ' + event.kind : event.tool ? ' / ' + event.tool : ''} · ${ui.displayText(event.name, event.nameUiMessage)}${event.model ? ' · ' + event.model : ''}`); return label; }));
   a.stop.hidden = !switchedAway(s) && ['ended', 'background', 'stopping', 'recoverable'].includes(s.state);
   a.forget.hidden = !(['ended', 'background', 'recoverable', 'error'].includes(s.state) && !s.backendUnavailable && !s.terminalAvailable && (s.serviceCapabilities || state.capabilities)?.includes('forget'));
 }
-// Native activity words as plain Chinese; a native permission title passes through.
-const nativeActivityLabels = { requesting: '正在请求', thinking: '思考中', text: '正在输出', input: '正在准备工具', tool: '正在运行工具',
-  inProgress: '工作中', commandExecution: '正在运行命令', fileChange: '正在修改文件', mcpToolCall: '正在调用工具', dynamicToolCall: '正在调用工具',
-  webSearch: '正在搜索网页', reasoning: '思考中', plan: '正在更新计划', agentMessage: '正在输出', waitingOnUserInput: '等待回答', waitingOnApproval: '等待确认', willRetry: '正在重试' };
-const elapsedText = seconds => seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, '0')} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`;
+// Only known activity enums are localized; native titles pass through unchanged.
+const nativeActivityLabels = {"requesting": "activity.requesting", "thinking": "activity.thinking", "text": "activity.text", "input": "activity.input", "tool": "activity.tool", "inProgress": "activity.inProgress", "commandExecution": "activity.commandExecution", "fileChange": "activity.fileChange", "mcpToolCall": "activity.mcpToolCall", "dynamicToolCall": "activity.dynamicToolCall", "webSearch": "activity.webSearch", "reasoning": "activity.reasoning", "plan": "activity.plan", "agentMessage": "activity.agentMessage", "waitingOnUserInput": "activity.waitingOnUserInput", "waitingOnApproval": "activity.waitingOnApproval", "willRetry": "activity.willRetry"};
+const elapsedText = seconds => seconds < 60 ? uiText('native.seconds', { seconds }) : seconds < 3600 ? uiText('native.minutes', { minutes: Math.floor(seconds / 60), seconds: String(seconds % 60).padStart(2, '0') }) : uiText('native.hours', { hours: Math.floor(seconds / 3600), minutes: Math.floor(seconds % 3600 / 60) });
 function renderNativeActivity(s) {
   const el = $('native-activity');
   const recovery = !disconnected && !s?.transportDisconnected && s?.capacityRecovery;
   if (recovery && ['scheduled', 'exhausted'].includes(recovery.status)) {
     el.hidden = false;
-    $('native-phase').textContent = `${s.name} · ${recovery.reason === 'routing' ? '路由发现超时' : '模型满载'}${recovery.status === 'exhausted' ? '，自动继续已达上限，需要你处理' : ''}`;
-    $('native-elapsed').textContent = recovery.status === 'scheduled' ? ` · ${new Date(recovery.due).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 自动继续（第 ${recovery.attempt + 1}/3 次）` : '';
+    ui.display.computed($('native-phase'), 'text', () => `${s.name} · ${uiText(recovery.reason === 'routing' ? 'native.routingTimeout' : 'native.capacity')}${recovery.status === 'exhausted' ? uiText('native.capacityLimit') : ''}`);
+    ui.display.computed($('native-elapsed'), 'text', () => recovery.status === 'scheduled' ? uiText('native.recovery', { time: new Date(recovery.due).toLocaleTimeString(ui.language.getSnapshot().active, { hour: '2-digit', minute: '2-digit' }), attempt: recovery.attempt + 1 }) : '');
     return;
   }
   const question = s?.approval?.method === 'item/tool/requestUserInput';
@@ -2790,13 +2904,11 @@ function renderNativeActivity(s) {
   const status = s.nativeActivity;
   const matched = status && nativeStatusFresh(status) && status.nativeId === s.nativeId && status.turnId === s.activeTurnId;
   const seconds = matched && Number.isFinite(status.startedAt) && status.startedAt <= Date.now() ? Math.floor((Date.now() - status.startedAt) / 1000) : null;
-  const label = s.claudeQuestion ? '等待回答' : status && !nativeStatusFresh(status) ? '原生状态待同步' : matched && status.label ? (Object.hasOwn(nativeActivityLabels, status.label) ? nativeActivityLabels[status.label] : status.label) : waiting ? question ? '等待回答' : '等待原生确认' : '正在处理';
+  const label = () => s.claudeQuestion ? uiText('state.question') : status && !nativeStatusFresh(status) ? uiText('native.stale') : matched && status.label ? (Object.hasOwn(nativeActivityLabels, status.label) ? uiText(nativeActivityLabels[status.label]) : status.label) : uiText(waiting ? question ? 'state.question' : 'native.approval' : 'native.processing');
   const notice = matched && !waiting && !s.approvalOverflow && s.state === 'working' && status.waitNotice;
   const slow = notice?.kind === 'tool-wait' && notice.nativeId === s.nativeId && notice.turnId === s.activeTurnId && notice.marker === status.toolWait?.marker && notice.progressAt === status.toolWait?.progressAt;
-  const text = (s.name || 'Codex') + ' · ' + label + (slow ? ' · 较长时间未收到工具进展，请检查原生界面或系统权限提示' : '');
-  if ($('native-phase').textContent !== text) $('native-phase').textContent = text;
-  const elapsed = seconds === null ? '' : ' · 已用 ' + elapsedText(seconds);
-  if ($('native-elapsed').textContent !== elapsed) $('native-elapsed').textContent = elapsed;
+  ui.display.computed($('native-phase'), 'text', () => (s.name || 'Codex') + ' · ' + label() + (slow ? uiText('native.slowTool') : ''));
+  ui.display.computed($('native-elapsed'), 'text', () => seconds === null ? '' : uiText('native.used', { elapsed: elapsedText(seconds) }));
 }
 const nativeActivityClock = setInterval(() => {
   if (!state) return;
@@ -2845,9 +2957,12 @@ function render() {
     $('panorama-nav').classList.toggle('active', inPanorama);
     $('panorama-nav').setAttribute('aria-pressed', String(inPanorama));
     $('return-panorama').hidden = !panoramaView.returning || inPanorama;
-    $('title').textContent = inRoom ? state.room.name : s?.name || '你的工作空间';
-    const warning = [disconnected ? '本地服务断开。草稿已保留，不会自动重发输入。' : [state.storageWarning, state.sessionNameWarning, state.roomStorageWarning].filter(Boolean).join(' '), state.viewStorageWarning].filter(Boolean).join(' ');
-    $('alert').hidden = !warning; $('alert').textContent = warning || '';
+    if (inRoom && state.room.unavailable) ui.display.text($('title'), 'space.unavailable');
+    else if (inRoom || s?.name) { ui.display.unbind($('title')); $('title').textContent = inRoom ? state.room.name : s.name; }
+    else ui.display.text($('title'), 'header.workspace');
+    const warningText = (raw, message) => message ? ui.displayText(raw, message) : raw;
+    const warning = () => [disconnected ? uiText('error.serviceDisconnectedNotice') : [warningText(state.storageWarning, state.storageWarningUiMessage), warningText(state.sessionNameWarning, state.sessionNameWarningUiMessage), warningText(state.roomStorageWarning, state.roomStorageWarningUiMessage)].filter(Boolean).join(' '), warningText(state.viewStorageWarning, state.viewStorageWarningUiMessage)].filter(Boolean).join(' ');
+    $('alert').hidden = !warning(); ui.display.computed($('alert'), 'text', warning);
     $('reconnect-button').hidden = !disconnected;
     $('retry-save').hidden = !state.viewStorageWarning && (disconnected || !state.storageRetryable);
     renderSessions(); renderCreateSpaces();
@@ -2855,27 +2970,27 @@ function render() {
     if ($('share-dialog').open) { populateSelect($('share-recipient'), members()); updateSharingControls(); }
     if ($('invite-dialog').open) for (const entry of $('invite-list').children) {
       const record = state.sessions.find(s => s.id === entry.dataset.inviteSession);
-      if (record) entry.textContent = `加入 ${participantLabel(record, state.sessions)}`;
+      if (record) ui.display.text(entry, 'invite.joinName', { name: participantLabel(record, state.sessions) });
     }
     renderHeader(s, inRoom);
     if (inPanorama || panoramaView.returning) renderPanorama();
     if (inPanorama) {
-      $('title').textContent = '全部空间'; $('subtitle').textContent = '';
-      document.title = '全部空间 — Native Agent Workspace';
+      ui.display.text($('title'), 'panorama.title'); $('subtitle').textContent = '';
+      document.title = uiText('panorama.windowTitle');
     }
     if (!s) renderNativeActivity(null);
     if (s) {
       const own = s.owner === owner; const alive = nativeUsable(s);
-      $('native-pane-title').textContent = inRoom ? participantLabel(s, state.sessions) + ' · 原生终端' : '原生终端';
-      $('native-pane-title').title = participantLabel(s, state.sessions) + ' · 原生终端';
-      $('terminal-maximize').setAttribute('aria-label', terminalLayout === 'maximized' ? '恢复并排' : '放大终端');
-      $('terminal-maximize').title = terminalLayout === 'maximized' ? '恢复并排' : '放大终端';
+      ui.display.text($('native-pane-title'), inRoom ? 'terminal.named' : 'terminal.native', { name: participantLabel(s, state.sessions) });
+      ui.display.attribute($('native-pane-title'), 'title', 'terminal.named', { name: participantLabel(s, state.sessions) });
       // A focused member's conversation tab also shows the chat alone, whatever the saved split.
-      $('chat-maximize').setAttribute('aria-label', !terminalVisible ? '恢复并排' : '放大对话'); $('chat-maximize').title = $('chat-maximize').getAttribute('aria-label');
+      for (const [id, key] of [['terminal-maximize', terminalLayout === 'maximized' ? 'terminal.restoreSplit' : 'terminal.maximize'], ['chat-maximize', !terminalVisible ? 'terminal.restoreSplit' : 'terminal.maximizeChat']]) {
+        ui.display.attribute($(id), 'aria-label', key); ui.display.attribute($(id), 'title', key);
+      }
       // The graphic follows the same layout state as the accessible name.
       $('terminal-maximize').toggleAttribute('data-restore', terminalLayout === 'maximized'); $('chat-maximize').toggleAttribute('data-restore', !terminalVisible);
-      $('session-status').textContent = `${s.archived ? '已归档 · ' : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? ` · Codex ${s.nativeVersion || '版本未确认'} 尚未验证` : ''}${s.activity ? ' · ' + s.activity : ''}${!own && s.owner ? ' · 另一个窗口控制' : ''}${terminals.get(s.id)?.viewInput ? ' · 输入暂存，尚未发送' : terminalUnclaimed(s, own, terminalVisible) ? ' · 终端未接通，可点「原生终端」重试' : ''}`;
-      $('session-status').title = nativeVersionText(s);
+      ui.display.computed($('session-status'), 'text', () => `${s.archived ? uiText('native.archived') : ''}${sessionStatus(s)}${s.provider === 'codex' && s.nativeVersionStatus === 'unverified' && !disconnected ? uiText('native.codexUnverified', { version: s.nativeVersion || uiText('native.versionMissing') }) : ''}${s.activity ? ' · ' + (s.activityUiMessage ? ui.displayText(s.activity, s.activityUiMessage) : s.activity) : ''}${!own && s.owner ? uiText('native.otherWindow') : ''}${terminals.get(s.id)?.viewInput ? uiText('native.inputBuffered') : terminalUnclaimed(s, own, terminalVisible) ? uiText('native.terminalUnclaimed') : ''}`);
+      ui.display.computed($('session-status'), 'title', () => nativeVersionText(s));
       $('take-control').hidden = own || !alive;
       $('chat-tab').classList.toggle('active', mode === 'chat'); $('terminal-tab').classList.toggle('active', mode === 'terminal');
       $('terminal-controls').hidden = !terminalVisible;
@@ -2883,7 +2998,7 @@ function render() {
       $('messages').hidden = false; $('terminal-area').hidden = !terminalVisible; $('composer-wrap').hidden = false;
       renderComposer(s); renderNativeActivity(s);
       $('interrupt').hidden = !own || !(['working', 'approval'].includes(s.state) || s.capacityRecovery?.status === 'scheduled');
-      $('interrupt').textContent = s.capacityRecovery?.status === 'scheduled' ? '取消自动继续' : '中断回复';
+      ui.display.text($('interrupt'), s.capacityRecovery?.status === 'scheduled' ? 'native.cancelContinue' : 'native.interrupt');
       $('interrupt').disabled = interruptPending(s);
       readLegacyProgress(s);
       const visibleMessages = sessionMessages(s);
@@ -2895,12 +3010,11 @@ function render() {
       $('terminal-empty').hidden = terminals.has(s.id);
       // Without a terminal in this window: not started yet, ended, or (status line says
       // which: archived, background, disconnected…) simply none here.
-      const emptyText = alive ? '发送第一条消息后，这里会显示同一会话的原生终端。' : s.state === 'ended' ? '会话已结束，本窗口没有保留它的原生终端画面。' : '本窗口没有这个会话的原生终端画面。';
-      if ($('terminal-empty').textContent !== emptyText) $('terminal-empty').textContent = emptyText;
+      ui.display.text($('terminal-empty'), alive ? 'terminal.notStarted' : s.state === 'ended' ? 'terminal.endedEmpty' : 'terminal.noScreen');
       if (terminalVisible && alive && (mode === 'terminal' || s.terminalState?.alive || s.activeTurnId || s.messages.some(m => m.role === 'assistant'))) {
         // Mounting the same native display is passive; input still requires its
         // own focus/control claim. Never steal focus when the snapshot arrives.
-        ensureTerminal(s.id).catch(error => { if (mode === 'terminal') toast(error.message); });
+        ensureTerminal(s.id).catch(error => { if (mode === 'terminal') toastError(error); });
       }
     }
     if (inRoom) {
@@ -2911,7 +3025,7 @@ function render() {
       if (tabs.dataset.signature !== tabSignature) {
         tabs.replaceChildren(...people.map(m => {
           const label = `${m.name} · ${sessionShortId(m.id)}`;
-          const tab = button(label, () => selectRoom(m.id)); tab.dataset.roomSession = m.id; tab.title = `${label} · 拖回左侧独立使用`; draggableSession(tab, m.id); return tab;
+          const tab = button(label, () => selectRoom(m.id)); tab.dataset.roomSession = m.id; ui.display.attribute(tab, 'title', 'room.tabHint', { label }); draggableSession(tab, m.id); return tab;
         }));
         tabs.dataset.signature = tabSignature;
       }
@@ -2920,34 +3034,33 @@ function render() {
       for (const tab of tabs.children) {
         const member = people.find(m => m.id === tab.dataset.roomSession);
         const count = member.nativeApproval?.requests?.length || member.approvals?.length || (member.approval || member.approvalOverflow ? 1 : 0);
-        const text = `${member.name} · ${sessionShortId(member.id)}` + (count ? ` · ${count} 待处理` : '');
-        if (tab.textContent !== text) tab.textContent = text;
-        tab.title = `${member.name} · ${sessionShortId(member.id)} · 拖回左侧独立使用`;
+        ui.display.computed(tab, 'text', () => `${member.name} · ${sessionShortId(member.id)}` + (count ? uiText('room.pendingCount', { count }) : ''));
+        ui.display.attribute(tab, 'title', 'room.tabHint', { label: `${member.name} · ${sessionShortId(member.id)}` });
         tab.classList.toggle('needs-attention', Boolean(count));
       }
-      let runText = run ? `${run.pausePending ? '正在撤销后续授权' : run.pauseUnconfirmed ? '部分后台未确认暂停' : { running: '正在核查', paused: '已暂停', completed: '本轮交接结束' }[run.status]} · ${run.steps}/${run.maxSteps} 次回复${run.reason ? ' · ' + run.reason : ''}` : '';
       const pendingRun = roomSubmitting?.automatic;
       const waiting = roomPendingRecipients.get($('recipient').value) || roomPendingRecipients.values().next().value;
       $('run-status').parentElement.hidden = !run && !roomSubmitting && !waiting;
-      const next = state.sessions.find(m => m.id === run?.awaiting?.sessionId);
-      if (run?.status === 'running' && next) runText += ` · 等待 ${next.name}`;
-      if (pendingRun && roomSubmitting.cancelling) runText = '正在取消后续交接；草稿保留，已接收的任务仍在原会话中。';
-      else if (pendingRun && run?.status !== 'running') runText = '正在准备核查，等待先前操作或原生接收确认。可取消本次等待；已开始的原生任务不受影响。';
-      if (waiting && !pendingRun) runText = waiting.queued ? `已排队给 ${waiting.recipientName}：要等它空闲后才发送；想中途插话，请在它的原生终端输入。` : `正在发给 ${waiting.recipientName}，等待原生接收确认。可以选择其他成员继续输入。`;
       const active = people.filter(person => {
         const activity = person.sharedActivity;
         if (disconnected || person.transportDisconnected || !['working', 'approval'].includes(person.state) ||
           !activity || !nativeStatusFresh(activity) || activity.nativeId !== person.nativeId || activity.turnId !== person.activeTurnId) return false;
         return true;
       }).map(person => `${participantLabel(person, people)} · ${person.sharedActivity.label}`);
-      if (active.length) {
-        runText = [runText, ...active].filter(Boolean).join(' · ');
-        $('run-status').parentElement.hidden = false;
-      }
-      if (state.room.merge && !['ready', 'undone'].includes(state.room.merge.stage)) {
-        runText = [runText, '合并有步骤待核对，可从空间菜单查看详情'].filter(Boolean).join(' · '); $('run-status').parentElement.hidden = false;
-      }
-      if ($('run-status').textContent !== runText) $('run-status').textContent = runText;
+      const mergePending = state.room.merge && !['ready', 'undone'].includes(state.room.merge.stage);
+      if (active.length || mergePending) $('run-status').parentElement.hidden = false;
+      ui.display.computed($('run-status'), 'text', () => {
+        const statusKey = run?.pausePending ? 'room.revoking' : run?.pauseUnconfirmed ? 'room.pauseUnconfirmed' : { running: 'room.running', paused: 'room.paused', completed: 'room.completed' }[run?.status] || 'room.runUnknown';
+        let text = run ? uiText('room.replies', { status: uiText(statusKey), steps: run.steps, max: run.maxSteps, reason: run.reason ? ' · ' + ui.displayText(run.reason, run.reasonUiMessage) : '' }) : '';
+        const next = state.sessions.find(member => member.id === run?.awaiting?.sessionId);
+        if (run?.status === 'running' && next) text += uiText('room.awaiting', { name: next.name });
+        if (pendingRun && roomSubmitting.cancelling) text = uiText('room.cancelling');
+        else if (pendingRun && run?.status !== 'running') text = uiText('room.preparing');
+        if (waiting && !pendingRun) text = uiText(waiting.queued ? 'room.queued' : 'room.sending', { name: waiting.recipientName });
+        if (active.length) text = [text, ...active].filter(Boolean).join(' · ');
+        if (mergePending) text = [text, uiText('room.mergePending')].filter(Boolean).join(' · ');
+        return text;
+      });
       $('pause-button').hidden = !run && !roomSubmitting;
       renderTimeline();
       const previousRecipient = $('recipient').value;
@@ -2961,7 +3074,7 @@ function render() {
       const nativeRoute = recipient && (recipient.nativeInputRequired || recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient));
       $('shared-input').readOnly = false;
       $('forward-button').type = nativeRoute ? 'button' : 'submit';
-      $('forward-button').textContent = nativeRoute ? (nativeUsable(recipient) ? '打开原生终端' : '查看会话') : interruptPending(recipient) ? '等待中断确认' : recipient?.pendingQueue ? '等待原生接收' : roomQueueAvailable(recipient) ? '等本轮结束后发送 ↑' : roomSteerAvailable(recipient) ? '追加指令 ↑' : '发送 ↑';
+      ui.display.text($('forward-button'), nativeRoute ? (nativeUsable(recipient) ? 'composer.terminal' : 'reading.viewSession') : interruptPending(recipient) ? 'composer.waitInterrupt' : recipient?.pendingQueue ? 'composer.waitNative' : roomQueueAvailable(recipient) ? 'composer.queue' : roomSteerAvailable(recipient) ? 'composer.steer' : 'composer.send');
       const recipientPending = roomPendingRecipients.has(recipient?.id);
       const mergeBlocked = state.room.merge && (!state.room.merge.imported || ['preparing', 'joining', 'failed', 'undoing'].includes(state.room.merge.stage));
       const unavailable = mergeBlocked || roomSubmitting || recipientPending || disconnected || !nativeWorkspaceMentions.body(roomMention, $('shared-input').value).trim();
@@ -2971,16 +3084,19 @@ function render() {
       $('forward-button').disabled = nativeRoute ? mergeBlocked || roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !manualErrorReady && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
       const otherRun = allSpaces().find(r => r.id !== spaceId && r.run?.status === 'running');
       $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed || !safeHandoffs || Boolean(threadUnsupported) || Boolean(otherRun);
-      $('run-help').textContent = recipient ? `只发给 ${participantLabel(recipient)} · Enter 发送，Shift Enter 换行` : roomMention?.active === false ? '接收者已变化，重新 @ 选择。正文保留，不会发送给旧成员。' : '@ 选择接收者。加入或查看工作区不会自动发送私人历史。';
-      if (roomQueueAvailable(recipient) || recipient?.pendingQueue) $('run-help').textContent += ' · 等原生下一轮接收；当前工作继续，先前私人内容不会加入共享记录。';
-      if (roomSteerAvailable(recipient)) $('run-help').textContent += ' · 追加到当前原生回合；接收后的新消息块进入共享记录，先前内容不补发。';
-      if (manualErrorReady) $('run-help').textContent += ' · 上次请求失败，不会自动重试或继续交接。';
-      if (recipient?.legacyShare && !recipient.legacySharedReply) $('run-help').textContent += ' · 回复在成员视图查看，由你选择后再分享。';
-      $('run-button').title = otherRun ? `「${otherRun.name}」正在核查；请先在原空间明确暂停。定向发送给其他空闲成员仍可使用。` : safeHandoffs ? '预览任务后授权有限的回复交接；不代表全部原生团队结束。' : state.handoffNotice || '现有后台暂不支持这项核查，原生会话继续保留。';
-      if (nativeRoute) $('run-help').textContent = recipient?.nativeInputRequired ? 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；共享草稿保留，不会自动发送。' : '这个会话暂不能从这里接收消息。草稿保留，查看会话不会自动粘贴或发送。';
-      if (interruptPending(recipient)) $('run-help').textContent = '正在等待原生中断确认，可以继续编辑草稿；不会自动发送。';
-      if (threadUnsupported) $('run-help').textContent = roomThreads.rows.has(roomReplyTo) ? '此连接尚不支持讨论回复。草稿保留；取消回复可作为新消息发送。' : '原讨论已移除。草稿保留，请先取消回复。';
-      $('pause-button').textContent = run?.pauseUnconfirmed ? '重新核对暂停' : pendingRun && run?.status !== 'running' ? '取消等待' : '暂停交接';
+      ui.display.computed($('run-help'), 'text', () => {
+        let text = recipient ? uiText('room.sendHint', { name: participantLabel(recipient) }) : uiText(roomMention?.active === false ? 'room.recipientChanged' : 'room.chooseRecipientHelp');
+        if (roomQueueAvailable(recipient) || recipient?.pendingQueue) text += uiText('room.queueHelp');
+        if (roomSteerAvailable(recipient)) text += uiText('room.steerHelp');
+        if (manualErrorReady) text += uiText('room.failedHelp');
+        if (recipient?.legacyShare && !recipient.legacySharedReply) text += uiText('room.legacyReplyHelp');
+        if (nativeRoute) text = uiText(recipient?.nativeInputRequired ? 'room.nativeInputRequired' : 'room.nativeRouteHelp');
+        if (interruptPending(recipient)) text = uiText('composer.interruptHint');
+        if (threadUnsupported) text = uiText(roomThreads.rows.has(roomReplyTo) ? 'room.threadUnsupported' : 'room.threadMissingHelp');
+        return text;
+      });
+      ui.display.computed($('run-button'), 'title', () => otherRun ? uiText('room.otherReview', { name: otherRun.name }) : safeHandoffs ? uiText('room.runPreviewHelp') : state.handoffNotice ? ui.displayText(state.handoffNotice, state.handoffNoticeUiMessage) : uiText('room.runUnsupported'));
+      ui.display.text($('pause-button'), run?.pauseUnconfirmed ? 'room.recheckPause' : pendingRun && run?.status !== 'running' ? 'room.cancelWait' : 'room.pauseHandoffs');
       $('pause-button').disabled = Boolean(roomSubmitting?.cancelling) || Boolean(run?.pausePending) || (!pendingRun && run?.status !== 'running' && !run?.pauseUnconfirmed);
       if (!$('mention-list').hidden && mentionRoster !== mentionRosterKey()) showMentions();
       renderRoomOverview();
@@ -3051,7 +3167,7 @@ async function ensureTerminal(id, explicit = false) {
   if (record?.recovering && !record.terminalAvailable && !record.terminalState?.alive) return;
   const generation = record?.connectionRevision || 0;
   const old = terminals.get(id);
-  if (old && (old.generation !== generation || old.nativeId !== record?.nativeId)) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, new Error('原生连接已变化；旧输入没有发送。')); }
+  if (old && (old.generation !== generation || old.nativeId !== record?.nativeId)) { old.term.dispose(); old.element.remove(); terminals.delete(id); cancelViewInput(old, uiError("error.nativeConnectionChanged")); }
   if (old?.waitingForFirstTurn && terminals.get(id) === old &&
       (record?.activeTurnId && record.activeTurnId !== old.firstTurnAttemptId || record?.messages.some(message => message.role === 'assistant') && !old.firstTurnHadOutput)) {
     // A first-message instruction never launched a display. Once that same
@@ -3061,8 +3177,8 @@ async function ensureTerminal(id, explicit = false) {
   // A repaint never restarts a native display. Only an explicit view action can
   // replace its cached screen, after the backend reports the display lifetime.
   if (explicit && old?.ready && terminals.get(id) === old && !currentTerminalDisplay(old, record)) {
-    if (record.owner !== owner || record.backendUnavailable || record.transportDisconnected || disconnected) throw new Error('请先连接并接管这个会话，再打开终端。');
-    if (record.terminalState?.alive === false && !record.terminalState.exitConfirmed) throw new Error('旧终端退出尚未确认，暂不启动另一个终端。');
+    if (record.owner !== owner || record.backendUnavailable || record.transportDisconnected || disconnected) throw uiError("error.sessionControl");
+    if (record.terminalState?.alive === false && !record.terminalState.exitConfirmed) throw uiError("error.oldTerminalPending");
     cancelViewInput(old); old.term.dispose(); old.element.remove(); terminals.delete(id);
   }
   if (!explicit && !terminals.has(id) && record?.terminalState?.alive === false) return;
@@ -3071,7 +3187,7 @@ async function ensureTerminal(id, explicit = false) {
   if (activeSessionId() === id) $('terminal-empty').hidden = true;
   const theme = terminalThemes[terminalDisplay.palette];
   $('terminal-area').style.backgroundColor = theme.background;
-  const loading = node('p', '正在连接原生终端…', 'terminal-loading'); loading.setAttribute('role', 'status');
+  const loading = uiNode('p', 'terminal.connecting', undefined, 'terminal-loading'); loading.setAttribute('role', 'status');
   const surface = node('div', undefined, 'terminal-surface'); surface.hidden = true; surface.inert = true; element.append(loading, surface);
   // Option-drag selects text even when the program takes the mouse. Option-click must not
   // move the cursor: xterm would type arrow keys into the native program and clear the selection.
@@ -3095,15 +3211,15 @@ async function ensureTerminal(id, explicit = false) {
   let recovery = inputRecoveries.get(id);
   if (!recovery) {
     const panel = node('div', undefined, 'terminal-input-recovery'); panel.hidden = true;
-    const text = node('textarea'); text.readOnly = true; text.setAttribute('aria-label', '未确认的终端输入');
-    panel.append(node('strong', '这段输入尚未确认'), node('p', '不会自动重发。请先复制留存，再检查原生终端是否已收到；关闭应用会清除此处的临时副本。'), text,
-      button('复制', () => api.copy(text.value)), button('关闭提示', () => { panel.hidden = true; text.value = ''; render(); focusTerminal(id); }));
+    const text = node('textarea'); text.readOnly = true; ui.display.attribute(text, 'aria-label', 'terminal.unconfirmedInput');
+    panel.append(uiNode('strong', 'terminal.inputUnconfirmed'), uiNode('p', 'terminal.inputUnconfirmedHelp'), text,
+    uiButton('common.copy', () => api.copy(text.value)), uiButton('terminal.closeNotice', () => { panel.hidden = true; text.value = ''; render(); focusTerminal(id); }));
     recovery = { panel, text }; inputRecoveries.set(id, recovery);
   }
   element.append(recovery.panel);
   const preserveUnconfirmed = entry.preserveUnconfirmed = (text, error) => {
     recovery.text.value += text; recovery.panel.hidden = false; render();
-    toast(`${state.sessions.find(s => s.id === id)?.name || '原会话'}：${error.message || '输入未确认'}。文字保留在该原生终端的提示中，不会自动重发。`);
+    toastMessage("toast.nativeInputRetained", () => ({ arg1: state.sessions.find(s => s.id === id)?.name || uiText('terminal.originalSession'), arg2: error.message ? ui.errorText(error) : uiText('terminal.inputUnknown') }));
   };
   const claimTerminalFocus = () => {
     const binding = columnTerminalBinding(id);
@@ -3135,14 +3251,14 @@ async function ensureTerminal(id, explicit = false) {
     const token = entry.composition;
     if (token?.cancelled) return;
     if (entry.viewInput && !canCaptureTerminal(id)) {
-      const error = new Error('输入切换已失效；这段输入没有发送。');
+      const error = uiError("error.inputSwitchExpired");
       cancelViewInput(entry, error); preserveUnconfirmed(data, error);
       if (token) { token.consumed = true; token.input = Promise.reject(error); token.input.catch(() => {}); }
       return;
     }
     if (canCaptureTerminal(id)) {
       const pending = entry.viewInput;
-      if (pending.text.length + data.length > 65536) { cancelViewInput(entry, new Error('切换等待期间输入过长，请复制后重试。')); preserveUnconfirmed(data, new Error('输入未发送。')); render(); return; }
+      if (pending.text.length + data.length > 65536) { cancelViewInput(entry, uiError("error.bufferTooLong")); preserveUnconfirmed(data, uiError("error.inputNotSent")); render(); return; }
       pending.text += data;
       if (token && !token.consumed) { token.consumed = true; token.input = pending.done; }
       return;
@@ -3152,7 +3268,7 @@ async function ensureTerminal(id, explicit = false) {
     if (finishing) token.consumed = true;
     const input = api.input(id, data);
     if (finishing) token.input = input;
-    input.catch(error => { if (finishing) preserveUnconfirmed(data, error); else toast(error.message || '终端输入未确认；不会自动重发。'); });
+    input.catch(error => { if (finishing) preserveUnconfirmed(data, error); else toastError(error.message ? error : uiError('error.nativeInputUnconfirmed')); });
   });
   let confirmingEnter = false, blurValue, compositionSequence = 0;
   element.addEventListener('compositionstart', () => { entry.composing = true; compositionSequence++; entry.compositionIntent = entry.viewInput; entry.compositionOrigin = { cancelled: false }; }, true);
@@ -3164,7 +3280,7 @@ async function ensureTerminal(id, explicit = false) {
     token.done = new Promise((resolve, reject) => setTimeout(async () => {
       try {
         if (!token.consumed && token.text) {
-          const error = new Error('输入未发送，请检查会话连接或控制权。');
+          const error = uiError("error.inputNotSentCheck");
           preserveUnconfirmed(token.text, error); throw error;
         }
         await token.input; resolve();
@@ -3244,7 +3360,7 @@ async function ensureTerminal(id, explicit = false) {
         if (terminals.get(id) !== entry) return;
         live = state.sessions.find(s => s.id === id)?.terminalState;
       }
-      if (snapshot.epoch && live?.epoch && snapshot.epoch !== live.epoch) throw new Error('终端画面已变化，请重新选择这个视图。');
+      if (snapshot.epoch && live?.epoch && snapshot.epoch !== live.epoch) throw uiError("error.terminalViewChanged");
       entry.epoch = snapshot.epoch;
       term.resize(snapshot.cols || 100, snapshot.rows || 30);
       if (snapshot.cursorModesVersion === 1) term.options.cursorBlink = false;
@@ -3263,7 +3379,7 @@ async function ensureTerminal(id, explicit = false) {
         // Never persist a raw native error (which can contain private paths).
         const firstMessage = '请先在对话中发送第一条消息，再打开同一会话的原生终端。';
         entry.waitingForFirstTurn = Boolean(error.message?.includes(firstMessage));
-        loading.textContent = entry.waitingForFirstTurn ? firstMessage : '终端未连接，重新选择此会话或视图可重试。';
+        ui.display.text(loading, entry.waitingForFirstTurn ? 'terminal.firstMessage' : 'terminal.connectFailed');
         throw error;
       }
     }
@@ -3312,13 +3428,13 @@ const disposers = [
     const record = state?.sessions.find(s => s.id === id);
     if (record) { record.name = name; render(); }
   }),
-  api.onDisconnected(message => { disconnected = true; for (const s of state?.sessions || []) freezeLegacyProgress(s); render(); toast(message); }),
-  api.onViewStorage(warning => { latestViewStorage = warning; if (state) { state.viewStorageWarning = warning; render(); } }),
+  api.onDisconnected((message, uiMessage) => { disconnected = true; for (const s of state?.sessions || []) freezeLegacyProgress(s); render(); toastError({ message, uiMessage }); }),
+  api.onViewStorage((warning, uiMessage) => { latestViewStorage = warning; latestViewStorageUiMessage = uiMessage; if (state) { state.viewStorageWarning = warning; state.viewStorageWarningUiMessage = uiMessage; render(); } }),
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
   api.onBackendSwitched(notice => toast(backendSwitchedText(notice))),
   api.onNew(() => openCreate()),
 ];
-sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), onError: error => toast(error.message || '未能保存侧栏高度。') });
+sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), displayTitle: (element, params) => ui.display.attribute(element, 'title', 'sidebar.resizeHelp', params), onError: toastError });
 disposers.push(() => sidebarLayout.dispose());
 // A drag resizes the native terminal once, on release, not on every move.
 const observer = new ResizeObserver(() => { if (activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
@@ -3368,8 +3484,8 @@ $('rename-form').onsubmit = async event => {
   try {
     await (target.id === 'room' ? api.spaceAction(target.roomId, 'rename', [$('rename-name').value]) : api.rename(target.id, $('rename-name').value));
     if (renameTarget !== target) return;
-    const returnFocus = mayRestoreFocus(); renaming = false; closeRename(returnFocus); toast('名称已保存。');
-  } catch (error) { if (renameTarget === target) { showRenameError(error.message || '名称未能保存，请重试。'); if (mayRestoreFocus()) $('rename-name').focus({ preventScroll: true }); } }
+    const returnFocus = mayRestoreFocus(); renaming = false; closeRename(returnFocus); toastMessage("toast.nameSaved");
+  } catch (error) { if (renameTarget === target) { showRenameError(error.message ? error : uiError('error.renameSave')); if (mayRestoreFocus()) $('rename-name').focus({ preventScroll: true }); } }
   finally { renaming = false; if (renameTarget === target) renderRename(); }
 };
 $('choose-folder').onclick = () => attempt(async () => { const ticket = dialogTickets.get($('create-dialog')); const value = await api.chooseFolder(); if (value && currentDialogTicket(ticket)) { folder = value; newDirectory = false; invalidateGitPreview(true); $('git-worktree-relative').value = ''; $('chosen-folder').textContent = folder; if ($('git-worktree').checked) await refreshGitPreview(); else createReadiness(); } });
@@ -3386,15 +3502,15 @@ $('create-form').onsubmit = event => { event.preventDefault();
   try { choice = createSpaceChoice(); } catch (error) { $('create-error').textContent = error.message; return; }
   attempt(async () => {
   const worktree = $('git-worktree').checked ? gitWorktreePlan : null;
-  if ($('git-worktree').checked && (!worktree || newDirectory || gitPreviewLoading || !state.capabilities?.includes('gitWorktreeV1'))) throw Error('请先完成 Git 副本预览；没有改用原目录启动。');
-  creatingSession = true; $('create-error').textContent = ''; createReadiness();
+  if ($('git-worktree').checked && (!worktree || newDirectory || gitPreviewLoading || !state.capabilities?.includes('gitWorktreeV1'))) throw uiError("error.gitPreviewRequired");
+  creatingSession = true; ui.display.unbind($('create-error')); $('create-error').textContent = ''; createReadiness();
   const submittedFolder = worktree?.cwd || folder, priorIds = new Set(state.sessions.map(s => s.id));
   let createdId = ''; // T-115: once the service returns the new session's id, a later failed read can't lose it
   try { const provider = document.querySelector('input[name="provider"]:checked').value, view = provider === 'codex' ? $('initial-view').value : preference; preference = view; const id = createdId = await api.create({ provider, cwd: worktree?.source || folder, name: $('session-name').value, view, ...(worktree ? { gitWorktree: worktree } : newDirectory ? { newDirectory: true } : {}), skipPermissions: $('skip-permissions').checked || undefined }); updateState(await api.initial()); render();
     if (choice.kind !== 'independent') { ticket.creation = { choice, sessionId: id, view, roomId: choice.roomId || '' }; creatingSession = false; await finishCreateSpace(ticket, revision); return; }
     // I160: the session exists from here on, so this opening creates no other, even if it stays open (the selection moved).
     ticket.created = id;
-    if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, view); } else toast('此前创建的会话已保留在侧栏。'); }
+    if (currentDialogTicket(ticket) && revision === selectionRevision) { $('create-dialog').close(); await select(id, view); } else toastMessage("toast.createdSessionRetained"); }
   catch (error) {
     let reread = true; try { updateState(await api.initial()); render(); } catch { reread = false; }
     const created = createdId ? state.sessions.find(s => s.id === createdId) : state.sessions.find(s => s.cwd === submittedFolder && !priorIds.has(s.id));
@@ -3428,7 +3544,7 @@ $('create-form').onsubmit = event => { event.preventDefault();
     // Stopped at its own folder, the service's 已存在 advice (use another folder) would contradict the locked form (I160).
     const message = kept + (ownFolderTaken ? '' : error.message) + join + spaceLater;
     if (currentDialogTicket(ticket)) $('create-error').textContent = message; else toast(message);
-    if (worktree && currentDialogTicket(ticket) && !ticket.creation && !ticket.created) { invalidateGitPreview(); $('chosen-folder').textContent = folder; $('git-worktree-preview').textContent = '若已生成副本，其路径和分支会保留。要再创建，请明确重新选择仓库或重新勾选副本；不会自动重试。'; }
+    if (worktree && currentDialogTicket(ticket) && !ticket.creation && !ticket.created) { invalidateGitPreview(); $('chosen-folder').textContent = folder; ui.display.text($('git-worktree-preview'), 'create.copyRetained'); }
     // A failed/uncertain start may already own the displayed path. Preserve
     // that record and any files; a new explicit submit gets a fresh preview.
     // A known id means the session owns this path; keeping it makes another 创建 fail as 已存在 rather than add a second one.
@@ -3456,7 +3572,7 @@ $('preview-space-merge').onclick = () => attempt(async () => {
     const batch = await api.spaceMerge('preview', mergeSpec());
     if (!currentDialogTicket(ticket)) { api.spaceMerge('discard', { operationId: batch.operationId }).catch(() => {}); return; }
     draft.batch = batch; mergeButtons(true); renderMergeBatch(batch); $('confirm-space-merge').focus();
-  } catch (error) { if (currentDialogTicket(ticket)) mergeError(error.message); else toast(error.message); }
+  } catch (error) { if (currentDialogTicket(ticket)) mergeError(error); else toastError(error); }
   finally { if (currentDialogTicket(ticket)) $('preview-space-merge').disabled = false; }
 });
 async function submitSpaceMerge(action) {
@@ -3469,16 +3585,16 @@ async function submitSpaceMerge(action) {
     if (action === 'undo') await persistView();
     const record = await api.spaceMerge(action, { operationId: batch.operationId, binding: batch.binding });
     updateState(await api.initial()); render();
-    if (!currentDialogTicket(ticket)) return toast('合并记录已保留，可从空间菜单查看详情。');
+    if (!currentDialogTicket(ticket)) return toastMessage("toast.mergeRetained");
     draft.record = record; draft.targetId = batch.targetId;
     if (action === 'commit' && record.stage === 'ready' && revision === selectionRevision) {
       $('space-merge-dialog').close(); await selectSpace(batch.targetId);
-      return toast(`已合并为「${batch.name}」`, { label: '查看详情', run: () => openMergeRecord(batch.targetId) });
+      return toastMessage("toast.mergeDone", { arg1: batch.name }, { label: uiText('merge.viewDetails'), labelKey: 'merge.viewDetails', run: () => openMergeRecord(batch.targetId) });
     }
     mergeButtons(true, true); renderMergeBatch(batch, record);
   } catch (error) {
     try { updateState(await api.initial()); render(); } catch {}
-    if (currentDialogTicket(ticket)) mergeError(error.message); else toast(error.message);
+    if (currentDialogTicket(ticket)) mergeError(error); else toastError(error);
   } finally { if (currentDialogTicket(ticket)) for (const key of controls) $(key).disabled = false; }
 }
 $('confirm-space-merge').onclick = () => attempt(() => submitSpaceMerge('commit'));
@@ -3495,8 +3611,8 @@ $('space-create-form').onsubmit = event => { event.preventDefault(); attempt(asy
   try {
     const id = await api.spaceCreate($('space-create-name').value); updateState(await api.initial()); render();
     if (currentDialogTicket(ticket)) { $('space-create-dialog').close(); await selectSpace(id); }
-    else toast('此前新建的空间已保留在侧栏。');
-  } catch (error) { if (currentDialogTicket(ticket)) { $('space-create-error').textContent = error.message; $('space-create-error').hidden = false; } else toast(error.message); }
+    else toastMessage("toast.createdSpaceRetained");
+  } catch (error) { if (currentDialogTicket(ticket)) { ui.showError($('space-create-error'), error); $('space-create-error').hidden = false; } else toastError(error); }
   finally { if (currentDialogTicket(ticket)) $('confirm-space-create').disabled = false; }
 }); };
 $('workspace-group').addEventListener('contextmenu', event => {
@@ -3558,7 +3674,7 @@ $('terminal-more').onpointerdown = event => { if (sessionMenu?.anchor === $('ter
 const saveTerminalDisplay = () => attempt(async () => {
   if (!$('terminal-display-dialog').open) return;
   const fontSize = Number($('terminal-font-size').value);
-  if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 24) throw new Error('字号请设为 10–24。');
+  if (!Number.isInteger(fontSize) || fontSize < 10 || fontSize > 24) throw uiError('error.nativeFontRange');
   terminalDisplay = { fontSize, palette: $('terminal-palette').value }; applyTerminalDisplay(); await persistView();
 });
 $('terminal-font-size').onchange = $('terminal-palette').onchange = saveTerminalDisplay;
@@ -3571,16 +3687,16 @@ function openSpaceFiles() {
 function renderSpaceFiles() {
   if (!filesSpace) return;
   const room = spaceRecord(filesSpace); if (!room) return;
-  $('space-files-title').textContent = `空间文件 · ${room.name}`;
+  ui.display.text($('space-files-title'), 'files.titleName', { name: room.name });
   $('add-space-files').disabled = disconnected || room.archived;
   const signature = JSON.stringify(room.files || []), list = $('space-files-list');
   if (list.dataset.signature === signature) return; list.dataset.signature = signature;
   list.replaceChildren(...(room.files || []).map(file => {
     const row = node('div', undefined, 'space-file-row'), open = button(file.name, async () => { $('space-files-dialog').close(); if (spaceId !== filesSpace) await selectSpace(filesSpace); await openLocalFile(true, file.id); }); open.title = file.path;
-    const remove = button('移除引用', async () => { await api.spaceAction(filesSpace, 'removeFile', [file.id, room.metadataRevision]); updateState(await api.initial()); renderSpaceFiles(); }); remove.disabled = room.archived; remove.setAttribute('aria-label', `从「${room.name}」移除「${file.name}」的引用，保留原文件`);
+    const remove = uiButton('files.remove', async () => { await api.spaceAction(filesSpace, 'removeFile', [file.id, room.metadataRevision]); updateState(await api.initial()); renderSpaceFiles(); }); remove.disabled = room.archived; ui.display.attribute(remove, 'aria-label', 'files.removeAction', { space: room.name, file: file.name });
     row.append(open, remove); return row;
   }));
-  if (!list.children.length) list.append(node('p', '这个空间还没有文件引用。', 'quiet'));
+  if (!list.children.length) list.append(uiNode('p', 'files.empty', undefined, 'quiet'));
 }
 $('close-space-files').onclick = () => $('space-files-dialog').close();
 $('add-space-files').onclick = () => attempt(async () => { const id = filesSpace; await api.spaceFiles(id); updateState(await api.initial()); if (filesSpace === id) renderSpaceFiles(); });
@@ -3601,11 +3717,11 @@ async function openLocalFile(room = false, reference) {
     if (!fileTargetMatches()) { fileTarget = null; await api.closeLocalFile(preview.token); return; }
     filePreview = preview;
     $('file-title').textContent = preview.name;
-    $('file-info').textContent = `${preview.size} 字节 · 当前文件快照 · 支持 UTF-8 文本，最多 256 KB`;
+    ui.display.text($('file-info'), 'file.snapshot', () => ({ size: preview.size.toLocaleString(ui.language.getSnapshot().active) }));
     $('file-content').textContent = preview.text;
     $('file-error').hidden = true;
     $('insert-file').disabled = !target.room && mode !== 'chat' || fileDraftInput().readOnly;
-    $('insert-file').title = $('insert-file').disabled ? '可在对话视图中加入草稿；文件仍可查看和保存副本。' : '只加入草稿，不会发送';
+    ui.display.attribute($('insert-file'), 'title', $('insert-file').disabled ? 'file.insertUnavailable' : 'file.insertOnly');
     $('file-dialog').showModal();
   } finally { fileChoosing = false; }
 }
@@ -3616,15 +3732,15 @@ $('file-dialog').addEventListener('close', () => {
   if ($('file-dialog').open) return;
   if (filePreview) attempt(() => api.closeLocalFile(filePreview.token));
   filePreview = null; fileTarget = null;
-  for (const id of ['file-title', 'file-info', 'file-content', 'file-error']) $(id).textContent = '';
+  for (const id of ['file-title', 'file-info', 'file-content', 'file-error']) { ui.display.unbind($(id)); $(id).textContent = ''; }
   $('file-error').hidden = true; $('save-file').disabled = false;
 });
 $('insert-file').onclick = async () => {
   try {
-    if (!filePreview || !fileTargetMatches() || fileDraftInput().readOnly || (!fileTarget.room && mode !== 'chat')) throw Error('视图或控制权已变化，请回到要编辑的会话重新选择文件。');
+    if (!filePreview || !fileTargetMatches() || fileDraftInput().readOnly || (!fileTarget.room && mode !== 'chat')) throw uiError("error.fileViewChanged");
     const input = fileDraftInput();
-    const next = appendedDraft(input, `文件：${filePreview.name}\n${filePreview.text}`, fileTarget.room);
-    if (next.length > 16000) throw Error('合并后超过 16000 字符。请缩短草稿或选择较小的材料；没有截断内容。');
+    const next = appendedDraft(input, uiText('files.material', { name: filePreview.name, text: filePreview.text }), fileTarget.room);
+    if (next.length > 16000) throw uiError("error.draftMaterialTooLong");
     const room = fileTarget.room;
     input.value = next;
     // Insertion is synchronous and happens once. A failed persistence retry
@@ -3633,15 +3749,15 @@ $('insert-file').onclick = async () => {
     if (room) { roomDraftRevision++; render(); input.focus(); await persistView(); }
     else { input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); }
   } catch (error) {
-    if ($('file-dialog').open) { $('file-error').textContent = error.message; $('file-error').hidden = false; }
-    else toast(error.message);
+    if ($('file-dialog').open) { ui.showError($('file-error'), error); $('file-error').hidden = false; }
+    else toastError(error);
   }
 };
 $('save-file').onclick = async () => {
   if (!filePreview) return;
   const preview = filePreview; $('save-file').disabled = true;
-  try { if (await api.saveLocalFile(preview.token)) toast('已保存预览副本。'); }
-  catch (error) { if (filePreview === preview && $('file-dialog').open) { $('file-error').textContent = error.message; $('file-error').hidden = false; } else toast(error.message); }
+  try { if (await api.saveLocalFile(preview.token)) toastMessage("toast.previewSaved"); }
+  catch (error) { if (filePreview === preview && $('file-dialog').open) { ui.showError($('file-error'), error); $('file-error').hidden = false; } else toastError(error); }
   finally { if (filePreview === preview && $('file-dialog').open) $('save-file').disabled = false; }
 };
 $('interrupt').onclick = () => {
@@ -3679,7 +3795,7 @@ $('shared-input').oninput = event => {
     roomMention = edit ? nativeWorkspaceMentions.edited(prior, edit.before, input.value, edit) : null;
     if (edit) roomMentionHistory.record(edit.before, prior, input.value, roomMention); else roomMentionHistory.sync(input.value, null);
   }
-  if (prior && !roomMention) $('mention-status').textContent = `已移除收件人 ${prior.text.slice(1)}`;
+  if (prior && !roomMention) ui.display.text($('mention-status'), 'mention.removed', { name: prior.text.slice(1) });
   else if (roomMention) $('mention-status').textContent = '';
   roomDraftRevision++; attempt(persistView); render();
   if (event.isComposing || mentionComposing) closeMentions(); else showMentions();
@@ -3718,7 +3834,7 @@ async function submitRoom(automatic) {
   const sendingSpace = spaceId, view = captureRoomView();
   const ids = automatic?.ids;
   const recipient = members().find(s => s.id === first);
-  if (!recipient) throw Error('接收方已变化，请重新选择。');
+  if (!recipient) throw uiError("error.recipientChanged");
   if (recipient.nativeInputRequired || recipient.shareAvailable === false || recipient.chatAvailable === false || !nativeUsable(recipient)) return;
   // Return focus before the clicked control becomes disabled. Never steal it
   // back asynchronously after the person has opened another view or dialog.
@@ -3776,7 +3892,9 @@ function renderRunChoices() {
   if (crossService && !peerDirected) $('run-mode').value = 'replies';
   const directed = $('run-mode').value === 'directed';
   const capable = ids.every(id => { const s = members().find(m => m.id === id); return s?.addressedSendAvailable === true && (s.serviceCapabilities || state.capabilities || []).includes('agentAddressedHandoffs'); });
-  $('run-mode-help').textContent = directed ? (capable ? '只向成员明确选择的接收者发送；没有定向调用就结束。工具调用、工具说明及本轮成员表会计入原生用量；发送详情可核对实际内容。' : '所选会话中有原生连接尚不支持主动定向工具。可改用按顺序核查；不会重建或替换原会话。') : crossService ? '成员保留各自后台；按预览顺序转交完整回复，关闭界面后继续。暂停撤销后续授权，已经被原生接收的工作仍可能继续。' : '';
+  const helpKey = directed ? (capable ? 'run.directedHelp' : 'run.unsupportedHelp') : crossService ? 'run.crossServiceHelp' : null;
+  if (helpKey) ui.display.text($('run-mode-help'), helpKey);
+  else { ui.display.unbind($('run-mode-help')); $('run-mode-help').textContent = ''; }
   const multi = eligible.every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs'));
   $('run-participants').replaceChildren();
   for (const s of members()) {
@@ -3794,23 +3912,23 @@ function renderRunChoices() {
     const position = ids.indexOf(s.id);
     if (position > 1) {
       const up = button('↑', () => { [ids[position - 1], ids[position]] = [ids[position], ids[position - 1]]; $('run-consent').checked = false; renderRunChoices(); });
-      up.setAttribute('aria-label', `提前 ${s.name} · ${sessionShortId(s.id)}`); row.append(up);
+      ui.display.attribute(up, 'aria-label', 'run.moveUp', { name: s.name, id: sessionShortId(s.id) }); row.append(up);
     }
     $('run-participants').append(row);
   }
   for (const option of $('run-limit').options) option.disabled = Number(option.value) < ids.length;
   if (Number($('run-limit').value) < ids.length) $('run-limit').value = String(ids.length);
-  const sequence = Array.from({ length: Number($('run-limit').value) }, (_, i) => {
+  const sequence = () => Array.from({ length: Number($('run-limit').value) }, (_, i) => {
     const s = members().find(s => s.id === ids[i % ids.length]);
-    return s ? `${s.name} (${sessionShortId(s.id)})` : '未选择';
+    return s ? `${s.name} (${sessionShortId(s.id)})` : uiText('run.notSelected');
   });
-  $('run-order').textContent = directed ? `由第一位开始，在所选成员中明确选择下一位；上限 ${$('run-limit').value} 次回复，不广播私人历史。` : `转交顺序：${sequence.join(' → ')}。只转交任务与上一份回复，不附加私人历史。`;
+  ui.display.text($('run-order'), directed ? 'run.directedOrder' : 'run.order', () => directed ? { count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(Number($('run-limit').value)) } : { sequence: sequence().join(' → ') });
   $('confirm-run').disabled = !$('run-consent').checked || ids.length < 2 || (directed && !capable);
 }
 $('run-button').onclick = () => {
   if ($('run-button').disabled) return;
   $('room-advanced').open = false;
-  if (nativeWorkspaceMentions.body(roomMention, $('shared-input').value).length > 6000) { toast('一起核查的任务与材料合计最多 6000 字符。草稿保留；可缩短后核查，或定向发送。'); $('shared-input').focus(); return; }
+  if (nativeWorkspaceMentions.body(roomMention, $('shared-input').value).length > 6000) { toastMessage("toast.runMaterialLimit"); $('shared-input').focus(); return; }
   const recipient = roomRecipient(), candidates = handoffCandidates(recipient);
   runPreview = { spaceId, text: nativeWorkspaceMentions.body(roomMention, $('shared-input').value), recipient, revision: roomDraftRevision, selectionRevision,
     members: members().map(s => [s.id, pairRevision(s), s.name, s.nativeId]), identities: Object.fromEntries(members().map(s => [s.id, s.peerIdentity])), ids: [recipient, candidates.find(s => s.id !== recipient)?.id].filter(Boolean) };
@@ -3830,7 +3948,7 @@ $('run-form').onsubmit = event => {
   const same = selected === 'room' && runPreview.spaceId === spaceId && runPreview.selectionRevision === selectionRevision && runPreview.text === nativeWorkspaceMentions.body(roomMention, $('shared-input').value) && runPreview.recipient === $('recipient').value && runPreview.revision === roomDraftRevision && JSON.stringify(runPreview.members) === JSON.stringify(members().map(s => [s.id, pairRevision(s), s.name, s.nativeId]));
   const available = runPreview.ids.length >= 2 && runPreview.ids.every(id => JSON.stringify(runPreview.identities[id]) === JSON.stringify(members().find(s => s.id === id)?.peerIdentity)) && runPreview.ids.every(id => eligible.some(s => s.id === id)) &&
     (runPreview.ids.length <= 2 || eligible.filter(s => runPreview.ids.includes(s.id)).every(s => (s.serviceCapabilities || state.capabilities || []).includes('multiSessionHandoffs')));
-  if (!same || !available || $('run-button').disabled) { $('run-error').textContent = '任务、成员或接收方已变化，请取消并重新预览。'; $('run-error').hidden = false; return; }
+  if (!same || !available || $('run-button').disabled) { ui.display.text($('run-error'), 'run.changed'); $('run-error').hidden = false; return; }
   const mode = $('run-mode').value, limit = Number($('run-limit').value), ids = [...runPreview.ids], labels = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[2]]));
   const identities = Object.fromEntries(runPreview.ids.map(id => [id, runPreview.identities[id]]));
   const contexts = Object.fromEntries(runPreview.members.filter(m => ids.includes(m[0])).map(m => [m[0], m[3]]));
@@ -3840,7 +3958,7 @@ $('run-form').onsubmit = event => {
 $('room-search').oninput = $('room-filter').onchange = () => { renderTimeline(); attempt(persistView); };
 $('thread-back').onclick = () => { captureReadingViews(); roomThread = ''; if (!$('shared-input').value.trim() && !roomSubmitting) roomReplyTo = ''; render(); attempt(persistView); };
 $('cancel-reply').onclick = () => { roomReplyTo = ''; roomThread = ''; roomDraftRevision++; render(); attempt(persistView); $('shared-input').focus(); };
-$('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString() : '时间未记录'} · ${roomMessageLabel(m)}\n${m.text}`).join('\n\n')));
+$('copy-timeline').onclick = () => attempt(() => api.copy(filteredTimeline().map(m => `${Number.isFinite(m.time) ? new Date(m.time).toLocaleString(ui.language.getSnapshot().active) : uiText('reading.unknownTime')} · ${roomMessageLabel(m)}\n${m.text}`).join('\n\n')));
 $('room-notes').onclick = () => openNotes(); $('cancel-notes').onclick = () => $('notes-dialog').close();
 $('notes-form').onsubmit = async event => {
   event.preventDefault(); const ticket = dialogTickets.get($('notes-dialog'));
@@ -3848,10 +3966,10 @@ $('notes-form').onsubmit = async event => {
   $('save-notes').disabled = true; $('notes-error').hidden = true;
   try {
     await api.spaceAction(ticket.roomId, 'notes', [$('room-notes-text').value, notesRevision]);
-    if (currentDialogTicket(ticket)) $('notes-dialog').close(); else toast('此前提交的笔记已保存。');
+    if (currentDialogTicket(ticket)) $('notes-dialog').close(); else toastMessage("toast.notesSavedEarlier");
   } catch (error) {
-    if (currentDialogTicket(ticket)) { $('notes-error').textContent = error.message; $('notes-error').hidden = false; }
-    else toast('此前提交的笔记未能保存：' + error.message);
+    if (currentDialogTicket(ticket)) { ui.showError($('notes-error'), error); $('notes-error').hidden = false; }
+    else toastMessage('toast.notesFailedEarlier', () => ({ error: ui.errorText(error) }));
   } finally { if (currentDialogTicket(ticket)) $('save-notes').disabled = false; }
 };
 $('attach-context').onclick = () => { $('room-advanced').open = false; openContext(); }; $('close-context').onclick = () => $('context-dialog').close();
@@ -3859,7 +3977,7 @@ $('context-text').addEventListener('input', updateContextControls);
 $('copy-context').onclick = () => attempt(async () => {
   const text = $('context-text').value;
   if (!contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed()) return contextProblem('请先核对背景文字与所选空间。');
-  await api.copy(text); toast('已复制，尚未发送给 agent。');
+  await api.copy(text); toastMessage("toast.contextCopied");
 });
 $('insert-context').onclick = () => attempt(async () => {
   const ticket = dialogTickets.get($('context-dialog')), revision = selectionRevision;
@@ -3869,7 +3987,7 @@ $('insert-context').onclick = () => attempt(async () => {
   if (!target?.room || target.roomId !== spaceId || selected !== 'room') return contextProblem('当前视图已变化，请重新打开协作背景。');
   const input = $('shared-input');
   const next = appendedDraft(input, text, true);
-  if (next.length > 16000) { $('context-error').textContent = '合并后的草稿超过 16000 字符，请先缩短。'; $('context-error').hidden = false; return; }
+  if (next.length > 16000) { ui.display.text($('context-error'), 'context.tooLong'); $('context-error').hidden = false; return; }
   input.value = next;
   roomDraftRevision++; await persistView();
   if (currentDialogTicket(ticket) && revision === selectionRevision) { $('context-dialog').close(); render(); input.focus(); }
@@ -3886,7 +4004,7 @@ $('pause-button').onclick = () => attempt(async () => {
     await api.spaceAction(submission?.spaceId || spaceId, 'pause', []);
     if (submission) {
       if (roomSubmitting === submission) roomSubmitting = null;
-      toast('已取消后续交接；草稿保留，已接收的原生任务仍在原会话中。');
+      toastMessage("toast.handoffCancelled");
     }
   } finally {
     if (submission) {
@@ -3914,10 +4032,10 @@ function openInvite(anchor) {
       });
       entry.setAttribute('aria-disabled', 'true'); entry.title = oldBackendJoin(s); entry.dataset.inviteSession = s.id; return entry;
     }
-    const entry = button(`加入 ${participantLabel(s, state.sessions)}`, async () => {
+    const entry = button('', async () => {
       try {
         const current = state.sessions.find(record => record.id === s.id);
-        if (!current || inSpace(current, destination) || current.archived || current.state === 'ended' || pairRevision(current, destination) !== pairRevision(s, destination) || current.nativeId !== s.nativeId) throw new Error('会话已变化，请关闭并重新打开邀请。');
+        if (!current || inSpace(current, destination) || current.archived || current.state === 'ended' || pairRevision(current, destination) !== pairRevision(s, destination) || current.nativeId !== s.nativeId) throw uiError("error.inviteSessionChanged");
         if (!currentDialogTicket(ticket) || entry.disabled) return;
         entry.disabled = true; $('invite-error').hidden = true;
         try { await api.spaceAction(destination, 'join', [s.id, true]); if (currentDialogTicket(ticket) && revision === selectionRevision) $('invite-dialog').close(); }
@@ -3928,10 +4046,10 @@ function openInvite(anchor) {
         $('invite-error').textContent = error.message || '没有加入。'; $('invite-error').hidden = false;
       }
     });
-    entry.dataset.inviteSession = s.id; return entry;
+    ui.display.text(entry, 'invite.joinName', { name: participantLabel(s, state.sessions) }); entry.dataset.inviteSession = s.id; return entry;
   }));
   if (candidates.some(blocked)) $('invite-list').append(node('p', `旧版后台上的会话不能加入其他协作空间。${OLD_BACKEND_NEXT}`));
-  if (!$('invite-list').children.length) $('invite-list').append(node('p', '所有可用会话已在这个空间中；可创建会话后邀请。'));
+  if (!$('invite-list').children.length) $('invite-list').append(uiNode('p', 'invite.allJoined'));
 }
 $('invite-dialog').addEventListener('close', () => {
   if ($('invite-dialog').open) return;
@@ -3943,7 +4061,7 @@ $('close-invite').onclick = () => $('invite-dialog').close();
 $('cancel-share').onclick = () => $('share-dialog').close();
 $('share-dialog').onclose = () => {
   if ($('share-dialog').open) return;
-  shareRevision++; $('share-text').value = ''; $('share-help').textContent = '';
+  shareRevision++; $('share-text').value = ''; ui.display.unbind($('share-help')); $('share-help').textContent = '';
   const recipient = $('share-recipient'); recipient.replaceChildren(); recipient.title = '';
   delete recipient.dataset.signature; delete recipient.dataset.hadChoices;
 };
@@ -3960,7 +4078,7 @@ $('confirm-share').onclick = () => attempt(async () => {
     // including a new edit whose text happens to match the submitted text.
     if ($('share-dialog').open && shareRevision === request.revision &&
         $('share-recipient').value === request.recipient && $('share-text').value === request.text) $('share-dialog').close();
-    toast('已定向发送。');
+    toastMessage("toast.directedSent");
   } finally { sharePending = null; updateSharingControls(); }
 });
 $('privacy-button').onclick = $('refresh-trust').onclick = () => attempt(showTrust); $('quit-service').onclick = () => attempt(() => api.quitService());
@@ -3969,13 +4087,13 @@ $('data-directory').onclick = () => attempt(() => api.dataDirectory());
 $('clear-shared-history').onclick = () => attempt(async () => {
   const target = trustClearRoom, generation = trustRevision, control = $('clear-shared-history');
   if (control.disabled) return;
-  if (target === 'shared' && !state.capabilities?.includes('clearSharedHistory')) throw Error('后台仍在保留旧版会话；结束它们并重开应用后可使用此功能。');
+  if (target === 'shared' && !state.capabilities?.includes('clearSharedHistory')) throw uiError("error.oldBackendFeature");
   control.disabled = true;
   try {
     const cleared = await api.spaceAction(target, 'clearSharedHistory', []);
-    if (cleared && generation === trustRevision && $('privacy-dialog').open) $('trust-refresh-status').textContent = '这个空间的共享记录已清除；其他空间和未发送草稿保留。';
+    if (cleared && generation === trustRevision && $('privacy-dialog').open) ui.display.text($('trust-refresh-status'), 'trust.cleared');
   } catch (error) {
-    if (generation === trustRevision && $('privacy-dialog').open) $('trust-refresh-status').textContent = error.message;
+    if (generation === trustRevision && $('privacy-dialog').open) ui.showError($('trust-refresh-status'), error);
     else throw error;
   } finally { if (generation === trustRevision) control.disabled = false; }
 });
@@ -4009,24 +4127,24 @@ for (const dialog of document.querySelectorAll('dialog')) {
     dialogTickets.delete(dialog); dialog.scrollTop = 0;
     if (dialog.id === 'create-dialog') {
       for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
-      for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note']) $(id).textContent = '';
+      for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note', 'git-worktree-preview']) { ui.display.unbind($(id)); $(id).textContent = ''; }
       $('skip-permissions').checked = false; folder = ''; newDirectory = false;
       $('initial-view').value = '';
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
     } else if (dialog.id === 'setup-dialog') {
       $('setup-status').replaceChildren(); $('version-info').textContent = '';
     } else if (dialog.id === 'notes-dialog') {
-      $('room-notes-text').value = ''; $('notes-error').textContent = ''; $('notes-error').hidden = true;
+      $('room-notes-text').value = ''; ui.display.unbind($('notes-error')); $('notes-error').textContent = ''; $('notes-error').hidden = true;
     } else if (dialog.id === 'context-dialog') {
       contextTarget = null; contextSnapshot = null;
       $('context-space-choices').replaceChildren(); $('context-spaces').disabled = false;
       $('context-scope-note').textContent = ''; $('context-scope-note').hidden = true;
-      $('context-text').value = ''; $('context-text').disabled = false; $('context-error').textContent = ''; $('context-error').hidden = true;
+      $('context-text').value = ''; $('context-text').disabled = false; ui.display.unbind($('context-error')); $('context-error').textContent = ''; $('context-error').hidden = true;
       $('copy-context').disabled = false; $('insert-context').disabled = false;
     } else if (dialog.id === 'run-dialog') {
       runPreview = null; $('run-consent').checked = false; $('confirm-run').disabled = true;
       $('run-mode').value = 'replies'; $('run-limit').value = '3'; $('run-participants').replaceChildren();
-      for (const id of ['run-preview', 'run-order', 'run-mode-help', 'run-error']) $(id).textContent = '';
+      for (const id of ['run-preview', 'run-order', 'run-mode-help', 'run-error']) { ui.display.unbind($(id)); $(id).textContent = ''; }
       $('run-error').hidden = true;
     } else if (dialog.id === 'terminal-display-dialog') {
       $('terminal-font-size').value = ''; $('terminal-palette').value = '';
@@ -4035,6 +4153,11 @@ for (const dialog of document.querySelectorAll('dialog')) {
 }
 $('setup-button').onclick = $('create-setup').onclick = $('refresh-setup').onclick = () => attempt(showSetup);
 $('close-setup').onclick = () => $('setup-dialog').close();
+$('ui-language').onchange = event => { void changeInterfaceLanguage(event.target.value); };
+disposers.push(ui.language.subscribe(() => { renderInterfaceLanguage(); renderSetupPrograms(true); if (selected === 'panorama') document.title = uiText('panorama.windowTitle'); }));
+disposers.push(api.onLocale(value => { if (!value || typeof value !== 'object') return; languageWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null; if (!languageWarning) notifiedLanguageWarning = undefined; renderInterfaceLanguage(); reportLanguageWarning(); }));
+renderInterfaceLanguage();
+
 for (const input of document.querySelectorAll('input[name="provider"]')) input.onchange = createReadiness;
 $('claude-history-id').oninput = createReadiness;
 $('create-space-kind').onchange = () => { if ($('create-space-kind').value === 'new' && !$('create-space-name').dataset.edited) $('create-space-name').value = $('session-name').value.trim(); createReadiness(); };
@@ -4046,7 +4169,8 @@ $('claude-history-id').onkeydown = event => {
 $('skip-permissions').onchange = createReadiness;
 attempt(async () => {
   state = await api.initial();
-  if (latestViewStorage !== undefined) state.viewStorageWarning = latestViewStorage;
+  languageWarning = ['unavailable', 'migrationNotSaved'].includes(state.localeWarning) ? state.localeWarning : null; renderInterfaceLanguage();
+  if (latestViewStorage !== undefined) { state.viewStorageWarning = latestViewStorage; state.viewStorageWarningUiMessage = latestViewStorageUiMessage; }
   roomViews = state.viewState.roomViews || Object.create(null);
   if (!roomViews.shared) roomViews.shared = Object.fromEntries(roomViewFields.filter(k => state.viewState[k] !== undefined).map(k => [k, state.viewState[k]]));
   spaceId = state.viewState.spaceId || 'shared'; sidebarView = state.viewState.sidebarView || 'flat';
@@ -4083,7 +4207,7 @@ attempt(async () => {
       draftRecoveries.set(id, await api.retainDraftRecovery(id, backup.text));
     }
   }
-  await select(state.viewState.selected || '', mode); await api.uiReady();
+  await select(state.viewState.selected || '', mode); await api.uiReady(); reportLanguageWarning();
 });
 const disposeContentMenus = bindContentMenus();
 return () => { clearInterval(nativeActivityClock); roomOverview?.dispose(); document.removeEventListener('toggle', updateSelectedSharing, true); document.removeEventListener('selectionchange', documentSelectionChanged); document.removeEventListener('keydown', searchKey); clearTimeout(searchTimer); disposeReadingViews(); disposeContentMenus(); sessionMenu?.close(); roomMenu?.(); for (const dispose of disposers) dispose(); observer.disconnect(); clearTimeout(toastTimer); for (const entry of terminals.values()) entry.term.dispose(); };

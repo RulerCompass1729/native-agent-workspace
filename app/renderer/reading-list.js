@@ -2,25 +2,27 @@
 const messageViews = new Map();
 let readingPositions = {};
 let readingPayloadId = 0;
-function readingMessageClock(message, now = Date.now()) {
+function readingMessageClock(message, now = Date.now(), language = []) {
   const important = ['user', 'human'].includes(message.role) || message.role === 'assistant' &&
     (!message.kind || message.kind === 'response') && message.phase !== 'commentary' && message.status !== 'streaming';
   if (!important || !Number.isFinite(message.time) || Math.abs(message.time) > 8640000000000000) return null;
   const date = new Date(message.time), today = new Date(now);
   const sameDay = date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
-  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-  return { text: (sameDay ? '' : date.toLocaleDateString() + ' ') + time, dateTime: date.toISOString(), full: date.toLocaleString([], { hourCycle: 'h23' }) };
+  const time = date.toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  return { text: (sameDay ? '' : date.toLocaleDateString(language) + ' ') + time, dateTime: date.toISOString(), full: date.toLocaleString(language, { hourCycle: 'h23' }) };
 }
+function readingDisplayClock(message) { return readingMessageClock(message, Date.now(), ui.language.getSnapshot().active); }
 function readingActionLabel(message, author) {
-  return message.toolKind === 'commandExecution' || message.title === 'Bash' ? '这条命令的输出'
-    : ['user', 'human'].includes(message.role) ? `${author}的输入`
-    : message.role === 'assistant' && (!message.kind || message.kind === 'response') ? `${author}的回复`
-    : message.kind === 'summary' ? `${author}的思考摘要` : message.role === 'tool' ? '这条工具记录' : '这条记录';
+  const key = message.toolKind === 'commandExecution' || message.title === 'Bash' ? 'reading.commandOutput'
+    : ['user', 'human'].includes(message.role) ? 'reading.input'
+    : message.role === 'assistant' && (!message.kind || message.kind === 'response') ? 'reading.reply'
+    : message.kind === 'summary' ? 'reading.summary' : message.role === 'tool' ? 'reading.toolRecord' : 'reading.record';
+  return uiText(key, { author });
 }
 async function copyReadingMessage(entry) {
-  const text = entry.displayText ?? entry.message.text, label = entry.actionLabel;
+  const text = entry.copyPayload ? entry.copyPayload() : entry.displayText ?? entry.message.text, label = entry.copyLabel;
   await api.copy(text);
-  toast('已复制：' + label);
+  toastMessage('reading.copied', () => ({ label: label() }));
 }
 // Visual boundaries do not wrap rows or expand paging spans. A page can begin
 // inside one native turn; that is a continuation, never a fabricated new input.
@@ -248,11 +250,14 @@ function readingView(el, key) {
     view = { el, key: '', entries: new Map(), groups: new Map(), days: new Map(), assignedTop: el.scrollTop, frame: 0, intent: null };
     el.tabIndex = 0;
     if (!el.hasAttribute('role')) el.setAttribute('role', 'region');
-    if (!el.hasAttribute('aria-label')) el.setAttribute('aria-label', '会话记录');
-    view.older = button('显示更早的记录', () => changeReadingPage(view, 'older', true), 'reading-page');
-    view.newer = button('显示较新的记录', () => changeReadingPage(view, 'newer', true), 'reading-page');
+    if (!el.hasAttribute('aria-label')) ui.display.attribute(el, 'aria-label', 'reading.records');
+    view.older = button('', () => changeReadingPage(view, 'older', true), 'reading-page');
+    ui.display.text(view.older, 'reading.older');
+    view.newer = button('', () => changeReadingPage(view, 'newer', true), 'reading-page');
+    ui.display.text(view.newer, 'reading.newer');
     view.older.dataset.direction = 'older'; view.newer.dataset.direction = 'newer';
-    view.jump = button('↓ 跳到最新', () => changeReadingPage(view, 'latest'), 'jump-latest');
+    view.jump = button('', () => changeReadingPage(view, 'latest'), 'jump-latest');
+    ui.display.text(view.jump, 'reading.latest');
     view.jumpBar = node('div', undefined, 'jump-bar'); view.jumpBar.append(view.jump); view.jumpBar.hidden = true;
     const interact = () => { view.intent = null; view.assignedTop = undefined; view.pageChanging = false; view.autoPages = 4; };
     // While following, moving toward the latest is not leaving it, and must not drop
@@ -320,6 +325,19 @@ function readingView(el, key) {
   }
   return view;
 }
+function readingOwnMessage(message) {
+  if (message.role !== 'system' && !(message.role === 'tool' && ['notice.legacy.nonText', 'notice.legacy.gapText'].includes(message.uiMessage?.key))) return null;
+  const locale = window.nativeWorkspaceLocale;
+  return locale.displayMessage(message.uiMessage, 'notice.', message.text) || locale.displayMessage(message.uiMessage, 'error.', message.text);
+}
+function readingOwnText(message, descriptor) {
+  const language = ui.language.getSnapshot().active;
+  if (['notice.capacityAutoContinueRouting', 'notice.capacityAutoContinueCapacity'].includes(descriptor.key) && Number.isFinite(message.time) && Math.abs(message.time) <= 8640000000000000) {
+    const time = new Date(message.time).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' });
+    return uiText(descriptor.key, { ...descriptor.params, time });
+  }
+  return window.nativeWorkspaceLocale.displayText(language, message.text, descriptor);
+}
 function nativeCompletionText(message) {
   // A machine-injected input may carry a short display summary; its original text stays in the record.
   if (message.kind !== 'turn') return message.role === 'user' && typeof message.displayText === 'string' && message.displayText ? message.displayText : message.text;
@@ -366,7 +384,8 @@ function commandExplorations(messages, room = false, originals = messages) {
     }
     flush(); group.summary = lines.join('\n'); group.active = group.messages.some(m => ['running', 'streaming'].includes(m.status));
     group.counts = Object.fromEntries(counts);
-    group.caption = [...counts].map(([type, count]) => `${count} ${{ read: '次读取', search: '次搜索', listFiles: '次列目录' }[type]}`).concat([...exits].map(code => `exit ${code}`)).join(' · ');
+    group.captionRead = () => [...counts].map(([type, count]) => uiText({ read: 'process.read', search: 'process.search', listFiles: 'process.list' }[type], { count })).concat([...exits].map(code => `exit ${code}`)).join(' · ');
+    group.caption = group.captionRead();
   }
   return groups;
 }
@@ -407,16 +426,18 @@ function nativeProcessGroups(messages, room = false, originals = messages, sessi
     group.active = !ended.has(turnKey(first)) && !group.messages.some(m => m.status === 'interrupted') && Boolean(source &&
       !source.transportDisconnected && !source.backendUnavailable && source.activeTurnId === first.turnId && ['working', 'approval'].includes(source.state));
     for (const m of group.messages) {
-      const label = m.kind === 'summary' ? '段思考摘要' : m.toolKind === 'commandExecution' || m.title === 'Bash' ? '个命令'
-        : m.title === 'Read' ? '次读取' : m.toolKind === 'webSearch' || ['Grep', 'Glob'].includes(m.title) ? '次搜索' : '次工具调用';
+      const label = m.kind === 'summary' ? 'process.summary' : m.toolKind === 'commandExecution' || m.title === 'Bash' ? 'process.command'
+        : m.title === 'Read' ? 'process.read' : m.toolKind === 'webSearch' || ['Grep', 'Glob'].includes(m.title) ? 'process.search' : 'process.tool';
       counts.set(label, (counts.get(label) || 0) + 1);
       // Keep T29's native nonzero exploration annotation, including search exit1.
       if (m.status === 'failed' && nativeExploration(m) && Number.isSafeInteger(m.exitCode) && m.exitCode !== 0) exits.add(m.exitCode);
       else if (['failed', 'declined', 'interrupted'].includes(m.status)) outcomes.set(m.status, (outcomes.get(m.status) || 0) + 1);
     }
-    group.caption = [...counts].map(([label, count]) => `${count} ${label}`).join(' · ');
-    group.outcome = ['failed', 'declined', 'interrupted'].filter(status => outcomes.has(status)).map(status => `${{ failed: '失败', declined: '已拒绝', interrupted: '已中断' }[status]} ${outcomes.get(status)}`)
+    group.captionRead = () => [...counts].map(([key, count]) => uiText(key, { count })).join(' · ');
+    group.caption = group.captionRead();
+    group.outcomeRead = () => ['failed', 'declined', 'interrupted'].filter(status => outcomes.has(status)).map(status => uiText('process.' + status, { count: outcomes.get(status) }))
       .concat([...exits].map(code => `exit ${code}`)).join(' · ');
+    group.outcome = group.outcomeRead();
   }
   return groups;
 }
@@ -434,15 +455,15 @@ function updateProcessTail(entry) {
   entry.preview.style.display = open ? 'none' : 'inline';
   if (entry.exploration) {
     entry.tail.hidden = open;
-    if (entry.tail.textContent !== entry.exploration.caption) entry.tail.textContent = entry.exploration.caption;
+    ui.display.computed(entry.tail, 'text', () => entry.exploration.captionRead ? entry.exploration.captionRead() : entry.exploration.caption);
     entry.more.hidden = true; return;
   }
   // Like the native TUIs: a folded command keeps two one-line rows of output (the
   // newest while it runs, the first once done) and says how many more there are.
   const lines = (m.toolKind === 'commandExecution' || (!m.toolKind && m.title === 'Bash')) && !open && m.text ? m.text.replace(/\n+$/, '').split('\n') : [];
   const shown = ['running', 'streaming'].includes(m.status) ? lines.slice(-2) : lines.slice(0, 2), more = lines.length - shown.length, tail = shown.join('\n');
-  entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
-  entry.more.hidden = !more; const moreText = `+${more} 行`; if (entry.more.textContent !== moreText) entry.more.textContent = moreText;
+  ui.display.unbind(entry.tail); entry.tail.hidden = !tail; if (entry.tail.textContent !== tail) entry.tail.textContent = tail;
+  entry.more.hidden = !more; ui.display.computed(entry.more, 'text', () => uiText('reading.moreLines', { count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(more) }));
 }
 function processGroupRows(view, rows, plans, explorations, room, key) {
   const membership = new Map(), members = new Map(), retained = new Set(), output = [];
@@ -493,12 +514,11 @@ function processGroupRows(view, rows, plans, explorations, room, key) {
     group.content.className = group.effective ? 'process-content' : '';
     group.summary.hidden = !group.effective;
     group.item.dataset.running = String(plan.active);
-    const author = room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : 'Codex');
-    if (group.author.textContent !== author) group.author.textContent = author;
-    if (group.caption.textContent !== plan.caption) group.caption.textContent = plan.caption;
-    if (group.outcome.textContent !== plan.outcome) group.outcome.textContent = plan.outcome;
-    group.summary.setAttribute('aria-label', `${author} · ${plan.active ? '进行中 · ' : ''}${plan.caption}${plan.outcome ? ' · ' + plan.outcome : ''}`);
-    group.summary.title = group.summary.getAttribute('aria-label');
+    const author = () => room ? roomMessageLabel(first) : first.name || (view.session?.provider === 'claude' ? 'Claude' : 'Codex');
+    const caption = () => plan.captionRead ? plan.captionRead() : plan.caption, outcome = () => plan.outcomeRead ? plan.outcomeRead() : plan.outcome;
+    ui.display.computed(group.author, 'text', author); ui.display.computed(group.caption, 'text', caption); ui.display.computed(group.outcome, 'text', outcome);
+    const summary = () => `${author()} · ${plan.active ? uiText('process.active') : ''}${caption()}${outcome() ? ' · ' + outcome() : ''}`;
+    ui.display.computed(group.summary, 'aria-label', summary); ui.display.computed(group.summary, 'title', summary);
     const position = view.intent?.position, selection = window.getSelection();
     const reading = group.disclosure.open && (selection && !selection.isCollapsed && group.item.contains(selection.anchorNode) ||
       position && !position.follow && (position.anchor === id || plan.messages.some(m => m.id === position.anchor)));
@@ -565,7 +585,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     if (room) {
       const day = Number.isFinite(m.time) && Math.abs(m.time) <= 8640000000000000 ? new Date(m.time).toLocaleDateString() : '时间未记录';
       if (day !== lastDay) {
-        let divider = view.days.get(day); if (!divider) { divider = node('div', day, 'timeline-day'); view.days.set(day, divider); }
+        let divider = view.days.get(day); if (!divider) {
+          divider = node('div', undefined, 'timeline-day');
+          ui.display.computed(divider, 'text', () => Number.isFinite(m.time) && Math.abs(m.time) <= 8640000000000000 ? new Date(m.time).toLocaleDateString(ui.language.getSnapshot().active) : uiText('reading.unknownTime'));
+          view.days.set(day, divider);
+        }
         rows.push(divider); days.add(day); lastDay = day;
       }
     }
@@ -599,8 +623,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
           entry.expectedOpen = undefined; rememberFold();
         });
       }
-      entry.copyText = button('复制', () => copyReadingMessage(entry)); actions.append(entry.copyText);
-      entry.share = button('选择并分享', () => share(entry.message.text)); actions.append(entry.share);
+      entry.copyText = button('', () => copyReadingMessage(entry)); actions.append(entry.copyText);
+      entry.share = button('', () => share(entry.message.text)); actions.append(entry.share);
       for (const action of [entry.copyText, entry.share]) {
         action.setAttribute('aria-controls', body.id);
         const highlight = () => body.classList.add('copy-payload');
@@ -610,16 +634,17 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       }
       actions.addEventListener('pointerleave', () => { if (!actions.contains(document.activeElement)) body.classList.remove('copy-payload'); });
       if (room) {
-        entry.reply = button('回复', () => openThread(entry.message.id)); actions.append(entry.reply);
+        entry.reply = button('', () => openThread(entry.message.id)); actions.append(entry.reply);
         entry.delivery = node('details', undefined, 'message-delivery');
         entry.deliverySummary = node('summary'); entry.deliveryBody = node('div', undefined, 'delivery-body');
         entry.deliveryRows = new Map(); entry.deliveryNote = node('p'); entry.deliveryBody.append(entry.deliveryNote);
         entry.delivery.append(entry.deliverySummary, entry.deliveryBody); (entry.content || item).append(entry.delivery);
-        entry.openRecipient = button('查看会话', () => {
-          if (!state.sessions.some(s => s.id === entry.openSessionId)) return toast('这个会话当前不可用，记录仍保留。');
+        entry.openRecipient = button('', () => {
+          if (!state.sessions.some(s => s.id === entry.openSessionId)) return toast(uiText('reading.unavailable'));
           return select(entry.openSessionId, 'chat');
         }, 'message-session-link');
-        entry.context = button('查看上下文', () => {
+        ui.display.text(entry.openRecipient, 'reading.viewSession');
+        entry.context = button('', () => {
           $('room-search').value = ''; $('room-filter').value = ''; renderTimeline();
           const original = view.entries.get(m.id)?.item;
           if (original) {
@@ -631,7 +656,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
             original.tabIndex = -1; original.focus({ preventScroll: true });
           }
           attempt(persistView);
-        }); actions.append(entry.context);
+        }); ui.display.text(entry.context, 'reading.context'); actions.append(entry.context);
         // Last, so it stays put when the row's other actions appear.
         actions.append(entry.openRecipient);
       }
@@ -640,45 +665,65 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     entry.item.className = `message ${m.role}${m.kind === 'turn' ? ' native-turn' : ''}${entry.disclosure ? ' process' : ''}`;
     entry.item.classList.toggle('native-notice', Boolean(m.role === 'system' && (['notice', 'gap', 'context'].includes(m.kind) || !room && session?.nativeContexts?.some(c => c.boundaryId === m.id))));
     const nativeTitle = entry.exploration ? entry.exploration.active ? 'Exploring' : 'Explored' : m.toolKind === 'commandExecution' ? ['running', 'streaming'].includes(m.status) ? 'Running' : m.commandSource === 'userShell' ? 'You ran' : 'Ran' : m.kind === 'summary' && m.title === '过程摘要' || m.kind === 'plan' && m.title === '计划' || m.toolKind === 'webSearch' && ['搜索网页', '打开网页', '页内查找'].includes(m.title) || m.toolKind === 'fileChange' && m.title === '文件修改' ? '' : m.title;
-    let name = room ? roomMessageLabel(m) : m.name;
-    if (m.nativeBlock && m.kind === 'input' && m.inputMode === 'native-inline') name = '原生会话';
-    if (!room && m.commandSource === 'userShell') name = '你'; // the person's own `!` command
-    name ||= m.role === 'user' ? '你' : session?.provider === 'claude' ? 'Claude' : 'Codex';
-    if (!room && m.role === 'system' && !m.sessionId) name = m.name || '原生会话';
+    const messageName = () => {
+      if (m.nativeBlock && m.kind === 'input' && m.inputMode === 'native-inline') return uiText('reading.nativeSession');
+      if (!room && m.commandSource === 'userShell') return uiText('reading.you'); // the person's own `!` command
+      if (!room && m.role === 'system' && !m.sessionId) return ui.displayText(m.name, m.uiNameMessage) || uiText('reading.nativeSession');
+      return (room ? roomMessageLabel(m) : ui.displayText(m.name, m.uiNameMessage)) || (m.role === 'user' ? uiText('reading.you') : session?.provider === 'claude' ? 'Claude' : 'Codex');
+    };
+    const name = messageName();
     const messageTime = readingMessageClock(m);
     const snapshotSource = room && m.snapshotSource && state.room.merge?.sources.find(source => source.id === m.snapshotSource.roomId);
     const snapshotName = snapshotSource ? mergeSourceLabel(snapshotSource, state.room.merge.sources) : '';
-    const headingKey = JSON.stringify([name, m.status, messageTime, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped, snapshotName]);
+    const ownGap = m.kind === 'gap' && m.role === 'system' && Boolean(readingOwnMessage(m));
+    const headingKey = JSON.stringify([ownGap, name, m.uiNameMessage, m.uiTitleMessage, m.legacyOriginalTitleUiMessage, m.status, messageTime, m.manualReply, nativeTitle, entry.exploration?.error, m.exitCode, m.incomplete, m.volatile, m.sharingStopped, m.sharingStoppedUiMessage, snapshotName]);
     if (entry.headingKey !== headingKey) {
       const authorId = room && (m.sessionId || m.recipientId);
       const author = authorId ? button(name, () => { $('room-filter').value = authorId; renderTimeline(); attempt(persistView); }, 'message-author') : node('strong', name);
-      if (authorId) { author.title = `查看 ${name} 的共享轨迹`; author.setAttribute('aria-label', `查看 ${name} 的共享轨迹`); }
+      ui.display.computed(author, 'text', messageName);
+      if (authorId) {
+        const label = () => uiText('reading.trajectory', { author: messageName() });
+        ui.display.computed(author, 'title', label); ui.display.computed(author, 'aria-label', label);
+      }
       entry.heading.replaceChildren(author); entry.headingKey = headingKey;
       if (snapshotSource) {
-        const source = button(`来自 ${snapshotName} · 快照`, () => {
+        const source = button('', () => {
           openSearch('all'); return openSearchResult({ kind: 'shared', roomId: m.snapshotSource.roomId, messageId: m.snapshotSource.messageId });
         }, 'snapshot-source');
-        source.setAttribute('aria-label', `查看原空间「${snapshotName}」中的来源记录`); entry.heading.append(source);
+        ui.display.text(source, 'reading.snapshotSource', { name: snapshotName });
+        ui.display.attribute(source, 'aria-label', 'reading.snapshotSourceAction', { name: snapshotName }); entry.heading.append(source);
       }
-      if (nativeTitle) entry.heading.append(node('span', nativeTitle));
-      if (m.incomplete) entry.heading.append(node('span', '内容未完整同步 · 请核对原生终端'));
-      if (m.volatile && !entry.disclosure) entry.heading.append(node('span', (m.nativeMessageId || m.id || '').startsWith(`native:${m.nativeId}:tool:`) ? '工具记录' : '本次运行记录'));
-      if (m.sharingStopped) entry.heading.append(node('span', `共享已停止 · ${m.sharingStopped}`));
-      if (messageTime) { const time = node('time', messageTime.text); time.dateTime = messageTime.dateTime; time.title = '记录时间：' + messageTime.full; time.setAttribute('aria-label', time.title); entry.heading.append(time); }
+      if (nativeTitle) {
+        const title = node('span'), message = window.nativeWorkspaceLocale.displayMessage(m.uiTitleMessage, 'notice.');
+        if (message && message.key === 'notice.legacyTitle' && ['last', 'old'].includes(message.params.status)) ui.display.text(title, message.key, () => ({ title: ui.displayText(m.legacyOriginalTitle, m.legacyOriginalTitleUiMessage) || message.params.title || uiText('notice.legacyNative'), status: uiText(message.params.status === 'last' ? 'notice.legacyLast' : 'notice.legacyOld') }));
+        else if (message && message.key !== 'notice.legacyTitle' && window.nativeWorkspaceLocale.displayMessage(message, 'notice.', nativeTitle)) ui.display.text(title, message.key, message.params); else title.textContent = nativeTitle;
+        entry.heading.append(title);
+      }
+      if (m.incomplete) { const label = node('span'); ui.display.text(label, 'reading.incomplete'); entry.heading.append(label); }
+      if (m.volatile && !entry.disclosure) { const label = node('span'); ui.display.text(label, (m.nativeMessageId || m.id || '').startsWith(`native:${m.nativeId}:tool:`) ? 'reading.tool' : 'reading.runRecord'); entry.heading.append(label); }
+      if (m.sharingStopped) { const label = node('span'); ui.display.text(label, 'reading.sharingStopped', () => ({ reason: ui.displayText(m.sharingStopped, m.sharingStoppedUiMessage) })); entry.heading.append(label); }
+      if (messageTime) {
+        const time = node('time'); time.dateTime = messageTime.dateTime;
+        ui.display.computed(time, 'text', () => readingDisplayClock(m).text);
+        const label = () => uiText('reading.recordedAt', { time: readingDisplayClock(m).full });
+        ui.display.computed(time, 'title', label); ui.display.computed(time, 'aria-label', label); entry.heading.append(time);
+      }
       // A stored fragment is not proof that its native turn is still running.
       // Current activity lives in the session/progress status, not this record.
       // Only Claude rows take queued input; native sends it once the agent is idle.
-      const status = { 'awaiting-native': m.inputMode === 'queue' ? '排队中，等空闲后发送' : '等待原生确认', unconfirmed: '结果未确认', 'not-sent': '没有发出', streaming: '正在输出', running: !room && session?.provider === 'claude' && m.role === 'tool' ? '已请求工具' : '正在运行', failed: '原生报告失败', declined: '原生已拒绝', interrupted: '原生已中断', 'reply-private': '分享已失效，回复保留在原会话' }[m.status];
+      const status = { 'awaiting-native': m.inputMode === 'queue' ? 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'reading.status.unconfirmed', 'not-sent': 'delivery.notSent', streaming: 'reading.status.streaming', running: !room && session?.provider === 'claude' && m.role === 'tool' ? 'reading.status.toolRequested' : 'reading.status.running', failed: 'reading.status.failed', declined: 'reading.status.declined', interrupted: 'reading.status.interrupted', 'reply-private': 'reading.status.private' }[m.status];
       if (entry.exploration) { if (entry.exploration.error) entry.heading.append(node('span', entry.exploration.error)); }
-      else if (status && !m.nativeBlock && !m.sharedStream) entry.heading.append(node('span', status));
+      else if (status && (ownGap || !m.nativeBlock && !m.sharedStream)) { const label = node('span'); ui.display.text(label, status); entry.heading.append(label); }
       else if ((m.nativeBlock || m.sharedStream) && ['failed', 'declined', 'interrupted', 'unconfirmed'].includes(m.status)) entry.heading.append(node('span', m.status));
-      else if (m.manualReply && m.status === 'submitted') entry.heading.append(node('span', '原生已接收 · 回复由你选定后分享'));
+      else if (m.manualReply && m.status === 'submitted') { const label = node('span'); ui.display.text(label, 'reading.manualReply'); entry.heading.append(label); }
       if (m.toolKind === 'commandExecution' && !entry.exploration && m.exitCode) entry.heading.append(node('span', 'exit ' + m.exitCode));
       if (entry.preview) entry.heading.append(entry.preview);
     }
-    entry.actionLabel = readingActionLabel(m, name);
-    entry.copyText.setAttribute('aria-label', '复制：' + entry.actionLabel);
-    entry.share.setAttribute('aria-label', '选择并分享：' + entry.actionLabel);
+    // Capture this original row's label function for an in-flight copy. A later
+    // streaming row can replace entry.copyLabel, but cannot retarget that copy.
+    entry.copyLabel = () => readingActionLabel(m, messageName());
+    ui.display.computed(entry.copyText, 'aria-label', () => uiText('reading.copyAction', { label: readingActionLabel(m, messageName()) }));
+    ui.display.computed(entry.share, 'aria-label', () => uiText('reading.shareAction', { label: readingActionLabel(m, messageName()) }));
     // Keep tools' original disclosure and source IDs. The toolbar belongs to
     // this heading, rather than floating over the next record's content.
     if (m.role !== 'system' && entry.actions.parentElement !== entry.heading) entry.heading.append(entry.actions);
@@ -707,7 +752,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       entry.reply.dataset.replyTo = m.id;
       const root = roomThreads.roots.get(m.id), count = roomThreads.groups.get(root)?.length || 1;
       entry.reply.hidden = m.role === 'system';
-      entry.reply.textContent = count > 1 ? `回复 · ${count} 条讨论记录` : '回复';
+      ui.display.computed(entry.reply, 'text', () => count > 1 ? uiText('reading.responses', { count: new Intl.NumberFormat(ui.language.getSnapshot().active).format(count) }) : uiText('reading.respond'));
     }
     if (entry.delivery) {
       entry.delivery.hidden = m.role === 'system';
@@ -718,10 +763,10 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       const deliveryKey = JSON.stringify([m.deliveryTracked, deliveries, Boolean(m.snapshotBatch)]);
       if (entry.deliveryKey !== deliveryKey) {
         entry.deliveryKey = deliveryKey;
-        const status = d => ({ submitted: '原生已接收', 'awaiting-native': m.inputMode === 'queue' ? '排队中，等空闲后发送' : '等待原生确认', unconfirmed: '接收结果未确认', 'not-sent': '没有发出' }[d.status] || '接收结果未记录');
-        entry.deliverySummary.textContent = deliveries.length
-          ? `${m.snapshotBatch ? '来源接收记录' : '发送详情'} · ${deliveries.map(d => `${d.label}：${status(d)}`).join('；')}`
-          : m.snapshotBatch ? '来源记录 · 合并未发送' : m.deliveryTracked ? '本条未由工作区转发' : '旧记录 · 发送详情未记录';
+        const status = d => uiText(({ submitted: 'delivery.submitted', 'awaiting-native': m.inputMode === 'queue' ? 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'delivery.unconfirmed', 'not-sent': 'delivery.notSent' }[d.status] || 'delivery.unknown'));
+        ui.display.computed(entry.deliverySummary, 'text', () => deliveries.length
+          ? uiText(m.snapshotBatch ? 'delivery.snapshotSummary' : 'delivery.summary', { recipients: deliveries.map(d => uiText('delivery.recipient', { recipient: d.label, status: status(d) })).join(ui.language.getSnapshot().active === 'zh' ? '；' : '; ') })
+          : uiText(m.snapshotBatch ? 'delivery.snapshotNone' : m.deliveryTracked ? 'delivery.none' : 'delivery.legacy'));
         const retainedDeliveries = new Set();
         for (const d of deliveries) {
           let row = entry.deliveryRows.get(d.id);
@@ -731,16 +776,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
             entry.deliveryRows.set(d.id, row);
           }
           retainedDeliveries.add(d.id);
-          const label = `${m.snapshotBatch ? '当时发给' : '发给'} ${d.label} · ${status(d)}`;
-          if (row.label.textContent !== label) row.label.textContent = label;
+          ui.display.computed(row.label, 'text', () => uiText(m.snapshotBatch ? 'delivery.snapshotRow' : 'delivery.row', { recipient: d.label, status: status(d) }));
           if (row.payload.textContent !== d.text) row.payload.textContent = d.text;
         }
         for (const [id, row] of entry.deliveryRows) if (!retainedDeliveries.has(id)) { row.item.remove(); entry.deliveryRows.delete(id); }
-        const note = m.snapshotBatch ? '这是来源空间的记录；合并没有新增发送或执行授权。' : deliveries.length
-          ? '以上是本次交给原生 agent 的正文，不是其完整模型上下文；原生历史、系统指令和 hooks 仍由原生管理。列入共享记录不会自动发送给其他成员。'
-          : m.deliveryTracked ? '这条消息保留在共享记录中，工作区没有将本条转发给其他 agent。'
-          : '这条旧记录没有完整的发送凭据，不能据此判断哪些 agent 已收到。';
-        if (entry.deliveryNote.textContent !== note) entry.deliveryNote.textContent = note;
+        ui.display.text(entry.deliveryNote, m.snapshotBatch ? 'delivery.snapshotNote' : deliveries.length ? 'delivery.note' : m.deliveryTracked ? 'delivery.noteNone' : 'delivery.noteLegacy');
       }
     }
     if (entry.openRecipient) {
@@ -757,7 +797,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       entry.inputBody.textContent = m.input || ''; entry.inputBody.hidden = !m.input;
     }
     const displayText = nativeCompletionText(m);
+    const ownNotice = readingOwnMessage(m);
+    const noticeSignature = ownNotice ? JSON.stringify(ownNotice) : '';
+    if (entry.noticeSignature !== noticeSignature) { entry.text = undefined; entry.noticeSignature = noticeSignature; }
     entry.displayText = displayText;
+    entry.copyPayload = ownNotice ? () => readingOwnText(m, ownNotice) : null;
     const fileSession = room ? state.sessions.find(s => s.id === m.sessionId) : session;
     const fileCwdKnown = fileSession && !fileSession.nativeContextPending && (m.nativeId
       ? m.nativeId === fileSession.nativeId && !fileSession.nativeContexts?.some(c => c.nativeId === m.nativeId)
@@ -769,7 +813,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       if (entry.role && entry.role !== m.role) ui.clearMarkdown(entry.body);
       entry.text = displayText; entry.role = m.role; entry.streaming = m.status === 'streaming'; entry.fileSourceKey = fileSourceKey;
       if (m.role === 'assistant') ui.markdown(entry.body, m.text, entry.streaming, () => { if (view.key === key) scheduleReading(view); }, fileSource);
-      else entry.body.textContent = displayText;
+      else if (ownNotice) ui.display.computed(entry.body, 'text', () => readingOwnText(m, ownNotice));
+      else { ui.display.unbind(entry.body); entry.body.textContent = displayText; }
     }
     const footer = readingTurnFooter(m);
     entry.item.classList.toggle('native-metadata-only', m.kind === 'turn' && !displayText);
@@ -785,9 +830,15 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         if (footer.duration) entry.footer.append(node('span', footer.duration));
         // The footer is native turn metadata, not the local receipt clock used
         // by ordinary message headings. Missing fields stay absent.
-        if (footer.clock && !repeatedClock) { const time = node('time', footer.clock.text); time.dateTime = footer.clock.dateTime; time.title = footer.clock.full; time.setAttribute('aria-label', footer.clock.full); entry.footer.append(time); }
-        const description = [footer.duration && '用时 ' + footer.duration, footer.clock && '完成时间 ' + footer.clock.full].filter(Boolean).join(' · ');
-        entry.footer.title = description; entry.footer.setAttribute('aria-label', description);
+        if (footer.clock && !repeatedClock) {
+          const time = node('time'); time.dateTime = footer.clock.dateTime;
+          const clock = () => readingDisplayClock({ role: 'user', time: m.nativeCompletedAt });
+          ui.display.computed(time, 'text', () => clock().text);
+          ui.display.computed(time, 'title', () => clock().full); ui.display.computed(time, 'aria-label', () => clock().full);
+          entry.footer.append(time);
+        }
+        const description = () => [footer.duration && uiText('reading.elapsed', { duration: footer.duration }), footer.clock && uiText('reading.completedAt', { time: readingDisplayClock({ role: 'user', time: m.nativeCompletedAt }).full })].filter(Boolean).join(' · ');
+        ui.display.computed(entry.footer, 'title', description); ui.display.computed(entry.footer, 'aria-label', description);
         entry.footerKey = footerKey;
       }
     } else if (entry.footer) { entry.footer.remove(); delete entry.footer; delete entry.footerKey; }
@@ -804,6 +855,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     if (hasImages && !entry.images) {
       const host = node('div', undefined, 'message-images'); entry.body.after(host);
       entry.images = window.nativeWorkspaceImages.mount(host, api, {
+        display: ui.display, text: uiText, displayText: ui.displayText, createError: ui.createError,
         beforeLayout: () => { if (el.clientWidth && el.clientHeight) captureReading(view); }, onLayout: () => { if (view.key === key && el.clientWidth && el.clientHeight) scheduleReading(view); },
         isOpen: imageKey => view.folds[imageKey] === true,
         onOpen: (imageKey, open) => {
@@ -816,11 +868,11 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
       });
     }
     entry.images?.update(m.images || [], { kind: room ? 'room' : 'session', ...(room ? { roomId: state.room?.id || 'shared' } : {}), sessionId: room ? m.sessionId : session?.id,
-      nativeId: m.nativeId, messageId: m.id }, room ? m.name || name : session?.name || name, m.status);
+      nativeId: m.nativeId, messageId: m.id }, () => room ? m.name || messageName() : session?.name || messageName(), m.status);
     if (entry.inputBody && hasImages && m.toolKind === 'imageView') entry.inputBody.hidden = true;
-    if (entry.copyText) { entry.copyText.hidden = hasImages && !m.text || m.kind === 'turn' && !displayText; entry.copyText.textContent = hasImages ? '复制文字' : '复制'; }
+    if (entry.copyText) { entry.copyText.hidden = hasImages && !m.text || m.kind === 'turn' && !displayText; ui.display.text(entry.copyText, hasImages ? 'reading.copyText' : 'common.copy'); }
     entry.share.hidden ||= hasImages && !m.text;
-    entry.share.textContent = hasImages ? '选择并分享文字' : '选择并分享';
+    ui.display.text(entry.share, hasImages ? 'reading.shareText' : 'reading.share');
   }
   const nested = new Set();
   for (const [id, group] of explorations) {
@@ -841,8 +893,10 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   }
   if (!sourceMessages.length) {
     const s = session;
-    const empty = s?.state === 'approval' || s?.nativeApproval ? '原生会话正在等待确认，请核对待处理请求或同屏终端。' : s?.state === 'working' ? '原生会话正在工作，输出会在这里出现。' : '从这里开始。你也可以随时使用同一个会话的原生终端。';
-    rows.push(node('p', room ? ($('room-search').value || $('room-filter').value ? '没有匹配的共享记录。私人会话内容不会出现在这里。' : '从一句话开始合作\n@ 选择接收者；共享消息和成员变化会留在这里。') : empty, 'message empty'));
+    const empty = s?.state === 'approval' || s?.nativeApproval ? 'reading.emptyApproval' : s?.state === 'working' ? 'reading.emptyWorking' : 'reading.empty';
+    const label = node('p', undefined, 'message empty');
+    ui.display.text(label, room ? ($('room-search').value || $('room-filter').value ? 'reading.emptySharedMatch' : 'reading.emptyShared') : empty);
+    rows.push(label);
   }
   view.older.hidden = room || !range.start; view.newer.hidden = room || range.tail;
   if (!room) { rows.unshift(view.older); rows.push(view.newer); }

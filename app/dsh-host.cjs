@@ -1,6 +1,8 @@
+const { uiError } = require('./ui-errors.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { validPreference } = require('./ui-locale.js');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // DSH signs browser cookies for each listener authority, but Chromium sends
@@ -31,7 +33,7 @@ async function waitForPrevious(filename) {
 
 // Run the pinned DSH UI composition behind the local desktop view.
 // Its UI may restart; the native session service is a separate owner.
-async function startDsh(dataDir) {
+async function startDsh(dataDir, { onLocale } = {}) {
   const registry = path.join(dataDir, 'ui-host.json');
   await waitForPrevious(registry);
   const home = path.join(dataDir, 'dsh');
@@ -40,19 +42,27 @@ async function startDsh(dataDir) {
     cwd: dataDir, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...Object.fromEntries(['PATH', 'TMPDIR', 'LANG', 'LC_ALL'].filter(key => process.env[key]).map(key => [key, process.env[key]])), ELECTRON_RUN_AS_NODE: '1', DSH_HOME: home },
   });
+  // Listen before the URL is ready: the first accepted snapshot precedes it.
+  child.on('message', value => {
+    if (value?.type !== 'ui-locale') return;
+    const warning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null;
+    if (Object.hasOwn(value, 'preference') && validPreference(value.preference) && Number.isSafeInteger(value.revision) && value.revision >= 0) {
+      try { onLocale?.({ preference: value.preference, revision: value.revision, explicit: value.explicit === true, warning }); } catch {}
+    } else if (warning) { try { onLocale?.({ warning }); } catch {} }
+  });
   if (child.pid) fs.writeFileSync(registry, JSON.stringify({ pid: child.pid, parentPid: process.pid }), { mode: 0o600 });
   child.once('exit', () => {
     try { if (JSON.parse(fs.readFileSync(registry, 'utf8')).pid === child.pid) fs.rmSync(registry); } catch {}
   });
   const stop = () => { if (child.connected) child.disconnect(); else if (child.exitCode === null) child.kill('SIGTERM'); };
   const url = await new Promise((resolve, reject) => {
-    let pending = ''; const timer = setTimeout(() => { stop(); reject(new Error('DSH 界面服务启动超时；原生会话保持运行。')); }, 60000);
+    let pending = ''; const timer = setTimeout(() => { stop(); reject(uiError("error.dshStartupTimeout")); }, 60000);
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', chunk => { pending += chunk; if (pending.length > 100000) pending = pending.slice(-50000); const match = pending.match(/dsh web: (http:\/\/127\.0\.0\.1:\d+\/[^\s]*)/); if (match) { clearTimeout(timer); resolve(match[1]); } });
     // Tokens may appear in DSH diagnostics. Keep them out of logs and the UI.
     child.stderr.on('data', () => {});
-    child.once('error', () => { clearTimeout(timer); reject(new Error('无法启动 DSH 界面服务。')); });
-    child.once('exit', code => { clearTimeout(timer); reject(new Error(`DSH 界面服务退出（${code}）；原生会话未被替换。`)); });
+    child.once('error', () => { clearTimeout(timer); reject(uiError("error.dshStartupFailed")); });
+    child.once('exit', code => { clearTimeout(timer); reject(uiError("error.dshExited", { arg1: code })); });
   });
   return { child, stop, url, origin: new URL(url).origin };
 }

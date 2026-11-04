@@ -1,3 +1,4 @@
+const { uiError, uiNotice, uiActivity } = require('./ui-errors.cjs');
 const { claudeUsage } = require('./native-usage.js');
 const { EventEmitter } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
@@ -299,7 +300,7 @@ class Terminal extends EventEmitter {
     this.screen.onData(data => { if (this.alive) this.input(data); });
   }
   command(message) {
-    if (!this.alive || !this.worker.stdin.writable) throw new Error('原生终端已经关闭。');
+    if (!this.alive || !this.worker.stdin.writable) throw uiError("error.nativeTerminalClosed");
     this.worker.stdin.write(JSON.stringify(message) + '\n');
   }
   input(data) { this.command({ type: 'input', data }); }
@@ -327,11 +328,11 @@ class Terminal extends EventEmitter {
   observe() { return new Promise(resolve => this.screen.write('', () => resolve({ ...this.journal.snapshot(), alive: this.alive }))); }
   stop(timeout = 5000) {
     if (this.stopPending) return this.stopPending;
-    if (!this.alive) return this.nativeExited ? Promise.resolve() : Promise.reject(new Error('原生进程退出未获确认；请检查原生会话。'));
+    if (!this.alive) return this.nativeExited ? Promise.resolve() : Promise.reject(uiError("error.nativeExitUnconfirmed"));
     this.stopPending = new Promise((resolve, reject) => {
       const finish = error => { clearTimeout(timer); this.off('closed', closed); error ? reject(error) : resolve(); };
-      const closed = result => finish(result.confirmed ? null : new Error('终端连接断开，但原生进程退出未获确认。'));
-      const timer = setTimeout(() => finish(new Error('原生进程仍未确认退出；保留状态，请检查后重试。')), timeout);
+      const closed = result => finish(result.confirmed ? null : uiError("error.terminalClosedExitUnconfirmed"));
+      const timer = setTimeout(() => finish(uiError("error.nativeExitStillUnconfirmed")), timeout);
       this.once('closed', closed);
       try { this.command({ type: 'stop' }); } catch (error) { finish(error); }
     }).finally(() => { this.stopPending = null; });
@@ -405,7 +406,7 @@ function claudeHolder(nativeId, strict = false) {
   if (!/^[a-f0-9-]{36}$/i.test(nativeId || '')) return null;
   // Without ps the check cannot run; recovery then proceeds as it did before.
   let lines; try { lines = execFileSync('/bin/ps', ['-axo', 'pid=,args='], { encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024 * 1024 }).split('\n'); } catch {
-    if (strict) { const error = Error('无法核对原生进程，没有接管。请稍后重试。'); error.nativeImportRefused = true; throw error; }
+    if (strict) { const error = uiError("error.nativeProcessUnverifiable"); error.nativeImportRefused = true; throw error; }
     return null;
   }
   for (const line of lines) {
@@ -420,10 +421,10 @@ function claudeImportAvailable(record, host) {
     rows = JSON.parse(execFileSync(host.binaries.claude, ['agents', '--json'], { env: nativeEnvironment(), encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
     if (!Array.isArray(rows) || rows.length > 1000 || rows.some(row => !row || !['interactive', 'background'].includes(row.kind) || (row.sessionId !== undefined && (typeof row.sessionId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(row.sessionId))))) throw Error('Unknown native identity');
   } catch {
-    const error = Error('无法核对 Claude 后台会话，没有接管。请先在原生界面确认并退出原连接。'); error.nativeImportRefused = true; throw error;
+    const error = uiError("error.claudeSessionUnverifiable"); error.nativeImportRefused = true; throw error;
   }
   if (rows.some(row => row.sessionId?.toLowerCase() === record.nativeId.toLowerCase())) {
-    const error = Error('Claude 仍报告这个会话有活动连接或后台工作。请先在那里退出；这里不会自动 attach 或停止它。'); error.nativeActiveWriter = true; throw error;
+    const error = uiError("error.claudeSessionStillActive"); error.nativeActiveWriter = true; throw error;
   }
 }
 class Claude extends EventEmitter {
@@ -466,7 +467,7 @@ class Claude extends EventEmitter {
     // Native has no lock: a second --resume writes the same transcript. Refuse
     // while another claude process (e.g. an external terminal) names this ID.
     const holder = record.recovering && claudeHolder(record.nativeId, record.externalHistory === true);
-    if (holder) { const error = Error(`另一个 claude 进程（PID ${holder}）引用了这个原生会话，可能正在写入。请先在那里退出，避免两个程序同时写同一会话。`); error.nativeActiveWriter = true; throw error; }
+    if (holder) { const error = uiError("error.claudeOtherWriter", { arg1: holder }); error.nativeActiveWriter = true; throw error; }
     if (record.recovering && record.externalHistory) claudeImportAvailable(record, host);
     // Claude also loads the compat plugin a retained session once left in this
     // folder; refresh NAW's own byte-exact old copy before starting (T-100).
@@ -509,7 +510,7 @@ class Claude extends EventEmitter {
   }
   terminalClosed(result) {
     this.cancelNativeAbort(); this.ready = false; this.submission.close();
-    if (!result.confirmed) { this.emit('activity', '终端连接断开，原生进程退出未确认。'); this.emit('state', 'error'); return; }
+    if (!result.confirmed) { this.emit('activity', ...uiActivity("notice.activity.terminalDisconnectedExitUnconfirmed")); this.emit('state', 'error'); return; }
     // Native /background ends this root like /exit, then its daemon starts the
     // conversation under a new ID with this record's hook token. Briefly keep
     // the token routed so that start can arrive; otherwise this is a plain exit.
@@ -526,8 +527,8 @@ class Claude extends EventEmitter {
       this.emit('background', { nativeId: this.record.nativeId, backgroundId: this.backgroundTo });
       this.emit('state', 'background');
     } else {
-      if (this.switchedTo) this.emit('activity', `原生终端已退出；它切换到的会话 ${this.switchedTo.slice(0, 8)} 是否在别处继续无法确认。`);
-      else if (this.record.forkPicker) this.emit('activity', '未选择会话，没有创建分支。');
+      if (this.switchedTo) this.emit('activity', ...uiActivity("notice.activity.switchedTerminalExited", { arg1: this.switchedTo.slice(0, 8) }));
+      else if (this.record.forkPicker) this.emit('activity', ...uiActivity("notice.activity.noBranchSelected"));
       this.emit('state', 'ended');
     }
   }
@@ -580,6 +581,8 @@ class Claude extends EventEmitter {
     const tool = typeof message.title === 'string' ? message.title.slice(0, 200) : '';
     this.emit('progress', { id: `claude-row-${message.id}`, source: 'claude-native-message', kind: message.kind,
       status: 'observed', title: message.kind === 'response' ? '原生回复' : `${tool || '工具'} · 原生输出`,
+      uiTitleMessage: uiNotice(message.kind === 'response' ? 'notice.legacy.replyTitle' : tool ? 'notice.legacy.toolOutput' : 'notice.legacy.unnamedToolOutput', message.kind !== 'response' && tool ? { tool } : undefined).uiMessage,
+      ...(message.nonText === true ? { uiMessage: uiNotice('notice.legacy.nonText', { text: message.text }).uiMessage } : {}),
       text: message.text + (message.nonText === true ? '\n含非文本结果，请在原生终端查看。' : ''), truncated: message.truncated === true });
     return { observed: true };
   }
@@ -827,7 +830,7 @@ class Claude extends EventEmitter {
     const request = this.nativeAbortRequest; if (!request) return;
     this.nativeAbortRequest = null; clearTimeout(request.timer);
     this.emit('capability');
-    request.reject(Error('原生中断结果未确认；没有重发或切换为终端按键，请核对原会话。'));
+    request.reject(uiError("error.nativeInterruptUnconfirmed"));
   }
   nativeAbortCurrent(request) {
     return this.nativeAbortRequest === request && !this.rootEnding && !this.disposed && this.terminal?.alive &&
@@ -865,9 +868,9 @@ class Claude extends EventEmitter {
     this.cancelNativeAbort(); this.rootTurn = null; this.liveTurn = null; this.livePermissions?.clear();
     this.displayGap = true; for (const turn of this.displayProofs?.values() || []) turn.incomplete = true;
     this.emit('progress', { id: `claude-observation-gap-${this.record.nativeId}`,
-      source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步',
-      text: '本地观察连接或队列出现缺口，请核对原生终端。没有重发任务。' });
-    if (this.nativeBlocks) this.emit('nativeBlock', { id: `gap:${this.observationEpoch}`, nativeId: this.record.nativeId, kind: 'gap', status: 'unconfirmed', text: '部分原生内容未能同步，请在原生终端核对。没有重发任务。' });
+      source: 'claude-native-message', kind: 'gap', status: 'unknown', title: '部分原生消息未能同步', uiTitleMessage: uiNotice('notice.legacy.gapTitle').uiMessage,
+      text: '本地观察连接或队列出现缺口，请核对原生终端。没有重发任务。', uiMessage: uiNotice('notice.legacy.gapText').uiMessage });
+    if (this.nativeBlocks) this.emit('nativeBlock', { id: `gap:${this.observationEpoch}`, nativeId: this.record.nativeId, kind: 'gap', status: 'unconfirmed', text: '部分原生内容未能同步，请在原生终端核对。没有重发任务。', uiMessage: uiNotice('notice.observation.nativeContentGap').uiMessage });
   }
   contextEnding(reason = 'other') {
     if (this.rootEnding?.sessionId === this.record.nativeId) return;
@@ -897,7 +900,8 @@ class Claude extends EventEmitter {
       typeof message.nextSessionId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(message.nextSessionId) ||
       message.nextSessionId === message.sessionId || !this.terminal?.alive) throw Error('Unverified root transition');
     const change = { previousId: message.sessionId, nativeId: message.nextSessionId, reason: message.source === 'fork' ? 'branch' : 'clear',
-      model: typeof message.model === 'string' && message.model.length <= 120 ? message.model : '原生未报告', committed: false };
+      model: typeof message.model === 'string' && message.model.length <= 120 ? message.model : '原生未报告',
+      modelUiMessage: typeof message.model === 'string' && message.model.length <= 120 ? null : uiNotice('notice.model.nativeUnreported').uiMessage, committed: false };
     this.emit('contextClear', change);
     if (!change.committed || this.record.nativeId !== change.nativeId) throw Error('Context not saved');
     this.lastRootTransition = { sessionId: message.sessionId, nextSessionId: message.nextSessionId, lease: message.lease };
@@ -905,7 +909,7 @@ class Claude extends EventEmitter {
     this.observationEpoch = crypto.randomBytes(16).toString('hex'); this.rootObservation = null;
     this.rootEnding = null; this.lastPromptId = null; this.pending = null; this.ready = true;
     this.displayProofs = new Map(); this.displayGap = false;
-    this.emit('state', 'idle'); this.emit('model', change.model);
+    this.emit('state', 'idle'); this.emit('model', change.model, change.modelUiMessage);
     const observed = (this.contextEvents || []).filter(e => e.session_id === change.nativeId);
     this.contextEvents = (this.contextEvents || []).filter(e => e.session_id !== change.nativeId);
     for (const event of observed) this.hook(event);
@@ -937,7 +941,7 @@ class Claude extends EventEmitter {
       this.contextEvents ||= [];
       if (this.contextEvents.length >= 256 || this.contextEvents.reduce((n, e) => n + JSON.stringify(e).length, 0) + JSON.stringify(event).length > 1024 * 1024) {
         this.contextEventsOverflow = true;
-        this.emit('activity', '原生上下文同步记录已达上限；请在原生终端继续，图形输入保持关闭。');
+        this.emit('activity', ...uiActivity("notice.activity.nativeContextSyncLimit"));
       } else this.contextEvents.push(event);
       return;
     }
@@ -976,6 +980,7 @@ class Claude extends EventEmitter {
     if (['SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCompleted'].includes(event.hook_event_name)) this.emit('fleet', {
       event: event.hook_event_name, id: event.agent_id || event.task_id || '',
       name: event.teammate_name || event.agent_type || event.task_subject || '原生团队活动',
+      nameUiMessage: event.teammate_name || event.agent_type || event.task_subject ? null : uiNotice('notice.fleet.nativeTeamActivity').uiMessage,
     });
     if (isChild) return;
     // The branch exists once its own session starts; later launches resume it.
@@ -1006,10 +1011,11 @@ class Claude extends EventEmitter {
     });
     if (['PermissionRequest', 'Notification', 'StopFailure'].includes(event.hook_event_name)) this.emit('progress', {
       source: 'claude-hook', kind: event.hook_event_name, title: event.hook_event_name === 'PermissionRequest' ? '等待原生权限确认' : event.hook_event_name === 'StopFailure' ? '原生请求失败' : '原生通知',
+      uiTitleMessage: uiNotice(event.hook_event_name === 'PermissionRequest' ? 'notice.run.approval' : event.hook_event_name === 'StopFailure' ? 'notice.hook.nativeFailure' : 'notice.hook.nativeNotification').uiMessage,
       text: event.message || '', status: event.hook_event_name === 'StopFailure' ? 'failed' : 'observed',
     });
     switch (event.hook_event_name) {
-      case 'SessionStart': if (this.rootEnding) break; this.ready = true; this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告'); break;
+      case 'SessionStart': if (this.rootEnding) break; this.ready = true; this.emit('state', 'idle'); if (!this.nativeModelEpoch || this.nativeModelEpoch !== this.observationEpoch) this.emit('model', event.model || '原生未报告', event.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); break;
       case 'UserPromptSubmit': {
         if (this.liveTurn && (!event.prompt_id || event.prompt_id !== this.liveTurn.promptId)) this.liveTurn.question = false;
         // A settings hook observing a prompt is not its acceptance. The native
@@ -1075,7 +1081,7 @@ class Claude extends EventEmitter {
         if (this.liveTurn) this.liveTurn.question = false;
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
         clearTimeout(this.pending?.displayTimer); this.pending = null;
-        this.emit('state', 'error'); this.emit('failed', '原生请求未完成，请查看失败记录。');
+        this.emit('state', 'error'); { const notice = uiNotice("notice.failure.nativeRequestIncomplete"); this.emit('failed', notice.text, undefined, notice.uiMessage); }
         if (this.rootTurn) this.rootTurn.failedTranscript = event.transcript_path;
         this.reportCapacityFailure(); break;
       case 'SessionEnd': this.contextEnding(event.reason); break;
@@ -1141,10 +1147,10 @@ class Claude extends EventEmitter {
         this.emit('complete', { messageId: displayConfirmed ? proof?.messageId : undefined, tag: accepted && displayConfirmed ? pending.tag : undefined, text: this.nativeBlocks ? displayConfirmed ? proof?.safeText || '' : '' : event.last_assistant_message || '', background, scheduled, fleetPending: null, stopHookActive: typeof event.stop_hook_active === 'boolean' ? event.stop_hook_active : null });
   }
   async send(text, tag, guard) {
-    if (this.nativeAbortRequest) throw Error('正在等待原生中断确认；草稿保留。');
-    if (this.nativeInputRequired) throw Error('Claude 已暂停插件输入；请在原生终端输入一次后继续，草稿保留。');
-    if (!this.ready || this.pending || this.queued) throw new Error('Claude 尚未就绪，或上一条输入仍待确认。');
-    if (!guard()) throw new Error('这条交接已撤销。');
+    if (this.nativeAbortRequest) throw uiError("error.nativeInterruptPending");
+    if (this.nativeInputRequired) throw uiError("error.claudePluginInputPaused");
+    if (!this.ready || this.pending || this.queued) throw uiError("error.claudeInputNotReady");
+    if (!guard()) throw uiError("error.handoffRevoked");
     const failedPromptId = this.failedTurnInputId ? this.rootTurn.promptId : null;
     this.claimFailedTurnInput();
     const pending = this.pending = { tag, text, guard, nativeId: this.record.nativeId, failedPromptId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
@@ -1161,7 +1167,7 @@ class Claude extends EventEmitter {
   }
   get queueAvailable() { return Boolean(!this.nativeAbortRequest && !this.nativeInputRequired && this.nativeQueue && this.rootLease && !this.rootEnding && this.ready && this.chatAvailable); }
   async queue(text, tag, guard) {
-    if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Object.assign(Error('原生等待输入暂不可用；草稿保留。'), { notSent: true });
+    if (!this.queueAvailable || this.queued || this.submission.pending || !guard()) throw Object.assign(uiError("error.nativeWaitingInputUnavailable"), { notSent: true });
     const pending = this.queued = { tag, text, guard, nativeId: this.record.nativeId, accepted: false, promptId: null, prompts: new Set(), replies: new Map() };
     try { return await this.deliver(pending, true); }
     finally { if (this.queued === pending) this.queued = null; }
@@ -1230,7 +1236,7 @@ class Rpc extends EventEmitter {
       else if (this.pending.has(message.id)) {
         const p = this.pending.get(message.id); this.pending.delete(message.id); clearTimeout(p.timer);
         if (message.error) {
-          const error = new Error(`原生接口拒绝请求（${message.error.code}），请查看原生会话。`);
+          const error = uiError("error.nativeRequestRejected", { arg1: message.error.code });
           error.nativeMissingHistory = message.error.code === -32600 && /^no rollout found for thread id /.test(message.error.message || '');
           if (error.nativeMissingHistory) error.nativeMissingHistoryThread = /^no rollout found for thread id ([^\s]+)$/.exec(message.error.message || '')?.[1];
           error.nativeUnsupportedTurns = message.error.code === -32601 && message.error.message === 'list_turns is not supported yet';
@@ -1238,29 +1244,30 @@ class Rpc extends EventEmitter {
           if (message.error.code === -32600) error.nativeUnmaterializedThread =
             /^thread ([\da-f-]{36}) is not materialized yet; thread\/turns\/list is unavailable before first user message$/i.exec(message.error.message || '')?.[1];
           if (message.error.code === -32600 && /already has an active writer/.test(message.error.message || '')) {
-            error.message = '该会话仍在其他原生连接中使用。请先在那里结束连接，再继续；原连接未被修改。';
+            const display = uiError('error.nativeActiveWriter');
+            error.message = display.message; error.uiMessage = display.uiMessage;
             error.nativeActiveWriter = true;
           }
           p.reject(error);
         } else p.resolve(message.result);
       }
     });
-    ws.on('close', () => { for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('原生连接已断开；不会自动重发。')); } this.pending.clear(); this.emit('closed'); });
+    ws.on('close', () => { for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(uiError("error.nativeDisconnectedNoReplay")); } this.pending.clear(); this.emit('closed'); });
     ws.on('error', () => {});
   }
   call(method, params) {
     if (this.ws.readyState !== undefined && this.ws.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error('原生连接已断开；不会自动重发。'));
+      return Promise.reject(uiError("error.nativeDisconnectedNoReplay"));
     }
     return new Promise((resolve, reject) => {
       const id = ++this.sequence;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('原生请求确认超时；不会自动重发。')); }, 30000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(uiError("error.nativeRequestTimeout")); }, 30000);
       this.pending.set(id, { resolve, reject, timer });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
   reply(id, result) {
-    if (this.ws.readyState !== undefined && this.ws.readyState !== WebSocket.OPEN) throw new Error('原生连接已断开；确认没有发送。');
+    if (this.ws.readyState !== undefined && this.ws.readyState !== WebSocket.OPEN) throw uiError("error.nativeDisconnectedDecisionNotSent");
     this.ws.send(JSON.stringify({ id, result }));
   }
 }
@@ -1282,7 +1289,7 @@ class Codex extends EventEmitter {
     catch (error) { this.finishRecoveryConnection?.(false); throw error; }
     const rpc = this.host.rpc, child = this.host.codexProcess;
     const current = () => !this.stopped && this.host.rpc === rpc && this.host.codexProcess === child;
-    if (!current()) throw new Error('原生后台已变化，没有继续旧的启动请求。');
+    if (!current()) throw uiError("error.backendChangedStartCancelled");
     if (this.record.recovering) {
       // Subscribe locally before the request: native events may precede its ACK.
       // Persisted text has no delta watermark; wait for authoritative completion
@@ -1297,8 +1304,8 @@ class Codex extends EventEmitter {
       try {
         result = await rpc.call('thread/resume', { threadId: this.record.nativeId, ...(!this.record.externalHistory ? { cwd: this.record.cwd } : {}), excludeTurns: true });
         if (this.stopped) { this.finishRecoveryConnection?.(false); return; }
-        if (!current()) throw new Error('原生后台已变化，没有继续旧的恢复请求。');
-        if (result.thread?.id !== this.record.nativeId) throw new Error('原生返回了不同的会话，恢复未确认。');
+        if (!current()) throw uiError("error.backendChangedResumeCancelled");
+        if (result.thread?.id !== this.record.nativeId) throw uiError("error.nativeResumeWrongIdentity");
         this.nativeSessionId = result.thread.sessionId; this.emit('workspaceMcpProof');
       } catch (error) {
         if (this.host.codexTargets.get(this.record.nativeId) === this) this.host.codexTargets.delete(this.record.nativeId);
@@ -1316,22 +1323,22 @@ class Codex extends EventEmitter {
         if (!await this.hydrateHistory(this.record.nativeId)) return;
         this.chatAvailable = true; this.emit('capability');
       } catch {
-        if (!this.stopped) this.emit('activity', '对话历史同步未完成；已保存的记录和草稿仍保留，请在原生终端继续。');
+        if (!this.stopped) this.emit('activity', ...uiActivity("notice.activity.historySyncIncomplete"));
       }
       return;
     }
     if (this.record.view === 'terminal') {
-      this.host.createCodex(() => this.startFromTerminal()).catch(error => { if (!this.stopped) { this.emit('activity', error.message); this.emit('state', 'error'); } });
+      this.host.createCodex(() => this.startFromTerminal()).catch(error => { if (!this.stopped) { this.emit('activity', error.message, error.uiMessage); this.emit('state', 'error'); } });
       return;
     }
     await this.host.createCodex(async () => {
-    if (!current()) throw new Error('原生后台已变化，没有继续旧的启动请求。');
+    if (!current()) throw uiError("error.backendChangedStartCancelled");
     // Native configuration/requirements choose permissions unless the person
     // chose to skip confirmations for this session when creating it.
     const settings = this.nativeSettings;
     const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false, dynamicTools: [require('./addressed-handoffs.cjs').codexTool],
       ...(this.record.skipPermissions ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : {}) });
-    if (!current()) throw new Error('原生后台已变化，没有接管旧的启动结果。');
+    if (!current()) throw uiError("error.backendChangedStartResultIgnored");
     this.record.addressedToolVersion = 1; this.addressedSendAvailable = true;
     this.record.nativeId = r.thread.id; this.nativeSessionId = r.thread.sessionId; this.emit('workspaceMcpProof');
     this.host.codexTargets.set(this.record.nativeId, this);
@@ -1346,23 +1353,23 @@ class Codex extends EventEmitter {
     await new Promise((resolve, reject) => {
       // Login/trust is a human decision, not a timed model request. Keep the
       // creation slot until that terminal starts a thread or actually exits.
-      const timeout = setTimeout(() => this.emit('activity', '等待原生登录或文件夹确认，请在终端继续。'), 120000);
+      const timeout = setTimeout(() => this.emit('activity', ...uiActivity("notice.activity.awaitingNativeLogin")), 120000);
       const cleanup = () => {
         clearTimeout(timeout);
         if (this.host.pendingCodex === started) this.host.pendingCodex = null;
         if (this.host.pendingCodexRuntime === this) this.host.pendingCodexRuntime = null;
         this.terminal?.off('closed', closed);
       };
-      const closed = () => { cleanup(); reject(new Error('原生初始化已退出；未发送模型任务。')); };
+      const closed = () => { cleanup(); reject(uiError("error.nativeInitializationExited")); };
       const started = (thread, model) => {
         cleanup();
         if (this.stopped || rpc !== this.host.rpc || child !== this.host.codexProcess) {
-          reject(new Error('原生后台已变化，没有接管旧的启动结果。')); return;
+          reject(uiError("error.backendChangedStartResultIgnored")); return;
         }
         this.record.nativeId = thread.id; this.nativeSessionId = thread.sessionId; this.emit('workspaceMcpProof'); this.host.codexTargets.set(thread.id, this);
         if (this.terminalNotificationSource) this.chatAvailable = true;
-        this.emit('activity', ''); this.emit('model', model || thread.model || '原生未报告'); this.emit('state', 'idle'); resolve();
-        if (!this.chatAvailable) this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', '原生终端可继续；对话连接未确认。'); });
+        this.emit('activity', ''); this.emit('model', model || thread.model || '原生未报告', model || thread.model ? undefined : uiNotice('notice.model.nativeUnreported').uiMessage); this.emit('state', 'idle'); resolve();
+        if (!this.chatAvailable) this.observing = this.observeFirstTurn().catch(() => { if (!this.stopped) this.emit('activity', ...uiActivity("notice.activity.nativeConversationUnconfirmed")); });
       };
       this.host.pendingCodex = started;
       this.host.pendingCodexRuntime = this;
@@ -1403,10 +1410,10 @@ class Codex extends EventEmitter {
       if (this.stopped || lifecycle !== this.lifecycleRevision) return false;
       const result = await this.host.rpc.call('thread/items/list', { threadId, limit: 100, sortDirection: 'asc', ...(cursor ? { cursor } : {}) });
       if (this.stopped || lifecycle !== this.lifecycleRevision) return false;
-      if (!Array.isArray(result.data)) throw new Error('原生历史格式未能确认；请在原生终端继续。');
+      if (!Array.isArray(result.data)) throw uiError("error.nativeHistoryUnknownFormat");
       for (const entry of result.data) {
         const item = entry.item || entry;
-        if (!item || typeof item.id !== 'string' || !item.id) throw new Error('原生历史缺少消息标识；请在原生终端继续。');
+        if (!item || typeof item.id !== 'string' || !item.id) throw uiError("error.nativeHistoryMissingMessageId");
         if (item.type === 'reasoning') items.set(item.id, { id: item.id, type: item.type, summary: Array.isArray(item.summary) && item.summary.every(part => typeof part === 'string') ? item.summary : [], turnId: entry.turnId });
         if (item.type === 'plan') items.set(item.id, { id: item.id, type: item.type, text: typeof item.text === 'string' ? item.text : '', turnId: entry.turnId });
         if (['agentMessage', 'userMessage'].includes(item.type) || toolTypes.has(item.type)) items.set(item.id, { ...item, turnId: entry.turnId });
@@ -1450,10 +1457,10 @@ class Codex extends EventEmitter {
         }
         return true;
       }
-      if (typeof cursor !== 'string' || !cursor || cursors.has(cursor)) throw new Error('原生历史分页未能确认；请在原生终端继续。');
+      if (typeof cursor !== 'string' || !cursor || cursors.has(cursor)) throw uiError("error.nativeHistoryPaginationUnconfirmed");
       cursors.add(cursor);
     }
-    throw new Error('原生历史超过本次读取上限；请在原生终端查看完整记录。');
+    throw uiError("error.nativeHistoryReadLimit");
   }
   makeTerminal(argv) {
     this.terminal = new Terminal(argv, this.record.cwd);
@@ -1465,9 +1472,7 @@ class Codex extends EventEmitter {
     });
     this.terminal.on('closed', () => {
       this.terminalBridge?.close(); this.terminalBridge = null; this.terminalBridgeReady = null;
-      this.emit('activity', this.backendExitConfirmed
-        ? '原生后台已退出；记录和草稿保留，任务不会自动重发。'
-        : exitNotice);
+      this.emit('activity', ...uiActivity(this.backendExitConfirmed ? 'notice.activity.backendExited' : 'notice.activity.terminalExitedManaged'));
     });
     return this.terminal;
   }
@@ -1516,7 +1521,7 @@ class Codex extends EventEmitter {
       ...(q.options || []).map(option => [option.label, option.description].filter(v => typeof v === 'string').join(' — '))]
       .filter(v => typeof v === 'string' && v).join('\n')).join('\n\n');
     const question = { id, turnId: params.turnId, secret: params.questions.some(q => q.isSecret === true), questionIds: params.questions.map(q => q.id).filter(id => typeof id === 'string'), labels: params.questions.map(q => ({ id: q.id, text: q.header || q.question })) };
-    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, turnId: params.turnId, kind: 'notice', title: '原生问题', text, status: 'complete' });
+    this.emit('nativeBlock', { id, nativeId: this.record.nativeId, turnId: params.turnId, kind: 'notice', title: '原生问题', uiTitleMessage: uiNotice('notice.nativeQuestion.title').uiMessage, text, status: 'complete' });
     return question;
   }
   observeTerminalContext(event) {
@@ -1534,7 +1539,7 @@ class Codex extends EventEmitter {
       const entries = Object.entries(answers);
       const text = entries.map(([id, value]) => (entries.length > 1 ? (request.question.labels.find(q => q.id === id)?.text || id) + '\n' : '') + value.answers.join('\n')).join('\n\n');
       this.emit('nativeBlock', { id: request.question.id + ':reply', nativeId: this.record.nativeId,
-        turnId: request.question.turnId, kind: 'notice', title: '原生终端提交的回答', text, status: 'submitted' });
+        turnId: request.question.turnId, kind: 'notice', title: '原生终端提交的回答', uiTitleMessage: uiNotice('notice.nativeQuestion.terminalAnswer').uiMessage, text, status: 'submitted' });
       return;
     }
     if (event.kind === 'native') {
@@ -1554,7 +1559,7 @@ class Codex extends EventEmitter {
       this.rememberHistoryWatermarks();
       for (const row of this.record.messages || []) if (row.nativeId === this.record.nativeId && row.turnId === this.turnId && ['streaming', 'running'].includes(row.status)) row.incomplete = true;
       this.liveMessageItems.clear(); this.liveToolItems.clear(); this.liveTextItems.clear(); this.nativeTextParts.clear();
-      if (this.turnId && !this.nativeTurnFinished) this.emit('nativeBlock', { id: `gap:source:${crypto.randomUUID()}`, nativeId: this.record.nativeId, turnId: this.turnId, kind: 'gap', status: 'complete', text: '原生显示连接已断开，正在核对图形连接；此间的临时变化可能未同步，原会话继续保留。' });
+      if (this.turnId && !this.nativeTurnFinished) this.emit('nativeBlock', { id: `gap:source:${crypto.randomUUID()}`, nativeId: this.record.nativeId, turnId: this.turnId, kind: 'gap', status: 'complete', text: '原生显示连接已断开，正在核对图形连接；此间的临时变化可能未同步，原会话继续保留。', uiMessage: uiNotice('notice.observation.displayDisconnected').uiMessage });
       const rpc = this.host.rpc, id = this.record.nativeId, revision = this.lifecycleRevision, stateRevision = this.stateRevision, settings = this.nativeSettings;
       this.observing = rpc.call('thread/resume', { threadId: id, excludeTurns: true }).then(async result => {
         if (revision !== this.lifecycleRevision || this.stopped || this.transportDisconnected || this.host.rpc !== rpc || result.thread?.id !== id) return;
@@ -1562,7 +1567,7 @@ class Codex extends EventEmitter {
         this.observeReplySettings(result, settings);
         if (stateRevision === this.stateRevision) this.observeStatus(result.thread.status);
         if (await this.hydrateHistory(id, revision, true) && revision === this.lifecycleRevision && !this.stopped) { this.chatAvailable = true; this.emit('capability'); }
-      }).catch(() => this.emit('activity', '原生终端已退出；图形连接尚未确认，记录和草稿保留。'));
+      }).catch(() => this.emit('activity', ...uiActivity("notice.activity.terminalExitedGuiUnconfirmed")));
       this.emit('capability'); return;
     }
     if (event.ephemeral) return; // Native title/Recap helpers are not the displayed root.
@@ -1581,7 +1586,7 @@ class Codex extends EventEmitter {
     }
     if (event.kind !== 'response') return;
     if (event.error) {
-      if (this.terminalSwitch === event.key) this.emit('activity', '原生切换未确认，旧记录和草稿保留；请在同屏终端核对。');
+      if (this.terminalSwitch === event.key) this.emit('activity', ...uiActivity("notice.activity.nativeSwitchUnconfirmed"));
       return;
     }
     const thread = event.result?.thread;
@@ -1600,11 +1605,11 @@ class Codex extends EventEmitter {
     if (this.terminalSwitch !== event.key) return;
     const existing = this.host.codexTargets.get(thread.id);
     if (existing && existing !== this) {
-      this.emit('activity', '终端已切换到另一个已列出的会话。请选择那个会话继续；旧记录与草稿保留。'); return;
+      this.emit('activity', ...uiActivity("notice.activity.switchedToListedSession")); return;
     }
     this.pendingTerminalContext = event;
     const previousId = this.record.nativeContextPending?.nativeId || this.record.nativeId;
-    const info = { previousId, nativeId: thread.id, reason: 'terminal-switch', model: event.result.model || thread.model || '原生未报告', cwd: thread.cwd };
+    const info = { previousId, nativeId: thread.id, reason: 'terminal-switch', model: event.result.model || thread.model || '原生未报告', modelUiMessage: event.result.model || thread.model ? null : uiNotice('notice.model.nativeUnreported').uiMessage, cwd: thread.cwd };
     this.emit('contextClear', info);
     if (!info.committed || this.record.nativeId !== thread.id) return;
     this.pendingTerminalContext = null; this.terminalSwitch = null; ++this.lifecycleRevision;
@@ -1629,7 +1634,7 @@ class Codex extends EventEmitter {
       }
     }).catch(error => {
       if (revision !== this.lifecycleRevision || this.stopped || this.transportDisconnected) return;
-      this.emit('activity', '新原生上下文已确认，图形连接尚未完成；请在同屏终端继续。');
+      this.emit('activity', ...uiActivity("notice.activity.newContextGuiPending"));
       this.emit('capability');
     });
   }
@@ -1699,11 +1704,11 @@ class Codex extends EventEmitter {
     if (status?.type === 'idle') this.emit('state', 'idle');
     else if (status?.type === 'active') this.emit('state', status.activeFlags?.some(flag => ['waitingOnApproval', 'waitingOnUserInput'].includes(flag)) ? 'approval' : 'working');
     else if (status?.type === 'systemError') this.emit('state', 'error');
-    else { this.emit('state', 'starting'); this.emit('activity', '原生状态尚未确认，请在原生终端查看。'); return; }
+    else { this.emit('state', 'starting'); this.emit('activity', ...uiActivity("notice.activity.nativeStateUnconfirmed")); return; }
     this.publishNativeActivity();
   }
   forgetNativeRequests() {
-    for (const request of this.nativeRequests.values()) this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认结果未确认' });
+    for (const request of this.nativeRequests.values()) this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认结果未确认', uiTitleMessage: uiNotice('notice.nativeConfirm.unconfirmed').uiMessage });
     this.nativeRequests.clear();
     this.terminalRequestKeys?.clear();
   }
@@ -1826,13 +1831,13 @@ class Codex extends EventEmitter {
         }
       }
     }
-    if (message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: '原生会话错误', status: 'failed' });
+    if (message.method === 'error') this.emit('progress', { source: 'codex-native', kind: message.method, title: '原生会话错误', uiTitleMessage: uiNotice('notice.nativeConfirm.sessionError').uiMessage, status: 'failed' });
     if (message.id !== undefined && message.method === 'item/tool/call' && p.tool === require('./addressed-handoffs.cjs').TOOL && p.namespace === require('./addressed-handoffs.cjs').NAMESPACE) {
       // Only the connected native root supplies identity. Never take a sender
       // ID from model arguments or treat another dynamic tool as ours.
       let result, success = false;
       try {
-        if (!this.addressedSendAvailable || this.transportDisconnected || p.threadId !== this.record.nativeId || p.turnId !== this.turnId || !this.addressedCall) throw Error('当前原生连接不支持定向协作。');
+        if (!this.addressedSendAvailable || this.transportDisconnected || p.threadId !== this.record.nativeId || p.turnId !== this.turnId || !this.addressedCall) throw uiError("error.nativeDirectedUnsupported");
         result = this.addressedCall({ nativeId: p.threadId, turnId: p.turnId, callId: p.callId }, p.arguments); success = true;
         if (result?.then) {
           result.then(value => sourceRpc.reply(message.id, { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify(value) }] }), error => sourceRpc.reply(message.id, { success: false, contentItems: [{ type: 'inputText', text: JSON.stringify({ status: 'unconfirmed', message: error.message }) }] })).catch(() => {});
@@ -1855,8 +1860,8 @@ class Codex extends EventEmitter {
         // native client can safely interpret it.
         if (request.fingerprint !== fingerprint && !request.ambiguous) {
           request.ambiguous = true;
-          this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认需要核对' });
-          this.emit('approval', { requestId: message.id, method: 'native/requestAmbiguous', params: { reason: '原生确认标识重复且内容变化；请在原生终端核对。' } }, sourceRpc);
+          this.emit('progress', { id: request.id, source: 'codex-native', status: 'unknown', title: '原生确认需要核对', uiTitleMessage: uiNotice('notice.nativeConfirm.check').uiMessage });
+          this.emit('approval', { requestId: message.id, method: 'native/requestAmbiguous', params: { reason: '原生确认标识重复且内容变化；请在原生终端核对。', reasonUiMessage: uiNotice('notice.nativeConfirm.ambiguous').uiMessage } }, sourceRpc);
           this.emit('state', 'approval');
         }
         return;
@@ -1873,7 +1878,7 @@ class Codex extends EventEmitter {
       const nonBlocking = message.method === 'item/tool/requestUserInput' && p.isBlocking === false;
       if (message.method === 'item/tool/requestUserInput') request.question = this.rememberQuestion(p);
       if (!nonBlocking) this.nativeWait = message.method.endsWith('/requestUserInput') ? 'waitingOnUserInput' : 'waitingOnApproval';
-      this.emit('progress', { id: request.id, source: 'codex-native', kind: message.method, title: nonBlocking ? '原生问题（此问题不阻塞本轮）' : '等待原生确认', status: 'waiting' });
+      this.emit('progress', { id: request.id, source: 'codex-native', kind: message.method, title: nonBlocking ? '原生问题（此问题不阻塞本轮）' : '等待原生确认', uiTitleMessage: uiNotice(nonBlocking ? 'notice.nativeConfirm.nonBlocking' : 'notice.nativeConfirm.waiting').uiMessage, status: 'waiting' });
       this.emit('approval', { requestId: message.id, method: message.method, params: p }, sourceRpc); if (!nonBlocking) this.emit('state', 'approval'); this.publishNativeActivity(); return;
     }
     switch (message.method) {
@@ -1883,9 +1888,9 @@ class Codex extends EventEmitter {
         if (!request || request.rpc !== sourceRpc) break;
         this.nativeRequests.delete(key);
         if (request.question) this.emit('nativeBlock', { id: request.question.id, nativeId: this.record.nativeId,
-          turnId: request.question.turnId, kind: 'notice', title: '原生问题 · 已处理', status: 'complete' });
+          turnId: request.question.turnId, kind: 'notice', title: '原生问题 · 已处理', uiTitleMessage: uiNotice('notice.nativeQuestion.resolved').uiMessage, status: 'complete' });
         if (sourceRpc !== this.host.rpc) this.terminalRequestKeys?.delete(p.requestId);
-        this.emit('progress', { id: request.id, source: 'codex-native', status: 'resolved', title: '原生确认已处理' });
+        this.emit('progress', { id: request.id, source: 'codex-native', status: 'resolved', title: '原生确认已处理', uiTitleMessage: uiNotice('notice.nativeConfirm.resolved').uiMessage });
         this.emit('approvalResolved', p.requestId, sourceRpc);
         break;
       }
@@ -1906,7 +1911,7 @@ class Codex extends EventEmitter {
       case 'item/started':
         if (/collab|agent/i.test(p.item?.type || '') && p.item.type !== 'agentMessage') {
           const item = p.item;
-          this.emit('fleet', { event: item.type, id: item.id, name: item.agentPath || 'Codex 原生子 agent', kind: item.kind, tool: item.tool,
+          this.emit('fleet', { event: item.type, id: item.id, name: item.agentPath || 'Codex 原生子 agent', nameUiMessage: item.agentPath ? null : uiNotice('notice.fleet.codexNativeChild').uiMessage, kind: item.kind, tool: item.tool,
             nativeId: item.agentThreadId, model: item.model,
             active: (item.type === 'subAgentActivity' && ['started', 'interacted'].includes(item.kind)) ||
               (item.type === 'collabAgentToolCall' && ['spawnAgent', 'sendInput', 'resumeAgent', 'sendMessage', 'followupTask'].includes(item.tool)) });
@@ -1954,7 +1959,7 @@ class Codex extends EventEmitter {
         const turn = this.turns.get(p.turnId); if (turn && text) turn.errorText = text;
         if (!p.turnId || p.turnId === this.turnId) {
           if (p.willRetry === true) { this.nativeRetry = this.turnId; this.publishNativeActivity(); }
-          else this.emit('failed', '原生会话返回错误，请检查原文或同屏终端。');
+          else { const notice = uiNotice("notice.failure.nativeError"); this.emit('failed', notice.text, undefined, notice.uiMessage); }
         }
         break;
       }
@@ -1971,20 +1976,20 @@ class Codex extends EventEmitter {
     if (pending) this.pending = null;
     this.turns.delete(id); this.hasHistory = true;
     if (this.turnId === id) { this.turnId = null; this.emit('state', 'idle'); }
-    if (turn.completed.status !== 'completed') this.emit('failed', '原生回合中断或失败；协作已暂停。', { tag: pending?.tag, supersededTag: pending?.supersededTag });
+    if (turn.completed.status !== 'completed') { const notice = uiNotice("notice.failure.nativeTurnFailed"); this.emit('failed', notice.text, { tag: pending?.tag, supersededTag: pending?.supersededTag }, notice.uiMessage); }
     else this.emit('complete', { tag: pending?.tag, supersededTag: pending?.supersededTag, messageId: turn.messageId, inputTag: turn.itemInputs.get(turn.messageId) || '', text: turn.text, background: null, scheduled: null, fleetPending: null, stopHookActive: null });
     if (live) this.emit('nativeTurnEnd', { nativeId: this.record.nativeId, turnId: id, status: turn.completed.status, errorInfo: turn.completed.error?.codexErrorInfo, errorMessage: turn.completed.error?.message });
   }
   get steerAvailable() { return verifiedCodexProtocol(this.host.rpc) && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
   async steer(text, tag, expectedTurnId, guard, shared = false, acceptedGuard = guard) {
-    if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw Error('当前原生回合已变化；追加指令未发送，草稿保留。');
+    if (!this.steerAvailable || !expectedTurnId || this.turnId !== expectedTurnId || this.nativeRequests.size || this.steering || !guard()) throw uiError("error.nativeTurnChangedSteerNotSent");
     this.ownInputs.add(tag);
     const operation = this.steering = { tag, turnId: expectedTurnId, inputSeen: false };
     const previous = this.pending, lifecycle = this.lifecycleRevision;
     try {
       // Native expectedTurnId is the atomic precondition. No new-turn fallback.
       const receipt = await this.host.rpc.call('turn/steer', { threadId: this.record.nativeId, expectedTurnId, clientUserMessageId: tag, input: [{ type: 'text', text, text_elements: [] }] });
-      if (receipt?.turnId !== expectedTurnId) throw Error('原生追加指令接收结果未确认；请核对终端，不会重发。');
+      if (receipt?.turnId !== expectedTurnId) throw uiError("error.nativeSteerUnconfirmed");
       this.emit('submitted', tag);
       if (shared && this.pending === previous && lifecycle === this.lifecycleRevision && !this.stopped && !this.transportDisconnected && acceptedGuard()) {
         this.pending = { tag, turnId: expectedTurnId, steered: true, supersededTag: previous?.supersededTag || previous?.tag };
@@ -1997,7 +2002,7 @@ class Codex extends EventEmitter {
     }
   }
   async send(text, tag, guard) {
-    if (!this.chatAvailable || this.pending || !guard()) throw new Error('会话忙碌、原生对话接口尚未连接，或交接已失效。');
+    if (!this.chatAvailable || this.pending || !guard()) throw uiError("error.nativeSendUnavailable");
     const pending = this.pending = { tag, turnId: null }; this.ownInputs.add(tag);
     const lifecycle = this.lifecycleRevision, revision = this.stateRevision;
     try {
@@ -2021,14 +2026,14 @@ class Codex extends EventEmitter {
         // must never be returned as a send failure that invites a paid retry.
         if (lifecycle === this.lifecycleRevision && !this.stopped) {
           this.emit('state', 'error');
-          this.emit('failed', '消息已被原生接受，但后续状态尚未同步；请核对原生终端，不要重发。');
+          { const notice = uiNotice("notice.failure.acceptedStateUnsynced"); this.emit('failed', notice.text, undefined, notice.uiMessage); }
         }
       }
     }
     return pending.turnId;
   }
   async observeAcceptedTurn(turnId, inputTag) {
-    if (this.stopped || !turnId) throw Error('原生观察连接已变化。');
+    if (this.stopped || !turnId) throw uiError("error.nativeObservationChanged");
     const revision = this.stateRevision, lifecycle = this.lifecycleRevision, rpc = this.host.rpc, settings = this.nativeSettings;
     let result;
     try { result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true }); }
@@ -2052,12 +2057,12 @@ class Codex extends EventEmitter {
       this.needsSubscription = false; this.hasHistory = true;
       return;
     }
-    if (this.stopped || lifecycle !== this.lifecycleRevision || result.thread?.id !== this.record.nativeId) throw Error('原生观察连接已变化。');
+    if (this.stopped || lifecycle !== this.lifecycleRevision || result.thread?.id !== this.record.nativeId) throw uiError("error.nativeObservationChanged");
     this.observeReplySettings(result, settings);
     this.needsSubscription = false; this.hasHistory = true;
     if (revision === this.stateRevision && this.latestState !== 'approval') this.observeStatus(result.thread.status);
     const page = await this.host.rpc.call('thread/turns/list', { threadId: this.record.nativeId, limit: 20, itemsView: 'full' });
-    if (this.stopped || lifecycle !== this.lifecycleRevision) throw Error('原生观察连接已变化。');
+    if (this.stopped || lifecycle !== this.lifecycleRevision) throw uiError("error.nativeObservationChanged");
     const turn = page.data?.find(t => t.id === turnId);
     // A live completion may have already finished this exact accepted input.
     // Re-subscribe, but never replay that reply as a second unowned completion.
@@ -2073,7 +2078,7 @@ class Codex extends EventEmitter {
     this.stopped = true; this.chatAvailable = false; this.lifecycleRevision++;
     this.finishRecoveryConnection?.(false);
     if (this.retiringTerminal) return this.retiringTerminal;
-    this.emit('activity', '原生后台已退出；记录和草稿保留，任务不会自动重发。');
+    this.emit('activity', ...uiActivity("notice.activity.backendExited"));
     this.emit('state', 'error');
     this.retiringTerminal = Promise.resolve().then(async () => {
       // This is only the remote display client owned by this runtime. Never
@@ -2082,22 +2087,22 @@ class Codex extends EventEmitter {
       this.emit('state', this.record.nativeId ? 'recoverable' : 'ended');
       return { state: this.record.nativeId ? 'recoverable' : 'ended' };
     }).catch(error => {
-      this.emit('activity', '后台已退出，但终端进程退出尚未确认；请检查原生终端后重试断开。');
+      this.emit('activity', ...uiActivity("notice.activity.backendExitedTerminalUnconfirmed"));
       throw error;
     }).finally(() => { this.retiringTerminal = null; });
     return this.retiringTerminal;
   }
   async interrupt() {
-    if (!this.turnId) throw new Error('尚未确认当前原生回合；请在原生终端中断。');
+    if (!this.turnId) throw uiError("error.nativeTurnUnconfirmedInterrupt");
     await this.host.rpc.call('turn/interrupt', { threadId: this.record.nativeId, turnId: this.turnId });
   }
   async openTerminal(guard = () => true) {
-    if (!guard()) throw new Error('终端控制权已变化，请重新选择会话。');
-    if (this.recoveryReady && !this.hasHistory && !await this.recoveryReady) throw new Error('原生会话恢复尚未确认，请检查恢复状态后重试。');
-    if (this.stopped) throw new Error('本应用已断开该会话；原生历史仍保留。');
+    if (!guard()) throw uiError("error.terminalOwnerChanged");
+    if (this.recoveryReady && !this.hasHistory && !await this.recoveryReady) throw uiError("error.nativeResumeUnconfirmed");
+    if (this.stopped) throw uiError("error.sessionDetachedHistoryRetained");
     if (this.terminal?.alive) return this.terminal;
-    if (this.backendExitConfirmed || this.transportDisconnected) throw new Error('原生连接已断开，请先恢复会话。');
-    if (this.terminal && !this.terminal.nativeExited) throw new Error('旧终端退出尚未确认，暂不启动另一个终端。');
+    if (this.backendExitConfirmed || this.transportDisconnected) throw uiError("error.nativeDisconnectedResumeFirst");
+    if (this.terminal && !this.terminal.nativeExited) throw uiError("error.previousTerminalExitUnconfirmed");
     if (!this.record.nativeId) { for (let i = 0; i < 100 && !this.terminal; i++) await delay(50); if (this.terminal) return this.terminal; }
     if (!this.hasHistory) {
       // A first turn may already be waiting for a native-only permission. Read
@@ -2115,27 +2120,27 @@ class Codex extends EventEmitter {
             let page;
             try { page = await rpc.call('thread/turns/list', { threadId: id, limit: 1, itemsView: 'full' }); }
             catch (error) { if (error.nativeUnmaterializedThread !== id) throw error; page = { data: [] }; }
-            if (!Array.isArray(page?.data) || page.data.length > 1) throw new Error('原生历史尚未确认，请重新打开终端。');
+            if (!Array.isArray(page?.data) || page.data.length > 1) throw uiError("error.nativeHistoryUnconfirmedReopen");
             thread = { ...thread, turns: page.data };
           }
         }
       } catch (error) { if (!error.nativeMissingHistory || error.nativeMissingHistoryThread !== id) throw error; missingHistory = true; }
-      if (this.stopped || this.transportDisconnected || this.host.rpc !== rpc || this.lifecycleRevision !== revision || this.record.nativeId !== id) throw new Error('原生连接已变化，请重新打开终端。');
-      if (missingHistory || thread?.id === id && Array.isArray(thread.turns) && !thread.turns.length) throw new Error('请先在对话中发送第一条消息，再打开同一会话的原生终端。');
-      if (thread?.id !== id || !Array.isArray(thread.turns) || !thread.turns.every(turn => typeof turn?.id === 'string' && turn.id.trim())) throw new Error('原生历史尚未确认，请重新打开终端。');
+      if (this.stopped || this.transportDisconnected || this.host.rpc !== rpc || this.lifecycleRevision !== revision || this.record.nativeId !== id) throw uiError("error.nativeConnectionChangedReopen");
+      if (missingHistory || thread?.id === id && Array.isArray(thread.turns) && !thread.turns.length) throw uiError("error.firstMessageBeforeTerminal");
+      if (thread?.id !== id || !Array.isArray(thread.turns) || !thread.turns.every(turn => typeof turn?.id === 'string' && turn.id.trim())) throw uiError("error.nativeHistoryUnconfirmedReopen");
       this.hasHistory = true;
     }
     // Another attachment can finish while the initial rollout read is pending.
-    if (!guard()) throw new Error('终端控制权已变化，请重新选择会话。');
+    if (!guard()) throw uiError("error.terminalOwnerChanged");
     if (this.terminal?.alive) return this.terminal;
     const endpoint = await this.terminalEndpoint();
-    if (!guard() || this.stopped || this.transportDisconnected) throw new Error('终端控制权已变化，请重新选择会话。');
+    if (!guard() || this.stopped || this.transportDisconnected) throw uiError("error.terminalOwnerChanged");
     if (this.terminal?.alive) return this.terminal;
     return this.makeTerminal([this.host.codexBinary || this.host.binaries.codex, '-c', 'analytics.enabled=false', '-c', 'check_for_update_on_startup=false', 'resume', '--remote', `unix://${endpoint}`, '-C', this.record.cwd, this.record.nativeId]);
   }
   async reconnect() {
     const transportOnly = Boolean(this.transportDisconnected);
-    if ((!this.stopped && !transportOnly) || this.closed || !this.record.nativeId) throw new Error('原生连接状态已改变，请重新查看。');
+    if ((!this.stopped && !transportOnly) || this.closed || !this.record.nativeId) throw uiError("error.nativeConnectionStateChanged");
     const lifecycle = ++this.lifecycleRevision;
     let rpc, child;
     const current = () => lifecycle === this.lifecycleRevision && !this.stopped &&
@@ -2150,7 +2155,7 @@ class Codex extends EventEmitter {
     const revision = this.stateRevision;
     try {
       if (transportOnly) await this.host.reconnectCodex();
-      if (!current()) throw new Error('原生连接已经变化；没有重发任务。');
+      if (!current()) throw uiError("error.nativeConnectionChangedNoReplay");
       rpc = this.host.rpc; child = this.host.codexProcess;
       this.transportDisconnected = false;
       const settings = this.nativeSettings;
@@ -2167,13 +2172,13 @@ class Codex extends EventEmitter {
         this.emit('capability');
         return;
       }
-      if (result.thread?.id !== this.record.nativeId) throw new Error('原生返回了不同的会话，恢复未确认。');
-      if (!current()) throw new Error('原生连接已经关闭；没有重发任务。');
+      if (result.thread?.id !== this.record.nativeId) throw uiError("error.nativeResumeWrongIdentity");
+      if (!current()) throw uiError("error.nativeConnectionClosedNoReplay");
       this.hasHistory = true; this.needsSubscription = false;
       this.emit('pid', this.terminal?.alive && this.terminal.pid ? this.terminal.pid : this.host.codexProcess.pid);
       this.observeReplySettings(result, settings);
       if (revision === this.stateRevision) this.observeStatus(result.thread.status);
-      if (!await this.hydrateHistory(this.record.nativeId, lifecycle) || !current()) throw new Error('连接在同步记录时断开；没有重发任务。');
+      if (!await this.hydrateHistory(this.record.nativeId, lifecycle) || !current()) throw uiError("error.historySyncDisconnected");
       this.nativeObservationPending = false; this.chatAvailable = true; this.emit('capability');
     } catch (error) {
       if (lifecycle === this.lifecycleRevision) {
@@ -2187,7 +2192,7 @@ class Codex extends EventEmitter {
     // must not undo a confirmed subscription or disable graphical input.
     if (this.record.view === 'terminal') {
       try { await this.openTerminal(); }
-      catch { this.emit('activity', '原会话已连接；原生终端未能打开，可切到对话继续或重试终端。'); }
+      catch { this.emit('activity', ...uiActivity("notice.activity.connectedTerminalOpenFailed")); }
     }
   }
   transportClosed() {
@@ -2195,7 +2200,7 @@ class Codex extends EventEmitter {
     this.forgetNativeRequests();
     this.transportDisconnected = true; this.chatAvailable = false; this.lifecycleRevision++;
     this.finishRecoveryConnection?.(false);
-    this.emit('activity', '图形连接已断开；原生任务可能仍在运行。可重新连接，已有终端保持原样，不会重发任务。');
+    this.emit('activity', ...uiActivity("notice.activity.guiDisconnected"));
     this.emit('state', this.stopped ? 'disconnected' : 'error');
   }
   async stop() {
@@ -2214,7 +2219,7 @@ class Codex extends EventEmitter {
       if (this.turnId) await this.interrupt();
       await this.terminal?.stop();
       const result = await this.host.rpc.call('thread/unsubscribe', { threadId: this.record.nativeId });
-      if (!['notLoaded', 'notSubscribed', 'unsubscribed'].includes(result.status)) throw new Error('原生返回了未知的断开状态。');
+      if (!['notLoaded', 'notSubscribed', 'unsubscribed'].includes(result.status)) throw uiError("error.unknownNativeDisconnectState");
       this.forgetNativeRequests();
       // An unsubscribe acknowledgement is not thread termination. The server may
       // retain its thread or other subscribers; never kill the shared app-server.
@@ -2234,19 +2239,19 @@ class Codex extends EventEmitter {
 // sender when the authoritative item notification has not arrived yet.
 async function workspaceMcpProof(runtime, identity, args, socket) {
   const check = () => {
-    if (runtime.stopped || runtime.transportDisconnected || socket.destroyed) throw Error('原生连接已变化，未登记自动消息。');
+    if (runtime.stopped || runtime.transportDisconnected || socket.destroyed) throw uiError("error.nativeConnectionChangedNoAutoMessage");
     const call = runtime.workspaceMcpCalls?.get(identity.callId);
     if (!call || !runtime.nativeSessionId) return false;
     if (identity.sessionId !== runtime.nativeSessionId || identity.turnId !== runtime.turnId || call.turnId !== identity.turnId ||
-        !call.arguments || call.arguments.recipient_id !== args?.recipient_id || call.arguments.message !== args?.message) throw Error('本次原生主会话工具来源未能确认。');
+        !call.arguments || call.arguments.recipient_id !== args?.recipient_id || call.arguments.message !== args?.message) throw uiError("error.nativeToolOriginUnconfirmed");
     return call;
   };
   const ready = check(); if (ready) return ready;
   return new Promise((resolve, reject) => {
     const finish = (error, value) => { runtime.off('workspaceMcpProof', observed); runtime.off('nativeTurnEnd', ended); socket.off('close', closed); error ? reject(error) : resolve(value); };
     const observed = () => { try { const value = check(); if (value) finish(null, value); } catch (e) { finish(e); } };
-    const ended = info => { if (info.turnId === identity.turnId) finish(Error('原生回合已结束，未登记自动消息。')); };
-    const closed = () => finish(Error('自动消息来源等待已结束；接收结果未确认。'));
+    const ended = info => { if (info.turnId === identity.turnId) finish(uiError("error.nativeTurnEndedNoAutoMessage")); };
+    const closed = () => finish(uiError("error.automaticMessageOriginWaitEnded"));
     runtime.on('workspaceMcpProof', observed); runtime.on('nativeTurnEnd', ended); socket.once('close', closed);
     observed();
   });
@@ -2276,7 +2281,7 @@ class NativeHost {
           Promise.resolve().then(async () => {
             const identity = event.identity, runtime = this.codexTargets.get(identity?.nativeId);
             const args = event.arguments;
-            if (event.token !== this.codexMessageToken || this.rpc?.nativeVersion !== '0.165.0' || !runtime || !runtime.addressedCall) throw Error('本次原生主会话工具来源未能确认。');
+            if (event.token !== this.codexMessageToken || this.rpc?.nativeVersion !== '0.165.0' || !runtime || !runtime.addressedCall) throw uiError("error.nativeToolOriginUnconfirmed");
             const call = await workspaceMcpProof(runtime, identity, args, socket);
             return runtime.addressedCall({ ...identity, valid: () => !socket.destroyed && runtime.workspaceMcpCalls?.get(identity.callId) === call }, args);
           }).then(result => { if (!socket.destroyed) socket.end(JSON.stringify(result) + '\n'); }, error => { if (!socket.destroyed) socket.end(JSON.stringify({ status: 'unconfirmed', message: error.message }) + '\n'); });
@@ -2298,7 +2303,7 @@ class NativeHost {
   createCodex(operation) {
     const rpc = this.rpc, child = this.codexProcess;
     const next = (this.creationQueue || Promise.resolve()).then(() => {
-      if (this.closed || rpc !== this.rpc || child !== this.codexProcess) throw new Error('原生后台已变化，没有继续旧的启动队列。');
+      if (this.closed || rpc !== this.rpc || child !== this.codexProcess) throw uiError("error.backendChangedStartQueueCancelled");
       return operation();
     });
     this.creationQueue = next.catch(() => {}); return next;
@@ -2331,7 +2336,7 @@ class NativeHost {
       if (target && (message.id !== undefined || !target.terminalNotificationSource)) target.event(message);
       else if (message.method === 'thread/started' && p.thread?.parentThreadId) {
         const parent = this.codexTargets.get(p.thread.parentThreadId);
-        if (parent && !parent.transportDisconnected) parent.emit('fleet', { id: p.thread.id, event: 'thread/started', name: p.thread.agentNickname || 'Codex 子 agent' });
+        if (parent && !parent.transportDisconnected) parent.emit('fleet', { id: p.thread.id, event: 'thread/started', name: p.thread.agentNickname || 'Codex 子 agent', nameUiMessage: p.thread.agentNickname ? null : uiNotice('notice.fleet.codexChild').uiMessage });
       }
     };
     const closed = () => {
@@ -2353,7 +2358,7 @@ class NativeHost {
     const link = fs.lstatSync(this.codexSocket), resolved = fs.realpathSync(this.codexSocket);
     const socket = fs.lstatSync(resolved);
     if (link.uid !== process.getuid() || socket.uid !== process.getuid() || !socket.isSocket() ||
-      (!link.isSocket() && !link.isSymbolicLink())) throw new Error('原生接口身份未确认，没有连接其他后台。');
+      (!link.isSocket() && !link.isSymbolicLink())) throw uiError("error.nativeInterfaceIdentityUnconfirmed");
     // Codex may publish a symlink. Keep both identities: an unchanged link
     // does not prove that its target still belongs to the original listener.
     return { resolved, linkDev: link.dev, linkIno: link.ino, socketDev: socket.dev, socketIno: socket.ino };
@@ -2363,24 +2368,24 @@ class NativeHost {
     const child = this.codexProcess, previous = this.rpc, endpoint = this.codexEndpoint;
     const owned = () => !this.closed && this.codexProcess === child && child &&
       child.exitCode === null && child.signalCode === null && this.rpc === previous;
-    if (!owned()) throw new Error('原生后台身份已变化；请重新查看状态。');
+    if (!owned()) throw uiError("error.nativeBackendIdentityChanged");
     if (previous?.ws.readyState === WebSocket.OPEN) return;
-    if (previous?.ws.readyState !== WebSocket.CLOSED || !endpoint) throw new Error('原生连接退出尚未确认；请稍后重试。');
+    if (previous?.ws.readyState !== WebSocket.CLOSED || !endpoint) throw uiError("error.nativeConnectionExitUnconfirmed");
     const sameEndpoint = () => {
       const now = this.readCodexEndpoint();
-      if (Object.keys(endpoint).some(key => now[key] !== endpoint[key])) throw new Error('原生接口已变化；没有连接其他后台。');
+      if (Object.keys(endpoint).some(key => now[key] !== endpoint[key])) throw uiError("error.nativeInterfaceChangedNoConnection");
     };
     this.reconnecting = Promise.resolve().then(async () => {
       let ws, watcher;
       try {
-        if (!owned()) throw new Error('原生后台身份已变化；没有新建后台。');
+        if (!owned()) throw uiError("error.nativeBackendChangedNoNewBackend");
         sameEndpoint();
         ws = new WebSocket('ws://localhost', { createConnection: () => net.connect(endpoint.resolved), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 10000 });
         await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
         const rpc = new Rpc(ws);
         watcher = this.watchCodexConnection(rpc, child);
         rpc.nativeVersion = serverVersion(await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } }));
-        if (!owned() || ws.readyState !== WebSocket.OPEN) throw new Error('原生连接在确认时已变化；没有重发任务。');
+        if (!owned() || ws.readyState !== WebSocket.OPEN) throw uiError("error.nativeConnectionChangedDuringConfirmation");
         sameEndpoint();
         ws.send(JSON.stringify({ method: 'initialized', params: {} }));
         watcher.activate();
@@ -2393,7 +2398,7 @@ class NativeHost {
     return this.reconnecting;
   }
   async startCodex() {
-    if (this.closed) throw new Error('原生服务已关闭。');
+    if (this.closed) throw uiError("error.nativeServiceClosed");
     if (this.rpc) return;
     if (this.starting) return this.starting;
     this.starting = Promise.resolve().then(async () => {
@@ -2404,7 +2409,7 @@ class NativeHost {
       let entry;
       try { entry = fs.lstatSync(this.codexSocket); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (entry) {
-        if (entry.uid !== process.getuid() || (!entry.isSocket() && !entry.isSymbolicLink())) throw new Error('原生接口身份未确认，没有启动重复后台。');
+        if (entry.uid !== process.getuid() || (!entry.isSocket() && !entry.isSymbolicLink())) throw uiError("error.nativeIdentityUnconfirmedNoDuplicate");
         const absent = await new Promise(resolve => {
           const socket = net.connect(this.codexSocket);
           const finish = value => { socket.destroy(); resolve(value); };
@@ -2412,10 +2417,10 @@ class NativeHost {
           socket.once('error', error => finish(['ENOENT', 'ECONNREFUSED'].includes(error.code)));
           socket.setTimeout(1000, () => finish(false));
         });
-        if (!absent) throw new Error('原生接口仍在运行或无法确认；没有启动重复后台。');
+        if (!absent) throw uiError("error.nativeInterfaceStillRunning");
         try {
           const now = fs.lstatSync(this.codexSocket);
-          if (now.dev !== entry.dev || now.ino !== entry.ino) throw new Error('原生接口已变化，没有启动重复后台。');
+          if (now.dev !== entry.dev || now.ino !== entry.ino) throw uiError("error.nativeInterfaceChangedNoDuplicate");
           fs.unlinkSync(this.codexSocket);
         } catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
@@ -2429,7 +2434,7 @@ class NativeHost {
       child.stderr.on('data', () => {});
       child.on('error', error => { spawnError = error; });
       for (let i = 0; i < 100 && !fs.existsSync(this.codexSocket); i++) {
-        if (spawnError || child.exitCode !== null || child.signalCode !== null) throw new Error('Codex 后台未能启动，请在设置中检查所选程序。');
+        if (spawnError || child.exitCode !== null || child.signalCode !== null) throw uiError("error.codexBackendStartFailed");
         await delay(100);
       }
       const endpoint = this.readCodexEndpoint();
@@ -2438,9 +2443,9 @@ class NativeHost {
       rpc = new Rpc(ws);
       watcher = this.watchCodexConnection(rpc, child);
       rpc.nativeVersion = serverVersion(await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace', version: '0.1.0' }, capabilities: { experimentalApi: true } }));
-      if (ws.readyState !== WebSocket.OPEN) throw new Error('原生连接在启动时已断开。');
+      if (ws.readyState !== WebSocket.OPEN) throw uiError("error.nativeConnectionClosedDuringStart");
       const verifiedEndpoint = this.readCodexEndpoint();
-      if (Object.keys(endpoint).some(key => verifiedEndpoint[key] !== endpoint[key])) throw new Error('原生接口在启动时已变化。');
+      if (Object.keys(endpoint).some(key => verifiedEndpoint[key] !== endpoint[key])) throw uiError("error.nativeInterfaceChangedDuringStart");
       this.codexEndpoint = endpoint;
       ws.send(JSON.stringify({ method: 'initialized', params: {} }));
       watcher.activate();
@@ -2466,8 +2471,8 @@ class NativeHost {
   }
   create(record) {
     this.binaries = { claude: executable('claude'), codex: executable('codex'), python: pythonExecutable() };
-    if (!this.binaries[record.provider] || !this.binaries.python) throw new Error('未找到原生 CLI 或 Python 3，请先安装并完成原生登录。');
-    if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw new Error('Codex 位置已修改，现有后台继续使用原程序。请恢复原位置，或结束原生会话并完全退出后台后再使用新位置。');
+    if (!this.binaries[record.provider] || !this.binaries.python) throw uiError("error.nativeRuntimeMissing");
+    if (record.provider === 'codex' && this.codexBinary && this.codexBinary !== this.binaries.codex) throw uiError("error.codexLocationChanged");
     return record.provider === 'claude' ? new Claude(record, this) : new Codex(record, this);
   }
   close() { this.closed = true; for (const target of this.hookTargets.values()) { target.submission?.close(); target.stop().catch(() => {}); } for (const target of this.codexTargets.values()) target.terminal?.stop().catch(() => {}); this.rpc?.ws.close(); this.codexProcess?.kill('SIGTERM'); this.hooks.close(); this.submissions.server.close(); }

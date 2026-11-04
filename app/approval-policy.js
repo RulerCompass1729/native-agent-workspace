@@ -53,9 +53,10 @@
     if ((commandRequest || fileRequest) && nativeDecisions.includes('decline')) decisions.push('decline');
     // Native cancel interrupts this turn; it is not a refusal that continues it.
     if (localDecisions && (commandRequest || fileRequest) && nativeDecisions.includes('cancel')) decisions.push('cancel');
-    return { command, cwd, reason, decisions, questions: nativeQuestions(approval),
+    return { command, cwd, reason, ...(approval?.method === 'native/requestAmbiguous' ? { reasonUiMessage: p.reasonUiMessage } : {}), decisions, questions: nativeQuestions(approval),
       nativeRequired: !ordinary,
       notice: !ordinary ? '这项请求的权限范围需要在原生终端核对。' : '',
+      noticeKey: !ordinary ? 'approval.nativeScope' : null,
     };
   }
   if (typeof module !== 'undefined' && module.exports) module.exports = { nativeApprovalPolicy, ApprovalQueue };

@@ -221,3 +221,26 @@ test('a peer-only human row with confirmed receipts is retained, while a merely 
   assert.deepEqual(batch.blocks[0].entries.map(entry => entry.payload.id), ['peer']); assert.equal(batch.blocks[0].omitted.length, 1);
   assert.doesNotThrow(() => materializeBatch(batch));
 });
+
+
+test('optional owned display metadata follows detached snapshot bytes without retaining hidden or stale metadata', () => {
+  const locale = require('../ui-locale.js'), own = locale.createNotice('notice.turnTimeUnavailable'), label = locale.createNotice('notice.name.collaboration');
+  const rows = [message('own-notice', { role: 'system', kind: 'notice', ...own, name: label.text, uiNameMessage: { ...label.uiMessage, hidden: 'PRIVATE_UNSHARED_METADATA' } }),
+    message('raw', { text: 'RAW native 中文', uiMessage: { ...own.uiMessage, hidden: 'PRIVATE_UNSHARED_METADATA' } })];
+  const source = room(A, { messages: rows }), sessions = [session('s')], before = JSON.stringify(source);
+  const batch = prepareBatch([captureSource(source, sessions), captureSource(room(B), sessions)], spec());
+  assert.equal(JSON.stringify(source), before); assert.equal(JSON.stringify(batch).includes('PRIVATE_UNSHARED_METADATA'), false);
+  const payload = batch.blocks[0].entries[0].payload; assert.deepEqual(payload.uiMessage, own.uiMessage); assert.deepEqual(payload.uiNameMessage, label.uiMessage);
+  assert.equal(batch.blocks[0].entries[1].payload.uiMessage, undefined); assert.equal(batch.blocks[0].entries[1].payload.text, 'RAW native 中文');
+  const imported = materializeBatch(batch); assert.equal(imported[0].text, own.text); assert.equal(imported[0].name, label.text);
+  assert.equal(locale.displayText('en', imported[0].text, imported[0].uiMessage), locale.format('en', own.uiMessage.key));
+  const recaptured = captureSource(room(A, { messages: imported }), sessions); assert.equal(recaptured.rows.length, imported.length);
+  const forged = structuredClone(batch); forged.blocks[0].entries[0].payload.uiMessage.hidden = 'PRIVATE_UNSHARED_METADATA';
+  // Supply internally consistent hashes so the optional metadata validator,
+  // rather than an unrelated checksum mismatch, must reject the hidden field.
+  const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
+  const digest = value => require('node:crypto').createHash('sha256').update(JSON.stringify(ordered(value))).digest('hex');
+  forged.blocks[0].entries[0].hash = digest(forged.blocks[0].entries[0].payload);
+  const { bytes, binding, ...body } = forged; forged.binding = digest(body); forged.bytes = Buffer.byteLength(JSON.stringify(body));
+  assert.throws(() => validateBatch(forged));
+});

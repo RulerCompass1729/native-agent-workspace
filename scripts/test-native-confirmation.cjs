@@ -12,6 +12,7 @@ const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms)), checks = [], errors = [];
 const evidence = process.env.NAW_EVIDENCE_DIR;
+const sessionName = '原生确认同步'; // Synthetic session data, not fixed interface text.
 let app, page, sequence = 0;
 async function until(fn, label) { for (let n = 0; n < 160; n++) { if (await fn()) return; await delay(50); } throw Error(label); }
 function fixture(method, target, value) { const id = ++sequence; return new Promise((resolve, reject) => {
@@ -22,7 +23,7 @@ function fixture(method, target, value) { const id = ++sequence; return new Prom
 const snapshot = () => page.evaluate(() => workspace.initial());
 const progress = id => page.evaluate(async id => (await workspace.observe(id)).progress.items.filter(item =>
   item.source === 'codex-native' && item.kind === 'item/commandExecution/requestApproval'), id);
-const approvalHeading = text => page.locator('#approval').getByText('原生确认同步 · ' + text, { exact: true });
+const approvalHeading = text => page.locator('#approval').getByText(sessionName + ' · ' + text, { exact: true });
 const event = (target, value) => fixture('event', target, value);
 const request = (target, id, command) => event(target, { id, method: 'item/commandExecution/requestApproval', params: { command, cwd: '/synthetic', reason: '合成权限检查，不执行命令' } });
 const resolve = (target, requestId) => event(target, { method: 'serverRequest/resolved', params: { requestId } });
@@ -40,7 +41,7 @@ async function run() {
   await page.locator('#new-session').waitFor({ timeout: 60000 });
   await page.locator('#new-session').click();
   await page.locator('input[name="provider"][value="codex"]').check();
-  await page.locator('#session-name').fill('原生确认同步');
+  await page.locator('#session-name').fill(sessionName);
   await createIn(page, 'chat');
   await until(async () => (await snapshot()).sessions[0]?.state === 'idle', 'Session ready');
   const id = (await snapshot()).sessions[0].id;

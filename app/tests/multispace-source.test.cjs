@@ -1,3 +1,4 @@
+const localeUI = require('./fixtures/locale-ui.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), vm = require('node:vm');
@@ -54,8 +55,8 @@ test('both existing runtime copy sets include the new contract required by the a
 });
 test('actual clear button targets the room captured when privacy opened and shows failure inside the same dialog', async () => {
   const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8'), elements = new Map(), calls = [];
-  const $ = id => { if (!elements.has(id)) elements.set(id, { open: true, disabled: false, textContent: '' }); return elements.get(id); };
-  const context = { $, trustClearRoom: randomUUID(), trustRevision: 1, state: { capabilities: ['clearSharedHistory'] }, attempt: fn => fn(), api: { spaceAction: async (...args) => { calls.push(args); throw Error('Synthetic save failure'); }, clearSharedHistory: () => { throw Error('Wrong default clear'); } } };
+  const $ = id => { if (!elements.has(id)) elements.set(id, { open: true, disabled: false, textContent: '', attrs: {}, setAttribute(k,v) { this.attrs[k]=String(v); }, getAttribute(k) { return this.attrs[k]??null; }, removeAttribute(k) { delete this.attrs[k]; } }); return elements.get(id); };
+  const context = { ...localeUI(), $, trustClearRoom: randomUUID(), trustRevision: 1, state: { capabilities: ['clearSharedHistory'] }, attempt: fn => fn(), api: { spaceAction: async (...args) => { calls.push(args); throw Error('Synthetic save failure'); }, clearSharedHistory: () => { throw Error('Wrong default clear'); } } };
   vm.runInNewContext(source.slice(source.indexOf("$('clear-shared-history').onclick"), source.indexOf("$('close-privacy').onclick")), context);
   await $('clear-shared-history').onclick({ type: 'click' });
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [[context.trustClearRoom, 'clearSharedHistory', []]]);

@@ -1,12 +1,20 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
+const locale = require('../ui-locale.js');
+const bootstrap = fs.readFileSync(require.resolve('../dsh/bootstrap.js'), 'utf8');
+const helperStart = bootstrap.indexOf('    function createDisplayBindings('), helperEnd = bootstrap.indexOf('    function mountWorkspace(', helperStart);
+assert.ok(helperStart >= 0 && helperEnd > helperStart);
+const createBindings = vm.runInNewContext('(' + bootstrap.slice(helperStart, helperEnd).trim() + ')');
 class Element {
   constructor(tag = 'div', text = '') { this.tag = tag; this.text = text; this.children = []; this.open = false; this.isConnected = true; this.dataset = {}; this.attributes = {}; this.listeners = new Map(); this.scrollTop = 0; }
   append(...values) { this.children.push(...values); }
   replaceChildren(...values) { this.children = values; }
   querySelector() { return this.heading ||= new Element('h2'); }
-  querySelectorAll() { return this.details ||= [new Element('details'), new Element('details')]; }
+  querySelectorAll(selector) { if (!selector || selector === 'details') return this.details ||= [new Element('details'), new Element('details')]; const children = this.heading ? [...this.children, this.heading] : this.children; return children.flatMap(child => [...(child.hasAttribute('data-naw-i18n-bound') ? [child] : []), ...child.querySelectorAll(selector)]); }
+  get childElementCount() { return this.children.length; }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
   addEventListener(name, fn) { this.listeners.set(name, fn); }
   setAttribute(name, value) { this.attributes[name] = value; }
   removeAttribute(name) { delete this.attributes[name]; }
@@ -18,12 +26,14 @@ class Element {
 }
 function pending() { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { resolve, reject, promise }; }
 function fixture() {
-  const elements = new Map(), requests = [];
+  let language = 'zh'; const elements = new Map(), requests = [];
+  const uiText = (key, params) => locale.format(language, key, params), display = createBindings(uiText);
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
-  const context = vm.createContext({ $, spaceId: 'shared', spaceRecord: () => ({ id: 'shared', name: 'Synthetic shared' }), selectionRevision: 1, node: (tag, text) => new Element(tag, text), participantLabel: s => s.name,
+  const context = vm.createContext({ $, uiText, ui: { display, displayText: (raw, message) => locale.displayText(language, raw, message), language: { getSnapshot: () => ({ active: language }) }, errorText: error => locale.errorText(language, error) }, spaceId: 'shared', spaceRecord: () => ({ id: 'shared', name: 'Synthetic shared' }), selectionRevision: 1, node: (tag, text) => new Element(tag, text), participantLabel: s => s.name,
     window: { nativeWorkspaceUsage: require('../native-usage.js') }, api: { initial() { const request = pending(); requests.push(request); return request.promise; } } });
+  vm.runInContext(source.slice(source.indexOf('const uiNode ='), source.indexOf('const states =')), context);
   vm.runInContext(source.slice(source.indexOf('let trustScope ='), source.indexOf('function openCreate(')), context);
-  return { $, context, requests, open: options => context.showTrust(options) };
+  return { $, context, requests, open: options => context.showTrust(options), refresh(value) { language = value; display.refresh({ querySelectorAll: () => [...elements.values()].flatMap(el => [el, ...el.querySelectorAll('[data-naw-i18n-bound]')]) }); } };
 }
 const snapshot = () => ({ sessions: [], services: [], diagnostics: {}, appVersion: 'fixture', runtimeVersion: 'fixture' });
 test('refresh opens feedback immediately, prevents duplicate reads and records only local completion', async () => {
@@ -65,8 +75,41 @@ test('scoped usage preserves the original native report time and existing unknow
   data.sessions = [{ id: 'one', name: 'Fixture', nativeId: 'native-one', usage: { source: 'claude-session-usage', context: { window: 200, tokens: 20 }, reportedAt }, provider: 'claude' }];
   const before = structuredClone(data), work = f.open({ usageScope: { kind: 'session', id: 'one', nativeId: 'native-one', name: 'Fixture' } });
   f.requests[0].resolve(data); await work;
-  assert.match(f.$('trust-status').textContent, /本机读数时间：/); assert.ok(f.$('trust-status').textContent.includes(new Date(reportedAt).toLocaleString())); assert.deepEqual(data, before);
+  assert.match(f.$('trust-status').textContent, /本机读数时间：/); assert.ok(f.$('trust-status').textContent.includes(new Date(reportedAt).toLocaleString('zh'))); assert.deepEqual(data, before);
   f.$('privacy-dialog').close(); f.$('privacy-dialog').closeEvent();
   const next = f.open(); data.sessions[0].nativeContextPending = { reason: 'fixture' }; f.requests[1].resolve(data); await next;
   assert.match(f.$('trust-status').textContent, /原生上下文待核对/); assert.match(f.$('trust-status').textContent, /原生用量未报告；不能据此判断为零。/);
+});
+
+test('locale changes during an existing privacy read keep its exact pending request and refresh state', async () => {
+  const f = fixture(), work = f.open(); f.$('privacy-dialog').scrollTop = 71;
+  f.refresh('en'); assert.equal(f.requests.length, 1); assert.equal(f.$('refresh-trust').disabled, true);
+  assert.equal(f.$('trust-refresh-status').textContent, 'Reading local status…'); assert.equal(f.$('privacy-dialog').scrollTop, 71);
+  f.requests[0].resolve(snapshot()); await work; const section = f.$('trust-status').children[0];
+  assert.match(section.textContent, /Data destinations/); assert.equal(f.$('refresh-trust').textContent, 'Refresh status');
+  f.refresh('zh'); assert.equal(f.$('trust-status').children[0], section); assert.equal(f.requests.length, 1); assert.match(section.textContent, /数据去向/);
+});
+
+test('usage locale repaint does not refresh native reports or rewrite model and session names', async () => {
+  const f = fixture(), data = snapshot(); data.sessions = [{ id: 'A', nativeId: 'N', provider: 'codex', name: 'RAW NAME 中文', model: 'RAW MODEL 中文', usage: { total: { inputTokens: 2000, cachedInputTokens: 1000, outputTokens: 0 }, last: { inputTokens: 7, outputTokens: 0 }, modelContextWindow: 200000, reportedAt: 1000 } }];
+  const before = structuredClone(data), work = f.open({ usageScope: { kind: 'session', id: 'A', nativeId: 'N', name: 'RAW NAME 中文' } }); f.requests[0].resolve(data); await work;
+  const content = f.$('trust-status'), children = [...content.children]; f.refresh('en');
+  assert.deepEqual(content.children, children); assert.match(content.textContent, /RAW NAME 中文/); assert.match(content.textContent, /RAW MODEL 中文/); assert.match(content.textContent, /Cumulative tokens: input 2,000/);
+  assert.equal(f.requests.length, 1); assert.deepEqual(data, before);
+});
+
+test('usage repaints an owned model placeholder in place without a second report read', async () => {
+  const f = fixture(), data = snapshot(), notice = locale.createNotice('notice.model.nativeDefault');
+  data.sessions = [{ id: 'A', nativeId: 'N', provider: 'claude', name: 'RAW NAME 中文', model: notice.text, modelUiMessage: notice.uiMessage }];
+  const before = structuredClone(data), work = f.open({ usageScope: { kind: 'session', id: 'A', nativeId: 'N', name: 'RAW NAME 中文' } });
+  f.requests[0].resolve(data); await work; const content = f.$('trust-status'), children = [...content.children]; f.refresh('en');
+  assert.deepEqual(content.children, children); assert.match(content.textContent, /Native default/); assert.match(content.textContent, /RAW NAME 中文/);
+  assert.equal(f.requests.length, 1); assert.deepEqual(data, before);
+});
+
+test('a missing room usage heading repaints the owned fallback while retaining the raw stored name', async () => {
+  const f = fixture(), scope = { kind: 'room', roomId: 'missing', name: '空间资料未能读取', unavailable: true }, before = structuredClone(scope), work = f.open({ usageScope: scope });
+  f.requests[0].resolve(snapshot()); await work; f.refresh('en');
+  assert.equal(f.$('privacy-dialog').querySelector('h2').textContent, 'Space data unavailable · Usage');
+  assert.equal(f.requests.length, 1); assert.deepEqual(scope, before);
 });

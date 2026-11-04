@@ -143,7 +143,7 @@ const eventWriter = renderer.match(/^function writeTerminal\(entry, event\) \{.+
 async function hydrate(frame, { queued = [], retired = false, staleEpoch = false } = {}) {
   const term = new Screen({ allowProposedApi: true, cursorBlink: true, cols: 40, rows: 10 });
   const entry = { term, queued }, state = { sessions: [{ id: 'synthetic', terminalState: { alive: true, epoch: staleEpoch ? 'another-epoch' : frame.epoch } }] };
-  const context = { term, entry, state, id: 'synthetic', terminals: new Map([['synthetic', retired ? {} : entry]]),
+  const context = { uiError: require('../ui-errors.cjs').uiError, term, entry, state, id: 'synthetic', terminals: new Map([['synthetic', retired ? {} : entry]]),
     api: { terminalSnapshot: async () => frame, initial: async () => state }, document: { activeElement: null },
     revealTerminalCursor() { throw Error('No DOM focus or input in this headless replay'); } };
   context.updateState = next => { context.state = next; };

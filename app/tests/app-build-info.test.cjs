@@ -99,7 +99,7 @@ test('slow cached build metadata never makes the initial native snapshot stale',
   assert.ok(end > start);
   const registration = source.slice(start, end);
   let handler, release, metadataCalls = 0, snapshotCalls = 0, state = 'working';
-  vm.runInNewContext(registration, { register: (_name, fn) => { handler = fn; }, displayState: value => value, applicationBuild: null, notifyCapacity() {},
+  vm.runInNewContext(registration, { register: (_name, fn) => { handler = fn; }, displayState: value => value, applicationBuild: null, localeWarning: null, notifyCapacity() {},
     appBuildInfo: () => { metadataCalls++; return new Promise(resolve => { release = resolve; }); },
     app: { getVersion: () => '0.1.0-alpha.130' }, dataDir: '/synthetic/profile', preflight: () => ({}) });
   const client = { async call() { snapshotCalls++; return { nativeState: state }; } };

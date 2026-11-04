@@ -1,3 +1,4 @@
+const localeUI = require('./fixtures/locale-ui.cjs');
 // T-128: a notice with an action keeps no time limit, but any press that is not
 // on one of its own buttons ends it, on the notice or anywhere else. Plain
 // notices are unchanged (6.5 s).
@@ -9,7 +10,7 @@ const code = part('function toast(', 'function sessionNotice(') + '\n' + part('/
 function fixture() {
   let now = 0, timers = [], seq = 0, action = null;
   const documentListeners = {};
-  class Element { constructor(id, isButton = false) { this.id = id; this.isButton = isButton; } closest(selector) { return selector === 'button' && this.isButton ? this : null; } }
+  class Element { setAttribute() {} removeAttribute() {} constructor(id, isButton = false) { this.id = id; this.isButton = isButton; } closest(selector) { return selector === 'button' && this.isButton ? this : null; } }
   const body = new Element('body'), outside = new Element('continue-native', true), text = new Element('toast-text'), close = new Element('toast-close', true);
   close.focus = () => { document.activeElement = close; };
   const document = { activeElement: body, addEventListener: (type, fn) => { (documentListeners[type] ||= []).push(fn); } };
@@ -17,7 +18,7 @@ function fixture() {
     contains: el => el === toast || el === text || el === close || el === action,
     querySelector: () => action, insertBefore: el => { action = el; } });
   const button = (label, run) => { const el = new Element('toast-action', true); Object.assign(el, { label, isConnected: true, setAttribute() {}, remove() { el.isConnected = false; if (action === el) action = null; }, click: run }); return el; };
-  const context = vm.createContext({ document, button, Element,
+  const context = vm.createContext({ ...localeUI(), document, button, Element,
     $: id => ({ toast, 'toast-text': text, 'toast-close': close })[id],
     setTimeout: (fn, ms) => { const id = ++seq; timers.push({ id, at: now + ms, fn }); return id; },
     clearTimeout: id => { timers = timers.filter(t => t.id !== id); } });

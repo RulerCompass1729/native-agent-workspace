@@ -9,7 +9,7 @@
     const form = options.form, input = form.querySelector('textarea');
     const send = form.querySelector('.session-send-button'), hint = form.querySelector('.session-compose-hint');
     const native = form.ownerDocument.createElement('button');
-    native.type = 'button'; native.textContent = '原生输入'; native.className = 'session-native-button'; native.hidden = true;
+    native.type = 'button'; native.textContent = options.nativeText || ''; native.className = 'session-native-button'; native.hidden = true;
     send.before(native);
     const listeners = []; let composing = false, confirmingEnter = false, disposed = false;
     const on = (el, event, fn, capture = false) => { el.addEventListener(event, fn, capture); listeners.push(() => el.removeEventListener(event, fn, capture)); };

@@ -2,7 +2,7 @@
 // cross the clipboard/expand boundary; the renderer never requests a file path.
 (function (root) {
   function mount(host, api, options = {}) {
-    const doc = host.ownerDocument, widgets = new Set(); let revision = '', closed = false;
+    const doc = host.ownerDocument, display = options.display, widgets = new Set(); let revision = '', closed = false;
     const element = (tag, cls, text) => { const el = doc.createElement(tag); if (cls) el.className = cls; if (text !== undefined) el.textContent = text; return el; };
     const release = token => { if (token) Promise.resolve(api.releaseImage(token)).catch(() => {}); };
     const clear = () => { for (const widget of widgets) widget.dispose(); widgets.clear(); host.replaceChildren(); };
@@ -13,14 +13,17 @@
       revision = key; clear();
       if (!Array.isArray(images)) return;
       images.forEach((ref, index) => {
-        const sourceKey = { ...source, index }, label = ref.path?.split('/').at(-1) || `原生图片 ${index + 1}`;
-        const item = element('div', 'native-image'), toggle = element('button', 'native-image-toggle', label),
-          image = element('img'), caption = element('div', 'native-image-caption', label), controls = element('div', 'native-image-controls'),
-          copy = element('button', 'native-image-copy', '复制图片'), note = element('span', 'native-image-note');
+        const sourceKey = { ...source, index }, label = () => ref.path?.split('/').at(-1) || options.text('image.nameless', { number: index + 1 });
+        const item = element('div', 'native-image'), toggle = element('button', 'native-image-toggle'),
+          image = element('img'), caption = element('div', 'native-image-caption'), controls = element('div', 'native-image-controls'),
+          copy = element('button', 'native-image-copy'), note = element('span', 'native-image-note');
         item.dataset.imageIndex = String(index); toggle.type = copy.type = 'button';
-        const relabel = value => { toggle.setAttribute('aria-label', `查看图片（${value}）${label}`); copy.setAttribute('aria-label', `复制图片（${value}）${label}`); };
+        let imageOwner;
+        const labelParams = () => ({ owner: typeof imageOwner === 'function' ? imageOwner() : imageOwner, label: label() });
+        const relabel = value => { imageOwner = value; display.attribute(toggle, 'aria-label', 'image.view', labelParams); display.attribute(copy, 'aria-label', 'image.copyFor', labelParams); };
+        display.computed(toggle, 'text', label); display.computed(caption, 'text', label); display.text(copy, 'image.copy');
         relabel(owner); toggle.setAttribute('aria-expanded', 'false'); copy.disabled = true;
-        image.alt = label; toggle.title = ref.path || label; note.setAttribute('role', 'status');
+        display.computed(toggle, 'title', () => ref.path || label()); note.setAttribute('role', 'status');
         controls.append(copy, note); item.append(toggle, caption, controls); host.append(item);
         let alive = true, token, foldKey, thumb, full, loading, expanding, wantsOpen = false, interacted = false, observer;
         const current = () => alive && !closed && revision === key && host.isConnected;
@@ -34,10 +37,10 @@
         }
         function failure(error) {
           if (!current()) return;
-          note.textContent = `图片不可用 · ${error.message || error}`;
-          caption.textContent = ref.path || label; caption.title = ref.path || '';
+          display.computed(note, 'text', () => options.text('image.unavailable', { reason: options.displayText(String(error.message || error), error.uiMessage) }));
+          display.computed(caption, 'text', () => ref.path || label()); caption.title = ref.path || '';
           copy.disabled = true;
-          if (!thumb) toggle.textContent = '重试图片预览';
+          if (!thumb) display.text(toggle, 'image.retry');
         }
         async function expand(remember = false) {
           if (!current() || !token || !wantsOpen || expanding) return;
@@ -46,8 +49,8 @@
             try {
               const result = await api.expandImage(ownToken);
               if (!current() || token !== ownToken || !wantsOpen) return;
-              if (typeof result !== 'string' || !result.startsWith('data:image/png;base64,')) throw Error('图片预览格式无效。');
-              full = result; markOpen(true, remember); note.textContent = '';
+              if (typeof result !== 'string' || !result.startsWith('data:image/png;base64,')) throw options.createError('error.imagePreviewFormat');
+              full = result; markOpen(true, remember); display.unbind(note); note.textContent = '';
             } catch (error) { if (current()) { release(token); token = null; wantsOpen = false; markOpen(false, false); failure(error); } }
             finally { expanding = null; if (current()) toggle.removeAttribute('aria-busy'); }
           })();
@@ -55,18 +58,18 @@
         }
         async function load() {
           if (!current() || loading || token || !['complete', 'submitted'].includes(status)) return loading;
-          toggle.setAttribute('aria-busy', 'true'); note.textContent = '正在读取图片…';
+          toggle.setAttribute('aria-busy', 'true'); display.text(note, 'image.loading');
           loading = (async () => {
             try {
               const result = await api.previewImage(sourceKey);
               if (!current()) { release(result.token); return; }
-              if (typeof result.thumbnail !== 'string' || !result.thumbnail.startsWith('data:image/png;base64,')) { release(result.token); throw Error('图片缩略图格式无效。'); }
+              if (typeof result.thumbnail !== 'string' || !result.thumbnail.startsWith('data:image/png;base64,')) { release(result.token); throw options.createError('error.imageThumbnailFormat'); }
               token = result.token; foldKey = result.key; thumb = result.thumbnail;
               if (!interacted) wantsOpen = options.isOpen?.(foldKey) === true;
               else options.onOpen?.(foldKey, wantsOpen);
               image.src = thumb; image.width = result.width; image.height = result.height;
-              toggle.replaceChildren(image); copy.disabled = false; note.textContent = '';
-              toggle.title = `${ref.path || label}\n${result.width} × ${result.height}`;
+              display.computed(image, 'alt', label); display.unbind(toggle); toggle.replaceChildren(image); copy.disabled = false; display.unbind(note); note.textContent = '';
+              display.computed(toggle, 'title', () => options.text('image.dimensions', { label: ref.path || label(), width: result.width, height: result.height }));
               options.onLayout?.(); if (wantsOpen) await expand(false);
             } catch (error) { failure(error); }
             finally { loading = null; if (current()) toggle.removeAttribute('aria-busy'); }
@@ -88,14 +91,14 @@
         copy.onclick = async () => {
           if (!current() || !token) return;
           const ownToken = token; copy.disabled = true;
-          try { await api.copyImage(ownToken); if (current() && token === ownToken) note.textContent = `已复制图片 · ${label}`; }
+          try { await api.copyImage(ownToken); if (current() && token === ownToken) display.text(note, 'image.copied', () => ({ label: label() })); }
           catch (error) { release(token); token = null; failure(error); }
           finally { if (current()) copy.disabled = !token; }
         };
-        const widget = { relabel, dispose() { alive = false; observer?.disconnect(); release(token); token = null; image.onload = null; image.removeAttribute('src'); full = thumb = null; } };
+        const widget = { relabel, dispose() { alive = false; observer?.disconnect(); release(token); token = null; image.onload = null; image.removeAttribute('src'); full = thumb = null; for (const [el, slots] of [[toggle, ['text', 'aria-label', 'title']], [caption, ['text']], [copy, ['text', 'aria-label']], [image, ['alt']], [note, ['text']]]) for (const slot of slots) display.unbind(el, slot); } };
         widgets.add(widget);
-        if (ref.unavailable) { toggle.disabled = true; note.textContent = `图片不可用 · ${ref.unavailable}`; caption.textContent = ref.path || label; }
-        else if (!['complete', 'submitted'].includes(status)) { toggle.disabled = true; note.textContent = '等待原生确认图片'; }
+        if (ref.unavailable) { toggle.disabled = true; display.computed(note, 'text', () => options.text('image.unavailable', { reason: options.displayText(ref.unavailable, ref.unavailableUiMessage) })); display.computed(caption, 'text', () => ref.path || label()); }
+        else if (!['complete', 'submitted'].includes(status)) { toggle.disabled = true; display.text(note, 'image.waiting'); }
         else if (typeof root.IntersectionObserver === 'function') {
           observer = new root.IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { observer.disconnect(); load(); } }, { root: host.closest('.messages'), rootMargin: '200px' });
           observer.observe(item);

@@ -84,3 +84,67 @@ test('replay preserves existing recorded clocks but never dates first-seen histo
   applyNativeBlock(s, { ...event, id: 'display:live', replayed: true });
   assert.equal(s.messages[1].time, time);
 });
+
+
+test('explicit own display metadata survives persistence while native bodies and titles clear stale descriptors', () => {
+  const locale = require('../ui-locale.js'), blocks = require('../native-blocks.cjs'), own = locale.createNotice('notice.turnTimeUnavailable'), title = locale.createNotice('notice.nativeProcessTitle');
+  const session = { nativeId: 'N', messages: [] };
+  applyNativeBlock(session, { id: 'own', nativeId: 'N', kind: 'notice', ...own, title: title.text, uiTitleMessage: title.uiMessage });
+  const row = session.messages[0]; assert.equal(locale.displayText('en', row.text, row.uiMessage), locale.format('en', 'notice.turnTimeUnavailable'));
+  assert.equal(locale.displayText('en', row.title, row.uiTitleMessage), 'Native process record');
+  assert.deepEqual(blocks.persistedMessages(session.messages)[0].uiMessage, row.uiMessage);
+  applyNativeBlock(session, { id: 'own', nativeId: 'N', kind: 'notice', delta: ' RAW 中文', title: 'RAW native title', uiTitleMessage: title.uiMessage });
+  assert.equal(row.text, own.text + ' RAW 中文'); assert.equal(row.uiMessage, undefined); assert.equal(row.uiTitleMessage, undefined); assert.equal(row.title, 'RAW native title');
+  applyNativeBlock(session, { id: 'native', nativeId: 'N', kind: 'response', ...own }); assert.equal(session.messages[1].uiMessage, undefined);
+  const candidate = { id: 'delta', nativeItemId: 'delta', nativeId: 'N', role: 'assistant', text: own.text, uiMessage: own.uiMessage }; session.messages.push(candidate);
+  blocks.applyCodexDelta(session, { id: 'delta', text: ' RAW', turnId: 'T' }); assert.equal(candidate.uiMessage, undefined); assert.equal(candidate.text, own.text + ' RAW');
+  candidate.uiMessage = own.uiMessage; blocks.applyCodexMessage(session, { id: 'delta', text: 'RAW final', turnId: 'T' }); assert.equal(candidate.uiMessage, undefined); assert.equal(candidate.text, 'RAW final');
+});
+
+test('own cache gaps, missing clocks and pending image descriptions localize without claiming native completion', () => {
+  const locale = require('../ui-locale.js'), blocks = require('../native-blocks.cjs');
+  const rows = Array.from({ length: 201 }, (_, index) => ({ id: 'tool-' + index, role: 'tool', volatile: true, text: 'RAW ' + index }));
+  const trimmed = blocks.trimVolatileRows(rows), gap = trimmed.find(row => row.kind === 'gap'); assert.equal(gap.incomplete, true);
+  assert.equal(locale.displayText('en', gap.text, gap.uiMessage), 'Some tool records exceed the local retention limit. Check them in the native terminal.');
+  const session = { nativeId: 'N', messages: [] }; blocks.applyCodexTurnHistory(session, null);
+  assert.equal(locale.displayText('en', session.messages[0].text, session.messages[0].uiMessage), 'Native turn timing has not synchronized yet. The original text is retained; check the native terminal.');
+  applyNativeBlock(session, { id: 'image', nativeId: 'N', kind: 'tool', status: 'complete', imageCount: 1 });
+  const image = session.messages[1].images[0]; assert.equal(image.pending, true); assert.equal(locale.displayText('en', image.unavailable, image.unavailableUiMessage), 'The image is not fully synchronized yet.');
+  assert.equal(session.messages.some(row => row.kind === 'turn'), false);
+});
+
+
+test('localized gap metadata consumes its existing reservation once at count and oversized-marker boundaries', () => {
+  const { trimVolatileRows } = require('../native-blocks.cjs');
+  const rows = Array.from({ length: 201 }, (_, n) => ({ id: 'tool-' + n, role: 'tool', kind: 'tool', volatile: true, text: 'RAW ' + n }));
+  const first = trimVolatileRows(rows), before = JSON.stringify(first);
+  assert.equal(first.length, 200); assert.equal(first.filter(row => row.kind === 'gap').length, 1);
+  assert.equal(JSON.stringify(trimVolatileRows(first)), before);
+  const hugeGap = { id: 'native-cache-gap', role: 'system', kind: 'gap', volatile: true, text: 'X'.repeat(1024 * 1024) };
+  const repaired = trimVolatileRows([hugeGap, ...rows.slice(0, 3)]);
+  assert.ok(Buffer.byteLength(JSON.stringify(repaired)) <= 1024 * 1024); assert.ok(repaired.length <= 200);
+  assert.equal(repaired.filter(row => row.kind === 'gap').length, 1); assert.deepEqual(repaired.filter(row => row.role === 'tool'), rows.slice(0, 3));
+  assert.equal(JSON.stringify(trimVolatileRows(repaired)), JSON.stringify(repaired));
+});
+
+
+test('legacy and translated gap growth both fit the complete serialized array on the first trim', () => {
+  const { trimVolatileRows, persistedMessages } = require('../native-blocks.cjs'), own = require('../ui-locale.js').createNotice('notice.nativeCacheGap');
+  const size = row => Buffer.byteLength(JSON.stringify(row));
+  const tool = (id, length) => ({ id: 'native:n:tool:' + id, role: 'tool', nativeId: 'n', nativeBlock: true, kind: 'tool', volatile: true, status: 'complete', text: 'x'.repeat(length) });
+  for (const translated of [false, true]) {
+    const gap = { id: 'native-cache-gap', role: 'system', kind: 'gap', volatile: true, time: 1, text: own.text, incomplete: true, ...(translated ? { uiMessage: own.uiMessage } : {}) };
+    const rows = [...Array.from({ length: 100 }, (_, i) => tool(i, 9000)), gap], filler = tool(500, 1);
+    filler.text = 'x'.repeat(1 + 1024 * 1024 - 1 - rows.reduce((n, row) => n + size(row), 0) - size(filler));
+    rows.unshift(tool(999, 9000), filler);
+    const alreadyFits = rows.slice(1).map(row => ({ ...row }));
+    const excess = Buffer.byteLength(JSON.stringify(alreadyFits)) - (1024 * 1024 - 1);
+    alreadyFits[0].text = alreadyFits[0].text.slice(0, -excess);
+    assert.equal(Buffer.byteLength(JSON.stringify(alreadyFits)), 1024 * 1024 - 1);
+    const untouched = JSON.stringify(alreadyFits);
+    assert.equal(JSON.stringify(trimVolatileRows(alreadyFits)), untouched, 'A valid legacy record must not lose a tool merely to add display metadata.');
+    const original = JSON.stringify(rows), first = trimVolatileRows(rows.map(row => ({ ...row })));
+    assert.ok(Buffer.byteLength(JSON.stringify(first.filter(row => row.volatile))) <= 1024 * 1024, 'The first result, including array punctuation and new metadata, must already fit.');
+    assert.ok(first.length <= 200); assert.equal(JSON.stringify(persistedMessages(first)), JSON.stringify(first)); assert.equal(JSON.stringify(rows), original);
+  }
+});

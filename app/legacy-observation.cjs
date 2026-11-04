@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 const { TerminalJournal } = require('./observation.cjs');
 
 // Only this inspected protocol/provider pair has a snapshot that cannot create
@@ -30,7 +31,7 @@ class LegacyObservation {
       this.capturedRevision = revision;
       if (typeof frame?.buffer !== 'string' || !Number.isSafeInteger(frame.sequence)
         || !Number.isInteger(frame.cols) || frame.cols < 20 || frame.cols > 400
-        || !Number.isInteger(frame.rows) || frame.rows < 5 || frame.rows > 200) throw Error('旧连接没有提供有效的原生画面。');
+        || !Number.isInteger(frame.rows) || frame.rows < 5 || frame.rows > 200) throw uiError("error.legacy.nativeScreenInvalid");
       // A complete checkpoint provides its own dimensions. Never interpret
       // unlabelled old output bytes using guessed resize ordering.
       const fingerprint = [frame.sequence, frame.cols, frame.rows];
@@ -45,11 +46,11 @@ class LegacyObservation {
     return this.pending;
   }
   async observe() {
-    if (this.disposed) throw Error('观察连接已关闭。');
+    if (this.disposed) throw uiError("error.legacy.observationClosed");
     this.watching = true;
     await this.capture();
     if (this.capturedRevision !== this.revision && this.watching && !this.disposed) await this.capture();
-    if (this.disposed || !this.watching) throw Error('观察视图已关闭。');
+    if (this.disposed || !this.watching) throw uiError("error.legacy.observationViewClosed");
     return { terminal: { ...this.journal.snapshot(), legacySnapshots: true }, progress: { items: [], revision: 0, truncated: false } };
   }
   release() { this.watching = false; this.revision++; clearTimeout(this.timer); this.timer = null; }

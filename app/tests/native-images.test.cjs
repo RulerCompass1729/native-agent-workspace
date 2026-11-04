@@ -207,3 +207,32 @@ test('post-read validation remains inside the bounded preview operation', async 
   try { await assert.rejects(store.preview(f.source), /繁忙/); }
   finally { release(f.snapshot); await Promise.allSettled([first, ...queued]); store.close(); }
 });
+
+
+test('image display metadata follows explicit own producers while raw native details clear old metadata', () => {
+  const locale = require('../ui-locale.js');
+  const own = userImageReferences([{ type: 'image', fileId: 'RAW-private-id' }]);
+  const raw = own[0].unavailable, refs = imageReferences(own, '/synthetic');
+  assert.equal(refs[0].unavailable, raw);
+  assert.equal(locale.displayText('en', refs[0].unavailable, refs[0].unavailableUiMessage), 'The native record did not provide a readable local image path.');
+  assert.ok(!JSON.stringify(refs).includes('RAW-private-id'));
+  const old = { path: 'original.png', observedAt: 123, unavailable: raw, unavailableUiMessage: refs[0].unavailableUiMessage };
+  const original = JSON.stringify(old), native = imageReferences([{ unavailable: 'RAW 原生 <detail>{key}' }], '/later', [old])[0];
+  assert.equal(native.path, old.path); assert.equal(native.observedAt, 123); assert.equal(native.unavailableUiMessage, null);
+  assert.equal(locale.displayText('en', native.unavailable, native.unavailableUiMessage), 'RAW 原生 <detail>{key}'); assert.equal(JSON.stringify(old), original);
+  const untagged = imageReferences([{ unavailable: raw }], '/synthetic')[0];
+  assert.equal(locale.displayText('en', untagged.unavailable, untagged.unavailableUiMessage), raw);
+  const missing = imageReferences([], '/later', [old])[0]; assert.equal(missing.path, old.path);
+  assert.equal(locale.displayText('en', missing.unavailable, missing.unavailableUiMessage), 'The image record is not fully synchronized. Check the native session.');
+  assert.throws(() => require('../native-images.cjs').resolvedImagePath(refs[0]), error => error.message === raw && locale.errorText('en', error) === 'The native record did not provide a readable local image path.');
+});
+
+test('image display metadata keeps the native payload allowlist and raw failure while local pending records translate', () => {
+  const locale = require('../ui-locale.js');
+  const payload = { index: 1, unavailable: 'RAW native failure 中文' }, row = { kind: 'tool', status: 'complete', images: [] };
+  const original = JSON.stringify(payload); assert.equal(require('../native-images.cjs').validImagePayload(payload), true);
+  assert.equal(require('../native-images.cjs').validImagePayload({ ...payload, unavailableUiMessage: { version: 1, key: 'error.nativeImages.unavailable', params: {} } }), false);
+  assert.equal(require('../native-images.cjs').applyImagePayload(row, payload, '/unused-synthetic', 'session-A'), true);
+  assert.equal(row.images[0].pending, true); assert.equal(locale.displayText('en', row.images[0].unavailable, row.images[0].unavailableUiMessage), 'The image is not fully synchronized yet.');
+  assert.equal(row.images[1].unavailable, payload.unavailable); assert.equal(row.images[1].unavailableUiMessage, undefined); assert.equal(row.incomplete, true); assert.equal(JSON.stringify(payload), original);
+});

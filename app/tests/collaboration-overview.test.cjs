@@ -2,6 +2,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { statusFacts, excerpt, adjustedWidths } = require('../renderer/collaboration-overview.js');
 
+test('English status facts preserve unknown children, stale observations and pending request counts', () => {
+  const record = { state: 'idle', nativeId: 'native-current', nativeActivity: { nativeId: 'native-current', observedAt: 1000 },
+    nativeApproval: { requests: [{ id: 'request-a' }, { id: 'request-b' }] }, fleet: [{ event: 'thread/started', id: 'child-unknown', stale: false }] };
+  const before = structuredClone(record), english = statusFacts(record, true, 10000, 'en'), chinese = statusFacts(record, true, 10000, 'zh');
+  assert.equal(english.state, 'Session ready · 2 pending'); assert.match(english.child, /1 with unknown status.*partial observations/);
+  assert.equal(english.stale, chinese.stale); assert.equal(english.freshnessReported, chinese.freshnessReported); assert.match(english.freshness, /Last observed · Updated 9s ago/);
+  assert.equal(statusFacts(record, false, 10000, 'en').state, 'Connection status unverified · 2 pending'); assert.deepEqual(record, before);
+});
+
 test('root idle never conceals observed working or unknown native children', () => {
   const record = { id: 'fixture-member', nativeId: 'fixture-native', state: 'idle', fleet: [
     { event: 'SubagentStart', id: 'fixture-child-a', stale: false },

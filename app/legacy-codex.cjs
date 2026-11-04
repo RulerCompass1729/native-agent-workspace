@@ -1,3 +1,5 @@
+const { displayMessage } = require('./ui-locale.js');
+const { uiError, uiNotice, setActivity } = require('./ui-errors.cjs');
 // Attach to the retained native server. This module never starts a process,
 // changes native settings, writes native history, or calls the old send RPC.
 const fs = require('node:fs');
@@ -23,23 +25,23 @@ function eligibleCodex(state, record) {
 }
 function retainedSocket(dataDir, entry, record) {
   if (!eligibleCodex(entry.state, record) || record.processIdentity?.pid !== record.pid
-    || !processMayBeAlive(record.processIdentity) || !processMayBeAlive(record.serverIdentity)) throw Error('原 Codex 进程已变化，没有启动替代会话。');
+    || !processMayBeAlive(record.processIdentity) || !processMayBeAlive(record.serverIdentity)) throw uiError("error.legacy.codexProcessChanged");
   const filename = path.join(dataDir, entry.key, 'connection.json');
   const stat = fs.lstatSync(filename);
-  if (stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw Error('原连接文件权限不安全。');
+  if (stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw uiError("error.legacy.connectionFilePermissions");
   const info = JSON.parse(fs.readFileSync(filename, 'utf8'));
-  if (info.protocol !== 1 || info.pid !== entry.state.servicePid || !path.isAbsolute(info.endpoint)) throw Error('原连接身份已变化。');
+  if (info.protocol !== 1 || info.pid !== entry.state.servicePid || !path.isAbsolute(info.endpoint)) throw uiError("error.legacy.connectionIdentityChanged");
   const directory = path.dirname(info.endpoint), parent = fs.lstatSync(directory);
-  if (parent.isSymbolicLink() || !parent.isDirectory() || parent.uid !== process.getuid() || (parent.mode & 0o077)) throw Error('原连接目录权限不安全。');
+  if (parent.isSymbolicLink() || !parent.isDirectory() || parent.uid !== process.getuid() || (parent.mode & 0o077)) throw uiError("error.legacy.connectionDirectoryPermissions");
   const socket = path.join(directory, 'codex.sock'), link = fs.lstatSync(socket);
   // Native Codex can publish an owned symlink to its private daemon socket.
   // Validate the resolved endpoint and directory instead of banning the
   // provider's actual transport or trusting an arbitrary redirect.
-  if (link.uid !== process.getuid()) throw Error('原 Codex 接口不可用。');
+  if (link.uid !== process.getuid()) throw uiError("error.legacy.codexInterfaceUnavailable");
   const resolved = fs.realpathSync(socket), sock = fs.lstatSync(resolved);
   const container = fs.lstatSync(path.dirname(resolved));
   if (!sock.isSocket() || sock.uid !== process.getuid() || sock.mode & 0o077
-    || !container.isDirectory() || container.isSymbolicLink() || container.uid !== process.getuid() || container.mode & 0o077) throw Error('原 Codex 接口不可用。');
+    || !container.isDirectory() || container.isSymbolicLink() || container.uid !== process.getuid() || container.mode & 0o077) throw uiError("error.legacy.codexInterfaceUnavailable");
   return resolved;
 }
 
@@ -69,8 +71,8 @@ class LegacyCodex extends EventEmitter {
       createConnection: () => net.connect(socket), maxPayload: CODEX_WEBSOCKET_MAX_PAYLOAD, handshakeTimeout: 5000,
     });
     ws.on('error', () => {});
-    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); ws.once('close', () => reject(Error('原生连接已关闭。'))); });
-    if (this.closed) { ws.close(); throw Error('连接操作已取消。'); }
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); ws.once('close', () => reject(uiError("error.legacy.nativeConnectionClosed"))); });
+    if (this.closed) { ws.close(); throw uiError("error.legacy.connectionCancelled"); }
     const rpc = this.rpc = new Rpc(ws);
     const host = { rpc, codexTargets: new Map() };
     // Use the current event/turn correlation implementation, but never start()
@@ -94,8 +96,8 @@ class LegacyCodex extends EventEmitter {
     });
     adapter.on('replyBound', identity => this.emit('replyBound', identity));
     adapter.on('usage', usage => { this.usage = usage; this.emit('change'); });
-    adapter.on('model', model => { this.model = model; this.emit('change'); });
-    adapter.on('activity', text => { this.activity = text; this.emit('change'); });
+    adapter.on('model', (model, uiMessage) => { this.model = model; this.modelUiMessage = displayMessage(uiMessage, 'notice.', model) || undefined; this.emit('change'); });
+    adapter.on('activity', (text, uiMessage) => { setActivity(this, text, uiMessage); this.emit('change'); });
     adapter.on('nativeInput', (text, item) => {
       if (!item?.id || !this.record.messages.some(m => m.id === item.id)) this.record.messages.push({ id: item?.id || crypto.randomUUID(), role: 'user', origin: 'native', text, status: 'submitted' });
     });
@@ -106,7 +108,7 @@ class LegacyCodex extends EventEmitter {
       adapter.on(event, (...args) => {
         if (event === 'state') {
           this.state = args[0]; if (this.state !== 'approval') this.approvalResolved = false;
-          if (this.state === 'idle') this.activity = '';
+          if (this.state === 'idle') setActivity(this, '');
           if (['disconnected', 'error', 'ended'].includes(this.state)) for (const m of this.record.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
         }
         if (event === 'approval') {
@@ -115,7 +117,7 @@ class LegacyCodex extends EventEmitter {
           this.approvalResolved = false;
         }
         if (event === 'failed') {
-          this.activity = args[0];
+          setActivity(this, args[0], args[2]);
           for (const m of this.record.messages) if (['streaming', 'running'].includes(m.status)) m.status = 'unconfirmed';
           for (const item of this.progress.items.values()) if (['streaming', 'running'].includes(item.status)) {
             this.emit('progress', this.progress.update({ id: item.id, status: 'unknown' }));
@@ -143,26 +145,26 @@ class LegacyCodex extends EventEmitter {
       }
     });
     rpc.nativeVersion = require('./native-history.cjs').serverVersion(await rpc.call('initialize', { clientInfo: { name: 'native_agent_workspace_compat', version: '1' }, capabilities: { experimentalApi: true } }));
-    if (this.closed) throw Error('连接操作已取消。');
+    if (this.closed) throw uiError("error.legacy.connectionCancelled");
     ws.send(JSON.stringify({ method: 'initialized', params: {} }));
     let loaded = false, cursor;
     for (let page = 0; page < 100 && !loaded; page++) {
-      if (this.closed) throw Error('连接操作已取消。');
+      if (this.closed) throw uiError("error.legacy.connectionCancelled");
       const result = await rpc.call('thread/loaded/list', { ...(cursor ? { cursor } : {}) });
-      if (!Array.isArray(result.data)) throw Error('原生会话列表无法确认。');
+      if (!Array.isArray(result.data)) throw uiError("error.legacy.sessionListUnconfirmed");
       loaded = result.data.includes(this.record.nativeId);
       if (!result.nextCursor) break;
-      if (result.nextCursor === cursor) throw Error('原生会话列表无法确认。');
+      if (result.nextCursor === cursor) throw uiError("error.legacy.sessionListUnconfirmed");
       cursor = result.nextCursor;
     }
-    if (this.closed) throw Error('连接操作已取消。');
-    if (!loaded) throw Error('原生会话未处于可连接状态，没有恢复或重建它。');
+    if (this.closed) throw uiError("error.legacy.connectionCancelled");
+    if (!loaded) throw uiError("error.legacy.nativeSessionNotConnectable");
     const revision = adapter.stateRevision, settings = adapter.nativeSettings;
     // No model/cwd/permission overrides. This is an explicit connection action
     // to an already loaded thread, not a background observer or cold recovery.
     try {
       const result = await rpc.call('thread/resume', { threadId: this.record.nativeId, excludeTurns: true });
-      if (this.closed || result.thread?.id !== this.record.nativeId) throw Error('原生会话连接未确认。');
+      if (this.closed || result.thread?.id !== this.record.nativeId) throw uiError("error.legacy.nativeConnectionUnconfirmed");
       adapter.observeReplySettings(result, settings);
       if (revision === adapter.stateRevision) adapter.observeStatus(result.thread.status);
       this.subscribed = true;
@@ -172,17 +174,17 @@ class LegacyCodex extends EventEmitter {
       // exact ID; only the person's first turn is allowed to create its history.
       this.subscribed = false; this.state = this.record.state || 'idle';
     }
-    if (this.subscribed && !await adapter.hydrateHistory(this.record.nativeId)) throw Error('原生历史连接已变化，没有重发任务。');
-    if (this.closed) throw Error('连接操作已取消。');
+    if (this.subscribed && !await adapter.hydrateHistory(this.record.nativeId)) throw uiError("error.legacy.historyConnectionChanged");
+    if (this.closed) throw uiError("error.legacy.connectionCancelled");
     this.record.recovering = false;
     adapter.chatAvailable = true; this.connected = true; this.initialized = true; this.save(); this.emit('change');
   }
   async send(text, tag, refresh, guard) {
-    if (!this.connected || this.closed || this.pending) throw Error('原 Codex 输入连接未就绪。');
+    if (!this.connected || this.closed || this.pending) throw uiError("error.legacy.codexInputNotReady");
     const revision = this.revision;
     await refresh();
     const valid = () => this.connected && !this.closed && this.state === 'idle' && this.revision === revision && guard();
-    if (!valid()) throw Error('原生状态已变化，输入未发送。');
+    if (!valid()) throw uiError("error.legacy.nativeStateChangedNoInput");
     const message = { id: tag, role: 'user', text, status: 'awaiting-native', origin: 'human' };
     this.record.messages.push(message); this.emit('change');
     let turnId;
@@ -195,24 +197,24 @@ class LegacyCodex extends EventEmitter {
       // if it already ended, reconcile by the exact native turn ID.
       try {
         await this.adapter.observeAcceptedTurn(turnId, tag);
-        if (this.closed) throw Error('原生观察连接已变化。');
+        if (this.closed) throw uiError("error.nativeObservationChanged");
         this.subscribed = true;
       } catch {
         // ACK was already received. Never turn a later observation failure
         // into a failed send that invites duplicate billing.
-        this.state = 'error'; this.emit('failed', '消息已被原生接受，但后续状态尚未同步；请核对原生终端，不要重发。');
+        this.state = 'error'; { const notice = uiNotice("notice.failure.acceptedStateUnsynced"); this.emit('failed', notice.text, undefined, notice.uiMessage); }
       }
     }
   }
   async steer(text, tag, expectedTurnId, refresh, guard, shared = false, sharingGuard = guard) {
-    if (!this.steerAvailable || this.pendingSteer) throw Error('原生追加指令连接尚未就绪。');
+    if (!this.steerAvailable || this.pendingSteer) throw uiError("error.legacy.nativeSteeringNotReady");
     this.pendingSteer = tag;
     const revision = this.revision;
     let message;
     try {
       await refresh();
       const valid = () => this.steerAvailable && this.revision === revision && this.state === 'working' && !this.approval && this.turnId === expectedTurnId && guard();
-      if (!valid()) throw Error('当前原生回合已变化，草稿保留。');
+      if (!valid()) throw uiError("error.client.nativeTurnChanged");
       message = { id: tag, role: 'user', text, status: 'awaiting-native', origin: 'human', inputMode: 'steer', turnId: expectedTurnId };
       this.record.messages.push(message); this.emit('change');
       // Native work can complete before the ACK. Sending still requires the
@@ -226,8 +228,8 @@ class LegacyCodex extends EventEmitter {
   observe() { return { terminal: null, progress: this.progress.snapshot() }; }
   approve(requestId, decision) {
     const route = this.pendingApprovals.get(requestId);
-    if (!this.connected || this.closed || this.state !== 'approval' || !route || route.approval.pending || route.rpc !== this.rpc || this.pendingApprovals.overflow) throw Error('权限请求已变化，请重新查看。');
-    if (!nativeApprovalPolicy(route.approval).decisions.includes(decision)) throw Error('请在原生终端核对；此界面不支持这项权限决定。');
+    if (!this.connected || this.closed || this.state !== 'approval' || !route || route.approval.pending || route.rpc !== this.rpc || this.pendingApprovals.overflow) throw uiError("error.legacy.approvalChanged");
+    if (!nativeApprovalPolicy(route.approval).decisions.includes(decision)) throw uiError("error.legacy.approvalDecisionUnsupported");
     route.rpc.reply(route.nativeRequestId, { decision });
     if (this.pendingApprovals.get(requestId) === route) { route.approval = { ...route.approval, pending: true }; Object.assign(this, this.pendingApprovals.snapshot()); }
     this.emit('change');

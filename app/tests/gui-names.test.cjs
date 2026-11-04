@@ -10,9 +10,10 @@ test('every name the GUI scripts look up exists in the interface source', () => 
   assert.deepEqual(result.missing, [], 'Rename the lookup to the current interface text (node scripts/check-gui-names.cjs lists them)');
 });
 
-function repository(t, app, script, fixture = '') {
+function repository(t, app, script, fixture = '', catalog = '') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-gui-names-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   for (const folder of ['app/renderer', 'scripts/fixtures']) fs.mkdirSync(path.join(dir, folder), { recursive: true });
+  if (catalog) fs.writeFileSync(path.join(dir, 'app/ui-messages.js'), catalog);
   fs.writeFileSync(path.join(dir, 'app/renderer/r.js'), app.join('\n'));
   fs.writeFileSync(path.join(dir, 'app/renderer/index.html'), '<button id="privacy" aria-label="查看隐私与用量"><span>隐私</span>与用量</button>');
   fs.writeFileSync(path.join(dir, 'scripts/fixtures/emit.cjs'), fixture);
@@ -88,4 +89,12 @@ test('a regular expression name is checked by the text it always starts with', (
 test('the source reader skips comments and reads strings, template holes and regular expressions', () => {
   const found = literals("// '注释'\n/* '也是注释' */ const r = /'不是字符串'/g; const a = 'yes', b = `x ${f('inner')} y`;\nconst c = 1 / 2 / 'z'.length;");
   assert.deepEqual(found.map(l => [l.kind, l.text]), [['regex', "'不是字符串'"], ['string', 'yes'], ['template', 'x  y'], ['string', 'inner'], ['string', 'z']]);
+});
+
+test('catalog placeholders produce their named control but a hole-only entry cannot approve an old name', t => {
+  const result = repository(t, [], [
+    "await page.getByRole('menuitem', { name: '加入「Research」', exact: true }).click();",
+    "await page.getByRole('button', { name: '过时的控件', exact: true }).click();",
+  ], '', 'module.exports = ' + JSON.stringify({ zh: { join: '加入「{name}」', raw: '{name}' }, en: { join: 'Join {name}', raw: '{name}' } }));
+  assert.equal(result.checked, 2); assert.deepEqual(result.missing.map(row => row.name), ['过时的控件']);
 });

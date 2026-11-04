@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -8,7 +9,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const controls = ['core.hooksPath=/dev/null', 'core.fsmonitor=false', 'core.attributesFile=/dev/null',
   'core.sparseCheckout=false', 'core.sparseCheckoutCone=false', 'submodule.recurse=false',
   'protocol.allow=never', 'gc.auto=0', 'maintenance.auto=false'];
-function failure(message) { return Object.assign(new Error(message), { code: 'NAW_GIT_WORKTREE' }); }
+function failure(key, params) { return Object.assign(uiError(key, params), { code: 'NAW_GIT_WORKTREE' }); }
 function gitEnvironment() {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^GIT_/.test(key)));
   return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_GLOBAL: '/dev/null',
@@ -30,12 +31,12 @@ function exists(file) {
 }
 function plainMetadata(file) {
   const resolved = path.resolve(file);
-  if (/(?:^|\/)Library\/(?:Group )?Containers(?:\/|$)/i.test(resolved)) throw failure('Git 元数据指向应用容器，未读取或创建工作副本。');
+  if (/(?:^|\/)Library\/(?:Group )?Containers(?:\/|$)/i.test(resolved)) throw failure("error.gitMetadataInAppContainer");
   let current = path.parse(resolved).root;
   for (const part of resolved.slice(current.length).split(path.sep).filter(Boolean)) {
     current = path.join(current, part);
     const stat = exists(current);
-    if (!stat || stat.isSymbolicLink()) throw failure('Git 元数据路径不可用或含链接，未创建工作副本。');
+    if (!stat || stat.isSymbolicLink()) throw failure("error.gitMetadataLinkedPath");
   }
   return resolved;
 }
@@ -43,49 +44,49 @@ function smallFile(file, optional = false) {
   if (optional && !exists(file)) return '';
   plainMetadata(file);
   const stat = fs.lstatSync(file);
-  if (!stat.isFile() || stat.size > 65536) throw failure('Git 元数据格式或大小不支持，未创建工作副本。');
+  if (!stat.isFile() || stat.size > 65536) throw failure("error.gitMetadataUnsupportedFile");
   return fs.readFileSync(file, 'utf8');
 }
 function repository(selected) {
-  if (typeof selected !== 'string' || !path.isAbsolute(selected) || selected.length > 4096 || /[\x00-\x1f\x7f]/.test(selected)) throw failure('请选择已有 Git 仓库。');
-  if (/(?:^|\/)Library\/(?:Group )?Containers(?:\/|$)/i.test(path.resolve(selected))) throw failure('不自动访问应用容器。');
+  if (typeof selected !== 'string' || !path.isAbsolute(selected) || selected.length > 4096 || /[\x00-\x1f\x7f]/.test(selected)) throw failure("error.gitRepositoryRequired");
+  if (/(?:^|\/)Library\/(?:Group )?Containers(?:\/|$)/i.test(path.resolve(selected))) throw failure("error.appContainerNotRead");
   let directory;
   try { directory = plainMetadata(selected); if (!fs.statSync(directory).isDirectory()) throw Error(); }
-  catch { throw failure('所选路径含链接或不可用，未创建自动副本；请选择实际目录，或使用已有目录模式。'); }
+  catch { throw failure("error.gitSelectedLinkedPath"); }
   let root = directory, marker;
   while (!(marker = exists(path.join(root, '.git')))) {
     const parent = path.dirname(root);
-    if (parent === root) throw failure('所选目录不在 Git 工作区内；可以直接使用已有目录。');
+    if (parent === root) throw failure("error.gitSelectedOutsideRepository");
     root = parent;
   }
-  if (root === path.parse(root).root || marker.isSymbolicLink()) throw failure('这个 Git 工作区路径暂不支持自动副本。');
+  if (root === path.parse(root).root || marker.isSymbolicLink()) throw failure("error.gitWorkingTreeUnsupported");
   let gitDir = path.join(root, '.git');
   if (marker.isFile()) {
     const match = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(smallFile(gitDir));
-    if (!match) throw failure('Git 工作区登记格式不支持。');
+    if (!match) throw failure("error.gitRegistrationUnsupported");
     gitDir = path.resolve(root, match[1]);
-  } else if (!marker.isDirectory()) throw failure('Git 元数据不可用。');
+  } else if (!marker.isDirectory()) throw failure("error.gitMetadataUnavailable");
   plainMetadata(gitDir);
   const commonFile = path.join(gitDir, 'commondir');
   const common = exists(commonFile) ? path.resolve(gitDir, smallFile(commonFile).trim()) : gitDir;
   plainMetadata(common);
   for (const file of [path.join(common, 'config'), path.join(gitDir, 'config.worktree')]) {
     const text = smallFile(file, true);
-    if (/^\s*\[\s*include(?:if)?(?:\s|\])/im.test(text)) throw failure('仓库含外部 Git 配置引用，暂不自动创建副本；未读取引用文件。');
+    if (/^\s*\[\s*include(?:if)?(?:\s|\])/im.test(text)) throw failure("error.gitExternalConfig");
   }
-  if (smallFile(path.join(common, 'objects/info/alternates'), true).trim()) throw failure('仓库借用了外部对象目录，暂不自动创建副本。');
+  if (smallFile(path.join(common, 'objects/info/alternates'), true).trim()) throw failure("error.gitExternalObjects");
   const attributes = path.join(common, 'info/attributes');
   if (exists(attributes)) smallFile(attributes);
   const packs = path.join(common, 'objects/pack');
   if (exists(packs)) {
     plainMetadata(packs);
-    if (fs.readdirSync(packs).some(name => name.endsWith('.promisor'))) throw failure('部分克隆仓库暂不自动创建工作副本，不会联网补取内容。');
+    if (fs.readdirSync(packs).some(name => name.endsWith('.promisor'))) throw failure("error.gitPartialClone");
   }
   return { root, directory, gitDir, common, filters: [] };
 }
 function run(repo, args, { missing = false, timeout = 10000, environment = {}, workTree = true } = {}) {
   const binary = available();
-  if (!binary) return Promise.reject(failure('没有可用 Git；请安装 Git 后再选择工作副本。'));
+  if (!binary) return Promise.reject(failure("error.gitUnavailable"));
   const overrides = [...controls];
   for (const driver of repo.filters) for (const field of ['process', 'smudge', 'clean', 'required']) overrides.push(`filter.${driver}.${field}=${field === 'required' ? 'false' : ''}`);
   const argv = ['--no-pager', '--no-optional-locks', `--git-dir=${repo.gitDir}`, ...(workTree ? [`--work-tree=${repo.root}`] : []),
@@ -95,8 +96,8 @@ function run(repo, args, { missing = false, timeout = 10000, environment = {}, w
       maxBuffer: 65536, windowsHide: true }, (error, stdout) => {
       if (!error) return resolve(stdout.trimEnd());
       if (missing && error.code === 1) return resolve('');
-      reject(failure(error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'Git 准备输出超出限制，未重试；已登记的分支和路径保留。'
-        : error.killed ? 'Git 准备超时，未重试；已登记的分支和路径保留。' : 'Git 未能完成准备；请检查仓库、磁盘空间或路径占用，未自动重试。'));
+      reject(failure(error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'error.gitOutputLimit'
+        : error.killed ? 'error.gitPreparationTimeout' : 'error.gitPreparationFailed'));
     });
   });
 }
@@ -104,48 +105,48 @@ async function inspect(selected) {
   const repo = repository(selected);
   const partial = await run(repo, ['config', '--get', 'extensions.partialClone'], { missing: true });
   const promisors = await run(repo, ['config', '--type=bool', '--get-regexp', '^remote\..*\.promisor$'], { missing: true });
-  if (partial || promisors.split('\n').some(line => /\s+true$/i.test(line))) throw failure('部分克隆仓库暂不自动创建工作副本，不会联网补取内容。');
+  if (partial || promisors.split('\n').some(line => /\s+true$/i.test(line))) throw failure("error.gitPartialClone");
   const keys = await run(repo, ['config', '--null', '--name-only', '--get-regexp', '^filter\..*\.(process|smudge|clean|required)$'], { missing: true });
   for (const key of keys.split('\0').filter(Boolean)) {
     const driver = key.slice(7, key.lastIndexOf('.'));
-    if (!/^[A-Za-z0-9_.-]{1,100}$/.test(driver)) throw failure('仓库过滤器名称暂不支持安全准备，未创建工作副本。');
+    if (!/^[A-Za-z0-9_.-]{1,100}$/.test(driver)) throw failure("error.gitFilterUnsupported");
     if (!repo.filters.includes(driver)) repo.filters.push(driver);
   }
   repo.revision = await run(repo, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], { missing: true });
-  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(repo.revision)) throw failure('仓库需要先有一个本机提交；未创建工作副本。');
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(repo.revision)) throw failure("error.gitCommitRequired");
   return repo;
 }
 function relativePath(value = '') {
-  if (typeof value !== 'string' || value.length > 1024 || /[\x00-\x1f\x7f\\]/.test(value) || path.isAbsolute(value)) throw failure('子目录请从新副本根目录填写相对路径。');
+  if (typeof value !== 'string' || value.length > 1024 || /[\x00-\x1f\x7f\\]/.test(value) || path.isAbsolute(value)) throw failure("error.gitSubdirectoryRelative");
   if (!value || value === '.') return '';
   const normalized = value.replace(/\/+$/, '');
-  if (normalized.split('/').some(part => !part || part === '.' || part === '..')) throw failure('子目录不能离开新副本根目录。');
+  if (normalized.split('/').some(part => !part || part === '.' || part === '..')) throw failure("error.gitSubdirectoryOutside");
   return normalized;
 }
 function destination(repo, nonce, relative) {
-  if (typeof nonce !== 'string' || !UUID.test(nonce)) throw failure('工作副本预览已变化，请重新选择。');
+  if (typeof nonce !== 'string' || !UUID.test(nonce)) throw failure("error.gitPreviewChanged");
   const parent = `${repo.root}-lanes`, stat = exists(parent);
-  if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw failure('副本存放位置不是普通目录，未创建工作副本。');
+  if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) throw failure("error.gitCopyRootNotDirectory");
   const target = path.join(parent, nonce);
-  if (exists(target)) throw failure('工作副本路径已存在，未覆盖或重复创建。');
+  if (exists(target)) throw failure("error.gitCopyAlreadyExists");
   return { source: repo.directory, repository: repo.root, revision: repo.revision,
     nonce, branch: `naw/session-${nonce}`, target, relativeDirectory: relative, cwd: path.join(target, relative) };
 }
 async function preview(selected, nonce, relative = '') {
   const repo = await inspect(selected), child = relativePath(relative), plan = destination(repo, nonce, child);
-  if (child && await run(repo, ['cat-file', '-t', `${repo.revision}:${child}`]) !== 'tree') throw failure('子目录不在这个已提交快照中，请从新副本根目录重新选择。');
-  if (await run(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`], { missing: true })) throw failure('工作副本分支已存在，未覆盖或重复创建。');
+  if (child && await run(repo, ['cat-file', '-t', `${repo.revision}:${child}`]) !== 'tree') throw failure("error.gitSubdirectoryMissingInCommit");
+  if (await run(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${plan.branch}`], { missing: true })) throw failure("error.gitBranchAlreadyExists");
   return plan;
 }
 function planShape(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan) ||
       Object.keys(plan).sort().join(',') !== 'branch,cwd,nonce,relativeDirectory,repository,revision,source,target' ||
-      Object.values(plan).some(value => typeof value !== 'string' || value.length > 4096)) throw failure('工作副本计划无效，请重新预览。');
+      Object.values(plan).some(value => typeof value !== 'string' || value.length > 4096)) throw failure("error.gitPlanInvalid");
 }
 async function validate(plan) {
   planShape(plan);
   const fresh = await preview(plan.source, plan.nonce, plan.relativeDirectory);
-  if (Object.keys(fresh).some(key => fresh[key] !== plan[key])) throw failure('仓库或工作副本计划已变化，请重新预览；未创建副本。');
+  if (Object.keys(fresh).some(key => fresh[key] !== plan[key])) throw failure("error.gitPlanChanged");
   return fresh;
 }
 async function checkout(copy, plan) {
@@ -162,31 +163,31 @@ async function checkout(copy, plan) {
     fs.copyFileSync(path.join(temporary, 'index'), path.join(copy.gitDir, 'index'), fs.constants.COPYFILE_EXCL);
   } finally {
     const current = exists(temporary);
-    if (current && (current.isSymbolicLink() || current.ino !== identity.ino || current.dev !== identity.dev)) throw failure('临时 Git 元数据身份已变化，未清理或启动原生会话。');
+    if (current && (current.isSymbolicLink() || current.ino !== identity.ino || current.dev !== identity.dev)) throw failure("error.gitTemporaryMetadataChanged");
     if (current) fs.rmSync(temporary, { recursive: true }); // Only our exclusive temporary metadata, never worktree files.
   }
 }
 async function prepare(plan) {
   await validate(plan);
   const repo = await inspect(plan.source);
-  if (repo.revision !== plan.revision || repo.root !== plan.repository) throw failure('仓库已变化，未创建副本。');
+  if (repo.revision !== plan.revision || repo.root !== plan.repository) throw failure("error.gitRepositoryChanged");
   const parent = path.dirname(plan.target);
   if (!exists(parent)) { try { fs.mkdirSync(parent, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; } }
   const parentStat = fs.lstatSync(parent);
-  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw failure('副本存放位置已变化，未创建副本。');
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw failure("error.gitCopyLocationChanged");
   // Exclusive creation reserves only this path. Never remove or reuse work.
   try { fs.mkdirSync(plan.target, { mode: 0o700 }); }
-  catch { throw failure('工作副本路径已存在或不可写，未覆盖、删除或重试。'); }
+  catch { throw failure("error.gitCopyPathUnavailable"); }
   await run(repo, ['worktree', 'add', '--no-checkout', '--no-guess-remote', '--no-track', '-b', plan.branch, plan.target, plan.revision], { timeout: 30000 });
   // The common config can change while worktree registration is awaited.
   // Re-read the copy's actual config before checkout, not the earlier list.
   const copy = await inspect(plan.target);
-  if (copy.revision !== plan.revision) throw failure('副本提交已变化，未开始检出；登记的分支和路径保留。');
+  if (copy.revision !== plan.revision) throw failure("error.gitCopyRevisionChanged");
   await checkout(copy, plan);
   let cwd;
   try { cwd = fs.realpathSync(plan.cwd); }
-  catch { throw failure('副本内子目录不可用；分支和完整路径保留，未启动原生会话。'); }
-  if ((cwd !== plan.target && !cwd.startsWith(plan.target + path.sep)) || !fs.statSync(cwd).isDirectory()) throw failure('子目录离开了新副本，未启动原生会话；分支和路径保留。');
+  catch { throw failure("error.gitCopySubdirectoryUnavailable"); }
+  if ((cwd !== plan.target && !cwd.startsWith(plan.target + path.sep)) || !fs.statSync(cwd).isDirectory()) throw failure("error.gitCopySubdirectoryEscaped");
   return cwd;
 }
 module.exports = { CAPABILITY, available, preview, validate, prepare };

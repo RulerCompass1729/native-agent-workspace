@@ -6,6 +6,7 @@ const spaces = require('../collaboration-spaces.cjs');
 const root = path.resolve(__dirname, '../..');
 const source = file => fs.readFileSync(path.join(root, file), 'utf8');
 const renderer = source('app/renderer/renderer.js');
+const ui = { displayText: (raw, metadata) => require('../ui-locale.js').displayText('zh', raw, metadata) };
 function actualFunction(text, name, next, context) {
   const start = text.indexOf(`function ${name}(`), end = text.indexOf(`function ${next}(`, start + 1);
   assert.ok(start >= 0 && end > start); return vm.runInNewContext(text.slice(start, end) + `;${name}`, context);
@@ -23,7 +24,7 @@ test('the actual reading timeline keeps source blocks before C activity, resolve
 });
 test('an imported original author is not silently renamed when the same native session has a new current name', () => {
   const state = { sessions: [{ id: 's', name: 'Current name', nativeId: 'same-native' }] };
-  const label = actualFunction(renderer, 'roomMessageLabel', 'timeline', { state });
+  const label = actualFunction(renderer, 'roomMessageLabel', 'timeline', { state, ui });
   assert.equal(label({ id: 'imported', role: 'assistant', snapshotBatch: 'batch', sessionId: 's', name: 'Original author' }), 'Original author');
 });
 test('duplicate source-space and historical author names retain distinct visible identity references', () => {
@@ -31,7 +32,7 @@ test('duplicate source-space and historical author names retain distinct visible
   const sourceLabel = actualFunction(renderer, 'mergeSourceLabel', 'mergeCheckbox', {});
   assert.equal(sourceLabel(rooms[0], rooms), 'Same space · aaaaaaaa'); assert.equal(sourceLabel(rooms[1], rooms), 'Same space · bbbbbbbb');
   const rows = rooms.map((room, index) => ({ id: `row-${index}`, role: 'assistant', sessionId: room.id, name: 'Original same author', snapshotBatch: 'batch' }));
-  const label = actualFunction(renderer, 'roomMessageLabel', 'timeline', { state: { sessions: [], room: { messages: rows } } });
+  const label = actualFunction(renderer, 'roomMessageLabel', 'timeline', { state: { sessions: [], room: { messages: rows } }, ui });
   assert.notEqual(label(rows[0]), label(rows[1]));
 });
 test('browser selection uses the same completed-shared-record contract as the backend, including pending acceptance and gaps', () => {

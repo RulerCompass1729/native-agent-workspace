@@ -1,6 +1,6 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm');
-const spaces = require('../collaboration-spaces.cjs');
+const spaces = require('../collaboration-spaces.cjs'), { uiError } = require('../ui-errors.cjs');
 const source = fs.readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
 const html = fs.readFileSync(require.resolve('../renderer/index.html'), 'utf8');
 function fixture() {
@@ -16,7 +16,7 @@ function fixture() {
     return elements.get(id);
   };
   const context = vm.createContext({ $, selected: 'a', spaceId: 'shared', selectionRevision: 1, disconnected: false,
-    window: { nativeWorkspaceSpaces: spaces },
+    window: { nativeWorkspaceSpaces: spaces }, uiError,
     sessionMenu: null, roomMenu: null, contentMenu: null, renameTarget: null, disposers: [],
     document: { addEventListener(type, listener, capture) { listeners.set(type, { listener, capture }); }, removeEventListener(type, listener, capture) { const entry = listeners.get(type); if (entry?.listener === listener && entry.capture === capture) listeners.delete(type); }, querySelector() { return $('terminal-display-dialog').open ? $('terminal-display-dialog') : null; } },
     record: spaces.withMembership({ id: 'a', nativeId: 'native-a', owner: 'window-a', archived: false, memberRevision: 0 }, 'shared', true),
@@ -148,7 +148,7 @@ for (const inDialog of [false, true]) test(`the original DSH menu host stays out
   assert.equal(menu.props.portal, !inDialog);
   // update() re-renders the same open menu with new items; after close it renders nothing.
   const next = [{ id: 'rename', label: '重命名…' }];
-  close.update(next); assert.equal(rendered.length, 2); assert.equal(rendered[1].type(rendered[1].props).props.items, next);
+  close.update(next); assert.equal(rendered.length, 2); assert.deepEqual(Array.from(rendered[1].type(rendered[1].props).props.items), next); assert.strictEqual(rendered[1].type(rendered[1].props).props.items[0], next[0]);
   close(); close(); assert.equal(closes.length, 1); assert.equal(removed.length, 1);
   close.update([]); assert.equal(rendered.length, 2);
 });

@@ -58,6 +58,34 @@ test('native explicit wake is staged durably, transfers once across backends, an
   assert.equal(source.get(a).messages.find(m => m.wake)?.wake.status, 'submitted');
   assert.equal(target.get(b).messages.find(m => m.origin === 'agent-wake').status, 'submitted');
 });
+
+test('wake display changes language through registration, acceptance and cold restore while the one native payload stays exact', async t => {
+  const locale = require('../ui-locale.js'), f = await fixture(t), body = 'RAW native message 中文\n  ';
+  await f.call(body); const row = f.source.get(f.a).messages.find(m => m.wake), intent = row.wake;
+  assert.equal(locale.displayText('en', row.text, row.uiMessage), 'Message to Receiver registered; not yet delivered.\n' + body);
+  assert.equal(locale.displayText('en', row.name, row.uiNameMessage), 'Automatic message');
+  const expected = `[Workspace message from ${intent.senderName} · ${intent.senderId} at ${new Date(intent.time).toISOString()}]\n${body}`;
+  await f.finish(); assert.equal(f.writes.length, 1); assert.equal(f.writes[0].text, expected);
+  assert.equal(locale.displayText('en', row.text, row.uiMessage), 'Automatic message to the original session: accepted by the native process.\n' + body);
+  f.start('later'); await f.call('RAW staged body 中文', 'later-call'); f.source.persist();
+  const reopened = new Workspace({ binaries: {}, close() {} }, f.root); t.after(() => reopened.close());
+  const restored = reopened.get(f.a).messages.findLast(m => m.wake);
+  assert.equal(locale.displayText('en', restored.text, restored.uiMessage), 'Delivery of the earlier automatic message is unconfirmed; it will not be resent.\nRAW staged body 中文');
+  assert.equal(restored.wake.status, 'unconfirmed'); assert.equal(f.writes.length, 1);
+});
+
+test('failed wake display retains unknown and oversized upstream reasons without changing one-shot failure state', async t => {
+  const locale = require('../ui-locale.js');
+  for (const reason of ['RAW upstream 中文 <failure>', 'LONG'.repeat(4100)]) {
+    const f = await fixture(t), body = 'RAW body 中文\n  '; await f.call(body);
+    f.source.peerRunner.transferWake = async () => { throw Error(reason); }; await f.finish();
+    const row = f.source.get(f.a).messages.find(m => m.wake);
+    assert.equal(row.text, '自动消息未确认投递；不会重发。\n' + reason + '\n' + body);
+    assert.equal(row.wake.status, 'unconfirmed'); assert.equal(f.writes.length, 0);
+    assert.equal(locale.displayText('en', row.text, row.uiMessage), reason.length <= 16000 ? 'Automatic message delivery is unconfirmed; it will not be retried.\n' + reason + '\n' + body : row.text);
+    if (reason.length > 16000) assert.equal(row.uiMessage, undefined);
+  }
+});
 test('the person pausing all follow-up handoffs on another backend invalidates both staged and late intent from the old source turn', async t => {
   const { source, target, a, b, call, finish, writes } = await fixture(t);
   await call(); target.pauseAll('你暂停了后续交接'); await finish(); assert.equal(writes.length, 0);

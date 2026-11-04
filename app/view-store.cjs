@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
@@ -62,7 +63,7 @@ function validViews(views) {
   }
   return true;
 }
-function readError() { return Object.assign(new Error('界面记录无法读取；原文件已保留，未写入空白记录。'), { code: 'NAW_VIEW_RECORD' }); }
+function readError() { return Object.assign(uiError("error.views.unreadable"), { code: 'NAW_VIEW_RECORD' }); }
 
 // A failed read is never permission to overwrite the previous recovery copies.
 class ViewStore {
@@ -84,14 +85,14 @@ class ViewStore {
   }
   save(views) {
     if (!this.loaded) throw readError();
-    if (!validViews(views)) throw Error('界面记录格式异常，未覆盖已保存的草稿。');
+    if (!validViews(views)) throw uiError("error.views.invalidFormat");
     const temporary = `${this.file}.${randomUUID()}.tmp`; let fd;
     try {
       fd = fs.openSync(temporary, 'wx', 0o600);
       fs.writeFileSync(fd, JSON.stringify(views)); fs.fsyncSync(fd);
       fs.closeSync(fd); fd = undefined;
       fs.renameSync(temporary, this.file);
-    } catch { throw Error('界面与草稿副本未能保存，请检查磁盘空间与本机数据权限。'); }
+    } catch { throw uiError("error.views.saveFailed"); }
     finally {
       if (fd !== undefined) fs.closeSync(fd);
       try { fs.unlinkSync(temporary); } catch {}

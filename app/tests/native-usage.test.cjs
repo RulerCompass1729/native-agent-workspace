@@ -26,3 +26,10 @@ test('Codex cumulative usage is not summed with cache or called context occupanc
   assert.ok(!text.includes('%') && !text.includes('$') && !text.includes('1,700,000'));
   assert.match(text, /金额与额度窗口：此接口未报告/);
 });
+
+test('English usage preserves native counts, missing data and the distinction from actual billing', () => {
+  const usage = { source: 'claude-session-usage', context: { window: 200000, tokens: 0, percent: 0 }, costUsd: 0.000048, rateLimits: [{ kind: 'five_hour', percentUsed: 12.5, resetsAt: '2026-10-30T06:00:00.000Z' }], reportedAt: 1000 };
+  const before = structuredClone(usage), text = usageLines('claude', usage, 'en').join('\n');
+  assert.match(text, /Context: 0 \/ 200,000 tokens · 0%/); assert.match(text, /<\$0.0001; not the actual account bill/); assert.match(text, /Native 5-hour limit window: 12.5% used/);
+  assert.deepEqual(usage, before); assert.match(usageLines('codex', null, 'en')[0], /does not mean zero/);
+});

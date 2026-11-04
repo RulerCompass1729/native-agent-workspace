@@ -1,3 +1,4 @@
+const { uiError, uiNotice } = require('./ui-errors.cjs');
 // The native processes belong here, never to an Electron window or renderer.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -8,6 +9,7 @@ const { Workspace } = require('./workspace.cjs');
 const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED } = require('./peer-handoffs.cjs');
 const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./service-transport.cjs');
 const { roomId: validRoomId, isMember, membershipRevision } = require('./collaboration-spaces.cjs');
+const { displayMessage } = require('./ui-locale.js');
 const gitWorktree = require('./git-worktree.cjs');
 
 async function main() {
@@ -46,23 +48,23 @@ async function main() {
   workspace.on('progress', data => broadcast('progress', data));
   let shuttingDown = false;
   const dispatch = async (owner, method, args, client, roomId = 'shared', scoped = false) => {
-    if (shuttingDown) throw new Error('后台正在关闭；操作未执行，请重新连接。');
+    if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
     switch (method) {
       case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'collaborationSpacesV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
-        if (roomId !== 'shared' || args.length !== 1) throw Error('无效快照导入请求。');
+        if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
       }
       case 'spaceAction': {
         const [space, action, values, expected] = args, bounds = { join: 3, forward: 4, queueShared: 4, steerShared: 5, run: 7, pause: 0, clearSharedHistory: 0 };
-        if (roomId !== 'shared' || !validRoomId(space) || !Object.hasOwn(bounds, action) || !Array.isArray(values) || values.length > bounds[action]) throw Error('无效协作空间操作。');
+        if (roomId !== 'shared' || !validRoomId(space) || !Object.hasOwn(bounds, action) || !Array.isArray(values) || values.length > bounds[action]) throw uiError("error.invalidSpaceAction");
         const ids = action === 'run' ? values[0] : ['forward', 'queueShared', 'steerShared'].includes(action) ? [values[0]] : [];
-        if (!Array.isArray(ids) || ids.some(id => { const s = workspace.get(id); return !expected || !isMember(s, space) || expected[id] !== membershipRevision(s, space); })) throw Error('空间成员关系已变化；没有派发，请重新核对。');
+        if (!Array.isArray(ids) || ids.some(id => { const s = workspace.get(id); return !expected || !isMember(s, space) || expected[id] !== membershipRevision(s, space); })) throw uiError("error.spaceMembershipChangedNoDispatch");
         return dispatch(owner, action, values, client, space, true);
       }
       case 'mobileRead': return workspace.mobileRead(args[0]);
       case 'mobileSend':
-      case 'mobileAnswer': throw Error('手机输入需要先预备并核对旧接力已暂停；没有派发。');
+      case 'mobileAnswer': throw uiError("error.mobileInputNeedsPreparation");
       case 'mobilePrepareSend': return workspace.mobilePrepare(args[0], args[1], 'send', client);
       case 'mobilePrepareAnswer': return workspace.mobilePrepare(args[0], args[1], 'answer', client);
       case 'mobileCommitSend': return workspace.mobileCommit(args[0], args[1], 'send', client);
@@ -86,15 +88,15 @@ async function main() {
       case 'gitWorktreePreview': return gitWorktree.preview(args[0], args[1], args[2]);
       case 'create': return workspace.create(args[0].provider, args[0].cwd, owner, args[0].name, args[0].view, { fork: args[0].fork, skipPermissions: args[0].skipPermissions, newDirectory: args[0].newDirectory, gitWorktree: args[0].gitWorktree });
       case 'join': {
-        if (typeof args[1] !== 'boolean') throw new Error('无效成员操作。');
+        if (typeof args[1] !== 'boolean') throw uiError("error.invalidMemberAction");
         const s = workspace.get(args[0]), proof = args[2];
-        if (proof !== undefined && (!proof || proof.nativeId !== s.nativeId || proof.revision !== membershipRevision(s, roomId))) throw Error('成员关系或原生身份已变化；撤销没有执行。');
+        if (proof !== undefined && (!proof || proof.nativeId !== s.nativeId || proof.revision !== membershipRevision(s, roomId))) throw uiError("error.membershipIdentityChangedNoRevocation");
         return workspace.join(args[0], args[1], roomId);
       }
       case 'claim': return workspace.claim(args[0], owner, args[1]);
       case 'send': {
         workspace.assertNativeContext(args[0], args[2]);
-        if (/^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw new Error('原生命令请在终端执行；草稿已保留。');
+        if (/^\/[a-z-]+(?:\s|$)/i.test(args[1])) throw uiError("error.nativeCommandUseTerminal");
         const nativeId = workspace.get(args[0]).nativeId;
         const tag = await workspace.send(args[0], args[1], owner);
         const current = workspace.get(args[0]);
@@ -123,7 +125,7 @@ async function main() {
       case 'resize': return workspace.resize(args[0], owner, args[1], args[2]);
       case 'interrupt': return workspace.interrupt(args[0], owner);
       case 'run': {
-        if (!Array.isArray(args[0])) throw Error('无效会话选择。');
+        if (!Array.isArray(args[0])) throw uiError("error.invalidSessionSelection");
         for (const id of args[0]) workspace.assertNativeContext(id, args[5]?.[id]);
         const contexts = args[0].map(id => [id, workspace.get(id).nativeId]);
         await workspace.startRun(args[0], args[1], args[2], args[3], args[4], args[5], args[6], roomId);
@@ -133,8 +135,8 @@ async function main() {
         if (!scoped || (peerRunner.run?.roomId || 'shared') === roomId) await peerRunner.pause();
         // Only the person's explicit pause (and a backend upgrade) withdraws every staged wake;
         // the implicit pause before ordinary input to another session does not.
-        if (!scoped) return args[0]?.withdrawWakes === true ? workspace.pauseAll('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。') : workspace.pause('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。');
-        return workspace.pauseRoom(roomId, '你暂停了这个空间的后续交接；已接收的原生工作保留。');
+        if (!scoped) return args[0]?.withdrawWakes === true ? workspace.pauseAll('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。', uiNotice('notice.run.humanPaused').uiMessage) : workspace.pause('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。', undefined, false, uiNotice('notice.run.humanPaused').uiMessage);
+        return workspace.pauseRoom(roomId, '你暂停了这个空间的后续交接；已接收的原生工作保留。', uiNotice('notice.run.humanSpacePaused').uiMessage);
       case 'forward': {
         workspace.assertNativeContext(args[0], args[2]);
         const nativeId = workspace.get(args[0]).nativeId;
@@ -149,11 +151,11 @@ async function main() {
       case 'clearSharedHistory': return workspace.rooms.has(roomId) ? workspace.clearSharedHistory(roomId) : undefined;
       case 'forget': return workspace.forget(args[0]);
       case 'shutdown':
-        if (workspace.pendingNativeImports) throw new Error('正在接入所选原生会话，请等待连接结果后再关闭后台。');
-        if ([...workspace.sessions.values()].some(s => !['ended', 'background'].includes(s.state))) throw new Error('请先结束各原生会话，再关闭运行服务。');
+        if (workspace.pendingNativeImports) throw uiError("error.nativeImportPendingBackendClose");
+        if ([...workspace.sessions.values()].some(s => !['ended', 'background'].includes(s.state))) throw uiError("error.endNativeSessionsBeforeBackend");
         shuttingDown = true;
         setTimeout(shutdown, 100); return true;
-      default: throw new Error('不支持的本地操作。');
+      default: throw uiError("error.unsupportedLocalAction");
     }
   };
   const server = net.createServer(client => {
@@ -167,7 +169,7 @@ async function main() {
         authenticated = true; owner = request.owner; clients.add(client); clearTimeout(authTimer); send(client, { ready: true }); return;
       }
       if (!Array.isArray(request.args) || request.args.length > (request.method === 'run' ? 7 : 5) || !Number.isInteger(request.id)) { client.destroy(); return; }
-      Promise.resolve().then(() => dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。' }));
+      Promise.resolve().then(() => dispatch(owner, request.method, request.args, client)).then(value => send(client, { id: request.id, ok: true, value }), error => send(client, { id: request.id, ok: false, error: error.message || '操作未完成。', uiMessage: displayMessage(error.uiMessage) }));
     });
     client.on('close', () => { clearTimeout(authTimer); clients.delete(client); writers.delete(client); workspace.peerLeases.disconnected(client); if (mobileCapabilities.length) workspace.mobileDisconnected(client); if (!shuttingDown) workspace.release(owner); });
   });

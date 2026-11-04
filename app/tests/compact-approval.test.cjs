@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../renderer/renderer.js'),'utf8');
 const start=source.indexOf('function nativeApprovalPreview('),end=source.indexOf('function renderNativeOnlyApproval(',start);
-const helpers=vm.runInNewContext(start>=0&&end>start?source.slice(start,end)+';({nativeApprovalPreview,nativeApprovalExcerpt,nativeApprovalChangeExcerpts})':'({})');
+const helpers=vm.runInNewContext(start>=0&&end>start?source.slice(start,end)+';({nativeApprovalPreview,nativeApprovalExcerpt,nativeApprovalChangeExcerpts})':'({})', { uiText: (key,params)=>require('../ui-locale.js').format('zh',key,params) });
 const preview=r=>JSON.parse(JSON.stringify(helpers.nativeApprovalPreview(r)));
 test('native Edit fields produce literal before/after previews and preserve the exact original input',()=>{
  const input=' {"file_path":"notes.txt","old_string":"old\\n  literal","new_string":"new\\n  literal","replace_all":true,"other":7} ';

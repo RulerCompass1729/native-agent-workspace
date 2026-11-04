@@ -5,7 +5,8 @@ const { randomUUID } = require('node:crypto');
 const { ensureService, connect, connectService, continuationStatus, continueService } = require('./service-client.cjs');
 const backendSwitch = require('./backend-switch.cjs');
 const { startDsh, resetUiAuthentication } = require('./dsh-host.cjs');
-const { startupMessage } = require('./ui-errors.cjs');
+const { startupMessage, uiError } = require('./ui-errors.cjs');
+const uiLocale = require('./ui-locale.js');
 const { preflight, appBuildInfo } = require('./preflight.cjs');
 const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
@@ -48,6 +49,9 @@ if (testRequested) {
   } catch { /* An unverifiable profile must never fall through to foreground. */ }
   if (!backgroundTest) { console.error('Invalid isolated headed-test parent/profile; no window opened.'); process.exit(1); }
 }
+// NAW_TEST_VISIBLE=1 keeps every isolation check but shows the test window
+// without taking focus, so a person can watch it close and reopen.
+const visibleTest = backgroundTest && process.env.NAW_TEST_VISIBLE === '1';
 // A normal background relaunch restores the user's real state without showing
 // a window in their current Space. The user's later activation restores normal
 // Dock behavior and reveals the restored window.
@@ -65,13 +69,61 @@ const toolWaitNotifications = new Map();
 const capacityNotifications = new Map();
 let entry, dsh;
 const trusted = url => { try { const parsed = new URL(url); return parsed.origin === dsh.origin && parsed.pathname === '/'; } catch { return false; } };
-let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, views = [], quitting = false;
+let dataDir, sessionLabels, roomState, viewStore, viewStorageWarning = null, viewStorageWarningUiMessage = null, views = [], quitting = false;
 let startupWindow, starting = false, wired = false;
-let applicationBuild;
+let applicationBuild, applicationMenu;
 const startupFile = path.join(__dirname, 'startup.html');
-function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, show: !backgroundTest && !backgroundLaunch, focusable: !backgroundTest, minWidth: Math.min(850, view.bounds?.width || 850), minHeight: Math.min(600, view.bounds?.height || 600), backgroundColor: '#f8f8f5', webPreferences: { ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
+let localeSnapshot = uiLocale.snapshot({ languages: [], preference: null });
+let localeProvisional, localeWarning = null, localeHostGeneration = 0;
+const displayLanguage = () => localeProvisional || uiLocale.language(localeSnapshot);
+const displayText = (key, params) => uiLocale.format(displayLanguage(), key, params);
+function broadcastLocale() {
+  const targets = new Set([startupWindow, ...[...windows.values()].map(c => c.win)]);
+  for (const win of targets) if (win && !win.isDestroyed()) win.webContents.send('workspace:locale', { ...localeSnapshot, startupLanguage: localeProvisional, warning: localeWarning });
+}
+async function readStartupLocale() {
+  let languages = localeSnapshot.languages;
+  try { const value = app.getPreferredSystemLanguages(); if (Array.isArray(value) && value.every(item => typeof item === 'string')) languages = value; } catch {}
+  let profile;
+  try {
+    const { readLocaleProfile } = await import('./ui-locale-profile.mjs');
+    profile = await readLocaleProfile({ dataDir: path.join(app.getPath('userData'), 'dsh'), localeModule: require.resolve('@deepseek-ai/dsh-client-locale') });
+  } catch { profile = { warning: 'unavailable' }; }
+  localeSnapshot = uiLocale.snapshot({ languages, preference: profile.warning ? localeSnapshot.preference : profile.preference }, localeSnapshot);
+  localeProvisional = profile.legacyChinese ? 'zh' : undefined;
+  localeWarning = profile.warning || null;
+  updateApplicationMenu(); broadcastLocale();
+}
+function acceptLocale(value, generation) {
+  if (generation !== localeHostGeneration || quitting) return;
+  if (Object.hasOwn(value, 'preference') && uiLocale.validPreference(value.preference)) {
+    localeSnapshot = uiLocale.snapshot({ languages: localeSnapshot.languages, preference: value.preference });
+    localeProvisional = undefined;
+  }
+  localeWarning = ['unavailable', 'migrationNotSaved'].includes(value.warning) ? value.warning : null;
+  updateApplicationMenu(); broadcastLocale();
+}
+function workspaceMenuReady() { return Boolean(wired && dsh && entry && dataDir && viewStore?.loaded && !starting && !quitting && !startupWindow); }
+function updateApplicationMenu() {
+  const text = key => displayText(key, { app: app.name });
+  const create = !applicationMenu;
+  const menu = applicationMenu ||= Menu.buildFromTemplate([
+    { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { id: 'naw-menu-quit', label: text('menu.quit'), accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }] },
+    { id: 'naw-menu-file', label: text('menu.file'), submenu: [{ id: 'naw-menu-new-window', label: text('menu.newWindow'), accelerator: 'CmdOrCtrl+Shift+N', click: () => { if (workspaceMenuReady()) return openWindow(); } }, { id: 'naw-menu-new-session', label: text('menu.newSession'), accelerator: 'CmdOrCtrl+N', click: () => { if (!workspaceMenuReady()) return; const win = BrowserWindow.getFocusedWindow(); if (win && windows.get(win.webContents.id)?.win === win) win.webContents.send('workspace:new'); } }, { role: 'close' }] },
+    { role: 'editMenu' }, { id: 'naw-menu-view', label: text('menu.view'), submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' },
+  ]);
+  // Keep Electron's generated actions/accelerators and native window/Services
+  // contents. Relabel only known application-owned standard role labels.
+  const roles = { about: 'about', hide: 'hide', hideothers: 'hideOthers', unhide: 'unhide', close: 'close', editmenu: 'edit', undo: 'undo', redo: 'redo', cut: 'cut', copy: 'copy', paste: 'paste', pasteandmatchstyle: 'pasteAndMatchStyle', delete: 'delete', selectall: 'selectAll', reload: 'reload', forcereload: 'forceReload', resetzoom: 'resetZoom', zoomin: 'zoomIn', zoomout: 'zoomOut', togglefullscreen: 'togglefullscreen', windowmenu: 'window', minimize: 'minimize', zoom: 'zoom', front: 'front', services: 'services', speech: 'speech', startspeaking: 'startSpeaking', stopspeaking: 'stopSpeaking' };
+  const own = { 'naw-menu-quit': 'quit', 'naw-menu-file': 'file', 'naw-menu-new-window': 'newWindow', 'naw-menu-new-session': 'newSession', 'naw-menu-view': 'view' };
+  const relabel = current => { for (const item of current.items || []) { const role = item.role?.toLowerCase(); const key = Object.hasOwn(own, item.id) ? own[item.id] : Object.hasOwn(roles, role) ? roles[role] : undefined; if (key) item.label = text(`menu.${key}`); if (['naw-menu-new-window', 'naw-menu-new-session'].includes(item.id)) item.enabled = workspaceMenuReady(); if (item.submenu) relabel(item.submenu); } };
+  relabel(menu); if (create) Menu.setApplicationMenu(menu);
+}
+
+function windowOptions(view = {}) { return { title: 'Native Agent Workspace', width: 1240, height: 850, ...view.bounds, show: !backgroundTest && !backgroundLaunch, focusable: !backgroundTest, minWidth: Math.min(850, view.bounds?.width || 850), minHeight: Math.min(600, view.bounds?.height || 600), backgroundColor: '#f8f8f5', webPreferences: { additionalArguments: [`--naw-ui-locale=${JSON.stringify({ ...localeSnapshot, startupLanguage: localeProvisional })}`], ...(backgroundTest ? { backgroundThrottling: false } : {}), preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false } }; }
 function createWindow(view) {
   const win = new BrowserWindow(windowOptions(view));
+  if (visibleTest) win.once('ready-to-show', () => win.showInactive());
   return win;
 }
 function notifyToolWait(snapshot, win) {
@@ -88,7 +140,7 @@ function notifyToolWait(snapshot, win) {
     const record = { key, time: notice.createdAt }; toolWaitNotifications.set(s.id, record);
     try {
       if (!Notification.isSupported()) continue;
-      const notification = record.notification = new Notification({ title: 'NAW · 工具等待提醒', body: '原生工具较长时间未返回。请检查原生界面或系统权限提示；任务没有自动重发。' });
+      const notification = record.notification = new Notification({ title: displayText('os.toolWaitTitle'), body: displayText('os.toolWaitBody') });
       // A notification is an observation of that past turn, never a session-only
       // interrupt action that could accidentally target its replacement.
       notification.once('click', () => { if (!win.isDestroyed()) win.show(); else if (!quitting) focusOrOpen(); });
@@ -117,7 +169,7 @@ function notifyCapacity(snapshot, win) {
     let notification;
     try {
       if (!Notification.isSupported()) continue;
-      notification = new Notification({ title: 'NAW · 自动继续已达上限', body: '会话已自动继续 3 次，仍需处理。请在侧栏检查标记的会话。' });
+      notification = new Notification({ title: displayText('os.capacityTitle'), body: displayText('os.capacityBody') });
       notices.active.add(notification);
       notification.once('close', () => notices.active.delete(notification));
       notification.once('click', () => { if (!win.isDestroyed()) win.show(); else if (!quitting) focusOrOpen(); });
@@ -137,25 +189,25 @@ function bindClient(context) {
       for (const id of (method === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]])) roomState.assertAvailable(id, ['forward', 'queueShared', 'steerShared', 'run'].includes(method), roomId);
     }
   };
-  const send = (channel, data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, data); };
+  const send = (channel, ...data) => { if (context.client === client && !win.isDestroyed()) win.webContents.send(channel, ...data); };
   client.on('state', data => { if (context.client === client && !win.isDestroyed()) {
     const display = displayState(data, context);
     send('workspace:state', display); notifyToolWait(data, win); notifyCapacity(display, win);
   } });
   client.on('terminal', data => send('workspace:terminal', data));
   client.on('progress', data => send('workspace:progress', data));
-  client.on('closed', () => { if (context.client === client) send('workspace:disconnected', '本地运行服务断开。输入不会自动重发，请保留当前草稿。'); });
+  client.on('closed', () => { if (context.client === client) { const notice = uiError('error.warning.serviceDisconnected'); send('workspace:disconnected', notice.message, notice.uiMessage); } });
 }
 function displayState(snapshot, context) {
   const roomId = context?.view?.spaceId || 'shared';
   const display = roomState.apply(sessionLabels.apply(submissionState(snapshot)), roomId);
-  return { ...display, sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning,
+  return { ...display, sessions: display.sessions.map(s => ({ ...s, peerIdentity: roomPeerIdentity(s, roomId), sharedActivity: s.sharedActivities?.[roomId] || (roomId === 'shared' ? s.sharedActivity : null) })), viewStorageWarning, viewStorageWarningUiMessage,
     switchEnded: endedByMove(display.sessions) };
 }
-function reportViewStorage(warning) {
+function reportViewStorage(warning, uiMessage = null) {
   if (viewStorageWarning === warning) return;
-  viewStorageWarning = warning;
-  for (const { win } of windows.values()) if (!win.isDestroyed()) win.webContents.send('workspace:view-storage', warning);
+  viewStorageWarning = warning; viewStorageWarningUiMessage = uiMessage;
+  for (const { win } of windows.values()) if (!win.isDestroyed()) win.webContents.send('workspace:view-storage', warning, uiMessage);
 }
 async function broadcastRoom() {
   await Promise.allSettled([...windows.values()].map(async context => {
@@ -174,12 +226,12 @@ function saveViews() {
   const resolve = finishReadingSave, reject = failReadingSave;
   readingSavePromise = finishReadingSave = failReadingSave = undefined;
   try {
-    if (!viewStore) throw Error('界面记录尚未读取，未写入空白记录。');
+    if (!viewStore) throw uiError("error.main.viewRecordUnread");
     viewStore.save(views);
     reportViewStorage(null);
     resolve?.();
   } catch (error) {
-    reportViewStorage('界面与草稿副本未能保存。窗口已保留；请检查磁盘空间或本机数据权限，再点“重试保存”。');
+    const warning = uiError('error.warning.viewSave'); reportViewStorage(warning.message, warning.uiMessage);
     reject?.(error); throw error;
   }
 }
@@ -229,7 +281,7 @@ async function openWindow(saved) {
     windows.delete(id); context.imagePreviews?.close(); context.client.close();
   });
   try { await win.loadURL(entry); await ready; }
-  catch (error) { if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error)); }
+  catch (error) { if (quitting || win.isDestroyed()) return; throw new Error(startupMessage(error, displayLanguage())); }
   finally { clearTimeout(context.readyTimer); }
   return win;
 }
@@ -257,7 +309,9 @@ function connectionUpdateOptions(client, applicationVersion, profile) {
       // Which sessions this backend holds, so a menu can name them (T-131).
       sessions: visible.map(value => ({ id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 80) : '' })),
       reason: unavailable ? '这个后台连接正在更新或已断开，原会话继续保留。' : !old ? '版本未知、较新或无法比较，不能把它当作旧后台自动更新。原连接保留。'
-        : effectiveActive ? status.reason || '原生会话尚未确认结束；原连接保留，不会自动安排重启。' : status.reason || '' });
+        : effectiveActive ? status.reason || '原生会话尚未确认结束；原连接保留，不会自动安排重启。' : status.reason || '',
+      reasonUiMessage: unavailable ? uiError('error.connection.updating').uiMessage : !old ? uiError('error.connection.versionNotOlder').uiMessage
+        : effectiveActive && !status.reason ? uiError('error.connection.nativeEndUnconfirmed').uiMessage : status.reasonUiMessage || null });
   }
   return options;
 }
@@ -272,7 +326,7 @@ function register(name, handler) {
     const context = windows.get(event.sender.id);
     if (!context || event.senderFrame !== event.sender.mainFrame || !trusted(event.senderFrame.url)) throw new Error('Unexpected IPC source');
     try { return { ok: true, value: await handler(context, ...args) }; }
-    catch (error) { return { ok: false, error: error.message || '操作未完成。' }; }
+    catch (error) { return { ok: false, error: error.message || '操作未完成。', uiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.main.operationIncomplete').uiMessage }; }
   });
 }
 async function replaceBackendSockets(key) {
@@ -340,7 +394,8 @@ async function boot() {
   await ensureService(dataDir, process.execPath);
   switchRecords = backendSwitch.readRecords(dataDir);
   if (quitting) return;
-  dsh = await startDsh(dataDir); entry = dsh.url;
+  const generation = localeHostGeneration;
+  dsh = await startDsh(dataDir, { onLocale: value => acceptLocale(value, generation) }); entry = dsh.url;
   if (quitting) { dsh.stop(); return; }
   // The fresh launch URL authenticates all restored windows after this cleanup.
   await resetUiAuthentication(session.defaultSession);
@@ -372,19 +427,19 @@ async function boot() {
   });
   register('archiveSession', async (c, id) => { try { await roomState.archiveSession(c.client, id, sessionLabels.labels.get(id)); } finally { await broadcastRoom(); } });
   register('restoreSession', async (c, id) => {
-    const state = await c.client.call('initial'); if (!state.sessions.some(s => s.id === id)) throw Error('原生会话记录不可用。');
+    const state = await c.client.call('initial'); if (!state.sessions.some(s => s.id === id)) throw uiError("error.main.nativeRecordsUnavailable");
     roomState.restoreSession(id); await broadcastRoom();
   });
   register('archiveRoom', async c => { try { await roomState.archiveRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('restoreRoom', async c => { try { await roomState.restoreRoom(c.client, sessionLabels.labels); } finally { await broadcastRoom(); } });
   register('spaceCreate', async (_c, name) => { const id = roomState.create(name); await broadcastRoom(); return id; });
   register('spaceMerge', async (c, action, value) => {
-    if (!value || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw Error('无效合并请求。');
+    if (!value || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw uiError("error.main.invalidMergeRequest");
     if (action === 'preview') return roomState.mergePreview(c.client, value);
-    if (!validRoomId(value.operationId) || value.operationId === 'shared' || Object.keys(value).some(key => !['operationId', 'binding'].includes(key))) throw Error('合并记录无法核对。');
+    if (!validRoomId(value.operationId) || value.operationId === 'shared' || Object.keys(value).some(key => !['operationId', 'binding'].includes(key))) throw uiError("error.main.mergeRecordUnverifiable");
     if (action === 'discard') { roomState.discardMergePreview(value.operationId); return; }
     if (action === 'status') return roomState.mergeStatus(c.client, value.operationId);
-    if (!['commit', 'recover', 'undo'].includes(action) || !/^[a-f0-9]{64}$/u.test(value.binding)) throw Error('无效合并确认。');
+    if (!['commit', 'recover', 'undo'].includes(action) || !/^[a-f0-9]{64}$/u.test(value.binding)) throw uiError("error.main.invalidMergeConfirmation");
     try {
       const targetId = roomState.mergeRecord(value.operationId)?.id;
       const keepDraft = hasSavedSpaceDraft(views, targetId);
@@ -393,7 +448,7 @@ async function boot() {
     } finally { await broadcastRoom(); }
   });
   register('spaceAction', async (c, roomId, action, args = []) => {
-    if (!validRoomId(roomId) || !Array.isArray(args) || args.length > 8) throw Error('无效协作空间操作。');
+    if (!validRoomId(roomId) || !Array.isArray(args) || args.length > 8) throw uiError("error.invalidSpaceAction");
     roomState.metadata(roomId); // Never reinterpret a missing space as shared.
     if (action === 'join') {
       try { return await roomState.membership(c.client, args[0], args[1], sessionLabels.labels.get(args[0]), roomId, args[2]); }
@@ -412,12 +467,12 @@ async function boot() {
         // A clear every backend would refuse is refused before the person is asked; the client checks again after (T-149).
         const refusal = await c.client.clearSharedHistoryProblem(roomId); if (refusal) throw Error(refusal);
         const value = roomState.metadata(roomId), revision = value.revision;
-        const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: `清除「${value.name}」的共享记录？`, detail: '仅清除这个空间的共享消息、成员时间线和笔记。文件引用和原生会话保留，已经收到的内容无法撤回。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
+        const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: displayText('os.clearSpaceTitle', { name: value.name }), detail: displayText('os.clearSpaceDetail'), buttons: [displayText('common.cancel'), displayText('os.clearSharedButton')], defaultId: 0, cancelId: 0 });
         if (answer.response !== 1) return false;
-        if (roomState.metadata(roomId).revision !== revision) throw Error('空间资料已变化，请重新核对后清除。');
+        if (roomState.metadata(roomId).revision !== revision) throw uiError("error.main.spaceDataChangedBeforeClear");
         roomState.writable(roomId);
         const result = await c.client.callSpace(roomId, action, []);
-        try { roomState.clear(revision, roomId); } catch (error) { throw Error(`共享消息已清除，时间线和笔记已保留。${error.message}`); }
+        try { roomState.clear(revision, roomId); } catch (error) { throw uiError("error.sharedClearedRetained", { reason: error.message }, { cause: error, param: 'reason' }); }
         await broadcastRoom();
         if (result?.imagesLeft) throw Error('共享记录已清除，但已移除会话的本机图片副本未能全部删除，请检查本机数据目录的权限。');
         return true;
@@ -425,46 +480,46 @@ async function boot() {
       if (action !== 'pause') for (const id of action === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]]) roomState.assertAvailable(id, true, roomId);
       if (action === 'run' && Array.isArray(args[0])) {
         const snapshot = sessionLabels.apply(c.client.snapshot(roomId));
-        if (args[4] && args[0].some(id => args[4][id] !== snapshot.sessions.find(s => s.id === id)?.name)) throw Error('参与者名称已变化，请重新预览任务。');
+        if (args[4] && args[0].some(id => args[4][id] !== snapshot.sessions.find(s => s.id === id)?.name)) throw uiError("error.main.participantNamesChanged");
         args[4] = Object.fromEntries(args[0].filter(id => sessionLabels.labels.has(id)).map(id => [id, sessionLabels.labels.get(id)]));
       }
       return c.client.callSpace(roomId, action, args);
-    } else throw Error('不支持的协作空间操作。');
+    } else throw uiError("error.main.unsupportedSpaceAction");
     await broadcastRoom();
   });
   register('spaceFiles', async (c, roomId, fileId) => {
-    if (!validRoomId(roomId)) throw Error('无效协作空间。');
+    if (!validRoomId(roomId)) throw uiError("error.main.invalidSpace");
     const value = roomState.metadata(roomId);
     if (fileId !== undefined) {
-      const file = value.files.find(f => f.id === fileId); if (!file) throw Error('文件引用已变化，请重新打开。');
+      const file = value.files.find(f => f.id === fileId); if (!file) throw uiError("error.main.fileReferenceChanged");
       const preview = await readPreview(file.path);
-      if (c.win.isDestroyed() || !roomState.metadata(roomId).files.some(f => f.id === fileId && f.path === file.path)) throw Error('空间文件列表已变化，未打开。');
+      if (c.win.isDestroyed() || !roomState.metadata(roomId).files.some(f => f.id === fileId && f.path === file.path)) throw uiError("error.main.spaceFileListChanged");
       c.filePreview = preview;
       return { token: preview.token, name: preview.name, text: preview.text, size: preview.bytes.length };
     }
     roomState.assertAvailable(null, true, roomId);
-    if (c.fileChoosing) throw Error('文件选择窗口已经打开。');
+    if (c.fileChoosing) throw uiError("error.main.filePickerAlreadyOpen");
     c.fileChoosing = true;
     try {
-      const result = await dialog.showOpenDialog(c.win, { title: `添加到「${value.name}」的本机文件`, filters: [{ name: '文本材料', extensions: textExtensions }], properties: ['openFile', 'multiSelections', 'dontAddToRecent'] });
+      const result = await dialog.showOpenDialog(c.win, { title: displayText('os.spaceFileTitle', { name: value.name }), filters: [{ name: displayText('os.textFiles'), extensions: textExtensions }], properties: ['openFile', 'multiSelections', 'dontAddToRecent'] });
       if (result.canceled || c.win.isDestroyed()) return false;
       for (const file of result.filePaths) await readPreview(file);
       roomState.assertAvailable(null, true, roomId); roomState.addFiles(result.filePaths, roomId); await broadcastRoom(); return true;
     } finally { c.fileChoosing = false; }
   });
   register('gitWorktreePreview', async (c, selected, nonce, relative) => {
-    if (selected !== c.worktreeSource) throw Error('请先选择要复制的仓库目录。');
+    if (selected !== c.worktreeSource) throw uiError("error.main.selectRepositoryFirst");
     const revision = c.worktreePreviewRevision = (c.worktreePreviewRevision || 0) + 1;
     c.worktreePlan = null;
     const plan = await c.client.call('gitWorktreePreview', selected, nonce, relative);
-    if (c.win.isDestroyed() || c.worktreeSource !== selected || c.worktreePreviewRevision !== revision) throw Error('仓库预览已变化，未准备工作副本。');
+    if (c.win.isDestroyed() || c.worktreeSource !== selected || c.worktreePreviewRevision !== revision) throw uiError("error.main.repositoryPreviewChanged");
     c.worktreePlan = plan; return plan;
   });
   register('create', async (c, ...args) => {
     assertNativeCreation(await c.client.call('initial'));
     if (args[0]?.gitWorktree != null) {
       const requested = args[0].gitWorktree, plan = c.worktreePlan;
-      if (!plan || Object.keys(requested).length !== Object.keys(plan).length || Object.keys(plan).some(key => requested[key] !== plan[key])) throw Error('Git 工作副本预览已失效，请重新选择；未启动会话。');
+      if (!plan || Object.keys(requested).length !== Object.keys(plan).length || Object.keys(plan).some(key => requested[key] !== plan[key])) throw uiError("error.main.worktreePreviewExpired");
       c.worktreePlan = null;
     }
     return c.client.call('create', ...args);
@@ -473,7 +528,7 @@ async function boot() {
   register('importHistory', (c, nativeId, options) => c.client.call('importHistory', nativeId, options));
   register('rename', async (c, id, name) => {
     const snapshot = await c.client.call('initial');
-    if (!snapshot.sessions.some(s => s.id === id)) throw new Error('找不到这个会话，名称未更改。');
+    if (!snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.renameSessionMissing");
     const saved = sessionLabels.set(id, name);
     broadcastName(id, saved);
     return saved;
@@ -493,7 +548,7 @@ async function boot() {
     if (method === 'run' && Array.isArray(args[0])) {
       if (args[4]) {
         const snapshot = sessionLabels.apply(c.client.snapshot());
-        if (args[0].some(id => args[4][id] !== snapshot.sessions.find(s => s.id === id)?.name)) throw Error('参与者名称已变化，请重新预览任务。');
+        if (args[0].some(id => args[4][id] !== snapshot.sessions.find(s => s.id === id)?.name)) throw uiError("error.main.participantNamesChanged");
       }
       args[4] = Object.fromEntries(args[0].filter(id => sessionLabels.labels.has(id)).map(id => [id, sessionLabels.labels.get(id)]));
     }
@@ -512,10 +567,10 @@ async function boot() {
   });
   register('preflight', () => preflight());
   register('runtimeLocation', async (c, key, reset = false) => {
-    if (!['claude', 'codex', 'python3'].includes(key) || typeof reset !== 'boolean') throw Error('未知程序设置。');
+    if (!['claude', 'codex', 'python3'].includes(key) || typeof reset !== 'boolean') throw uiError("error.main.unknownProgramSetting");
     if (reset) setLocation(process.env.NAW_RUNTIME_CONFIG, key, null);
     else {
-      const result = await dialog.showOpenDialog(c.win, { title: '选择已安装的原生程序', buttonLabel: '使用这个程序', properties: ['openFile', 'showHiddenFiles'] });
+      const result = await dialog.showOpenDialog(c.win, { title: displayText('os.chooseProgram'), buttonLabel: displayText('os.useProgram'), properties: ['openFile', 'showHiddenFiles'] });
       if (!result.canceled && result.filePaths.length === 1) setLocation(process.env.NAW_RUNTIME_CONFIG, key, result.filePaths[0]);
     }
     return preflight();
@@ -524,19 +579,19 @@ async function boot() {
   register('quitService', async c => { await c.client.call('shutdown'); app.quit(); });
   register('clearSharedHistory', async c => {
     const state = await c.client.call('initial');
-    if (state.room.run?.pausePending || state.room.run?.pauseUnconfirmed) throw Error('请先核对各后台已撤销后续交接授权，再清除共享记录。');
-    const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: '清除共同工作记录？', detail: '清除本应用里的共享消息、成员时间线和共享笔记，并停止尚未完成的分享回写。名称与各个原生会话保留，不能撤回其他 agent 已收到的内容。正在执行的原生任务不会因此取消。', buttons: ['取消', '清除共享记录'], defaultId: 0, cancelId: 0 });
+    if (state.room.run?.pausePending || state.room.run?.pauseUnconfirmed) throw uiError("error.main.clearNeedsLeaseRevocation");
+    const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: displayText('os.clearSharedTitle'), detail: displayText('os.clearSharedDetail'), buttons: [displayText('common.cancel'), displayText('os.clearSharedButton')], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
       const revision = roomState.value.revision;
       const result = await c.client.call('clearSharedHistory');
-      try { roomState.clear(revision); } catch (error) { throw Error(`共享消息已清除，时间线和笔记已保留。${error.message}`); }
+      try { roomState.clear(revision); } catch (error) { throw uiError("error.sharedClearedRetained", { reason: error.message }, { cause: error, param: 'reason' }); }
       if (result?.imagesLeft) { await broadcastRoom(); throw Error('共享记录已清除，但已移除会话的本机图片副本未能全部删除，请检查本机数据目录的权限。'); }
       await broadcastRoom(); return true;
     }
   });
   register('draft', async (c, id, text) => {
-    if (typeof text !== 'string' || text.length > 16000) throw new Error('草稿过长。');
-    if (typeof id !== 'string' || id.length > 100) throw new Error('无效会话。');
+    if (typeof text !== 'string' || text.length > 16000) throw uiError("error.main.draftTooLong");
+    if (typeof id !== 'string' || id.length > 100) throw uiError("error.main.invalidSession");
     const draft = beginDraft(c.view, id, text); saveViews();
     try { roomState.assertAvailable(id); await c.client.call('draft', id, text); }
     catch (error) {
@@ -546,7 +601,7 @@ async function boot() {
     if (acknowledgeDraft(c.view, id, draft)) saveViews();
   });
   for (const [name, operation] of [['retainDraftRecovery', retainRecovery], ['discardDraftRecovery', discardRecovery]]) register(name, (c, id, text) => {
-    if (typeof id !== 'string' || id.length > 100 || typeof text !== 'string' || text.length > 16000) throw new Error('无效草稿副本。');
+    if (typeof id !== 'string' || id.length > 100 || typeof text !== 'string' || text.length > 16000) throw uiError("error.main.invalidDraftCopy");
     const copies = operation(c.view, id, text); saveViews(); return copies;
   });
   register('reconnect', async c => {
@@ -574,11 +629,11 @@ async function boot() {
     if (!option?.switch?.ready || !same(option.switch)) throw Error('后台或会话状态已变化；没有结束任何会话，请重新核对。');
     const names = option.switch.stops.map(value => value.name).join('、');
     const answer = await dialog.showMessageBox(c.win, {
-      type: 'warning', message: `结束并更新这个后台的 ${option.switch.stops.length} 个会话？`,
-      detail: `会先正常结束：${names}，用新版后台在原记录上重开，再按原身份接回。历史、草稿、名字和协作空间都保留；接回时 NAW 不发送任何内容，也不恢复 goal。` +
-        (option.switch.endsCodex ? '\n\n这个后台里的 Codex 程序会被结束：Codex 会话的后台终端和子 agent 也会结束。' : '') +
-        (option.switch.reason ? `\n\n无法自动确认的部分：${option.switch.reason}。请先在原生终端核对：没有没发出的字，也没有在跑的后台任务；继续会结束它们。` : ''),
-      buttons: ['保留原连接', '已核对，结束并更新'], defaultId: 0, cancelId: 0,
+      type: 'warning', message: displayText('os.switchBackendTitle', { count: option.switch.stops.length }),
+      detail: displayText('os.switchBackendDetail', { names }) +
+        (option.switch.endsCodex ? '\n\n' + displayText('os.switchBackendCodex') : '') +
+        (option.switch.reason ? '\n\n' + displayText('os.switchBackendUnconfirmed', { reason: option.switch.reason }) : ''),
+      buttons: [displayText('os.keepConnection'), displayText('os.confirmSwitchBackend')], defaultId: 0, cancelId: 0,
     });
     if (answer.response !== 1) return false;
     return runBackendSwitch(c, option);
@@ -588,21 +643,21 @@ async function boot() {
     const target = c.client.route(id), status = continuationStatus(target.state, id);
     const guard = c.client.operationGuard(target), nativeId = target.state.sessions.find(record => record.id === id)?.nativeId, version = target.state.runtimeVersion;
     const matches = value => value && value.backendKey === target.key && value.nativeId === nativeId && value.version === version;
-    if (expected !== undefined && (!matches(expected) || !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option)))) throw Error('后台身份、版本或更新资格已变化；原连接保留，请重新核对。');
+    if (expected !== undefined && (!matches(expected) || !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option)))) throw uiError("error.main.backendUpdateEligibilityChanged");
     if (!status.ready) {
-      await dialog.showMessageBox(c.win, { type: 'info', message: '保留原会话，等待原生工作结束', detail: status.reason, buttons: ['知道了'] });
+      await dialog.showMessageBox(c.win, { type: 'info', message: displayText('os.keepNativeWork'), detail: uiLocale.displayText(displayLanguage(), status.reason, status.reasonUiMessage), buttons: [displayText('os.ok')] });
       return false;
     }
     const answer = await dialog.showMessageBox(c.win, {
-      type: 'warning', message: '更新这个已结束会话的连接？',
-      detail: '保留原会话身份、历史、草稿和协作关系。更新会关闭这个旧运行服务；原生后台或子任务若仍存在可能被中断，请先确认它们已结束。之后可点“继续原生会话”，不会重发旧任务，也不会重建活动团队。其他仍在工作的连接不受影响。',
-      buttons: ['保留原连接', '已核对，更新连接'], defaultId: 0, cancelId: 0,
+      type: 'warning', message: displayText('os.updateConnectionTitle'),
+      detail: displayText('os.updateConnectionDetail'),
+      buttons: [displayText('os.keepConnection'), displayText('os.confirmUpdate')], defaultId: 0, cancelId: 0,
     });
     if (answer.response !== 1) return false;
     guard(); await c.client.refresh(); guard();
     const current = c.client.route(id), record = current.state.sessions.find(value => value.id === id), fresh = continuationStatus(current.state, id);
     if (current !== target || current.state.runtimeVersion !== version || record?.nativeId !== nativeId || !fresh.ready ||
-        expected !== undefined && !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option))) throw Error('核对期间后台或原生工作已变化；原连接保留，没有更新。');
+        expected !== undefined && !connectionUpdateOptions(c.client, app.getVersion(), roomState).some(option => option.id === id && option.ready && matches(option))) throw uiError("error.main.backendChangedDuringCheck");
     const finishMaintenance = c.client.maintainService(target.key);
     try {
     const { key } = await continueService(dataDir, process.execPath, id);
@@ -615,16 +670,16 @@ async function boot() {
     const record = snapshot.sessions.find(s => s.id === id);
     const resubscribe = action === 'resume' && (record?.state === 'disconnected' || record?.transportDisconnected);
     if (action === 'resume') assertNativeCreation(snapshot, id);
-    if (resubscribe && !capabilitiesFor(snapshot, id).includes('resubscribe')) throw new Error('这个后台尚不支持重新连接；原生会话仍保留。');
-    if (record?.transportDisconnected && !capabilitiesFor(snapshot, id).includes('transportReconnect')) throw new Error('这个后台尚不支持恢复图形连接；已有终端保持原样。');
-    if (!capabilitiesFor(snapshot, id).includes(action)) throw new Error('这个会话的后台暂不支持此操作；原生会话已保留。');
+    if (resubscribe && !capabilitiesFor(snapshot, id).includes('resubscribe')) throw uiError("error.main.backendReconnectUnsupported");
+    if (record?.transportDisconnected && !capabilitiesFor(snapshot, id).includes('transportReconnect')) throw uiError("error.main.backendGuiRestoreUnsupported");
+    if (!capabilitiesFor(snapshot, id).includes(action)) throw uiError("error.main.backendActionUnsupported");
     // The explicit resume action already expresses consent. The workspace
     // still verifies identity, ownership and liveness before native resume.
     if (action === 'resume') return c.client.call(action, id);
     const answer = await dialog.showMessageBox(c.win, {
-      type: 'question', message: '移除此应用中的会话记录？',
-      detail: '移除本应用的会话副本和草稿。原生服务中的历史与共同工作中已分享的内容仍保留。',
-      buttons: ['取消', '移除记录'], defaultId: 0, cancelId: 0,
+      type: 'question', message: displayText('os.forgetTitle'),
+      detail: displayText('os.forgetDetail'),
+      buttons: [displayText('common.cancel'), displayText('os.removeRecord')], defaultId: 0, cancelId: 0,
     });
     if (answer.response === 1) {
       const result = await c.client.call(action, id);
@@ -633,23 +688,23 @@ async function boot() {
         saveViews();
         let labelsLeft = false; try { sessionLabels.remove(id); } catch { labelsLeft = true; }
         if (labelsLeft && result?.imagesLeft) throw new Error('会话记录已移除，但本地显示名和本机的图片副本未能全部清理。请检查本机数据权限与磁盘空间。');
-        if (labelsLeft) throw new Error('会话记录已移除，但本地显示名未能清理。请检查本机数据权限与磁盘空间。');
+        if (labelsLeft) throw uiError("error.main.forgottenLabelCleanupFailed");
         if (result?.imagesLeft) throw new Error('会话记录已移除，但本机的图片副本未能全部删除，请检查本机数据目录的权限。');
       }
     }
   });
   register('stop', async (c, id) => {
     const record = (await c.client.call('initial')).sessions.find(s => s.id === id);
-    if (!record) throw new Error('找不到这个会话。');
+    if (!record) throw uiError("error.sessionMissing");
     const codex = record.provider === 'codex';
     const answer = await dialog.showMessageBox(c.win, {
-      type: 'warning', message: codex ? '断开这个 Codex 会话？' : '结束这个原生会话？',
-      detail: codex ? '关闭本应用终端连接，并请求中断已知的当前回合。原生线程及后台任务可能仍在运行或缓存，确认释放前不会标记已结束。原生历史保留。' : '这会停止本应用托管的原生主进程，并等待退出确认。原生后台团队的状态仍需在原生界面确认。只关闭窗口或脱出协作不会结束它。',
-      buttons: ['保留会话', codex ? '断开连接' : '结束会话'], defaultId: 0, cancelId: 0,
+      type: 'warning', message: codex ? displayText('os.disconnectCodexTitle') : displayText('os.endNativeTitle'),
+      detail: codex ? displayText('os.disconnectCodexDetail') : displayText('os.endNativeDetail'),
+      buttons: [displayText('os.keepSession'), codex ? displayText('os.disconnect') : displayText('os.endSession')], defaultId: 0, cancelId: 0,
     });
     if (answer.response === 1) return c.client.call('stop', id);
   });
-  register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('链接类型不支持。'); return shell.openExternal(url.href); });
+  register('openExternal', (_c, href) => { const url = new URL(href); if (!['http:', 'https:'].includes(url.protocol)) throw uiError("error.main.unsupportedLinkType"); return shell.openExternal(url.href); });
   register('openMessageFile', (c, source, file, options) => openMessageFile({
     snapshot: async () => roomState.apply(await c.client.call('initial')),
     openPath: target => shell.openPath(target),
@@ -659,7 +714,7 @@ async function boot() {
     const appBuild = await (applicationBuild ||= appBuildInfo(app, dataDir));
     const display = displayState(await c.client.call('initial'), c);
     notifyCapacity(display, c.win);
-    return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, preflight: preflight() };
+    return { ...display, viewState: c.view, appVersion: app.getVersion(), appBuild, localeWarning, preflight: preflight() };
   });
   register('readingState', (c, positions, panorama) => {
     const checked = readingState(positions);
@@ -670,18 +725,18 @@ async function boot() {
     return saveReadingSoon();
   });
   register('viewState', (c, next) => {
-    if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw new Error('无效界面状态。');
-    if (next.terminalLayout !== undefined && !['hidden', 'split', 'maximized'].includes(next.terminalLayout)) throw new Error('无效终端布局。');
-    if (next.terminalSplit !== undefined && !(Number.isFinite(next.terminalSplit) && next.terminalSplit >= 0.2 && next.terminalSplit <= 0.8)) throw new Error('无效分栏宽度。');
-    if (next.roomSession !== undefined && (typeof next.roomSession !== 'string' || next.roomSession.length > 100)) throw new Error('无效协作视图。');
-    if (next.roomRecipient !== undefined && (typeof next.roomRecipient !== 'string' || next.roomRecipient.length > 100)) throw new Error('无效协作接收方。');
-    if (next.roomFilter !== undefined && (typeof next.roomFilter !== 'string' || next.roomFilter.length > 100)) throw new Error('无效成员筛选。');
+    if (!next || typeof next.selected !== 'string' || next.selected.length > 100 || !['chat', 'terminal'].includes(next.mode)) throw uiError("error.main.invalidViewState");
+    if (next.terminalLayout !== undefined && !['hidden', 'split', 'maximized'].includes(next.terminalLayout)) throw uiError("error.main.invalidTerminalLayout");
+    if (next.terminalSplit !== undefined && !(Number.isFinite(next.terminalSplit) && next.terminalSplit >= 0.2 && next.terminalSplit <= 0.8)) throw uiError("error.main.invalidColumnWidth");
+    if (next.roomSession !== undefined && (typeof next.roomSession !== 'string' || next.roomSession.length > 100)) throw uiError("error.main.invalidCollaborationView");
+    if (next.roomRecipient !== undefined && (typeof next.roomRecipient !== 'string' || next.roomRecipient.length > 100)) throw uiError("error.main.invalidCollaborationRecipient");
+    if (next.roomFilter !== undefined && (typeof next.roomFilter !== 'string' || next.roomFilter.length > 100)) throw uiError("error.main.invalidMemberFilter");
     for (const key of ['roomThread', 'roomReplyTo']) if (next[key] !== undefined) require('./room-threads.js').replyReference(next[key]);
-    if (next.roomSearch !== undefined && (typeof next.roomSearch !== 'string' || next.roomSearch.length > 1000)) throw new Error('搜索词过长。');
-    if (next.sharedDraft !== undefined && (typeof next.sharedDraft !== 'string' || next.sharedDraft.length > 16000)) throw new Error('协作草稿过长。');
-    if (next.roomMention !== undefined && next.roomMention !== null && !require('./room-mention.js').validView(next.roomMention, next.sharedDraft, next.roomRecipient)) throw new Error('无效协作提及。');
-    if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw new Error('无效终端显示设置。');
-    if (!validViews([{ ...c.view, ...next }])) throw Error('空间界面记录无效；草稿没有覆盖。');
+    if (next.roomSearch !== undefined && (typeof next.roomSearch !== 'string' || next.roomSearch.length > 1000)) throw uiError("error.main.searchTooLong");
+    if (next.sharedDraft !== undefined && (typeof next.sharedDraft !== 'string' || next.sharedDraft.length > 16000)) throw uiError("error.main.sharedDraftTooLong");
+    if (next.roomMention !== undefined && next.roomMention !== null && !require('./room-mention.js').validView(next.roomMention, next.sharedDraft, next.roomRecipient)) throw uiError("error.main.invalidMention");
+    if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw uiError("error.main.invalidTerminalDisplay");
+    if (!validViews([{ ...c.view, ...next }])) throw uiError("error.main.invalidSpaceViewRecord");
     for (const key of ['spaceId', 'sidebarView', 'sidebarCollapsedGroups', 'columnTerminalHeights', 'roomViews', 'panorama']) if (next[key] !== undefined) c.view[key] = structuredClone(next[key]);
     // Retained UI rollback must still see only the original shared draft.
     if (next.roomViews) for (const key of ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo']) next[key] = next.roomViews.shared?.[key] ?? (key === 'roomMention' ? null : '');
@@ -701,14 +756,14 @@ async function boot() {
     saveViews();
   });
   register('openLocalFile', async (c, sessionId) => {
-    if (c.fileChoosing) throw Error('文件选择窗口已经打开。');
+    if (c.fileChoosing) throw uiError("error.main.filePickerAlreadyOpen");
     c.fileChoosing = true;
     try {
       const snapshot = await c.client.call('initial');
       const record = snapshot.sessions.find(s => s.id === sessionId);
-      if (sessionId && !record) throw Error('会话已变化，请重新打开文件。');
-      const result = await dialog.showOpenDialog(c.win, { title: '查看材料或成果', defaultPath: record?.cwd || snapshot.defaultWorkspace,
-        filters: [{ name: '文本材料', extensions: textExtensions }], properties: ['openFile', 'dontAddToRecent'] });
+      if (sessionId && !record) throw uiError("error.main.sessionChangedFile");
+      const result = await dialog.showOpenDialog(c.win, { title: displayText('os.openMaterial'), defaultPath: record?.cwd || snapshot.defaultWorkspace,
+        filters: [{ name: displayText('os.textFiles'), extensions: textExtensions }], properties: ['openFile', 'dontAddToRecent'] });
       if (result.canceled || c.win.isDestroyed()) return null;
       const preview = await readPreview(result.filePaths[0]);
       if (c.win.isDestroyed()) return null;
@@ -719,31 +774,31 @@ async function boot() {
   register('closeLocalFile', (c, token) => { if (c.filePreview?.token === token) c.filePreview = null; });
   register('saveLocalFile', async (c, token) => {
     const preview = c.filePreview;
-    if (!preview || preview.token !== token || c.fileSaving) throw Error('文件预览已变化，请重新打开。');
+    if (!preview || preview.token !== token || c.fileSaving) throw uiError("error.main.filePreviewChanged");
     c.fileSaving = true;
     try {
       const ext = path.extname(preview.name);
-      const result = await dialog.showSaveDialog(c.win, { title: '保存预览的副本（不覆盖已有文件）', defaultPath: `${path.basename(preview.name, ext)}-copy${ext}`, properties: ['dontAddToRecent'] });
+      const result = await dialog.showSaveDialog(c.win, { title: displayText('os.saveCopy'), defaultPath: `${path.basename(preview.name, ext)}-copy${ext}`, properties: ['dontAddToRecent'] });
       if (result.canceled || c.win.isDestroyed()) return false;
-      if (c.filePreview !== preview) throw Error('文件预览已变化，未保存。');
+      if (c.filePreview !== preview) throw uiError("error.main.filePreviewChangedBeforeSave");
       await saveCopy(preview, result.filePath); return true;
     } finally { c.fileSaving = false; }
   });
   register('chooseFolder', async c => {
-    const result = await dialog.showOpenDialog(c.win, { title: '选择这个会话可以工作的目录', properties: ['openDirectory', 'createDirectory'] });
+    const result = await dialog.showOpenDialog(c.win, { title: displayText('os.chooseFolder'), properties: ['openDirectory', 'createDirectory'] });
     if (result.canceled || c.win.isDestroyed()) return null;
     c.worktreeSource = result.filePaths[0]; c.worktreePlan = null;
     c.worktreePreviewRevision = (c.worktreePreviewRevision || 0) + 1;
     return result.filePaths[0];
   });
-  register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw new Error('找不到会话。'); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });
-  register('copy', (_c, text) => { if (typeof text !== 'string' || text.length > 100000) throw new Error('复制内容无效。'); return clipboard.writeText(text); });
+  register('newWindow', async (c, id) => { const snapshot = await c.client.call('initial'); if (id && !snapshot.sessions.some(s => s.id === id)) throw uiError("error.main.sessionNotFound"); await openWindow({ owner: randomUUID(), selected: id || '', mode: c.view.mode, preference: c.view.preference, active: true }); });
+  register('copy', (_c, text) => { if (typeof text !== 'string' || text.length > 100000) throw uiError("error.main.invalidCopyContent"); return clipboard.writeText(text); });
   // Read only when the person presses Paste; never watch or persist clipboard content.
-  register('pasteText', async () => { const text = await clipboard.readText(); if (text.length > 65500) throw new Error('粘贴内容过长，请分段粘贴。'); return text; });
+  register('pasteText', async () => { const text = await clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return text; });
   const imageTarget = async (c, id, expectedNativeId) => {
     roomState.assertAvailable(id);
     const snapshot = await c.client.call('initial'), record = snapshot.sessions.find(s => s.id === id);
-    if (!record || !['codex', 'claude'].includes(record.provider) || record.owner !== c.view.owner || record.nativeId !== expectedNativeId || record.nativeContextPending || !record.terminalState?.alive || !['idle', 'working'].includes(record.state)) throw Error('请先连接并接管原生终端；图片没有放入。');
+    if (!record || !['codex', 'claude'].includes(record.provider) || record.owner !== c.view.owner || record.nativeId !== expectedNativeId || record.nativeContextPending || !record.terminalState?.alive || !['idle', 'working'].includes(record.state)) throw uiError("error.main.connectTerminalBeforeImage");
     return record;
   };
   register('stageImages', async (c, id, nativeId, files) => {
@@ -758,7 +813,7 @@ async function boot() {
     }
     // Text keeps the original paste path, including native permission/question
     // prompts. Only importing images requires the stricter idle/working gate.
-    const text = clipboard.readText(); if (text.length > 65500) throw Error('粘贴内容过长，请分段粘贴。'); return { text };
+    const text = clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return { text };
   });
   const imagesFor = c => c.imagePreviews ||= new ImagePreviews({ nativeImage,
     snapshot: async () => roomState.apply(await c.client.call('initial')) });
@@ -766,11 +821,7 @@ async function boot() {
   register('expandImage', (c, token) => imagesFor(c).expand(token));
   register('copyImage', (c, token) => imagesFor(c).copy(token, clipboard));
   register('releaseImage', (c, token) => c.imagePreviews?.release(token));
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { label: '退出界面（会话继续运行）', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }] },
-    { label: '文件', submenu: [{ label: '新窗口', accelerator: 'CmdOrCtrl+Shift+N', click: () => openWindow() }, { label: '新会话', accelerator: 'CmdOrCtrl+N', click: () => BrowserWindow.getFocusedWindow()?.webContents.send('workspace:new') }, { role: 'close' }] },
-    { role: 'editMenu' }, { label: '视图', submenu: [{ role: 'reload' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] }, { role: 'windowMenu' },
-  ]));
+  updateApplicationMenu();
   }
   const restore = views.filter(v => v.active);
   if (restore.length) for (const view of restore) await openWindow(view);
@@ -780,8 +831,10 @@ async function boot() {
 }
 async function start() {
   if (starting || quitting) return; starting = true;
+  localeHostGeneration++;
+  await readStartupLocale();
   if (!startupWindow || startupWindow.isDestroyed()) { startupWindow = createWindow(); await startupWindow.loadFile(startupFile); }
-  startupWindow.webContents.send('workspace:startup', { title: '正在打开你的工作空间', detail: '连接本机服务，恢复上次的界面…', retry: false });
+  startupWindow.webContents.send('workspace:startup', { kind: 'opening', title: displayText('startup.opening'), detail: displayText('startup.connecting'), retry: false });
   try {
     await boot();
     if (!backendSwitchTimer) { backendSwitchTimer = setInterval(() => autoBackendSwitch().catch(() => {}), (testRequested && Number(process.env.NAW_TEST_BACKEND_SWITCH_MS)) || 60000); backendSwitchTimer.unref?.(); }
@@ -792,8 +845,8 @@ async function start() {
     if (!quitting && (!startupWindow || startupWindow.isDestroyed())) {
       startupWindow = createWindow(); await startupWindow.loadFile(startupFile);
     }
-    if (!quitting && startupWindow && !startupWindow.isDestroyed()) startupWindow.webContents.send('workspace:startup', { title: '暂时未能打开', detail: startupMessage(error), retry: true, data: error.code === 'NAW_VIEW_RECORD' });
-  } finally { starting = false; }
+    if (!quitting && startupWindow && !startupWindow.isDestroyed()) startupWindow.webContents.send('workspace:startup', { kind: 'failed', code: uiLocale.startupCode(error.code), title: displayText('startup.failed'), detail: startupMessage(error, displayLanguage()), retry: true, data: error.code === 'NAW_VIEW_RECORD' });
+  } finally { starting = false; if (!quitting) updateApplicationMenu(); }
 }
 ipcMain.handle('workspace:retry-startup', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href) return start(); });
 ipcMain.handle('workspace:startup-data', event => { if (startupWindow?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(startupFile).href && viewStore && !viewStore.loaded) return shell.openPath(dataDir); });

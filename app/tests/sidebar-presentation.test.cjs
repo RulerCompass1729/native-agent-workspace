@@ -1,3 +1,4 @@
+const localeUI = require('./fixtures/locale-ui.cjs');
 // Ported from Codex 2's T114 (a97045a) onto main without the T-60 message catalog.
 // Runs the production renderer functions in a VM with synthetic records.
 const test = require('node:test'), assert = require('node:assert/strict');
@@ -7,10 +8,11 @@ const fleet = require('../renderer/fleet-observation.js'), collaboration = requi
 function section(start, end) { const a = source.indexOf(start), b = source.indexOf(end, a + start.length); assert.ok(a >= 0 && b > a); return source.slice(a, b); }
 const row = patch => ({ id: 'synthetic-session', nativeId: 'synthetic-native', provider: 'codex', name: 'literal <name> 中文', state: 'idle', runtimeVersion: '0.1.0-alpha.157', messages: [], ...patch });
 function harness(record, connected = true) {
+  const displayFixture = localeUI();
   const copied = [], actions = [], menus = [], updates = [], records = [row({ id: 'earlier' }), record, row({ id: 'later' })];
   const more = { isConnected: true, disabled: false, focus() {}, setAttribute() {}, getClientRects: () => [1], getBoundingClientRect: () => ({ left: 0, top: 0 }) };
-  const currentRow = { more, spaceId: undefined }, ctx = { disconnected: !connected, state: { sessions: records, rooms: [], capabilities: ['agentWakeV1', 'observe'], appVersion: '0.1.0-alpha.157' },
-    ui: { menu: options => { menus.push(options); return Object.assign(() => options.onClose(), { update: items => updates.push(items) }); } },
+  const currentRow = { more, spaceId: undefined }, ctx = { ...displayFixture, disconnected: !connected, state: { sessions: records, rooms: [], capabilities: ['agentWakeV1', 'observe'], appVersion: '0.1.0-alpha.157' },
+    ui: { ...displayFixture.ui, menu: options => { menus.push(options); return Object.assign(() => options.onClose(), { update: items => updates.push(items) }); } },
     window: { workspace: { copy: value => copied.push(value), archiveSession: () => actions.push('archive'), wakePolicy: () => actions.push('wake'), continueConnection: () => actions.push('continue'), newWindow: () => actions.push('window') }, nativeWorkspaceFleet: fleet, nativeWorkspaceCollaboration: collaboration },
     allSpaces: () => ctx.state.rooms, inSpace: (s, id) => (s.roomIds || []).includes(id),
     contentMenu: null, sessionMenu: null, roomMenu: null, sessionRows: new Map([[record.id, currentRow]]), sessionRow: () => currentRow,
@@ -140,4 +142,15 @@ test('an open facts menu refreshes changed state or version in place and closes 
   for (const change of [h => { h.record.runtimeVersion = '0.1.0-alpha.140'; }, h => { h.ctx.disconnected = true; }, h => { h.record.nativeId = undefined; }, h => { h.records.reverse(); }, h => { h.ctx.state.sessions = h.records.filter(r => r !== h.record); }]) {
     const h = setup(); change(h); h.ctx.renderSessions(); assert.equal(h.ctx.sessionMenu, null, 'A changed action list, order or connection closes the menu');
   }
+});
+
+test('changing language keeps an open facts menu and its original copy action on the next native update', () => {
+  const h = harness(row()), prefix = section('function renderSessions() {', '\n  const visible =');
+  h.ctx.renderVersions = h.ctx.renderSidebarGroups = () => {}; vm.runInContext(prefix + '\n}', h.ctx); h.open();
+  const opened = h.ctx.sessionMenu, select = h.menus[0].onSelect, original = h.record.nativeId;
+  h.ctx.setLanguage('en'); h.record.state = 'working'; h.ctx.renderSessions();
+  assert.strictEqual(h.ctx.sessionMenu, opened); assert.equal(h.updates.length, 1);
+  assert.ok(h.updates[0].some(item => item.id === 'copy-id' && item.label === 'Copy full NAW ID'));
+  select('copy-id'); assert.deepEqual(h.copied, [h.record.id]); assert.equal(h.record.nativeId, original);
+  h.ctx.disconnected = true; h.ctx.renderSessions(); assert.equal(h.ctx.sessionMenu, null);
 });

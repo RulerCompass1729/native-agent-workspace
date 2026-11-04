@@ -16,26 +16,28 @@
     });
     return result;
   }
-  function usageLines(provider, usage) {
-    const number = n => count(n) ? n.toLocaleString() : '未报告';
+  function usageLines(provider, usage, language = 'zh') {
+    const formatter = typeof module === 'object' && module.exports ? require('./ui-locale.js') : root.nativeWorkspaceLocale;
+    const text = (key, params) => formatter.format(language, key, params);
+    const number = n => count(n) ? n.toLocaleString(language) : text('usage.unreported');
     const lines = [];
     if (provider === 'claude' && usage?.source === 'claude-session-usage') {
       const c = usage.context || {};
-      lines.push(`上下文：${number(c.tokens)} / ${number(c.window)} token${amount(c.percent) && c.percent <= 100 ? ` · ${c.percent}%` : ''}（最近一次请求，非累计）`);
-      const usd = amount(usage.costUsd) ? usage.costUsd > 0 && usage.costUsd < 0.0001 ? '<$0.0001' : '$' + usage.costUsd.toFixed(4) : '未报告';
-      lines.push(`原生 /cost 累计金额：${usd}；不是账户实际账单`);
+      lines.push(text('usage.context', { tokens: number(c.tokens), window: number(c.window), percent: amount(c.percent) && c.percent <= 100 ? ` · ${c.percent}%` : '' }));
+      const usd = amount(usage.costUsd) ? usage.costUsd > 0 && usage.costUsd < 0.0001 ? '<$0.0001' : '$' + usage.costUsd.toFixed(4) : text('usage.unreported');
+      lines.push(text('usage.cost', { usd }));
       for (const r of Array.isArray(usage.rateLimits) ? usage.rateLimits : []) {
-        const label = { five_hour: '5 小时', seven_day: '7 天', spend_limit: '支出' }[r.kind];
-        if (label && amount(r.percentUsed)) lines.push(`原生${label}额度窗口：已用 ${r.percentUsed}%${r.resetsAt && Number.isFinite(Date.parse(r.resetsAt)) ? ' · 重置 ' + new Date(r.resetsAt).toLocaleString() : ''}（不可跨会话相加）`);
+        const key = { five_hour: 'usage.fiveHour', seven_day: 'usage.sevenDay', spend_limit: 'usage.spend' }[r.kind];
+        if (key && amount(r.percentUsed)) lines.push(text('usage.window', { label: text(key), percent: r.percentUsed, reset: r.resetsAt && Number.isFinite(Date.parse(r.resetsAt)) ? text('usage.reset', { time: new Date(r.resetsAt).toLocaleString(language) }) : '' }));
       }
-      if (!usage.rateLimits?.length) lines.push('原生额度窗口：未报告');
+      if (!usage.rateLimits?.length) lines.push(text('usage.noLimits'));
     } else if (provider === 'codex' && usage?.total) {
       const t = usage.total, last = usage.last || {};
-      lines.push(`累计 token：输入 ${number(t.inputTokens)} · 其中缓存输入 ${number(t.cachedInputTokens)} · 输出 ${number(t.outputTokens)}`);
-      lines.push(`最近一次请求：输入 ${number(last.inputTokens)} · 输出 ${number(last.outputTokens)} · 模型窗口 ${number(usage.modelContextWindow)}`);
-      lines.push('金额与额度窗口：此接口未报告');
-    } else return ['原生用量未报告；不能据此判断为零。'];
-    lines.push(count(usage.reportedAt) ? '本机读数时间：' + new Date(usage.reportedAt).toLocaleString() : '本机读数时间未报告');
+      lines.push(text('usage.total', { input: number(t.inputTokens), cached: number(t.cachedInputTokens), output: number(t.outputTokens) }));
+      lines.push(text('usage.last', { input: number(last.inputTokens), output: number(last.outputTokens), window: number(usage.modelContextWindow) }));
+      lines.push(text('usage.noCosts'));
+    } else return [text('usage.noData')];
+    lines.push(count(usage.reportedAt) ? text('usage.timestamp', { time: new Date(usage.reportedAt).toLocaleString(language) }) : text('usage.noTimestamp'));
     return lines;
   }
   const api = { claudeUsage, usageLines };

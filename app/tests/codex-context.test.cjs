@@ -326,6 +326,7 @@ test('routing and capacity failures share the same bounded three-attempt budget'
   f.start('automatic-'+n);f.end('automatic-'+n,n===1?'serverOverloaded':'other','failed',n===1?'NATIVE ORIGINAL':routingError);
  }
  assert.equal(f.w.capacityStatus(f.s.id).status,'exhausted');assert.equal(f.w.capacityStatus(f.s.id).reason,'routing');
+ const notice=f.s.messages.findLast(m=>m.uiMessage?.key==='notice.capacityLimitRouting');assert.ok(notice);assert.equal(require('../ui-locale.js').displayText('en',notice.text,notice.uiMessage),'Automatic continuation after routing discovery timeouts reached its limit of 3 attempts. Your action is needed.');
  f.w.tickCapacity(Date.now()+86400000);assert.equal(f.calls.length,3);
 });
 for(const stop of ['draft','cancel','paused goal','goal read pending'])test('routing recovery preserves the existing human/goal boundary: '+stop,async t=>{
@@ -397,6 +398,7 @@ test('live terminal overload alone schedules a delayed new continuation; three a
   w.tickCapacity(scheduled.due);w.tickCapacity(scheduled.due+1);await capacityTick();assert.equal(calls.length,n,'One send even if tick runs again before acknowledgement');
   assert.equal(calls[n-1].method,'turn/start');assert.equal(calls[n-1].params.threadId,s.nativeId);assert.deepEqual(calls[n-1].params.input,[{type:'text',text:'继续',text_elements:[]}]);
   assert.equal(s.messages.filter(m=>m.origin==='capacity-recovery').length,n);assert.equal(s.messages.find(m=>m.origin==='capacity-recovery').name,'NAW');
+  const notice=s.messages.findLast(m=>m.uiMessage?.key==='notice.capacityAutoContinueCapacity');assert.equal(notice.uiMessage.params.attempt,n);assert.ok(require('../ui-locale.js').displayText('en',notice.text,notice.uiMessage).includes('Automatic continuation after a model capacity error'));
   f.start('automatic-'+n);f.end('automatic-'+n);
  }
  assert.equal(w.capacityStatus(s.id).status,'exhausted');w.tickCapacity(Date.now()+86400000);await capacityTick();assert.equal(calls.length,3);
@@ -450,6 +452,7 @@ for(const status of ['blocked','paused','usageLimited','budgetLimited'])test('ca
  assert.deepEqual(f.goal,before);assert.equal(f.goalReads.length,1);assert.equal(f.calls.length,0,'No turn/start or goal mutation');assert.equal(f.w.capacityStatus(f.s.id),null);
  assert.ok(f.s.messages.some(m=>m.name==='NAW'&&m.text.includes('goal 为 '+status)));assert.equal(f.s.messages.filter(m=>m.origin==='capacity-recovery').length,0);
  if(status==='blocked')assert.ok(f.s.messages.some(m=>m.text.includes('/goal resume')));
+ const notice=f.s.messages.findLast(m=>m.uiMessage?.key===(status==='blocked'?'notice.capacityGoalBlocked':'notice.capacityGoalInactive'));assert.ok(notice);assert.ok(require('../ui-locale.js').displayText('en',notice.text,notice.uiMessage).includes('The native goal is '+status));
 });
 for(const status of ['active','complete'])test('capacity metadata read never changes an existing goal: '+status,async t=>{
  const f=capacityFixture(t);f.goal={threadId:f.s.nativeId,status,objective:'Unchanged',tokenBudget:null};const before={...f.goal};f.fail();f.w.tickCapacity(f.w.capacityStatus(f.s.id).due);await capacityTick();

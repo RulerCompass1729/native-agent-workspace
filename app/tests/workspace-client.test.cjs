@@ -4,6 +4,50 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['claudePromptIdentity', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+test('retained service notices carry their own display labels without changing capabilities, native identities or drafts', async () => {
+  const locale = require('../ui-locale.js'), { old, next, c } = fixture();
+  try {
+    old.real.sessions[0].roomId = 'shared'; next.real.sessions[0].roomId = 'shared';
+    await c.refresh(); const rawBefore = structuredClone(old.real), state = c.snapshot(), retained = state.sessions.find(s => s.id === 'old');
+    assert.match(locale.displayText('en', retained.submissionNotice, retained.submissionNoticeUiMessage), /native identity and history/);
+    assert.equal(locale.displayText('en', state.handoffNotice, state.handoffNoticeUiMessage), 'Members use different backend versions, so automatic handoffs are unavailable. You can view terminals, select content and share it with specific recipients in the same collaboration view.');
+    const approval = state.sessions.find(s => s.id === 'old-codex');
+    assert.equal(locale.displayText('en', approval.approvalNotice, approval.approvalNoticeUiMessage), 'The old connection cannot verify the latest approval state. Check the native terminal. The original session is retained.');
+    assert.deepEqual(old.real, rawBefore); assert.equal(retained.nativeId, 'same-native'); assert.equal(retained.liveDraft, 'private draft');
+    const { assertAutomaticRun } = require('../submission-policy.cjs');
+    assert.throws(() => assertAutomaticRun({ ...state, capabilities: [] }), error => error.message === state.handoffNotice && locale.errorText('en', error).startsWith('Members use different'));
+    old.real.capabilities.push('nativeApprovalSync'); await c.refresh(); const updated = c.snapshot().sessions.find(s => s.id === 'old-codex');
+    assert.equal(updated.approvalNotice, null); assert.equal(updated.approvalNoticeUiMessage, null);
+    assert.ok([...old.calls, ...next.calls].every(([method]) => method === 'initial'));
+  } finally { c.close(); }
+});
+test('retained reader gaps and local-only sharing notices label owned text while unknown legacy notices remain raw', async () => {
+  const locale = require('../ui-locale.js'), { c } = fixture();
+  try {
+    c.control.legacyInput = { records: [], target: () => null, prepared: () => false, connected: () => false, reader: () => null, readerUnavailable: () => true, close() {} };
+    const gap = c.snapshot().sessions.find(s => s.id === 'old').messages[0];
+    assert.equal(locale.displayText('en', gap.text, gap.uiMessage), 'Native reading history is unavailable. It was not replaced with old backend content; continue in the native terminal.');
+    const native = { id: 'raw', provider: 'codex', legacySubmit: true, legacyShare: true, legacySharedReply: false, messages: [{ text: 'RAW native 中文' }] };
+    const result = submissionState({ capabilities: [], sessions: [native] }).sessions[0];
+    assert.equal(locale.displayText('en', result.sharingNotice, result.sharingNoticeUiMessage), 'View replies in the member view. You choose whether to share again; private replies are never forwarded automatically.');
+    assert.equal(native.sharingNotice, undefined); assert.equal(result.messages, native.messages);
+  } finally { c.close(); }
+});
+
+test('retained model projection replaces stored labels with the current reader source branch', () => {
+  const locale = require('../ui-locale.js'), { old, c } = fixture();
+  try {
+    old.state.sessions[0].modelUiMessage = locale.createNotice('notice.model.nativeDefault').uiMessage;
+    const reader = { initialized: true, record: { messages: [] }, model: null };
+    c.control.legacyInput = { records: [], target: () => null, prepared: () => false, connected: () => false, reader: s => s.id === 'old' ? reader : null, close() {} };
+    let actual = c.snapshot().sessions.find(s => s.id === 'old');
+    assert.equal(locale.displayText('en', actual.model, actual.modelUiMessage), 'Not reported by native process');
+    for (const model of ['原生未报告', '原生默认', 'RAW MODEL 中文']) {
+      reader.model = model; actual = c.snapshot().sessions.find(s => s.id === 'old');
+      assert.equal(actual.model, model); assert.equal(actual.modelUiMessage, null); assert.equal(locale.displayText('en', actual.model, actual.modelUiMessage), model);
+    }
+  } finally { c.close(); }
+});
 test('each session reports its owning backend version even when another backend is active', async () => {
   const { old, next, c } = fixture();
   next.real.runtimeVersion = '0.1.0-alpha.128';

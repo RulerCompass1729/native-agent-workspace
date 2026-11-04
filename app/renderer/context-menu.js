@@ -3,7 +3,7 @@
 let contentMenu;
 const contentMenuOrigin = () => ({ revision: selectionRevision, id: activeSessionId(), nativeId: current()?.nativeId });
 const contentMenuCurrent = target => target.revision === selectionRevision && target.id === activeSessionId() && target.nativeId === current()?.nativeId;
-const contentMenuChanged = () => new Error('内容或会话已变化，请重新打开菜单。');
+const contentMenuChanged = () => uiError("error.contentChanged");
 function terminalMenuTarget(id = activeSessionId()) {
   const entry = terminals.get(id), record = state?.sessions.find(s => s.id === id);
   const binding = columnTerminalBinding(id);
@@ -17,12 +17,12 @@ function terminalMenuCurrent(target, writable = false) {
 }
 async function copyTerminalContext(target = terminalMenuTarget()) {
   if (!terminalMenuCurrent(target)) throw contentMenuChanged();
-  if (!target.text) return toast('先选择文字；原生程序占用鼠标时，按住 ⌥ Option 拖选，再点复制。');
+  if (!target.text) return toastMessage('clipboard.selectFirst');
   await api.copy(target.text);
   if (terminalMenuCurrent(target)) focusTerminal(target.id);
 }
 async function pasteTerminalContext(target = terminalMenuTarget()) {
-  if (!terminalMenuCurrent(target, true)) throw new Error('请先连接并接管这个终端。');
+  if (!terminalMenuCurrent(target, true)) throw uiError("error.terminalControl");
   const content = await api.pasteNativeContent(target.id, target.nativeId);
   if (!terminalMenuCurrent(target, true)) throw contentMenuChanged();
   if (content.images) await pasteImages([], content.images, target.id); else pasteTerminal(content.text, target.id);
@@ -41,8 +41,8 @@ function showContentMenu(element, point, keyboard = false, event) {
     const forced = navigator.platform.includes('Mac') ? event?.altKey : event?.shiftKey;
     if (!keyboard && target.entry.term.modes.mouseTrackingMode !== 'none' && !target.entry.term.options.disableStdin && !forced) return true;
     actions = [
-      { id: 'copy', label: '复制', disabled: !target.text, run: () => copyTerminalContext(target) },
-      { id: 'paste', label: '粘贴', disabled: !terminalMenuCurrent(target, true), run: () => pasteTerminalContext(target) },
+      { id: 'copy', label: uiText('common.copy'), labelKey: 'common.copy', disabled: !target.text, run: () => copyTerminalContext(target) },
+      { id: 'paste', label: uiText('menu.paste'), labelKey: 'menu.paste', disabled: !terminalMenuCurrent(target, true), run: () => pasteTerminalContext(target) },
     ];
     restore = () => { if (terminalMenuCurrent(target)) target.entry.term.focus(); };
   } else {
@@ -70,33 +70,33 @@ function showContentMenu(element, point, keyboard = false, event) {
         if (!field.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: text ? 'insertFromPaste' : 'deleteByCut', data: text || null }))) return;
         if (maximum >= 0 && field.value.length - (field.selectionEnd - field.selectionStart) + text.length > maximum) {
           field.setSelectionRange(fieldState.start, fieldState.end, fieldState.direction);
-          throw new Error(`超过 ${maximum} 个字符；原内容保留，没有截断粘贴。`);
+          throw uiError("error.pasteLimit", { arg1: maximum });
         }
-        if (!document.execCommand(text ? 'insertText' : 'delete', false, text)) throw new Error('未能编辑原输入框，内容保留。');
+        if (!document.execCommand(text ? 'insertText' : 'delete', false, text)) throw uiError("error.editInputFailed");
       };
       actions = [
-        { id: 'cut', label: '剪切', disabled: field.readOnly || !selectedText, run: async () => {
+        { id: 'cut', label: uiText('menu.cut'), labelKey: 'menu.cut', disabled: field.readOnly || !selectedText, run: async () => {
           if (!editable()) throw contentMenuChanged();
           const range = field.id === 'shared-input' ? nativeWorkspaceMentions.atomicRange(roomMention, field.value, { start: fieldState.start, end: fieldState.end, type: 'deleteByCut' }) : null;
           await api.copy(range ? field.value.slice(range.start, range.end) : selectedText); edit('');
         } },
-        { id: 'copy', label: '复制', disabled: !selectedText, run: () => { if (!validField()) throw contentMenuChanged(); return api.copy(selectedText); } },
-        { id: 'paste', label: '粘贴', disabled: field.readOnly, run: async () => {
+        { id: 'copy', label: uiText('common.copy'), labelKey: 'common.copy', disabled: !selectedText, run: () => { if (!validField()) throw contentMenuChanged(); return api.copy(selectedText); } },
+        { id: 'paste', label: uiText('menu.paste'), labelKey: 'menu.paste', disabled: field.readOnly, run: async () => {
           if (!editable()) throw contentMenuChanged();
           const text = await api.pasteText();
-          if (!text) return toast('剪贴板里没有文字。');
+          if (!text) return toastMessage('clipboard.empty');
           edit(text);
         } },
-        { id: 'all', label: '全选', disabled: !field.value, run: () => { if (!validField()) throw contentMenuChanged(); field.focus({ preventScroll: true }); field.select(); } },
+        { id: 'all', label: uiText('menu.selectAll'), labelKey: 'menu.selectAll', disabled: !field.value, run: () => { if (!validField()) throw contentMenuChanged(); field.focus({ preventScroll: true }); field.select(); } },
       ];
     } else {
       const text = window.getSelection()?.toString();
-      if (text) actions.push({ id: 'copy', label: '复制', run: () => { if (!contentMenuCurrent(origin)) throw contentMenuChanged(); return api.copy(text); } });
+      if (text) actions.push({ id: 'copy', label: uiText('common.copy'), labelKey: 'common.copy', run: () => { if (!contentMenuCurrent(origin)) throw contentMenuChanged(); return api.copy(text); } });
     }
     const link = element.closest('a[href]');
     if (link) {
       const href = link.href;
-      actions.push({ id: 'link', label: '复制链接', run: () => { if (!contentMenuCurrent(origin)) throw contentMenuChanged(); return api.copy(href); } });
+      actions.push({ id: 'link', label: uiText('menu.copyLink'), labelKey: 'menu.copyLink', run: () => { if (!contentMenuCurrent(origin)) throw contentMenuChanged(); return api.copy(href); } });
     }
   }
   if (!actions.length) return false;

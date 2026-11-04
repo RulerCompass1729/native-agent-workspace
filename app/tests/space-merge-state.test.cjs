@@ -5,6 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { RoomState } = require('../room-state.cjs');
+const locale = require('../ui-locale.js');
 const { withMembership, isMember, membershipRevision } = require('../collaboration-spaces.cjs');
 
 function fixture(t) {
@@ -114,6 +115,7 @@ test('cold metadata reopen preserves partial operation and returns its state wit
   const reopened = new RoomState(f.directory), before = f.calls.length;
   const result = await reopened.mergeCommit(f.client, batch.operationId, batch.binding);
   assert.equal(result.stage, 'partial'); assert.equal(f.calls.length, before); assert.equal(f.counters.imports, 1);
+  assert.equal(locale.errorText('en', { message: result.failures.join('\n'), uiMessage: result.failuresUiMessage }), result.failures.join('\n'), 'Unknown original errors survive a cold reopen without translation');
   assert.equal((await reopened.mergeStatus(f.client, batch.operationId)).observedSaved, true);
 });
 test('identity, stale selected source, native alias, and old backend refuse before creating C', async t => {
@@ -176,6 +178,11 @@ test('undo refuses to overwrite subsequently changed source metadata or native i
   f.sessions.get('s').nativeId = 'new-native-context';
   const result = await f.state.mergeUndo(f.client, batch.operationId, batch.binding);
   assert.equal(result.stage, 'partial'); assert.ok(result.failures.length > 0);
+  const raw = result.failures.join('\n'), translated = locale.errorText('en', { message: raw, uiMessage: result.failuresUiMessage });
+  assert.ok(translated.includes('The source changed after archiving.')); assert.ok(translated.includes('Source session identity changed.'));
+  assert.equal(locale.errorText('zh', { message: raw, uiMessage: result.failuresUiMessage }), raw);
+  const reopened = new RoomState(f.directory), persisted = reopened.metadata(batch.targetId).merge;
+  assert.equal(locale.errorText('en', { message: persisted.failures.join('\n'), uiMessage: persisted.failuresUiMessage }), translated);
   assert.equal(f.state.metadata(f.a).notes, 'Changed archived source'); assert.equal(f.state.metadata(f.a).archived, true);
   assert.equal(f.sessions.get('s').nativeId, 'new-native-context');
 });

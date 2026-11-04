@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 // Private mobile authority only. Importing this module starts no transport or native work.
 const fs = require('node:fs'), path = require('node:path');
 const { randomBytes, randomUUID, createHash, timingSafeEqual } = require('node:crypto');
@@ -13,7 +14,7 @@ const uuid = s => typeof s === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f
 const digest = s => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s);
 const token = s => typeof s === 'string' && /^[A-Za-z0-9_-]{43}$/.test(s);
 const exact = (o, keys) => o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length === keys.length && keys.every(k => Object.hasOwn(o, k));
-const denied = (code = 'MOBILE_DENIED') => Object.assign(Error('手机授权未确认或已变化，请重新连接。'), { code });
+const denied = (code = 'MOBILE_DENIED') => Object.assign(uiError("error.mobile.authorizationUnconfirmed"), { code });
 function origin(value) {
   try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password && value === u.origin; } catch { return false; }
 }

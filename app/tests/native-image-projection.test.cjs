@@ -48,7 +48,7 @@ test('cold history normalizes the image reference before a later history refresh
   assert.deepEqual(result.png, png);
 });
 test('an original image is an explicit media boundary between collapsed process groups', () => {
-  const vm = require('node:vm'), context = vm.createContext({});
+  const vm = require('node:vm'), context = vm.createContext({ uiText: (key, params) => require('../ui-locale.js').format('zh', key, params) });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/reading-list.js'), 'utf8'), context);
   const tool = id => ({ id, nativeId: 'N', turnId: 'T', nativeBlock: true, kind: 'tool', role: 'tool', title: 'Bash', text: id, status: 'complete' });
   context.rows = [tool('a'), tool('b'), { ...tool('image'), images: [{ path: '/synthetic/image.png' }] }, tool('c'), tool('d')];

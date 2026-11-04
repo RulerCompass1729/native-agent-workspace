@@ -1,6 +1,8 @@
 const { randomUUID } = require('node:crypto');
 const { trimVolatileRows } = require('./native-blocks.cjs');
 const { isMember, membershipRevision } = require('./collaboration-spaces.cjs');
+const { uiActivity } = require('./ui-errors.cjs');
+const { displayMessage } = require('./ui-locale.js');
 
 // A room displays only the turn bound to its explicit send. Display is not
 // model delivery; only Workspace.advance may hand off an accepted final reply.
@@ -37,15 +39,21 @@ class SharedReplies {
         (acceptedTurn && r.rootTurn?.id === acceptedTurn &&
           (r.rootTurn.status === 'working' || (r.rootTurn.status === null && r.rootTurn.completed === true)))));
   }
-  close(tag, reason = '后续内容留在原会话') {
+  close(tag, reason = '后续内容留在原会话', uiMessage) {
     const g = this.grants.get(tag); if (!g || g.closed) return;
+    if (arguments[1] === undefined) uiMessage = uiActivity('notice.sharing.furtherLocal')[1];
+    uiMessage = displayMessage(uiMessage, 'notice.', reason) || displayMessage(uiMessage, 'error.', reason);
     g.closed = true;
     const rows = [...g.rows.values()];
     // A permission can arrive between completed items, with nothing currently
     // streaming. Keep the completed status but explain why no continuation follows.
-    if (rows.length && !rows.some(row => row.finalReply)) rows.at(-1).sharingStopped ||= reason;
+    if (rows.length && !rows.some(row => row.finalReply) && !rows.at(-1).sharingStopped) {
+      const row = rows.at(-1); row.sharingStopped = reason;
+      if (uiMessage) row.sharingStoppedUiMessage = uiMessage; else delete row.sharingStoppedUiMessage;
+    }
     for (const row of g.rows.values()) if (!row.finalReply && ['streaming', 'running'].includes(row.status)) {
       row.sharingStopped = reason;
+      if (uiMessage) row.sharingStoppedUiMessage = uiMessage; else delete row.sharingStoppedUiMessage;
       row.status = 'unconfirmed';
     }
   }
@@ -87,7 +95,7 @@ class SharedReplies {
     if (message?.kind === 'gap') {
       for (const g of this.grants.values()) if (g.sessionId === s.id && !g.closed) {
         for (const row of g.rows.values()) row.incomplete = true;
-        this.close(g.tag, '部分内容未同步，请在原会话核对');
+        this.close(g.tag, '部分内容未同步，请在原会话核对', uiActivity('notice.sharing.gap')[1]);
       }
       return;
     }
@@ -106,7 +114,7 @@ class SharedReplies {
           turnId: g.turnId, ...(g.run ? { runId: g.run.id } : {}), sharedStream: true, deliveryTracked: true };
         g.rows.set(message.id, row); this.room(g.roomId).messages.push(row);
       }
-      for (const field of ['text', 'input', 'title', 'kind', 'toolKind', 'commandActions', 'commandSource', 'exitCode', 'status', 'incomplete', 'volatile', 'displayTurnId', 'nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) row[field] = message[field];
+      for (const field of ['text', 'input', 'title', 'uiTitleMessage', 'kind', 'toolKind', 'commandActions', 'commandSource', 'exitCode', 'status', 'incomplete', 'volatile', 'displayTurnId', 'nativeStartedAt', 'nativeCompletedAt', 'nativeDurationMs']) row[field] = message[field];
       if (Array.isArray(message.images)) row.images = message.images.map(ref => ({ ...ref }));
       row.nativeStatus = message.status;
       this.boundary(g, message);
@@ -145,7 +153,7 @@ class SharedReplies {
       this.room(g.roomId).messages.push(row);
     }
     row.text = info.text; row.status = 'complete'; row.finalReply = true;
-    this.close(info.tag, '本次回复已结束');
+    this.close(info.tag, '本次回复已结束', uiActivity('notice.sharing.replyEnded')[1]);
     return row;
   }
 }

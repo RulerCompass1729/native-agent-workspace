@@ -126,11 +126,21 @@ function interfaceSource(dir = root) {
   for (const file of files) {
     const source = fs.readFileSync(file, 'utf8');
     if (file.endsWith('.html')) { for (const s of htmlStrings(source)) { strings.add(s); others.add(s); } for (const m of source.matchAll(/<script>([\s\S]*?)<\/script>/g)) collect(m[1]); continue; }
-    collect(source);
+    collect(source, path.relative(dir, file) === path.join('app', 'ui-messages.js'));
   }
-  function collect(source) {
+  function collect(source, catalog = false) {
     for (const l of texts(literals(source))) {
       const text = normal(l.text); if (!text) continue;
+      // Catalog substitutions are the same named data holes as source templates.
+      // A hole without fixed words still cannot approve an arbitrary lookup.
+      if (catalog && l.kind === 'string') {
+        const slots = [...l.text.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)];
+        if (slots.length) {
+          let offset = 0; const parts = [];
+          for (const slot of slots) { parts.push(l.text.slice(offset, slot.index)); offset = slot.index + slot[0].length; }
+          parts.push(l.text.slice(offset)); templates.push(template(parts, slots.map(slot => slot[1])));
+        }
+      }
       if (l.kind === 'template') templates.push(template(l.parts, l.holes));
       else { strings.add(text); (menuLabel(source, l.start) ? labels : others).add(text); }
       if (l.plusAfter) prefixes.add(normal(l.text).trimStart());

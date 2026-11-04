@@ -1,12 +1,18 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {randomUUID}=require('node:crypto');
+const locale=require('../ui-locale.js');
+const bootstrap=fs.readFileSync(require.resolve('../dsh/bootstrap.js'),'utf8');
+const begin=bootstrap.indexOf('    function createDisplayBindings('),finish=bootstrap.indexOf('    function mountWorkspace(',begin);
+assert.ok(begin>=0&&finish>begin);
+const createBindings=vm.runInNewContext('('+bootstrap.slice(begin,finish).trim()+')');
 const source=fs.readFileSync(path.join(__dirname,'../renderer/renderer.js'),'utf8');
 function fixture() {
   const nodes=new Map(),timers=new Map(),requests=[]; let timer=0;
-  const get=id=>{if(!nodes.has(id))nodes.set(id,{checked:false,disabled:false,hidden:false,value:'',textContent:'',open:false,dataset:{},replaceChildren(){},add(){},querySelectorAll:()=>[]});return nodes.get(id);};
+  const get=id=>{if(!nodes.has(id))nodes.set(id,{checked:false,disabled:false,hidden:false,value:'',textContent:'',open:false,dataset:{},replaceChildren(){},add(){},querySelectorAll:()=>[],childElementCount:0,attrs:new Map(),setAttribute(k,v){this.attrs.set(k,String(v));},getAttribute(k){return this.attrs.get(k)??null;},removeAttribute(k){this.attrs.delete(k);}});return nodes.get(id);};
   const dialog=get('create-dialog'); dialog.open=true; const ticket={valid:true};
-  const context={ $,state:{capabilities:['gitWorktreeV1','nativePermissionDefaults','createSkipPermissions','newSessionDirectory'],preflight:{python:true,codex:true}},
+  const uiText=(key,params)=>locale.format('zh',key,params),display=createBindings(uiText);
+  const context={ $,uiError:locale.createError,uiText,ui:{display,showError(element,error){display.unbind(element);element.textContent=error.message;}},state:{capabilities:['gitWorktreeV1','nativePermissionDefaults','createSkipPermissions','newSessionDirectory'],preflight:{python:true,codex:true}},
     document:{querySelector:()=>({value:'codex'})},crypto:{randomUUID},dialogTickets:new Map([[dialog,ticket]]),
     currentDialogTicket:t=>t===ticket&&ticket.valid&&dialog.open,
     allSpaces:()=>[],spaceRecord:()=>undefined,Option:function(){},

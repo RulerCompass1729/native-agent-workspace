@@ -1,3 +1,4 @@
+const { uiError, uiNotice } = require('./ui-errors.cjs');
 // A human delegate on the existing native session, never a desktop owner or agent.
 const fs = require('node:fs'), path = require('node:path');
 const { createHash, randomUUID, randomBytes } = require('node:crypto');
@@ -10,7 +11,7 @@ const PREPARED = 'humanMobilePreparedV1', PREPARE_MS = 40000;
 const delegates = new WeakSet();
 const pending = new WeakMap();
 const clock = () => Number(process.hrtime.bigint() / 1000000n);
-const denied = () => Error('手机请求、原会话或授权已变化；没有重新派发，请核对原记录。');
+const denied = () => uiError("error.mobile.requestChanged");
 const exact = (o, keys) => o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length === keys.length && keys.every(k => Object.hasOwn(o, k));
 const uuid = x => typeof x === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(x);
 const stable = x => Array.isArray(x) ? x.map(stable) : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map(k => [k, stable(x[k])])) : x;
@@ -67,7 +68,7 @@ function receipt(w, row) {
 }
 function reserve(w, ticket, spec, action, tag) {
   const rows = records(w).filter(r => r.deviceId === ticket.deviceId && r.generation === ticket.generation && r.issuer === ticket.issuer.instance);
-  if (rows.length >= MAX_REQUESTS) throw Error('本次手机连接的回执已达上限，请先核对记录，再在 Mac 重新配对。');
+  if (rows.length >= MAX_REQUESTS) throw uiError("error.mobile.receiptLimit");
   const row = { deviceId: ticket.deviceId, generation: ticket.generation, issuer: ticket.issuer.instance, requestId: spec.requestId,
     serviceKey: ticket.serviceKey, sessionId: ticket.sessionId, nativeId: ticket.nativeId, action, digest: digest(spec), tag, status: 'awaiting-native', error: null, at: Date.now() };
   rows.push(row); w.mobileRequests = rows;
@@ -87,7 +88,7 @@ function delegate(w, ticket, spec, action) {
     },
     human() {
       if (!d.valid()) throw denied();
-      wake.human(w, s.id); w.pause('手机真人输入优先'); w.cancelCapacity(s.id);
+      wake.human(w, s.id); w.pause('手机真人输入优先', undefined, false, uiNotice('notice.run.mobileHuman').uiMessage); w.cancelCapacity(s.id);
       if (!d.valid()) throw denied();
       s.peerRevision = (s.peerRevision || 0) + 1; s.controlRevision++; control = s.controlRevision;
     },
@@ -96,7 +97,7 @@ function delegate(w, ticket, spec, action) {
       if (d.row) { if (d.row.tag !== tag || !records(w).includes(d.row)) throw denied(); }
       else d.row = reserve(w, ticket, spec, action, tag);
       d.row.status = status; w.persist();
-      if (w.storageWarning) { d.row.status = 'not-sent'; throw Object.assign(Error('手机请求回执未能保存，没有向原生派发。'), { notSent: true }); }
+      if (w.storageWarning) { d.row.status = 'not-sent'; throw Object.assign(uiError("error.mobile.receiptSaveFailed"), { notSent: true }); }
     },
     prepare() { if (d.validationOnly) return false; if (!d.valid()) throw denied(); d.reserve(d.row?.tag || randomUUID()); d.human(); },
   };

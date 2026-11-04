@@ -24,6 +24,9 @@ test('real desktop clear handler retains concurrently saved note instead of losi
   const clearing = d.invoke('clearSharedHistory'); await waiting;
   assert.equal((await d.invoke('roomNotes', 'newer', d.room().revision)).ok, true); release();
   const result = await clearing; assert.equal(result.ok, false); assert.match(result.error, /清除期间更新/); assert.equal(d.room().notes, 'newer');
+  assert.equal(result.uiMessage.key, 'error.sharedClearedRetained');
+  const locale = require('../ui-locale.js');
+  assert.ok(locale.errorText('en', { message: result.error, uiMessage: result.uiMessage }).startsWith('Shared messages were cleared; the timeline and notes are retained. '));
 });
 test('a space clear the client will refuse is refused before the confirmation; an allowed one asks once, after the check (T-149)', async t => {
   const d = await desktop(t), order = []; let refusal = '请先核对各后台已撤销后续交接授权，再清除共享记录。';

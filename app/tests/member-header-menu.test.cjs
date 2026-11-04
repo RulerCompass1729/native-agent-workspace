@@ -37,11 +37,11 @@ function fixture(member = 0) {
   const elements = new Map(['manage-members', 'room-nav'].map(id => { const value = node('button'); value.id = id; host.append(value); return [id, value]; }));
   const menus = [], copies = [], changed = [], notices = [], records = [{ id: 'naw-alpha', nativeId: 'native-alpha', name: 'Same name', roomId: 'shared', memberRevision: 1 }, { id: 'naw-beta', nativeId: 'native-beta', name: 'Same name', roomId: 'shared', memberRevision: 1 }];
   const button = (text, action, cls) => { const value = node('button', cls); value.textContent = text; value.addEventListener('click', action); return value; };
-  const context = vm.createContext({ Element, document, window: { getSelection: () => ({ toString: () => 'Previously selected private reading text' }) },
+  const context = vm.createContext({ uiError: require('../ui-locale.js').createError, uiText: (key, params) => require('../ui-locale.js').format('zh', key, params), Element, document, window: { getSelection: () => ({ toString: () => 'Previously selected private reading text' }) },
     spaceId: 'shared', pairRevision: record => require('../collaboration-spaces.cjs').membershipRevision(record), selectionRevision: 1, selected: 'room', disconnected: false, state: { room: { archived: false }, members: records }, roomSurface: 'overview', roomSession: '', sessionMenu: null, roomMenu: null,
     members: () => context.state.members, orderedMembers: () => context.state.members, $: id => elements.get(id),
     activeSessionId: () => 'naw-alpha', current: () => records[0], terminals: new Map(), sessionComposers: new Map(), owner: 'fixture-owner',
-    toast: text => notices.push(text), attempt: action => action(), detach: id => changed.push(id), columnTerminalBinding: () => null,
+    toast: text => notices.push(text), toastMessage: (key, params) => notices.push(require('../ui-locale.js').format('zh', key, params)), attempt: action => action(), detach: id => changed.push(id), columnTerminalBinding: () => null,
     captureReadingViews() {}, restoreOverviewReading() {}, moveRoomMember: (...args) => changed.push(args),
     api: { copy: id => copies.push(id) }, ui: { menu: config => { const entry = { config, closed: false }; const close = () => { if (entry.closed) return; entry.closed = true; config.onClose(); }; entry.close = close; menus.push(entry); return close; } },
     header, name, heading, next, record: records[member], button,

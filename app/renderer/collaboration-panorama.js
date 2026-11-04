@@ -3,10 +3,11 @@
 (function (target, factory) {
   const commonJS = typeof module !== 'undefined' && module.exports;
   const api = factory(commonJS ? require('../collaboration-spaces.cjs') : target.nativeWorkspaceSpaces,
-    commonJS ? require('./collaboration-overview.js') : target.nativeWorkspaceCollaboration);
+    commonJS ? require('./collaboration-overview.js') : target.nativeWorkspaceCollaboration,
+    commonJS ? require('../ui-locale.js') : target.nativeWorkspaceLocale);
   if (commonJS) module.exports = api;
   else target.nativeWorkspacePanorama = api;
-})(typeof window === 'undefined' ? globalThis : window, function (spaces, collaboration) {
+})(typeof window === 'undefined' ? globalThis : window, function (spaces, collaboration, locale) {
   const knownStates = new Set(['starting', 'idle', 'working', 'approval', 'stopping', 'disconnected', 'recoverable', 'ended', 'background', 'error']);
   const validObservation = (value, record, now) => value && record.nativeId && value.nativeId === record.nativeId &&
     (!record.activeTurnId || !value.turnId || value.turnId === record.activeTurnId) &&
@@ -65,18 +66,19 @@
   }
   function create(options) {
     const host = options.host, doc = host.ownerDocument;
+    const display = options.display || { text(el, key, params) { el.textContent = locale.format('zh', key, params); }, attribute(el, attr, key, params) { el.setAttribute(attr, locale.format('zh', key, params)); } };
     const element = (tag, text, cls) => { const el = doc.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
     const control = (text, action) => { const el = element('button', text); el.type = 'button'; el.addEventListener('click', action); return el; };
     let data = { sessions: [], rooms: [] }, connected = true, order = [], origin, firstRender = true;
     const saved = options.view || {};
     let layout = saved.layout === 'grid' ? 'grid' : 'list', query = saved.query || '', scope = saved.spaceId || '';
     const toolbar = element('div', undefined, 'panorama-tools');
-    const search = element('input'); search.type = 'search'; search.maxLength = 1000; search.value = query; search.placeholder = '查找成员或空间'; search.setAttribute('aria-label', '查找全部空间的成员');
-    const filter = element('select'); filter.setAttribute('aria-label', '全景空间筛选');
+    const search = element('input'); search.type = 'search'; search.maxLength = 1000; search.value = query; display.attribute(search, 'placeholder', 'panorama.searchPlaceholder'); display.attribute(search, 'aria-label', 'panorama.memberSearch');
+    const filter = element('select'); display.attribute(filter, 'aria-label', 'panorama.spaceFilter');
     const grid = control('网格', () => setLayout('grid')), list = control('列表', () => setLayout('list'));
     const summary = element('span', undefined, 'quiet'); summary.setAttribute('role', 'status');
     toolbar.append(search, filter, grid, list, summary);
-    const reader = element('div', undefined, 'panorama-members'); reader.tabIndex = -1; reader.setAttribute('aria-label', '跨空间全部成员');
+    const reader = element('div', undefined, 'panorama-members'); reader.tabIndex = -1; display.attribute(reader, 'aria-label', 'panorama.allMembers');
     const empty = element('p', '没有符合筛选的会话。', 'quiet');
     host.classList.add('collaboration-panorama'); host.append(toolbar, reader, empty);
     const rows = new Map();
@@ -136,7 +138,7 @@
         .filter(([count]) => count).map(([count, label]) => count + ' ' + label);
       write(summary, projection.people.length + ' / ' + projection.total + ' 个会话 · ' + projection.memberships + ' 条空间归属' +
         (counts.length ? ' · 全体：' + counts.join(' · ') : ''));
-      summary.title = '全体读数按原会话去重；待处理、连接、状态与观察时间可以重叠。未报告跨空间阻塞关系，不按零处理。';
+      display.attribute(summary, 'title', 'panorama.summaryHelp');
       const spaceRecords = data.rooms || (data.room ? [data.room] : []);
       const signature = JSON.stringify([scope, spaceRecords.filter(room => !room.archived).map(room => [room.id, room.name])]);
       if (filter.dataset.signature !== signature) {

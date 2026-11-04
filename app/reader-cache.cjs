@@ -1,3 +1,4 @@
+const { uiError } = require('./ui-errors.cjs');
 // Private display history only. Reading a cache grants no native authority.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -8,11 +9,11 @@ const maxBytes = 64 * 1024 * 1024;
 function readReaderCache(filename, record) {
   try {
     const stat = fs.lstatSync(filename);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid() || stat.mode & 0o077 || stat.size > maxBytes) throw Error('Unsafe reader cache');
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid() || stat.mode & 0o077 || stat.size > maxBytes) throw uiError('error.reader.unsafe', undefined, { rawLanguage: 'en' });
     const saved = JSON.parse(fs.readFileSync(filename, 'utf8'));
     if (saved.nativeId !== record.nativeId || JSON.stringify(saved.processIdentity) !== JSON.stringify(record.processIdentity) ||
       saved.provider && saved.provider !== record.provider || !Array.isArray(saved.messages) ||
-      record.provider === 'codex' && JSON.stringify(saved.serverIdentity) !== JSON.stringify(record.serverIdentity)) throw Error('Reader identity changed');
+      record.provider === 'codex' && JSON.stringify(saved.serverIdentity) !== JSON.stringify(record.serverIdentity)) throw uiError('error.reader.identityChanged', undefined, { rawLanguage: 'en' });
     return saved;
   } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
@@ -20,7 +21,7 @@ function writeReaderCache(filename, record, extra = {}) {
   const body = JSON.stringify({ ...extra, nativeId: record.nativeId, provider: record.provider,
     processIdentity: record.processIdentity, ...(record.provider === 'codex' ? { serverIdentity: record.serverIdentity } : {}),
     messages: persistedMessages(record.messages) });
-  if (Buffer.byteLength(body) > maxBytes) throw Error('Reader cache exceeds limit');
+  if (Buffer.byteLength(body) > maxBytes) throw uiError('error.reader.limit', undefined, { rawLanguage: 'en' });
   const temporary = filename + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
   try {
     fs.writeFileSync(temporary, body, { flag: 'wx', mode: 0o600 });
