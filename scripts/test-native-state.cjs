@@ -52,7 +52,7 @@ async function capture(name){
 async function join(id){
  const room=(await snapshot()).rooms.find(r=>r.id==='shared');
  await page.locator(`[data-session-menu="${id}"]`).click();
- await page.getByRole('menuitem',{name:`加入「${room.name}」`,exact:true}).click();
+ await page.getByRole('menuitem',{name:`移到「${room.name}」`,exact:true}).click();
  await until(async()=>(await snapshot()).sessions.find(s=>s.id===id).roomIds?.includes('shared'),'Visible membership acknowledged');
 }
 async function guards(){const values=await app.evaluate(()=>globalThis.stateGuards);assert.deepEqual(values,{clipboard:0,external:0,dialogs:0,maintenance:0,replacement:0});guardSamples.push(values);}

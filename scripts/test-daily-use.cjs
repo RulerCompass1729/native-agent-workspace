@@ -77,7 +77,7 @@ async function terminal(id) {
 async function membership(id, join) {
   const room = (await snapshot()).rooms.find(room => room.id === 'shared');
   await page.locator(`[data-session-menu="${id}"]`).click();
-  await page.getByRole('menuitem', { name: `${join ? '加入' : '离开'}「${room.name}」`, exact: true }).click();
+  await page.getByRole('menuitem', { name: join ? `移到「${room.name}」` : `移出「${room.name}」到独立会话`, exact: true }).click();
   await until(async () => Boolean((await snapshot()).sessions.find(s => s.id === id).roomIds?.includes('shared')) === join, 'Visible membership action acknowledged');
 }
 async function reply(text) { await fixture('release', text); await until(async () => (await snapshot()).sessions.every(s => !s.pendingTag), 'Reply settled'); }

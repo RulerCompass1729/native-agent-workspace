@@ -4486,3 +4486,36 @@ packaged files match after testing. The ordinary visible update preserves
 the original active goal across 150 seconds. The existing daily operator is
 reused by exact version substitution; installation facts are program-checked. These synthetic metadata checks do not certify a live
 account reading or solve T162's separate native-client choice-menu gap.
+
+
+I182 / one home per session (T145): the user asked for a session to move
+between Independent and one space, rather than remain in both. The owning
+backend now saves the whole placement and operation receipt in one workspace
+write. Desktop moves and Undo use native identity, connection and placement
+versions; archive restore cannot steal a later placement. Merge uses the same
+move path and retains earlier shared records. Native work is not restarted.
+The reviewed V3 sidebar is reused: a separate session overview, permanent space
+creation, grouped space/member navigation, and a drag-only empty Independent
+target. Existing legacy overlaps are retained, not silently collapsed; an old
+backend refuses a cross-space move until a safe update. Source GUI caught and
+fixed a flex layout overflow. Nine actual GUI journey groups passed on owned
+synthetic Unix backends with zero provider/model/input/send operations. Full
+checks: 2,586 pass, one pre-existing Claude compat-hook upgrade failure, also
+reproduced from unchanged HEAD. Independent and installed acceptance pending.
+
+I182 independent source review approved conditionally and identified two stale
+GUI assertions: a retained-membership toast and a drag preserving the old home.
+Both expectations are corrected. These older native/multi-space scripts were
+not rerun and are not counted as I182 acceptance; some fresh-profile scripts
+still need an explicit created-space setup. A new bounded synthetic native-event
+check verifies that moving an accepted stream closes its old grant, preserves
+its already-shared text and never retargets later output. No real model runs.
+The final new GUI harness also resolves fixtures from the test directory when
+using the signed bundle's actual application code. Installed acceptance pending.
+
+The same independent checkpoint approved the delta after reading the corrected
+assertions, new accepted-stream test and new nine-group GUI harness. Source and
+index hashes stayed unchanged during both reviews. Its last reported cumulative
+list cost was 2.6211016, not an invoice and not summed across resumes. The
+version-only manifest delta is checked by program. Exact signed-code GUI replay
+will verify the harness change; source approval is not installed acceptance.

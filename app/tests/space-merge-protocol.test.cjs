@@ -53,9 +53,9 @@ test('actual Unix merge preserves scoped originals, native identity and positive
   const initial = await raw.call('initial'), nativeId = initial.sessions[0].nativeId;
   client = new WorkspaceClient([{ key: 'owned-synthetic', client: raw, state: initial }], 'owned-synthetic');
   const profile = new RoomState(directory), a = profile.create('A'), b = profile.create('B');
-  for (const room of [a, b]) await profile.membership(client, id, true, 'Existing member', room);
   await fixture(first, 'bindSends', id);
   for (const [room, label] of [[a, 'A'], [b, 'B']]) {
+    await profile.membership(client, id, true, 'Existing member', room);
     const snapshot = await raw.call('initial'), record = snapshot.sessions.find(record => record.id === id);
     await raw.call('spaceAction', room, 'forward', [id, `${label} explicit original request`, nativeId], { [id]: membershipRevision(record, room) });
     const stats = await fixture(first, 'stats', id);
@@ -84,6 +84,7 @@ test('actual Unix merge preserves scoped originals, native identity and positive
   assert.ok(lateState.sessions[0].messages.some(row => row.text === late));
   assert.equal(lateState.rooms.find(room => room.id === keep.targetId).messages.some(row => row.text === late), false);
 
+  await profile.membership(client, id, true, 'Existing member', b); // One explicit current-home move; copied C history stays intact.
   const archive = await preview('archive'); await profile.mergeCommit(client, archive.operationId, archive.binding);
   assert.equal(profile.metadata(a).archived, true); assert.equal(profile.metadata(b).archived, true);
   profile.notes('Later D notes retained', profile.metadata(archive.targetId).revision, archive.targetId);
@@ -93,7 +94,8 @@ test('actual Unix merge preserves scoped originals, native identity and positive
   assert.equal(profile.metadata(archive.targetId).notes, 'Later D notes retained');
   const final = await raw.call('initial'), record = final.sessions[0];
   assert.deepEqual(final.sessions.map(record => [record.id, record.nativeId]), identities);
-  for (const room of [a, b, keep.targetId, archive.targetId]) assert.equal(isMember(record, room), true);
+  for (const room of [a, b, keep.targetId]) assert.equal(isMember(record, room), false);
+  assert.equal(isMember(record, archive.targetId), true, 'Later D work retains the single D home');
   assert.equal(final.diagnostics.dispatches, 2); assert.equal(final.diagnostics.shellModelCalls, 0);
   const stats = await fixture(first, 'stats', id);
   assert.deepEqual(stats.stats, { opens: 0, inputs: 0, resizes: 0, sends: 2 });

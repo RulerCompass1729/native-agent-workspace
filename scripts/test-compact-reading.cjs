@@ -81,7 +81,7 @@ async function capture(name) {
 async function join(id) {
   const room = (await snapshot()).rooms.find(room => room.id === 'shared');
   await page.locator(`[data-session-menu="${id}"]`).click();
-  await page.getByRole('menuitem', { name: `加入「${room.name}」`, exact: true }).click();
+  await page.getByRole('menuitem', { name: `移到「${room.name}」`, exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(s => s.id === id).roomIds?.includes('shared'), 'Visible membership acknowledged');
 }
 async function run() {

@@ -87,7 +87,7 @@ async function run() {
   const independent = id => page.locator(`[data-session-group="independent"] [data-session-row="${id}"] .session-link`);
   await check('02 drag onto the empty group heading joins', async () => {
     await independent(a).dragTo(page.locator(`[data-session-group="${space}"] h3`));
-    await until(async () => (await members()).includes(a), 'Joined by group heading'); assert.equal(await toastText(), '已加入「Claude 聊天室」；原来的空间归属保留。');
+    await until(async () => (await members()).includes(a), 'Joined by group heading'); assert.equal(await toastText(), '已移到「Claude 聊天室」。');
   });
   await check('03 drag onto the space row joins', async () => {
     // T-145: the grouped view does not repeat the space rows (its headings are the list), so this drop target is checked in the flat view.
@@ -98,12 +98,12 @@ async function run() {
   });
   await check('04 session menu joins', async () => {
     await page.locator(`[data-session-group="independent"] [data-session-row="${c}"] .session-more`).click();
-    await page.getByRole('menuitem', { name: '加入「Claude 聊天室」', exact: true }).click();
+    await page.getByRole('menuitem', { name: '移到「Claude 聊天室」', exact: true }).click();
     await until(async () => (await members()).includes(c), 'Joined by menu');
   });
   await check('05 old-backend session is refused with reason and next step', async () => {
     await page.locator(`[data-session-group="independent"] [data-session-row="${old}"] .session-more`).click();
-    await page.getByRole('menuitem', { name: '加入「Claude 聊天室」', exact: true }).click();
+    await page.getByRole('menuitem', { name: '移到「Claude 聊天室」', exact: true }).click();
     await until(async () => (await toastText()).includes('连着旧版后台'), 'Old-backend reason shown');
     const text = await toastText();
     assert.ok(text.includes(`（${OLD_VERSION}）`) && text.includes('原会话与草稿保留') && text.includes('「旧版会话」里核对并更新连接'), text);

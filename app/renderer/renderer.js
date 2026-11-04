@@ -45,8 +45,11 @@ let roomViews = Object.create(null);
 const roomHistories = new Map(), spaceRows = new Map(), sidebarGroups = new Map();
 const inSpace = (s, id = spaceId) => window.nativeWorkspaceSpaces.isMember(s, id);
 const pairRevision = (s, id = spaceId) => window.nativeWorkspaceSpaces.membershipRevision(s, id);
-const allSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
-const spaceRecord = id => allSpaces().find(r => r.id === id);
+const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
+// The untouched legacy container is not a user-created space. Keep its data and
+// reveal it as soon as it has members or any saved activity; never migrate it.
+const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
+const spaceRecord = id => storedSpaces().find(r => r.id === id);
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
 const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface'];
 const focusedRoomMember = () => selected === 'room' && roomSurface === 'overview' && Boolean(roomSession);
@@ -92,15 +95,22 @@ function oldBackendJoin(record) {
   const version = versionValue(record.runtimeVersion);
   return uiError(version ? 'error.legacySpaceJoinVersion' : 'error.legacySpaceJoin', { name: participantLabel(record, state.sessions), ...(version ? { version } : {}) });
 }
+const placementProof = record => ({ nativeId: record.nativeId,
+  placementRevision: window.nativeWorkspaceSpaces.placementRevision(record), connectionRevision: record.connectionRevision || 0 });
 async function addToSpace(id, destination) {
   const room = spaceRecord(destination), record = state.sessions.find(s => s.id === id);
   if (!room || room.archived || !record || record.archived) throw uiError("error.spaceChanged");
   if (!window.nativeWorkspaceSpaces.canJoin(record, destination)) throw oldBackendJoin(record);
-  const receipt = await api.spaceAction(destination, 'join', [id, true]);
+  if (window.nativeWorkspaceSpaces.roomIds(record).length && !inSpace(record, destination) && !record.serviceCapabilities?.includes('singleHomeMoveV1')) throw uiError('error.movePlacementUnsupported');
+  const receipt = await api.spaceAction(destination, 'join', [id, true, placementProof(record)]);
   updateState(await api.initial()); render();
   if (!receipt?.changed) return toastMessage("toast.alreadyMember", { arg1: room.name });
   toastMessage("toast.joinedSpace", { arg1: room.name }, { label: uiText('action.undoJoin'), labelKey: 'action.undoJoin', nameKey: 'action.undoJoinName', params: { name: room.name }, run: async () => {
-    await api.spaceAction(destination, 'join', [id, false, { revision: receipt.revision, nativeId: receipt.nativeId }]);
+    const previous = receipt.previousRoomId || null;
+    const proof = receipt.placementRevision !== undefined
+      ? { nativeId: receipt.nativeId, placementRevision: receipt.placementRevision, connectionRevision: receipt.connectionRevision }
+      : { revision: receipt.revision, nativeId: receipt.nativeId };
+    await api.spaceAction(previous || destination, 'join', [id, Boolean(previous), proof]);
     updateState(await api.initial()); render(); toastMessage("toast.undoJoinDone", { arg1: spaceRecord(destination)?.name || room.name });
   } });
 }
@@ -844,6 +854,7 @@ async function selectSpace(id) {
   return selectRoom(roomSession);
 }
 function renderSpaceNavigation() {
+  $('room-nav').parentElement.hidden = !allSpaces().some(r => r.id === 'shared');
   for (const room of allSpaces()) {
     let row = spaceRows.get(room.id);
     if (!row) {
@@ -1047,7 +1058,9 @@ async function operateNative(id) {
   if (activeSessionId() === id) await switchMode('terminal');
 }
 async function detach(id, source = spaceId) {
-  await api.spaceAction(source, 'join', [id, false]);
+  const record = state.sessions.find(s => s.id === id);
+  if (!record) throw uiError('error.sessionMissing');
+  await api.spaceAction(source, 'join', [id, false, placementProof(record)]);
   // State reconciliation removes the reader in place. Opening its original
   // session is a separate human action, never another input/view claim.
   sessionNoticeMessage("toast.detached", undefined, id);
@@ -1328,7 +1341,7 @@ async function finishCreateSpace(ticket, revision) {
     if (!window.nativeWorkspaceSpaces.canJoin(record, room.id)) throw Object.assign(oldBackendJoin(record), { final: true });
     if (!inSpace(record, room.id)) {
       if (!fresh()) return paused('create.stepJoinSpace');
-      await api.spaceAction(room.id, 'join', [record.id, true]); updateState(await api.initial()); render();
+      await api.spaceAction(room.id, 'join', [record.id, true, placementProof(record)]); updateState(await api.initial()); render();
       if (!inSpace(state.sessions.find(s => s.id === record.id), room.id)) throw uiError('error.spaceJoinDidNotApply');
     }
     // Joined. If the selection moved meanwhile the dialog may still be open: close it too, since nothing is left to do here
@@ -1858,23 +1871,29 @@ async function moveSidebarSession(id, target, after) {
   await api.sidebar({ type: 'move', id, target, after });
 }
 function renderSidebarGroups() {
-  // T-145: the grouped view's headings are the space list; the layout gives 协作空间 only its content height.
-  $('workspace-group').dataset.groupedSessions = String(sidebarView === 'grouped');
+  const grouped = sidebarView === 'grouped', count = allSpaces().filter(r => !r.archived).length;
+  $('workspace-group').hidden = grouped;
+  const createSlot = $(grouped ? 'sessions-create-slot' : 'workspace-create-slot');
+  if ($('new-space').parentElement !== createSlot) createSlot.append($('new-space'));
+  const discoveryGroup = $(grouped ? 'sessions-group' : 'workspace-group');
+  if ($('space-discovery').parentElement !== discoveryGroup) discoveryGroup.insertBefore($('space-discovery'), discoveryGroup.querySelector('.sidebar-group-body'));
+  $('space-discovery').hidden = Boolean(count) || Boolean(state.sidebar?.[grouped ? 'sessionsCollapsed' : 'workspaceCollapsed']);
+  ui.display.text($('session-group-label'), grouped ? 'sidebar.spaces' : 'sidebar.sessions');
   const visible = state.sessions.filter(s => !s.archived);
   const working = visible.filter(s => s.state === 'working').length;
-  ui.display.computed($('session-group-summary'), 'text', () => working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
+  ui.display.computed($('session-group-summary'), 'text', () => grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length));
   ui.display.computed($('workspace-group-summary'), 'text', () => state.room.archived ? '0' : uiText('sidebar.memberCount', { count: members().length }));
   // The drop hint counts toward the section's fixed height, so it is shown or hidden before the layout measures (T-136).
   document.querySelector('.drop-hint').hidden = !allSpaces().some(r => !r.archived);
   for (const [section, control, body] of [['sessions', 'solo-drop', 'session-list'], ['workspace', 'workspace-toggle', 'workspace-group-body'], ['archive', 'archive-button', 'archive-group-body']]) {
     const collapsed = section === 'archive' ? state.sidebar?.archiveCollapsed !== false : Boolean(state.sidebar?.[section + 'Collapsed']), toggle = $(control);
-    const name = () => uiText({ sessions: 'sidebar.sessions', workspace: 'sidebar.spaces', archive: 'sidebar.archive' }[section]);
-    ui.display.computed(toggle, 'aria-label', () => section === 'archive' ? uiText('sidebar.archiveAria', { count: state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived)) }) : uiText('sidebar.groupAria', { name: name(), summary: section === 'sessions' ? working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length) : uiText('sidebar.spaceCount', { count: allSpaces().filter(room => !room.archived).length }) }));
+    const name = () => uiText({ sessions: grouped ? 'sidebar.spaces' : 'sidebar.sessions', workspace: 'sidebar.spaces', archive: 'sidebar.archive' }[section]);
+    ui.display.computed(toggle, 'aria-label', () => section === 'archive' ? uiText('sidebar.archiveAria', { count: state.sessions.filter(s => s.archived).length + Number(Boolean(state.room.archived)) }) : uiText('sidebar.groupAria', { name: name(), summary: section === 'sessions' ? grouped ? String(count) : working ? uiText('sidebar.workingCount', { count: visible.length, working }) : String(visible.length) : uiText('sidebar.spaceCount', { count: allSpaces().filter(room => !room.archived).length }) }));
     toggle.setAttribute('aria-expanded', String(!collapsed));
     toggle.querySelector('.group-chevron').textContent = collapsed ? '▸' : '▾';
     if (collapsed && $(body).contains(document.activeElement)) { sessionMenu?.close(); roomMenu?.(); toggle.focus(); }
     $(body).hidden = collapsed;
-    ui.display.attribute(toggle, 'title', collapsed ? 'sidebar.expand' : 'sidebar.collapse', () => ({ name: section === 'sessions' ? uiText('sidebar.sessionDrop') : name() }));
+    ui.display.attribute(toggle, 'title', collapsed ? 'sidebar.expand' : 'sidebar.collapse', () => ({ name: section === 'sessions' && !grouped ? uiText('sidebar.sessionDrop') : name() }));
   }
   sidebarLayout?.update(state.sidebar);
 }
@@ -1904,7 +1923,7 @@ function renderSessions() {
     const groups = allSpaces().filter(r => !r.archived).map(r => ({ id: r.id, name: r.name, people: orderedMembers(r.id).filter(s => visible.includes(s)) }));
     // Every listed session appears at least once: a session left only in an archived or unknown space counts as independent.
     const independent = visible.filter(s => !groups.some(group => inSpace(s, group.id)));
-    if (independent.length) groups.push({ id: '', name: null, people: independent });
+    groups.push({ id: '', name: null, people: independent });
     groups.forEach((group, index) => {
       let entry = sidebarGroups.get(group.id);
       if (!entry) {
@@ -1920,9 +1939,10 @@ function renderSessions() {
           title.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation(); if (!more.disabled) openRoomMenu({ x: event.clientX, y: event.clientY }, more, group.id); });
           title.addEventListener('keydown', event => { if ((event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') && !more.disabled) { event.preventDefault(); event.stopPropagation(); openRoomMenu(undefined, more, group.id); } });
           heading.append(more); bindSpaceHighlight(element, group.id); dropTarget(element, true, group.id);
-        }
+        } else dropTarget(heading, false);
         entry = { element, title, body, toggle, attention, more }; sidebarGroups.set(group.id, entry);
       }
+      entry.element.classList.toggle('empty-independent', !group.id && !group.people.length);
       // Group spaces are never archived (archived ones get no group), as on the 协作空间 row's ⋯.
       if (entry.more) {
         ui.display.attribute(entry.more, 'aria-label', 'sidebar.spaceActions', { name: group.name }); ui.display.attribute(entry.more, 'title', 'sidebar.spaceActions', { name: group.name });
@@ -2329,12 +2349,21 @@ async function moveRoomMember(id, target, after, destination = spaceId) {
 function draggableSession(element, id, reorder = false, sourceSpace = selected === 'room' ? spaceId : '') {
   element.draggable = true;
   element.addEventListener('dragstart', event => {
-    event.dataTransfer.setData('application/x-native-session', id); event.dataTransfer.effectAllowed = 'copyMove';
+    event.dataTransfer.setData('application/x-native-session', id); event.dataTransfer.effectAllowed = 'move';
+    const record = state.sessions.find(s => s.id === id);
+    if (record) event.dataTransfer.setData('application/x-native-placement', JSON.stringify([record.placementRevision || 0, record.connectionRevision || 0]));
     event.dataTransfer.setData('application/x-native-source-space', sourceSpace);
     if (reorder) event.dataTransfer.setData('application/x-native-session-order', id);
     document.querySelector('.sidebar').classList.add('dragging-session');
   });
   element.addEventListener('dragend', () => { document.querySelector('.sidebar').classList.remove('dragging-session'); document.querySelectorAll('.drag-over, .drop-before, .drop-after').forEach(el => el.classList.remove('drag-over', 'drop-before', 'drop-after')); });
+}
+function currentDrag(event, id) {
+  const encoded = event.dataTransfer.getData('application/x-native-placement');
+  if (!encoded) return; // Older drag sources still use the backend's current proof.
+  const record = state.sessions.find(s => s.id === id);
+  let proof; try { proof = JSON.parse(encoded); } catch { throw uiError('error.movePlacementChanged'); }
+  if (!record || !Array.isArray(proof) || proof.length !== 2 || proof[0] !== (record.placementRevision || 0) || proof[1] !== (record.connectionRevision || 0)) throw uiError('error.movePlacementChanged');
 }
 function sidebarDropRow(element, target, group = null) {
   const accepts = event => !disconnected && event.dataTransfer.types.includes('application/x-native-session-order');
@@ -2349,16 +2378,27 @@ function sidebarDropRow(element, target, group = null) {
     if (!accepts(event)) return;
     event.preventDefault(); event.stopPropagation(); element.classList.remove('drop-before', 'drop-after');
     const id = event.dataTransfer.getData('application/x-native-session-order'), source = event.dataTransfer.getData('application/x-native-source-space');
-    if (group && source !== group) attempt(() => addToSpace(id, group));
-    else attempt(() => group ? moveRoomMember(id, target, after(event), group) : moveSidebarSession(id, target, after(event)));
+    attempt(async () => {
+      currentDrag(event, id);
+      const record = state.sessions.find(s => s.id === id), homes = record && window.nativeWorkspaceSpaces.roomIds(record);
+      if (group && !homes?.includes(group)) return addToSpace(id, group);
+      if (group === '' && homes?.length) {
+        if (homes.length !== 1) throw uiError('error.movePlacementAmbiguous');
+        return detach(id, homes[0]);
+      }
+      return group ? moveRoomMember(id, target, after(event), group) : moveSidebarSession(id, target, after(event));
+    });
   });
 }
 function dropTarget(element, join, destination = 'shared') {
-  element.addEventListener('dragover', event => { if (event.dataTransfer.types.includes('application/x-native-session')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; element.classList.add('drag-over'); } });
+  const active = () => !(element.id === 'solo-drop' && sidebarView === 'grouped');
+  element.addEventListener('dragover', event => { if (active() && event.dataTransfer.types.includes('application/x-native-session')) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; element.classList.add('drag-over'); } });
   element.addEventListener('dragleave', event => { if (!element.contains(event.relatedTarget)) element.classList.remove('drag-over'); });
   element.addEventListener('drop', event => {
     event.preventDefault(); event.stopPropagation(); element.classList.remove('drag-over');
+    if (!active()) return;
     const id = event.dataTransfer.getData('application/x-native-session');
+    try { currentDrag(event, id); } catch (error) { toastError(error); return; }
     if (!join && element.id === 'session-list' && sidebarView === 'grouped') return;
     if (!join && element.id === 'session-list' && event.dataTransfer.types.includes('application/x-native-session-order')) {
       attempt(() => moveSidebarSession(id, sidebarSessions().at(-1)?.id, true)); return;
@@ -3630,6 +3670,7 @@ $('workspace-toggle').addEventListener('keydown', event => { if (event.key === '
 for (const [id, view] of [['sessions-flat', 'flat'], ['sessions-grouped', 'grouped']]) $(id).onclick = () => { sidebarView = view; sessionMenu?.close(); render(); attempt(persistView); $(id).focus(); };
 $('room-nav').onclick = () => attempt(() => selectSpace('shared'));
 $('panorama-nav').onclick = () => attempt(openPanorama);
+$('create-first-space').onclick = openSpaceCreate;
 $('return-panorama').onclick = () => attempt(returnToPanorama);
 $('room-more').onclick = () => openRoomMenu(undefined, $('room-more'), 'shared');
 $('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };

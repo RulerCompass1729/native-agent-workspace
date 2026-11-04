@@ -1,3 +1,4 @@
+// Historical multi-membership fixture coverage; not I182 one-home GUI acceptance.
 // T69/T108: seven synthetic sessions, one original plus two new spaces.
 // Run only after Main's precise GUI handoff; this recipe never tests the daily app.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
@@ -163,10 +164,10 @@ async function run() {
     await second.locator(`[data-space-id="${b}"] .room-nav`).click(); await second.locator('#shared-input').fill('Second window B draft');
     assert.equal(await page.locator('#shared-input').inputValue(), 'A independent unsent'); await second.close();
   });
-  await flow('13 drag adds membership, preserves old space and undo removes only this addition', async () => { await page.locator(`[data-session-group="shared"] [data-session-row="${ids[3]}"] .session-link`).dragTo(page.locator(`#session-list [data-session-group="${a}"] .session-space-heading`)) /* T-145: in the grouped view the space's group is its row */; await until(async () => members(await snapshot(), a).some(s => s.id === ids[3]), 'Drag add acknowledged'); assert.ok(members(await snapshot(), 'shared').some(s => s.id === ids[3])); await page.getByRole('button', { name: '撤销加入「Research A」', exact: true }).click(); await until(async () => !members(await snapshot(), a).some(s => s.id === ids[3]), 'Undo exact addition');
-    await page.locator(`[data-session-group="shared"] [data-session-row="${ids[3]}"] .session-link`).dragTo(page.locator(`#session-list [data-session-group="${a}"] .session-space-heading`)) /* T-145: in the grouped view the space's group is its row */; await page.getByRole('button', { name: '撤销加入「Research A」', exact: true }).waitFor();
+  await flow('13 drag moves out of the old space and undo restores the old home', async () => { await page.locator(`[data-session-group="shared"] [data-session-row="${ids[3]}"] .session-link`).dragTo(page.locator(`#session-list [data-session-group="${a}"] .session-space-heading`)) /* T-145: in the grouped view the space's group is its row */; await until(async () => members(await snapshot(), a).some(s => s.id === ids[3]), 'Drag add acknowledged'); assert.ok(!members(await snapshot(), 'shared').some(s => s.id === ids[3])); await page.getByRole('button', { name: '撤销移动到「Research A」', exact: true }).click(); await until(async () => !members(await snapshot(), a).some(s => s.id === ids[3]), 'Undo exact addition');
+    await page.locator(`[data-session-group="shared"] [data-session-row="${ids[3]}"] .session-link`).dragTo(page.locator(`#session-list [data-session-group="${a}"] .session-space-heading`)) /* T-145: in the grouped view the space's group is its row */; await page.getByRole('button', { name: '撤销移动到「Research A」', exact: true }).waitFor();
     await page.evaluate(async ({ id, space }) => { await workspace.spaceAction(space, 'join', [id, false]); await workspace.spaceAction(space, 'join', [id, true]); }, { id: ids[3], space: a });
-    await page.getByRole('button', { name: '撤销加入「Research A」', exact: true }).click(); await page.locator('#toast-text').filter({ hasText: '这次撤销没有执行' }).waitFor();
+    await page.getByRole('button', { name: '撤销移动到「Research A」', exact: true }).click(); await page.locator('#toast-text').filter({ hasText: '这次撤销没有执行' }).waitFor();
     assert.ok(members(await snapshot(), a).some(s => s.id === ids[3]));
   });
   await flow('14 late A acceptance cannot clear an equal B draft or retarget original reply', async () => {

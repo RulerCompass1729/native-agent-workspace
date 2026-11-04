@@ -6,15 +6,15 @@ const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { RoomState } = require('../room-state.cjs');
 const locale = require('../ui-locale.js');
-const { withMembership, isMember, membershipRevision } = require('../collaboration-spaces.cjs');
+const { withMembership, withPlacement, placementRevision, isMember, membershipRevision } = require('../collaboration-spaces.cjs');
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-merge-state-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const state = new RoomState(directory), a = state.create('A'), b = state.create('B');
-  const sessions = new Map(['s', 't'].map(id => [id, withMembership(withMembership({ id, provider: 'codex', name: id,
+  const sessions = new Map(['s', 't'].map(id => [id, withPlacement({ id, provider: 'codex', name: id,
     nativeId: `native-${id}`, roomId: null, controlRevision: 1, connectionRevision: 1,
-    liveDraft: 'UNSENT PRIVATE', goal: { status: 'blocked' } }, a, true), b, true)]));
+    liveDraft: 'UNSENT PRIVATE', goal: { status: 'blocked' } }, id === 's' ? a : b)]));
   const rooms = new Map([a, b].map((id, i) => [id, { id, revision: 1, run: null, messages: [
     { id: `original-${i}`, role: 'assistant', sessionId: 's', nativeId: 'native-s', text: `Exact original ${i}`, status: 'complete', time: i + 1 } ] }]));
   const controls = {}, calls = [], counters = { imports: 0, sends: 0, inputs: 0 };
@@ -22,8 +22,19 @@ function fixture(t) {
   const client = {
     async call(method, ...args) {
       calls.push({ method, args: structuredClone(args) });
-      if (method === 'initial') return structuredClone({ capabilities: controls.old ? [] : ['collaborationSpacesV1', 'spaceMergeV1'],
+      if (method === 'initial') return structuredClone({ capabilities: controls.old ? [] : ['collaborationSpacesV1', 'spaceMergeV1', 'singleHomeMoveV1'],
         sessions: [...sessions.values()], rooms: [...rooms.values()], room: { id: 'shared', revision: 0, messages: [] }, storageWarning: controls.warning || null });
+      if (method === 'moveMembership') {
+        const [id, destination, proof] = args, current = sessions.get(id);
+        if (controls.failJoin && destination && ![a, b].includes(destination)) throw Error('Synthetic target member failure');
+        if (current.placementReceipt?.operationId === proof.operationId) return { ...current.placementReceipt, changed: true, replayed: true };
+        if (proof.nativeId !== current.nativeId || proof.revision !== placementRevision(current) || proof.connectionRevision !== current.connectionRevision) throw Error('Synthetic stale complete placement');
+        const next = withPlacement(current, destination), previous = require('../collaboration-spaces.cjs').roomIds(current)[0] || null;
+        const receipt = { operationId: proof.operationId, nativeId: current.nativeId, beforeRevision: proof.revision, revision: placementRevision(next), previousRoomId: previous, roomId: destination, connectionRevision: current.connectionRevision };
+        next.placementReceipt = receipt;sessions.set(id, next);if (destination) ensureRoom(destination);
+        if (previous && rooms.get(previous)?.run) rooms.get(previous).run.status = 'paused';
+        return { ...receipt, changed: true };
+      }
       if (method === 'mergeSnapshot') {
         counters.imports++; const batch = args[0];
         if (controls.beforeImport) await controls.beforeImport(batch);
@@ -44,7 +55,7 @@ function fixture(t) {
     },
     async callSpace(roomId, method, args) {
       calls.push({ roomId, method, args: structuredClone(args) });
-      if (method === 'pause') { const run = rooms.get(roomId)?.run; if (run) run.status = 'paused'; return; }
+      if (method === 'pause') { if (controls.failLeave === roomId && counters.imports > 0) throw Error('Synthetic source detach failure'); const run = rooms.get(roomId)?.run; if (run) run.status = 'paused'; return; }
       assert.equal(method, 'join');
       const [id, joined, expected] = args, session = sessions.get(id);
       if (controls.failLeave === roomId && !joined) throw Error('Synthetic source detach failure');
@@ -64,10 +75,10 @@ test('preview is read-only and commit saves a new independent C without changing
   assert.equal(fs.readFileSync(f.state.spacesFile, 'utf8'), before); assert.equal(f.counters.imports, 0);
   const result = await f.state.mergeCommit(f.client, batch.operationId, batch.binding);
   assert.equal(result.stage, 'ready'); assert.equal(f.counters.imports, 1);
-  assert.equal(f.rooms.get(batch.targetId).messages.length, 2); assert.equal(f.rooms.get(f.a).run.status, 'running');
+  assert.equal(f.rooms.get(batch.targetId).messages.length, 2); assert.equal(f.rooms.get(f.a).run.status, 'paused', 'Source routing pauses; no native input or process action is sent');
   for (const session of f.sessions.values()) {
     assert.equal(session.nativeId, `native-${session.id}`); assert.equal(session.liveDraft, 'UNSENT PRIVATE'); assert.equal(session.goal.status, 'blocked');
-    assert.equal(isMember(session, f.a), true); assert.equal(isMember(session, f.b), true); assert.equal(isMember(session, batch.targetId), true);
+    assert.equal(isMember(session, f.a), false); assert.equal(isMember(session, f.b), false); assert.equal(isMember(session, batch.targetId), true);
   }
   assert.equal(f.counters.sends, 0); assert.equal(f.counters.inputs, 0); assert.notEqual(JSON.stringify([...f.sessions.values()]), original, 'Only membership references changed');
 });
@@ -93,7 +104,7 @@ test('archive completes without queue reentry deadlock, only after verified targ
   assert.equal(result.stage, 'ready'); assert.ok(result.sources.every(source => source.status === 'done'));
   assert.equal(f.state.metadata(f.a).archived, true); assert.equal(f.state.metadata(f.b).archived, true);
   const importedAt = f.calls.findIndex(call => call.method === 'mergeSnapshot');
-  const detachedAt = f.calls.findIndex(call => call.method === 'join' && call.args[1] === false);
+  const detachedAt = f.calls.findIndex(call => call.method === 'moveMembership' && call.args[1] === batch.targetId);
   assert.ok(importedAt >= 0 && detachedAt > importedAt);
   assert.equal(f.rooms.get(batch.targetId).messages.length, 2);
 });
@@ -151,7 +162,7 @@ test('undo with later C notes, message and membership preserves them and all imp
   assert.equal(f.state.metadata(batch.targetId).archived, false); assert.equal(f.state.metadata(batch.targetId).notes, 'Later C notes');
   assert.equal(JSON.stringify(f.rooms.get(batch.targetId).messages), before);
   assert.equal(f.state.metadata(f.a).archived, false); assert.equal(f.state.metadata(f.b).archived, false);
-  for (const session of f.sessions.values()) for (const roomId of [f.a, f.b, batch.targetId]) assert.equal(isMember(session, roomId), true);
+  for (const session of f.sessions.values()) { assert.equal(isMember(session, batch.targetId), true); assert.equal(isMember(session, f.a), false); assert.equal(isMember(session, f.b), false); }
   assert.equal(f.counters.imports, 1); assert.equal(f.counters.sends, 0);
 });
 test('undo without later work archives C and restores sources without old run or replay', { timeout: 1000 }, async t => {
@@ -175,7 +186,7 @@ test('a saved unsent C draft supplied by the trusted window guard retains C even
 test('undo refuses to overwrite subsequently changed source metadata or native identity', async t => {
   const f = fixture(t), batch = await f.preview({ disposition: 'archive' }); await f.state.mergeCommit(f.client, batch.operationId, batch.binding);
   f.state.notes('Changed archived source', f.state.metadata(f.a).revision, f.a);
-  f.sessions.get('s').nativeId = 'new-native-context';
+  f.sessions.get('s').nativeId = 'new-native-context'; f.sessions.get('t').nativeId = 'new-native-context-t';
   const result = await f.state.mergeUndo(f.client, batch.operationId, batch.binding);
   assert.equal(result.stage, 'partial'); assert.ok(result.failures.length > 0);
   const raw = result.failures.join('\n'), translated = locale.errorText('en', { message: raw, uiMessage: result.failuresUiMessage });
@@ -219,16 +230,18 @@ test('clearing C also removes imported payloads from profile metadata and cannot
 });
 test('a partially failed target archive during undo is recorded and a manual retry does not mistake its own changes for later user work', async t => {
   const f = fixture(t), batch = await f.preview({ disposition: 'archive' }); await f.state.mergeCommit(f.client, batch.operationId, batch.binding);
-  const call = f.client.callSpace.bind(f.client); let leaves = 0, failed = false;
-  f.client.callSpace = async (room, method, args) => {
-    if (room === batch.targetId && method === 'join' && !args[1] && ++leaves === 2 && !failed) {
+  const call = f.client.call.bind(f.client); let leaves = 0, failed = false;
+  f.client.call = async (method, ...args) => {
+    if (method === 'moveMembership' && [f.a, f.b].includes(args[1]) && ++leaves === 2 && !failed) {
       failed = true; throw Error('Synthetic undo target detach failure');
     }
-    return call(room, method, args);
+    return call(method, ...args);
   };
   const partial = await f.state.mergeUndo(f.client, batch.operationId, batch.binding);
   assert.equal(partial.stage, 'partial'); assert.match(partial.failures[0], /undo target detach failure/);
-  assert.equal(f.state.metadata(f.a).archived, true);
+  assert.equal(f.state.metadata(f.a).archived, false);
+  assert.equal(isMember(f.sessions.get('s'), f.a), true, 'The first restored native session stays in its original home');
+  assert.equal(isMember(f.sessions.get('t'), batch.targetId), true, 'The unconfirmed second move is not treated as completed');
   const done = await f.state.mergeUndo(f.client, batch.operationId, batch.binding);
   assert.equal(done.stage, 'undone'); assert.equal(done.undoKeptTarget, false);
   assert.equal(f.state.metadata(batch.targetId).archived, true); assert.equal(f.state.metadata(f.a).archived, false);

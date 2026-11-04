@@ -135,23 +135,28 @@ class Workspace extends EventEmitter {
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.persist(), 150);
   }
-  persist() {
+  persist(replacement) {
     clearTimeout(this.saveTimer); clearTimeout(this.saveDeadline);
     this.saveTimer = this.saveDeadline = null;
-    if (this.storageWarning) return;
+    if (this.storageWarning) return false;
+    let workspaceSaved = false;
     const target = path.join(this.dataDir, 'workspace.json'); const temp = `${target}.tmp`;
     try {
       // No terminal bytes, credentials, environment, hook secrets or raw protocol.
-      const sessions = [...this.sessions.values()].map(({ owner, approval, approvals, approvalOverflow, approvalResolved, pid, ...s }) => ({ ...s, messages: persistedMessages(s.messages), pendingTag: null }));
+      const sessions = [...this.sessions.values()].map(record => {
+        const { owner, approval, approvals, approvalOverflow, approvalResolved, pid, ...s } = replacement?.id === record.id ? replacement.next : record;
+        return { ...s, messages: persistedMessages(s.messages), pendingTag: null };
+      });
       const mobile = Array.isArray(this.mobileRequests) && !this.mobileRequests.length ? {} : { mobileRequests: this.mobileRequests };
       fs.writeFileSync(temp, JSON.stringify({ sessions, room: { messages: persistedMessages(this.room.messages, 'shared-native-cache-gap'), ...(this.room.run ? { run: this.room.run } : {}) }, drafts: Object.fromEntries(this.drafts), ...mobile }), { mode: 0o600 });
-      fs.renameSync(temp, target); fs.chmodSync(target, 0o600);
+      fs.renameSync(temp, target); workspaceSaved = true; fs.chmodSync(target, 0o600);
       if (this.rooms.size > 1) {
         const file = path.join(this.dataDir, 'room-records.json'), pending = `${file}.tmp`;
         fs.writeFileSync(pending, JSON.stringify({ version: 1, rooms: [...this.rooms.values()].filter(r => r.id !== 'shared').map(r => ({ ...r, messages: persistedMessages(r.messages, 'shared-native-cache-gap') })) }), { mode: 0o600 });
         fs.renameSync(pending, file); fs.chmodSync(file, 0o600);
       }
     } catch { this.storageFailure = 'write'; setWarning(this, 'storageWarning', 'error.warning.workspaceWrite'); this.emit('change'); }
+    return workspaceSaved;
   }
   retrySave() {
     // A failed read may hide existing records. Never overwrite it with the
@@ -830,10 +835,59 @@ class Workspace extends EventEmitter {
   messageLists(s) { return [s.messages, ...[...this.rooms.values()].map(r => r.messages)]; }
   sharedMessage(id) { for (const room of this.rooms.values()) { const m = room.messages.find(m => m.id === id); if (m) return m; } }
   activeRun(id) { return [...this.rooms.values()].map(r => r.run).find(run => run?.status === 'running' && (!id || run.ids?.includes(id))); }
+  moveMembership(id, destination, proof) {
+    const s = this.get(id), generation = spaces.placementRevision(s);
+    if (!proof || typeof proof !== 'object' || Array.isArray(proof) ||
+        !spaces.roomId(proof.operationId) || proof.operationId === 'shared' ||
+        proof.nativeId !== s.nativeId || !Number.isSafeInteger(proof.revision) || proof.revision < 0 ||
+        proof.connectionRevision !== (s.connectionRevision || 0) || s.nativeContextPending || this.stops.has(id)) throw uiError('error.movePlacementChanged');
+    if (destination !== null && !spaces.roomId(destination)) throw uiError('error.invalidMemberAction');
+    const previous = spaces.roomIds(s), last = s.placementReceipt;
+    if (previous.length > 1) throw uiError('error.movePlacementAmbiguous');
+    if (last?.operationId === proof.operationId) {
+      if (last.nativeId !== s.nativeId || last.roomId !== destination || last.beforeRevision !== proof.revision ||
+          last.revision !== generation || last.connectionRevision !== proof.connectionRevision || (previous[0] || null) !== destination) throw uiError('error.movePlacementChanged');
+      return { ...last, changed: true, replayed: true };
+    }
+    if (proof.revision !== generation) throw uiError('error.movePlacementChanged');
+    if (this.storageWarning) throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage });
+    const next = spaces.withPlacement(s, destination);
+    if (next === s) return { changed: false, roomId: destination, nativeId: s.nativeId, revision: generation };
+    const receipt = { operationId: proof.operationId, nativeId: s.nativeId,
+      previousRoomId: previous[0] || null, roomId: destination, beforeRevision: generation,
+      revision: next.placementRevision, connectionRevision: s.connectionRevision || 0 };
+    next.placementReceipt = receipt;
+    // Revoke old routing before committing; accepted native work is not stopped.
+    for (const room of new Set([...previous, ...(destination ? [destination] : [])])) {
+      this.roomFor(room, true);
+      this.pauseRoom(room, '会话位置正在改变，后续交接已暂停', uiActivity('notice.run.placementChanging')[1]);
+      this.rooms.get(room).revision++;
+    }
+    // The entire membership vector and last receipt share one workspace rename.
+    // Do not publish a transient standalone position or replace the runtime record.
+    let saved = this.persist({ id, next });
+    if (!saved) {
+      // A save error may have occurred after rename. Reconcile once, never replay.
+      try {
+        const recorded = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'workspace.json'), 'utf8')).sessions.find(record => record.id === id);
+        saved = recorded?.nativeId === s.nativeId && recorded.placementReceipt?.operationId === receipt.operationId &&
+          recorded.placementReceipt.revision === receipt.revision && JSON.stringify(spaces.roomIds(recorded)) === JSON.stringify(spaces.roomIds(next));
+      } catch { /* The existing storage warning keeps routing closed. */ }
+    }
+    if (!saved) throw uiError('error.movePlacementUnconfirmed');
+    Object.assign(s, next);
+    this.sharedReplies.refresh(); this.emit('change');
+    return { ...receipt, changed: true };
+  }
   join(id, join, roomId = 'shared') {
     const s = this.get(id);
-    const next = spaces.withMembership(s, roomId, join);
+    // Old clients may make a literal join/leave, but cannot append a second home.
+    if (join && !spaces.isMember(s, roomId) && spaces.roomIds(s).length) throw uiError('error.movePlacementUnsupported');
+    let next = spaces.withMembership(s, roomId, join);
     if (next === s) return;
+    const generation = spaces.placementRevision(s) + 1;
+    if (!Number.isSafeInteger(generation)) throw uiError('error.movePlacementChanged');
+    next = { ...next, placementRevision: generation };
     if (this.storageWarning) throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage });
     const room = this.roomFor(roomId, true);
     this.pauseRoom(roomId, join ? '成员已加入' : '成员已退出', uiActivity(join ? 'notice.run.memberJoined' : 'notice.run.memberLeft')[1]);

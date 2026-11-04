@@ -128,16 +128,20 @@ Enter sends, Shift Enter inserts a newline. Search and member filters only chang
 what you read, never the recipient. Shared messages and confirmed membership
 changes form a local timeline; old events are not invented retroactively.
 
-The sidebar separates **会话** from **协作空间**, with archive and setup tools below.
-A collaborating agent still appears in the session section for individual use.
+The sidebar can list sessions flat or grouped by space. A session has one home:
+Independent or one collaboration space. Moving it preserves its native identity,
+draft and history, and revokes old sharing grants. Undo restores the previous
+home only if no later placement has changed. Older backends refuse cross-space
+moves until a safe update; legacy overlapping records are retained for inspection.
 
 The workspace **⋯** menu supports rename and archive. Session menus also support
 archive. **归档** in the sidebar restores the same records. Session archive detaches
 it; room archive pauses routing and detaches its members, preserving its name,
-messages and notes. Restore reconnects saved membership except separately archived
-or missing sessions. No task is replayed and no native process is stopped by
+messages and notes. Restore reconnects saved members only when their saved identity and placement
+are unchanged; later moves are kept. Missing placement proofs leave the session
+in its current home while restoring the space history. No task is replayed and no native process is stopped by
 archiving. Native work may continue; the archive list exposes reported state.
-The alpha still has one shared workspace, not multiple independent rooms.
+Spaces keep separate shared records; moving a session does not move its old shared records.
 
 **共享笔记** stores human-edited goals and decisions locally, including saved versions
 in the timeline. Saving does not notify a model. **附上背景…** previews only the room

@@ -6,14 +6,15 @@
   function weights(value) {
     return Array.isArray(value) && value.length === 3 && Array.from(value).every(n => Number.isInteger(n) && n > 0 && n < 9999) && value.reduce((a, b) => a + b, 0) === 10000 ? [...value] : [...defaults];
   }
-  function geometry(height, headers, collapsed, preference) {
+  function geometry(height, headers, collapsed, preference, hidden = [false, false, false]) {
+    headers = headers.map((n, i) => hidden[i] ? 0 : n);
     preference = weights(preference);
-    const open = [0, 1, 2].filter(i => !collapsed[i]);
-    const available = Math.max(0, (Number.isFinite(height) ? height : 0) - headers.reduce((a, b) => a + b, 0) - 2 * sashSize);
+    const open = [0, 1, 2].filter(i => !collapsed[i] && !hidden[i]);
+    const available = Math.max(0, (Number.isFinite(height) ? height : 0) - headers.reduce((a, b) => a + b, 0) - [0, 1].filter(i => !hidden[i] && hidden.slice(i + 1).includes(false)).length * sashSize);
     const minimum = open.length ? Math.min(minimumBody, available / open.length) : 0;
     const flexible = Math.max(0, available - minimum * open.length), total = open.reduce((sum, i) => sum + preference[i], 0);
-    const bodies = headers.map((_, i) => collapsed[i] ? 0 : minimum + flexible * preference[i] / total);
-    const pairs = [0, 1].map(i => collapsed[i] ? null : (() => { const next = open.find(n => n > i); return next === undefined ? null : [i, next]; })());
+    const bodies = headers.map((_, i) => collapsed[i] || hidden[i] ? 0 : minimum + flexible * preference[i] / total);
+    const pairs = [0, 1].map(i => collapsed[i] || hidden[i] ? null : (() => { const next = open.find(n => n > i); return next === undefined ? null : [i, next]; })());
     return { sizes: bodies.map((body, i) => body + headers[i]), bodies, pairs, minimum, flexible };
   }
   function resize(preference, layout, index, delta) {
@@ -38,25 +39,18 @@
     const removers = [];
     const listen = (el, name, fn) => { el.addEventListener(name, fn); removers.push(() => el.removeEventListener(name, fn)); };
     // A section's fixed part is its heading plus any visible hint after its list (T-136).
-    const fixed = group => [group.querySelector('.nav-label'), ...group.querySelectorAll(':scope > .drop-hint')].reduce((sum, el) => sum + (el ? el.getBoundingClientRect().height : 0), 0);
+    const fixed = group => [group.querySelector('.nav-label'), ...group.querySelectorAll(':scope > .drop-hint, :scope > .space-discovery')].reduce((sum, el) => sum + (el ? el.getBoundingClientRect().height : 0), 0);
     const headers = () => groups.map(fixed);
     const rail = () => navigation.closest('.naw')?.dataset.collapsed === 'true';
     const height = () => { const css = getComputedStyle(navigation); return Math.max(0, navigation.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom)); };
     function apply() {
       if (disposed) return;
       if (rail()) { for (const group of groups) group.style.height = ''; return; }
-      // T-145: in the grouped session view 协作空间 lists no spaces, only 全部空间 and 新建空间; it takes just
-      // that content's height, so the session list (there also the space list) gets the rest.
-      const fitted = groups.map((group, i) => !collapsed[i] && group.dataset.groupedSessions === 'true');
-      // The body stretches to its section, so its content height is where its last shown child ends.
-      const content = body => {
-        const shown = body ? [...body.children].filter(child => child.getClientRects().length) : [];
-        return shown.length ? Math.ceil(Math.max(...shown.map(child => child.getBoundingClientRect().bottom)) - body.getBoundingClientRect().top + parseFloat(getComputedStyle(body).paddingBottom || 0)) : 0;
-      };
-      const parts = headers().map((size, i) => size + (fitted[i] ? content(groups[i].querySelector('.sidebar-group-body')) : 0));
-      layout = geometry(height(), parts, collapsed.map((c, i) => c || fitted[i]), preference);
+      const hidden = groups.map(group => group.hidden);
+      layout = geometry(height(), headers(), collapsed, preference, hidden);
       groups.forEach((group, i) => { group.style.height = `${layout.sizes[i]}px`; });
       sashes.forEach((sash, i) => {
+        sash.hidden = hidden[i] || !hidden.slice(i + 1).includes(false);
         const candidate = layout.pairs[i], pair = candidate && layout.flexible >= 0.01 ? candidate : null; sash.tabIndex = pair ? 0 : -1; sash.setAttribute('aria-disabled', String(!pair));
         if (!pair) return;
         const [left, right] = pair, values = separatorValues(layout, i);

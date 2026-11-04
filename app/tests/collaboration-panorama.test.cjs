@@ -66,7 +66,7 @@ test('real display bindings repaint panorama labels without replacing its focuse
   doc.getSelection = () => { throw Error('Locale repaint must not rerender or navigate the original reader'); };
   binding.setLanguage('en'); binding.ui.display.refresh(host);
   assert.equal(source.textContent, 'View original'); assert.equal(row.children[0].children[1].textContent, 'Background tasks running · 2 (Command 1, Monitor 1)');
-  assert.equal(filter.children[0].textContent, 'All spaces'); assert.equal(filter.value, 'shared');
+  assert.equal(filter.children[0].textContent, 'Sessions overview'); assert.equal(filter.value, 'shared');
   assert.equal(quote.textContent, body); assert.equal(quote.firstChild, rawNode);
   assert.equal(reference.textContent, 'RAW 中文 space'); assert.equal(reference.firstChild, referenceNode);
   assert.equal(api.reader.children[0], row); assert.equal(doc.activeElement, source); assert.equal(api.reader.scrollTop, 27);

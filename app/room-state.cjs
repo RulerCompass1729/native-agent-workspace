@@ -3,11 +3,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { validateName } = require('./session-labels.cjs');
-const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision } = require('./collaboration-spaces.cjs');
+const { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, placementRevision } = require('./collaboration-spaces.cjs');
 const { captureSource, prepareBatch, assertCurrentSources, sameOperation, validateBatch } = require('./space-merge.cjs');
 const orderId = id => typeof id === 'string' && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f]/u.test(id);
 const memberOrder = value => Array.isArray(value) && value.length <= 10000 ? [...new Set(value.filter(orderId))] : [];
-const initialRoom = name => ({ version: 1, name, notes: '', revision: 0, events: [], archived: false, restoreMembers: [], memberOrder: [], files: [] });
+const initialRoom = name => ({ version: 1, name, notes: '', revision: 0, events: [], archived: false, restoreMembers: [], restorePlacements: {}, memberOrder: [], files: [] });
 const roomGate = id => id === DEFAULT_ROOM_ID ? 'room' : `room:${id}`;
 const mergeSignature = value => createHash('sha256').update(JSON.stringify({ name: value.name, notes: value.notes,
   files: value.files, events: value.events.map(e => e.id), memberOrder: value.memberOrder })).digest('hex');
@@ -25,11 +25,17 @@ function validateMerge(value, id) {
       value.undoTargetRevision !== undefined && (!Number.isSafeInteger(value.undoTargetRevision) || value.undoTargetRevision < 0)) throw Error('Invalid undo');
   validateBatch(value.batch);
 }
+function restorePlacement(session) {
+  return { nativeId: session.nativeId ?? null, connectionRevision: session.connectionRevision || 0,
+    revision: placementRevision(session), signature: JSON.stringify([roomIds(session).sort(), session.memberRevision || 0,
+      Object.entries(session.roomMembershipRevisions || {}).sort(([a], [b]) => a.localeCompare(b))]) };
+}
 function validateRoom(data) {
   if (!data || data.version !== 1 || validateName(data.name) !== data.name || typeof data.notes !== 'string' || data.notes.length > 8000 || !Number.isSafeInteger(data.revision) || data.revision < 0 || !Array.isArray(data.events)) throw Error('Invalid room');
   for (const e of data.events) if (!e || typeof e.id !== 'string' || e.role !== 'system' || typeof e.text !== 'string' || !Number.isFinite(e.time) || (e.sessionId !== undefined && typeof e.sessionId !== 'string')) throw Error('Invalid event');
   for (const key of ['archivedSessions', 'restoreMembers']) if (data[key] !== undefined && (!Array.isArray(data[key]) || data[key].some(id => !orderId(id)))) throw Error('Invalid archive');
   if (data.archived !== undefined && typeof data.archived !== 'boolean') throw Error('Invalid archive');
+  if (data.restorePlacements !== undefined && (!data.restorePlacements || typeof data.restorePlacements !== 'object' || Array.isArray(data.restorePlacements) || Object.entries(data.restorePlacements).some(([id, p]) => !orderId(id) || !p || typeof p !== 'object' || p.nativeId !== null && typeof p.nativeId !== 'string' || !Number.isSafeInteger(p.connectionRevision) || p.connectionRevision < 0 || !Number.isSafeInteger(p.revision) || p.revision < 0 || typeof p.signature !== 'string' || p.signature.length > 1048576))) throw Error('Invalid restore placement');
   if (data.files !== undefined && (!Array.isArray(data.files) || data.files.some(f => !f || typeof f.id !== 'string' || !roomId(f.id) || f.id === DEFAULT_ROOM_ID || typeof f.path !== 'string' || !path.isAbsolute(f.path) || /\u0000/.test(f.path) || typeof f.name !== 'string' || !f.name || /[\u0000-\u001f]/u.test(f.name)) || new Set(data.files.map(f => f.id)).size !== data.files.length)) throw Error('Invalid files');
   if (data.merge !== undefined) validateMerge(data.merge, data.id);
   return { ...initialRoom(data.name), ...data, memberOrder: memberOrder(data.memberOrder) };
@@ -182,10 +188,17 @@ class RoomState {
           const cuts = this.mergeSources(snapshot, batch.sources.map(source => source.id));
           assertCurrentSources(batch, cuts);
           if (this.spaces.rooms.some(room => room.id === targetId)) throw uiError("error.room.mergeTargetExists");
+          for (const id of batch.memberIds) {
+            const session = snapshot.sessions.find(s => s.id === id);
+            if (!session || roomIds(session).length > 1) throw uiError('error.movePlacementAmbiguous');
+            if (!(session.serviceCapabilities || snapshot.capabilities || []).includes('singleHomeMoveV1')) throw uiError('error.movePlacementUnsupported');
+          }
           const value = { ...initialRoom(batch.name), id: targetId,
             files: batch.blocks.flatMap(block => block.files.map(file => ({ ...file, id: randomUUID(), snapshotBatch: operationId, origin: { roomId: block.roomId, fileId: file.id } }))), merge: {
             batch: structuredClone(batch), stage: 'preparing', imported: false, joins: [], failures: [], failuresUiMessage: null,
-            memberProofs: batch.memberIds.map(id => ({ id, nativeId: snapshot.sessions.find(s => s.id === id)?.nativeId })),
+            memberProofs: batch.memberIds.map(id => { const session = snapshot.sessions.find(s => s.id === id); return {
+              id, nativeId: session?.nativeId, placementRevision: placementRevision(session),
+              connectionRevision: session.connectionRevision || 0, operationId: randomUUID() }; }),
             sources: cuts.map(source => ({ id: source.id, status: 'pending', revision: source.metadataRevision,
               members: source.members.map(member => ({ id: member.id, nativeId: member.nativeId })) })) } };
           validateMerge(value.merge, targetId);
@@ -209,13 +222,21 @@ class RoomState {
           snapshot = await client.call('initial');
           const session = snapshot.sessions.find(session => session.id === id);
           if (!session || session.nativeId !== this.metadata(targetId).merge.memberProofs.find(proof => proof.id === id)?.nativeId) throw uiError("error.room.mergeTargetIdentityChanged");
+          const savedProof = this.metadata(targetId).merge.memberProofs.find(proof => proof.id === id);
+          if (savedProof.placementRevision === undefined || !savedProof.operationId) throw uiError('error.movePlacementUnsupported');
           const result = await this.changeMember(client, id, true, session.name, targetId,
-            { nativeId: session.nativeId, revision: membershipRevision(session, targetId) });
+            { nativeId: savedProof.nativeId, placementRevision: savedProof.placementRevision,
+              connectionRevision: savedProof.connectionRevision, operationId: savedProof.operationId });
           const after = (await client.call('initial')).sessions.find(session => session.id === id);
           if (!after || !isMember(after, targetId)) throw uiError("error.room.mergeMembersUnconfirmed");
           const joins = this.metadata(targetId).merge.joins.filter(join => join.id !== id);
-          joins.push({ id, nativeId: after.nativeId, revision: membershipRevision(after, targetId), changed: result.changed });
-          this.setMerge(targetId, { joins });
+          joins.push({ id, nativeId: after.nativeId, revision: membershipRevision(after, targetId), changed: result.changed,
+            placementRevision: result.placementRevision, previousRoomId: result.previousRoomId, connectionRevision: result.connectionRevision });
+          const sources = this.metadata(targetId).merge.sources.map(source => {
+            const event = result.metadataChanges?.find(change => change.roomId === source.id);
+            return event && source.revision === event.beforeRevision ? { ...source, revision: event.revision } : source;
+          });
+          this.setMerge(targetId, { joins, sources });
         }
         const value = this.metadata(targetId);
         this.setMerge(targetId, { stage: batch.disposition === 'archive' ? 'archiving' : 'ready', failures: [], failuresUiMessage: null,
@@ -280,26 +301,24 @@ class RoomState {
         const snapshot = await client.call('initial');
         if (snapshot.storageWarning) throw Object.assign(Error(snapshot.storageWarning), { uiMessage: snapshot.storageWarningUiMessage });
         const current = this.metadata(targetId), record = current.merge;
-        const room = snapshot.rooms?.find(room => room.id === targetId);
-        const members = snapshot.sessions.filter(session => isMember(session, targetId));
-        const sameMembers = members.length === record.joins.length && members.every(session => record.joins.some(join =>
-          join.id === session.id && join.nativeId === session.nativeId && join.revision === membershipRevision(session, targetId)));
+        if (record.joins.some(join => join.placementRevision === undefined || join.previousRoomId === undefined)) throw uiError('error.movePlacementUnsupported');
+        const room = snapshot.rooms?.find(room => room.id === targetId), members = snapshot.sessions.filter(session => isMember(session, targetId));
+        const undoIds = new Set(record.joins.map(join => join.undoOperationId).filter(Boolean));
+        const base = { ...current, events: current.events.filter(event => ![...undoIds].some(id => event.id === `placement:${id}:leave`)) };
+        const samePlacements = members.every(session => record.joins.some(join => join.id === session.id)) && record.joins.every(join => {
+          const session = snapshot.sessions.find(s => s.id === join.id);
+          if (!session || session.nativeId !== join.nativeId) return false;
+          const restored = join.undoOperationId && session.placementReceipt?.operationId === join.undoOperationId &&
+            session.placementReceipt.roomId === join.previousRoomId && session.placementReceipt.revision === placementRevision(session);
+          return restored || isMember(session, targetId) && placementRevision(session) === join.placementRevision && membershipRevision(session, targetId) === join.revision;
+        });
         const noLaterData = !room?.run && !room?.messages.some(message => message.snapshotBatch !== operationId);
-        const ownPartialUndo = record.undoTargetFailed && current.revision === record.undoTargetRevision && members.every(session => record.joins.some(join =>
-          join.id === session.id && join.nativeId === session.nativeId && join.revision === membershipRevision(session, targetId)));
-        const laterWork = keepTarget || !noLaterData || !(record.baseline === mergeSignature(current) && sameMembers || ownPartialUndo);
-        await this.serial(() => this.setMerge(targetId, { stage: 'undoing', undoStarted: true, undoTargetFailed: false, undoKeptTarget: laterWork, failures: [], failuresUiMessage: null }));
-        if (!laterWork) {
-          // archiveRoom owns the same gate and queue; leave both before entry.
-          this.gates.delete(gate);
-          try { await this.archiveRoom(client, undefined, targetId); }
-          catch (error) {
-            this.gates.add(gate);
-            return await this.serial(() => structuredClone(this.setMerge(targetId, { stage: 'partial', undoTargetFailed: true,
-              undoTargetRevision: this.metadata(targetId).revision + 1, failures: [error.message], failuresUiMessage: error.uiMessage || null })));
-          }
-          this.gates.add(gate);
-        }
+        const laterWork = keepTarget || !noLaterData || record.baseline !== mergeSignature(base) || !samePlacements;
+        await this.serial(() => this.setMerge(targetId, { stage: 'undoing', undoStarted: true, undoTargetFailed: false,
+          undoKeptTarget: laterWork, failures: [], failuresUiMessage: null,
+          joins: record.joins.map(join => ({ ...join, undoOperationId: join.undoOperationId || randomUUID() })) }));
+        // Restore only source-space metadata we archived, before returning people.
+        // This never resurrects old shared grants or steals a later placement.
         for (const original of this.metadata(targetId).merge.sources) {
           if (!original.touched || original.status === 'restored') continue;
           let status = 'restored', error = '', errorUiMessage = null;
@@ -314,15 +333,40 @@ class RoomState {
             this.setMerge(targetId, { sources: record.sources.map(source => source.id === original.id ? { ...source, status, error, errorUiMessage, revision: this.metadata(source.id).revision } : source) });
           });
         }
+        const movementFailures = [];
+        if (!laterWork) {
+          for (const join of this.metadata(targetId).merge.joins) {
+            try {
+              if (join.previousRoomId && this.metadata(join.previousRoomId).archived) throw uiError('error.room.archivedSourceChanged');
+              const receipt = await this.changeMember(client, join.id, Boolean(join.previousRoomId), undefined, join.previousRoomId || targetId,
+                { nativeId: join.nativeId, placementRevision: join.placementRevision, connectionRevision: join.connectionRevision, operationId: join.undoOperationId });
+              await this.serial(() => {
+                const record = this.metadata(targetId).merge;
+                this.setMerge(targetId, { joins: record.joins.map(value => value.id === join.id ? { ...value, undoReceipt: receipt } : value) });
+              });
+            } catch (error) { movementFailures.push(error); break; }
+          }
+          if (!movementFailures.length) {
+            // The target is empty after exact C->original moves; no transient solo hop.
+            this.gates.delete(gate);
+            try { await this.archiveRoom(client, undefined, targetId); }
+            catch (error) { movementFailures.push(error); }
+            this.gates.add(gate);
+          }
+        }
         await this.serial(() => {
-          const record = this.metadata(targetId).merge, failures = record.sources.filter(source => source.status === 'changed').map(source => source.error);
-          const failureDisplay = uiError('error.warningLines', { warnings: failures.join('\n') }, { parts: record.sources.filter(source => source.status === 'changed').map(source => ({ message: source.error, uiMessage: source.errorUiMessage })), param: 'warnings', separator: '\n' });
-        this.setMerge(targetId, { stage: failures.length ? 'partial' : 'undone', failures, failuresUiMessage: failureDisplay.uiMessage || null });
+          const record = this.metadata(targetId).merge;
+          const parts = [...record.sources.filter(source => source.status === 'changed').map(source => ({ message: source.error, uiMessage: source.errorUiMessage })),
+            ...movementFailures.map(error => ({ message: error.message, uiMessage: error.uiMessage || null }))];
+          const failures = parts.map(part => part.message), failureDisplay = uiError('error.warningLines', { warnings: failures.join('\n') }, { parts, param: 'warnings', separator: '\n' });
+          this.setMerge(targetId, { stage: failures.length ? 'partial' : 'undone', undoTargetFailed: movementFailures.length > 0,
+            failures, failuresUiMessage: failureDisplay.uiMessage || null });
         });
         return structuredClone(this.metadata(targetId).merge);
       } finally { this.gates.delete(gate); }
     });
   }
+
   update(fields, event, id = DEFAULT_ROOM_ID) {
     const value = this.metadata(id);
     if (value.revision === Number.MAX_SAFE_INTEGER) throw uiError("error.room.dataVersionLimit");
@@ -391,20 +435,61 @@ class RoomState {
       return this.changeMember(client, id, join, label, room, expected);
     }, id, room);
   }
-  async changeMember(client, id, join, label, room = DEFAULT_ROOM_ID, expected) {
-      const before = (await client.call('initial')).sessions.find(s => s.id === id);
+  async changeMember(client, id, join, label, room = DEFAULT_ROOM_ID, expected, legacyDetach = false) {
+      const snapshot = await client.call('initial'), before = snapshot.sessions.find(s => s.id === id);
       if (!before) throw uiError("error.sessionMissing");
-      if (expected !== undefined && (!expected || expected.nativeId !== before.nativeId || expected.revision !== membershipRevision(before, room))) throw uiError("error.room.membershipChangedNoRevocation");
-      if (isMember(before, room) === join) return { changed: false, roomId: room, sessionId: id, joined: join };
-      if (typeof client.callSpace === 'function') await client.callSpace(room, 'join', expected === undefined ? [id, join] : [id, join, expected]);
-      else if (expected !== undefined) await client.call('joinSpace', id, join, room, expected);
-      else if (room === DEFAULT_ROOM_ID) await client.call('join', id, join);
-      else await client.call('joinSpace', id, join, room);
+      const recovered = expected?.operationId && before.placementReceipt?.operationId === expected.operationId &&
+        before.placementReceipt.nativeId === before.nativeId && before.placementReceipt.roomId === (join ? room : null) &&
+        before.placementReceipt.revision === placementRevision(before) && before.placementReceipt.beforeRevision === expected.placementRevision &&
+        before.placementReceipt.connectionRevision === (before.connectionRevision || 0);
+      if (expected !== undefined && (!expected || expected.nativeId !== before.nativeId ||
+          expected.revision !== undefined && !recovered && expected.revision !== membershipRevision(before, room) ||
+          expected.placementRevision !== undefined && !recovered && expected.placementRevision !== placementRevision(before) ||
+          expected.connectionRevision !== undefined && expected.connectionRevision !== (before.connectionRevision || 0))) throw uiError("error.room.membershipChangedNoRevocation");
+      const prior = roomIds(before), modern = (before.serviceCapabilities || snapshot.capabilities || []).includes('singleHomeMoveV1') && !(legacyDetach && prior.length > 1);
+      if (before.nativeContextPending || prior.length > 1 && !(legacyDetach && !join)) throw uiError(prior.length > 1 ? 'error.movePlacementAmbiguous' : 'error.movePlacementChanged');
+      if (isMember(before, room) === join && !recovered) return { changed: false, roomId: room, sessionId: id, joined: join };
+      // Both histories must be readable before changing an owning backend.
+      this.metadata(room);
+      if (modern && prior[0] && prior[0] !== room) this.metadata(prior[0]);
+      let move;
+      if (modern) {
+        const proof = { operationId: expected?.operationId || randomUUID(), nativeId: before.nativeId,
+          revision: placementRevision(before), connectionRevision: before.connectionRevision || 0 };
+        try { move = recovered ? { ...before.placementReceipt, changed: true } : await client.call('moveMembership', id, join ? room : null, proof); }
+        catch (error) {
+          // Lost replies are reconciled from the same writer's saved receipt, never retried.
+          const current = (await client.call('initial').catch(() => null))?.sessions.find(s => s.id === id);
+          if (current?.nativeId !== before.nativeId || current?.placementReceipt?.operationId !== proof.operationId) throw error;
+          move = { ...current.placementReceipt, changed: true };
+        }
+      } else {
+        // Preserve old literal standalone join/leave. Never emulate A->B with two writes.
+        if (join && prior.length) throw uiError('error.movePlacementUnsupported');
+        if (typeof client.callSpace === 'function') await client.callSpace(room, 'join', expected === undefined ? [id, join] : [id, join, { nativeId: expected.nativeId, revision: expected.revision ?? membershipRevision(before, room) }]);
+        else if (room === DEFAULT_ROOM_ID) await client.call('join', id, join, ...(expected === undefined ? [] : [{ nativeId: expected.nativeId, revision: expected.revision ?? membershipRevision(before, room) }]));
+        else if (expected !== undefined) await client.call('joinSpace', id, join, room, { nativeId: expected.nativeId, revision: expected.revision ?? membershipRevision(before, room) });
+        else await client.call('joinSpace', id, join, room);
+      }
       const after = (await client.call('initial')).sessions.find(s => s.id === id);
-      if (!after || isMember(after, room) !== join) throw uiError("error.room.memberStateUnconfirmed");
-      try { this.update({}, { kind: join ? 'join' : 'leave', sessionId: id, name: label || before.name, ...uiNotice(join ? 'notice.room.joined' : 'notice.room.left') }, room); }
-      catch { throw uiError("error.room.membershipSavedTimelineFailed"); }
-      return { changed: true, roomId: room, sessionId: id, joined: join, revision: membershipRevision(after, room), nativeId: after.nativeId };
+      if (!after || after.nativeId !== before.nativeId || isMember(after, room) !== join || roomIds(after).length > 1 && !legacyDetach ||
+          modern && (!move || after.placementReceipt?.operationId !== move.operationId || placementRevision(after) !== move.revision)) throw uiError("error.room.memberStateUnconfirmed");
+      const metadataChanges = [];
+      try {
+        const event = (space, kind) => {
+          const key = modern ? `placement:${move.operationId}:${kind}` : null;
+          const saved = key && this.metadata(space).events.find(e => e.id === key && e.sessionId === id);
+          if (saved) { if (Number.isSafeInteger(saved.beforeRevision)) metadataChanges.push({ roomId: space, beforeRevision: saved.beforeRevision, revision: saved.beforeRevision + 1 }); return; }
+          const beforeRevision = this.metadata(space).revision;
+          this.update({}, { kind, sessionId: id, name: label || before.name,
+            ...uiNotice(kind === 'join' ? 'notice.room.joined' : 'notice.room.left'), ...(key ? { id: key, beforeRevision } : {}) }, space);
+          metadataChanges.push({ roomId: space, beforeRevision, revision: beforeRevision + 1 });
+        };
+        if (modern && move.previousRoomId && move.previousRoomId !== room) event(move.previousRoomId, 'leave');
+        event(room, join ? 'join' : 'leave');
+      } catch { throw uiError("error.room.membershipSavedTimelineFailed"); }
+      return { changed: true, roomId: room, sessionId: id, joined: join, revision: membershipRevision(after, room), nativeId: after.nativeId,
+        ...(modern ? { placementRevision: move.revision, previousRoomId: move.previousRoomId, connectionRevision: move.connectionRevision, operationId: move.operationId, metadataChanges } : { legacyPlacement: true }) };
   }
   assertAvailable(id, shared = false, room = DEFAULT_ROOM_ID) {
     if (this.warning) throw Object.assign(Error(this.warning), { uiMessage: this.warningUiMessage });
@@ -421,7 +506,7 @@ class RoomState {
       if (this.value.archivedSessions.includes(id)) return;
       const session = (await client.call('initial')).sessions.find(s => s.id === id);
       if (!session) throw uiError("error.sessionMissing");
-      for (const space of roomIds(session)) { this.metadata(space); await this.changeMember(client, id, false, label, space); }
+      for (const space of roomIds(session)) { this.metadata(space); await this.changeMember(client, id, false, label, space, undefined, true); }
       this.update({ archivedSessions: [...this.value.archivedSessions, id] });
     }, id, typeof client.snapshot === 'function' ? roomIds(client.snapshot().sessions.find(s => s.id === id)) : DEFAULT_ROOM_ID).finally(() => this.gates.delete(id));
   }
@@ -442,7 +527,12 @@ class RoomState {
       // lose the information needed for an explicit restore/retry.
       const restoreMembers = [...new Set([...value.restoreMembers, ...members.map(s => s.id)])];
       this.update({ restoreMembers }, undefined, room);
-      for (const s of members) await this.changeMember(client, s.id, false, labels?.get(s.id), room);
+      for (const s of members) {
+        await this.changeMember(client, s.id, false, labels?.get(s.id), room, undefined, true);
+        const current = (await client.call('initial')).sessions.find(record => record.id === s.id);
+        if (!current) throw uiError('error.sessionMissing');
+        this.update({ restorePlacements: { ...this.metadata(room).restorePlacements, [s.id]: restorePlacement(current) } }, undefined, room);
+      }
       this.update({ archived: true }, { kind: 'archive', ...uiNotice('notice.room.archived') }, room);
     }, undefined, room).finally(() => this.gates.delete(gate));
   }
@@ -456,8 +546,17 @@ class RoomState {
       if (!value.archived && !value.restoreMembers.length) return;
       const sessions = (await client.call('initial')).sessions;
       const wanted = value.restoreMembers.filter(id => sessions.some(s => s.id === id) && !this.value.archivedSessions.includes(id));
-      for (const id of wanted) await this.changeMember(client, id, true, labels?.get(id), room);
-      this.update({ archived: false, restoreMembers: [] }, { kind: 'restore', ...uiNotice('notice.room.restored') }, room);
+      const skipped = [];
+      for (const id of wanted) {
+        const current = (await client.call('initial')).sessions.find(s => s.id === id), proof = this.metadata(room).restorePlacements?.[id];
+        if (current && roomIds(current).length === 1 && isMember(current, room)) continue;
+        if (!current || !proof || roomIds(current).length || JSON.stringify(restorePlacement(current)) !== JSON.stringify(proof)) { skipped.push(id); continue; }
+        await this.changeMember(client, id, true, labels?.get(id), room, { nativeId: current.nativeId, placementRevision: placementRevision(current), connectionRevision: current.connectionRevision || 0 });
+        const remaining = { ...this.metadata(room).restorePlacements }; delete remaining[id];
+        this.update({ restoreMembers: this.metadata(room).restoreMembers.filter(value => value !== id), restorePlacements: remaining }, undefined, room);
+      }
+      this.update({ archived: false, restoreMembers: [], restorePlacements: {} }, { kind: 'restore',
+        ...uiNotice(skipped.length ? 'notice.room.restoredPlacementRetained' : 'notice.room.restored', skipped.length ? { count: skipped.length } : undefined), ...(skipped.length ? { skippedSessions: skipped } : {}) }, room);
     }, undefined, room).finally(() => this.gates.delete(gate));
   }
   clear(revision, room = DEFAULT_ROOM_ID) {

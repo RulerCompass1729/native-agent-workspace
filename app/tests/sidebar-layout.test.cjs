@@ -45,3 +45,11 @@ test('published separator ranges include the actual position at both bounds',()=
  assert.equal(separatorValues(geometry(600,[30,30,30],[true,true,true]),0),null);
  assert.equal(separatorValues(geometry(0,[30,30,30],[false,false,false]),0),null);
 });
+
+ test('grouped space navigation omits the duplicate section and still sizes archive separately',()=>{
+ const weights=[5000,3000,2000], g=geometry(600,[30,30,30],[false,false,false],weights,[false,true,false]);
+ assert.equal(g.sizes[1],0); assert.deepEqual(g.pairs,[[0,2],null]);close(g.sizes.reduce((a,b)=>a+b,0)+8,600);
+ const changed=resize(weights,g,0,40); assert.equal(changed[1],3000);
+ const folded=geometry(600,[30,30,30],[false,false,true],weights,[false,true,false]);
+ assert.equal(folded.bodies[1],0);assert.equal(folded.bodies[2],0);assert.ok(folded.bodies[0]>500);
+ });

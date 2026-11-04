@@ -68,7 +68,7 @@ async function run() {
   await page.reload(); await page.locator('#new-session').waitFor();
   await until(() => picture().getAttribute('data-expanded').then(x => x === 'true'), 'Original image open choice survives reload');
   assert.equal(await page.locator('#message-input').inputValue(), 'OWNED_SOURCE_DRAFT');
-  await page.locator(`.session-more[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '离开「共同工作」', exact: true }).click();
+  await page.locator(`.session-more[data-session-menu="${b}"]`).click(); await page.getByRole('menuitem', { name: '移出「共同工作」到独立会话', exact: true }).click();
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b).roomId, 'Exact peer detached');
   assert.equal((await snapshot()).viewState.selected, a); assert.equal(await page.locator('#message-input').inputValue(), 'OWNED_SOURCE_DRAFT');
   checks.push('Image open choice and draft survive reload; detaching another member preserves the current original reader'); await capture('detached');

@@ -3,9 +3,15 @@ const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { Workspace } = require('../workspace.cjs');
-const { isMember } = require('../collaboration-spaces.cjs');
+const { isMember, withMembership } = require('../collaboration-spaces.cjs');
 const { PeerLeases, identity } = require('../peer-handoffs.cjs');
 const tick = () => new Promise(resolve => setImmediate(resolve));
+function seedLegacyJoin(w,id,room) {
+  if (!w.get(id).roomIds?.length || isMember(w.get(id),room)) return w.join(id,true,room);
+  Object.assign(w.get(id),withMembership(w.get(id),room,true)); w.roomFor(room,true);
+  w.pauseRoom(room,'Legacy fixture metadata changed'); w.sharedReplies.refresh(id); w.changed(); w.persist();
+  if(w.storageWarning) throw Error(w.storageWarning);
+}
 async function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-spaces-')), runtimes = [], sent = [];
   const host = { binaries: {}, close() {}, create(s) {
@@ -17,7 +23,7 @@ async function fixture(t) {
   const w = new Workspace(host, dir), a = randomUUID(), b = randomUUID();
   t.after(() => { w.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const ids = [await w.create('claude', dir, 'owner', 'A'), await w.create('codex', dir, 'owner', 'B')];
-  for (const id of ids) for (const room of ['shared', a, b]) w.join(id, true, room);
+  for (const id of ids) for (const room of ['shared', a, b]) seedLegacyJoin(w,id,room);
   const bind = (i, turn = `turn-${i}`) => {
     const tag = sent.findLast(x => x.id === ids[i]).tag;
     runtimes[i].emit('replyBound', { tag, nativeId: w.get(ids[i]).nativeId, turnId: turn, promptId: `prompt-${i}` }); return tag;
@@ -32,7 +38,7 @@ test('late original native blocks and final receipts stay in the captured space 
   const aRow = w.roomFor(a).messages.find(m => m.role === 'assistant');
   assert.ok(aRow); assert.equal(w.room.messages.length, 0); assert.equal(w.roomFor(b).messages.length, 0);
   assert.equal(w.snapshot().rooms.find(r => r.id === b).messages.length, 0);
-  w.join(ids[0], false, b); w.join(ids[0], true, b);
+  w.join(ids[0], false, b); seedLegacyJoin(w,ids[0],b);
   block(0, { id: 'display:answer', kind: 'response', text: 'A after B membership change', status: 'complete' });
   assert.equal(aRow.text, 'A after B membership change', 'A authorization uses its own pair revision');
   runtimes[0].emit('complete', { tag, messageId: aRow.nativeMessageId, text: 'A final' });
@@ -46,7 +52,7 @@ test('leave/rejoin cannot revive old A grants and clearing B cannot stop an auth
   const row = w.roomFor(a).messages.find(m => m.role === 'assistant');
   w.clearSharedHistory(b); block(1, { id: 'answer', kind: 'response', text: 'After B clear', status: 'streaming' });
   assert.equal(row.text, 'After B clear'); assert.equal(w.sharedReplies.grants.get(tag).closed, false);
-  w.join(ids[1], false, a); w.join(ids[1], true, a);
+  w.join(ids[1], false, a); seedLegacyJoin(w,ids[1],a);
   block(1, { id: 'answer', kind: 'response', text: 'PRIVATE AFTER ABA', status: 'complete' });
   assert.equal(row.text, 'After B clear'); assert.equal(w.sharedReplies.grants.get(tag).closed, true);
   assert.ok(!JSON.stringify([...w.rooms.values()]).includes('PRIVATE AFTER ABA'));
@@ -96,7 +102,7 @@ test('peer lease proofs bind both the selected room and its membership generatio
   leases.pause(client, grant.id, 'Explicit A pause before a fresh authorization');
   const next = { ...spec, id: randomUUID() }; assert.equal(leases.prepare(client, 'owner', next), true);
   const nextGrant = leases.leases.get(next.id); assert.equal(leases.valid(nextGrant), true);
-  w.join(ids[0], false, a); w.join(ids[0], true, a); assert.equal(leases.valid(nextGrant), false);
+  w.join(ids[0], false, a); seedLegacyJoin(w,ids[0],a); assert.equal(leases.valid(nextGrant), false);
   const wrong = { ...spec, id: randomUUID(), expected: Object.fromEntries(ids.map(id => [id, identity(w.get(id), b)])) };
   assert.throws(() => leases.prepare(client, 'owner', wrong), /身份|控制权/);
   assert.throws(() => leases.prepare(client, 'owner', { ...wrong, id: randomUUID(), roomId: 'shared', expected: Object.fromEntries(ids.map(id => [id, identity(w.get(id), a)])) }), /身份|控制权/, 'A proof cannot authorize the default room');
@@ -112,7 +118,7 @@ test('modern Claude activity is visible only in the authorized extra space, with
 test('missing extension after a partial checkpoint fails closed on cold load without overwriting the original files', async t => {
   const { w, ids, dir, a } = await fixture(t), c = randomUUID(), original = fs.readFileSync(path.join(dir, 'room-records.json'), 'utf8'), rename = fs.renameSync;
   const failure = t.mock.method(fs, 'renameSync', (from, to) => { if (to.endsWith('room-records.json')) throw Error('Synthetic extension failure'); return rename(from, to); });
-  assert.throws(() => w.join(ids[0], true, c), /保存失败/); failure.mock.restore();
+  assert.throws(() => seedLegacyJoin(w,ids[0],c), /保存失败/); failure.mock.restore();
   const before = fs.readFileSync(path.join(dir, 'workspace.json'), 'utf8');
   const reopened = new Workspace({ binaries: {}, close() {} }, dir); t.after(() => reopened.close());
   assert.match(reopened.storageWarning, /成员与共享记录未能核对/); assert.equal(reopened.rooms.has(c), false); assert.equal(reopened.rooms.has(a), true);

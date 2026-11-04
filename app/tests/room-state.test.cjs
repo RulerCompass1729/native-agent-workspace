@@ -165,7 +165,7 @@ test('partial room restore survives cold reopen and retry without duplicate join
   await assert.rejects(room.restoreRoom(client), /restore failure/);
   assert.equal(room.value.archived, true); assert.equal(records[0].roomId, 'shared');
   assert.equal(records[1].roomId, null); assert.equal(records[2].roomId, null);
-  assert.deepEqual(room.value.restoreMembers, ['one', 'two', 'three']);
+  assert.deepEqual(room.value.restoreMembers, ['two', 'three'], 'Completed restores are not replayed after a later failure');
   const cold = new RoomState(dir); assert.equal(cold.value.archived, true);
   assert.throws(() => cold.assertAvailable('one', true), /归档/);
   client.call = original; await cold.restoreRoom(client);
@@ -203,7 +203,7 @@ test('new spaces preserve legacy bytes and isolate names, notes, file references
   saved.removeFile(saved.metadata(a).files[0].id, saved.metadata(a).revision, a);
   assert.equal(saved.metadata(a).files.length, 0); assert.equal(saved.metadata(b).files.length, 1);
 });
-test('room archive removes only that membership; global session archive detaches every space without cloning native identity', async t => {
+test('legacy multi-home archive detaches explicitly and restore does not recreate old overlaps or steal placement', async t => {
   const { room } = setup(t), a = room.create('A'), b = room.create('B');
   let record = { id: 'one', name: 'Agent', nativeId: 'original', pid: 123, liveDraft: 'unsent', roomId: 'shared' };
   const calls = [], client = { call: async (method, id, join, space) => {
@@ -211,16 +211,17 @@ test('room archive removes only that membership; global session archive detaches
     if (method === 'initial') return { sessions: [structuredClone(record)] };
     if (method === 'join' || method === 'joinSpace') record = withMembership(record, method === 'join' ? 'shared' : space, join);
   } };
-  await room.membership(client, 'one', true, 'Agent', a); await room.membership(client, 'one', true, 'Agent', b);
+  // Seed pre-existing legacy overlap; the new join/move path must never create it.
+  record = withMembership(withMembership(record, a, true), b, true);
   assert.deepEqual(roomIds(record), ['shared', a, b]);
   await room.archiveRoom(client, null, a);
   assert.deepEqual(roomIds(record), ['shared', b]); assert.equal(room.metadata(a).archived, true); assert.equal(room.metadata(b).archived, false);
-  await room.restoreRoom(client, null, a); assert.equal(isMember(record, a), true);
+  await room.restoreRoom(client, null, a); assert.equal(isMember(record, a), false, 'Restore preserves the later/other homes instead of adding another');
   await room.archiveSession(client, 'one'); assert.deepEqual(roomIds(record), []);
   assert.equal(record.nativeId, 'original'); assert.equal(record.pid, 123); assert.equal(record.liveDraft, 'unsent');
   room.restoreSession('one'); assert.deepEqual(roomIds(record), [], 'A session restore cannot silently rejoin any room');
   assert.ok(calls.every(([m]) => ['pause', 'pauseSpace', 'initial', 'join', 'joinSpace'].includes(m)));
-  assert.equal(room.metadata(a).events.filter(e => e.kind === 'leave').length, 2);
+  assert.equal(room.metadata(a).events.filter(e => e.kind === 'leave').length, 1);
   assert.equal(room.metadata(b).events.filter(e => e.kind === 'leave').length, 1);
 });
 test('nondefault membership refuses an old backend rather than falling back to shared or fabricating a join', async t => {

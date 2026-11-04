@@ -82,7 +82,7 @@ async function create(provider, name) {
   const s = (await snapshot()).sessions.find(s => s.name === name);
   const shared = (await snapshot()).rooms.find(room => room.id === 'shared');
   await page.locator(`[data-session-menu="${s.id}"]`).click();
-  await page.getByRole('menuitem', { name: `加入「${shared.name}」`, exact: true }).click();
+  await page.getByRole('menuitem', { name: `移到「${shared.name}」`, exact: true }).click();
   await until(async () => (await snapshot()).sessions.find(row => row.id === s.id).roomIds?.includes('shared'), 'Visible membership acknowledged'); return s.id;
 }
 async function room() { await page.locator('#room-nav').click(); await page.locator('#room-record').click(); }

@@ -66,6 +66,24 @@ function withMembership(session, id, joined) {
     roomMembershipRevisions: { ...state.revisions, [id]: nextRevision },
   };
 }
+// A move is one candidate record for the owning writer, never two RPCs.
+// Existing multi-home records require an explicit resolution, not silent loss.
+function placementRevision(session) {
+  const value = Object.hasOwn(session, 'placementRevision') ? session.placementRevision : 0;
+  if (!revision(value)) throw invalid();
+  return value;
+}
+function withPlacement(session, destination) {
+  if (destination !== null && !roomId(destination)) throw invalid();
+  const state = membership(session), generation = placementRevision(session);
+  if (state.ids.length > 1) throw invalid();
+  if ((state.ids[0] || null) === destination) return session;
+  if (!revision(generation + 1)) throw invalid();
+  let next = session;
+  for (const previous of state.ids) next = withMembership(next, previous, false);
+  if (destination !== null) next = withMembership(next, destination, true);
+  return { ...next, placementRevision: generation + 1 };
+}
 // Another space is recorded by the session's own backend; an older one cannot.
 function canJoin(session, id) {
   if (!roomId(id)) throw invalid();
@@ -73,7 +91,7 @@ function canJoin(session, id) {
   return id === DEFAULT_ROOM_ID || !Array.isArray(capabilities) || capabilities.includes('collaborationSpacesV1');
 }
 
-const contract = { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, withMembership, canJoin, completedSharedRecord };
+const contract = { DEFAULT_ROOM_ID, roomId, roomIds, isMember, membershipRevision, withMembership, placementRevision, withPlacement, canJoin, completedSharedRecord };
 if (typeof module !== 'undefined' && module.exports) module.exports = contract;
 else target.nativeWorkspaceSpaces = contract;
 })(typeof window === 'undefined' ? globalThis : window);

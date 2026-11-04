@@ -76,7 +76,7 @@ test('the existing DSH menu label child observes locale without recreating menu 
   const context = vm.createContext({ React: { useSyncExternalStore(subscribe, read) { subscriptions++; return read(); } }, subscribeLocale() {}, localeSnapshot: () => ({ active: language }), t: (key, params) => locale.format(language, key, params) });
   vm.runInContext(bootstrap.slice(from, to), context);
   const run = () => {}, item = { id: 'original-action', labelKey: 'menu.joinSpace', labelParams: { name: 'RAW SPACE 中文' }, disabled: false, run };
-  context.item = item; assert.equal(vm.runInContext('MenuMessage({item})', context), '加入「RAW SPACE 中文」'); language = 'en'; assert.equal(vm.runInContext('MenuMessage({item})', context), 'Join “RAW SPACE 中文”');
+  context.item = item; assert.equal(vm.runInContext('MenuMessage({item})', context), '移到「RAW SPACE 中文」'); language = 'en'; assert.equal(vm.runInContext('MenuMessage({item})', context), 'Move to “RAW SPACE 中文”');
   assert.equal(item.run, run); assert.equal(item.disabled, false); assert.equal(item.id, 'original-action'); assert.equal(subscriptions, 2);
 });
 

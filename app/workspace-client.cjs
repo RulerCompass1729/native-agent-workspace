@@ -386,6 +386,15 @@ class WorkspaceClient extends EventEmitter {
   async callScoped(roomId, method, args, scoped = false) {
     if (this.socket.destroyed) throw uiError("error.client.serviceNotConnected");
     this.authorizeOperation?.(method, args, roomId);
+    if (method === 'moveMembership') {
+      const entry = this.route(args[0]), guard = this.operationGuard(entry);
+      guard();
+      if (!entry.state.capabilities?.includes('singleHomeMoveV1')) throw uiError('error.movePlacementUnsupported');
+      return this.intervene(async () => {
+        guard(); const result = await entry.client.call(method, ...args);
+        guard(); await this.refresh(); guard(); return result;
+      }, args[0], false, false, args[1] || 'shared');
+    }
     if (method === 'gitWorktreePreview') {
       const entry = this.active, guard = this.operationGuard(entry);
       guard(); await this.refresh(); guard();

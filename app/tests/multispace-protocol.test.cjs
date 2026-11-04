@@ -31,10 +31,11 @@ test('actual bounded space envelopes preserve membership and original output acr
   assert.ok(fs.existsSync(path.join(dir, 'connection.json')), stderr);
   client = await connectService(dir, 'space-test-owner');
   assert.ok((await client.call('initial')).capabilities.includes('collaborationSpacesV1'));
-  const id = await client.call('create', { provider: 'codex', cwd: dir, name: 'Synthetic native identity', view: 'chat' }), a = randomUUID(), b = randomUUID();
-  for (const room of [a, b]) await client.call('spaceAction', room, 'join', [id, true], {});
+  const id = await client.call('create', { provider: 'codex', cwd: dir, name: 'Synthetic native identity', view: 'chat' });
+  const roomMetadata=new RoomState(dir), a=roomMetadata.create('A'), b=roomMetadata.create('B');
+  await client.call('spaceAction', a, 'join', [id, true], {});
   let snapshot = await client.call('initial'), session = snapshot.sessions.find(s => s.id === id);
-  assert.equal(session.roomId, null); assert.deepEqual(session.roomIds, [a, b]); const nativeId = session.nativeId;
+  assert.equal(session.roomId, null); assert.deepEqual(session.roomIds, [a]); const nativeId = session.nativeId;
   const originalProof = { nativeId, revision: membershipRevision(session, a) };
   await client.call('spaceAction', a, 'join', [id, false], {}); await client.call('spaceAction', a, 'join', [id, true], {});
   await assert.rejects(client.call('spaceAction', a, 'join', [id, false, originalProof], {}), /撤销没有执行/);
@@ -45,7 +46,7 @@ test('actual bounded space envelopes preserve membership and original output acr
   await fixture('nativeBlock', id, { id: 'display:answer', turnId: sent.lastSend.turnId, kind: 'response', text: 'Only A original reply', status: 'complete' });
   snapshot = await client.call('initial');
   assert.ok(snapshot.rooms.find(r => r.id === a).messages.some(m => m.text === 'Only A original reply'));
-  assert.equal(snapshot.rooms.find(r => r.id === b).messages.length, 0); assert.equal(snapshot.room.messages.length, 0);
+  assert.equal((snapshot.rooms.find(r => r.id === b)?.messages || []).length, 0); assert.equal(snapshot.room.messages.length, 0);
   await client.call('spaceAction', b, 'clearSharedHistory', [], {});
   assert.equal((await fixture('stats', id)).stats.sends, 1); assert.equal(sent.stats.inputs, 0); assert.equal(sent.stats.opens, 0);
   await assert.rejects(client.call('spaceAction', a, 'send', [id, 'Forbidden private route'], proof), /无效协作空间/);
@@ -61,7 +62,8 @@ test('actual bounded space envelopes preserve membership and original output acr
   await client.call('spaceAction', a, 'run', [[id, second], 'A finite goal', 2, 'replies', {}, contexts], proofs);
   const broker = new WorkspaceClient([{ key: '.', client, state: await client.call('initial') }], '.'); t.after(() => broker.close());
   const metadata = new RoomState(dir), c = metadata.create('Independent C');
-  await metadata.membership(broker, second, true, 'Second', c);
+  const fourth = await client.call('create',{provider:'codex',cwd:dir,name:'Idle independent C member',view:'chat'});
+  await metadata.membership(broker, fourth, true, 'Fourth', c);
   assert.equal((await client.call('initial')).rooms.find(r => r.id === a).run.status, 'running', 'Changing idle C cannot pause A through profile/client/daemon');
   await metadata.archiveRoom(broker, null, c);
   assert.equal((await client.call('initial')).rooms.find(r => r.id === a).run.status, 'running', 'Archiving C cannot pause A');

@@ -62,7 +62,7 @@ test('T-145: an empty 独立会话 group is not shown, and each space heading ca
  const h=harness(),opened=[];h.ctx.openRoomMenu=(point,anchor,id)=>opened.push([anchor,id]);
  assert.ok(h.list.children.includes(h.group('').element));
  const at=h.records.indexOf(h.independent);h.records.splice(at,1);h.render();
- assert.ok(!h.list.children.includes(h.group('').element),'no independent session: no 独立会话 group');
+ assert.ok(h.group('').element.classList.contains('empty-independent'),'empty target is hidden normally, revealed during a move');
  assert.ok(h.list.children.includes(h.group(A).element),'a space group stays');
  h.records.splice(at,0,h.independent);h.render();assert.ok(h.list.children.includes(h.group('').element));
  const more=h.group(A).more;assert.equal(more.tagName,'BUTTON');assert.equal(more.getAttribute('aria-haspopup'),'menu');assert.match(more.getAttribute('aria-label'),/^空间操作：/);

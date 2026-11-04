@@ -187,7 +187,7 @@ async function start(first, text) {
       await page.locator('#close-privacy').click(); assert.deepEqual(counts, before); assert.equal(tokenCountRequests, 0);
     }
     for (const member of [claude, second]) {
-      await page.locator(`[data-session-menu="${member.id}"]`).click(); await page.getByRole('menuitem', { name: '离开「共同工作」', exact: true }).click();
+      await page.locator(`[data-session-menu="${member.id}"]`).click(); await page.getByRole('menuitem', { name: '移出「共同工作」到独立会话', exact: true }).click();
       await until(async () => !(await snapshot()).sessions.find(s => s.id === member.id).roomId, 'Independent same-name invite candidate');
     }
     await page.locator('#room-nav').click(); await page.locator('#room-record').click();

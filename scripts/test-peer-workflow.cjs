@@ -114,7 +114,7 @@ async function main() {
   await fixture(old, 'release', '权限变化后的原会话结果'); await delay(150); assert.equal((await fixture(next)).sends.length, 2);
   checks.push('Approval → idle inside one state batch cannot restore a revoked step');
   await run(a.id, '成员脱出后不要继续交接。'); await until(async () => (await fixture(old)).sends.length === 5, 'Departure scenario starts');
-  await page.locator(`[data-session-menu="${b.id}"]`).click(); await page.getByRole('menuitem', { name: '离开「共同工作」', exact: true }).click();
+  await page.locator(`[data-session-menu="${b.id}"]`).click(); await page.getByRole('menuitem', { name: '移出「共同工作」到独立会话', exact: true }).click();
   await until(async () => !(await snapshot()).sessions.find(s => s.id === b.id).roomId, 'Member detached');
   await fixture(old, 'release', '脱出后的原会话结果'); await delay(150); assert.equal((await fixture(next)).sends.length, 2);
   state = await snapshot(); assert.deepEqual(state.sessions.map(s => [s.id, s.nativeId, s.pid]), identities);
