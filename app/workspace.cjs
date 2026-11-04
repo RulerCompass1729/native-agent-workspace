@@ -1,3 +1,4 @@
+const { copySnapshotImages } = require('./native-images.cjs');
 const { EventEmitter } = require('node:events');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
@@ -102,7 +103,7 @@ class Workspace extends EventEmitter {
     this.activityMarks = new Map([...this.sessions.values()].map(s => [s.id, activityMark(s)]));
   }
   snapshot() {
-    return { wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' };
+    return { nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     for (const s of this.sessions.values()) {
@@ -797,13 +798,23 @@ class Workspace extends EventEmitter {
     if (operation) {
       if (operation.room.id !== batch.targetId || operation.marker.binding !== batch.binding ||
           JSON.stringify(operation.room.messages.filter(message => message.snapshotBatch === batch.operationId)) !== JSON.stringify(expected)) throw uiError("error.workspace.mergeConfirmationMismatch");
+      copySnapshotImages(this.dataDir, batch);
       return { operationId: batch.operationId, binding: batch.binding, persisted: true };
     }
     if (existing) throw uiError("error.workspace.mergeTargetHasRecords");
+    const copiedImages = copySnapshotImages(this.dataDir, batch);
     const room = { id: batch.targetId, revision: 0, run: null, messages: expected,
       snapshotBatches: [{ operationId: batch.operationId, binding: batch.binding }] };
     this.rooms.set(room.id, room); this.persist();
-    if (this.storageWarning) { this.rooms.delete(room.id); this.emit('change'); throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage }); }
+    if (this.storageWarning) {
+      this.rooms.delete(room.id);
+      // A partial save may already retain the room; never remove pixels it can reference.
+      try {
+        const saved = JSON.parse(fs.readFileSync(path.join(this.dataDir, 'room-records.json'), 'utf8'));
+        if (Array.isArray(saved.rooms) && !saved.rooms.some(r => r.snapshotBatches?.some(m => m.operationId === batch.operationId))) copiedImages.rollback();
+      } catch (error) { if (error.code === 'ENOENT') copiedImages.rollback(); }
+      this.emit('change'); throw Object.assign(Error(this.storageWarning), { uiMessage: this.storageWarningUiMessage });
+    }
     this.emit('change');
     return { operationId: batch.operationId, binding: batch.binding, persisted: true };
   }

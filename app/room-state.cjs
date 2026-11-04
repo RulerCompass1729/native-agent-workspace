@@ -117,7 +117,7 @@ class RoomState {
     return ids.map(id => {
       const value = state.rooms.find(room => room.id === id);
       if (!value) throw uiError("error.room.mergeSourceChanged");
-      return captureSource(value, state.sessions);
+      return captureSource(value, state.sessions, state.nativeImageCacheRoots || (state.nativeImageCacheRoot ? [state.nativeImageCacheRoot] : []));
     });
   }
   async mergePreview(client, spec) {
@@ -133,8 +133,13 @@ class RoomState {
     })) throw uiError("error.room.mergeMembersSpacesUnsupported");
     const sources = this.mergeSources(snapshot, spec.sourceIds);
     const batch = prepareBatch(sources, { ...spec, operationId: randomUUID(), targetId: randomUUID() });
+    this.assertMergeImageSupport(snapshot, batch);
     this.mergePreviews.set(batch.operationId, { batch, sources });
     return structuredClone(batch);
+  }
+  assertMergeImageSupport(snapshot, batch) {
+    if (!snapshot.nativeImageCacheRoot && batch.blocks.some(block => block.entries.some(entry =>
+      Array.isArray(entry.payload.images) && entry.payload.images.some(ref => ref?.kind === 'native-pixels' && !ref.unavailable)))) throw uiError('error.room.mergeSnapshotUnsupported');
   }
   discardMergePreview(operationId) { this.mergePreviews.delete(operationId); }
   mergeJob(operationId, binding, kind, action) {
@@ -172,6 +177,7 @@ class RoomState {
       try {
         let snapshot = await client.call('initial');
         if (!snapshot.capabilities?.includes('spaceMergeV1')) throw uiError("error.room.mergeCapabilityChanged");
+        this.assertMergeImageSupport(snapshot, batch);
         if (!previous) {
           const cuts = this.mergeSources(snapshot, batch.sources.map(source => source.id));
           assertCurrentSources(batch, cuts);

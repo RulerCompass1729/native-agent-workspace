@@ -51,16 +51,123 @@ function imageSource(snapshot, source) {
     source.roomId !== undefined && (source.kind !== 'room' || !require('./collaboration-spaces.cjs').roomId(source.roomId)) ||
     Object.keys(source).some(key => !['kind', 'roomId', 'sessionId', 'nativeId', 'messageId', 'index'].includes(key))) throw uiError("error.nativeImages.invalidSource");
   const session = snapshot?.sessions?.find(s => s.id === source.sessionId);
-  const message = source.kind === 'room'
-    ? (snapshot?.rooms || [snapshot?.room]).find(r => (r?.id || 'shared') === (source.roomId || 'shared'))?.messages?.find(m => m.id === source.messageId && m.sessionId === source.sessionId && m.sharedStream === true)
-    : session?.messages?.find(m => m.id === source.messageId);
+  const room = source.kind === 'room' ? (snapshot?.rooms || [snapshot?.room]).find(r => (r?.id || 'shared') === (source.roomId || 'shared')) : null;
+  const message = room ? room.messages?.find(m => m.id === source.messageId && m.sessionId === source.sessionId)
+    : source.kind === 'session' ? session?.messages?.find(m => m.id === source.messageId) : null;
+  if (source.kind === 'room' && message?.snapshotBatch) {
+    // Snapshot authority is its saved batch and original content hash, never a
+    // reconstructed live sharing grant or a lookup in the private session.
+    if (!message.snapshotOrigin || !/^[a-f0-9]{64}$/.test(message.snapshotHash || '') ||
+        !room.snapshotBatches?.some(marker => marker.operationId === message.snapshotBatch)) throw uiError('error.nativeImages.originalReadUnconfirmed');
+    require('./space-merge.cjs').captureSource({ id: room.id, name: 'Snapshot', revision: 0, metadataRevision: 0,
+      notes: '', files: [], events: [], messages: [message] }, []);
+  } else if (source.kind === 'room' && message?.sharedStream !== true) throw uiError('error.nativeImages.originalReadUnconfirmed');
   if (!message || message.nativeId !== source.nativeId || !['complete', 'submitted'].includes(message.status) ||
     !(message.role === 'user' || message.kind === 'tool') || !Array.isArray(message.images)) throw uiError("error.nativeImages.originalReadUnconfirmed");
   const ref = message.images[source.index];
   if (!ref) throw uiError("error.nativeImages.originalChanged");
   // A shared row is its own authority. Never follow nativeMessageId into the
   // complete private session to obtain an image that wasn't on the shared row.
+  return snapshotImageReference(ref, source.sessionId,
+    snapshot.nativeImageCacheRoots || (snapshot.nativeImageCacheRoot ? [snapshot.nativeImageCacheRoot] : []));
+}
+// Cache locations are transport metadata, never part of the original message or
+// snapshot hash. A copied snapshot can use its own bytes after its source goes.
+function snapshotImageRoots(roots = []) {
+  if (!Array.isArray(roots) || roots.length > 64 || roots.some(root => !validPath(root) || !path.isAbsolute(root) || path.basename(path.normalize(root)) !== 'native-image-cache')) throw uiError('error.nativeImages.invalidCacheSource');
+  return [...new Set(roots.map(root => path.normalize(root)))];
+}
+function snapshotImageKey(ref, sessionId) {
+  if (!validPath(ref.cachedPath) || !path.isAbsolute(ref.cachedPath) || typeof sessionId !== 'string' || !sessionId || sessionId.length > 512 || !/^[a-f0-9]{64}$/.test(ref.pixelSha256 || '')) throw uiError('error.nativeImages.invalidCacheSource');
+  const folder = createHash('sha256').update(sessionId).digest('hex'), name = path.basename(ref.cachedPath);
+  if (path.basename(path.dirname(ref.cachedPath)) !== folder || !new RegExp('^' + ref.pixelSha256 + '\\.(png|jpg|gif|webp)$').test(name) || path.basename(path.dirname(path.dirname(ref.cachedPath))) !== 'native-image-cache') throw uiError('error.nativeImages.invalidCacheSource');
+  return { folder, name };
+}
+function snapshotCacheFile(root, key) {
+  const folder = path.join(root, key.folder), file = path.join(folder, key.name);
+  try {
+    for (const directory of [root, folder]) {
+      const stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw uiError('error.nativeImages.cacheDirectoryUnverifiable');
+    }
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid() || stat.size <= 0 || stat.size > MAX_NATIVE_BYTES) throw uiError('error.nativeImages.cacheChanged');
+    return file;
+  } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function snapshotImageReference(ref, sessionId, roots) {
+  const locations = snapshotImageRoots(roots);
+  if (ref?.kind !== 'native-pixels' || ref.unavailable || !locations.length) return { ...ref };
+  const key = snapshotImageKey(ref, sessionId);
+  let failure;
+  for (const root of locations) try {
+    const file = snapshotCacheFile(root, key);
+    if (file) { snapshotImageBytes(file, ref.pixelSha256); return { ...ref, cachedPath: file }; }
+  } catch (error) { failure = error; }
+  if (failure) throw failure;
   return { ...ref };
+}
+function snapshotImageBytes(file, digest) {
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const before = fs.fstatSync(fd);
+    if (!before.isFile() || before.uid !== process.getuid() || before.size <= 0 || before.size > MAX_NATIVE_BYTES) throw uiError('error.nativeImages.cacheChanged');
+    const bytes = Buffer.alloc(before.size + 1); let length = 0;
+    while (length < bytes.length) { const read = fs.readSync(fd, bytes, length, bytes.length - length, length); if (!read) break; length += read; }
+    if (length !== before.size || JSON.stringify(fileIdentity(before)) !== JSON.stringify(fileIdentity(fs.fstatSync(fd)))) throw uiError('error.nativeImages.cacheChanged');
+    const value = bytes.subarray(0, length);
+    if (createHash('sha256').update(value).digest('hex') !== digest) throw uiError('error.nativeImages.cacheChanged');
+    imageDimensions(value); return value;
+  } catch (error) { if (['ENOENT', 'EACCES', 'EPERM', 'ELOOP', 'ENOTDIR'].includes(error.code)) throw uiError('error.nativeImages.unavailable'); throw error; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+function copySnapshotImages(dataDir, batch, maxBytes = MAX_BYTES) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > MAX_BYTES) throw uiError('error.merge.transferLimit');
+  const roots = snapshotImageRoots([...new Set(batch.blocks.flatMap(block => block.imageCacheRoots || []))]);
+  const target = path.join(dataDir, 'native-image-cache'), created = [], directories = [], seen = new Set(); let total = 0;
+  const rollback = () => {
+    for (const item of created.reverse()) try {
+      const current = fs.lstatSync(item.file);
+      if (!current.isSymbolicLink() && current.uid === process.getuid() && JSON.stringify(fileIdentity(current)) === item.identity) fs.unlinkSync(item.file);
+    } catch {}
+    for (const item of directories.reverse()) try {
+      const current = fs.lstatSync(item.path);
+      if (!current.isSymbolicLink() && current.dev === item.dev && current.ino === item.ino && current.uid === process.getuid() && !fs.readdirSync(item.path).length) fs.rmdirSync(item.path);
+    } catch {}
+  };
+  const directory = location => {
+    let stat;
+    try { stat = fs.lstatSync(location); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      fs.mkdirSync(location, { mode: 0o700 }); stat = fs.lstatSync(location); directories.push({ path: location, dev: stat.dev, ino: stat.ino });
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw uiError('error.nativeImages.cacheDirectoryUnverifiable');
+  };
+  try {
+    for (const block of batch.blocks) for (const entry of block.entries) for (const ref of entry.payload.images || []) {
+      if (ref?.kind !== 'native-pixels' || ref.unavailable) continue;
+      const sessionId = entry.payload.sessionId, key = snapshotImageKey(ref, sessionId), token = key.folder + '/' + key.name;
+      if (seen.has(token)) continue; seen.add(token);
+      const existing = snapshotCacheFile(target, key);
+      let bytes, failure;
+      if (existing) bytes = snapshotImageBytes(existing, ref.pixelSha256);
+      else for (const root of new Set([path.dirname(path.dirname(ref.cachedPath)), ...roots])) try {
+        const file = snapshotCacheFile(root, key);
+        if (file) { bytes = snapshotImageBytes(file, ref.pixelSha256); break; }
+      } catch (error) { failure = error; }
+      if (!bytes) throw failure || uiError('error.nativeImages.unavailable');
+      total += bytes.length;
+      if (total > maxBytes) throw uiError('error.merge.transferLimit');
+      if (existing) continue;
+      directory(target); directory(path.join(target, key.folder));
+      const mime = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }[path.extname(key.name).slice(1)];
+      const copied = nativePixelReference(dataDir, sessionId, { index: 0, mime, data: bytes.toString('base64') }, undefined, (file, stat) => created.push({ file, identity: JSON.stringify(fileIdentity(stat)) }));
+      if (copied.unavailable || !copied.cachedPath) throw Object.assign(Error(copied.unavailable), { uiMessage: copied.unavailableUiMessage });
+    }
+    return { rollback };
+  } catch (error) { rollback(); throw error; }
 }
 function resolvedImagePath(ref) {
   if (ref?.unavailable) throw Object.assign(Error(ref.unavailable), ref.unavailableUiMessage ? { uiMessage: ref.unavailableUiMessage } : {});
@@ -81,7 +188,7 @@ function validImagePayload(payload) {
   return payload.index < MAX_IMAGES && ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(payload.mime) &&
     typeof payload.data === 'string' && payload.data.length > 0 && payload.data.length <= MAX_NATIVE_ENCODED;
 }
-function nativePixelReference(dataDir, sessionId, payload, previous) {
+function nativePixelReference(dataDir, sessionId, payload, previous, onCreated) {
   const original = payload.sourcePath ? { path: payload.sourcePath } : {};
   if (payload.unavailable) return { ...original, unavailable: payload.unavailable };
   let bytes, digest;
@@ -125,7 +232,7 @@ function nativePixelReference(dataDir, sessionId, payload, previous) {
       if (stored + bytes.length > 64 * 1024 * 1024) throw uiError("error.nativeImages.sessionCacheLimit");
       const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
       const created = fs.fstatSync(fd);
-      try { fs.writeFileSync(fd, bytes); stat = fs.fstatSync(fd); }
+      try { fs.writeFileSync(fd, bytes); stat = fs.fstatSync(fd); onCreated?.(file, stat); }
       catch (error) {
         try { const current = fs.lstatSync(file); if (current.dev === created.dev && current.ino === created.ino && !current.isSymbolicLink()) fs.unlinkSync(file); } catch {}
         throw error;
@@ -343,4 +450,4 @@ class ImagePreviews {
   release(token) { const entry = this.entries.get(token); if (entry) { this.bytes -= entry.png.length; this.entries.delete(token); } }
   close() { this.closed = true; this.entries.clear(); this.bytes = 0; }
 }
-module.exports = { MAX_IMAGES, MAX_BYTES, MAX_PIXELS, MAX_NATIVE_BYTES, MAX_NATIVE_ENCODED, validImagePayload, applyImagePayload, cachedImageKey, removeCachedImages, imageDimensions, userImageReferences, imageReferences, applyInputImages, imageSource, resolvedImagePath, readImage, ImagePreviews };
+module.exports = { snapshotImageRoots, copySnapshotImages, MAX_IMAGES, MAX_BYTES, MAX_PIXELS, MAX_NATIVE_BYTES, MAX_NATIVE_ENCODED, validImagePayload, applyImagePayload, cachedImageKey, removeCachedImages, imageDimensions, userImageReferences, imageReferences, applyInputImages, imageSource, resolvedImagePath, readImage, ImagePreviews };

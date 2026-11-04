@@ -1,3 +1,4 @@
+const { snapshotImageRoots } = require('./native-images.cjs');
 const { uiError, uiNotice } = require('./ui-errors.cjs');
 const liveUnsavedActivity = uiNotice('notice.activity.liveUnsaved');
 const { codexVersionInfo } = require('./native-history.cjs');
@@ -193,7 +194,7 @@ class WorkspaceClient extends EventEmitter {
       { message: this.control.legacyInput?.storageWarning, uiMessage: this.control.legacyInput?.storageWarningUiMessage },
       ...(this.control.legacyInput?.sharedReplies?.storageError ? [uiError('error.warning.sharedReplyUnsaved')] : [])].filter(part => part.message);
     const storageDisplay = uiError('error.warningLines', { warnings: warningParts.map(part => part.message).join('\n') }, { parts: warningParts, param: 'warnings', separator: '\n' });
-    return { ...this.active.state, wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
+    return { ...this.active.state, nativeImageCacheRoots: snapshotImageRoots(this.entries.map(e => e.state.nativeImageCacheRoot).filter(Boolean)), wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
       rooms, room: rooms.find(r => r.id === roomId) || { id: roomId, revision: 0, run: null, messages: [] },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
       storageWarning: storageDisplay.message || null, storageWarningUiMessage: storageDisplay.uiMessage || null,
@@ -398,6 +399,8 @@ class WorkspaceClient extends EventEmitter {
       if (owners.length > 1) throw uiError("error.client.mergeSnapshotOwnershipConflict");
       const target = owners[0] || this.active;
       if (!target.state.capabilities?.includes('spaceMergeV1') || batch.memberIds.some(id => !this.route(id).state.capabilities?.includes('collaborationSpacesV1'))) throw uiError("error.client.mergeMultipleSpacesUnsupported");
+      if (!target.state.nativeImageCacheRoot && batch.blocks.some(block => block.entries.some(entry =>
+        Array.isArray(entry.payload.images) && entry.payload.images.some(ref => ref?.kind === 'native-pixels' && !ref.unavailable)))) throw uiError('error.client.mergeMultipleSpacesUnsupported');
       const guards = this.entries.map(entry => this.operationGuard(entry)); guards.forEach(check => check());
       const result = await target.client.call('mergeSnapshot', batch);
       guards.forEach(check => check()); await this.refresh(); guards.forEach(check => check());

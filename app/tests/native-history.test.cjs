@@ -172,6 +172,7 @@ test('workspace native version metadata follows its actual runtime RPC and never
   const rpc = { nativeVersion: '0.163.0', ws: { readyState: 1 } };
   const runtime = { host: { rpc } };
   const workspace = Object.assign(Object.create(Workspace.prototype), {
+    dataDir: '/synthetic/native-history-workspace',
     sessions: new Map([['test', { id: 'test', provider: 'codex', nativeVersion: '0.164.0', nativeVersionStatus: 'verified' }]]),
     runtimes: new Map([['test', runtime]]), host: { binaries: {}, rpc: { nativeVersion: '0.164.0' } },
     sharedReplies: { activity: () => null }, drafts: new Map(), capacityRecoveries: new Map(), room: {}, versions: {},

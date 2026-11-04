@@ -1,3 +1,4 @@
+const { snapshotImageRoots } = require('./native-images.cjs');
 const { uiError } = require('./ui-errors.cjs');
 const { displayMessage } = require('./ui-locale.js');
 const { createHash } = require('node:crypto');
@@ -39,7 +40,8 @@ function displayMetadata(row) {
   }
   return result;
 }
-function captureSource(room, sessions) {
+function captureSource(room, sessions, imageCacheRoots = []) {
+  const roots = snapshotImageRoots(imageCacheRoots);
   if (!object(room) || !roomId(room.id) || room.unavailable || !revision(room.metadataRevision) ||
       !revision(room.revision) || typeof room.notes !== 'string' || room.notes.length > 8000 ||
       !Array.isArray(room.messages) || !Array.isArray(room.events) || !Array.isArray(room.files) || !Array.isArray(sessions)) throw failure();
@@ -83,6 +85,7 @@ function captureSource(room, sessions) {
       return pick(event, ['id', 'role', 'text', 'kind', 'time', 'sessionId', 'name']);
     }),
     rows, members, run: room.run ? pick(room.run, ['id', 'status', 'steps', 'reason']) : null };
+  if (roots.length) value.imageCacheRoots = roots;
   return { ...value, cut: hash(value) };
 }
 
@@ -98,7 +101,7 @@ function block(source, selection = {}) {
   if (!object(selection) || selection.includeNotes !== undefined && typeof selection.includeNotes !== 'boolean') throw failure();
   const rows = select(source.rows, selection.messageIds, row => row.sourceMessageId);
   if (selection.messageIds !== undefined && rows.some(row => !row.complete)) throw failure();
-  return { roomId: source.id, name: source.name,
+  return { ...(source.imageCacheRoots?.length ? { imageCacheRoots: snapshotImageRoots(source.imageCacheRoots) } : {}), roomId: source.id, name: source.name,
     notes: selection.includeNotes === false ? null : source.notes,
     files: json(select(source.files, selection.fileIds, file => file.id)),
     events: json(select(source.events, selection.eventIds, event => event.id)),
@@ -214,6 +217,7 @@ function validateBatch(batch) {
         !(selected.notes === null || typeof selected.notes === 'string' && selected.notes.length <= 8000) ||
         !Array.isArray(selected.files) || !Array.isArray(selected.events) || !Array.isArray(selected.entries) ||
         !Array.isArray(selected.references) || !Array.isArray(selected.omitted)) throw failure();
+    snapshotImageRoots(selected.imageCacheRoots || []);
     // Reuse the existing source schema for metadata, without looking at files.
     captureSource({ id: source.id, name: selected.name, revision: 0, metadataRevision: 0,
       notes: selected.notes || '', files: selected.files, events: selected.events, messages: [] }, []);

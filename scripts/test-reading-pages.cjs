@@ -235,6 +235,9 @@ async function run() {
   await until(async () => (await group.locator(':scope > details > summary').innerText()).includes('60 个命令'), 'Actual T67 group keeps all sixty native originals');
   assert.equal(await group.locator('article[data-message-id]').count(), 60); assert.equal(await group.getAttribute('data-running'), 'true');
   assert.match(await group.locator(':scope > details > summary').innerText(), /失败 1/);
+  assert.equal(await group.locator(':scope > details').getAttribute('open'), null, 'Active process groups start folded');
+  await group.locator(':scope > details > summary').click();
+  assert.equal(await group.locator(':scope > details').getAttribute('open'), '', 'The person can expand the original group');
   await group.locator(':scope > details > summary').click();
   assert.equal(await group.locator(':scope > details').getAttribute('open'), null);
   // A collapsed group can make the page shorter than its viewport. Wheel-up
@@ -242,6 +245,7 @@ async function run() {
   await member(other).hover(); await page.mouse.wheel(0, -30);
   await until(() => member(other).locator('article[data-message-id]').count().then(n => n > 60), 'Short collapsed page can load earlier originals');
   assert.equal(await group.locator(':scope > details').getAttribute('open'), null, 'Loading history preserves the explicit outer fold');
+  await until(async () => { const r = (await snapshot()).viewState.readingPositions, k = Object.keys(r).find(k => k.startsWith('collaboration:') && k.endsWith(':' + other)); return r[k]?.folds?.[groupId] === false; }, 'Paging keeps the saved manual close, not only the default');
   assert.equal(await group.locator('article[data-message-id]').count(), 60); assert.match(await group.locator(':scope > details > summary').innerText(), /60 个命令/);
   await member(other).focus(); await member(other).press('End');
   await until(() => member(other).locator('article[data-message-id]').count().then(n => n > 60), 'A short latest page automatically fills with older originals');

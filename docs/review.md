@@ -4303,3 +4303,20 @@ A stale test toast and read-only ownership after synthetic rebind are recorded;
 neither is normal-use control proof. The actual visible alpha.181 update and
 150-second retention are program-checked; the original goal is still active.
 No actual provider/physical copy or whole-milestone claim follows.
+
+
+## I170 — retained images in merged spaces
+
+The reviewed six-file repair retains bounded copies in the existing image cache
+before acknowledging a snapshot import, preserving original fields and hashes.
+Source review closes actual-target routing, damaged-source fallback and missing
+snapshot-authority findings. The exact patch applies to current Main without
+conflicts; a prototype-only version test needs its previously omitted synthetic
+data directory. Its assertions are unchanged. The full run otherwise passes
+2,516 of 2,517 checks; the corrected fixture and affected image/version suites
+pass all 61 checks. Actual current-source GUI decodes, expands and collapses a
+retained image after source cleanup and cold start, with unchanged original/hash.
+The earlier copied-input bootstrap failure is retained, not image proof. Signed
+acceptance and this combined integration review remain pending. The unchanged
+reading interaction also reuses the author's nine-group source GUI acceptance
+for its four-line stale-default-fold test correction; no product change there.
