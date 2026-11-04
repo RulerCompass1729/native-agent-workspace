@@ -4,7 +4,17 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.185, committed build source `a1578ddd`. On Claude
+Current daily GUI: alpha.186, committed build source `06db30e`. The existing
+usage area can show Codex's native account-limit windows separately from thread
+tokens, clearing stale readings when the account or connection changes. The
+pending-context header no longer reports native exit. Source and affected signed
+UI reviews pass; the installed executable passes four synthetic-metadata UI
+checks without provider/model calls. Visible updating retains 14 records,
+16 live identities, 12 view drafts, seven older backends and the original active
+goal after 150 seconds. Old backends need normal safe adoption for new metadata.
+The native-client choice menu, current-account probe and whole goal remain open.
+
+Previously qualified alpha.185, committed build source `a1578ddd`. On Claude
 2.1.318 the GUI model now follows the native model read/switch event without
 enabling other unqualified capabilities. Signed candidate switching/reload
 and an actual installed-path switch after the visible update pass without task

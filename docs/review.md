@@ -4442,8 +4442,9 @@ the existing context-unverified label only for this stopping/pending state;
 real exit, later error/ended states and the existing unfollowed-resume label stay
 distinct. Two bounded native trials remain failed harness runs (prompt-space,
 then wrapped-UUID parsing), with raw runtime observations derived separately;
-they are not relabelled passing suites. Source checks pass; installed repair
-acceptance is pending the next substantive batch. No new version for this
+they are not relabelled passing suites. Source checks pass. The I181 substantive alpha.186 batch now passes the
+installed header acceptance with the existing context-end event; this does not
+qualify full native 318 context switching. No new version for this
 small wording repair, no broader 318 context capability gate opened.
 
 
@@ -4467,7 +4468,8 @@ reads cannot overwrite newer updates. No polling, model request, menu decision,
 settings write or new panel is added. Older occupied backends need their normal
 safe update before they expose these readings.
 
-Source checks pass: 140 affected checks, no skips. The actual source GUI passes
+Source checks pass: 140 related checks before N1 and 14 focused final checks,
+no skips. The actual source GUI passes
 quota rendering in both interface languages, cross-session/provider isolation,
 account invalidation and draft retention. An initial GUI check incorrectly
 expected a read-only pending-context draft; the existing editable-unsent behavior
@@ -4477,5 +4479,10 @@ against the native schema: limitId can be absent. An anonymous snapshot now
 replaces ambiguous old buckets rather than showing duplicate current limits.
 The focused counterexample passes. A late initial read is discarded as a whole
 when a newer update arrives; unreported buckets stay unknown until another
-native report. This is not a complete account inventory. Incremental source review passes; signed acceptance is pending. These synthetic metadata checks do not certify a live
+native report. This is not a complete account inventory. Incremental source and affected signed-path reviews pass. Signed alpha.186
+and the installed executable pass all four UI groups. Strict signing and 69
+packaged files match after testing. The ordinary visible update preserves
+14 records, 16 live identities, 12 drafts/settings, seven older backends and
+the original active goal across 150 seconds. The existing daily operator is
+reused by exact version substitution; installation facts are program-checked. These synthetic metadata checks do not certify a live
 account reading or solve T162's separate native-client choice-menu gap.

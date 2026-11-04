@@ -5034,7 +5034,8 @@ Independent scoped runtime review passes. Other 318 capabilities, daily gestures
 window/process recovery and the whole goal are not qualified by this task.
 
 
-I181 / Codex account usage: 140 affected checks pass without skips. A real
+I181 / Codex account usage: 140 related checks pass before the optional-ID
+correction; 14 focused final checks pass without skips. A real
 source GUI with synthetic native metadata verifies two Codex sessions see the
 same account windows, not a sum, while a Claude session keeps its own usage.
 Native labels and values survive both interface languages. Account invalidation
@@ -5042,4 +5043,11 @@ removes old limits on the existing refresh; tokens and unsent drafts persist.
 The unchanged I177 header repair distinguishes pending native context from
 native exit and keeps Send disabled. Zero provider processes, model calls,
 dispatches or terminal input. This is source UI proof, not a current-account
-probe or T162's native-client menu. Signed acceptance is pending.
+probe or T162's native-client menu. Signed alpha.186 (`06db30e`) and the
+actual installed executable pass the same four UI groups; strict signature and
+69 payload hashes match. The normal visible update preserves 14 records,
+16 live identities, 12 view drafts/settings, seven older backends and the
+original active goal after 150 seconds. The source/affected signed-path
+independent review is reused; unchanged update-template and receipt facts
+are checked by program. This does not certify the native-client menu, a real
+account probe, physical input, 318 context transitions or the whole goal.
