@@ -4636,3 +4636,51 @@ judgments are reused for the identical bytes; installation/template/count record
 are checked by program. The initial bounded review has no verdict, not a pass;
 the same reviewer then approves the scoped signed result. No physical/current-CLI,
 paste-GUI, broad-T59 or full milestone closure is inferred.
+
+
+## 2026-11-04 — T58 native desktop-tool startup, source slice
+
+The person requires every NAW Claude/Codex agent to operate NAW through the
+already selected Peekaboo route. Both native launch paths previously configured
+only workspace messaging. They now also configure the same pinned Peekaboo
+stdio toolset; packaging and the cold-backend runtime copy include its helper.
+Original native identity, permission flags and workspace messaging stay intact.
+
+The helper requires the existing signed GUI Bridge and grants, scrubs inherited
+provider credentials, and exposes only see, click and type. Capture requires one
+explicit installed-NAW PID/window. Input consumes a fresh snapshot from the same
+process generation; broad capture, foreground input, custom typing pace, control
+characters and backslash escapes are refused. Unknown mutation completion
+permanently disables that helper instance. Codex shares this availability cost
+across threads on its app-server; the gate is not per-agent authentication or an
+absolute sandbox against an agent's other tools. Screenshots return to the
+native caller and may enter its provider context; no no-upload guarantee is
+claimed.
+
+Independent source review found unsafe timeout reuse and unqualified escape
+interpretation; the same reviewer closed both after conservative guards and
+regression checks. Author testing also reproduced a missing cold-runtime helper
+that prevented startup; adding it to the existing copy list fixes the failure.
+The 38 affected checks pass, with a subsequent focused schema check included in
+the 12-test helper suite. Both provider-derived configurations register the three
+tools through the actual signed Electron executable in Node mode. A separate
+EOF check exits naturally with code zero, without forced termination. These are
+protocol checks, not live Claude/Codex engine tool use.
+
+The finite GUI qualification remains incomplete. The first attempt stopped
+before MCP because Electron document focus was an unsuitable OS-focus proxy.
+After independent review of the correction, one real MCP see returned an
+owned installed-NAW window screenshot. Six OS frontmost-identity checkpoints
+stayed equal, including cleanup. The returned Accessibility table contained
+only window-shell controls, with no intended New session control ID; the
+operator therefore stopped before clicking or typing. Both owned attempts
+cleaned up their processes and profiles and released the canonical GUI slot.
+No third attempt was made. A locked-state sample preceded the capture by
+several minutes and the later console sample contained no locked flag; this
+is not locked-screen qualification.
+
+This source slice does not complete T58. Locked-screen/background operation,
+unchanged daily view, visible space-@ delivery and pacing, native caller traces,
+live provider tool use and retained-backend adoption remain unqualified. No new
+UI, hidden message API, global settings or permission approval is introduced.
+Private raw failures, reviews, test output and cleanup receipts are retained.

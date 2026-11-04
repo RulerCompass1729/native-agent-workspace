@@ -21,7 +21,7 @@ test('cold bootstrap stages the disabled local prepared-command service without 
     assert.equal(fs.existsSync(path.join(directory, 'mobile-authority.json')), false);
     const runtimes = fs.readdirSync(path.join(directory, 'runtimes'));
     assert.equal(runtimes.length, 1);
-    for (const name of ['mobile-access.cjs', 'mobile-session.cjs']) {
+    for (const name of ['mobile-access.cjs', 'mobile-session.cjs', 'native-computer-use.cjs']) {
       assert.deepEqual(fs.readFileSync(path.join(directory, 'runtimes', runtimes[0], name)), fs.readFileSync(path.join(__dirname, '..', name)));
     }
   } finally {

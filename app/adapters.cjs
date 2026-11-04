@@ -17,6 +17,7 @@ const { TerminalJournal } = require('./observation.cjs');
 const { serverVersion, verifiedCodexProtocol } = require('./native-history.cjs');
 const { toolContent, toolStatus, toolTypes, fileChanges, nativeTextContent, nativeTextItemId } = require('./codex-tool-content.cjs');
 const { codexTurnBlock } = require('./native-blocks.cjs');
+const { computerUseMcpServer, codexComputerUseMcpArgs } = require('./native-computer-use.cjs');
 
 // The pinned MIT-licensed addon omits OSC8. Extend an isolated copy so other
 // consumers keep the stock module. Private xterm interfaces and the minified
@@ -486,7 +487,8 @@ class Claude extends EventEmitter {
     // the person did not ask for; /recap stays available on request.
     fs.writeFileSync(settings, JSON.stringify({ teammateMode: 'in-process', awaySummaryEnabled: false, promptSuggestionEnabled: false, hooks }), { mode: 0o600 });
     const mcp = JSON.stringify({ mcpServers: { native_workspace: { command: process.execPath,
-      args: ['--disable-sigusr1', path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
+      args: ['--disable-sigusr1', path.join(__dirname, 'claude-message-tool.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } },
+      peekaboo: computerUseMcpServer() } });
     // Native --resume restores the saved model and every permission mode except
     // bypassPermissions, but resolves effort from settings again. Re-pass only
     // those two, as this session's own last native reports had them.
@@ -2472,7 +2474,7 @@ class NativeHost {
         ['command', process.execPath], ['args', mcpArgs], ['env.ELECTRON_RUN_AS_NODE', '1'],
         ['env.NAW_MESSAGE_SOCKET', this.hookSocket], ['env.NAW_MESSAGE_TOKEN', this.codexMessageToken],
       ].flatMap(([key, value]) => ['-c', `mcp_servers.native_workspace.${key}=${JSON.stringify(value)}`]);
-      child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', ...mcpConfig, 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
+      child = this.codexProcess = spawn(this.codexBinary, ['-c', 'analytics.enabled=false', ...mcpConfig, ...codexComputerUseMcpArgs(), 'app-server', '--listen', `unix://${this.codexSocket}`], { stdio: ['ignore', 'ignore', 'pipe'], env: nativeEnvironment() });
       child.stderr.on('data', () => {});
       child.on('error', error => { spawnError = error; });
       for (let i = 0; i < 100 && !fs.existsSync(this.codexSocket); i++) {
