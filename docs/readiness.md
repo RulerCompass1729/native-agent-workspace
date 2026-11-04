@@ -4,7 +4,15 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.179, committed build source `abb67597`. The first
+Current daily GUI: alpha.180, committed build source `9ab17dc0`. Local file
+links now stay at body-text size inside a sentence. Signed solo/member, narrow,
+zoom, theme and keyboard checks and independent integration review pass.
+The ordinary visible update keeps 14 records, 16 verified live process
+identities, drafts/settings and 7 occupied old backends after 150 seconds.
+Daily visual feedback, full English coverage and the original dogfood goal
+remain open; the known raw-Chinese file error is retained under T-60.
+
+Previously qualified alpha.179, committed build source `abb67597`. The first
 interface-language batch preserves Chinese in an older profile, follows the
 system for a new profile, and exposes the existing manual language setting.
 Native/user text stays original. Signed isolated old/new-profile checks and

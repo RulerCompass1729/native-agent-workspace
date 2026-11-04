@@ -4846,3 +4846,20 @@ review. Independent installed review passes only this phase1 scope.
 Open: later owned Chinese/stale menu facts, a full English screenshot sweep,
 the person's actual daily-profile language operation, and the original dogfood
 milestone. Mixed-language leftovers and old backend versions are not hidden.
+
+
+## alpha.180 — inline file-link repair
+
+Source `9ab17dc0`. Unchanged reviewed source/compiled hashes reuse the
+source file-opening sink checks. Signed isolated tests cover four solo/member
+layout cases, Chromium light/dark themes and zoom, original labels/targets,
+keyboard focus and the real missing-file IPC guard. The two short file buttons
+measure 23.8px against a 23.8px line, versus 45.8px before. Original Markdown,
+identities, owner and unsent draft stay unchanged; native input/send counts are
+zero. This is synthetic transport, not real provider or physical accessibility
+proof; no valid file is opened in an actual OS viewer. Strict signature passes
+after owned tests and cleanup. The English raw-Chinese error gap stays open.
+The visible daily update preserves 14 records, 16 live process identities,
+drafts/settings and 7 old backends for 150 seconds, with no automatic move.
+One daily application-search entry remains; the previous app copy is removed
+and its verified archive retained. Operator/records checks are programmatic.

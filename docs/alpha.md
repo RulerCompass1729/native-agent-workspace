@@ -1526,3 +1526,12 @@ language flows and independent integration review pass. Ordinary visible daily
 upgrade preserves session identities/drafts and occupied old backends; Chinese
 is persisted in the actual profile. Full English coverage and daily user
 operation remain pending. See the alpha.179 testing record for scope and limits.
+
+
+## alpha.180 — compact file links
+
+Source `9ab17dc0`. Original local file labels sit naturally inside a sentence,
+retaining their targets and keyboard focus. Signed installed acceptance and
+independent review pass. The ordinary visible update retains existing sessions,
+drafts and occupied backends. English error coverage and daily visual feedback
+remain open; this does not complete the dogfood goal.

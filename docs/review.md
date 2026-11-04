@@ -4247,3 +4247,21 @@ live native identities, drafts/settings and seven occupied older backends after
 150 seconds. The real legacy profile persists Chinese; installed signature,
 single app-search entry and archive retention pass program checks. The user's
 daily-profile language operation and phase2/3 remain open.
+
+
+## I168 — compact local file links
+
+A reported medium layout defect came from global action-button padding/borders
+leaking into DSH Markdown FileLink buttons. The scoped CSS repair preserves
+original labels, targets, icons and keyboard focus. The reviewed source and
+compiled renderer merge byte-identically; version-only changes are checked
+by program. Signed alpha.179 reproduces a 45.8px button on a 23.8px line;
+alpha.180 is 23.8px in solo/member readers, including narrow/zoom/theme cases.
+Independent installed review passes this task, with physical accessibility and
+real OS viewer use unverified. A narrow solo screenshot is partly obscured by
+the existing jump button; geometry and the member screenshot retain coverage.
+The first English-error assertion failed: the backend's Chinese file error
+is still rendered raw. That T-60 gap is recorded, not repaired or hidden here.
+Post-task strict signature is confirmed by a separate actual exit receipt.
+The ordinary visible update preserves identities/drafts and old backends;
+daily visual feedback and the full dogfood milestone remain open.
