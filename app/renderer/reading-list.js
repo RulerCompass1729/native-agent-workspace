@@ -118,7 +118,9 @@ function followRenderGuard(view, now = performance.now()) { return !view.onScrol
 function changeReadingPage(view, action, fromButton = false, automatic = false) {
   if (!view.reload || view.loadingPage || !view.el.isConnected) return;
   captureReading(view);
-  const previous = readingPositions[view.key] || { top: 0, follow: false, anchor: '', offset: 0 };
+  // The initial following target may not have a saved position yet. Automatic
+  // fill must carry the live target through a short, folded process page.
+  const previous = view.intent?.position || readingPositions[view.key] || { top: 0, follow: false, anchor: '', offset: 0 };
   const pagerFocused = document.activeElement === view.older || document.activeElement === view.newer;
   const position = action === 'latest' ? { top: 0, follow: true, anchor: '', offset: 0 }
     : action === 'first' ? { top: 0, follow: false, anchor: view.pageData.messages[0]?.id || '', offset: 0 }

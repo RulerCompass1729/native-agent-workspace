@@ -4545,3 +4545,32 @@ cap produced no verdict and was not treated as a pass. Its conclusion resume
 reported cumulative list cost 0.5698338, not an invoice. Source/index hashes were
 unchanged during review. This is source-only, pending the next substantive runtime
 batch; installed alpha.187 and Claude capability qualification remain unchanged.
+
+
+### 2026-11-04 — Short process page drops a new reader's follow target
+
+User path: a grid member follows current native output while another member is
+read manually. When a long tool group becomes the whole recent page, its folded
+height triggers automatic older-page fill. The new reader already has a live
+follow target but no persisted reading position. The paging action used the
+missing saved position's default, disabled following, and returned to the top
+without input. This is a reproduced producer for the reported grid jumps, not
+proof that every earlier report has the same cause.
+
+The existing paging action now carries its live reading target before falling
+back to persisted geometry. Manual paging still leaves follow; an older segment
+cannot become follow-latest. Two of four new regression cases fail before the fix; all four pass after it; all 56 affected paging/group/follow checks pass.
+A five-member real source GUI with synthetic native output reproduces the
+failure and then passes the same assertion after the fix, including Home,
+JumpLatest, native completion and manual history during new tool output.
+The first trial missed the follow assertion despite recording the fault; its
+nominal zero exit is not a pass. A private attribution build-path failure is
+retained separately; corrected generated instrumentation identifies the paging
+call that saved false. No provider or model requests were made. Signed installed
+acceptance and independent delivery judgment are pending.
+
+An independent Fable checkpoint approved the source change after reading the
+actual paging function/callers, red/green checks and raw browser evidence. Its
+scope excludes signed installed acceptance and the whole user issue. Read-only
+tool inventory, unchanged source/index/HEAD and version-only manifest changes
+were verified mechanically. Signed acceptance follows from the committed source.
