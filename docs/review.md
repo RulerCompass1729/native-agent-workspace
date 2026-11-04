@@ -4359,3 +4359,19 @@ author's six GUI checks and independent review are reused; installed repair
 acceptance remains pending. The first old-version trial's shutdown race and
 verified eventual cleanup are retained in private evidence. Navigation and
 refolding without another rename remain unchanged and outside this repair.
+
+
+I171 affected-path closure: the exact reviewed rename guard and historical
+peer-label delta pass the combined signed GUI and independent Fable checkpoint.
+The raw source row/body is unchanged; neither unverified senders nor six-character
+historical prefixes become authenticated or globally unique. Seventeen affected
+checks and five package checks pass. The signed GUI covers seven workflows; an
+additional declared run closes the reviewer's missing pending-unfold assertion,
+and timestamped strict signature proof follows it. The first RED183 cleanup race
+is retained as a failure with subsequent cleanup proof. The initial daily command
+is blocked by missing operation flags before any daily action; corrected flags
+then perform the ordinary visible update. C2's final sealed source packet arrives
+after provisional exact-commit adoption and before delivery; it matches the
+reviewed candidate and adds no finding. The source, installed, daily-gesture and
+real-provider limits remain separate. Receipt counts and unchanged goal are
+checked by program; this is not whole-milestone completion.

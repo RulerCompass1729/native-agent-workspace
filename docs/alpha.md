@@ -1560,3 +1560,8 @@ Source `34de7557`. Recovery uses the existing saved batch owner, retaining
 old-target refusal for new copies. Signed-class acceptance and independent
 delta review pass; the visible update preserves sessions, drafts and goal.
 The alpha.183 testing record retains GUI/native/physical acceptance limits.
+
+
+Alpha.184 preserves newer rename intents and recorded historical peer IDs.
+Signed affected-path acceptance and visible update pass; see testing and
+readiness for exact scope. The overall dogfood milestone remains open.

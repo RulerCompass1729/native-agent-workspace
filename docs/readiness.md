@@ -4,7 +4,16 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.183, committed build source `34de7557`. Saved image
+Current daily GUI: alpha.184, committed build source `fd655d9e`. An older
+space-unfold reply no longer replaces a newer rename editor or reopens one
+after cancellation. Removed peer senders retain their recorded short ID and
+unverified marker; original message bodies are unchanged. Signed affected-path
+GUI acceptance and independent review pass. Visible update retains 14 records,
+16 live process identities, 12 view drafts/settings and 7 occupied older
+backends across 150 seconds; the original goal remains active. Physical input,
+real-provider qualification and daily user gestures are not certified.
+
+Previously qualified alpha.183, committed build source `34de7557`. Saved image
 merges now recover through their actual existing backend even when the active
 backend is older. New-merge and actual-target refusal checks remain. Signed
 backend-class RED/GREEN acceptance and same-reviewer delta pass; unchanged

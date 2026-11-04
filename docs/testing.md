@@ -4968,3 +4968,17 @@ review are reused. A private signed alpha.183 trial through real IPC and a
 one-shot held synthetic daemon response reproduces the stale editor override.
 The old-version failure and eventual owned cleanup are retained. Packaged
 repair acceptance is pending; no product-model inference is used.
+
+
+Alpha.184 / I171: clean committed source `fd655d9e`; 69 packaged source
+files match, 105 production dependencies. Actual signed 183 reproduces the
+late-unfold override; signed 184 passes seven GUI checks, then the one declared
+timing-assertion follow-up passes seven again. All three held unfold replies
+remain pending before the newer editor opens. Synthetic native inputs, sends and
+interruptions are zero; this is not real-provider or physical-input proof.
+Fresh read-only Fable review and same-session F1/F2 delta pass, with unchanged
+HEAD/index/tracked files/generated client. Final cumulative list-equivalent cost
+is $0.8253588, not an invoice or sum of resumed totals. Ordinary visible daily
+update preserves 14 records, 16 live identities, 12 view drafts/settings,
+7 occupied older backends and the original active goal across 150 seconds.
+Daily gestures, OS clipboard and whole goal remain open.
