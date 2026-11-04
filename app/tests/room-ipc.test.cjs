@@ -35,6 +35,11 @@ test('a space clear the client will refuse is refused before the confirmation; a
   d.dialog.showMessageBox = async (_win, options) => { order.push(['ask', options.message]); return { response: 1 }; };
   const refused = await d.invoke('spaceAction', 'shared', 'clearSharedHistory', []);
   assert.equal(refused.ok, false); assert.match(refused.error, /核对各后台/); assert.deepEqual(order, [['check', 'shared']], 'Refused without asking');
+  order.length = 0; const locale = require('../ui-locale.js'); refusal = locale.createError('error.main.clearNeedsLeaseRevocation');
+  const typed = await d.invoke('spaceAction', 'shared', 'clearSharedHistory', []);
+  assert.equal(typed.ok, false); assert.equal(typed.error, refusal.message); assert.equal(typed.uiMessage.key, 'error.main.clearNeedsLeaseRevocation');
+  assert.equal(locale.errorText('en', { message: typed.error, uiMessage: typed.uiMessage }), locale.errorText('en', refusal));
+  assert.deepEqual(order, [['check', 'shared']], 'A typed refusal also never reaches confirmation or clear');
   order.length = 0; refusal = '';
   const cleared = await d.invoke('spaceAction', 'shared', 'clearSharedHistory', []);
   assert.equal(cleared.ok, true, JSON.stringify(cleared)); assert.deepEqual(order.map(step => step[0]), ['check', 'ask', 'clear'], 'Checked, then asked once, then cleared');

@@ -143,7 +143,7 @@ function menuFixture() {
     api: { connectionUpdates() { requestCount++; return pending; }, async continueConnection(...args) { calls.updates.push(args); return false; },
       async backendSwitchSettings(value) { calls.settings.push(value); if (typeof value === 'boolean') settings.auto = value; return { ...settings }; },
       async switchBackend(value) { calls.switches.push(value); return { key: value.backendKey, resumed: ['s'], left: [] }; } },
-    ui: { display, menu(value) { menu = value; return () => {}; } }, renderVersions() { calls.renders++; },
+    ui: { display, displayText: (raw, message) => locale.displayText(language, raw, message), menu(value) { menu = value; return () => {}; } }, renderVersions() { calls.renders++; },
     versionValue: value => value, toast: value => calls.toasts.push(value), attempt: work => work() });
   vm.runInContext(source.slice(source.indexOf('function compactAppVersion('), source.indexOf('function backendVersionNotice(')), c);
   vm.runInContext(source.slice(source.indexOf('function backendSwitchedText('), source.indexOf("$('backend-version-summary').onclick")), c);
@@ -196,13 +196,31 @@ test('an idle old backend offers one explicit end-and-update, and the automatic 
   assert.deepEqual(plain(f.menu.items.map(item => item.labelRead ? item.labelRead() : item.label)), ['α120 · 结束并更新… · 1 个会话', '空闲时自动更新：开（点此关闭）']);
   await f.menu.onSelect('0');
   assert.deepEqual(plain(f.calls.switches), [{ backendKey: 'old', switch: { ready: true, auto: false, reason: 'Claude 2：这个后台的版本无法确认…', stops } }]);
-  assert.equal(f.calls.updates.length, 0); assert.deepEqual(f.calls.toasts, ['后台已更新，会话已按原身份接回；NAW 没有向它们发送任何内容。']);
+  assert.equal(f.calls.updates.length, 0); assert.deepEqual(f.calls.toasts, ['']);
+  assert.equal(f.toast.textContent, '后台已更新，会话已按原身份接回；NAW 没有向它们发送任何内容。');
+  f.switch('en'); assert.equal(f.toast.textContent, 'Backend updated and sessions reconnected with their original identities. NAW sent them no content.');
+  f.switch('zh');
   assert.match(f.c.backendSwitchedText({ resumed: 1, left: 0, reconnectFailed: true }), /窗口没能自动重新连接/);
   await f.menu.onSelect('auto'); assert.deepEqual(f.calls.settings, [undefined, false]); assert.match(f.calls.toasts.at(-1), /已关闭自动更新/);
   // A blocked plan still only explains itself.
   const blocked = menuFixture(), loading = blocked.c.open();
   blocked.resolve([{ id: 's', backendKey: 'old', count: 1, ready: false, reason: 'Retained', switch: { ready: false, auto: false, reason: '等空闲后更新：Claude 2正在工作。', stops: [] } }]); await loading;
   await blocked.menu.onSelect('0'); assert.deepEqual(blocked.calls.toasts, ['等空闲后更新：Claude 2正在工作。']); assert.equal(blocked.calls.switches.length, 0);
+});
+
+test('an actual backend plan refusal passes through Main and repaints in the existing toast without a backend operation', async () => {
+  const record = { id: 'original', nativeId: 'original-native', provider: 'claude', name: 'RAW 中文', state: 'working', archived: false };
+  const entry = { key: 'old', state: { runtimeVersion: '0.1.0-alpha.120', servicePid: 42, capabilities: ['atomicShutdown', 'resume'], sessions: [record], room: { messages: [] } } };
+  const [option] = mainOptions({ entries: [entry], snapshot: () => ({ sessions: [record], room: { messages: [] } }) });
+  assert.equal(option.switch.ready, false); assert.ok(locale.displayMessage(option.switch.reasonUiMessage));
+  const f = menuFixture(), loading = f.c.open(); f.resolve([option]); await loading; f.menu.onSelect('0');
+  assert.equal(f.toast.textContent, '等空闲后更新：RAW 中文正在工作。');
+  f.switch('en'); assert.equal(f.toast.textContent, 'Wait until idle before updating: RAW 中文 is working.');
+  f.switch('zh'); assert.equal(f.toast.textContent, option.switch.reason);
+  assert.equal(f.calls.updates.length + f.calls.switches.length, 0); assert.equal(f.requests, 1);
+  const own = locale.createError('error.backendSwitchStateChanged'); f.switch('en');
+  assert.equal(f.c.backendSwitchedText({ error: own.message, errorUiMessage: own.uiMessage }), 'Automatic backend update did not complete: ' + locale.errorText('en', own));
+  assert.equal(f.c.backendSwitchedText({ error: 'RAW upstream 中文 {reason}' }), 'Automatic backend update did not complete: RAW upstream 中文 {reason}');
 });
 test('sessions ended by an unfinished update are named in the menu even with no old backend left', async () => {
   const f = menuFixture(); f.settings.interrupted = ['Claude 2', 'Codex 秘书']; const opening = f.c.open(); f.resolve([]); await opening;
@@ -213,7 +231,7 @@ test('sessions ended by an unfinished update are named in the menu even with no 
 });
 
 test('sessions an unfinished move ended keep the old-sessions control visible after every old backend is gone', () => {
-  const elements = {}, $ = id => elements[id] ||= { id, hidden: false, textContent: '', title: '', disabled: false, attributes: {}, setAttribute(k, v) { this.attributes[k] = v; }, getAttribute(k) { return this.attributes[k] ?? null; }, removeAttribute(k) { delete this.attributes[k]; } };
+  const elements = {}, $ = id => elements[id] ||= { id, hidden: false, textContent: '', get title() { return this.attributes.title || ''; }, set title(value) { this.attributes.title = String(value); }, disabled: false, attributes: {}, setAttribute(k, v) { this.attributes[k] = v; }, getAttribute(k) { return this.attributes[k] ?? null; }, removeAttribute(k) { delete this.attributes[k]; } };
   const c = vm.createContext({ ...localeUI(), $, state: { appVersion: '0.1.0-alpha.157', sessions: [{ id: 'a', runtimeVersion: '0.1.0-alpha.157' }], switchEnded: [{ id: 'a', name: 'Claude 2' }, { id: 'b', name: 'Codex 秘书' }] },
     disconnected: false, checkingBackendVersions: false, backendVersionTicket: 0, backendVersionMenu: null });
   vm.runInContext(source.slice(source.indexOf('function versionValue('), source.indexOf("$('app-version').onclick")) + ';this.render = renderVersions;', c);

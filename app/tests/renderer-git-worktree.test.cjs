@@ -12,10 +12,10 @@ function fixture() {
   const get=id=>{if(!nodes.has(id))nodes.set(id,{checked:false,disabled:false,hidden:false,value:'',textContent:'',open:false,dataset:{},replaceChildren(){},add(){},querySelectorAll:()=>[],childElementCount:0,attrs:new Map(),setAttribute(k,v){this.attrs.set(k,String(v));},getAttribute(k){return this.attrs.get(k)??null;},removeAttribute(k){this.attrs.delete(k);}});return nodes.get(id);};
   const dialog=get('create-dialog'); dialog.open=true; const ticket={valid:true};
   const uiText=(key,params)=>locale.format('zh',key,params),display=createBindings(uiText);
-  const context={ $,uiError:locale.createError,uiText,ui:{display,showError(element,error){display.unbind(element);element.textContent=error.message;}},state:{capabilities:['gitWorktreeV1','nativePermissionDefaults','createSkipPermissions','newSessionDirectory'],preflight:{python:true,codex:true}},
+  const context={ $,uiError:locale.createError,uiText,ui:{display,errorText:error=>locale.errorText('zh',error),showError(element,error){display.unbind(element);element.textContent=error.message;}},state:{capabilities:['gitWorktreeV1','nativePermissionDefaults','createSkipPermissions','newSessionDirectory'],preflight:{python:true,codex:true}},
     document:{querySelector:()=>({value:'codex'})},crypto:{randomUUID},dialogTickets:new Map([[dialog,ticket]]),
     currentDialogTicket:t=>t===ticket&&ticket.valid&&dialog.open,
-    allSpaces:()=>[],spaceRecord:()=>undefined,Option:function(){},
+    allSpaces:()=>[],spaceRecord:()=>undefined,Option:function(){return get('space-placeholder');},
     setTimeout:fn=>{timers.set(++timer,fn);return timer;},clearTimeout:id=>timers.delete(id),
     api:{gitWorktreePreview:(...args)=>new Promise(resolve=>requests.push({args,resolve})),create:()=>{context.createCalls++;return Promise.resolve('id');}},createCalls:0};
   function $(id){return get(id);}
@@ -26,7 +26,7 @@ function fixture() {
   const declarations=names.map(name=>source.match(new RegExp('(?:async )?function '+name+'\\([\\s\\S]*?\\n}'))?.[0]);
   assert.ok(declarations.every(Boolean));
   get('create-space-kind').value='independent';
-  vm.runInContext("const CREATE_SPACE_HELP='';let folder='/synthetic/repo',newDirectory=false,creatingSession=false,gitWorktreePlan=null,gitWorktreeNonce='nonce',gitPreviewRevision=0,gitPreviewLoading=false,gitPreviewTimer,selectionRevision=0;\n"+declarations.join('\n'),context);
+  vm.runInContext("let folder='/synthetic/repo',newDirectory=false,creatingSession=false,gitWorktreePlan=null,gitWorktreeNonce='nonce',gitPreviewRevision=0,gitPreviewLoading=false,gitPreviewTimer,selectionRevision=0;\n"+declarations.join('\n'),context);
   get('git-worktree').checked=true; get('chosen-folder').textContent='/synthetic/repo';
   return {get,ticket,requests,timers,context,run:code=>vm.runInContext(code,context)};
 }

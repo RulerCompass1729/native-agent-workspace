@@ -131,7 +131,7 @@ async function stageOnce(w, s, r, native, args) {
   // T-137: also in the spaces they share, for the person to see. Must never throw: it runs between the
   // push and the save, and an unsaved staged wake would still be sent when the turn ends.
   w.mirrorWake?.(s, intent, target.session, row);
-  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; throw e; }
+  try { durable(w); } catch (e) { intent.status = 'unconfirmed'; row.text = `自动消息未能保存，没有派发。\n${args.message}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.saveFailed', params: { body: args.message } }, 'notice.', row.text) || undefined; throw e; }
   return { status: 'staged', id: intent.id, message: '已保存，尚未投递。当前原生回合正常结束后只尝试一次；不要等待或重试。真人可随时撤销。' };
 }
 function complete(w, s, r, info) {
@@ -140,7 +140,7 @@ function complete(w, s, r, info) {
     if (intent?.status !== 'staged' || intent.nativeId !== info.nativeId || intent.turnId !== info.turnId) continue;
     if (info.status !== 'completed' || !sourceValid(w, s, r, intent)) {
       // T-141: `boundary` is a turn whose authority an input or permission boundary took mid-turn.
-      intent.status = 'cancelled'; row.text = `${info.status === 'boundary' ? '发送方这一轮中途有新的输入或权限确认' : '原生回合未正常结束或授权已变化'}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.turnCancelled', params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
+      intent.status = 'cancelled'; row.text = `${info.status === 'boundary' ? '发送方这一轮中途有新的输入或权限确认' : '原生回合未正常结束或授权已变化'}；自动消息未投递。\n${intent.body}`; row.uiMessage = displayMessage({ version: 1, key: info.status === 'boundary' ? 'notice.wake.turnBoundaryCancelled' : 'notice.wake.turnCancelled', params: { body: intent.body } }, 'notice.', row.text) || undefined; durable(w); continue;
     }
     intent.status = 'sending'; durable(w);
     // Persist before the one transfer. Reopening never replays sending/staged rows.
@@ -150,11 +150,14 @@ function complete(w, s, r, info) {
     }).catch(error => { intent.status = 'unconfirmed'; row.text = `自动消息未确认投递；不会重发。\n${error.message}\n${intent.body}`; row.uiMessage = displayMessage(uiError('error.wake.deliveryUnconfirmed', { reason: error.message, body: intent.body }, { cause: error, param: 'reason' }).uiMessage, 'error.', row.text) || undefined; w.changed(); w.persist(); });
   }
 }
-function cancelParticipant(w, id, reason) {
+function cancelParticipant(w, id, reason, reasonUiMessage) {
   // Name the boundary, so a cancelled wake can be traced (T-100: the 11-02 secretary wake).
   const why = typeof reason === 'string' && reason ? `（${reason.slice(0, 120)}）` : '';
   for (const row of w.sessions.get(id)?.messages || []) if (row.wake?.status === 'staged') {
-    row.wake.status = 'cancelled'; row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundary', params: { body: row.wake.body } }, 'notice.', row.text) || undefined;
+    row.wake.status = 'cancelled'; row.text = `原生观察或控制边界已变化${why}；自动消息未投递。\n${row.wake.body}`; row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryReason', params: { why, body: row.wake.body } }, 'notice.', row.text) || undefined;
+    const rawReason = typeof reason === 'string' ? reason.slice(0, 120) : '';
+    const cause = displayMessage(reasonUiMessage, 'notice.', rawReason);
+    if (cause && why) row.uiMessage = displayMessage({ version: 1, key: 'notice.wake.observationBoundaryKnownReason', params: { reason: rawReason, body: row.wake.body }, cause, causeParam: 'reason' }, 'notice.', row.text) || row.uiMessage;
   }
 }
 function take(w, spec) {

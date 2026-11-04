@@ -101,7 +101,7 @@ for (const flag of ['pausePending', 'pauseUnconfirmed']) test('a clear of the sh
   const { c, old, next } = fixture();
   const counters = () => [c.control.revision, c.control.manualEpoch, JSON.stringify([...c.control.spaceRevisions])], before = counters();
   old.real.room.run = { id: 'unresolved', status: 'paused', [flag]: true };
-  assert.match(await c.clearSharedHistoryProblem('shared'), /核对各后台/);
+  assert.match((await c.clearSharedHistoryProblem('shared')).message, /核对各后台/);
   assert.equal([...old.calls, ...next.calls].some(([m]) => m !== 'initial'), false, 'Only fresh reads');
   assert.deepEqual(counters(), before, 'No control counter moves');
   await assert.rejects(c.call('clearSharedHistory'), /核对各后台/);
@@ -112,10 +112,10 @@ for (const flag of ['pausePending', 'pauseUnconfirmed']) test('a clear of the sh
 test('a clear of the shared record is refused before asking while a handoff runs, a backend lacks clearing, or a connection is being updated', async () => {
   const { c, old, next } = fixture();
   old.real.room.run = { id: 'live', status: 'running' };
-  assert.match(await c.clearSharedHistoryProblem('shared'), /请先暂停交接/);
+  assert.match((await c.clearSharedHistoryProblem('shared')).message, /请先暂停交接/);
   old.real.room.run = null;
   for (const e of [old, next]) e.real.capabilities = e.real.capabilities.filter(name => name !== 'clearSharedHistory');
-  assert.match(await c.clearSharedHistoryProblem('shared'), /支持清除记录/);
+  assert.match((await c.clearSharedHistoryProblem('shared')).message, /支持清除记录/);
   c.control.maintenance.add(c.entries[0].key);
   await assert.rejects(c.clearSharedHistoryProblem('shared'), /正在更新/);
   c.close();

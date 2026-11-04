@@ -142,6 +142,19 @@ test('the first human hook can arrive after the native turn-start without losing
   assert.equal(f.r.wakeTurn.human,JSON.stringify([s.owner,s.controlRevision,s.connectionRevision]));
 });
 
+test('a cold adapter cannot recapture its retained turn on an identical repeated prompt (T-141)', t => {
+  const before = fixture(t), id = randomUUID(), text = 'Original retained prompt.';
+  before.typed(id, text); before.start('retained-turn', id, { prompts: [id], rows: [] });
+  const f = fixture(t, before.saved());
+  assert.equal(f.r.announcedPrompts, undefined, 'The old in-memory announcement set is gone');
+  f.start('retained-turn', id);
+  const proof = f.r.wakeTurn.human, revision = f.r.record.controlRevision;
+  f.typed(id, text);
+  assert.equal(f.r.record.controlRevision, revision + 1, 'Still a new person input boundary');
+  assert.equal(f.rows().length, 1, 'Same text does not invent another display row');
+  assert.equal(f.r.wakeTurn.human, proof, 'A saved prompt already belonged to this native context');
+});
+
 test('a cold adapter keeps a queued prompt after reloading the saved first prompt (T-138)', t => {
   const before = fixture(t), id = randomUUID(), first = '  Original first prompt.\n', next = 'A different queued prompt.';
   before.typed(id, first); before.start('retained-turn', id, { prompts: [id], rows: [] });
@@ -164,10 +177,11 @@ test('a cold adapter keeps a queued prompt after reloading the saved first promp
   assert.ok(f.r.record.messages.findIndex(m => m.kind === 'turn' && m.turnId === 'retained-turn') < f.r.record.messages.indexOf(row));
 });
 
-for (const mismatch of ['native-context', 'unknown-context', 'role', 'origin', 'text']) test(`saved first-text recovery ignores an unrelated ${mismatch} (T-138)`, t => {
+for (const mismatch of ['native-context', 'unknown-context', 'unknown-current-context', 'role', 'origin', 'text']) test(`saved first-text recovery ignores an unrelated ${mismatch} (T-138)`, t => {
   const f = fixture(t), id = randomUUID(), old = { id: `claude-prompt-${id}`, role: 'user', origin: 'native', nativeId: f.r.record.nativeId, text: 'Unrelated saved text.' };
   if (mismatch === 'native-context') old.nativeId = randomUUID();
   if (mismatch === 'unknown-context') delete old.nativeId;
+  if (mismatch === 'unknown-current-context') { delete old.nativeId; delete f.r.record.nativeId; }
   if (mismatch === 'role') old.role = 'assistant';
   if (mismatch === 'origin') old.origin = 'desktop';
   if (mismatch === 'text') old.text = null;

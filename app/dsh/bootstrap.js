@@ -131,9 +131,9 @@ window.__ModuleLoader__.load({
             const requestVisible = () => pendingFile.current === request && stillVisible();
             const original = source && { ...source };
             Promise.resolve().then(() => window.workspace.openMessageFile(original, file, options)).then(result => {
-              if (result?.accepted !== true) throw Error('系统打开结果未确认，请先检查系统窗口。');
+              if (result?.accepted !== true) throw window.nativeWorkspaceLocale.createError('error.markdownOpenUnconfirmed');
               if (requestVisible() && options?.line) setFileStatus({ key: 'markdown.fileOpened' });
-            }).catch(error => { if (requestVisible()) setFileStatus({ key: 'markdown.openFileFailed', params: { error: error.message || String(error) } }); }).finally(() => {
+            }).catch(error => { if (requestVisible()) setFileStatus({ key: 'markdown.openFileFailed', error: error?.message ? error : { message: String(error) } }); }).finally(() => {
               const current = requestVisible();
               if (pendingFile.current === request) pendingFile.current = null;
               if (current) setFileBusy(false);
@@ -159,9 +159,9 @@ window.__ModuleLoader__.load({
           };
           return React.createElement('div', { className: 'naw-markdown', onClickCapture: copy, onMouseOverCapture: showTarget, onFocusCapture: showTarget, 'aria-busy': fileBusy || undefined },
             React.createElement(MarkdownDelegateProvider, { openFile, openExternalLink: href => {
-              Promise.resolve().then(() => window.workspace.openExternal(href)).catch(error => { if (stillVisible()) setFileStatus({ key: 'markdown.openLinkFailed', params: { error: error.message || String(error) } }); });
+              Promise.resolve().then(() => window.workspace.openExternal(href)).catch(error => { if (stillVisible()) setFileStatus({ key: 'markdown.openLinkFailed', error: error?.message ? error : { message: String(error) } }); });
             } }, React.createElement(MarkdownText, { text, streaming, className: 'dsh-markdown', labels: { code: { copyLabel: t('markdown.copy'), copiedLabel: t('markdown.copied') }, footnotes: t('markdown.footnotes') } })),
-            fileStatus ? React.createElement('p', { role: 'status' }, t(fileStatus.key, fileStatus.params)) : null);
+            fileStatus ? React.createElement('p', { role: 'status' }, t(fileStatus.key, fileStatus.error ? { error: errorText(fileStatus.error) } : undefined)) : null);
         }
         const ui = {
           language, display, displayText, errorText, showError, createError: window.nativeWorkspaceLocale.createError, createNotice: window.nativeWorkspaceLocale.createNotice,
@@ -211,7 +211,7 @@ window.__ModuleLoader__.load({
                 return () => cancelAnimationFrame(frame);
               }, []);
               return React.createElement(Menu, {
-                open: true, portal: !modal, autoFocus: true, items: items.map(item => item.labelKey || item.labelRead ? { ...item, label: React.createElement(MenuMessage, { item }) } : item), getAnchorRect,
+                open: true, portal: !modal, autoFocus: true, items: items.map(item => item.labelKey || item.labelRead ? { ...item, [item.type === 'label' ? 'text' : 'label']: React.createElement(MenuMessage, { item }) } : item), getAnchorRect,
                 listClassName: 'naw-session-menu', onClose: close,
                 onSelect: action => { close(); onSelect(action); },
               });

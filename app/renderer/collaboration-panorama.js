@@ -35,7 +35,10 @@
       const shared = [record.sharedActivity, ...references.map(room => record.sharedActivities?.[room.id])]
         .filter(value => validObservation(value, record, now)).sort((a, b) => b.observedAt - a.observedAt)[0];
       const observed = { ...record, sharedActivity: shared };
-      return { record, spaces: references, facts: collaboration.statusFacts(observed, connected, now),
+      // Repaint labels from the same observed record/time without navigating or
+      // replacing the original reader rows when the display language changes.
+      const paintFacts = language => collaboration.statusFacts(observed, connected, now, language);
+      return { record, spaces: references, facts: paintFacts(options.language), paintFacts,
         timeReported: [record.nativeActivity, record.nativeApproval, shared].some(value => validObservation(value, record, now)),
         excerpt: collaboration.excerpt(record) };
     });
@@ -58,7 +61,7 @@
 
   function pruneReading(positions, activeKeys = [], limit = 128) {
     const keys = Object.keys(positions), protectedKeys = new Set(activeKeys);
-    if (!Number.isSafeInteger(limit) || limit < 1 || keys.filter(key => protectedKeys.has(key)).length > limit) throw Error('活跃阅读位置超过保留上限。');
+    if (!Number.isSafeInteger(limit) || limit < 1 || keys.filter(key => protectedKeys.has(key)).length > limit) throw locale.createError('error.panoramaPruneLimit');
     const remove = new Set(keys.filter(key => !protectedKeys.has(key)).slice(0, Math.max(0, keys.length - limit)));
     const result = Object.create(null);
     for (const key of keys) if (!remove.has(key)) result[key] = positions[key];
@@ -66,7 +69,14 @@
   }
   function create(options) {
     const host = options.host, doc = host.ownerDocument;
-    const display = options.display || { text(el, key, params) { el.textContent = locale.format('zh', key, params); }, attribute(el, attr, key, params) { el.setAttribute(attr, locale.format('zh', key, params)); } };
+    const language = () => options.language?.getSnapshot().active || 'zh';
+    const text = (key, params) => locale.format(language(), key, params);
+    const display = options.display || {
+      text(el, key, params) { el.textContent = text(key, params); },
+      attribute(el, attr, key, params) { el.setAttribute(attr, text(key, params)); },
+      computed(el, slot, read) { if (slot === 'text') el.textContent = read(); else el.setAttribute(slot, read()); },
+      unbind() {},
+    };
     const element = (tag, text, cls) => { const el = doc.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
     const control = (text, action) => { const el = element('button', text); el.type = 'button'; el.addEventListener('click', action); return el; };
     let data = { sessions: [], rooms: [] }, connected = true, order = [], origin, firstRender = true;
@@ -75,11 +85,12 @@
     const toolbar = element('div', undefined, 'panorama-tools');
     const search = element('input'); search.type = 'search'; search.maxLength = 1000; search.value = query; display.attribute(search, 'placeholder', 'panorama.searchPlaceholder'); display.attribute(search, 'aria-label', 'panorama.memberSearch');
     const filter = element('select'); display.attribute(filter, 'aria-label', 'panorama.spaceFilter');
-    const grid = control('网格', () => setLayout('grid')), list = control('列表', () => setLayout('list'));
+    const grid = control(undefined, () => setLayout('grid')), list = control(undefined, () => setLayout('list'));
+    display.text(grid, 'collab.grid'); display.text(list, 'collab.list');
     const summary = element('span', undefined, 'quiet'); summary.setAttribute('role', 'status');
     toolbar.append(search, filter, grid, list, summary);
     const reader = element('div', undefined, 'panorama-members'); reader.tabIndex = -1; display.attribute(reader, 'aria-label', 'panorama.allMembers');
-    const empty = element('p', '没有符合筛选的会话。', 'quiet');
+    const empty = element('p', undefined, 'quiet'); display.text(empty, 'panorama.empty');
     host.classList.add('collaboration-panorama'); host.append(toolbar, reader, empty);
     const rows = new Map();
     function rememberBeforePointer(event) {
@@ -112,10 +123,11 @@
       heading.append(name, status);
       const references = element('div', undefined, 'panorama-spaces');
       const observations = element('p', undefined, 'panorama-observation quiet');
-      const quote = element('blockquote'), source = control('查看原文', () => {
+      const quote = element('blockquote'), source = control(undefined, () => {
         const row = rows.get(id);
         if (row?.snippet) options.onSession?.(id, row.snippet);
       });
+      display.text(source, 'panorama.openSource');
       source.className = 'panorama-source'; source.dataset.panoramaSource = id;
       source.addEventListener('pointerdown', rememberBeforePointer);
       article.append(heading, references, observations, quote, source);
@@ -130,21 +142,23 @@
       const heldSource = origin?.source || (selectedArticle ? { sessionId: selectedArticle.dataset.panoramaSession, messageId: selectedQuote.dataset.messageId } : null);
       const visibleTop = reader.clientHeight ? [...reader.children].find(row => !row.hidden && row.getBoundingClientRect().bottom > reader.getBoundingClientRect().top) : null;
       const offset = visibleTop ? visibleTop.getBoundingClientRect().top - reader.getBoundingClientRect().top : 0;
-      const projection = project(data, { order, query, spaceId: scope }, connected);
+      const projection = project(data, { order, query, spaceId: scope, language: language() }, connected);
       order = projection.order; host.dataset.layout = layout;
       grid.setAttribute('aria-pressed', String(layout === 'grid')); list.setAttribute('aria-pressed', String(layout === 'list'));
-      const counts = [[projection.stats.waiting, '待处理'], [projection.stats.disconnected, '连接待核对'],
-        [projection.stats.unknownState, '状态待核对'], [projection.stats.unreportedTime, '更新时间未报告'], [projection.stats.stale, '最后观察']]
-        .filter(([count]) => count).map(([count, label]) => count + ' ' + label);
-      write(summary, projection.people.length + ' / ' + projection.total + ' 个会话 · ' + projection.memberships + ' 条空间归属' +
-        (counts.length ? ' · 全体：' + counts.join(' · ') : ''));
+      display.computed(summary, 'text', () => {
+        const counts = [[projection.stats.waiting, 'panorama.waiting'], [projection.stats.disconnected, 'panorama.connectionUnverified'],
+          [projection.stats.unknownState, 'panorama.stateUnverified'], [projection.stats.unreportedTime, 'collab.timeMissing'], [projection.stats.stale, 'panorama.lastObserved']]
+          .filter(([count]) => count).map(([count, key]) => count + ' ' + text(key));
+        return text('panorama.summary', { visible: projection.people.length, total: projection.total, memberships: projection.memberships,
+          overall: counts.length ? text('panorama.overall', { counts: counts.join(' · ') }) : '' });
+      });
       display.attribute(summary, 'title', 'panorama.summaryHelp');
       const spaceRecords = data.rooms || (data.room ? [data.room] : []);
       const signature = JSON.stringify([scope, spaceRecords.filter(room => !room.archived).map(room => [room.id, room.name])]);
       if (filter.dataset.signature !== signature) {
-        const values = [['', '全部空间'], ...spaceRecords.filter(room => !room.archived).map(room => [room.id, room.name])];
-        if (scope && !values.some(([id]) => id === scope)) values.push([scope, '原空间已不可用']);
-        filter.replaceChildren(...values.map(([id, name]) => { const option = element('option', name); option.value = id; return option; }));
+        const values = [['', undefined, 'panorama.title'], ...spaceRecords.filter(room => !room.archived).map(room => [room.id, room.name])];
+        if (scope && !values.some(([id]) => id === scope)) values.push([scope, undefined, 'panorama.unavailableSpace']);
+        filter.replaceChildren(...values.map(([id, name, key]) => { const option = element('option', name); option.value = id; if (key) display.text(option, key); return option; }));
         filter.dataset.signature = signature;
       }
       filter.value = scope;
@@ -154,20 +168,21 @@
         const record = person.record, row = rows.get(record.id) || addRow(record.id);
         row.article.hidden = false;
         write(row.name, options.label ? options.label(record) : record.name);
-        write(row.status, person.facts.state);
-        row.status.title = person.facts.child + ' · ' + person.facts.freshness;
+        display.computed(row.status, 'text', () => person.paintFacts(language()).state);
+        display.computed(row.status, 'title', () => { const facts = person.paintFacts(language()); return facts.child + ' · ' + facts.freshness; });
         row.article.dataset.state = record.state || 'unknown'; row.article.dataset.stale = String(person.facts.stale);
-        write(row.observations, [person.facts.compactChild, person.facts.freshnessReported && person.facts.freshness].filter(Boolean).join(' · '));
+        display.computed(row.observations, 'text', () => { const facts = person.paintFacts(language()); return [facts.compactChild, facts.freshnessReported && facts.freshness].filter(Boolean).join(' · '); });
         row.observations.hidden = !row.observations.textContent;
         const referenceSignature = JSON.stringify(person.spaces);
         if (row.references.dataset.signature !== referenceSignature) {
           row.references.replaceChildren(...person.spaces.map(room => {
-            const reference = room.unavailable ? element('span', room.name + (room.archived ? ' · 已归档' : ' · 未核对'))
+            const reference = room.unavailable ? element('span')
               : control(room.name, () => options.onSpace?.(room.id));
+            if (room.unavailable) display.computed(reference, 'text', () => room.name + text(room.archived ? 'panorama.archivedSuffix' : 'panorama.unverifiedSuffix'));
             if (!room.unavailable) reference.addEventListener('pointerdown', rememberBeforePointer);
             reference.dataset.panoramaSpace = room.id; return reference;
           }));
-          if (!person.spaces.length) row.references.append(element('span', '独立会话'));
+          if (!person.spaces.length) { const independent = element('span'); display.text(independent, 'sidebar.independent'); row.references.append(independent); }
           row.references.dataset.signature = referenceSignature;
         }
         // Keep the originally selected source while visiting a member. A newer
@@ -175,10 +190,11 @@
         const held = heldSource?.sessionId === record.id ? record.messages?.find(message => message.id === heldSource.messageId) : null;
         const snippet = held ? collaboration.excerpt(record, [held]) : person.excerpt;
         row.snippet = snippet;
-        write(row.quote, snippet?.text || '原会话尚未报告可摘录的消息。');
+        if (snippet) { display.unbind(row.quote); write(row.quote, snippet.text); }
+        else display.text(row.quote, 'collab.noExcerpt');
         row.quote.dataset.messageId = snippet?.messageId || '';
         row.source.hidden = !snippet;
-        row.quote.title = snippet ? '原会话原文；查看不代表分享或发送。' : '';
+        display.computed(row.quote, 'title', () => snippet ? text('panorama.quoteHelp') : '');
         if (reader.children[index] !== row.article) reader.insertBefore(row.article, reader.children[index] || null);
       }
       // Removed sessions do not remain as hidden routing targets.

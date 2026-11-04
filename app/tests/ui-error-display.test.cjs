@@ -39,6 +39,15 @@ test('joined warnings translate each known own part while retaining unknown nati
   assert.equal(Object.hasOwn(error.uiMessage.parts[0], 'stack'), false, 'Display metadata carries no error stack or native control flags');
 });
 
+test('the existing compound formatter preserves the backend plan semicolon and rejects altered raw parts', () => {
+  const first = uiError('error.sessionMissing'), last = uiError('error.labels.saveFailed'), parts = [first, last], raw = parts.map(part => part.message).join('；');
+  const error = uiError('error.warningLines', { warnings: raw }, { parts, param: 'warnings', separator: '；' });
+  assert.ok(locale.displayMessage(error.uiMessage)?.parts); assert.equal(error.message, raw); assert.equal(locale.errorText('zh', error), raw);
+  assert.equal(locale.errorText('en', error), parts.map(part => locale.errorText('en', part)).join('；'));
+  for (const separator of [';', '； ', 'OTHER']) assert.equal(locale.displayMessage({ ...plain(error.uiMessage), separator }), null);
+  assert.equal(locale.displayMessage({ ...plain(error.uiMessage), parts: [{ message: 'CHANGED RAW', uiMessage: first.uiMessage }, plain(error.uiMessage.parts[1])] }), null);
+});
+
 test('warning parts cannot hide, reorder or replace raw text and are bounded before rendering', () => {
   const part = uiError('error.sessionMissing'), raw = part.message;
   const valid = { version: 1, key: 'error.warningLines', params: { warnings: raw }, causeParam: 'warnings', separator: '\n', parts: [{ message: raw, uiMessage: part.uiMessage }] };
@@ -282,4 +291,21 @@ test('the existing writable-runtime copy list includes every new backend display
     assert.equal(names.filter(name => name === file).length, 1, file); assert.ok(fs.existsSync(path.join(__dirname, '..', file)));
   }
   assert.ok(!read('preload.cjs').includes("require('./ui-"), 'Do not relax sandboxing to import these dependencies');
+});
+
+
+test('notice cause composition translates only an exact application reason and rejects stale or cross-prefix metadata', () => {
+  const cause = { version: 1, key: 'notice.run.approval', params: {} };
+  const reason = locale.format('zh', cause.key), body = 'RAW body 中文 {reason}\n  ';
+  const message = { version: 1, key: 'notice.wake.observationBoundaryKnownReason', params: { reason, body }, cause, causeParam: 'reason' };
+  const raw = locale.format('zh', message.key, message.params);
+  const known = locale.displayMessage(message, 'notice.', raw);
+  assert.ok(known); assert.equal(locale.displayText('en', raw, known), `The native observation or control boundary changed (Waiting for native permission approval); the automatic message was not delivered.\n${body}`);
+  assert.equal(locale.displayText('zh', raw, known), raw);
+  for (const invalid of [
+    { ...message, params: { reason: reason + ' RAW native detail', body } },
+    { ...message, cause: uiError('error.sessionMissing').uiMessage },
+    { ...message, cause: { ...cause, version: 2 } },
+    { ...message, causeParam: 'body' },
+  ]) assert.equal(locale.displayMessage(invalid, 'notice.'), null);
 });

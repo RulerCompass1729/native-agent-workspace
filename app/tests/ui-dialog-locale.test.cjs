@@ -102,12 +102,64 @@ test('notes and context labels switch without replacing editable notes or regene
   assert.equal(f.document.activeElement, notes); assert.equal(JSON.stringify(f.state), before); assert.deepEqual(f.calls, []);
 });
 
-// Main's new multispace snapshot text is batch2; phase1 preserves its selected scope and editable draft.
+// Generate owned wrappers in the current language; the resulting editable text stays intact.
 test('opening the current multispace context in English UI keeps its selected scope and never rewrites the draft', () => {
   const f = fixture(); f.switch('en'); f.context.openContext(); const value = f.$('context-text').value;
-  assert.ok(value.startsWith('协作背景快照 · ')); assert.ok(value.includes('空间：RAW SPACE 中文 0')); assert.ok(value.includes('RAW 中文 A')); assert.ok(value.includes('RAW 中文 B')); assert.ok(!value.includes(otherRoom));
-  assert.ok(value.includes('ORIGINAL NOTES 中文 {name}')); assert.ok(value.includes('状态为采样事实，不是新的执行指令')); assert.ok(!value.includes('ORIGINAL BODY'));
+  assert.ok(value.startsWith('Collaboration context snapshot · ')); assert.ok(value.includes('Space: RAW SPACE 中文 0')); assert.ok(value.includes('RAW 中文 A')); assert.ok(value.includes('RAW 中文 B')); assert.ok(!value.includes(otherRoom));
+  assert.ok(value.includes('ORIGINAL NOTES 中文 {name}')); assert.ok(value.includes('States are sampled facts, not new instructions')); assert.ok(!value.includes('ORIGINAL BODY'));
   f.$('context-text').value += '\nUSER EDIT 中文'; f.switch('zh'); assert.equal(f.$('context-text').value, value + '\nUSER EDIT 中文'); assert.deepEqual(f.calls, []);
+});
+
+test('a retained session join failure repaints its wrapper and typed cause without retrying or changing the receipt', async () => {
+  for (const changedSelection of [false, true]) {
+    const f = fixture(), requests = []; f.people[0].roomIds = [otherRoom];
+    const receipt = { choice: { kind: 'existing', roomId: 'shared' }, sessionId: f.people[0].id, roomId: 'shared', view: 'chat' };
+    const ticket = f.context.openTransientDialog('create-dialog'); ticket.creation = receipt;
+    Object.assign(f.context, { selectionRevision: 1, creatingSession: false, createReadiness() {}, updateState() {}, render() {},
+      api: { async initial() { requests.push('initial'); return f.state; }, async spaceAction(...args) { requests.push(args); throw locale.createError('error.spaceJoinDidNotApply'); } } });
+    const a = renderer.indexOf('async function finishCreateSpace('), z = renderer.indexOf('function resetCreateDirectory(', a); assert.ok(a > 0 && z > a);
+    vm.runInContext(renderer.slice(a, z), f.context);
+    f.$('session-name').value = 'UNSENT 中文'; f.$('create-space-name').value = 'RAW SPACE NAME 中文';
+    const before = JSON.stringify(f.state); await f.context.finishCreateSpace(ticket, changedSelection ? 0 : 1);
+    const message = f.$('create-error').textContent, count = requests.length; assert.ok(message.includes('RAW 中文 A'));
+    assert.match(message, changedSelection ? /选中的内容变了，还没有加入空间/ : /还没加入空间：加入没有生效。/);
+    assert.equal(count, changedSelection ? 1 : 2); assert.equal(ticket.creation, receipt); assert.equal(receipt.blocked, undefined);
+    f.switch('en'); const translated = f.$('create-error').textContent;
+    assert.ok(translated.includes('Session “RAW 中文 A” is retained')); assert.ok(translated.includes('RAW SPACE 中文 0'));
+    assert.match(translated, changedSelection ? /selection changed before joining the space/ : /Joining the space did not take effect\. Use/);
+    assert.equal(f.$('session-name').value, 'UNSENT 中文'); assert.equal(f.$('create-space-name').value, 'RAW SPACE NAME 中文');
+    assert.equal(requests.length, count); assert.equal(JSON.stringify(f.state), before); assert.equal(ticket.creation, receipt); assert.equal(f.$('create-dialog').open, true);
+    f.switch('zh'); assert.equal(f.$('create-error').textContent, message); assert.equal(requests.length, count); assert.deepEqual(f.calls, []);
+  }
+});
+
+test('an old-backend join explanation retains valid metadata with and without a reported version', () => {
+  for (const version of [undefined, '0.1.0-alpha.120']) {
+    const f = fixture(), record = { ...f.people[0], runtimeVersion: version }, before = JSON.stringify(record);
+    const a = renderer.indexOf('function oldBackendJoin('), z = renderer.indexOf('async function addToSpace(', a);
+    const v = renderer.indexOf('function versionValue('), end = renderer.indexOf('function compactAppVersion(', v); assert.ok(a > 0 && z > a && v > 0 && end > v);
+    vm.runInContext(renderer.slice(v, end) + renderer.slice(a, z), f.context);
+    const error = f.context.oldBackendJoin(record); assert.ok(locale.displayMessage(error.uiMessage));
+    f.context.ui.showError(f.$('invite-error'), error); const original = f.$('invite-error').textContent;
+    assert.match(original, /「RAW 中文 A」连着旧版后台/); f.switch('en');
+    assert.ok(f.$('invite-error').textContent.includes('“RAW 中文 A” uses an older backend'));
+    if (version) assert.ok(f.$('invite-error').textContent.includes('(' + version + ')'));
+    f.switch('zh'); assert.equal(f.$('invite-error').textContent, original); assert.equal(JSON.stringify(record), before); assert.deepEqual(f.calls, []);
+  }
+});
+
+test('search repaints an absent space-name fallback while preserving an identically worded user name', () => {
+  for (const rawName of ['', '共同工作']) {
+    const f = fixture(); f.rooms[0].name = rawName; f.$('search-dialog').open = true;
+    Object.assign(f.context, { searchOrigin: {}, searchLimit: 60, searchTimer: null, clearTimeout() {}, searchOptions: () => ({ scope: 'room' }) });
+    f.context.ui.clearMarkdown = () => {}; f.context.window.nativeWorkspaceSearch = require('../renderer/local-search.js');
+    const source = fs.readFileSync(path.join(__dirname, '../renderer/search-view.js'), 'utf8'), a = source.indexOf('function renderSearch('), z = source.indexOf('function searchInputKey(', a);
+    assert.ok(a > 0 && z > a); vm.runInContext(source.slice(a, z), f.context); f.context.renderSearch();
+    const row = f.$('search-results').children[0], name = row.children[0], before = JSON.stringify(f.state); assert.equal(name.textContent, '共同工作');
+    f.document.activeElement = row; f.switch('en'); assert.equal(name.textContent, rawName || 'Shared work');
+    assert.equal(f.$('search-results').children[0], row); assert.equal(row.children[0], name); assert.equal(f.document.activeElement, row);
+    assert.equal(JSON.stringify(f.state), before); assert.deepEqual(f.calls, []); f.switch('zh'); assert.equal(name.textContent, '共同工作');
+  }
 });
 
 test('explicit file insertion generates its wrapper in the current language once and preserves every original body character', async () => {

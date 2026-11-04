@@ -1,4 +1,4 @@
-const { uiError, setWarning } = require('./ui-errors.cjs');
+const { uiError, uiNotice, setWarning } = require('./ui-errors.cjs');
 // Explicit, same-process compatibility for inspected alpha.2 native hosts.
 // Native hooks remain the sole writer of conversation history. This transport
 // records dispatch metadata and explicitly shared text only. It never calls
@@ -190,8 +190,8 @@ class LegacyInput extends EventEmitter {
         native.on('readerMetadata', metadata); metadata();
         native.on('replyBound', identity => this.sharedReplies.bindNative(native, identity));
         native.on('complete', info => this.sharedReplies.completeNative(native, info));
-        for (const event of ['nativeInput', 'approval', 'failed', 'fleet']) native.on(event, () => this.sharedReplies.revoke(record.id, '原生输入、权限或运行状态已改变；后续内容留在原会话'));
-        native.on('state', state => { if (!['idle', 'working'].includes(state)) this.sharedReplies.revoke(record.id, '原生运行状态已改变；后续内容留在原会话'); });
+        for (const event of ['nativeInput', 'approval', 'failed', 'fleet']) native.on(event, () => this.sharedReplies.revoke(record.id, '原生输入、权限或运行状态已改变；后续内容留在原会话', uiNotice('notice.sharing.nativeControlChanged').uiMessage));
+        native.on('state', state => { if (!['idle', 'working'].includes(state)) this.sharedReplies.revoke(record.id, '原生运行状态已改变；后续内容留在原会话', uiNotice('notice.sharing.nativeStateChanged').uiMessage); });
         for (const event of ['complete', 'nativeInput', 'approval', 'failed', 'fleet']) native.on(event, (...args) => this.emit(event, record.id, ...args));
       } catch (error) { native.close(); throw error; }
       finally { this.connecting.delete(native); }
@@ -243,8 +243,8 @@ class LegacyInput extends EventEmitter {
       target.on('change', () => this.emit('change'));
       target.on('readerBlock', message => this.observeReader(target, message));
       target.on('sharingBoundary', kind => this.sharedReplies.revoke(record.id,
-        kind === 'control:permission' ? '等待原生权限确认；后续内容留在原会话' : '原生输入已改变；后续内容留在原会话'));
-      target.on('contextEnd', () => this.sharedReplies.revoke(record.id, '原生上下文已结束'));
+        kind === 'control:permission' ? '等待原生权限确认；后续内容留在原会话' : '原生输入已改变；后续内容留在原会话', uiNotice(kind === 'control:permission' ? 'notice.sharing.nativeApprovalBoundary' : 'notice.sharing.nativeInputChanged').uiMessage));
+      target.on('contextEnd', () => this.sharedReplies.revoke(record.id, '原生上下文已结束', uiNotice('notice.sharing.nativeContextEnded').uiMessage));
     } catch (error) {
       for (const file of [temp, ...(published ? [target.descriptor] : [])]) try { fs.unlinkSync(file); } catch {}
       target.close(); throw error;
@@ -318,7 +318,7 @@ class LegacyInput extends EventEmitter {
         setWarning(this, 'storageWarning', 'error.warning.legacyAcceptedUnsaved');
       }
       return row.id;
-    } catch (error) { this.sharedReplies.close(row.id, '接收结果未确认'); throw error; }
+    } catch (error) { this.sharedReplies.close(row.id, '接收结果未确认', uiNotice('notice.sharing.receiptUnconfirmed').uiMessage); throw error; }
     finally { target.refresh = null; this.emit('change'); }
   }
   close() {

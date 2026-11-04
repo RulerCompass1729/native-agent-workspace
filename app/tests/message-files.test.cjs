@@ -81,6 +81,7 @@ test('invalid schemes, unknown contexts and invalid location options fail before
 });
 test('default-application rejection and an unknown receipt are not reported as success',async t=>{
   const f=fixture(t);f.deps.openPath=async()=> 'Application rejected the file';
-  await assert.rejects(openMessageFile(f.deps,f.source,'report.md'),/Application rejected/);
-  f.deps.openPath=async()=>undefined;await assert.rejects(openMessageFile(f.deps,f.source,'report.md'),/没有确认/);
+  await assert.rejects(openMessageFile(f.deps,f.source,'report.md'),error=>error.message==='Application rejected the file'&&!error.uiMessage);
+  const locale=require('../ui-locale.js');
+  f.deps.openPath=async()=>undefined;await assert.rejects(openMessageFile(f.deps,f.source,'report.md'),error=>/没有确认/.test(error.message)&&locale.errorText('en',error)==='The system did not confirm receiving the open request. Check the system window first.');
 });

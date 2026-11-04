@@ -32,6 +32,27 @@ test('the actual IPC catch labels only its own empty-message fallback and retain
   await assert.rejects(handle({ sender, senderFrame: { url: frame.url } }), /Unexpected IPC source/);
 });
 const plain = value => JSON.parse(JSON.stringify(value));
+
+test('the actual backend-switch handler translates its confirmation reason and preserves the raw expected plan on cancel', async () => {
+  const a = main.indexOf("  register('switchBackend',"), b = main.indexOf("  register('continueConnection',", a); assert.ok(a > 0 && b > a);
+  const record = { id: 'original', nativeId: 'native-original', provider: 'codex', name: 'RAW 中文', owner: 'original-owner', state: 'idle' };
+  const plan = require('../backend-switch.cjs').backendPlan({ capabilities: ['atomicShutdown', 'resume'], servicePid: 42, sessions: [record] });
+  assert.equal(plan.ready, true); assert.equal(plan.auto, false);
+  for (const language of ['zh', 'en']) {
+    const option = { backendKey: 'original-backend', switch: plan }, before = JSON.stringify(option), dialogs = []; let handler, refreshes = 0, updates = 0;
+    const c = { win: {}, client: { async refresh() { refreshes++; } } };
+    vm.runInNewContext(main.slice(a, b), { register(name, fn) { assert.equal(name, 'switchBackend'); handler = fn; },
+      app: { getVersion: () => 'synthetic' }, roomState: {}, connectionUpdateOptions: () => [option], uiError, uiLocale: locale, displayLanguage: () => language,
+      displayText: (key, params) => locale.format(language, key, params), dialog: { async showMessageBox(win, options) { assert.equal(win, c.win); dialogs.push(options); return { response: 0 }; } },
+      runBackendSwitch() { updates++; throw Error('Cancel must not reach a backend operation'); } });
+    assert.equal(await handler(c, plain(option)), false); assert.equal(refreshes, 1); assert.equal(updates, 0); assert.equal(dialogs.length, 1);
+    const options = dialogs[0], translated = locale.displayText(language, plan.reason, plan.reasonUiMessage);
+    assert.ok(options.detail.includes(translated)); assert.ok(options.detail.includes(record.name));
+    if (language === 'en') assert.ok(options.detail.includes('Codex does not report background work. Updating ends'));
+    assert.equal(options.defaultId, 0); assert.equal(options.cancelId, 0); assert.equal(JSON.stringify(option), before); assert.deepEqual(plan.stops.map(s => s.nativeId), ['native-original']);
+  }
+});
+
 function osOptions(language, codex = true) {
   const raw = '/synthetic/RAW 中文 {name}';
   return options.map(option => ({ type: option.type, value: plain(vm.runInNewContext('(' + option.source + ')', {

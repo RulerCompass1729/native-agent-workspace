@@ -87,15 +87,14 @@ function bindSpaceHighlight(element, id) {
   element.addEventListener('pointerenter', () => highlightSpace(id)); element.addEventListener('pointerleave', () => highlightSpace(''));
   element.addEventListener('focusin', () => highlightSpace(id)); element.addEventListener('focusout', event => { if (!element.contains(event.relatedTarget)) highlightSpace(''); });
 }
-const OLD_BACKEND_NEXT = '这个后台上的会话都结束后，可在侧栏「旧版会话」里核对并更新连接，再加入。';
 function oldBackendJoin(record) {
   const version = versionValue(record.runtimeVersion);
-  return `「${participantLabel(record, state.sessions)}」连着旧版后台${version ? `（${version}）` : ''}，不能加入其他协作空间；原会话与草稿保留。${OLD_BACKEND_NEXT}`;
+  return uiError(version ? 'error.legacySpaceJoinVersion' : 'error.legacySpaceJoin', { name: participantLabel(record, state.sessions), ...(version ? { version } : {}) });
 }
 async function addToSpace(id, destination) {
   const room = spaceRecord(destination), record = state.sessions.find(s => s.id === id);
   if (!room || room.archived || !record || record.archived) throw uiError("error.spaceChanged");
-  if (!window.nativeWorkspaceSpaces.canJoin(record, destination)) throw Error(oldBackendJoin(record));
+  if (!window.nativeWorkspaceSpaces.canJoin(record, destination)) throw oldBackendJoin(record);
   const receipt = await api.spaceAction(destination, 'join', [id, true]);
   updateState(await api.initial()); render();
   if (!receipt?.changed) return toastMessage("toast.alreadyMember", { arg1: room.name });
@@ -323,7 +322,7 @@ function renderColumnInput(host, record, visible) {
   binding.nativeVisible = nativeVisible; binding.nativeHost.hidden = !nativeVisible;
   if (binding.nativeSash) {
     binding.nativeSash.hidden = !nativeVisible;
-    binding.nativeSash.setAttribute('aria-label', `调整 ${participantLabel(record, state.sessions)} 的终端高度`);
+    ui.display.attribute(binding.nativeSash, 'aria-label', 'terminal.heightName', { name: participantLabel(record, state.sessions) });
     if (!nativeVisible) binding.terminalDrag = null;
     else if (!binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(record.id));
   }
@@ -490,7 +489,7 @@ async function returnToPanorama() {
 }
 function renderPanorama() {
   if (!panorama) panorama = window.nativeWorkspacePanorama.create({
-    host: $('panorama-view'), view: panoramaView, display: ui.display,
+    host: $('panorama-view'), view: panoramaView, display: ui.display, language: ui.language,
     label: s => participantLabel(s, state.sessions),
     onChange: next => {
       if (selected !== 'panorama' || panoramaView.returning) return;
@@ -501,13 +500,13 @@ function renderPanorama() {
     },
     onSession: (id, source) => attempt(async () => {
       const record = state.sessions.find(s => s.id === id && !s.archived);
-      if (!record) throw Error('原会话已不可用，没有改为打开同名会话。');
+      if (!record) throw uiError('error.originalSessionUnavailable');
       rememberPanoramaOrigin();
       await select(id, 'chat', roomSession, true);
       if (source && !pointToMessage($('messages'), id, source.messageId)) toastMessage('toast.selectionMissing');
     }),
     onSpace: id => attempt(async () => {
-      if (!spaceRecord(id) || spaceRecord(id).archived) throw Error('原空间已不可用，没有改为打开其他空间。');
+      if (!spaceRecord(id) || spaceRecord(id).archived) throw uiError('error.originalSpaceUnavailable');
       rememberPanoramaOrigin(); await selectSpace(id);
     }),
     onReadingLost: () => toastMessage('toast.selectionChanged'),
@@ -830,7 +829,7 @@ function projectSpace(next) {
   return { ...next, sessions: next.sessions.map(s => {
     const { roomId: _oldRoom, roomMemberRevision: _oldMember, ...identity } = s.peerIdentity || {};
     return { ...s, peerIdentity: { ...identity, ...(spaceId === 'shared' ? {} : { roomId: spaceId, roomMemberRevision: pairRevision(s) }) }, sharedActivity: s.sharedActivities?.[spaceId] || (spaceId === 'shared' ? s.sharedActivity : null) };
-  }), room: room || { id: spaceId, name: '空间资料未能读取', archived: true, unavailable: true, messages: [], events: [], notes: '', files: [], memberOrder: [] } };
+  }), room: room || { id: spaceId, name: uiText('sidebar.spaceUnavailableName'), archived: true, unavailable: true, messages: [], events: [], notes: '', files: [], memberOrder: [] } };
 }
 function persistView() { normalizeRoomMention(); captureReadingViews(); captureRoomView(); return api.viewState({ readingPositions, panorama: panoramaView, selected, mode, preference, roomSession, terminalLayout, terminalSplit, terminalDisplay, spaceId, sidebarView, sidebarCollapsedGroups: [...sidebarCollapsedGroups], columnTerminalHeights, roomViews: persistedRoomViews(), sharedDraft: $('shared-input').value, roomRecipient: roomRecipient(), roomMention, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo }); }
 // Opening a space never changes which sessions the sidebar lists (T-132).
@@ -1260,21 +1259,20 @@ function openCreate(provider = 'claude') {
 // T-115: 开始一个会话 can also put the new session in a collaboration space. The order is session, then the space if it
 // is new, then the join. Each finished step stays on this opening's receipt, so 仅继续加入 runs only the steps left and
 // never creates the session or the space again. A choice that can't be valid creates nothing.
-const CREATE_SPACE_HELP = '只建立成员关系；不会分享私有历史、发消息或开始协作。';
 function createSpaceChoice() {
   const kind = $('create-space-kind').value;
   if (kind === 'independent') return { kind };
   if (kind === 'existing') {
     const room = spaceRecord($('create-space-existing').value);
-    if (!room || room.archived) throw Error('请选择一个还在的协作空间，或改成独立会话。');
+    if (!room || room.archived) throw uiError('error.chooseLiveSpace');
     return { kind, roomId: room.id, name: room.name };
   }
-  if (kind !== 'new') throw Error('请重新选择协作空间。');
+  if (kind !== 'new') throw uiError('error.chooseSpaceAgain');
   // The same rules as the space service (session-labels validateName), checked before anything is created.
   const name = $('create-space-name').value.trim();
-  if (!name) throw Error('请输入新空间的名称。');
-  if (name.length > 60) throw Error('空间名称最多 60 个字符。');
-  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name)) throw Error('空间名称不能包含换行或控制字符。');
+  if (!name) throw uiError('error.newSpaceName');
+  if (name.length > 60) throw uiError('error.spaceNameLength');
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(name)) throw uiError('error.spaceNameControls');
   return { kind, name };
 }
 function renderCreateSpaces() {
@@ -1283,7 +1281,8 @@ function renderCreateSpaces() {
   const roster = JSON.stringify(rooms.map(room => [room.id, room.name]));
   if (select.dataset.roster !== roster) {
     const chosen = select.value, named = name => rooms.filter(room => room.name === name).length > 1;
-    select.replaceChildren(new Option('选择一个空间', ''));
+    const placeholder = new Option('', ''); ui.display.text(placeholder, 'create.spacePlaceholder');
+    select.replaceChildren(placeholder);
     for (const room of rooms) select.add(new Option(named(room.name) ? `${room.name} · ${room.id.slice(0, 6)}` : room.name, room.id));
     select.value = rooms.some(room => room.id === chosen) ? chosen : ''; select.dataset.roster = roster;
     if (chosen && !select.value) createReadiness(); // the chosen space went away: 创建 must reflect it now
@@ -1295,20 +1294,23 @@ function renderCreateSpaces() {
 async function finishCreateSpace(ticket, revision) {
   const creation = ticket.creation, fresh = () => currentDialogTicket(ticket) && revision === selectionRevision;
   const kept = () => { const record = state.sessions.find(s => s.id === creation.sessionId), room = creation.roomId && spaceRecord(creation.roomId);
-    return `会话“${record?.name || sessionShortId(creation.sessionId)}”已保留在侧栏${room ? `，空间「${room.name}」也已保留` : ''}`; };
+    return uiText('create.keptSession', { name: record?.name || sessionShortId(creation.sessionId), space: room ? uiText('create.keptSpace', { name: room.name }) : '' }); };
   // Not fresh means either the dialog closed or (still open) the selection moved; say which, and offer the retry if open.
-  const paused = step => currentDialogTicket(ticket) ? ($('create-error').textContent = `${kept()}；选中的内容变了，还没有${step}；可以点「仅继续加入」接着做。`)
-    : toast(`${kept()}；对话框已关闭，没有${step}。`);
-  creatingSession = true; $('create-error').textContent = ''; createReadiness();
+  const paused = step => {
+    const open = currentDialogTicket(ticket), key = open ? 'create.pausedChanged' : 'create.pausedClosed';
+    const params = () => ({ kept: kept(), step: uiText(step) });
+    if (open) ui.display.text($('create-error'), key, params); else toastMessage(key, params);
+  };
+  creatingSession = true; ui.display.unbind($('create-error')); $('create-error').textContent = ''; createReadiness();
   try {
     updateState(await api.initial()); render(); // a retry starts from the current records: an earlier join or space may have landed
     if (!creation.roomId) {
-      if (!fresh()) return paused('新建空间');
+      if (!fresh()) return paused('create.stepNewSpace');
       // An error reply can follow a write that did happen. Spaces are compared with those before the first attempt, so a
       // retry keeps the one new space with this name instead of creating another; several are never guessed between.
       const adopted = () => {
         const added = allSpaces().filter(room => !creation.priorRooms.includes(room.id) && room.name === creation.choice.name);
-        if (added.length > 1) throw Error('出现了多个同名的新空间，没有替你选；请关闭后在侧栏核对。');
+        if (added.length > 1) throw uiError('error.ambiguousCreatedSpace');
         return added[0]?.id || '';
       };
       if (creation.priorRooms) creation.roomId = adopted(); else creation.priorRooms = allSpaces().map(room => room.id);
@@ -1320,28 +1322,27 @@ async function finishCreateSpace(ticket, revision) {
     }
     const record = state.sessions.find(s => s.id === creation.sessionId), room = spaceRecord(creation.roomId);
     // These won't change by retrying, so they end the retry (final).
-    if (!record || record.archived) throw Object.assign(Error('会话已移除或归档。'), { final: true });
-    if (!room || room.archived) throw Object.assign(Error('空间已归档或不存在。'), { final: true });
-    if (!window.nativeWorkspaceSpaces.canJoin(record, room.id)) throw Object.assign(Error(oldBackendJoin(record)), { final: true });
+    if (!record || record.archived) throw Object.assign(uiError('error.createdSessionGone'), { final: true });
+    if (!room || room.archived) throw Object.assign(uiError('error.createdSpaceGone'), { final: true });
+    if (!window.nativeWorkspaceSpaces.canJoin(record, room.id)) throw Object.assign(oldBackendJoin(record), { final: true });
     if (!inSpace(record, room.id)) {
-      if (!fresh()) return paused('加入空间');
+      if (!fresh()) return paused('create.stepJoinSpace');
       await api.spaceAction(room.id, 'join', [record.id, true]); updateState(await api.initial()); render();
-      if (!inSpace(state.sessions.find(s => s.id === record.id), room.id)) throw Error('加入没有生效。');
+      if (!inSpace(state.sessions.find(s => s.id === record.id), room.id)) throw uiError('error.spaceJoinDidNotApply');
     }
     // Joined. If the selection moved meanwhile the dialog may still be open: close it too, since nothing is left to do here
     // (branch table: E2, the join while the selection moved).
     if (fresh()) { $('create-dialog').close(); await select(record.id, creation.view); }
     else if (currentDialogTicket(ticket)) $('create-dialog').close();
-    toast(`新会话已加入「${room.name}」。`);
+    toastMessage('toast.createdSessionJoined', { name: room.name });
   } catch (error) {
-    const reason = String(error.message || '操作未完成').replace(/[。.！!]?$/u, '。');
     if (error.final) creation.blocked = true;
     // Whether the dialog is still open decides where the message goes and which retry it offers (a moved selection keeps
     // it open; only a closed dialog points to the session menu).
     const open = currentDialogTicket(ticket);
-    const next = error.final ? '请关闭对话框；之后可以从会话菜单加入别的空间。' : open ? '可以点「仅继续加入」再试，不会重建会话或空间。' : '可以打开这个会话，从会话菜单加入空间。';
-    const message = `${kept()}；还没加入空间：${reason}${next}`;
-    if (open) $('create-error').textContent = message; else toast(message);
+    const next = error.final ? 'create.joinFinalNext' : open ? 'create.joinRetryNext' : 'create.joinClosedNext';
+    const params = () => ({ kept: kept(), reason: String(ui.errorText(error) || uiText('create.operationIncomplete')).replace(/[。.！!]?$/u, ui.language.getSnapshot().active === 'en' ? '. ' : '。'), next: uiText(next) });
+    if (open) ui.display.text($('create-error'), 'create.joinFailure', params); else toastMessage('create.joinFailure', params);
   } finally { creatingSession = false; createReadiness(); }
 }
 function resetCreateDirectory() {
@@ -1582,10 +1583,10 @@ function sessionMenuModel(id, row) {
   const visible = group ? orderedMembers(group) : sidebarSessions(), index = visible.findIndex(s => s.id === id);
   const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: r.name }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: r.name } }));
   // Right under the version fact that says this backend is older (T-131).
-  const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: '结束并更新这个后台…' }] : [];
+  const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: uiText('menu.updateThisBackend'), labelKey: 'menu.updateThisBackend' }] : [];
   const actions = [...update, { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
-    items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
+    items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
 function openSessionMenu(id, point, rowKey = id) {
   contentMenu?.close(); if (!state.sessions.some(s => s.id === id)) return;
@@ -1639,7 +1640,7 @@ function openMemberMenu(id, anchor) {
   const close = ui.menu({
     contextElement: anchor,
     items: [{ id: 'detach', label: uiText('menu.detach'), labelKey: 'menu.detach' }, { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' },
-      ...(columnTerminalBinding(id) ? [{ id: 'terminal-height-all', label: '所有列都用这个终端高度' }] : []),
+      ...(columnTerminalBinding(id) ? [{ id: 'terminal-height-all', label: uiText('menu.terminalHeightAll'), labelKey: 'menu.terminalHeightAll' }] : []),
       ...(reorder && index > 0 ? [{ id: 'earlier', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []),
       ...(reorder && index < people.length - 1 ? [{ id: 'later', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : [])],
     getAnchorRect: () => {
@@ -1663,7 +1664,7 @@ function openMemberMenu(id, anchor) {
           if (value !== height) lower.push(participantLabel(member, state.sessions));
         }
         attempt(persistView);
-        toast(lower.length ? `终端高度改为 ${height} 像素；${lower.join('、')} 放不下，用了能放下的最高值。` : `所有列的终端高度都改为 ${height} 像素。`);
+        toastMessage(lower.length ? 'toast.terminalHeightLimited' : 'toast.terminalHeightAll', { height, names: lower.join('、') });
       }
       else if (action === 'detach') attempt(() => detach(id));
       else if (action === 'earlier' || action === 'later') {
@@ -1711,23 +1712,23 @@ function sidebarPresentation(record) {
   const live = Object.hasOwn(states, record.state) && !disconnected && !record.backendUnavailable && !record.transportDisconnected &&
     !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
   const facts = window.nativeWorkspaceCollaboration.statusFacts(record, !disconnected, Date.now(), ui.language.getSnapshot().active);
-  const fleet = window.nativeWorkspaceFleet.currentFleet(record, !disconnected), work = fleet.work, recovery = exhaustedRecovery(record);
+  const fleet = window.nativeWorkspaceFleet.currentFleet(record, !disconnected, uiText), work = fleet.work, recovery = exhaustedRecovery(record);
   const workTone = window.nativeWorkspaceFleet.workTone(record, !disconnected);
   const waiting = Boolean(record.approval || record.approvalOverflow || record.claudeQuestion || record.nativeApproval?.requests?.length || record.nativeInputRequired);
   const question = Boolean(record.claudeQuestion || record.approval?.method === 'item/tool/requestUserInput');
   const reported = record.state === 'idle' && (work.count > 0 || work.unconfirmed);
-  let base = switchedAway(record) ? '原生已切换会话' : facts.state;
+  let base = switchedAway(record) ? uiText('state.switched') : facts.state;
   if (live && !record.nativeContextPending) {
-    if (record.nativeInputRequired) base = '原生输入';
-    else if (waiting && !question) base = '等待确认';
+    if (record.nativeInputRequired) base = uiText('composer.nativeInput');
+    else if (waiting && !question) base = uiText('state.approval');
   }
   // An interrupt or a question can coincide with reported or unconfirmed background work; keep both facts.
   if (reported && work.text && !base.includes(work.text)) base += ' · ' + work.text;
   const childrenActive = fleet.running > 0 || fleet.unknown > 0;
   const compact = recovery ? (reported ? work.text + ' · ' : '') + recoveryStatusSuffix(recovery, false) : (record.state === 'idle' && childrenActive && !reported && !waiting && live && !record.nativeContextPending
     ? facts.compactChild : base + (childrenActive ? ' · ' + facts.compactChild : '')) + recoveryStatusSuffix(recovery);
-  const root = record.state === 'idle' && !reported && fleet.observed && live && !record.nativeContextPending && !waiting ? '主会话就绪' : base;
-  const full = [root, facts.child, record.provider === 'claude' && record.nativeInputRequired && 'Claude 已停止本轮，并暂停插件输入。请在原生终端输入一次后继续；这里的草稿保留，不会自动发送。'].filter(Boolean).join(' · ') + recoveryStatusSuffix(recovery);
+  const root = record.state === 'idle' && !reported && fleet.observed && live && !record.nativeContextPending && !waiting ? uiText('fleet.rootReady') : base;
+  const full = [root, facts.child, record.provider === 'claude' && record.nativeInputRequired && uiText('sidebar.nativeStoppedHelp')].filter(Boolean).join(' · ') + recoveryStatusSuffix(recovery);
   // Red (approval) is only for something that needs the person or failed (T-145): sub-tasks whose end was
   // not observed are not that. An idle row with them, or with unconfirmed background work, gets the grey
   // hollow mark and a ◌ in the rail (? is the rail's mark for an unreported backend version), so a folded
@@ -1742,9 +1743,9 @@ function sidebarPresentation(record) {
 function sidebarDetails(record) {
   const memberships = allSpaces().filter(room => !room.archived && inSpace(record, room.id));
   const notice = backendVersionNotice(record, state.appVersion), provider = record.provider === 'claude' ? 'Claude' : 'Codex';
-  return [record.name, provider, 'NAW ' + record.id, provider + ' ' + (record.nativeId || '正在建立'), sidebarPresentation(record).full,
-    memberships.length ? '所属空间：' + memberships.map(room => room.name).join('、') : '独立会话', sessionTimes(record),
-    notice?.title || `后台 ${versionValue(record.runtimeVersion) || '未报告'} · 应用 ${versionValue(state.appVersion) || '未报告'}；后台仅报告版本号，未报告提交号。`];
+  return [record.name, provider, 'NAW ' + record.id, provider + ' ' + (record.nativeId || uiText('advanced.establishing')), sidebarPresentation(record).full,
+    memberships.length ? uiText('sidebar.membershipFacts', { names: memberships.map(room => room.name).join('、') }) : uiText('sidebar.independent'), sessionTimes(record),
+    notice?.title || uiText('sidebar.versionFacts', { backend: versionValue(record.runtimeVersion) || uiText('version.unreported'), app: versionValue(state.appVersion) || uiText('version.unreported') })];
 }
 function sidebarFactsKey(record) {
   return JSON.stringify([disconnected, sidebarDetails(record)]);
@@ -1773,9 +1774,9 @@ function renderVersions() {
   const ended = Array.isArray(state.switchEnded) ? state.switchEnded.length : 0;
   action.hidden = summary.count === 0 && !ended;
   if ((!summary.count && !ended) || disconnected) { backendVersionTicket++; backendVersionMenu?.(); backendVersionMenu = null; }
-  if (!checkingBackendVersions) action.textContent = summary.old ? `${summary.old} 旧版会话${summary.count > summary.old ? ` +${summary.count - summary.old}` : ''}` : summary.count ? `${summary.count} 会话待核对` : `${ended} 会话待接回`;
-  action.title = summary.count ? `${summary.label}；按未归档的独立会话计数。空闲的会话可结束并更新到新版后台，其他会话等空闲后再更新。` : `上次更新后台时结束了 ${ended} 个会话，还没有接回。`;
-  action.setAttribute('aria-label', action.title); action.disabled = disconnected;
+  if (!checkingBackendVersions) ui.display.computed(action, 'text', () => summary.old ? uiText('version.summaryOld', { old: summary.old, more: summary.count > summary.old ? ` +${summary.count - summary.old}` : '' }) : uiText(summary.count ? 'version.summaryCheck' : 'version.summaryReconnect', { count: summary.count || ended }));
+  const title = () => summary.count ? uiText('version.liveSummaryHelp', { summary: backendVersionSummary(state.sessions, state.appVersion).label }) : uiText('version.summaryEnded', { count: ended });
+  ui.display.computed(action, 'title', title); ui.display.computed(action, 'aria-label', title); action.disabled = disconnected;
   action.setAttribute('aria-disabled', String(disconnected || checkingBackendVersions)); action.setAttribute('aria-busy', String(checkingBackendVersions));
 }
 $('app-version').onclick = () => { if (state) return ui.copyCode(appVersionReport(state)).catch(() => {}); };
@@ -1789,18 +1790,18 @@ async function openBackendVersions() {
   try {
     const [options, settings] = await Promise.all([api.connectionUpdates(), api.backendSwitchSettings()]);
     if (ticket !== backendVersionTicket || revision !== selectionRevision || disconnected || !control.isConnected || document.activeElement !== control || document.querySelector('dialog[open]')) return;
-    const interrupted = settings.interrupted.length ? `上次更新时结束了 ${settings.interrupted.join('、')}，可在会话里点“继续原生会话”接回` : '';
+    const interrupted = settings.interrupted.length ? () => uiText('version.interruptedSessions', { names: settings.interrupted.join('、') }) : null;
     if (!options.length && !interrupted) return toastMessage('version.noneToCheck');
     backendVersionMenu = ui.menu({
       items: [...options.map((option, index) => ({ id: String(index), labelRead: () => backendOptionLabel(option) })),
-        ...(interrupted ? [{ id: 'interrupted', label: interrupted }] : []),
-        { id: 'auto', label: settings.auto ? '空闲时自动更新：开（点此关闭）' : '空闲时自动更新：关（点此打开）' }],
+        ...(interrupted ? [{ id: 'interrupted', labelRead: interrupted }] : []),
+        { id: 'auto', label: uiText(settings.auto ? 'version.autoOn' : 'version.autoOff'), labelKey: settings.auto ? 'version.autoOn' : 'version.autoOff' }],
       getAnchorRect: () => control.getBoundingClientRect(),
       onClose: () => { backendVersionMenu = null; if (revision === selectionRevision && control.isConnected && !control.hidden) control.focus({ preventScroll: true }); },
       onSelect: key => {
         if (ticket !== backendVersionTicket) return;
-        if (key === 'interrupted') return toast(interrupted);
-        if (key === 'auto') return attempt(async () => { const next = await api.backendSwitchSettings(!settings.auto); toast(next.auto ? '已打开：旧后台上的会话确认空闲后会自动更新并接回。' : '已关闭自动更新；旧后台上的会话保持原样。'); });
+        if (key === 'interrupted') return toastMessage('version.interruptedSessions', { names: settings.interrupted.join('、') });
+        if (key === 'auto') return attempt(async () => { const next = await api.backendSwitchSettings(!settings.auto); toastMessage(next.auto ? 'toast.autoBackendOn' : 'toast.autoBackendOff'); });
         const option = options[Number(key)];
         if (option) return runBackendOption(option);
       },
@@ -1819,7 +1820,7 @@ function backendOptionLabel(option) {
   return uiText('version.connectionOption', { version: option.version ? compactAppVersion(option.version) : uiText('version.kindUnknown'), action: uiText(option.ready ? 'version.updateAction' : option.switch?.ready ? 'version.endUpdateAction' : 'version.keepAction'), count: option.count, who });
 }
 function runBackendOption(option) {
-  if (!option.ready && option.switch?.ready) return attempt(async () => { const result = await api.switchBackend({ backendKey: option.backendKey, switch: option.switch }); if (result) toast(backendSwitchedText(result)); });
+  if (!option.ready && option.switch?.ready) return attempt(async () => { const result = await api.switchBackend({ backendKey: option.backendKey, switch: option.switch }); if (result) { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(result)); } });
   if (!option.ready) {
     const switchBlocked = option.switch?.reason && !option.switch.ready, message = switchBlocked ? option.switch.reason : option.reason;
     toast(message); ui.showError($('toast-text'), { message, uiMessage: switchBlocked ? option.switch.reasonUiMessage : option.reasonUiMessage }); return;
@@ -1837,10 +1838,10 @@ async function updateSessionBackend(id) {
   return runBackendOption(option);
 }
 function backendSwitchedText(result) {
-  if (result.error) return '自动更新旧后台没有完成：' + result.error;
+  if (result.error) return uiText('version.autoFailed', { error: ui.displayText(result.error, result.errorUiMessage) });
   const left = Array.isArray(result.left) ? result.left.length : Number(result.left) || 0;
-  const reconnect = result.reconnectFailed ? '窗口没能自动重新连接，请关闭后重新打开窗口。' : '';
-  return (left ? `后台已更新；${left} 个会话没能自动接回，请在会话里点“继续原生会话”。` : '后台已更新，会话已按原身份接回；NAW 没有向它们发送任何内容。') + reconnect;
+  const reconnect = result.reconnectFailed ? uiText('version.reconnectWindowFailed') : '';
+  return uiText(left ? 'version.updatedSomeLeft' : 'version.updatedAll', { count: left }) + reconnect;
 }
 $('backend-version-summary').onclick = () => attempt(openBackendVersions);
 $('backend-version-summary').addEventListener('keydown', event => { if (event.key === 'Escape') { backendVersionTicket++; backendVersionMenu?.(); } });
@@ -1921,7 +1922,7 @@ function renderSessions() {
       }
       // Group spaces are never archived (archived ones get no group), as on the 协作空间 row's ⋯.
       if (entry.more) {
-        entry.more.setAttribute('aria-label', `空间操作：${group.name}`); entry.more.title = entry.more.getAttribute('aria-label');
+        ui.display.attribute(entry.more, 'aria-label', 'sidebar.spaceActions', { name: group.name }); ui.display.attribute(entry.more, 'title', 'sidebar.spaceActions', { name: group.name });
         entry.more.disabled = disconnected || renameTarget?.id === 'room' && renameTarget.roomId === group.id;
       }
       ui.display.text(entry.title, 'sidebar.groupCount', () => ({ name: group.name ?? uiText('sidebar.independent'), count: group.people.length })); entry.title.className = group.id ? `session-space-heading ${roomTone(group.id)}` : 'session-space-heading';
@@ -1937,11 +1938,12 @@ function renderSessions() {
       const closeMenu = rowsHidden && sessionMenu?.kind === 'session' && entry.body.contains(menuRow?.element || sessionMenu.anchor);
       const hiddenFocus = rowsHidden && (entry.body.contains(document.activeElement) || closeMenu);
       entry.body.hidden = closed; entry.toggle.textContent = closed ? '▸' : '▾'; entry.toggle.setAttribute('aria-expanded', String(!closed));
-      entry.toggle.setAttribute('aria-label', `${closed ? '展开' : '折叠'}${group.name}`); entry.toggle.setAttribute('title', `${closed ? '展开' : '折叠'}${group.name}`);
+      const groupLabel = () => ({ name: group.name ?? uiText('sidebar.independent') });
+      ui.display.attribute(entry.toggle, 'aria-label', closed ? 'sidebar.expand' : 'sidebar.collapse', groupLabel); ui.display.attribute(entry.toggle, 'title', closed ? 'sidebar.expand' : 'sidebar.collapse', groupLabel);
       const attention = group.people.map(record => ({ record, presentation: sidebarPresentation(record) })).filter(item => item.presentation.marker === '!');
       entry.attention.hidden = !closed || !attention.length; entry.attention.textContent = attention.length ? `!${attention.length}` : '';
-      const attentionText = `${attention.length} 个会话需要处理或核对状态: ${attention.map(item => `${item.record.name} · ${item.presentation.full}`).join('; ')}`;
-      entry.attention.setAttribute('aria-label', attentionText); entry.attention.setAttribute('title', attentionText);
+      const attentionText = () => uiText('sidebar.attentionFacts', { count: attention.length, facts: attention.map(item => `${item.record.name} · ${sidebarPresentation(item.record).full}`).join('; ') });
+      ui.display.computed(entry.attention, 'aria-label', attentionText); ui.display.computed(entry.attention, 'title', attentionText);
       if (entry.attention.hidden) entry.toggle.removeAttribute('aria-describedby'); else entry.toggle.setAttribute('aria-describedby', entry.attention.id);
       if (closeMenu) sessionMenu.close();
       if (hiddenFocus) entry.toggle.focus({ preventScroll: true });
@@ -1989,7 +1991,7 @@ function renderSessions() {
     if (row.badgeKey !== badgeKey) {
       // One badge plus a count keeps membership on its line; the badge shows the space's whole name and CSS
       // shortens it only by the width it has (T-144). The full list is in the title and details.
-      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', r.name, `space-badge ${roomTone(r.id)}`); badge.title = `空间：${r.name}`; return badge; }));
+      row.badges.replaceChildren(...memberships.slice(0, 1).map(r => { const badge = node('span', r.name, `space-badge ${roomTone(r.id)}`); ui.display.attribute(badge, 'title', 'sidebar.spaceBadge', { name: r.name }); return badge; }));
       if (memberships.length > 1) { const more = node('span', `+${memberships.length - 1}`, 'space-badge space-badge-more'); more.title = membershipNames; row.badges.append(more); }
       row.badgeKey = badgeKey;
     }
@@ -2028,7 +2030,8 @@ function createReadiness() {
   const createTicket = dialogTickets.get($('create-dialog'));
   const gitHelp = !$('git-worktree-option').hidden && !gitSelected && newDirectory && !takeover && !createTicket?.creation && !createTicket?.created;
   $('git-worktree-source-help').hidden = !gitHelp;
-  $('git-worktree-source-help').textContent = gitHelp ? '要新建 Git 工作副本，请先点「选择…」选一个已有提交的 Git 仓库，再勾选这一项。这里不会新建仓库。' : '';
+  if (gitHelp) ui.display.text($('git-worktree-source-help'), 'create.gitSourceHelp');
+  else { ui.display.unbind($('git-worktree-source-help')); $('git-worktree-source-help').textContent = ''; }
   $('git-worktree-relative').disabled = creatingSession;
   if (gitSelected && !gitSupported) {
     invalidateGitPreview();
@@ -2072,7 +2075,8 @@ function createSpaceReadiness(final = false) {
   ui.display.text($('cancel-create'), stopped ? 'create.closeKeep' : 'common.cancel');
   // Continuing an existing session doesn't take the space choice yet; say so rather than drop it.
   $('create-space-help').hidden = !spaced;
-  $('create-space-help').textContent = spaced ? CREATE_SPACE_HELP + '继续或接管已有会话时不能同时选空间：先继续，再从会话菜单加入空间。' : '';
+  if (spaced) ui.display.text($('create-space-help'), 'create.spaceHelpForExisting');
+  else { ui.display.unbind($('create-space-help')); $('create-space-help').textContent = ''; }
   if (spaced || stopped) $('open-native-history').disabled = true; // continuing or branching would add another session
   if (stopped) for (const id of ['choose-folder', 'new-folder', 'git-worktree', 'git-worktree-relative']) $(id).disabled = true;
   if (creation) {
@@ -2083,9 +2087,9 @@ function createSpaceReadiness(final = false) {
   ui.display.text($('confirm-create'), spaced ? 'create.spaceConfirm' : 'create.confirm');
   if (!final) return;
   if (ticket?.created) { $('confirm-create').disabled = true; ui.display.text($('create-readiness'), ticket.created === 'unconfirmed' ? 'create.startedUnconfirmed' : 'create.startedRetained'); return; }
-  let problem = spaced && takeover ? '接管已有 Claude 会话时不能同时选空间；请改成独立会话，接管后再从会话菜单加入空间。' : '';
-  if (!problem) try { createSpaceChoice(); } catch (error) { problem = error.message; }
-  if (problem) { $('confirm-create').disabled = true; if (!$('create-readiness').textContent) { ui.display.unbind($('create-readiness'), 'text'); $('create-readiness').textContent = problem; } }
+  let problem = spaced && takeover ? uiError('error.takeoverSpaceChoice') : null;
+  if (!problem) try { createSpaceChoice(); } catch (error) { problem = error; }
+  if (problem) { $('confirm-create').disabled = true; if (!$('create-readiness').textContent) ui.showError($('create-readiness'), problem); }
 }
 function renderArchives() {
   const records = state.sessions.filter(s => s.archived), archivedRooms = allSpaces().filter(r => r.archived), count = records.length + archivedRooms.length;
@@ -2233,15 +2237,15 @@ function roomMessageLabel(m) {
   if (m.role === 'system' && m.runId && !m.sharedStream) return displayName || uiText('identity.collaboration');
   if (m.role === 'system' && m.wake) {
     // An agent wake row: current names by ID, the stored names only when a session is gone (T-137).
-    const name = (id, stored) => { const s = state.sessions.find(x => x.id === id); return s ? participantLabel(s, state.sessions) : historicalParticipantLabel(stored || '历史会话', id); };
+    const name = (id, stored) => { const s = state.sessions.find(x => x.id === id); return s ? participantLabel(s, state.sessions) : historicalParticipantLabel(stored || uiText('identity.historicalSession'), id); };
     return `${name(m.wake.senderId, m.wake.senderName)} → ${name(m.wake.recipientId, m.wake.recipientName)}`;
   }
   if (m.role === 'system' && m.peerMessage) {
     // A cross-session message: the recipient by its current name; the sender is never verified (T-137).
     const p = m.peerMessage, s = p.senderId && state.sessions.find(x => x.id === p.senderId), r = state.sessions.find(x => x.id === p.recipientId);
     // A name the sender only claimed stays inside 「」, so nothing in it can pass for NAW's own marker.
-    const sender = s ? participantLabel(s, state.sessions) : p.senderId ? p.senderName || '历史会话' : p.senderName ? `「${p.senderName}」` : '未知会话';
-    return `${sender}（未核实） → ${r ? participantLabel(r, state.sessions) : historicalParticipantLabel(p.recipientName || '历史会话', p.recipientId)}`;
+    const sender = s ? participantLabel(s, state.sessions) : p.senderId ? p.senderName || uiText('identity.historicalSession') : p.senderName ? `「${p.senderName}」` : uiText('identity.unknownSession');
+    return uiText('identity.unverifiedSender', { name: sender, recipient: r ? participantLabel(r, state.sessions) : historicalParticipantLabel(p.recipientName || uiText('identity.historicalSession'), p.recipientId) });
   }
   const person = state.sessions.find(s => s.id === (m.role === 'human' ? m.recipientId : m.sessionId));
   if (person) return (m.role === 'human' ? uiText('identity.youTo') : '') + participantLabel(person, state.sessions);
@@ -2373,11 +2377,12 @@ function openNotes(id = spaceId) {
 }
 let contextSnapshot = null;
 function contextEdited() { return Boolean(contextSnapshot && $('context-text').value && $('context-text').value !== contextSnapshot.text); }
-function contextProblem(text) { $('context-error').textContent = text; $('context-error').hidden = false; }
+function contextProblem(problem) { ui.showError($('context-error'), problem); $('context-error').hidden = false; }
 function updateContextControls() {
   const text = $('context-text').value, edited = contextEdited();
   $('context-spaces').disabled = edited;
-  $('context-scope-note').textContent = edited ? '这份背景已编辑，空间选择已固定。内容仍可继续修改；加入草稿或取消后可重新选择。' : '';
+  if (edited) ui.display.text($('context-scope-note'), 'context.scopeLocked');
+  else { ui.display.unbind($('context-scope-note')); $('context-scope-note').textContent = ''; }
   $('context-scope-note').hidden = !edited;
   $('context-text').disabled = !contextSnapshot;
   const unavailable = !contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed();
@@ -2390,11 +2395,11 @@ function generateContextPreview() {
   }
   const ids = [...$('context-space-choices').querySelectorAll('input:checked')].map(check => check.dataset.contextSpace);
   try {
-    contextSnapshot = window.nativeWorkspaceContextSnapshot.build(state, ids, { connected: !disconnected });
+    contextSnapshot = window.nativeWorkspaceContextSnapshot.build(state, ids, { connected: !disconnected, language: ui.language.getSnapshot().active });
     $('context-text').value = contextSnapshot.text;
-    $('context-error').textContent = ''; $('context-error').hidden = true;
+    ui.display.unbind($('context-error')); $('context-error').textContent = ''; $('context-error').hidden = true;
   } catch (error) {
-    contextSnapshot = null; $('context-text').value = ''; contextProblem(error.message || '背景快照未生成。');
+    contextSnapshot = null; $('context-text').value = ''; contextProblem(error.message ? error : uiError('error.contextPreviewFailed'));
   }
   updateContextControls();
 }
@@ -3431,7 +3436,7 @@ const disposers = [
   api.onDisconnected((message, uiMessage) => { disconnected = true; for (const s of state?.sessions || []) freezeLegacyProgress(s); render(); toastError({ message, uiMessage }); }),
   api.onViewStorage((warning, uiMessage) => { latestViewStorage = warning; latestViewStorageUiMessage = uiMessage; if (state) { state.viewStorageWarning = warning; state.viewStorageWarningUiMessage = uiMessage; render(); } }),
   api.onReconnected(next => { for (const s of state?.sessions || []) freezeLegacyProgress(s); disconnected = false; updateState(next); render(); }),
-  api.onBackendSwitched(notice => toast(backendSwitchedText(notice))),
+  api.onBackendSwitched(notice => { toast(''); ui.display.computed($('toast-text'), 'text', () => backendSwitchedText(notice)); }),
   api.onNew(() => openCreate()),
 ];
 sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), displayTitle: (element, params) => ui.display.attribute(element, 'title', 'sidebar.resizeHelp', params), onError: toastError });
@@ -3499,7 +3504,7 @@ $('create-form').onsubmit = event => { event.preventDefault();
   if (ticket.creation) { attempt(() => finishCreateSpace(ticket, revision)); return; }
   if (document.querySelector('input[name="provider"]:checked').value === 'claude' && $('claude-history-id').value.trim()) { $('open-native-history').click(); return; }
   let choice; // T-115: an invalid space choice creates nothing, and its reason stays in the dialog
-  try { choice = createSpaceChoice(); } catch (error) { $('create-error').textContent = error.message; return; }
+  try { choice = createSpaceChoice(); } catch (error) { ui.showError($('create-error'), error); return; }
   attempt(async () => {
   const worktree = $('git-worktree').checked ? gitWorktreePlan : null;
   if ($('git-worktree').checked && (!worktree || newDirectory || gitPreviewLoading || !state.capabilities?.includes('gitWorktreeV1'))) throw uiError("error.gitPreviewRequired");
@@ -3534,16 +3539,15 @@ $('create-form').onsubmit = event => { event.preventDefault();
     const sharedFolder = unknown && !newDirectory;
     if (!ticket.creation && !ticket.created && (ownFolderTaken || sharedFolder)) ticket.created = 'unconfirmed';
     if (unknown && newDirectory) ticket.unsurePath = submittedFolder;
-    const kept = created ? `会话“${created.name}”（${sessionShortId(created.id)}）已保留在侧栏。` : createdId ? `会话（${sessionShortId(createdId)}）已建好，保留在侧栏。`
-      : ownFolderTaken ? '这个目录是上一次创建时建的，会话很可能已经建好；请在侧栏核对，侧栏里没有的话，关掉对话框重新打开再建。这里不会再建一个。'
-      : sharedFolder ? '无法确认会话是否已经建好，请先在侧栏核对；侧栏里没有的话，关掉对话框重新打开再建。这里不会再建一个。'
-      : unknown ? '无法确认会话是否已经建好，请先在侧栏核对，再决定要不要重新创建。' : '';
+    const kept = () => created ? uiText('create.keptNamedId', { name: created.name, id: sessionShortId(created.id) }) : createdId ? uiText('create.keptId', { id: sessionShortId(createdId) })
+      : ownFolderTaken ? uiText('create.folderTakenKept') : sharedFolder ? uiText('create.sharedFolderUnknown') : unknown ? uiText('create.creationUnknown') : '';
     // A space was chosen but no session can be named: the space can still be joined later from the session menu.
-    const spaceLater = ticket.created === 'unconfirmed' && choice.kind !== 'independent' ? ' 如果会话已建好，可以从会话菜单加入空间。' : '';
-    const join = !ticket.creation ? '' : currentDialogTicket(ticket) ? ' 还没加入空间；可以点「仅继续加入」，不会重建会话。' : ' 还没加入空间；可以打开这个会话，从会话菜单加入空间。';
+    const spaceLater = ticket.created === 'unconfirmed' && choice.kind !== 'independent';
+    const join = !ticket.creation ? null : currentDialogTicket(ticket) ? 'create.joinRetryKept' : 'create.joinLaterKept';
     // Stopped at its own folder, the service's 已存在 advice (use another folder) would contradict the locked form (I160).
-    const message = kept + (ownFolderTaken ? '' : error.message) + join + spaceLater;
-    if (currentDialogTicket(ticket)) $('create-error').textContent = message; else toast(message);
+    const message = () => kept() + (ownFolderTaken ? '' : ui.errorText(error)) + (join ? uiText(join) : '') + (spaceLater ? uiText('create.spaceLater') : '');
+    if (currentDialogTicket(ticket)) ui.display.computed($('create-error'), 'text', message);
+    else { toast(''); ui.display.computed($('toast-text'), 'text', message); }
     if (worktree && currentDialogTicket(ticket) && !ticket.creation && !ticket.created) { invalidateGitPreview(); $('chosen-folder').textContent = folder; ui.display.text($('git-worktree-preview'), 'create.copyRetained'); }
     // A failed/uncertain start may already own the displayed path. Preserve
     // that record and any files; a new explicit submit gets a fresh preview.
@@ -3976,15 +3980,15 @@ $('attach-context').onclick = () => { $('room-advanced').open = false; openConte
 $('context-text').addEventListener('input', updateContextControls);
 $('copy-context').onclick = () => attempt(async () => {
   const text = $('context-text').value;
-  if (!contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed()) return contextProblem('请先核对背景文字与所选空间。');
+  if (!contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed()) return contextProblem(uiError('error.contextCheckPreview'));
   await api.copy(text); toastMessage("toast.contextCopied");
 });
 $('insert-context').onclick = () => attempt(async () => {
   const ticket = dialogTickets.get($('context-dialog')), revision = selectionRevision;
   if (!currentDialogTicket(ticket)) return;
   const target = contextTarget, text = $('context-text').value;
-  if (!contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed()) return contextProblem('请先核对背景文字与所选空间。');
-  if (!target?.room || target.roomId !== spaceId || selected !== 'room') return contextProblem('当前视图已变化，请重新打开协作背景。');
+  if (!contextSnapshot || !text.trim() || text.length > 12000 || !text.isWellFormed()) return contextProblem(uiError('error.contextCheckPreview'));
+  if (!target?.room || target.roomId !== spaceId || selected !== 'room') return contextProblem(uiError('error.contextViewChanged'));
   const input = $('shared-input');
   const next = appendedDraft(input, text, true);
   if (next.length > 16000) { ui.display.text($('context-error'), 'context.tooLong'); $('context-error').hidden = false; return; }
@@ -4022,15 +4026,16 @@ function openInvite(anchor) {
   const ticket = openTransientDialog('invite-dialog'), revision = selectionRevision;
   const candidates = state.sessions.filter(s => !inSpace(s, destination) && !s.archived && s.state !== 'ended');
   const blocked = s => !window.nativeWorkspaceSpaces.canJoin(s, destination);
-  $('invite-error').hidden = true; $('invite-error').textContent = '';
+  $('invite-error').hidden = true; ui.display.unbind($('invite-error')); $('invite-error').textContent = '';
   $('invite-list').replaceChildren(...candidates.map(s => {
     if (blocked(s)) {
       // Stay focusable so keyboard and reader users can reach the exact reason.
-      const entry = button(`加入 ${participantLabel(s, state.sessions)} · 当前后台不可加入新空间`, () => {
+      const entry = button('', () => {
         if (!currentDialogTicket(ticket)) return;
-        $('invite-error').textContent = oldBackendJoin(s); $('invite-error').hidden = false;
+        ui.showError($('invite-error'), oldBackendJoin(s)); $('invite-error').hidden = false;
       });
-      entry.setAttribute('aria-disabled', 'true'); entry.title = oldBackendJoin(s); entry.dataset.inviteSession = s.id; return entry;
+      ui.display.text(entry, 'invite.legacyBlocked', { name: participantLabel(s, state.sessions) });
+      entry.setAttribute('aria-disabled', 'true'); ui.display.computed(entry, 'title', () => ui.errorText(oldBackendJoin(s))); entry.dataset.inviteSession = s.id; return entry;
     }
     const entry = button('', async () => {
       try {
@@ -4043,17 +4048,17 @@ function openInvite(anchor) {
       } catch (error) {
         // The modal hides ordinary toasts; keep the reason beside the choice.
         if (!currentDialogTicket(ticket)) throw error;
-        $('invite-error').textContent = error.message || '没有加入。'; $('invite-error').hidden = false;
+        ui.showError($('invite-error'), error.message ? error : uiError('error.spaceJoinFailed')); $('invite-error').hidden = false;
       }
     });
     ui.display.text(entry, 'invite.joinName', { name: participantLabel(s, state.sessions) }); entry.dataset.inviteSession = s.id; return entry;
   }));
-  if (candidates.some(blocked)) $('invite-list').append(node('p', `旧版后台上的会话不能加入其他协作空间。${OLD_BACKEND_NEXT}`));
+  if (candidates.some(blocked)) $('invite-list').append(uiNode('p', 'invite.legacyHelp'));
   if (!$('invite-list').children.length) $('invite-list').append(uiNode('p', 'invite.allJoined'));
 }
 $('invite-dialog').addEventListener('close', () => {
   if ($('invite-dialog').open) return;
-  $('invite-list').replaceChildren(); $('invite-error').hidden = true; $('invite-error').textContent = '';
+  $('invite-list').replaceChildren(); $('invite-error').hidden = true; ui.display.unbind($('invite-error')); $('invite-error').textContent = '';
   const origin = inviteOrigin; inviteOrigin = null;
   if (origin?.revision === selectionRevision && selected === 'room') focusMemberAction(origin.anchor);
 });
@@ -4127,7 +4132,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
     dialogTickets.delete(dialog); dialog.scrollTop = 0;
     if (dialog.id === 'create-dialog') {
       for (const id of ['session-name', 'claude-history-id']) $(id).value = '';
-      for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note', 'git-worktree-preview']) { ui.display.unbind($(id)); $(id).textContent = ''; }
+      for (const id of ['chosen-folder', 'create-error', 'create-readiness', 'create-permission-note', 'create-space-help', 'git-worktree-source-help', 'git-worktree-preview']) { ui.display.unbind($(id)); $(id).textContent = ''; }
       $('skip-permissions').checked = false; folder = ''; newDirectory = false;
       $('initial-view').value = '';
       for (const input of dialog.querySelectorAll('input[name="provider"]')) input.checked = false;
@@ -4138,7 +4143,7 @@ for (const dialog of document.querySelectorAll('dialog')) {
     } else if (dialog.id === 'context-dialog') {
       contextTarget = null; contextSnapshot = null;
       $('context-space-choices').replaceChildren(); $('context-spaces').disabled = false;
-      $('context-scope-note').textContent = ''; $('context-scope-note').hidden = true;
+      ui.display.unbind($('context-scope-note')); $('context-scope-note').textContent = ''; $('context-scope-note').hidden = true;
       $('context-text').value = ''; $('context-text').disabled = false; ui.display.unbind($('context-error')); $('context-error').textContent = ''; $('context-error').hidden = true;
       $('copy-context').disabled = false; $('insert-context').disabled = false;
     } else if (dialog.id === 'run-dialog') {

@@ -107,7 +107,7 @@ test('a pending create keeps Cancel available while duplicate folder changes sta
   const f = fixture(); f.$('create-dialog').showModal();
   Object.assign(f.context, { document: { querySelector: () => ({ value: 'codex' }) }, creatingSession: true, newDirectory: false });
   // T-115: createReadiness also renders the space choice; an independent session (the default) leaves this check as it was.
-  Object.assign(f.context, { renderCreateSpaces() {}, createSpaceChoice: () => ({ kind: 'independent' }), CREATE_SPACE_HELP: '' });
+  Object.assign(f.context, { renderCreateSpaces() {}, createSpaceChoice: () => ({ kind: 'independent' }) });
   f.$('create-space-kind').value = 'independent'; f.$('create-dialog').querySelectorAll = () => [];
   f.context.state.capabilities = ['nativePermissionDefaults', 'nativeHistory']; f.context.state.preflight = { codex: true, python: true };
   vm.runInContext(source.slice(source.indexOf('function createReadiness()'), source.indexOf('function renderArchives()')), f.context);

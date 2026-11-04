@@ -25,7 +25,7 @@
         ? text('collab.childPartial', { running: children.running ? text('collab.childRunning', { count: children.running }) : '', separator: children.running && children.unknown ? ' · ' : '', unknown: children.unknown ? text('collab.childUnknown', { count: children.unknown }) : '' })
         : text('collab.childComplete', { count: children.children.length });
     }
-    const work = fleet.backgroundWork(record, live);
+    const work = fleet.backgroundWork(record, live, text);
     const base = record.state === 'idle' && (work.count || work.unconfirmed) ? work.text : text(Object.hasOwn(labels, record.state) ? labels[record.state] : 'collab.stateMissing');
     const question = record.approval?.method === 'item/tool/requestUserInput';
     const state = !live ? text('collab.connectionUnknown') : record.nativeContextPending ? text('collab.contextUnknown') : record.claudeQuestion || question && record.approval.params?.isBlocking !== false

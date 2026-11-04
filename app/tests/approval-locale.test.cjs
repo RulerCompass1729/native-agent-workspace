@@ -80,6 +80,25 @@ test('the existing DSH menu label child observes locale without recreating menu 
   assert.equal(item.run, run); assert.equal(item.disabled, false); assert.equal(item.id, 'original-action'); assert.equal(subscriptions, 2);
 });
 
+test('the actual DSH menu maps both action labels and read-only facts to the existing locale child', () => {
+  let language = 'zh';
+  const begin = bootstrap.indexOf('        function MenuMessage('), end = bootstrap.indexOf('        let mounted =', begin);
+  const menuBegin = bootstrap.indexOf('            function SessionMenu('), menuEnd = bootstrap.indexOf('            // update()', menuBegin);
+  assert.ok(begin >= 0 && end > begin && menuBegin > end && menuEnd > menuBegin);
+  const callback = () => {}, raw = 'RAW NAME 中文 <body>', action = { id: 'copy', labelKey: 'menu.copyNawId', disabled: false, callback },
+    fact = { type: 'label', id: 'original-fact', text: raw, labelRead: () => locale.format(language, 'sidebar.membershipFacts', { names: raw }) },
+    unchanged = { type: 'label', id: 'raw', text: raw };
+  const context = vm.createContext({ React: { useSyncExternalStore: (_subscribe, read) => read(), useEffect() {}, createElement: (type, props) => ({ type, props }) },
+    subscribeLocale() {}, localeSnapshot: () => ({ active: language }), t: (key, params) => locale.format(language, key, params), Menu: callback,
+    modal: false, getAnchorRect: callback, close: callback, onSelect: callback, items: [action, fact, unchanged] });
+  vm.runInContext(bootstrap.slice(begin, end) + bootstrap.slice(menuBegin, menuEnd), context);
+  const mapped = vm.runInContext('SessionMenu({items}).props.items', context), label = mapped[0].label, text = mapped[1].text;
+  assert.equal(label.type(label.props), '复制完整 NAW ID'); assert.equal(text.type(text.props), '所属空间：' + raw);
+  language = 'en'; assert.equal(label.type(label.props), 'Copy full NAW ID'); assert.equal(text.type(text.props), 'Spaces: ' + raw);
+  assert.equal(mapped[0].id, action.id); assert.equal(mapped[0].callback, callback); assert.equal(mapped[0].disabled, false);
+  assert.equal(mapped[1].id, fact.id); assert.equal(mapped[1].type, 'label'); assert.equal(mapped[2], unchanged); assert.equal(mapped[2].text, raw);
+});
+
 
 test('owned ambiguity reason repaints both selected detail and pending option while a native reason with identical text stays raw', () => {
   const f = fixture(), own = locale.createNotice('notice.nativeConfirm.ambiguous'), raw = { requestId: 'native-raw', method: 'item/commandExecution/requestApproval', params: { reason: own.text, command: '', cwd: '/synthetic' } }, request = { requestId: 'owned', method: 'native/requestAmbiguous', params: { reason: own.text, reasonUiMessage: own.uiMessage } };

@@ -138,7 +138,22 @@ async function run() {
   const returnAnchor = await readingAnchor();
   await search('Page record 0123.', 'page-123'); await host.locator('[data-message-id="page-123"][data-search-target="true"]').waitFor();
   const target = await measure('unloaded-search'); assert.ok(target.articles <= 50); assert.ok(Number(target.last.replace('page-', '')) < 200);
-  await until(async () => Math.abs((await readingAnchor()).offset - 16) < 40, 'Unloaded original is in the viewport after Markdown mounts');
+  // Search aligns the matched text, which can leave the record's heading above
+  // the viewport. Check the original matching paragraph, not the first row's box.
+  let searchTarget;
+  await until(async () => {
+    searchTarget = await host.locator('[data-message-id="page-123"][data-search-target="true"] .message-body p').evaluateAll(paragraphs => {
+      const matches = paragraphs.filter(p => p.textContent === 'Page record 0123. Original source.');
+      if (matches.length !== 1) return null;
+      const paragraph = matches[0], reader = paragraph.closest('.messages');
+      const rect = paragraph.getBoundingClientRect(), viewport = reader.getBoundingClientRect();
+      return { id: paragraph.closest('[data-message-id]').dataset.messageId, text: paragraph.textContent,
+        top: rect.top - viewport.top, bottom: rect.bottom - viewport.top, height: rect.height, width: rect.width,
+        viewportHeight: reader.clientHeight };
+    });
+    return searchTarget && searchTarget.height > 0 && searchTarget.width > 0 && searchTarget.top >= 0 && searchTarget.bottom <= searchTarget.viewportHeight;
+  }, 'Unloaded matching original paragraph is in the viewport after Markdown mounts');
+  measurements.push({ name: 'unloaded-search-target', ...searchTarget });
   assert.equal(await host.locator('[data-message-id="page-live"]').count(), 0);
   await fixture('delta', id, { id: 'page-live', text: 'Still later source.\n' });
   assert.equal(await host.locator('[data-message-id="page-live"]').count(), 0);

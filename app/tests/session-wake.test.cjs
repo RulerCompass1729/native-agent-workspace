@@ -124,6 +124,7 @@ test('a sender boundary that cancels a staged wake names its reason in the recor
   const row = f.source.get(f.a).messages.find(m => m.wake);
   assert.equal(row.wake.status, 'cancelled');
   assert.match(row.text, /^原生观察或控制边界已变化（等待原生权限确认）；自动消息未投递。/);
+  assert.equal(require('../ui-locale.js').displayText('en', row.text, row.uiMessage), `The native observation or control boundary changed (Waiting for native permission approval); the automatic message was not delivered.\n${row.wake.body}`);
   await f.finish(); assert.equal(f.writes.length, 0);
 });
 test('target busy, permission wait, or immediate global/session off prevents any native write', async t => {
@@ -376,6 +377,7 @@ test('a turn end reported as a boundary withdraws its staged wake and says why (
   const row = f.source.get(f.a).messages.find(m => m.wake);
   assert.equal(row.wake.status, 'cancelled');
   assert.match(row.text, /^发送方这一轮中途有新的输入或权限确认；自动消息未投递。/);
+  assert.ok(require('../ui-locale.js').displayText('en', row.text, row.uiMessage).startsWith("New input or a permission request arrived during the sender's turn; the automatic message was not delivered.\n"));
   assert.equal(f.writes.length, 0);
 });
 test('an identical repeated Claude prompt cannot reauthorize a wake; a fresh turn can (T-141)', async t => {
@@ -399,4 +401,13 @@ test('a first Claude prompt hook arriving after native turn-start still authoriz
     assert.equal((await f.call()).status, 'staged');
     await f.finish();
     assert.equal(f.writes.length, 1);
+});
+
+test('a cancelled wake translates only its own boundary wrapper and preserves the original reason and body', async t => {
+  const f = await fixture(t); await f.call();
+  const row = f.source.get(f.a).messages.find(m => m.wake), body = row.wake.body, reason = 'RAW reason 中文 {body}';
+  require('../session-wake.cjs').cancelParticipant(f.source, f.a, reason);
+  assert.equal(row.wake.status, 'cancelled'); const original = row.text, locale = require('../ui-locale.js');
+  assert.equal(locale.displayText('en', row.text, row.uiMessage), `The native observation or control boundary changed（${reason}）; the automatic message was not delivered.\n${body}`);
+  assert.equal(locale.displayText('zh', row.text, row.uiMessage), original); assert.equal(row.wake.body, body); assert.equal(f.writes.length, 0);
 });

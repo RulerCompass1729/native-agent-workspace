@@ -599,16 +599,16 @@ class Workspace extends EventEmitter {
       this.cancelCapacity(s.id);
       // It still interrupts a desktop send it displaced; that send is not retried.
       if (!machine) { wake.human(this, s.id); this.pause('真人在原生终端输入', undefined, false, uiActivity('notice.run.humanTerminalInput')[1]); s.controlRevision++; }
-      else if (item?.superseded) { this.pause('原生自动输入抢在交接发送之前开始；请核对后再继续。'); s.controlRevision++; }
+      else if (item?.superseded) { this.pause('原生自动输入抢在交接发送之前开始；请核对后再继续。', undefined, false, uiActivity('notice.run.machineSuperseded')[1]); s.controlRevision++; }
       runtime.workspaceMcpCalls?.clear();
       if (item?.turnId && item.turnId === runtime.turnId) wake.nativeStart(this, runtime, { nativeId: s.nativeId, turnId: item.turnId }, s);
       // Machine turns keep their place but are not shown as the person's words.
       const summaries = machine && onlyBlocks ? blocks.map(block => /<summary>([\s\S]*?)<\/summary>/.exec(block)?.[1]?.trim()).filter(Boolean) : [];
       // The original text is kept for search and history; the summary is only what the reader shows.
       const peer = inputSource === 'naw-peer' ? this.peerMessage(text) : null;
-      const shown = summaries.length && summaries.length === blocks.length ? { name: '后台任务通知', displayText: summaries.join('\n') }
-        : peer ? { name: peer.name, ...(peer.body !== null ? { displayText: peer.body } : {}) }
-        : machine ? { name: inputSource.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入' } : {};
+      const shown = summaries.length && summaries.length === blocks.length ? { name: '后台任务通知', uiNameMessage: uiNotice('notice.name.backgroundNotification').uiMessage, displayText: summaries.join('\n') }
+        : peer ? { name: peer.name, uiNameMessage: peer.uiNameMessage, ...(peer.body !== null ? { displayText: peer.body } : {}) }
+        : machine ? { name: inputSource.endsWith('_wakeup') ? '定时唤醒' : '原生自动输入', uiNameMessage: uiNotice(inputSource.endsWith('_wakeup') ? 'notice.name.scheduledWake' : 'notice.name.nativeAutomaticInput').uiMessage } : {};
       if (item?.display !== false && (!item?.id || !s.messages.some(m => m.id === item.id))) {
         s.messages.push({ id: item?.id || randomUUID(), role: 'user', text, ...shown, status: 'submitted', origin: 'native', ...(machine ? { inputSource } : {}), time: Date.now() });
         if (peer) this.mirrorPeer(s, peer, Date.now(), text);
@@ -738,7 +738,7 @@ class Workspace extends EventEmitter {
   // is shown by that session's name, as a process-number match.
   peerMessage(text) {
     const outer = /^\s*<cross-session-message((?:\s+[a-z-]{1,20}="[^"<>]{0,512}")*)\s*>\n?([\s\S]*?)\n?<\/cross-session-message>\s*$/.exec(String(text));
-    if (!outer) return { name: '会话间消息', body: null, senderId: null, senderName: '' };
+    if (!outer) return { name: '会话间消息', uiNameMessage: uiNotice('notice.name.peerMessage').uiMessage, body: null, senderId: null, senderName: '' };
     const attrs = Object.fromEntries([...outer[1].matchAll(/([a-z-]{1,20})="([^"<>]{0,512})"/g)].map(m => [m[1], m[2]]));
     const pid = /^uds:\/tmp\/cc-socks\/(\d{1,10})\.sock$/.exec(attrs.from || '')?.[1];
     const sender = pid ? [...this.sessions.values()].find(s => s.provider === 'claude' && String(s.pid) === pid) : null;
@@ -747,7 +747,8 @@ class Workspace extends EventEmitter {
     // anything in it that looks like NAW's marker then visibly sits inside the claim. Its own brackets stay.
     const claimed = (attrs['from-name'] || '').replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u2028-\u202e\u2060-\u2069\u300c\u300d\u3164\ufe41-\ufe44\ufeff\uff62\uff63\uffa0\ufff9-\ufffb]/g, '').trim().slice(0, 80);
     const who = sender ? `${sender.name || '会话'}（按进程号对应，未核实）` : claimed ? `「${claimed}」（未核实）` : '未知会话';
-    return { name: `会话间消息 · 来自 ${who}`, body: outer[2], senderId: sender?.id || null, senderName: sender ? sender.name || '' : claimed };
+    const label = sender ? sender.name ? uiNotice('notice.name.peerPid', { name: sender.name }) : uiNotice('notice.name.peerPidUnnamed') : claimed ? uiNotice('notice.name.peerClaimed', { name: claimed }) : uiNotice('notice.name.peerUnknown');
+    return { name: `会话间消息 · 来自 ${who}`, uiNameMessage: label.uiMessage, body: outer[2], senderId: sender?.id || null, senderName: sender ? sender.name || '' : claimed };
   }
   // T-137: a cross-session message also appears in the spaces of the session that received it (the ones
   // it shares with a local sender, else its own). Only the receiving backend writes it: it holds the proof
@@ -761,10 +762,13 @@ class Workspace extends EventEmitter {
     for (const id of common.length ? common : own) {
       const room = this.rooms.get(id);
       // The stored name carries the mark too: merged copies keep `name` but not `peerMessage`.
-      if (room) room.messages.push({ id: randomUUID(), role: 'system', kind: 'agent-peer', name: `${peer.senderId ? peer.senderName || '会话' : peer.senderName ? `「${peer.senderName}」` : '未知会话'}（未核实） → ${s.name || '会话'}`,
+      const senderName = peer.senderId ? peer.senderName || '会话' : peer.senderName ? `「${peer.senderName}」` : null;
+      const name = `${senderName || '未知会话'}（未核实） → ${s.name || '会话'}`;
+      const nameMessage = displayMessage({ version: 1, key: senderName ? 'notice.peer.mirroredName' : 'notice.peer.mirroredUnknown', params: { ...(senderName ? { sender: senderName } : {}), recipient: s.name || '会话' } }, 'notice.', name);
+      if (room) room.messages.push({ id: randomUUID(), role: 'system', kind: 'agent-peer', name, ...(nameMessage ? { uiNameMessage: nameMessage } : {}),
         peerMessage: { senderId: peer.senderId, senderName: peer.senderName || '', recipientId: s.id, recipientName: s.name || '' },
         // A text that is not one strict wrapper keeps its original, so the space never loses the content.
-        text: `会话间消息（Claude Code 自带，未经 NAW 转交；发送方未核实）\n${peer.body ?? String(original ?? '')}`, time });
+        text: `会话间消息（Claude Code 自带，未经 NAW 转交；发送方未核实）\n${peer.body ?? String(original ?? '')}`, uiMessage: displayMessage({ version: 1, key: 'notice.peer.mirroredText', params: { body: peer.body ?? String(original ?? '') } }, 'notice.') || undefined, time });
     }
   }
   wakeView(room) {
@@ -773,7 +777,7 @@ class Workspace extends EventEmitter {
       if (!m.wake) return m;
       const record = this.sessions.get(m.wake.senderId)?.messages?.find(x => x.id === m.wake.id && x.wake);
       // With the sender's record removed, its delivery result is no longer known; never show a stale state.
-      return { ...m, text: record ? record.text : `发送方会话记录已移除，无法确认投递结果。\n${m.wake.body || ''}`, wakeStatus: record ? record.wake.status : 'unknown' };
+      return { ...m, text: record ? record.text : `发送方会话记录已移除，无法确认投递结果。\n${m.wake.body || ''}`, uiMessage: record ? record.uiMessage : displayMessage({ version: 1, key: 'notice.wake.senderRemoved', params: { body: m.wake.body || '' } }, 'notice.') || undefined, wakeStatus: record ? record.wake.status : 'unknown' };
     }) };
   }
   roomFor(id = 'shared', create = false) {
@@ -1125,7 +1129,7 @@ class Workspace extends EventEmitter {
     if (room?.run) this.pause(reason, room.run, false, uiMessage);
   }
   pauseParticipant(id, reason, automatic = false, uiMessage) {
-    if (!automatic) wake.cancelParticipant(this, id, reason);
+    if (!automatic) wake.cancelParticipant(this, id, reason, uiMessage);
     this.peerLeases?.revoke(reason, id, undefined, uiMessage);
     // Native activity in another independent session does not revoke this
     // selected run. Explicit human interventions still use the global pause.

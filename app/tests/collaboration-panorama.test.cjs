@@ -19,6 +19,59 @@ test('one primary projection reaches B-only U and counts shared S only once', ()
   assert.equal(JSON.stringify({ rooms, sessions }), before, 'observation changes no input, identity or membership');
 });
 
+test('projection paints the same observed facts in English without changing membership or raw source text', () => {
+  const value = { rooms, sessions: [session('S', ['shared', B], { background: 2, backgroundKinds: ['shell', 'monitor'], backgroundAt: 1,
+    messages: [{ id: 'source', role: 'assistant', text: 'NATIVE 中文 original' }] })] };
+  const before = JSON.stringify(value), result = project(value, { language: 'en' }, true, 10000), person = result.people[0];
+  assert.equal(person.facts.state, 'Background tasks running · 2 (Command 1, Monitor 1)');
+  assert.equal(person.paintFacts('zh').state, '后台任务在跑 · 2 项（命令 1、监视 1）');
+  assert.equal(person.paintFacts('en').freshness, person.facts.freshness);
+  assert.deepEqual(person.spaces.map(room => room.id), ['shared', B]); assert.equal(person.excerpt.text, 'NATIVE 中文 original');
+  assert.equal(result.total, 1); assert.equal(result.memberships, 2); assert.equal(JSON.stringify(value), before);
+});
+
+test('real display bindings repaint panorama labels without replacing its focused control, raw source node or scroll', () => {
+  const binding = require('./fixtures/locale-ui.cjs')('zh');
+  class Element {
+    constructor(tag) { this.tagName = tag.toUpperCase(); this.ownerDocument = doc; this.children = []; this.dataset = {}; this.attrs = new Map(); this.classList = { add() {} }; this.clientHeight = 0; this.scrollTop = 0; this._text = ''; }
+    set textContent(value) { this._text = String(value); this.children = []; this.firstChild = value ? { textContent: String(value), parentElement: this } : null; }
+    get textContent() { return this._text || this.children.map(child => child.textContent).join(''); }
+    setAttribute(key, value) { this.attrs.set(key, String(value)); }
+    getAttribute(key) { return this.attrs.get(key) ?? null; }
+    hasAttribute(key) { return this.attrs.has(key); }
+    removeAttribute(key) { this.attrs.delete(key); }
+    addEventListener() {}
+    append(...nodes) { for (const node of nodes) { node.remove(); node.parentElement = this; this.children.push(node); } this.firstChild = this.children[0] || null; }
+    insertBefore(node, before) { if (node === before) return; node.remove(); node.parentElement = this; const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, node); this.firstChild = this.children[0] || null; }
+    replaceChildren(...nodes) { for (const node of this.children) node.parentElement = null; this.children = []; this._text = ''; this.append(...nodes); }
+    remove() { if (this.parentElement) { const list = this.parentElement.children; list.splice(list.indexOf(this), 1); this.parentElement = null; } }
+    querySelectorAll(selector) {
+      assert.equal(selector, '[data-naw-i18n-bound]'); const found = [];
+      const visit = element => { for (const child of element.children) { if (child.hasAttribute('data-naw-i18n-bound')) found.push(child); visit(child); } };
+      visit(this); return found;
+    }
+  }
+  const doc = { createElement: tag => new Element(tag), getSelection: () => null, addEventListener() {}, activeElement: null };
+  const host = new Element('div'), api = create({ host, display: binding.ui.display, language: binding.ui.language, view: { spaceId: 'shared' } });
+  const record = session('S', ['shared'], { background: 2, backgroundKinds: ['shell', 'monitor'], backgroundAt: 1 });
+  const data = { rooms: [{ id: 'shared', name: 'RAW 中文 space' }], sessions: [record] };
+  api.update(data); // First bind the owned no-excerpt fallback.
+  const row = api.reader.children[0], quote = row.children.find(child => child.tagName === 'BLOCKQUOTE');
+  const source = row.children.find(child => child.dataset.panoramaSource === 'S');
+  const body = 'NATIVE 中文 original\n{literal}'; record.messages = [{ id: 'source', role: 'assistant', text: body }];
+  api.update(data); // Native content must remove the old owned-text binding.
+  const rawNode = quote.firstChild, reference = row.children[1].children[0], referenceNode = reference.firstChild;
+  const filter = host.children[0].children.find(child => child.tagName === 'SELECT');
+  api.reader.scrollTop = 27; doc.activeElement = source;
+  doc.getSelection = () => { throw Error('Locale repaint must not rerender or navigate the original reader'); };
+  binding.setLanguage('en'); binding.ui.display.refresh(host);
+  assert.equal(source.textContent, 'View original'); assert.equal(row.children[0].children[1].textContent, 'Background tasks running · 2 (Command 1, Monitor 1)');
+  assert.equal(filter.children[0].textContent, 'All spaces'); assert.equal(filter.value, 'shared');
+  assert.equal(quote.textContent, body); assert.equal(quote.firstChild, rawNode);
+  assert.equal(reference.textContent, 'RAW 中文 space'); assert.equal(reference.firstChild, referenceNode);
+  assert.equal(api.reader.children[0], row); assert.equal(doc.activeElement, source); assert.equal(api.reader.scrollTop, 27);
+});
+
 test('filtering retains the full denominator and every original membership', () => {
   const state = { rooms, sessions: [session('S', ['shared', B]), session('T', ['shared']), session('U', [B])] };
   const a = project(state, { spaceId: 'shared' });

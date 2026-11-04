@@ -4265,3 +4265,29 @@ is still rendered raw. That T-60 gap is recorded, not repaired or hidden here.
 Post-task strict signature is confirmed by a separate actual exit receipt.
 The ordinary visible update preserves identities/drafts and old backends;
 daily visual feedback and the full dogfood milestone remain open.
+
+
+## I169 — terminal copying, retained inputs and interface-language continuation
+
+This batch preserves the reviewed terminal-copy cancellation repair, the retained
+Claude input rows and the original human-input wake boundary through adapter
+rehydration. Source reviews are reused only for exact patches. The sole
+behavioral merge repair is the optional display reason passed by
+`pauseParticipant`: a known application approval reason now retains its bounded,
+validated notice metadata inside the cancellation wrapper. Native text, unknown
+reasons, the original cancellation body and dispatch guards are unchanged.
+Stale or mismatched metadata cannot replace a raw reason. The new source
+counterexample fails before the repair and passes afterward.
+
+A test-only conflict incorrectly assigned a turn-boundary expectation to an
+approval observation boundary. Its correction is recorded separately from the
+actual dropped-metadata defect; correcting the assertion alone was insufficient.
+Combined source checks pass 2,510 tests with no failures or skips. Twenty isolated
+bilingual GUI groups cover existing dialogs, menu facts, raw text/selection,
+unsent drafts, images, compact views and renderer reload. Earlier operator
+failures remain evidence: a history page required the existing jump-to-latest
+action, and a malformed synthetic PNG was correctly rejected by the decoder.
+Neither was treated as a product repair. No provider, native CLI, product-model,
+OS clipboard or external-viewer action was used. These source checks do not prove
+native provenance, physical input, a real service restart or the whole dogfood
+goal. Signed acceptance and the independent integration checkpoint remain open.

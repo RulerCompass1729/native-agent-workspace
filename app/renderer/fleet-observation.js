@@ -1,7 +1,10 @@
 // Observed native events are a partial view, never a fleet inventory or a
 // completion/permission signal. Reading them must not launch or query an agent.
 (function (target) {
-  function observedFleet(record, connected = true) {
+  const locale = typeof module !== 'undefined' && module.exports ? require('../ui-locale.js') : target.nativeWorkspaceLocale;
+  const defaultText = (key, params) => locale.format('zh', key, params);
+  function observedFleet(record, connected = true, text = defaultText) {
+    text ||= defaultText;
     const entries = new Map();
     const live = connected && !record.backendUnavailable && !record.transportDisconnected &&
       !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
@@ -19,7 +22,7 @@
       if (!id) continue;
       const before = entries.get(id);
       entries.delete(id); // A later lifecycle event belongs in the recent list.
-      entries.set(id, { id, name: event.name || before?.name || '原生子任务',
+      entries.set(id, { id, name: event.name || before?.name || text('fleet.childFallback'),
         model: event.model || before?.model || '', time: event.time,
         status: live && event.stale === false ? status : 'unknown' });
     }
@@ -31,8 +34,9 @@
   // The latest native turn-end report lists in-flight background work of the
   // process that sent it. Only whitelisted type labels are shown, never task text.
   // A Claude turn that ended without a report (for example an interrupt) leaves it unconfirmed.
-  const workLabels = { shell: '命令', subagent: '子 agent', monitor: '监视', workflow: '工作流' };
-  function backgroundWork(record, connected = true) {
+  const workLabels = { shell: 'fleet.work.shell', subagent: 'fleet.work.subagent', monitor: 'fleet.work.monitor', workflow: 'fleet.work.workflow', other: 'fleet.work.other' };
+  function backgroundWork(record, connected = true, text = defaultText) {
+    text ||= defaultText;
     const live = connected && !record.backendUnavailable && !record.transportDisconnected &&
       !['disconnected', 'recoverable', 'ended', 'stopping'].includes(record.state);
     const unconfirmed = live && record.backgroundStale === true;
@@ -40,31 +44,32 @@
     const count = reported ? record.background : 0;
     const kinds = new Map();
     // Type detail only when it accounts for every reported item.
-    if (Array.isArray(record.backgroundKinds) && record.backgroundKinds.length === count) for (const kind of record.backgroundKinds) {
-      const label = Object.hasOwn(workLabels, kind) ? workLabels[kind] : '其他';
-      kinds.set(label, (kinds.get(label) || 0) + 1);
+    if (Array.isArray(record.backgroundKinds) && record.backgroundKinds.length === count) for (const reportedKind of record.backgroundKinds) {
+      const kind = Object.hasOwn(workLabels, reportedKind) ? reportedKind : 'other';
+      kinds.set(kind, (kinds.get(kind) || 0) + 1);
     }
-    const detail = [...kinds].map(([label, n]) => kinds.size > 1 ? `${label} ${n}` : label).join('、');
-    return { reported, unconfirmed, count, text: count ? `后台任务在跑 · ${count} 项${detail ? `（${detail}）` : ''}` : unconfirmed ? '后台状态待核对' : '' };
+    const detail = [...kinds].map(([kind, n]) => { const label = text(workLabels[kind]); return kinds.size > 1 ? `${label} ${n}` : label; }).join(text('context.rosterSeparator'));
+    return { reported, unconfirmed, count, text: count ? text('fleet.workRunning', { count, detail: detail ? text('fleet.workDetail', { detail }) : '' }) : unconfirmed ? text('fleet.workUnconfirmed') : '' };
   }
   // A later turn-end report settles child records that were already unconfirmed.
   // It never ends a child observed as running: teammates may not be listed in that report.
-  function currentFleet(record, connected = true) {
-    const fleet = observedFleet(record, connected), work = backgroundWork(record, connected);
+  function currentFleet(record, connected = true, text = defaultText) {
+    const fleet = observedFleet(record, connected, text), work = backgroundWork(record, connected, text);
     const after = Number.isFinite(record.backgroundAt) ? record.backgroundAt : -Infinity;
     const children = fleet.children.filter(child => !(work.reported && child.status === 'unknown' && Number.isFinite(child.time) && child.time <= after));
     return { ...fleet, children, settled: children.length < fleet.children.length, work,
       running: children.filter(c => c.status === 'running').length, unknown: children.filter(c => c.status === 'unknown').length };
   }
   // `text` renders catalog keys in the display language (T-60); without it the Chinese originals stay.
-  function fleetStatus(record, base, connected = true, text) {
-    const fleet = currentFleet(record, connected), idle = record.state === 'idle';
+  function fleetStatus(record, base, connected = true, text = defaultText) {
+    text ||= defaultText;
+    const fleet = currentFleet(record, connected, text), idle = record.state === 'idle';
     // A mixed fleet keeps both facts: running children never hide unknown ones.
-    const children = (fleet.running ? text ? text('fleet.running', { count: fleet.running }) : ` · ${fleet.running} 个子任务进行中` : '') + (fleet.unknown ? text ? text('fleet.unknown') : ' · 子任务状态待核对' : '');
+    const children = (fleet.running ? text('fleet.running', { count: fleet.running }) : '') + (fleet.unknown ? text('fleet.unknown') : '');
     if (idle && fleet.work.count) return fleet.work.text;
     if (idle && fleet.work.unconfirmed) return fleet.work.text + children;
     if (!fleet.observed || fleet.settled && !fleet.children.length) return base;
-    return (idle ? text ? text('fleet.rootReady') : '主会话就绪' : base) + children;
+    return (idle ? text('fleet.rootReady') : base) + children;
   }
   // Green means idle with nothing reported in flight. Codex has no turn-end report, so its dot is unchanged.
   function workTone(record, connected = true) {

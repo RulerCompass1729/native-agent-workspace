@@ -1,6 +1,7 @@
 // NAW's Claude compatibility plugin for a retained session's folder. Claude
 // loads it from <cwd>/.claude/skills, so the daemon also refreshes NAW's own
 // byte-exact old copy before it starts Claude there (T-100).
+const { uiError } = require('./ui-errors.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -14,7 +15,7 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     if (existingOnly && !fs.existsSync(directory)) return false;
     if (!existingOnly) try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
     const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件目录不可安全写入，原会话未改动。');
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw uiError("error.legacy.pluginDirectoryUnwritable");
   }
   const files = new Map();
   for (const name of ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'hooks/register.js']) {
@@ -28,7 +29,7 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     if (existingOnly && !fs.existsSync(parent)) return false;
     if (!existingOnly) try { fs.mkdirSync(parent, { mode: 0o700 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
     const stat = fs.lstatSync(parent);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('本地插件路径不安全，未写入插件文件。');
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw uiError("error.legacy.pluginPathUnsafe");
   }
   // Upgrade only our byte-exact previous hook. Edited copies remain untouched.
   const previousHooks = new Set(['3bac8e70b12519f6746dbeb87113422d482bbd8461a834ad5af165a773b920b7','1c56f6056688ea2b028e6664cd947dfc05391d1734e06795e954fded4b467a0f','45b245ee982a380e9f2ce43b5d17e3520e3d8864f9202a513dcecd9b42c51288','83db754f697e95c097fef44653b6bd682dd9e12099f28cf741173b56ef453872','791b1c310e31533798773b78d0fc03910e4a32218bad131c668d540921bba0b1','c01128b905d1d2270fe511e6e0774737667ba2ff07c745f6887aaf3cf6912ec8','f4edcbf3e0dc27aface203fc3ce13888ec986562f58bce9e591cf71be6538aec','6fd9a5650c74e5ee1cbde98efdb6ba33bc83dae1eeacbef3e86c614aabca785a','ea38c6320e515aea2150db84e39bc2a817d57d68974661422e419617cdc14887','add32628c2d9b306efc391e28801aa3b339520451a659101d6a6689c6e688fb3','959ab599a77d3a69a06c388eafe77cdfb57666defacb568cba28be957dba40e0','ba3228157c0b6c0288c6df9f389c9624efde43535f1a6c2fb3600846064c7de8',
@@ -69,11 +70,11 @@ function installPlugin(cwd, { existingOnly = false } = {}) {
     const filename = path.join(directory, name);
     if (!fs.existsSync(filename)) continue;
     const stat = fs.lstatSync(filename);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('已有同名插件内容不同，未覆盖；原会话继续保留。');
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw uiError("error.legacy.pluginConflict");
     const prior = fs.readFileSync(filename, 'utf8');
     if (prior === content) continue;
     if (name === 'hooks/register.js' && previousHooks.has(crypto.createHash('sha256').update(prior).digest('hex'))) upgrades.add(name);
-    else throw Error('已有同名插件内容不同，未覆盖；原会话继续保留。');
+    else throw uiError("error.legacy.pluginConflict");
   }
   for (const [name, content] of files) {
     const filename = path.join(directory, name);

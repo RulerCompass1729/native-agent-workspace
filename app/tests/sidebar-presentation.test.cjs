@@ -154,3 +154,27 @@ test('changing language keeps an open facts menu and its original copy action on
   select('copy-id'); assert.deepEqual(h.copied, [h.record.id]); assert.equal(h.record.nativeId, original);
   h.ctx.disconnected = true; h.ctx.renderSessions(); assert.equal(h.ctx.sessionMenu, null);
 });
+
+test('English sidebar background facts appear once and keep their original count and tone', () => {
+  const record = row({ provider: 'claude', background: 2, backgroundKinds: ['shell', 'monitor'], backgroundAt: Date.now() });
+  const before = JSON.stringify(record), h = harness(record); h.ctx.setLanguage('en');
+  const value = h.present(), expected = 'Background tasks running · 2 (Command 1, Monitor 1)';
+  assert.equal(value.compact, expected);
+  assert.ok(value.full.startsWith(expected)); assert.doesNotMatch(value.full, /后台任务/);
+  assert.equal(value.compact.split('Background tasks running').length - 1, 1);
+  assert.equal(value.tone, 'idle'); assert.equal(value.workTone, 'bg-work'); assert.equal(value.marker, '…');
+  assert.equal(JSON.stringify(record), before); assert.deepEqual(h.actions, []);
+});
+
+test('existing session-menu fact readers change language without reopening or rerunning an action', () => {
+  const h = harness(row({ provider: 'claude', nativeInputRequired: true, liveDraft: 'UNSENT 中文' })); h.open();
+  const opened = h.ctx.sessionMenu, items = h.menus[0].items, facts = items.filter(item => item.type === 'label'), select = h.menus[0].onSelect;
+  const before = JSON.stringify(h.record), original = facts.map(item => item.labelRead());
+  assert.ok(original.some(text => text.includes('Claude 已停止本轮')));
+  h.ctx.setLanguage('en'); const translated = facts.map(item => item.labelRead());
+  assert.ok(translated.some(text => text.includes('Claude stopped this turn'))); assert.ok(translated.includes('Independent session'));
+  assert.ok(translated.includes(h.record.name)); assert.ok(translated.includes('NAW ' + h.record.id));
+  assert.equal(h.ctx.sessionMenu, opened); assert.equal(h.menus.length, 1); assert.equal(h.menus[0].items, items); assert.equal(h.menus[0].onSelect, select);
+  assert.equal(h.updates.length, 0); assert.equal(JSON.stringify(h.record), before); assert.deepEqual(h.actions, []); assert.deepEqual(h.copied, []);
+  h.ctx.setLanguage('zh'); assert.deepEqual(facts.map(item => item.labelRead()), original);
+});

@@ -10,3 +10,13 @@ test('explicit parent edges group interleaved streams and nested replies; cycles
   assert.equal(index.roots.get('orphan'), 'orphan'); assert.equal(index.roots.get('x'), 'x');
   for (const bad of [42, {}, 'x'.repeat(101), 'bad\nvalue']) assert.throws(() => replyReference(bad));
 });
+
+test('invalid reply identity carries display metadata while the standalone data contract keeps its original fallback', () => {
+  const fs = require('node:fs'), vm = require('node:vm'), locale = require('../ui-locale.js');
+  assert.throws(() => replyReference('bad\nreply'), error => error.message === '无效的回复关联。' && locale.errorText('en', error) === 'Invalid reply reference.');
+  const source = fs.readFileSync(require.resolve('../room-threads.js'), 'utf8'), standalone = {};
+  vm.runInNewContext(source, standalone);
+  assert.throws(() => standalone.nativeWorkspaceThreads.replyReference(42), error => error.message === '无效的回复关联。' && !error.uiMessage);
+  const display = { nativeWorkspaceLocale: locale }; vm.runInNewContext(source, display);
+  assert.throws(() => display.nativeWorkspaceThreads.replyReference({}), error => locale.errorText('en', error) === 'Invalid reply reference.');
+});

@@ -11,9 +11,7 @@ const { CAPABILITY: PEER_HANDOFFS, DIRECTED: PEER_DIRECTED, identity: peerIdenti
 const spaces = require('./collaboration-spaces.cjs');
 const backendRooms = state => state.rooms || [state.room];
 const backendRoom = (state, id) => backendRooms(state).find(r => (r?.id || 'shared') === id);
-const OLD_BACKEND_SPACES = '这个会话连着旧版后台，不能加入或发送到其他协作空间；没有加入或发送，原会话与草稿保留。这个后台上的会话都结束后，可在侧栏「旧版会话」里核对并更新连接。';
 // An older backend cannot verify an undo proof even for the original space.
-const OLD_BACKEND_UNDO = '这个会话连着旧版后台，无法核对这次撤销，没有执行；原会话与草稿保留。需要时可从会话菜单选择离开。';
 const SPACE_METHODS = new Set(['join', 'forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory']);
 let creationQueue = Promise.resolve();
 const controls = new Map();
@@ -355,19 +353,19 @@ class WorkspaceClient extends EventEmitter {
     if (method === 'pauseSpace') return this.callSpace(args[0], 'pause', []);
     return this.callScoped('shared', method, args);
   }
-  // Why clearing a space's shared record would be refused, across every backend ('' when it would not be). The clear
+  // A typed refusal across every backend ('' when clear would not be refused). The clear
   // below checks this again after its refresh; the window asks first, so a clear that will be refused is refused
   // before the person is asked to confirm it (T-149). Reading fresh state is the only side effect: no control
   // counters move. A closed service or a connection being updated or replaced throws, as the clear itself would.
   clearRefusal(roomId, state, entries = this.entries) {
-    if (roomId !== 'shared') return entries.some(e => { const run = backendRoom(e.state, roomId)?.run; return run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed; }) ? '请先核对这个空间的交接已暂停，再清除记录。' : '';
-    if (!state.capabilities.includes('clearSharedHistory') || state.room.run?.status === 'running') return '请先暂停交接，并确认各后台支持清除记录。';
-    if (this.entries.some(e => backendRooms(e.state).some(r => r?.run?.pausePending || r?.run?.pauseUnconfirmed))) return '请先核对各后台已撤销后续交接授权，再清除共享记录。';
+    if (roomId !== 'shared') return entries.some(e => { const run = backendRoom(e.state, roomId)?.run; return run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed; }) ? uiError('error.client.pauseBeforeClear') : '';
+    if (!state.capabilities.includes('clearSharedHistory') || state.room.run?.status === 'running') return uiError('error.client.pauseAndCheckClearSupport');
+    if (this.entries.some(e => backendRooms(e.state).some(r => r?.run?.pausePending || r?.run?.pauseUnconfirmed))) return uiError('error.main.clearNeedsLeaseRevocation');
     return '';
   }
   async clearSharedHistoryProblem(roomId = 'shared') {
-    if (!spaces.roomId(roomId)) return '无效协作空间操作。';
-    if (this.socket.destroyed) throw new Error('本地服务未连接；请重新连接，输入不会自动重发。');
+    if (!spaces.roomId(roomId)) return uiError('error.invalidSpaceAction');
+    if (this.socket.destroyed) throw uiError("error.client.serviceNotConnected");
     const entries = this.entries.filter(e => roomId === 'shared' || e.state.capabilities?.includes('collaborationSpacesV1'));
     const guards = entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
     const state = await this.refresh(roomId); guards.forEach(check => check());
@@ -379,7 +377,7 @@ class WorkspaceClient extends EventEmitter {
   }
   invoke(entry, roomId, method, args, scopedPause = false) {
     if (roomId === 'shared' && !(method === 'join' && args[2] !== undefined) && (!scopedPause || !entry.state.capabilities?.includes('collaborationSpacesV1'))) return entry.client.call(method, ...args);
-    if (!entry.state.capabilities?.includes('collaborationSpacesV1')) throw Error(roomId === 'shared' ? OLD_BACKEND_UNDO : OLD_BACKEND_SPACES);
+    if (!entry.state.capabilities?.includes('collaborationSpacesV1')) throw uiError(roomId === 'shared' ? 'error.client.legacyUndoUnsupported' : 'error.client.legacySpaceUnsupported');
     const ids = method === 'run' ? args[0] : ['forward', 'queueShared', 'steerShared'].includes(method) ? [args[0]] : [];
     const expected = Object.fromEntries(ids.map(id => [id, spaces.membershipRevision(entry.state.sessions.find(s => s.id === id), roomId)]));
     return entry.client.call('spaceAction', roomId, method, args, expected);
@@ -410,7 +408,7 @@ class WorkspaceClient extends EventEmitter {
       const targets = ['pause', 'clearSharedHistory'].includes(method)
         ? this.entries.filter(e => e.state.capabilities?.includes('collaborationSpacesV1'))
         : (method === 'run' ? args[0] : [args[0]]).map(id => this.route(id));
-      if (targets.some(e => !e.state.capabilities?.includes('collaborationSpacesV1'))) throw Error(OLD_BACKEND_SPACES);
+      if (targets.some(e => !e.state.capabilities?.includes('collaborationSpacesV1'))) throw uiError('error.client.legacySpaceUnsupported');
     }
     if (method === 'wakePolicy') {
       const entry = args[0] === null ? this.entries.find(e => e.state.capabilities?.includes('agentWakeV1')) : this.route(args[0]);
@@ -666,7 +664,7 @@ class WorkspaceClient extends EventEmitter {
         const entries = this.entries.filter(e => e.state.capabilities?.includes('collaborationSpacesV1'));
         const guards = entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
         const refreshed = await this.refresh(roomId); guards.forEach(check => check());
-        const refusal = this.clearRefusal(roomId, refreshed, entries); if (refusal) throw Error(refusal);
+        const refusal = this.clearRefusal(roomId, refreshed, entries); if (refusal) throw refusal;
         const results = await Promise.allSettled(entries.map(e => this.invoke(e, roomId, 'clearSharedHistory', [])));
         if (results.some(r => r.status === 'rejected')) throw uiError("error.client.clearPartiallyUnconfirmed");
         await this.refresh(roomId); return results.some(r => r.value?.imagesLeft) ? { imagesLeft: true } : true;
@@ -676,7 +674,7 @@ class WorkspaceClient extends EventEmitter {
       const guards = this.entries.map(e => this.operationGuard(e)); guards.forEach(check => check());
       const state = await this.refresh(roomId);
       if (method === 'shutdown' && state.sessions.some(s => !['ended', 'background'].includes(s.state))) throw uiError("error.endNativeSessionsBeforeBackend");
-      if (method === 'clearSharedHistory') { const refusal = this.clearRefusal(roomId, state); if (refusal) throw new Error(refusal); }
+      if (method === 'clearSharedHistory') { const refusal = this.clearRefusal(roomId, state); if (refusal) throw refusal; }
       // These are explicit user actions. Partial failure must remain visible.
       guards.forEach(check => check());
       const results = await Promise.allSettled(this.entries.map(e => method === 'clearSharedHistory'

@@ -1022,7 +1022,7 @@ class Claude extends EventEmitter {
         // structured submission result acknowledges our own sends separately.
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
         this.lastPromptId = event.prompt_id || null;
-        const promptAlreadyAnnounced = Boolean(event.prompt_id && this.announcedPrompts?.has(event.prompt_id));
+        const promptAlreadyAnnounced = Boolean(event.prompt_id && (this.announcedPrompts?.has(event.prompt_id) || this.firstPromptRow(event.prompt_id)));
         if (event.prompt_id) {
           this.announcedPrompts ||= new Set(); this.announcedPrompts.add(event.prompt_id); this.announceCount = (this.announceCount || 0) + 1;
           if (this.announcedPrompts.size > 64) this.announcedPrompts.delete(this.announcedPrompts.values().next().value);
@@ -1090,12 +1090,15 @@ class Claude extends EventEmitter {
       case 'SessionEnd': this.contextEnding(event.reason); break;
     }
   }
+  firstPromptRow(id) {
+    return this.record.messages?.find(m => m.id === `claude-prompt-${id}` && m.role === 'user' && m.origin === 'native' &&
+      this.record.nativeId && m.nativeId === this.record.nativeId && typeof m.text === 'string');
+  }
   promptFirstText(id, text) {
     this.promptTexts ||= new Map();
     if (!this.promptTexts.has(id)) {
       // A cold adapter can recover the original prompt's text, but only from this native context.
-      const saved = this.record.messages?.find(m => m.id === `claude-prompt-${id}` && m.role === 'user' && m.origin === 'native' &&
-        this.record.nativeId && m.nativeId === this.record.nativeId && typeof m.text === 'string');
+      const saved = this.firstPromptRow(id);
       this.promptTexts.set(id, saved ? saved.text : text);
       while (this.promptTexts.size > 64) this.promptTexts.delete(this.promptTexts.keys().next().value);
     }

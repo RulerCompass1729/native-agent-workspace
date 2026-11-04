@@ -42,7 +42,7 @@
       const message = { version: 1, key: value.key, params: Object.freeze(Object.fromEntries(entries)) };
       const hasCause = Object.hasOwn(value, 'cause'), hasParts = Object.hasOwn(value, 'parts');
       if (hasCause || hasParts || Object.hasOwn(value, 'causeParam') || Object.hasOwn(value, 'separator')) {
-        if (prefix !== 'error.' || typeof value.causeParam !== 'string' || !names.includes(value.causeParam)) return null;
+        if (typeof value.causeParam !== 'string' || !names.includes(value.causeParam) || prefix === 'notice.' && hasParts) return null;
         if (hasCause === hasParts) return null;
         if (hasCause) {
           if (Object.hasOwn(value, 'separator')) return null;
@@ -50,7 +50,7 @@
           if (!cause || !matchesOriginal(cause, message.params[value.causeParam])) return null;
           message.cause = cause;
         } else {
-          if (!Array.isArray(value.parts) || !value.parts.length || value.parts.length > 64 || !['\n', ' '].includes(value.separator)) return null;
+          if (!Array.isArray(value.parts) || !value.parts.length || value.parts.length > 64 || !['\n', ' ', '；'].includes(value.separator)) return null;
           const parts = [];
           for (const part of value.parts) {
             if (--budget.remaining < 0 || !part || typeof part.message !== 'string' || part.message.length > 16000) return null;

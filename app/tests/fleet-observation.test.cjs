@@ -117,3 +117,17 @@ test('a mixed observed fleet retains running and unknown facts together in the s
   assert.equal(observedFleet(s).running, 1); assert.equal(observedFleet(s).unknown, 1);
   assert.equal(fleetStatus(s, '就绪'), '主会话就绪 · 1 个子任务进行中 · 子任务状态待核对');
 });
+
+test('background type labels use the supplied display language without changing counts, lifecycle facts or native names', () => {
+  const locale = require('../ui-locale.js'), { currentFleet } = require('../renderer/fleet-observation.js');
+  const value = { provider: 'claude', state: 'idle', background: 2, backgroundKinds: ['shell', 'monitor'], backgroundAt: 1,
+    fleet: [{ event: 'SubagentStart', id: 'named', name: 'RAW 中文 child', stale: false, time: 2 }, { event: 'SubagentStart', id: 'unnamed', stale: false, time: 2 }] };
+  const before = JSON.stringify(value), text = (key, params) => locale.format('en', key, params);
+  const english = currentFleet(value, true, text), chinese = currentFleet(value);
+  assert.equal(english.work.text, 'Background tasks running · 2 (Command 1, Monitor 1)');
+  assert.equal(chinese.work.text, '后台任务在跑 · 2 项（命令 1、监视 1）');
+  assert.equal(english.work.count, 2); assert.equal(english.running, 2); assert.equal(english.unknown, 0);
+  assert.equal(english.children[0].name, 'RAW 中文 child'); assert.equal(english.children[1].name, 'Native subtask');
+  assert.equal(fleetStatus(value, 'Ready', true, text), english.work.text);
+  assert.equal(workTone(value), 'bg-work'); assert.equal(JSON.stringify(value), before);
+});

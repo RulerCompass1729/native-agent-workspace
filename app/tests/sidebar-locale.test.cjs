@@ -46,7 +46,7 @@ function fixture() {
   });
   function load(from, to) { const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length); assert.ok(a >= 0 && b > a, from); vm.runInContext(renderer.slice(a, b), context); }
   load('const uiNode =', 'let state,'); load('function sessionTime(', 'function renderDraftRecovery(');
-  load('function sidebarSessions(', 'async function restoreArchivedSession('); load('function renderSpaceNavigation(', 'function openSpaceCreate('); load('function createReadiness(', 'function renderArchives('); vm.runInContext(renderer.split('\n').find(line => line.startsWith('const CREATE_SPACE_HELP =')) + '\n' + ['createSpaceChoice', 'renderCreateSpaces'].map(name => renderer.match(new RegExp('function ' + name + '\\([\\s\\S]*?\\n}'))[0]).join('\n'), context); $('create-space-kind').value = 'independent';
+  load('function sidebarSessions(', 'async function restoreArchivedSession('); load('function renderSpaceNavigation(', 'function openSpaceCreate('); load('function createReadiness(', 'function renderArchives('); vm.runInContext(['createSpaceChoice', 'renderCreateSpaces'].map(name => renderer.match(new RegExp('function ' + name + '\\([\\s\\S]*?\\n}'))[0]).join('\n'), context); $('create-space-kind').value = 'independent';
   return { $, state, people, root, calls, layoutWrites, document, context, load, run: code => vm.runInContext(code, context), refresh(value) { language = value; display.refresh(root); } };
 }
 
@@ -77,6 +77,40 @@ test('create repaint keeps takeover ID, explicit Git and permission choices with
   assert.equal(f.$('open-native-history').textContent, 'Take over this Claude session');
   assert.equal(f.$('create-permission-note').textContent, locale.format('en', 'create.directoryCopy') + ' ' + locale.format('en', 'create.permissionsSkipped'));
   f.refresh('zh'); assert.equal(f.$('create-permission-note').textContent, locale.format('zh', 'create.directoryCopy') + locale.format('zh', 'create.permissionsSkipped'));
+});
+
+test('space choice labels repaint in place while keeping the selected raw workspace and draft', () => {
+  const f = fixture(); f.$('create-dialog').open = true; f.$('create-space-kind').value = 'existing';
+  f.run('renderCreateSpaces(); createSpaceReadiness()');
+  const select = f.$('create-space-existing'), placeholder = select.children[0], rawOption = select.children[1];
+  select.value = 'shared'; f.$('create-space-name').value = 'UNSENT 中文'; f.document.activeElement = select;
+  f.refresh('en');
+  assert.equal(select.children[0], placeholder); assert.equal(placeholder.textContent, 'Choose a space');
+  assert.equal(select.children[1], rawOption); assert.equal(rawOption.textContent, 'RAW SPACE 中文');
+  assert.equal(select.value, 'shared'); assert.equal(f.$('create-space-name').value, 'UNSENT 中文'); assert.equal(f.document.activeElement, select);
+  assert.equal(f.$('create-space-help').textContent, locale.format('en', 'create.spaceHelpForExisting'));
+  f.$('create-space-kind').value = 'independent'; f.run('createSpaceReadiness()'); f.refresh('zh');
+  assert.equal(f.$('create-space-help').textContent, ''); assert.equal(f.$('create-space-help').hasAttribute('data-naw-i18n-bound'), false);
+  // Exercise the actual close handler: a later locale refresh must not resurrect discarded help.
+  f.$('create-space-kind').value = 'existing'; f.run('createSpaceReadiness()');
+  const dialog = f.$('create-dialog'), listeners = new Map();
+  dialog.addEventListener = (type, listener) => listeners.set(type, listener); f.document.querySelectorAll = () => [dialog];
+  f.load("for (const dialog of document.querySelectorAll('dialog')) {", "$('setup-button').onclick");
+  dialog.open = false; listeners.get('close')(); f.refresh('en');
+  assert.equal(f.$('create-space-help').textContent, ''); assert.equal(f.$('create-space-help').hasAttribute('data-naw-i18n-bound'), false);
+  assert.deepEqual(f.calls, []);
+});
+
+test('the independent group disclosure keeps its localized name in both accessible labels without a layout rewrite', () => {
+  const f = fixture(); f.people[0].roomIds = [];
+  f.context.crypto = require('node:crypto'); f.$('session-list').closest = () => null;
+  f.context.sidebarCollapsedGroups = new Set(['independent']); f.run("sidebarView = 'grouped'; renderSessions()");
+  const group = f.context.sidebarGroups.get(''), toggle = group.toggle, before = f.layoutWrites.length;
+  assert.equal(toggle.getAttribute('aria-label'), '展开独立会话'); assert.equal(toggle.getAttribute('title'), '展开独立会话');
+  f.document.activeElement = toggle; f.refresh('en');
+  assert.equal(toggle.getAttribute('aria-label'), 'Expand Independent session'); assert.equal(toggle.getAttribute('title'), 'Expand Independent session');
+  assert.equal(f.document.activeElement, toggle); assert.equal(f.layoutWrites.length, before); assert.equal(f.context.sidebarGroups.get('').toggle, toggle);
+  f.refresh('zh'); assert.equal(toggle.getAttribute('aria-label'), '展开独立会话'); assert.equal(toggle.getAttribute('title'), '展开独立会话'); assert.deepEqual(f.calls, []);
 });
 
 test('archived rows repaint without reopening a process or replacing focused restore controls', () => {

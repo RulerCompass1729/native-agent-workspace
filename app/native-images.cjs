@@ -155,7 +155,7 @@ function removeCachedImages(dataDir, sessionId, keep = new Set()) {
     const base = path.join(dataDir, 'native-image-cache'), name = cacheFolderName(sessionId), folder = path.join(base, name);
     for (const directory of [base, folder]) {
       let stat; try { stat = fs.lstatSync(directory); } catch (error) { if (error.code === 'ENOENT') return result; throw error; }
-      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw Error('原生图片缓存目录无法核验。');
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) throw uiError("error.nativeImages.cacheDirectoryUnverifiable");
     }
     for (const entry of fs.readdirSync(folder)) {
       const file = path.join(folder, entry), stat = fs.lstatSync(file);

@@ -109,7 +109,7 @@ async function openMessageFile({ snapshot, openPath, isCurrent = () => true }, s
     if (!sameFile(opened, after) || resolved !== canonical) throw uiError("error.files.changedBeforeOpen");
     current();
     const error = await openPath(canonical);
-    if (error !== '') throw Error(typeof error === 'string' && error ? error : '系统没有确认接收打开请求，请先检查系统窗口。');
+    if (error !== '') throw (typeof error === 'string' && error ? Error(error) : uiError("error.localOpenUnconfirmed"));
     // This is an OS dispatch receipt, not proof that another app displayed it.
     return { accepted: true, path: canonical, line: line ?? null, lineNavigation: false };
   } catch (error) {

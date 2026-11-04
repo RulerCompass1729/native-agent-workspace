@@ -15,9 +15,9 @@ function harness() {
     useEffect(effect, deps) { const index = cursor++, prior = hooks[index]; if (!prior || !deps || deps.some((x, n) => x !== prior.deps[n])) { prior?.cleanup?.(); hooks[index] = { deps: deps || [] }; effects.push(() => { hooks[index].cleanup = effect(); }); } },
     useLayoutEffect(effect, deps) { return this.useEffect(effect, deps); },
   };
-  const window = { workspace: { openMessageFile: (...args) => { calls.push(args); return Promise.resolve({ accepted: true, lineNavigation: false }); }, openExternal: () => Promise.resolve() } };
+  const window = { nativeWorkspaceLocale: locale, workspace: { openMessageFile: (...args) => { calls.push(args); return Promise.resolve({ accepted: true, lineNavigation: false }); }, openExternal: () => Promise.resolve() } };
   class Element {}
-  const renderComponent = vm.runInNewContext(`(${component})`, { React, window, MarkdownDelegateProvider: Provider, MarkdownText: Markdown, Element, ui: {}, subscribeLocale: () => () => {}, localeSnapshot: () => ({ active: language }), t: (key, params) => locale.format(language, key, params) });
+  const renderComponent = vm.runInNewContext(`(${component})`, { React, window, MarkdownDelegateProvider: Provider, MarkdownText: Markdown, Element, ui: {}, errorText: error => locale.errorText(language, error), subscribeLocale: () => () => {}, localeSnapshot: () => ({ active: language }), t: (key, params) => locale.format(language, key, params) });
   const find = (tree, type) => tree?.type === type ? tree : tree?.children?.map(child => find(child, type)).find(Boolean);
   return { calls, states, window, Element, setLanguage(value) { language = value; }, render(source, text = '[Report](report.md)') { cursor = 0; effects = []; const tree = renderComponent({ text, streaming: false, source }); for (const effect of effects) effect(); return { tree, delegate: find(tree, Provider).props, markdown: find(tree, Markdown).props }; } };
 }
@@ -58,7 +58,7 @@ test('duplicate activation is bounded and failure is contained in the originatin
 test('a current failure is visible and HTTP hover exposes the actual full URL', async () => {
   const h = harness(); h.window.workspace.openMessageFile = () => Promise.reject(Error('Missing file'));
   const current = h.render(source('a')); current.delegate.openFile('missing.md'); await flush();
-  assert.ok(h.states.some(value => value?.params?.error === 'Missing file'));
+  assert.ok(h.states.some(value => value?.error?.message === 'Missing file'));
   assert.ok(h.render(source('a')).tree.children.some(child => child?.props?.role === 'status' && child.children[0].includes('Missing file')));
   const anchor = { title: '', getAttribute: () => 'https://example.com/full/path?q=1' };
   const target = new h.Element(); target.closest = () => anchor;
@@ -75,6 +75,18 @@ test('returning to the same message does not let an older request overwrite a ne
   assert.ok(!h.states.slice(length).some(value=>value===false||typeof value==='string'&&value.includes('STALE SAME SOURCE')));
   pending[1].resolve({accepted:true,lineNavigation:false});await flush();
   assert.equal(h.states.at(-1),false);
+});
+test('an unconfirmed system receipt and typed file failure repaint without repeating either open action', async () => {
+  for (const kind of ['unconfirmed', 'typed']) {
+    const h = harness(), original = 'RAW 中文 [report](report.md)', own = require('../ui-locale.js').createError('error.files.missing');
+    h.window.workspace.openMessageFile = (...args) => { h.calls.push(args); return kind === 'unconfirmed' ? Promise.resolve(undefined) : Promise.reject(own); };
+    h.render(source('a'), original).delegate.openFile('report.md'); await flush();
+    const status = () => h.render(source('a'), original).tree.children.find(child => child?.props?.role === 'status').children[0];
+    assert.match(status(), kind === 'unconfirmed' ? /系统打开结果未确认/ : /文件/);
+    h.setLanguage('en'); assert.equal(status(), 'Could not open file: ' + (kind === 'unconfirmed' ? 'The system open result was not confirmed. Check the system window first.' : require('../ui-locale.js').errorText('en', own)));
+    assert.equal(h.render(source('a'), original).markdown.text, original); assert.equal(h.calls.length, 1); assert.equal(h.calls[0][0].nativeId, 'native-a');
+    h.setLanguage('zh'); assert.match(status(), /无法打开文件/); assert.equal(h.calls.length, 1);
+  }
 });
 test('the actual reading render updates a cached row when its message source changes', () => {
   const sourceText=fs.readFileSync(path.join(__dirname,'../renderer/reading-list.js'),'utf8');

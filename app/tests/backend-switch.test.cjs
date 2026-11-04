@@ -13,6 +13,46 @@ const claudeNew = (extra = {}) => ({ id: 'c', nativeId: 'native-c', provider: 'c
 const codexNew = (extra = {}) => ({ id: 'x', nativeId: 'native-x', provider: 'codex', name: 'Codex 秘书', state: 'idle', owner: 'view-b', terminalInputPending: false, ...extra });
 const caps = ['atomicShutdown', 'resume'];
 
+test('backend plan reasons carry exact canonical text and translate each known refusal without changing the plan', () => {
+  const locale = require('../ui-locale.js'), rawName = 'RAW 中文 <name>{reason}';
+  const cases = [
+    { state: 'working' }, { state: 'starting' }, { state: 'stopping' }, { state: 'approval' }, { state: 'disconnected' }, { state: 'error' }, { state: 'unrecognized' }, { state: 'constructor' }, { state: '__proto__' },
+    { pendingTag: 'original' }, { approval: {} }, { claudeQuestion: {} }, { capacityRecovery: { status: 'scheduled' } }, { nativeContextPending: {} }, { worktreePreparation: { status: 'pending' } },
+    { nativeId: null }, { provider: 'unrecognized' }, { background: 2 }, { scheduled: 1 }, { fleet: [{ event: 'SubagentStart', id: 'child', stale: false }] },
+    { terminalInputPending: undefined }, { terminalInputPending: true }, { fleet: [{ event: 'TeammateIdle', id: 'team' }] }, { fleet: [{ event: 'SubagentStart', id: 'child', stale: true }] }, { backgroundStale: true }, { provider: 'codex' },
+  ];
+  for (const patch of cases) {
+    const record = claudeNew({ ...patch, name: rawName }), before = JSON.stringify(record), plan = sessionPlan(record, record.state), raw = plan.block || plan.reason;
+    const uiMessage = plan.block ? plan.blockUiMessage : plan.reasonUiMessage; assert.ok(locale.displayMessage(uiMessage), JSON.stringify(patch));
+    const wire = JSON.parse(JSON.stringify({ message: raw, uiMessage })); assert.equal(locale.errorText('zh', wire), raw);
+    const english = locale.errorText('en', wire); assert.ok(english.includes(rawName)); assert.notEqual(english, raw);
+    assert.doesNotMatch(english.replace(rawName, ''), /\p{Script=Han}/u); assert.equal(JSON.stringify(record), before);
+  }
+  for (const sessions of [[claudeNew({ name: rawName, state: 'working' }), codexNew({ state: 'approval' })], [claudeNew({ name: rawName, terminalInputPending: true }), codexNew()]]) {
+    const plan = backendPlan({ capabilities: caps, servicePid: 42, sessions }), original = plan.reason, wire = JSON.parse(JSON.stringify({ message: original, uiMessage: plan.reasonUiMessage }));
+    assert.ok(locale.displayMessage(wire.uiMessage)?.parts); assert.equal(locale.errorText('zh', wire), original);
+    const english = locale.errorText('en', wire); assert.ok(english.includes(rawName)); assert.ok(english.includes('Codex 秘书')); assert.notEqual(english, original);
+    assert.doesNotMatch(english.replace(rawName, '').replace('Codex 秘书', ''), /\p{Script=Han}/u);
+    assert.equal(plan.reason, original); assert.equal(plan.auto, false);
+  }
+});
+
+test('process identity refusals preserve their guards and carry English display metadata without a process operation', () => {
+  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm'), locale = require('../ui-locale.js');
+  const source = fs.readFileSync(require.resolve('../backend-switch.cjs'), 'utf8');
+  const begin = source.indexOf('function serviceProcess('), end = source.indexOf('const psCommand =', begin);
+  assert.ok(begin > 0 && end > begin);
+  let lock = '43', commands = 0; const identity = { pid: 42, started: 1 };
+  const context = { fs: { readFileSync: () => lock }, path, uiError: locale.createError, processIdentity: () => identity };
+  vm.runInNewContext(source.slice(begin, end) + ';globalThis.check = serviceProcess;', context);
+  const command = () => { commands++; return '/fixture/backend/runtimes/v1/daemon.cjs'; };
+  assert.throws(() => context.check('/fixture/backend', 42, command), error => error.message === '后台进程记录不一致；没有结束任何进程。' && locale.errorText('en', error).includes('no processes were ended'));
+  assert.equal(commands, 0, 'A mismatched lock never reaches process command inspection');
+  lock = '42';
+  assert.throws(() => context.check('/fixture/backend', 42, () => 'unrelated process'), error => error.uiMessage?.key === 'error.backendSwitchProcessUnconfirmed');
+  assert.equal(context.check('/fixture/backend', 42, command), identity); assert.equal(commands, 1);
+});
+
 test('only a Claude session whose runtime proves nothing would be lost may move automatically', () => {
   const plan = record => sessionPlan(record, record.state);
   assert.equal(plan(claudeNew()).auto, true);

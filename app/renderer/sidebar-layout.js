@@ -1,5 +1,6 @@
 // Sidebar geometry is display metadata. It never selects or controls an agent.
 (function (global) {
+  const locale = typeof module !== 'undefined' && module.exports ? require('../ui-locale.js') : global.nativeWorkspaceLocale;
   const defaults = [5000, 3000, 2000], sashSize = 8, minimumBody = 32;
   const same = (a, b) => a.every((n, i) => n === b[i]);
   function weights(value) {
@@ -65,7 +66,7 @@
         sash.setAttribute('aria-valuemin', String(values.min));
         sash.setAttribute('aria-valuemax', String(values.max));
         if (displayTitle) displayTitle(sash, () => ({ first: label.textContent, second: other.textContent }));
-        else sash.title = `拖动调整${label.textContent}与${other.textContent}的高度；上下键调整，Home/End 到边界，双击均分`;
+        else sash.title = locale.format('zh', 'sidebar.resizeHelp', { first: label.textContent, second: other.textContent });
       });
     }
     function revealEditor() {

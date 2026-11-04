@@ -666,8 +666,11 @@ test('a cross-session message is another agent\'s, not the person\'s, and names 
   assert.deepEqual(effects(), before, 'not a person at the terminal');
   assert.deepEqual([known.role, known.inputSource, known.name, known.displayText], ['user', 'naw-peer', '会话间消息 · 来自 Secretary（按进程号对应，未核实）', 'Please check the board.'], 'a process-number match, still not verified');
   assert.match(known.text, /^<cross-session-message /, 'the original stays for search and history');
+  const locale = require('../ui-locale.js');
+  assert.equal(locale.displayText('en', known.name, known.uiNameMessage), 'Inter-session message · From Secretary (matched by process ID; unverified)');
   const unknown = submit('p2', wrap(9999, 'Else\u202ewhere\n', 'Hello.'), 'naw-peer');
   assert.equal(unknown.name, '会话间消息 · 来自 「Elsewhere」（未核实）', 'control and bidi characters are dropped from the claimed name');
+  assert.equal(locale.displayText('en', unknown.name, unknown.uiNameMessage), 'Inter-session message · From “Elsewhere” (unverified)');
   const hidden = submit('p2b', wrap(9998, 'Else\u2028wh\u00adere\u3164\ufff9', 'Hello.'), 'naw-peer');
   assert.equal(hidden.name, '会话间消息 · 来自 「Elsewhere」（未核实）', 'line separators and invisible fillers are dropped too');
   // A marker imitation, even with lookalike characters or nested words, stays visibly inside the claim's quotes.
@@ -677,6 +680,7 @@ test('a cross-session message is another agent\'s, not the person\'s, and names 
   assert.equal(bracketed.name, '会话间消息 · 来自 「秘书（只读）」（未核实）', 'a real name keeps its own brackets');
   const odd = submit('p3', 'not wrapped', 'naw-peer');
   assert.deepEqual([odd.name, odd.displayText], ['会话间消息', undefined]);
+  assert.equal(locale.displayText('en', odd.name, odd.uiNameMessage), 'Inter-session message');
   before = effects();
   const typed = submit('p4', wrap(4242, 'Claude 2', 'I typed this lookalike.'));
   assert.deepEqual(effects(), [before[0] + 1, before[1] + 1, before[2] + 1], 'without the engine origin it is the person\'s input');
@@ -700,6 +704,10 @@ test('a cross-session message is also listed in the receiving session\'s space, 
   assert.deepEqual([row.role, row.kind, row.name], ['system', 'agent-peer', '「Elsewhere」（未核实） → ' + s.name], 'merged copies keep only the name, so it carries the mark');
   assert.deepEqual(row.peerMessage, { senderId: null, senderName: 'Elsewhere', recipientId: s.id, recipientName: s.name });
   assert.equal(row.text, '会话间消息（Claude Code 自带，未经 NAW 转交；发送方未核实）\nStatus please.');
+  assert.equal(require('../ui-locale.js').displayText('en', row.text, row.uiMessage), 'Inter-session message (from Claude Code, not relayed by NAW; sender unverified)\nStatus please.');
+  const retained = JSON.parse(JSON.stringify(row)); delete retained.peerMessage;
+  assert.equal(require('../ui-locale.js').displayText('en', retained.name, retained.uiNameMessage), '「Elsewhere」 (unverified) → ' + s.name);
+  assert.equal(require('../ui-locale.js').displayText('zh', retained.name, retained.uiNameMessage), row.name);
   for (const key of ['finalReply', 'sourceTag', 'sessionId', 'sharedStream', 'deliveryTracked', 'status']) assert.ok(!(key in row), key);
   assert.equal(require('../collaboration-spaces.cjs').completedSharedRecord(row), true, 'final at arrival');
   submit('p2', wrap(4242, 'Claude 2', 'From a local sender.'), 'naw-peer');
@@ -736,8 +744,8 @@ test('machine-injected native turns keep their place, are not shown as the perso
   runtime.record = w.get(ids[0]); runtime.ready = true; runtime.chatAvailable = true;
   runtime.submission = { request: async () => ({ promptId: 'unused' }) }; runtime.terminal = { input() {} };
   w.runtimes.set(ids[0], runtime); w.bind(runtime.record, runtime);
-  const s = w.get(ids[0]), nativeId = s.nativeId, pauses = [], pause = w.pause.bind(w);
-  w.pause = reason => { pauses.push(reason); return pause(reason); };
+  const s = w.get(ids[0]), nativeId = s.nativeId, pauses = [], pauseMessages = [], pause = w.pause.bind(w);
+  w.pause = (...args) => { pauses.push(args[0]); pauseMessages.push(args[3]); return pause(...args); };
   const notice = (id, summary) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>${summary}</summary>\n</task-notification>`;
   const submit = (id, prompt, source) => { runtime.hook({ hook_event_name: 'UserPromptSubmit', prompt_id: id, session_id: nativeId, prompt, ...(source ? { source } : {}) }); return s.messages.find(m => m.id === 'claude-prompt-' + id); };
   // A turn-end report belongs to the latest prompt; reports for older prompts are ignored.
@@ -750,6 +758,9 @@ test('machine-injected native turns keep their place, are not shown as the perso
   let before = effects(); const raw = notice('job', 'Background command "Run review" completed (exit code 0)'), one = submit('n1', raw);
   assert.deepEqual([one.role, one.name, one.displayText, one.inputSource], ['user', '后台任务通知', 'Background command "Run review" completed (exit code 0)', 'task-notification']);
   assert.equal(one.text, raw, 'The original native text is kept for search and history');
+  const locale = require('../ui-locale.js');
+  assert.equal(locale.displayText('en', one.name, one.uiNameMessage), 'Background task notification');
+  assert.equal(one.displayText, 'Background command "Run review" completed (exit code 0)');
   unchanged(before, 'A reported task finishing is not a person: no pause, no handoff invalidation, no human wake');
   assert.equal(s.state, 'working'); assert.equal(s.backgroundStale, true);
   before = effects(); const replay = submit('n2', raw); assert.equal(replay.name, undefined, 'A reported ID is used once'); human(before, 'A repeat of a used notification counts as a person');
@@ -773,11 +784,15 @@ test('machine-injected native turns keep their place, are not shown as the perso
   const bare = '<task-notification><task-id>x</task-id><status>killed</status></task-notification>', noSummary = submit('b1', bare, 'system');
   assert.deepEqual([noSummary.name, noSummary.text, noSummary.displayText], ['原生自动输入', bare, undefined], 'A block without a summary keeps its original text');
   const mixed = submit('m1', 'peer: ' + notice('c', 'done'), 'system'); assert.deepEqual([mixed.name, mixed.text, mixed.displayText], ['原生自动输入', 'peer: ' + notice('c', 'done'), undefined]);
+  assert.equal(locale.displayText('en', wake.name, wake.uiNameMessage), 'Scheduled wakeup');
+  assert.equal(locale.displayText('en', poll.name, poll.uiNameMessage), 'Native automatic input');
+  assert.equal(poll.text, 'event body');
   // A machine turn that displaces a desktop send still stops the relay, with its own reason.
   stop('p3', [{ id: 'late', type: 'shell' }]); runtime.pending = { text: 'handoff text', promptId: null, replies: new Set(), prompts: new Set() };
   before = effects(); const displaced = submit('d1', notice('late', 'Late job done'));
   assert.equal(displaced.name, '后台任务通知'); assert.deepEqual(effects(), [before[0] + 1, before[1], before[2] + 1]);
   assert.equal(pauses.at(-1), '原生自动输入抢在交接发送之前开始；请核对后再继续。'); assert.equal(runtime.pending, null);
+  assert.equal(locale.displayText('en', pauses.at(-1), pauseMessages.at(-1)), 'Native automatic input started before the handoff was sent. Check it before continuing.');
   // What the decision changes at collaboration level: a relay elsewhere keeps running; a relay this session is in
   // still stops, because an unexpected turn started (not because a person typed).
   stop('p4', [{ id: 'r1', type: 'shell' }, { id: 'r2', type: 'shell' }]);

@@ -1,8 +1,9 @@
 // Explicit reply edges only. Reading a discussion never supplies model context.
 (function (root) {
+  const uiError = typeof module === 'object' && module.exports ? require('./ui-errors.cjs').uiError : root.nativeWorkspaceLocale?.createError;
   function replyReference(value) {
     if (value === undefined || value === null || value === '') return '';
-    if (typeof value !== 'string' || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value)) throw Error('无效的回复关联。');
+    if (typeof value !== 'string' || value.length > 100 || /[\u0000-\u001f\u007f]/.test(value)) throw (uiError ? uiError("error.replyReferenceInvalid") : Error('无效的回复关联。'));
     return value;
   }
   function threadIndex(messages) {

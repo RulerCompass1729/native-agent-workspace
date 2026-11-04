@@ -162,3 +162,28 @@ test('a malformed original Unicode string is refused instead of being silently r
   const a = room(A, 'A'); a.notes = 'Original ' + String.fromCharCode(0xd800);
   assert.throws(() => build(state([person('S', [A])], [a]), [A], { now }), /文字.*核对/);
 });
+
+test('English snapshots translate owned wrappers and facts while preserving raw names, notes, identities and selected coverage', () => {
+  const a = room(A, 'RAW 中文 space'); a.notes = 'Original 中文 notes\n{literal}';
+  const s = person('S', [A], { name: 'RAW 中文 member', state: 'working', nativeActivity: { nativeId: 'native-S', observedAt: 9000 } });
+  const input = state([s], [a]), before = JSON.stringify(input);
+  const zh = build(input, [A], { now }), en = build(input, [A], { now, language: 'en' });
+  assert.ok(en.text.startsWith('Collaboration context snapshot · ')); assert.ok(en.text.includes('Space: RAW 中文 space'));
+  assert.ok(en.text.includes('Member: RAW 中文 member · Claude · S')); assert.ok(en.text.includes('Working'));
+  assert.ok(en.text.includes(a.notes)); assert.ok(en.text.includes('1970-01-01T00:00:09.000Z'));
+  assert.deepEqual(en.coverage, zh.coverage); assert.deepEqual(en.spaceIds, zh.spaceIds); assert.equal(en.generatedAt, zh.generatedAt);
+  assert.equal(JSON.stringify(input), before);
+  const locale = require('../ui-locale.js');
+  assert.throws(() => build(input, [], { now, language: 'en' }), error => error.uiMessage?.key === 'error.contextSnapshotChooseSpaces' && locale.errorText('en', error) === 'Select the collaboration spaces to include.');
+});
+
+test('translated footers fit the existing reserve and long English notes retain well-formed Unicode excerpts', () => {
+  const locale = require('../ui-locale.js');
+  const names = ['includedSpaces', 'spaces', 'includedMembers', 'uniqueSessions', 'includedNotes', 'notes', 'omittedSpaces', 'omittedMembers', 'omittedNotes', 'truncatedNotes'];
+  const largestArrayCounts = Object.fromEntries(names.map(name => [name, 0xffffffff]));
+  for (const language of ['zh', 'en']) assert.ok((locale.format(language, 'context.snapshotFooter', largestArrayCounts) + locale.format(language, 'context.snapshotImportedOmitted')).length <= 400);
+  const a = room(A, 'RAW 中文'); a.notes = '😀'.repeat(1000); const before = a.notes;
+  const result = build(state([], [a]), [A], { now, language: 'en', maxChars: 1024 });
+  assert.equal(result.coverage.truncatedNotes, 1); assert.ok(result.text.length <= 1024); assert.ok(result.text.isWellFormed());
+  assert.ok(result.text.includes('😀😀')); assert.ok(result.text.includes('[Notes excerpt only;')); assert.equal(a.notes, before);
+});

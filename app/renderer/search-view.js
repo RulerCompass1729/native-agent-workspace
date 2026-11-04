@@ -36,7 +36,8 @@ function renderSearch() {
       const source = result.provider ? (result.provider === 'claude' ? 'Claude' : 'Codex') + ' · ' + sessionShortId(result.sessionId) : uiText('search.sharedSpace');
       return [source, result.archived && uiText('search.archivedFlag'), result.role && uiText(['user', 'human'].includes(result.role) ? 'reading.you' : result.role === 'system' ? 'search.event' : 'search.agent')].filter(Boolean).join(' · ');
     });
-    row.append(node('strong', result.name), metadata);
+    const name = node('strong', result.name); if (result.nameKey) ui.display.text(name, result.nameKey);
+    row.append(name, metadata);
     if (result.kind === 'message' || result.kind === 'shared') row.append(node('span', result.text));
     list.append(row);
   }

@@ -304,7 +304,7 @@ function connectionUpdateOptions(client, applicationVersion, profile) {
     // Moving idle sessions too (T-122): automatic only where the runtime proves nothing would be lost.
     const plan = old && !unavailable && entry !== client.active ? backendSwitch.backendPlan(entry.state, value => client.sessionState?.(value) || value.state, runningRelays(client)) : null;
     options.push({ backendKey: entry.key, id: record.id, nativeId: record.nativeId || null, version: version || null,
-      switch: plan && (plan.stops.length || plan.blocked) ? { ready: plan.ready, auto: plan.auto, reason: plan.reason, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
+      switch: plan && (plan.stops.length || plan.blocked) ? { ready: plan.ready, auto: plan.auto, reason: plan.reason, reasonUiMessage: plan.reasonUiMessage || null, stops: plan.stops, endsCodex: Boolean(plan.endsCodex) } : null,
       count: visible.length, ready: Boolean(old && status.ready && !unavailable && !effectiveActive),
       // Which sessions this backend holds, so a menu can name them (T-131).
       sessions: visible.map(value => ({ id: value.id, name: typeof value.name === 'string' ? value.name.slice(0, 80) : '' })),
@@ -355,7 +355,7 @@ function endedByMove(sessions) {
     .filter(value => notReconnected(sessions, value)).map(value => ({ id: value.id, name: value.name })));
 }
 async function runBackendSwitch(c, option, requireAuto = false) {
-  if (backendSwitching) throw Error('另一个后台正在更新，请稍候。');
+  if (backendSwitching) throw uiError("error.backendUpdateBusy");
   backendSwitching = option.backendKey;
   let finishMaintenance;
   try {
@@ -378,7 +378,7 @@ async function autoBackendSwitch() {
   let notice;
   try { const result = await runBackendSwitch(c, option, true); notice = { resumed: result.resumed.length, left: result.left.length, reconnectFailed: result.reconnectFailed }; }
   // A failed automatic move is not retried in this app run; the person can still click.
-  catch (error) { autoSwitchFailed.add(option.backendKey); notice = { error: error.message || '后台更新未完成。' }; }
+  catch (error) { autoSwitchFailed.add(option.backendKey); notice = { error: error.message || '后台更新未完成。', errorUiMessage: error.message ? uiLocale.displayMessage(error.uiMessage) : uiError('error.backendAutoUpdateIncomplete').uiMessage }; }
   for (const context of windows.values()) if (!context.win.isDestroyed()) context.win.webContents.send('workspace:backend-switched', notice);
 }
 let backendSwitchTimer;
@@ -465,7 +465,7 @@ async function boot() {
       if (action === 'clearSharedHistory') {
         roomState.writable(roomId);
         // A clear every backend would refuse is refused before the person is asked; the client checks again after (T-149).
-        const refusal = await c.client.clearSharedHistoryProblem(roomId); if (refusal) throw Error(refusal);
+        const refusal = await c.client.clearSharedHistoryProblem(roomId); if (refusal) throw typeof refusal === 'string' ? Error(refusal) : refusal;
         const value = roomState.metadata(roomId), revision = value.revision;
         const answer = await dialog.showMessageBox(c.win, { type: 'warning', message: displayText('os.clearSpaceTitle', { name: value.name }), detail: displayText('os.clearSpaceDetail'), buttons: [displayText('common.cancel'), displayText('os.clearSharedButton')], defaultId: 0, cancelId: 0 });
         if (answer.response !== 1) return false;
@@ -474,7 +474,7 @@ async function boot() {
         const result = await c.client.callSpace(roomId, action, []);
         try { roomState.clear(revision, roomId); } catch (error) { throw uiError("error.sharedClearedRetained", { reason: error.message }, { cause: error, param: 'reason' }); }
         await broadcastRoom();
-        if (result?.imagesLeft) throw Error('共享记录已清除，但已移除会话的本机图片副本未能全部删除，请检查本机数据目录的权限。');
+        if (result?.imagesLeft) throw uiError("error.sharedRemovedImagesRetained");
         return true;
       }
       if (action !== 'pause') for (const id of action === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]]) roomState.assertAvailable(id, true, roomId);
@@ -585,7 +585,7 @@ async function boot() {
       const revision = roomState.value.revision;
       const result = await c.client.call('clearSharedHistory');
       try { roomState.clear(revision); } catch (error) { throw uiError("error.sharedClearedRetained", { reason: error.message }, { cause: error, param: 'reason' }); }
-      if (result?.imagesLeft) { await broadcastRoom(); throw Error('共享记录已清除，但已移除会话的本机图片副本未能全部删除，请检查本机数据目录的权限。'); }
+      if (result?.imagesLeft) { await broadcastRoom(); throw uiError("error.sharedRemovedImagesRetained"); }
       await broadcastRoom(); return true;
     }
   });
@@ -626,13 +626,13 @@ async function boot() {
     await c.client.refresh();
     const option = connectionUpdateOptions(c.client, app.getVersion(), roomState).find(value => value.backendKey === expected?.backendKey);
     const same = value => value && JSON.stringify(value.stops.map(s => [s.id, s.nativeId])) === JSON.stringify((expected?.switch?.stops || []).map(s => [s.id, s.nativeId]));
-    if (!option?.switch?.ready || !same(option.switch)) throw Error('后台或会话状态已变化；没有结束任何会话，请重新核对。');
+    if (!option?.switch?.ready || !same(option.switch)) throw uiError("error.backendSwitchRecheck");
     const names = option.switch.stops.map(value => value.name).join('、');
     const answer = await dialog.showMessageBox(c.win, {
       type: 'warning', message: displayText('os.switchBackendTitle', { count: option.switch.stops.length }),
       detail: displayText('os.switchBackendDetail', { names }) +
         (option.switch.endsCodex ? '\n\n' + displayText('os.switchBackendCodex') : '') +
-        (option.switch.reason ? '\n\n' + displayText('os.switchBackendUnconfirmed', { reason: option.switch.reason }) : ''),
+        (option.switch.reason ? '\n\n' + displayText('os.switchBackendUnconfirmed', { reason: uiLocale.displayText(displayLanguage(), option.switch.reason, option.switch.reasonUiMessage) }) : ''),
       buttons: [displayText('os.keepConnection'), displayText('os.confirmSwitchBackend')], defaultId: 0, cancelId: 0,
     });
     if (answer.response !== 1) return false;
@@ -687,9 +687,9 @@ async function boot() {
         for (const view of views) { delete view.readingPositions?.[id]; forgetDraft(view, id); if (view.selected === id) view.selected = ''; }
         saveViews();
         let labelsLeft = false; try { sessionLabels.remove(id); } catch { labelsLeft = true; }
-        if (labelsLeft && result?.imagesLeft) throw new Error('会话记录已移除，但本地显示名和本机的图片副本未能全部清理。请检查本机数据权限与磁盘空间。');
+        if (labelsLeft && result?.imagesLeft) throw uiError("error.removedNameAndImagesRetained");
         if (labelsLeft) throw uiError("error.main.forgottenLabelCleanupFailed");
-        if (result?.imagesLeft) throw new Error('会话记录已移除，但本机的图片副本未能全部删除，请检查本机数据目录的权限。');
+        if (result?.imagesLeft) throw uiError("error.removedImagesRetained");
       }
     }
   });
@@ -718,7 +718,7 @@ async function boot() {
   });
   register('readingState', (c, positions, panorama) => {
     const checked = readingState(positions);
-    if (panorama !== undefined && !validViews([{ owner: c.view.owner, panorama }])) throw Error('全景阅读记录无效；原记录已保留。');
+    if (panorama !== undefined && !validViews([{ owner: c.view.owner, panorama }])) throw uiError("error.panoramaReadingInvalid");
     const presentation = panorama === undefined ? undefined : structuredClone(panorama);
     c.view.readingPositions = checked;
     if (presentation !== undefined) c.view.panorama = presentation;
