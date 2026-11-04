@@ -4421,5 +4421,13 @@ source checks pass: 366 before that last guard, then 213 affected checks after
 it, both with zero skips. The separate headless CLI identity and exact
 Read/Grep/Glob inventory are recorded; a reviewer self-description saying it
 was not a separate CLI is contradicted by its actual launch and init records.
-Signed repair acceptance is pending. Actual 318 task delivery and context
-transitions remain unqualified; the overall dogfood goal stays open.
+Signed alpha.185 (`a1578ddd`) passes three local model changes and GUI reload.
+After the ordinary visible update, the actual installed executable passes
+another single-switch/reload journey in its isolated profile. Both retain the
+native UUID/PID and draft with no task prompts or model responder. Independent
+signed-path review approves; unchanged package/template/receipt facts are
+checked by program. The source-check final log is now read by the reviewer.
+The public model-only test guard admits 318 only in this qualified zero-task
+submode; queue and inline-test version guards remain unchanged. Actual 318
+task delivery and context transitions remain unqualified; the whole goal stays
+open. New processes use this code; occupied older backends are preserved.

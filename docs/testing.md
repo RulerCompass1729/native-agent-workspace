@@ -5010,5 +5010,15 @@ GUI Haiku after a successful native Sonnet switch under the same native ID
 and PID, with the unsent GUI draft retained. One native command, no task
 prompt and no model responder. Source repair has 213 affected checks after
 its last guard, with the earlier 366 related run retained separately;
-zero skipped. Independent source review passes. Signed repair acceptance is
-pending. This does not qualify other 318 capabilities or a full workday.
+zero skipped. Independent source and signed-path reviews pass. Signed 185/source `a1578ddd`
+performs Sonnet/Haiku/Sonnet and reload; after visible installation, the actual
+installed executable performs a single model switch and reload. Native ID/PID,
+draft and empty task history persist. The installed strict signature/CDHash
+matches; 69 packaged source files and 105 dependencies match the build. Model
+HTTP binding is guarded absent, not a global measurement of HTTP attempts.
+The 317 proof is reused for its unchanged enabled-block path. Public runner
+318 acceptance is limited to the model-only submode. Normal visible update
+preserves 14 records, 16 live identities, 12 view drafts/settings, seven occupied
+older backends and the original active goal after 150 seconds. One application
+search entry and the production executable-bound install receipt are checked.
+This does not qualify other 318 capabilities, physical input or a full workday.

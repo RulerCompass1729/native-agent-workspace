@@ -1,10 +1,19 @@
 # Readiness and next gates
 
-As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
+As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.184, committed build source `fd655d9e`. An older
+Current daily GUI: alpha.185, committed build source `a1578ddd`. On Claude
+2.1.318 the GUI model now follows the native model read/switch event without
+enabling other unqualified capabilities. Signed candidate switching/reload
+and an actual installed-path switch after the visible update pass without task
+prompts or a model responder. Independent affected-path review passes. The
+update preserves 14 records, 16 live process identities, 12 view drafts/settings,
+seven occupied older backends and the original active goal after 150 seconds.
+Other 318 capabilities, physical input and the whole dogfood goal remain open.
+
+Previously qualified alpha.184, committed build source `fd655d9e`. An older
 space-unfold reply no longer replaces a newer rename editor or reopens one
 after cancellation. Removed peer senders retain their recorded short ID and
 unverified marker; original message bodies are unchanged. Signed affected-path

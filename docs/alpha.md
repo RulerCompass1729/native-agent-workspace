@@ -1565,3 +1565,8 @@ The alpha.183 testing record retains GUI/native/physical acceptance limits.
 Alpha.184 preserves newer rename intents and recorded historical peer IDs.
 Signed affected-path acceptance and visible update pass; see testing and
 readiness for exact scope. The overall dogfood milestone remains open.
+
+
+Alpha.185 keeps Claude 318's GUI model current using the existing native
+metadata channel. Other capability gates stay closed. Signed and installed-path
+acceptance, independent review and visible update pass; see current readiness.
