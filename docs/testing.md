@@ -4863,3 +4863,38 @@ The visible daily update preserves 14 records, 16 live process identities,
 drafts/settings and 7 old backends for 150 seconds, with no automatic move.
 One daily application-search entry remains; the previous app copy is removed
 and its verified archive retained. Operator/records checks are programmatic.
+
+
+## alpha.181 — combined native-input and interface-language repairs
+
+Source `b41a8c79`, CDHash `41b1ec72`. The combined suite passes 2,510 checks
+with no failures or skips. Twenty source GUI groups check 236 visible labels,
+raw native text/selection, unsent drafts, existing dialogs and compact views;
+32 hidden-state samples are skipped, not GUI passes. Earlier operator failures
+are retained: a historical page needed the existing jump-to-latest action, and
+a malformed synthetic PNG was correctly rejected. Neither prompted product edits.
+
+Normal signed bootstrap passes three checks; the signed consumer passes four:
+selected terminal Meta+C cancels the DOM default; the actual missing-file guard
+shows an English application error while rendered/stored Chinese native text
+stays exact; cold consumer rebind preserves original/queued rows and rejects old
+wake authority; a fresh staged wake is cancelled on approval and its known reason
+renders in English with the original body. Input/send/interrupt counts are zero.
+These use synthetic transport, not real providers. The copy sentinel prevents
+an OS clipboard call. A persisted-record consumer rebind is not a service/native
+restart or a complete workspace-load qualification; its control ownership is
+not normal-use proof. Strict signature passes after cleanup and matches CDHash.
+
+The independent source checkpoint finds no product changes needed. Its first
+invocation hits the turn cap and is not a pass; the resumed verdict requires a
+full-workflow flag and rendered-text assertions in the operator. Both corrections
+and the actual signed evidence pass the same review session. Its final reported
+cumulative list equivalent is $2.0756112, not an invoice or a sum of resumed costs.
+The ordinary visible daily update retains 14 records, 16 live process identities,
+12 view drafts/settings and seven old backends, also after 150 seconds. The
+original Main goal remains active with the same identity/objective/creation time.
+One application-search entry remains; the previous executable copy is removed
+and its verified archive retained. Installation records are checked by program.
+Old occupied backends do not adopt the new adapter/error behavior yet. Daily user
+operations, real native provenance/version qualification, physical clipboard,
+full language/selection/trajectory coverage and the whole dogfood goal stay open.

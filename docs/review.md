@@ -4291,3 +4291,15 @@ Neither was treated as a product repair. No provider, native CLI, product-model,
 OS clipboard or external-viewer action was used. These source checks do not prove
 native provenance, physical input, a real service restart or the whole dogfood
 goal. Signed acceptance and the independent integration checkpoint remain open.
+
+
+I169 installed follow-up: the source checkpoint accepts the combined behavior.
+Its first capped invocation is not counted as a pass. The resumed review finds
+two operator gaps: partial workflow could pass, and native original text was
+checked only in storage. Both are corrected with an early required-flow refusal,
+a four-check terminal guard and actual DOM assertions. Same-session review then
+accepts the four signed affected paths, including the approval-cancellation row.
+A stale test toast and read-only ownership after synthetic rebind are recorded;
+neither is normal-use control proof. The actual visible alpha.181 update and
+150-second retention are program-checked; the original goal is still active.
+No actual provider/physical copy or whole-milestone claim follows.

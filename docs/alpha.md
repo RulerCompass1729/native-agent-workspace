@@ -1535,3 +1535,12 @@ retaining their targets and keyboard focus. Signed installed acceptance and
 independent review pass. The ordinary visible update retains existing sessions,
 drafts and occupied backends. English error coverage and daily visual feedback
 remain open; this does not complete the dogfood goal.
+
+
+## alpha.181 — input boundaries and interface-language continuation
+
+Source `b41a8c79`. Terminal-copy default cancellation, retained Claude input and
+wake authority, and existing interface-language consumers are integrated and
+signed-tested. The visible daily update preserves sessions, drafts, active goal
+and occupied older backends. See the alpha.181 testing record for accepted paths
+and remaining native/daily/physical limits; the dogfood milestone stays open.

@@ -4,7 +4,16 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.180, committed build source `9ab17dc0`. Local file
+Current daily GUI: alpha.181, committed build source `b41a8c79`. The combined
+batch repairs terminal-copy cancellation, retained Claude input/authority and
+interface-language consumers. Signed affected-path acceptance and independent
+review pass. The visible update retains 14 records, 16 live process identities,
+12 view drafts and seven occupied old backends for 150 seconds; the original
+Main goal remains active. Only the GUI and empty active backend adopt this code.
+Real-provider qualification, physical copy, daily user operations and the whole
+dogfood goal remain open. See the alpha.181 testing record for exact limits.
+
+Previously qualified alpha.180, committed build source `9ab17dc0`. Local file
 links now stay at body-text size inside a sentence. Signed solo/member, narrow,
 zoom, theme and keyboard checks and independent integration review pass.
 The ordinary visible update keeps 14 records, 16 verified live process
