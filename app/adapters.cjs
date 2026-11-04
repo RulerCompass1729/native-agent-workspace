@@ -1,5 +1,5 @@
 const { uiError, uiNotice, uiActivity } = require('./ui-errors.cjs');
-const { claudeUsage } = require('./native-usage.js');
+const { claudeUsage, codexAccountUsage } = require('./native-usage.js');
 const { EventEmitter } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
@@ -2323,8 +2323,29 @@ class NativeHost {
   watchCodexConnection(rpc, child) {
     const ws = rpc.ws;
     let initialized = false, retired = false;
+    let accountRevision = 0, accountReading = false, accountReadAgain = false;
     const current = () => !retired && !this.closed && this.codexProcess === child && this.rpc === rpc;
+    const publishAccount = value => {
+      if (!current()) return;
+      this.codexAccountUsage = value;
+      for (const target of new Set(this.codexTargets.values())) if (target.host === this && !target.stopped && !target.transportDisconnected) target.emit('accountUsage');
+    };
+    const readAccount = async () => {
+      if (!current() || ws.readyState !== WebSocket.OPEN) return;
+      if (accountReading) { accountReadAgain = true; return; }
+      accountReading = true;
+      const revision = accountRevision;
+      try {
+        const value = await rpc.call('account/rateLimits/read');
+        if (current() && ws.readyState === WebSocket.OPEN && revision === accountRevision) publishAccount(codexAccountUsage(value));
+      } catch { /* Unsupported or unavailable native metadata remains unknown. */ }
+      finally {
+        accountReading = false;
+        if (accountReadAgain) { accountReadAgain = false; readAccount(); }
+      }
+    };
     const dispose = () => {
+      accountRevision++; accountReadAgain = false;
       child.removeListener('exit', retire); rpc.removeListener('event', event); rpc.removeListener('closed', closed);
     };
     const retire = () => {
@@ -2339,6 +2360,12 @@ class NativeHost {
     const event = message => {
       if (!current()) return;
       const p = message.params || {};
+      if (message.id === undefined && ['account/rateLimits/updated', 'account/updated'].includes(message.method)) {
+        accountRevision++;
+        if (message.method === 'account/updated') { publishAccount(null); readAccount(); }
+        else publishAccount(codexAccountUsage(p, this.codexAccountUsage));
+        return;
+      }
       if (message.method === 'warning' && !p.threadId) {
         for (const target of this.codexTargets.values()) if (!target.terminalNotificationSource) target.event(message);
         return;
@@ -2353,6 +2380,7 @@ class NativeHost {
     };
     const closed = () => {
       if (!current()) return;
+      accountRevision++; accountReadAgain = false; publishAccount(null);
       for (const target of this.codexTargets.values()) target.transportClosed();
       retire();
     };
@@ -2361,7 +2389,9 @@ class NativeHost {
       activate: () => {
         this.disposeCodexConnection?.();
         this.rpc = rpc; this.disposeCodexConnection = dispose;
+        this.codexAccountUsage = null;
         initialized = true; retire();
+        readAccount();
       },
       dispose,
     };

@@ -5032,3 +5032,14 @@ and one response, no budget error, zero paid inference. The owned profile and
 listener are removed; installed strict signature/CDHash remain unchanged.
 Independent scoped runtime review passes. Other 318 capabilities, daily gestures,
 window/process recovery and the whole goal are not qualified by this task.
+
+
+I181 / Codex account usage: 140 affected checks pass without skips. A real
+source GUI with synthetic native metadata verifies two Codex sessions see the
+same account windows, not a sum, while a Claude session keeps its own usage.
+Native labels and values survive both interface languages. Account invalidation
+removes old limits on the existing refresh; tokens and unsent drafts persist.
+The unchanged I177 header repair distinguishes pending native context from
+native exit and keeps Send disabled. Zero provider processes, model calls,
+dispatches or terminal input. This is source UI proof, not a current-account
+probe or T162's native-client menu. Signed acceptance is pending.

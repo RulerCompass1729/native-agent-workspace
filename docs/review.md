@@ -4455,3 +4455,27 @@ capability gate or source changed. Final one-request/one-response counters,
 owned cleanup and unchanged strict signature pass. Independent scoped runtime review
 passes; model metadata proof is reused, not expanded to other 318
 capabilities or native lifecycle/goal acceptance.
+
+
+I181 / Codex account usage (T162-F2): native account notifications were lost
+by thread-only routing, and the existing usage area showed tokens only. Main
+now reads account limits once per connection and follows native updates there.
+The existing usage area shows the native windows, percentages, reset times and
+bucket names as shared account data, separate from per-thread tokens. Missing
+readings remain unknown. Account changes and disconnects clear old data; late
+reads cannot overwrite newer updates. No polling, model request, menu decision,
+settings write or new panel is added. Older occupied backends need their normal
+safe update before they expose these readings.
+
+Source checks pass: 140 affected checks, no skips. The actual source GUI passes
+quota rendering in both interface languages, cross-session/provider isolation,
+account invalidation and draft retention. An initial GUI check incorrectly
+expected a read-only pending-context draft; the existing editable-unsent behavior
+is preserved and the corrected check verifies Send stays disabled. The pending
+context header repair from I177 is batched here. Independent source review found no blocking issue, and its N1 was confirmed
+against the native schema: limitId can be absent. An anonymous snapshot now
+replaces ambiguous old buckets rather than showing duplicate current limits.
+The focused counterexample passes. A late initial read is discarded as a whole
+when a newer update arrives; unreported buckets stay unknown until another
+native report. This is not a complete account inventory. Incremental source review passes; signed acceptance is pending. These synthetic metadata checks do not certify a live
+account reading or solve T162's separate native-client choice-menu gap.
