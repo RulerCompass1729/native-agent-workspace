@@ -4340,3 +4340,11 @@ classes reproduces the refusal (seven pass, one fail); no application files,
 providers or user data are written. Current-source affected checks pass after
 the exact delta. The later packaged result and same-reviewer delta remain
 pending; the signed image/decoder path is unchanged and reused.
+
+
+I170 recovery closure for the affected backend path: the same reviewer accepts
+the exact guard delta, actual signed 182 RED to 183 GREEN, and the additional
+source-cleared recovery control. New-image preview refusal and actual-target
+validation stay intact. Signed-class proof is explicitly not a human GUI
+recovery test. Visible alpha.183 retention and signature are program-checked;
+whole-task daily operation and the original goal remain open.

@@ -1552,3 +1552,11 @@ Source `e7220192`. New merged snapshots retain their image bytes independently
 of source cleanup; signed preview/expand acceptance passes. The visible update
 keeps sessions, drafts and the original goal. A saved-merge recovery refusal
 is tracked separately and remains open. See the alpha.182 testing record.
+
+
+## alpha.183 — recover a saved image merge
+
+Source `34de7557`. Recovery uses the existing saved batch owner, retaining
+old-target refusal for new copies. Signed-class acceptance and independent
+delta review pass; the visible update preserves sessions, drafts and goal.
+The alpha.183 testing record retains GUI/native/physical acceptance limits.

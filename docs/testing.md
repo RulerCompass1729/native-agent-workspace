@@ -4934,3 +4934,29 @@ daily operation, that recovery branch, real providers, physical clipboard,
 full T-140 and the whole dogfood milestone. Existing lost pixels cannot be
 reconstructed. Changing cache-root metadata can also invalidate an in-flight
 preview safely; no automatic replay is added.
+
+
+## alpha.183 — saved image-merge recovery
+
+Source `34de7557`, CDHash `56ba1d48`. The exact reviewed two-file delta makes
+the early active-backend check apply only to a new merge. Existing saved-owner
+routing and its old-target guard remain. Actual signed alpha.182 modules fail
+only the new recovery case (seven pass, one fail); the alpha.183 modules pass
+all eight. An additional selected control deletes all source image references
+and pixels before recovery: the saved target recovers once, rows stay exact and
+source pixels remain absent. Local affected checks pass 146 with no skips.
+The probe imports the real signed backend classes under a virtual test filename;
+it writes no bundle file and uses only owned synthetic Workspaces. It is not
+GUI recovery, Electron-main IPC invocation, native/provider or physical proof.
+The unchanged alpha.182 image/codec/GUI path is reused, with normal signed
+bootstrap and strict signature verified for the new package after all probes.
+
+Same-checkpoint independent review accepts this recovery delta, including the
+unchanged new-merge/actual-target refusals. Its final reported cumulative list
+equivalent is $1.2416102, not invoiced cost or a sum of resumed results. The
+operator template differs only by version. Program-checked visible update and
+150-second receipts retain 14 records, 16 live process identities, 12 view drafts,
+seven occupied old backends and the original active goal. One app-search entry
+and the verified previous archive remain; no occupied backend is migrated.
+The known false refusal is fixed in adopted code; daily operation, human GUI
+recovery, real-provider/physical coverage and the whole dogfood goal stay open.
