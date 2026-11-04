@@ -4429,8 +4429,9 @@ signed-path review approves; unchanged package/template/receipt facts are
 checked by program. The source-check final log is now read by the reviewer.
 The public model-only test guard admits 318 only in this qualified zero-task
 submode; queue and inline-test version guards remain unchanged. Actual 318
-task delivery and context transitions remain unqualified; the whole goal stays
-open. New processes use this code; occupied older backends are preserved.
+task delivery and context transitions were unqualified at this checkpoint;
+I178 below later checks basic text only. The whole goal stays open. New
+processes use this code; occupied older backends are preserved.
 
 
 I177 / pending-context header: real installed Claude 318 `/clear` changes the
@@ -4444,3 +4445,13 @@ then wrapped-UUID parsing), with raw runtime observations derived separately;
 they are not relabelled passing suites. Source checks pass; installed repair
 acceptance is pending the next substantive batch. No new version for this
 small wording repair, no broader 318 context capability gate opened.
+
+
+I178 / real 318 basic text: Main closes only the previously untested basic text
+input/reply path. The actual signed installed alpha.185 sends one GUI text
+task to a private real 318 root and renders its original fixed reply once;
+the same terminal shows it, and native identity/PID are retained. No production
+capability gate or source changed. Final one-request/one-response counters,
+owned cleanup and unchanged strict signature pass. Independent scoped runtime review
+passes; model metadata proof is reused, not expanded to other 318
+capabilities or native lifecycle/goal acceptance.

@@ -5022,3 +5022,13 @@ preserves 14 records, 16 live identities, 12 view drafts/settings, seven occupie
 older backends and the original active goal after 150 seconds. One application
 search entry and the production executable-bound install receipt are checked.
 This does not qualify other 318 capabilities, physical input or a full workday.
+
+
+I178 / installed basic text on Claude 2.1.318: one explicitly authorized
+isolated alpha.185 run exits 0 in 8.46 seconds. One GUI input and one exact
+native reply appear once, with native ID/PID retained and the terminal idle.
+The fixed Haiku response is local: final post-close counters are one request
+and one response, no budget error, zero paid inference. The owned profile and
+listener are removed; installed strict signature/CDHash remain unchanged.
+Independent scoped runtime review passes. Other 318 capabilities, daily gestures,
+window/process recovery and the whole goal are not qualified by this task.

@@ -11,7 +11,10 @@ and an actual installed-path switch after the visible update pass without task
 prompts or a model responder. Independent affected-path review passes. The
 update preserves 14 records, 16 live process identities, 12 view drafts/settings,
 seven occupied older backends and the original active goal after 150 seconds.
-Other 318 capabilities, physical input and the whole dogfood goal remain open.
+A later single text task on the actual installed alpha.185 and real 318 also
+passes: GUI input and native reply match once in both views, under the same
+native ID/PID. This qualifies only the existing basic text path;
+other 318 capability gates, physical input and the whole goal remain open.
 
 Previously qualified alpha.184, committed build source `fd655d9e`. An older
 space-unfold reply no longer replaces a newer rename editor or reopens one
