@@ -1128,7 +1128,7 @@ function pasteTerminal(text, id = activeSessionId()) {
   if (!text) return;
   if (text.length > 65500) throw uiError("error.pasteTooLong");
   if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw uiError("error.multilineProtection");
-  entry.term.paste(text); focusTerminal(id);
+  entry.columnReading = false; entry.term.paste(text); focusTerminal(id);
 }
 const imageFiles = transfer => Array.from(transfer?.files || []).filter(file => file.type.startsWith('image/'));
 async function pasteImages(files, staged, id = activeSessionId()) {
@@ -3274,9 +3274,12 @@ async function ensureTerminal(id, explicit = false) {
     if (binding) return;
     if (mode !== 'terminal' && activeSessionId() === id && state.sessions.find(s => s.id === id)?.owner === owner && inputFocusAllowed()) attempt(() => switchMode('terminal'));
   };
-  surface.addEventListener('pointerdown', event => { if (event.button === 0) claimTerminalFocus(); }, true);
+  // A person reading a column keeps its position through passive native output.
+  // Keyboard/IME input returns to the original cursor-follow behavior.
+  surface.addEventListener('pointerdown', event => { if (event.button === 0) { if (columnTerminalBinding(id)) entry.columnReading = true; claimTerminalFocus(); } }, true);
   surface.addEventListener('focusin', claimTerminalFocus);
   surface.addEventListener('wheel', event => {
+    if (columnTerminalBinding(id) && (event.deltaX || event.deltaY)) entry.columnReading = true;
     // Keep horizontal reading of an oversized native frame local. xterm's
     // mouse-mode wheel listener otherwise prevents the browser's default scroll.
     if (Math.abs(event.deltaX) > Math.abs(event.deltaY) && surface.scrollWidth > surface.clientWidth) { event.stopPropagation(); return; }
@@ -3319,7 +3322,7 @@ async function ensureTerminal(id, explicit = false) {
     input.catch(error => { if (finishing) preserveUnconfirmed(data, error); else toastError(error.message ? error : uiError('error.nativeInputUnconfirmed')); });
   });
   let confirmingEnter = false, blurValue, compositionSequence = 0;
-  element.addEventListener('compositionstart', () => { entry.composing = true; compositionSequence++; entry.compositionIntent = entry.viewInput; entry.compositionOrigin = { cancelled: false }; }, true);
+  element.addEventListener('compositionstart', () => { entry.columnReading = false; entry.composing = true; compositionSequence++; entry.compositionIntent = entry.viewInput; entry.compositionOrigin = { cancelled: false }; }, true);
   element.addEventListener('compositionend', event => {
     entry.composing = false;
     // Bubble after xterm's target listener: its textarea commit timer must run
@@ -3360,6 +3363,7 @@ async function ensureTerminal(id, explicit = false) {
     }, () => {});
   });
   term.attachCustomKeyEventHandler(event => {
+    if (event.type === 'keydown' && !event.metaKey && !event.isComposing && !['Shift', 'Control', 'Alt', 'Meta'].includes(event.key) && columnTerminalBinding(id)) entry.columnReading = false;
     // The same Enter may reach keypress after compositionend. Ignore that key's
     // terminal encoding, but leave browser defaults intact so IME can commit.
     if (event.key === 'Enter') {
@@ -3467,7 +3471,7 @@ function fitTerminal(id) {
 }
 // Follow the producer's journal order, including resizes with no new output.
 // Keep legacy payloads; an unindexed event withdraws the optional ordering hint.
-function writeTerminal(entry, event) { const indexed = Number.isSafeInteger(entry.observationIndex) && entry.observationIndex >= 0; if (indexed) { if (event.epoch !== entry.epoch || !Number.isSafeInteger(event.sequence) || event.sequence < 0) return; if (!(event.index === undefined && event.kind !== 'resize' && typeof event.data === 'string' && event.sequence > entry.sequence)) { if (!Number.isSafeInteger(event.index) || event.index <= entry.observationIndex) return; if (event.kind === 'resize') { if (event.sequence < entry.sequence || !Number.isInteger(event.cols) || event.cols < 20 || event.cols > 400 || !Number.isInteger(event.rows) || event.rows < 5 || event.rows > 200 || terminals.get(event.id) !== entry) return; entry.observationIndex = event.index; entry.term.write('', () => { if (terminals.get(event.id) === entry && event.epoch === entry.epoch) entry.term.resize(event.cols, event.rows); }); return; } if (typeof event.data !== 'string' || event.sequence <= entry.sequence) return; } } if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => { if (document.activeElement === entry.term.textarea) revealTerminalCursor(entry); }); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; if (indexed) entry.observationIndex = event.index; } }
+function writeTerminal(entry, event) { const indexed = Number.isSafeInteger(entry.observationIndex) && entry.observationIndex >= 0; if (indexed) { if (event.epoch !== entry.epoch || !Number.isSafeInteger(event.sequence) || event.sequence < 0) return; if (!(event.index === undefined && event.kind !== 'resize' && typeof event.data === 'string' && event.sequence > entry.sequence)) { if (!Number.isSafeInteger(event.index) || event.index <= entry.observationIndex) return; if (event.kind === 'resize') { if (event.sequence < entry.sequence || !Number.isInteger(event.cols) || event.cols < 20 || event.cols > 400 || !Number.isInteger(event.rows) || event.rows < 5 || event.rows > 200 || terminals.get(event.id) !== entry) return; entry.observationIndex = event.index; entry.term.write('', () => { if (terminals.get(event.id) === entry && event.epoch === entry.epoch) entry.term.resize(event.cols, event.rows); }); return; } if (typeof event.data !== 'string' || event.sequence <= entry.sequence) return; } } if ((!entry.epoch || event.epoch === entry.epoch) && event.sequence > entry.sequence) { entry.term.write(event.data, () => { if (document.activeElement === entry.term.textarea && !entry.columnReading && (!entry.term.buffer?.active || entry.term.buffer.active.viewportY === entry.term.buffer.active.baseY)) revealTerminalCursor(entry); }); entry.keyboardFlags = event.keyboardFlags || 0; entry.sequence = event.sequence; if (indexed) entry.observationIndex = event.index; } }
 const disposers = [
   api.onProgress(updateLegacyProgress),
   api.onTerminal(event => { const entry = terminals.get(event.id); if (!entry || entry.failed) return; if (!entry.ready) entry.queued.push(event); else writeTerminal(entry, event); }),
