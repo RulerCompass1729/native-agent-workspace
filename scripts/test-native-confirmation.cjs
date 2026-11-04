@@ -1,9 +1,11 @@
 const testScratch = require('./fixtures/test-scratch.cjs');
 const { createIn } = require('./fixtures/create-view.cjs');
+const { createSourceEntry } = require('./fixtures/synthetic-source-boot.cjs');
 // Real Electron controls with synthetic native protocol events; no provider/model.
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), assert = require('node:assert/strict');
 const { fork } = testScratch.childProcess, { _electron } = testScratch.playwright(require('playwright'));
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
+if (process.env.NAW_APP_EXECUTABLE) throw Error('This synthetic source test requires the source Electron launcher; use dedicated installed acceptance for signed bundles');
 const profile = testScratch.directory(path.join(os.tmpdir(), 'naw-confirmation-ui-'));
 const child = fork(path.join(code, 'app/daemon.cjs'), [profile], {
   execArgv: ['--require', path.join(__dirname, 'fixtures/reconnect-native.cjs')],
@@ -30,10 +32,11 @@ const resolve = (target, requestId) => event(target, { method: 'serverRequest/re
 async function shot(name) { if (evidence) await page.screenshot({ path: path.join(evidence, name + '.png') }); }
 async function run() {
   await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Service ready');
+  const sourceEntry = createSourceEntry({ profile, code, fixturePid: child.pid });
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   app = await _electron.launch({
-    executablePath: process.env.NAW_APP_EXECUTABLE || require('electron'),
-    args: process.env.NAW_APP_EXECUTABLE ? [] : [code],
+    executablePath: require('electron'),
+    args: [sourceEntry],
     env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) },
     timeout: 70000,
   });

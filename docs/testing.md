@@ -114,7 +114,12 @@ in the same native thread. Two task attempts plus one native title, zero paid
 inference. The native TUI hard-wraps the error; only its display comparison ignores
 whitespace, while the GUI text is checked verbatim.
 
-`NAW_NATIVE_CLOSED_TRIAL=1` on `test-native-confirmation.cjs` separately sends a
+The current `test-native-confirmation.cjs` runner is source-only. It rejects
+`NAW_APP_EXECUTABLE` before allocation and binds its private entry to the owned
+fixture PID, endpoint and source version. Dedicated installed acceptance uses
+the installed-renderer launcher; the following signed receipt remains historical.
+
+Historical installed `NAW_NATIVE_CLOSED_TRIAL=1` acceptance separately sends a
 controlled `thread/closed` notification through the real adapter/workspace and
 installed GUI. Injection enters the session runtime directly, bypassing host
 per-thread routing; it does not certify that routing. It displays ended, retains

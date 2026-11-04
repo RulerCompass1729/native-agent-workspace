@@ -4375,3 +4375,13 @@ after provisional exact-commit adoption and before delivery; it matches the
 reviewed candidate and adds no finding. The source, installed, daily-gesture and
 real-provider limits remain separate. Receipt counts and unchanged goal are
 checked by program; this is not whole-milestone completion.
+
+
+I172 test-only containment: the exact independently reviewed three-file source
+launch guard is integrated unchanged. Nine focused checks pass, including the
+actual failed-connect fallback before any replacement spawn effect; installed-flag
+invocation fails as expected before allocation. The author's source GUI reaches
+its five assertion groups, but its nested exit remains unknown after a wrapper
+parser failure. Owned-resource recovery is separate evidence; no new GUI run or
+whole-GUI pass is claimed. This changes no product file, packaged behavior or
+provider qualification, so unchanged installed alpha.184 acceptance is reused.
