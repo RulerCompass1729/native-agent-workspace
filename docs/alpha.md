@@ -1544,3 +1544,11 @@ wake authority, and existing interface-language consumers are integrated and
 signed-tested. The visible daily update preserves sessions, drafts, active goal
 and occupied older backends. See the alpha.181 testing record for accepted paths
 and remaining native/daily/physical limits; the dogfood milestone stays open.
+
+
+## alpha.182 — retained merged images
+
+Source `e7220192`. New merged snapshots retain their image bytes independently
+of source cleanup; signed preview/expand acceptance passes. The visible update
+keeps sessions, drafts and the original goal. A saved-merge recovery refusal
+is tracked separately and remains open. See the alpha.182 testing record.

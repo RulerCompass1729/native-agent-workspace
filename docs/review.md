@@ -4320,3 +4320,23 @@ The earlier copied-input bootstrap failure is retained, not image proof. Signed
 acceptance and this combined integration review remain pending. The unchanged
 reading interaction also reuses the author's nine-group source GUI acceptance
 for its four-line stale-default-fold test correction; no product change there.
+
+
+I170 installed follow-up: fresh independent review accepts the affected signed
+read-after-source-cleanup path, not the human merge-menu or full task. Actual
+signature and identity/draft/goal retention pass. Evidence filename collision
+and clipboard measurement limits are disclosed. The review notes safe stale
+preview refusal when cache-root metadata changes. A later actual two-Workspace
+counterexample finds an additional recovery defect: `performMerge` checks the
+active backend before using a saved batch's actual owner. Source and data are
+kept, but valid recovery can be refused. That finding remains open with the
+author's two-file follow-up; this record does not certify full T-140.
+
+
+I170 recovery follow-up source: the exact two-file author delta changes only
+the early guard's predicate, preserving new-merge refusal and the router's
+actual-target check. A read-only test module using the real signed alpha.182
+classes reproduces the refusal (seven pass, one fail); no application files,
+providers or user data are written. Current-source affected checks pass after
+the exact delta. The later packaged result and same-reviewer delta remain
+pending; the signed image/decoder path is unchanged and reused.

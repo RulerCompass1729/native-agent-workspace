@@ -4,7 +4,16 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.181, committed build source `b41a8c79`. The combined
+Current daily GUI: alpha.182, committed build source `e7220192`. New snapshot
+imports retain bounded image copies in their target cache. Signed read/expand
+acceptance and independent review pass; original content/hash stay unchanged.
+The visible update preserves 14 records, 16 live process identities, 12 view
+drafts, the active original Main goal and seven old backends for 150 seconds.
+A later counterexample finds a safe but incorrect refusal when resuming a
+saved merge after changing the active backend. Its follow-up is open; full
+T-140, daily operation and the whole dogfood milestone are not closed.
+
+Previously qualified alpha.181, committed build source `b41a8c79`. The combined
 batch repairs terminal-copy cancellation, retained Claude input/authority and
 interface-language consumers. Signed affected-path acceptance and independent
 review pass. The visible update retains 14 records, 16 live process identities,

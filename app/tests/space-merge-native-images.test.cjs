@@ -81,3 +81,24 @@ test('actual multi-backend routing rejects an old saved owner even after active 
  const {RoomState}=require('../room-state.cjs'),rooms=new RoomState(path.join(f.dir,'rooms'));
  assert.throws(()=>rooms.assertMergeImageSupport({},batch));assert.doesNotThrow(()=>rooms.assertMergeImageSupport({nativeImageCacheRoot:f.target.snapshot().nativeImageCacheRoot},batch));
 });
+test('recovering an already copied batch uses its saved newer owner when the active backend is older', async t => {
+ const {EventEmitter}=require('node:events'),{WorkspaceClient}=require('../workspace-client.cjs'),{RoomState}=require('../room-state.cjs');
+ const f=fixture(t),profile=new RoomState(f.dir),a=profile.create('A'),b=profile.create('B');
+ f.source.roomFor(a,true).messages.push(structuredClone(f.row));f.target.roomFor(b,true);
+ let olderActive=false;
+ const state=w=>{const value={...w.snapshot(),capabilities:['spaceMergeV1','collaborationSpacesV1']};if(olderActive&&w===f.source)delete value.nativeImageCacheRoot;return value;};
+ const imports=[];
+ const entries=[f.source,f.target].map((w,index)=>{const peer=new EventEmitter();peer.call=async(method,...args)=>{if(method==='initial')return state(w);assert.equal(method,'mergeSnapshot');imports.push(index);return w.mergeSnapshot(...args);};peer.close=()=>peer.emit('closed');return {key:String(index),client:peer,state:state(w)};});
+ const client=new WorkspaceClient(entries,'1');t.after(()=>client.close());
+ const batch=await profile.mergePreview(client,{sourceIds:[a,b],name:'Saved image space',memberIds:[],disposition:'keep'});
+ assert.equal((await profile.mergeCommit(client,batch.operationId,batch.binding)).stage,'ready');
+ const originals=structuredClone(f.target.roomFor(batch.targetId).messages);
+ // The import has persisted; a restart can occur before the joining stage ends.
+ profile.setMerge(batch.targetId,{stage:'joining'});olderActive=true;client.active=entries[0];await client.refresh();
+ assert.equal(client.snapshot().nativeImageCacheRoot,undefined);assert.ok(entries[1].state.nativeImageCacheRoot);
+ assert.equal((await profile.mergeCommit(client,batch.operationId,batch.binding,true)).stage,'ready');
+ assert.deepEqual(f.target.roomFor(batch.targetId).messages,originals);assert.deepEqual(imports,[1]);
+ // A new image merge into that old active backend still refuses before any import.
+ await assert.rejects(profile.mergePreview(client,{sourceIds:[a,b],name:'Unsupported new target',memberIds:[],disposition:'keep'}));assert.deepEqual(imports,[1]);
+ assert.equal(f.counts.nativeCreates,0);
+});

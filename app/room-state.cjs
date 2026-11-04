@@ -177,7 +177,7 @@ class RoomState {
       try {
         let snapshot = await client.call('initial');
         if (!snapshot.capabilities?.includes('spaceMergeV1')) throw uiError("error.room.mergeCapabilityChanged");
-        this.assertMergeImageSupport(snapshot, batch);
+        if (!previous) this.assertMergeImageSupport(snapshot, batch);
         if (!previous) {
           const cuts = this.mergeSources(snapshot, batch.sources.map(source => source.id));
           assertCurrentSources(batch, cuts);

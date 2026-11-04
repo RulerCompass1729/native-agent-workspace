@@ -4898,3 +4898,39 @@ and its verified archive retained. Installation records are checked by program.
 Old occupied backends do not adopt the new adapter/error behavior yet. Daily user
 operations, real native provenance/version qualification, physical clipboard,
 full language/selection/trajectory coverage and the whole dogfood goal stay open.
+
+
+## alpha.182 — retained snapshot images
+
+Source `e7220192`, CDHash `caffab4c`. The reviewed source increment applies
+without conflicts to Main. Its full run passes 2,516 of 2,517 checks; the sole
+failure is a bare prototype fixture missing `dataDir`. A one-line fixture
+addition leaves all assertions intact; the affected image/version suites pass
+61 checks with no skips. This is not reported as a full 2,517-check pass.
+Source GUI and signed GUI each prove the three affected image steps: delete
+the original cache, cold-open the retained target, then decode/expand/collapse
+through actual IPC/Electron with unchanged original row and hash. The merge
+setup uses actual classes, not a human merge-menu operation. The nine-group
+reading regression is reused unchanged from the independently reviewed author.
+The earlier copied-input boot failure was missing ignored generated client
+output; it is not evidence of an image defect or a product dependency repair.
+
+The private helper reused two result filenames between source and installed
+runs. The original intermediate source JSON was overwritten; its complete raw
+stdout remains intact and supplies an explicitly derived final receipt. Signed
+originals are retained. Clipboard numeric fields are initialization values,
+not measurements; no copy action occurs and the unchanged source guard is
+reused. Post-test strict signature and owned cleanup pass. The fresh independent
+review accepts this affected signed path, reporting $0.8492836 list equivalent,
+not invoiced cost. No paid product-model test is used.
+
+The ordinary visible update and program-checked 150-second receipts preserve
+14 records, 16 live process identities, 12 view drafts/settings, the original
+active goal and seven occupied old backends. One app-search entry and the
+verified previous archive remain. A later actual-class counterexample exposes
+a recovery refusal when a saved merge's new target differs from the older
+active backend; data stays intact and the follow-up remains open. Pending:
+daily operation, that recovery branch, real providers, physical clipboard,
+full T-140 and the whole dogfood milestone. Existing lost pixels cannot be
+reconstructed. Changing cache-root metadata can also invalidate an in-flight
+preview safely; no automatic replay is added.
