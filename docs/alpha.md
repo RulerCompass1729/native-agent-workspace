@@ -1516,3 +1516,13 @@ for the engine. The official [interactive-mode queue documentation](https://code
 distinguishes typed waiting and immediate sending, including backgroundable tools.
 No equivalence between `turn.abort` plus submission and Ctrl+Enter is claimed.
 Retained room waiting and force-send are not enabled by this increment.
+
+
+## alpha.179 — first interface-language batch
+
+Source `abb67597`. Existing profiles keep Chinese; new profiles follow the
+system and can switch language without changing native text. Signed isolated
+language flows and independent integration review pass. Ordinary visible daily
+upgrade preserves session identities/drafts and occupied old backends; Chinese
+is persisted in the actual profile. Full English coverage and daily user
+operation remain pending. See the alpha.179 testing record for scope and limits.

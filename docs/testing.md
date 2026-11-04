@@ -4812,3 +4812,37 @@ processes were unchanged and no move record existed. Saved checks afterwards
 found only the copy in /Applications when searching by its bundle identifier,
 and an empty rollback folder. A script, not a reviewer, checked these install
 records against the commit and counts.
+
+
+## alpha.179 — interface-language integration
+
+Build `abb67597`, signed CDHash `98252a8f`. The two released author commits
+retain byte identity except the separately reviewed isolated-test visibility
+switch; the unchanged 2,475-check author result is reused. Main's 168 affected
+checks/build pass. The integration finalizer finding is reproduced red, fixed
+and rechecked by 52 cleanup checks plus the three explicit-visible/reopen/hidden
+source flows; the same independent reviewer approves the fix. Window focus
+assertions observe those windows, not the whole OS foreground application.
+
+The exact signed bundle passes normal bootstrap/space creation/signature checks
+and six synthetic-native GUI flows: old-profile Chinese migration, actual-system
+new-profile language, two-window manual switching with the existing menu, raw
+body/draft/identity retention, reload and create/cancel. A first capture did not
+wait for visible state; the changed recipe verifies the displayed running state
+and body lines. A further single-profile layout capture supplies Main-viewed
+visible-body proof; earlier blank captures are retained, not counted as that
+proof. These are private-profile synthetic transport checks, not real-provider
+lifecycle, physical input/clipboard or a full-day development test.
+
+The ordinary visible daily update keeps 14 original records, 16 verified live
+process identities, drafts/settings and seven older backends; 150-second checks
+confirm no automatic move. The real legacy profile is recognized before update
+and an explicit Chinese preference is persisted afterwards. The installed
+CDHash matches; application search lists one daily app, the previous executable
+copy is removed and its verified archive retained. Operator comparison and
+installation-record checks are programmatic; records receive no extra model
+review. Independent installed review passes only this phase1 scope.
+
+Open: later owned Chinese/stale menu facts, a full English screenshot sweep,
+the person's actual daily-profile language operation, and the original dogfood
+milestone. Mixed-language leftovers and old backend versions are not hidden.

@@ -4,7 +4,19 @@ As of 2026-11-03. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.178, committed build source `16531fbc`. It carries
+Current daily GUI: alpha.179, committed build source `abb67597`. The first
+interface-language batch preserves Chinese in an older profile, follows the
+system for a new profile, and exposes the existing manual language setting.
+Native/user text stays original. Signed isolated old/new-profile checks and
+independent integration review pass; the actual daily upgrade saved Chinese,
+kept 14 session records, their native identities/live processes and drafts, and
+left seven occupied older backends unchanged across 150 seconds. Only the GUI
+and empty active backend were updated. Full English coverage, some stale menu
+facts and the person's daily-profile language operation remain open; this does
+not close T-60 or the single-agent dogfood milestone. Details are in the
+alpha.179 testing record.
+
+Previously qualified alpha.178, committed build source `16531fbc`. It carries
 Claude 2's two reviewed follow-ups that apply one rule to every place 开始一个会话 can
 start a session (T-115): a session that this opening started, or may have
 started where that cannot be told apart, stops the dialog, except a session

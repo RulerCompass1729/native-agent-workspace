@@ -4236,3 +4236,14 @@ packaging, retained-backend runtime copies and version-only metadata changes.
 Signed installed migration/manual/new-profile acceptance is still pending at
 this source checkpoint. Raw source comparisons, failures, successful runs and
 review output remain private.
+
+
+I164 installed follow-up: the same reviewer accepts the limited signed
+old/new-profile flows on `abb67597`; it does not certify full T-60 or daily UI
+operations. Main retains the capture timing limitation and supplies a separate
+one-profile visible layout/frame check, rather than treating older blank frames
+as proof. The actual ordinary visible alpha.179 update preserves 14 records,
+live native identities, drafts/settings and seven occupied older backends after
+150 seconds. The real legacy profile persists Chinese; installed signature,
+single app-search entry and archive retention pass program checks. The user's
+daily-profile language operation and phase2/3 remain open.
