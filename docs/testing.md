@@ -5099,3 +5099,15 @@ The ordinary visible daily update preserves 14 records, 16 live native identitie
 12 view drafts and seven occupied older backends after 150 seconds. Installed
 source/hash/count records and the original active goal are verified mechanically;
 no peer backend is retired and the whole milestone remains open.
+
+
+### 2026-11-04 — Original Codex goal, window open
+
+One read-only 90-second event observer exits on the first actual turn transition.
+It records completion then a new turn 19ms later, with the same native thread and
+active goal identity/objective/creation. A two-MiB bounded native rollout projection
+identifies the generated goal-source input without exporting message bodies.
+An independent review accepts this scoped installed-app observation; no input,
+configuration override or goal setter was used. It observes ordinary development
+continuation and does not claim zero normal author inference, closed-window
+continuation, another provider or fault recovery. The observer process exits.

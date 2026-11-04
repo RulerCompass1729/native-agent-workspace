@@ -4585,3 +4585,28 @@ the corrected journey. Source/payload hashes stay bound to `90eff945`; signature
 identity/draft counts, unchanged occupied backends and active original goal are
 verified by program. The reproduced producer is fixed; broader T134 observations
 and original native lifecycle/physical-input milestones remain open.
+
+
+### 2026-11-04 — Original native goal continuation and recovery preflight
+
+A bounded observer on the original Codex 0.164 thread records a completed turn
+followed 19 milliseconds later by a new turn. Goal identity, objective, creation
+and active status remain the same. A bounded native rollout projection confirms
+the new input carries the native goal-source marker and original objective
+reference; no message body or session identifier is published. The observer sends
+no input, sets no goal, changes no configuration, and exits. An independent Fable
+review accepts this open-window continuation under installed alpha.188 with its
+retained alpha.159 backend. It proves neither closed-window behavior, Claude
+continuation, controlled process recovery nor the whole milestone. The next turn
+is normal real development with normal provider usage, not a synthetic free reply.
+
+The same review blocks the proposed controlled-loss trial: native turn history
+omits a currently executing command, so absence of unfinished historical items
+cannot prove quiescence. A live process probe confirms the executing command is
+a descendant of the intended native server. The private operator now requires a
+live native-event subscription before the final launcher exits, its positive
+completion event, no subsequent tool/turn event, and a final process-tree check.
+An owned zero-model child positively exercises the descendant rejection and
+exits normally. Twenty-one local guard checks pass. Other-session verification
+also includes the actual Claude process identity and state. These corrections
+still need independent re-review; no controlled native signal has been sent.
