@@ -19,7 +19,7 @@ let nativeBlocks = false;
 let addressedTool = false;
 let addressedReading = false;
 async function observeAddressedTool($, ownGeneration) {
-  if (legacyOnly || stopped || ownGeneration !== generation || addressedReading) return;
+  if (!nativeBlocks || legacyOnly || stopped || ownGeneration !== generation || addressedReading) return;
   const binding = rootBinding;
   addressedReading = true;
   try {
@@ -273,7 +273,8 @@ function markObservationGap(binding) {
 }
 
 function enqueueBlock($, row, binding = rootBinding) {
-  if (!nativeBlocks || !binding || binding !== rootBinding || stopped) return;
+  // Model metadata does not enable the separately qualified content/control capabilities.
+  if ((!nativeBlocks && !(nativeModelSupported && row.kind === 'control' && row.id === 'control:model')) || !binding || binding !== rootBinding || stopped) return;
   // No synchronous IO in a display hook. Keep the entire accepted batch; an
   // overrun is an explicit gap, never a sliced fragment presented as complete.
   let size = JSON.stringify(row).length;
@@ -1108,7 +1109,7 @@ export function register(on) {
     // 2.1.316 and 2.1.317: the free status-line usage read, session.model() and the
     // PostModelSwitch event are declared as on 2.1.312 (T-133).
     nativeUsageSupported = ['2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
-    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
+    nativeModelSupported = ['2.1.302', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317', '2.1.318'].includes(nativeVersion);
     nativeBlocks = legacyOnly ? ['2.1.302', '2.1.307', '2.1.308', '2.1.309', '2.1.310'].includes(nativeVersion)
       : ['2.1.307', '2.1.308', '2.1.309', '2.1.310', '2.1.311', '2.1.312', '2.1.316', '2.1.317'].includes(nativeVersion);
     // 2.1.316 and 2.1.317 (2.1.317's engine API only adds to 2.1.316's, T-133): root binding, native
@@ -1118,7 +1119,7 @@ export function register(on) {
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
     addressedTool = false;
-    if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => contextTransitions ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
+    if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => (contextTransitions || (!legacyOnly && nativeVersion === '2.1.318')) ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
     return next(e);
   });
   on('session.end', async ($, e, next) => {

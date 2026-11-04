@@ -4395,3 +4395,31 @@ now states the failed-HTTP-attempt measurement limit instead of treating an
 unstarted responder's counter as proof. No app file or version changes, and no
 new model listener or paid inference is needed for this one existing journey.
 Other response-based tests and 318 qualification remain open.
+
+
+I176 / model metadata on an otherwise unqualified Claude runtime
+------------------------------------------------------------
+Trigger: the signed alpha.184 native terminal changed from Haiku to Sonnet
+on Claude 2.1.318, while the GUI model remained Haiku after twenty seconds.
+Severity: incorrect current-model fact; owner Main. The installed RED used
+one private native root, one local model command and no task prompt or model
+responder. A prior unsafe test-config mode was refused before GUI/native
+startup; that harness failure is retained separately.
+
+Repair: reuse the existing native model read/switch event and ordered,
+lease-bound observation transport for 318. All other native capability flags
+remain off. A metadata-only binding admits only the existing model control
+record; it cannot publish content, discover directed-send capability, or
+enable queue, abort, usage, media, narration or context transitions. The GUI
+keeps the native model ID unchanged. No settings hook, endpoint, framework,
+terminal-text parsing or extra inference was added.
+
+Independent source review approved the bounded change. Its two LOW findings
+are addressed: an explicit check confirms the next input poll is reached,
+and directed-tool discovery stops without native-block capability. Related
+source checks pass: 366 before that last guard, then 213 affected checks after
+it, both with zero skips. The separate headless CLI identity and exact
+Read/Grep/Glob inventory are recorded; a reviewer self-description saying it
+was not a separate CLI is contradicted by its actual launch and init records.
+Signed repair acceptance is pending. Actual 318 task delivery and context
+transitions remain unqualified; the overall dogfood goal stays open.

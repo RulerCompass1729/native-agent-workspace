@@ -5003,3 +5003,12 @@ Failed HTTP attempts are not metered by this offline case; no global network
 audit is claimed. Owned roots are removed and the installed signature/CDHash
 stays unchanged after native testing. This is neither a daily gesture nor a
 window-only, process-recovery, 318 or whole-milestone certificate.
+
+
+I176 model metadata: signed alpha.184 / real Claude 2.1.318 reproduces stale
+GUI Haiku after a successful native Sonnet switch under the same native ID
+and PID, with the unsent GUI draft retained. One native command, no task
+prompt and no model responder. Source repair has 213 affected checks after
+its last guard, with the earlier 366 related run retained separately;
+zero skipped. Independent source review passes. Signed repair acceptance is
+pending. This does not qualify other 318 capabilities or a full workday.

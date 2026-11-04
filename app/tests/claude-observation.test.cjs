@@ -1676,3 +1676,33 @@ for (const version of ['2.1.316', '2.1.317']) test(`native ${version}: only a cr
   release(); await other;
   assert.deepEqual(seen, [undefined]);
 });
+
+
+// A model-only observer must not qualify any of 318's untested native capabilities.
+test('318 model-only binding updates metadata without enabling content, input, usage or control', async () => {
+  let binding, toolReads = 0;
+  const f = await mod({ version: '2.1.318', toolReader: async () => { toolReads++; return [{ name: 'mcp__native_workspace__workspace_message' }]; }, requestHandler: async (url, options, body) => { if (url.endsWith('/root-bind')) binding = body; } });
+  assert.ok(f.poll, 'Existing input listener reaches its next poll');
+  assert.equal(toolReads, 0, 'Metadata-only binding cannot discover directed-send capability');
+  assert.equal(binding.addressedTool, false);
+  for (const key of ['nativeBlocks', 'nativeQueue', 'nativeInlineInput', 'nativePromptInput', 'nativeMedia', 'nativeAbort', 'nativeCapacity', 'nativeSharedDisplay', 'nativeTurnRecords', 'nativeNarration']) assert.equal(binding[key], false, key);
+  assert.equal(f.r.nativeBlocks, false); assert.equal(f.r.nativeQueue, false); assert.equal(f.r.nativeAbortAvailable, false);
+  const models = []; f.r.on('model', value => models.push(value));
+  const turn = { id: 'unchanged', status: 'working' }; f.r.rootTurn = turn; f.r.nativeInputRequired = true;
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, to_model: 'claude-sonnet-test' });
+  await new Promise(r => setImmediate(r)); await f.clock.shift()();
+  assert.deepEqual(models, ['claude-sonnet-test']); assert.equal(f.r.rootTurn, turn); assert.equal(f.r.nativeInputRequired, true);
+  const row = f.requests[0]; assert.equal(row.id, 'control:model');
+  for (const change of [
+    { id: 'control:usage' }, { id: 'control:heartbeat' }, { id: 'control:turn-start', turnId: 'fake' },
+    { id: 'tool:fake', kind: 'tool', text: 'not qualified' }, { id: 'display:fake', kind: 'text', text: 'not qualified' },
+    { kind: 'input', id: 'prompt:fake', text: 'not qualified' }, { model: 'bad\nmodel' }, { status: 'running' },
+    { epoch: 'old' }, { lease: 'old' }, { sessionId: randomUUID() },
+  ]) assert.throws(() => f.r.observeBlock({ ...row, sequence: 2, ...change }), /Invalid/);
+  f.r.observeBlock({ ...row, sequence: 2, model: 'claude-old', replayed: true });
+  f.r.hook({ hook_event_name: 'SessionStart', session_id: f.r.record.nativeId, model: 'old-startup' });
+  assert.deepEqual(models, ['claude-sonnet-test']);
+  await f.invoke('classic.PostModelSwitch', { session_id: randomUUID(), to_model: 'child-model' });
+  await f.invoke('classic.PostModelSwitch', { session_id: f.r.record.nativeId, agent_id: 'child', to_model: 'child-model' });
+  assert.equal(f.requests.length, 1); assert.equal(f.clock.length, 0);
+});

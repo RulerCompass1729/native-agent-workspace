@@ -616,7 +616,7 @@ class Claude extends EventEmitter {
       !['tool', 'input'].includes(message.kind) || message.status !== 'complete')) throw Error('Invalid native image count');
     const inline = message.kind === 'input' && message.inputMode === 'native-inline';
     const nativePrompt = message.kind === 'input' && message.inputMode === 'native-prompt';
-    if (!this.nativeBlocks || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
+    if ((!this.nativeBlocks && !(message.kind === 'control' && message.id === 'control:model')) || !this.validRootBinding(message) || message.epoch !== this.observationEpoch ||
       !/^(display|tool|turn|prompt|control|narration):[a-zA-Z0-9_:-]{1,160}$/.test(message.id || '') ||
       !['response', 'tool', 'turn', 'control', ...(this.retainedReader || this.nativeInlineInput ? ['input'] : []), ...(this.nativeNarration ? ['narration'] : [])].includes(message.kind) ||
       // The terminal's drawn explanation: its own id namespace and exact shape only.
