@@ -5111,3 +5111,17 @@ An independent review accepts this scoped installed-app observation; no input,
 configuration override or goal setter was used. It observes ordinary development
 continuation and does not claim zero normal author inference, closed-window
 continuation, another provider or fault recovery. The observer process exits.
+
+
+Original Main controlled-loss acceptance (same checkpoint): the guarded one-shot
+trial performs one kill and one existing-service resume, then observes the native
+goal start a new developer turn in 8.087s. Same original thread, active goal and
+effective settings; 19 completed command records and 22 protected process
+identities match. Controller and old helpers exit; GUI/shared daemon remain live.
+The saved draft is empty, so positive draft preservation relies on the owned
+164 rehearsal. Read-only metadata and a 100×30 live native buffer confirm recovery;
+strict installed signature verification passes. Independent Fable result verdict
+accepts this scoped result, with final cumulative CLI list cost 1.366408 (not an
+invoice or a sum across resumes). Normal developer inference is used. Window-only,
+closed-window continuation, actual Claude loss, physical/focus/layout and the whole
+milestone remain open. No second fault or new product release is required.

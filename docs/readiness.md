@@ -17,6 +17,13 @@ reproduced automatic-fill producer, not every earlier grid-jump report, old-back
 adoption or the whole dogfood milestone. The trusted historical compatibility-hook
 repair is included unchanged; native provider qualification is not expanded.
 
+The original Codex 0.164 developer session also passes one independently reviewed
+controlled native-server loss/recovery on the retained alpha.159 backend under
+GUI188. The same thread, active goal and settings resume automatically; completed
+commands are not replayed, other native processes and the GUI remain live. The
+actual saved draft is empty. Original Claude loss, window-only/closed-window goal
+and external-terminal acceptance remain open; this is not an all-backend upgrade.
+
 Previously qualified alpha.187, committed build source `66c63a5`. A session can
 move between Independent and one space without changing its native identity,
 draft or history. Undo and archive restore preserve later placements; old shared

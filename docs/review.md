@@ -4608,5 +4608,17 @@ live native-event subscription before the final launcher exits, its positive
 completion event, no subsequent tool/turn event, and a final process-tree check.
 An owned zero-model child positively exercises the descendant rejection and
 exits normally. Twenty-one local guard checks pass. Other-session verification
-also includes the actual Claude process identity and state. These corrections
-still need independent re-review; no controlled native signal has been sent.
+also includes the actual Claude process identity and state. The same independent
+checkpoint subsequently approved the corrected operator.
+The actual original Main-only trial sent one signal, used one existing resume and
+reattached the native display; recovery took 8.087 seconds. Native thread, active
+goal identity/objective/creation and effective settings remain the same, while the
+server/display PIDs change. Nineteen completed command records match by identity,
+status and command/output hashes. Twenty-two protected identities, the shared
+daemon and the visible GUI process remain unchanged; old helpers exit naturally.
+A native goal-source input starts the new developer turn without controller input,
+goal setters, configuration overrides or completed-command replay. Post-recovery
+metadata, live terminal buffer and strict signature checks pass. Independent result
+review accepts this scoped recovery. The actual saved draft was empty; nonempty
+draft proof remains the earlier owned rehearsal. No screen paint, focus, layout,
+window-only, closed-window goal, Claude recovery or whole-milestone claim is made.
