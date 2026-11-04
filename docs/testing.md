@@ -2,6 +2,23 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Single-home moves - 2026-11-04
+
+Alpha.187 / `66c63a5`: nine groups pass against the signed candidate and actual
+installed executable: discovery, menu/drag moves, Undo, Independent drop, flat
+navigation, stale Undo refusal, old backend refusal and reload persistence. Owned
+synthetic Unix backends; no provider/model turns. A native-event regression also
+closes the old grant during a move without spilling or retargeting late output.
+Source suite: 2,586 pass and one pre-existing compat-hook upgrade failure,
+reproduced at unchanged HEAD; 49 delta checks pass. The full suite is not labelled
+all green. Older fresh-profile/multi-membership scripts were not rerun.
+Initial harness failures are retained: hardened Node-inspector startup, then an
+installed path wrongly used as Git cwd. The existing renderer launcher and test
+checkout mutex resolve them. Actual installed replay and post-GUI signature pass;
+all owned profiles and leases are gone. Source-only wrapper guards were inactive
+in signed runs; exact backend/session sets are now checked. The native/provider,
+physical input and lifecycle limits are unchanged. Private evidence stays local.
+
 ## Continuing addressed work and source images - 2026-10-29
 
 Signed126/126fc54 passes five wake-control flows across owned synthetic backends,

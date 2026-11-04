@@ -5,7 +5,7 @@ const { execFileSync } = require('node:child_process');
 const root = path.resolve(process.env.NAW_TEST_APP_ROOT || path.join(__dirname, '..')), scratch = require('./fixtures/test-scratch.cjs');
 const { connectService } = require(path.join(root, 'app/service-connection.cjs')), { writeLayout, readLayout } = require(path.join(root, 'app/service-layout.cjs'));
 const { _electron } = scratch.playwright(process.env.NAW_APP_EXECUTABLE ? { _electron: require('./fixtures/installed-renderer.cjs') } : require('playwright'));
-const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
+const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: path.resolve(__dirname,'..'), encoding: 'utf8' }).trim();
 const slot = path.resolve(common, '..', '.local/gui-test-slot.lock'), token = randomUUID(), owner = randomUUID();
 const evidence = process.env.NAW_EVIDENCE_DIR, checks = [], errors = [], delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const OLD_VERSION = '0.1.0-alpha.140', CURRENT_KEY = 'backends/bbbbbbbbbbbbbbbbbbbb';

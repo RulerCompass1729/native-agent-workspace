@@ -4,7 +4,19 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.186, committed build source `06db30e`. The existing
+Current daily GUI: alpha.187, committed build source `66c63a5`. A session can
+move between Independent and one space without changing its native identity,
+draft or history. Undo and archive restore preserve later placements; old shared
+records stay in their original spaces. The grouped sidebar reuses space headings,
+with permanent space creation and a separate session overview. Existing legacy
+overlaps are retained; older backends refuse cross-space moves until safe adoption.
+Independent source and affected signed-path reviews pass. The actual installed
+executable passes nine synthetic-transport GUI groups, with its signature checked
+afterwards and no provider/model turns. Visible updating retains 14 records,
+16 live identities, 12 view drafts and 7 older backends over 150 seconds.
+The original goal remains active. Native lifecycle and the whole milestone remain open.
+
+Previously qualified alpha.186, committed build source `06db30e`. The existing
 usage area can show Codex's native account-limit windows separately from thread
 tokens, clearing stale readings when the account or connection changes. The
 pending-context header no longer reports native exit. Source and affected signed

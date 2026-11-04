@@ -4519,3 +4519,17 @@ index hashes stayed unchanged during both reviews. Its last reported cumulative
 list cost was 2.6211016, not an invoice and not summed across resumes. The
 version-only manifest delta is checked by program. Exact signed-code GUI replay
 will verify the harness change; source approval is not installed acceptance.
+
+I182 scoped installed acceptance: source `66c63a5`, alpha.187. The rebuilt
+69-file runtime is byte-identical to the independently reviewed payload,
+including the generated renderer. Final candidate and actual installed nine-group
+replays pass, followed by strict signature/CDHash checks. The original active goal,
+14 records, 16 live identities, 12 view drafts and 7 retained backends
+survive the ordinary visible update and 150-second witness. No occupied backend
+was migrated. The source-only test wrapper was not active in signed mode; the
+harness instead checks the exact backend/session sets and actual launch receipt.
+The final test-only Git-cwd correction was author-verified by all nine installed
+flows; runtime review is reused unchanged. Old archive metadata was inspected
+read-only: no archived spaces needing unproven restoration in the current profile.
+No native lifecycle or whole-goal completion is claimed. The compat-hook upgrade
+failure remains open; no push was authorized or performed.
