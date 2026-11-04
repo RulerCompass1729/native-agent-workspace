@@ -1022,6 +1022,7 @@ class Claude extends EventEmitter {
         // structured submission result acknowledges our own sends separately.
         if (this.rootTurn?.promptId !== event.prompt_id) this.rootTurn = null;
         this.lastPromptId = event.prompt_id || null;
+        const promptAlreadyAnnounced = Boolean(event.prompt_id && this.announcedPrompts?.has(event.prompt_id));
         if (event.prompt_id) {
           this.announcedPrompts ||= new Set(); this.announcedPrompts.add(event.prompt_id); this.announceCount = (this.announceCount || 0) + 1;
           if (this.announcedPrompts.size > 64) this.announcedPrompts.delete(this.announcedPrompts.values().next().value);
@@ -1041,7 +1042,9 @@ class Claude extends EventEmitter {
           const superseded = Boolean(this.queued || this.pending);
           if (this.queued) this.queued.superseded = true;
           this.pending = null; this.emit('state', 'working');
-          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: rowId, ...(!laterText && this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);
+          // The first hook may follow turn-start. A repeated id is still input,
+          // but must not recapture that turn's wake proof, even for identical text.
+          if (!this.nativePromptInput) this.emit('nativeInput', event.prompt || '原生输入', event.prompt_id ? { id: rowId, ...(!laterText && !promptAlreadyAnnounced && this.liveTurn?.promptId === event.prompt_id ? { turnId: this.liveTurn.id } : {}), ...(typeof event.source === 'string' ? { source: event.source } : {}), ...(superseded ? { superseded } : {}) } : undefined);
         }
         break;
       }
@@ -1089,7 +1092,13 @@ class Claude extends EventEmitter {
   }
   promptFirstText(id, text) {
     this.promptTexts ||= new Map();
-    if (!this.promptTexts.has(id)) { this.promptTexts.set(id, text); while (this.promptTexts.size > 64) this.promptTexts.delete(this.promptTexts.keys().next().value); }
+    if (!this.promptTexts.has(id)) {
+      // A cold adapter can recover the original prompt's text, but only from this native context.
+      const saved = this.record.messages?.find(m => m.id === `claude-prompt-${id}` && m.role === 'user' && m.origin === 'native' &&
+        this.record.nativeId && m.nativeId === this.record.nativeId && typeof m.text === 'string');
+      this.promptTexts.set(id, saved ? saved.text : text);
+      while (this.promptTexts.size > 64) this.promptTexts.delete(this.promptTexts.keys().next().value);
+    }
     return this.promptTexts.get(id);
   }
   // Idle without a reply: nothing is shared or attributed, the session only stops showing work (T-138).

@@ -7,11 +7,13 @@ const { EventEmitter } = require('node:events'), { randomUUID } = require('node:
 const { Claude, promptTextTag } = require('../adapters.cjs'), { Workspace } = require('../workspace.cjs');
 const { SubmissionChannel } = require('../claude-submit.cjs');
 
-function fixture(t) {
+function fixture(t, savedWorkspace) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'naw-claude-unannounced-')), r = Object.create(Claude.prototype); EventEmitter.call(r);
-  r.record = { id: 'session', nativeId: randomUUID(), provider: 'claude', messages: [], state: 'idle', owner: 'window', controlRevision: 0, memberRevision: 0, connectionRevision: 0 };
+  if (savedWorkspace) fs.writeFileSync(path.join(dir, 'workspace.json'), savedWorkspace, { mode: 0o600 });
+  const w = new Workspace({ binaries: {}, close() {} }, dir);
+  r.record = savedWorkspace ? w.sessions.get('session') : { id: 'session', nativeId: randomUUID(), provider: 'claude', messages: [], state: 'idle', owner: 'window', controlRevision: 0, memberRevision: 0, connectionRevision: 0 };
   r.terminal = { alive: true }; r.submission = new SubmissionChannel(); r.ready = true;
-  const w = new Workspace({ binaries: {}, close() {} }, dir); w.sessions.set(r.record.id, r.record); w.runtimes.set(r.record.id, r); w.bind(r.record, r);
+  w.sessions.set(r.record.id, r.record); w.runtimes.set(r.record.id, r); w.bind(r.record, r);
   t.after(() => { try { w.close(); } finally { fs.rmSync(dir, { recursive: true, force: true }); } });
   r.bindRoot({ sessionId: r.record.nativeId, nativeBlocks: true, nativeTurnRecords: true, nativeMedia: true });
   const emit = value => r.observeRoot({ block: true, sessionId: r.record.nativeId, lease: r.rootLease, epoch: r.observationEpoch, sequence: (r.rootObservation?.sequence || 0) + 1, ...value });
@@ -21,7 +23,7 @@ function fixture(t) {
   const end = turnId => emit({ id: `turn:${turnId}`, kind: 'turn', turnId, status: 'complete', text: '' });
   const typed = (promptId, prompt) => hook('UserPromptSubmit', { prompt_id: promptId, prompt });
   const tool = () => hook('PreToolUse', { tool_name: 'Bash', prompt_id: undefined });
-  return { r, w, emit, stop, start, end, typed, tool, state: () => w.sessions.get('session').state, rows: () => w.sessions.get('session').messages.filter(m => m.role === 'user') };
+  return { r, w, emit, stop, start, end, typed, tool, state: () => w.sessions.get('session').state, rows: () => w.sessions.get('session').messages.filter(m => m.role === 'user'), saved: () => { w.persist(); return fs.readFileSync(path.join(dir, 'workspace.json')); } };
 }
 // First turn, a prompt typed while it runs (same id), then that prompt's own turn running a tool.
 function queued(f) {
@@ -123,6 +125,54 @@ test('a prompt typed during a turn does not re-capture that turn\'s wake authori
   f.typed(first, 'Look at the board.'); f.start('first-turn', first); const before = starts.length;
   f.typed(first, 'Wake the idle peer.');
   assert.equal(starts.length, before, 'the typed prompt re-captured the running turn');
+});
+test('an identical mid-turn prompt keeps the original human-control proof (T-141)', t => {
+  const f = fixture(t), first = randomUUID(), text = 'Look at the board.';
+  f.typed(first, text); f.start('first-turn', first);
+  const originalProof = f.r.wakeTurn.human, before = f.w.get('session').controlRevision;
+  f.typed(first, text); // Measured native316/317 shape: the queued prompt reuses the running prompt id.
+  assert.equal(f.w.get('session').controlRevision, before + 1, 'The repeated text is still a person acting');
+  assert.equal(f.r.wakeTurn.human, originalProof, 'The same native turn cannot adopt the later human-control revision');
+});
+test('the first human hook can arrive after the native turn-start without losing wake authority (T-141)', t => {
+  const f = fixture(t), first = randomUUID();
+  f.start('first-turn', first);f.typed(first, 'Late first human prompt.');
+  const s=f.w.get('session');
+  assert.equal(s.controlRevision,1);
+  assert.equal(f.r.wakeTurn.human,JSON.stringify([s.owner,s.controlRevision,s.connectionRevision]));
+});
+
+test('a cold adapter keeps a queued prompt after reloading the saved first prompt (T-138)', t => {
+  const before = fixture(t), id = randomUUID(), first = '  Original first prompt.\n', next = 'A different queued prompt.';
+  before.typed(id, first); before.start('retained-turn', id, { prompts: [id], rows: [] });
+  const f = fixture(t, before.saved()), original = structuredClone(f.rows()[0]);
+  assert.equal(f.r.promptTexts, undefined, 'The new adapter has no old in-memory first-text cache');
+  assert.equal(f.r.record.nativeId, before.r.record.nativeId);
+  f.start('retained-turn', id); const proof = f.r.wakeTurn.human;
+  f.typed(id, next); f.typed(id, next);
+  const rowId = `claude-prompt-${id}-q${promptTextTag(next)}`, row = f.rows().find(m => m.id === rowId);
+  assert.ok(row, 'The queued text must not collide with the persisted original row');
+  assert.equal(f.r.promptTexts.get(id), first, 'Recover the exact original text without trimming');
+  assert.equal(f.rows().filter(m => m.id === rowId).length, 1);
+  assert.equal(row.text, next); assert.equal(row.turnId, undefined);
+  assert.deepEqual(f.rows()[0], original, 'Saved original text, time, identity and metadata stay intact');
+  assert.equal(f.r.wakeTurn.human, proof, 'Recovering display text cannot recapture wake authority');
+  f.stop(id); f.end('retained-turn');
+  f.start('queued-turn', id, { prompts: [`${id}-q${promptTextTag(next)}`], rows: [] });
+  assert.equal(row.turnId, 'queued-turn');
+  assert.equal(f.r.record.messages.at(-1), row);
+  assert.ok(f.r.record.messages.findIndex(m => m.kind === 'turn' && m.turnId === 'retained-turn') < f.r.record.messages.indexOf(row));
+});
+
+for (const mismatch of ['native-context', 'unknown-context', 'role', 'origin', 'text']) test(`saved first-text recovery ignores an unrelated ${mismatch} (T-138)`, t => {
+  const f = fixture(t), id = randomUUID(), old = { id: `claude-prompt-${id}`, role: 'user', origin: 'native', nativeId: f.r.record.nativeId, text: 'Unrelated saved text.' };
+  if (mismatch === 'native-context') old.nativeId = randomUUID();
+  if (mismatch === 'unknown-context') delete old.nativeId;
+  if (mismatch === 'role') old.role = 'assistant';
+  if (mismatch === 'origin') old.origin = 'desktop';
+  if (mismatch === 'text') old.text = null;
+  f.r.record.messages.push(old);
+  assert.equal(f.r.promptFirstText(id, 'Actual first prompt.'), 'Actual first prompt.');
 });
 
 // T-133: an image in a prompt typed in the terminal, for that prompt's settings-hook row.

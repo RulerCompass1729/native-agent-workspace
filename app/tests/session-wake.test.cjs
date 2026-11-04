@@ -378,14 +378,25 @@ test('a turn end reported as a boundary withdraws its staged wake and says why (
   assert.match(row.text, /^发送方这一轮中途有新的输入或权限确认；自动消息未投递。/);
   assert.equal(f.writes.length, 0);
 });
-test('a wake staged after the person typed into the sender mid-turn is withdrawn at that turn\'s boundary end (T-141)', async t => {
-  // The typed input re-captures the turn for staging (workspace nativeInput → wake.nativeStart); only the
-  // boundary end keeps such a wake from being delivered.
-  const f = await fixture(t, 'claude');
-  f.ra.emit('nativeInput', 'The person types a second prompt', { id: 'typed-mid-turn', turnId: f.ra.turnId });
-  const staged = await f.call();
-  assert.equal(staged.status, 'staged');
-  await f.finish('boundary');
-  assert.equal(f.source.get(f.a).messages.find(m => m.wake).wake.status, 'cancelled');
-  assert.equal(f.writes.length, 0);
+test('an identical repeated Claude prompt cannot reauthorize a wake; a fresh turn can (T-141)', async t => {
+    const f = await fixture(t, 'claude');
+    const typed = () => f.ra.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.source.get(f.a).nativeId, prompt_id: f.ra.liveTurn.promptId, prompt: 'Continue one bounded task.' });
+    typed(); // The first hook may arrive after native turn-start.
+    typed(); // Native316/317 may reuse that same id/text for a mid-turn queued prompt.
+    await assert.rejects(async () => f.call(), error => error.uiMessage?.key === 'error.wake.turnRevokedByHuman');
+    assert.equal(f.source.get(f.a).messages.some(message => message.wake), false, 'No misleading registered wake after the boundary');
+    assert.equal(f.writes.length, 0);
+    await f.finish('boundary');
+    f.start('fresh-turn');
+    typed();
+    assert.equal((await f.call('Continue the new authorized turn.', 'fresh-call')).status, 'staged');
+    await f.finish();
+    assert.equal(f.writes.length, 1, 'A genuinely new native turn still transfers once');
+});
+test('a first Claude prompt hook arriving after native turn-start still authorizes its wake (T-141)', async t => {
+    const f = await fixture(t, 'claude');
+    f.ra.hook({ hook_event_name: 'UserPromptSubmit', session_id: f.source.get(f.a).nativeId, prompt_id: f.ra.liveTurn.promptId, prompt: 'The first human prompt.' });
+    assert.equal((await f.call()).status, 'staged');
+    await f.finish();
+    assert.equal(f.writes.length, 1);
 });
