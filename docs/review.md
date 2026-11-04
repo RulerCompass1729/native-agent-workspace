@@ -4431,3 +4431,16 @@ The public model-only test guard admits 318 only in this qualified zero-task
 submode; queue and inline-test version guards remain unchanged. Actual 318
 task delivery and context transitions remain unqualified; the whole goal stays
 open. New processes use this code; occupied older backends are preserved.
+
+
+I177 / pending-context header: real installed Claude 318 `/clear` changes the
+native UUID in the same process; `/status` still works. The GUI correctly keeps
+the old context pending and its draft read-only, with an explicit native-terminal
+action, but its header also incorrectly says it awaits native exit. Main reuses
+the existing context-unverified label only for this stopping/pending state;
+real exit, later error/ended states and the existing unfollowed-resume label stay
+distinct. Two bounded native trials remain failed harness runs (prompt-space,
+then wrapped-UUID parsing), with raw runtime observations derived separately;
+they are not relabelled passing suites. Source checks pass; installed repair
+acceptance is pending the next substantive batch. No new version for this
+small wording repair, no broader 318 context capability gate opened.

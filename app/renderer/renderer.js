@@ -24,6 +24,7 @@ function recoveryStatusSuffix(recovery, prefix = true) {
   return recovery ? (prefix ? ' · ' : '') + uiText(recovery.reason === 'routing' ? 'capacityBadge.routingStopped' : 'capacityBadge.capacityStopped') + uiText('capacityBadge.retried', { count: recovery.attempt }) : '';
 }
 const sessionStatus = (record, recoveryBadge = false) => {
+  if (record.state === 'stopping' && record.nativeContextPending && !switchedAway(record)) return uiText('collab.contextUnknown');
   const status = window.nativeWorkspaceFleet.fleetStatus(record, switchedAway(record) ? uiText('state.switched') : record.claudeQuestion ? uiText('state.question') : stateText(record), !disconnected, uiText);
   return status + recoveryStatusSuffix(recoveryBadge && exhaustedRecovery(record));
 };

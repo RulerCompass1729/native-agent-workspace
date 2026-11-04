@@ -142,3 +142,21 @@ test('capacity notices localize only owned labels without changing raw recovery 
     h.fire([row]); assert.equal(h.delivered.length, 1); assert.equal(JSON.stringify(row), before);
   }
 });
+
+
+for (const provider of ['claude', 'codex']) for (const reason of ['clear', 'terminal-switch']) for (const language of ['zh', 'en'])
+test(`pending ${provider} ${reason} header reports unverified context, not process exit: ${language}`, () => {
+  const row = record({ provider, state: 'stopping', nativeContextPending: { nativeId: 'native-a', reason }, liveDraft: 'UNSENT 原文' });
+  const before = JSON.stringify(row);
+  assert.equal(status(row, false, true, language), language === 'zh' ? '原生上下文待核对' : 'Native context unverified');
+  assert.equal(JSON.stringify(row), before);
+});
+test('real exit and an unfollowed resume keep their distinct existing header states', () => {
+  assert.equal(status(record({ state: 'stopping', capacityRecovery: null }), false), '等待原生退出确认');
+  assert.equal(status(record({ state: 'stopping', capacityRecovery: null, nativeContextPending: { nativeId: 'native-a', reason: 'resume' } }), false), '原生已切换会话');
+});
+
+for (const [state, expected] of [['ended', 'Ended'], ['error', 'Needs attention']])
+test(`a later ${state} is not hidden by retained context-pending metadata`, () => {
+  assert.equal(status(record({ state, capacityRecovery: null, nativeContextPending: { nativeId: 'native-a', reason: 'clear' } }), false, true, 'en'), expected);
+});
