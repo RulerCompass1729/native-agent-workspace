@@ -2947,8 +2947,12 @@ and interface checks, not tests of hosted model reasoning or complete U17 parity
 
 Use `NAW_MODEL_ONLY=1 node scripts/test-native-queue.cjs` after building the UI,
 or the same flag with `scripts/test-native-retained-claude.cjs` and its pinned
-302 executable. These actual Electron/native journeys reject every inference
-request. Native `/model` selection must update the existing title, preserve the
+302 executable. The solo model-only queue journey starts no model HTTP responder;
+it sends local commands, with an offline loopback endpoint. It cannot count failed
+HTTP attempts. The older responder-based journey rejects inference requests.
+Select an already qualified cached CLI through an owned runtime configuration;
+316/317 are allowed for the model-only path, while 318 remains unqualified.
+Native `/model` selection must update the existing title, preserve the
 same native identity/process and unsent draft, and survive GUI/whole-app reopen.
 Retained reopen ends on a model different from the original startup selection.
 Neither the user profile nor its native model configuration is changed.
@@ -4987,3 +4991,15 @@ is $0.8253588, not an invoice or sum of resumed totals. Ordinary visible daily
 update preserves 14 records, 16 live identities, 12 view drafts/settings,
 7 occupied older backends and the original active goal across 150 seconds.
 Daily gestures, OS clipboard and whole goal remain open.
+
+
+I175: the actual signed alpha.184 GUI with real cached Claude 2.1.317 passes
+three Sonnet/Haiku/Sonnet local commands and a page reload, preserving native
+identity/PID, unsent draft and visible model. One owned run exits 0 in 11 seconds.
+No operator model HTTP responder starts: a positive-control listener guard blocks
+before binding and records no actual listen attempt. GUI dispatches stay zero;
+native history contains no assistant rows and its cost state reports no API time.
+Failed HTTP attempts are not metered by this offline case; no global network
+audit is claimed. Owned roots are removed and the installed signature/CDHash
+stays unchanged after native testing. This is neither a daily gesture nor a
+window-only, process-recovery, 318 or whole-milestone certificate.

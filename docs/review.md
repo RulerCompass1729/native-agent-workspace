@@ -4385,3 +4385,13 @@ its five assertion groups, but its nested exit remains unknown after a wrapper
 parser failure. Owned-resource recovery is separate evidence; no new GUI run or
 whole-GUI pass is claimed. This changes no product file, packaged behavior or
 provider qualification, so unchanged installed alpha.184 acceptance is reused.
+
+
+I175 scoped zero-task model journey: independent review accepts the test-only
+listener removal and actual signed 317 model/header/draft/reload evidence,
+subject to two LOW corrections. The unqualified 312 model-only guard entry is
+removed; normal queue/shared and inline guards remain unchanged. Documentation
+now states the failed-HTTP-attempt measurement limit instead of treating an
+unstarted responder's counter as proof. No app file or version changes, and no
+new model listener or paid inference is needed for this one existing journey.
+Other response-based tests and 318 qualification remain open.

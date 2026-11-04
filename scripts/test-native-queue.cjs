@@ -13,6 +13,8 @@ const { connectService } = require(path.join(code, 'app/service-client.cjs'));
 const { executable, processIdentity } = require(path.join(code, 'app/platform.cjs'));
 const shared = process.env.NAW_QUEUE_SHARED === '1';
 const modelOnly = process.env.NAW_MODEL_ONLY === '1';
+// The solo model-switch journey sends no task and needs no model responder.
+const noModelServer = modelOnly && !shared;
 const inlineTrial = process.env.NAW_NATIVE_INLINE_TRIAL === '1';
 const inlineTool = process.env.NAW_NATIVE_INLINE_TOOL === '1';
 assert.ok(!inlineTool || inlineTrial);
@@ -23,7 +25,7 @@ const profile = path.join(base, 'profile'), cwd = path.join(base, 'work'), confi
 for (const dir of [profile, cwd, config]) fs.mkdirSync(dir, { mode: 0o700 });
 const located = executable('claude'), binary = located && fs.realpathSync(located); if (!binary) throw Error('Real Claude CLI required');
 const nativeVersion = testScratch.childProcess.execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : /^2\.1\.(308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
+assert.match(nativeVersion, inlineTrial ? /^2\.1\.312\b/ : noModelServer ? /^2\.1\.(308|309|310|311|316|317)\b/ : /^2\.1\.(308|309|310|311)\b/, 'Verify the updated native contract before sending a test task');
 let application, page, client, calls = 0, held, releaseFinal, pausedNative;
 let budgetError, toolMarker;
 const errors = [], checks = [];
@@ -83,12 +85,13 @@ async function cleanup() {
   server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
 }
 (async () => {
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  if (!noModelServer) await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const modelEndpoint = noModelServer ? 'http://127.0.0.1:9' : `http://127.0.0.1:${server.address().port}`;
   const shim = path.join(base, 'claude-local');
   // A selected executable is the supported native-discovery setting. No
   // production adapter methods are replaced by this test.
   fs.writeFileSync(shim, '#!/usr/bin/python3\nimport os,sys\nos.environ.pop("ANTHROPIC_AUTH_TOKEN",None)\nos.environ.pop("CLAUDE_CODE_OAUTH_TOKEN",None)\nos.environ.update(' +
-    `ANTHROPIC_BASE_URL=${JSON.stringify(`http://127.0.0.1:${server.address().port}`)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",DISABLE_AUTOUPDATER="1")\n` +
+    `ANTHROPIC_BASE_URL=${JSON.stringify(modelEndpoint)},ANTHROPIC_API_KEY="local-fixture",CLAUDE_CONFIG_DIR=${JSON.stringify(config)},CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",DISABLE_AUTOUPDATER="1")\n` +
     `os.execv(${JSON.stringify(binary)},["claude"]+sys.argv[1:]+${JSON.stringify(inlineTool ? ['--model', 'haiku', '--permission-mode', 'default', '--allowedTools', 'Bash(printf:*)', 'Bash(sleep:*)'] : ['--model', 'haiku', '--allowedTools', 'Bash(printf:*)'])})\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark', projects: { [fs.realpathSync(cwd)]: { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
   fs.writeFileSync(path.join(profile, 'runtime-locations.json'), JSON.stringify({ claude: shim }), { mode: 0o600 });
@@ -111,13 +114,17 @@ async function cleanup() {
   }
   await until(async () => (await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key') || (await snapshot()).sessions[0]?.chatAvailable, 'Native key prompt');
   if ((await page.locator('#terminal-area').innerText()).includes('Do you want to use this API key')) {
-    await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowUp'); await sleep(200); await page.keyboard.press('Enter');
+    await page.locator('#terminal-area .xterm-screen').click(); await page.keyboard.press('ArrowUp');
+    await until(async () => /^❯\s*Yes(?:\s|$)/.test((await terminalText()).split('\n').filter(line => line.trim().startsWith('❯')).at(-1)?.trim() || ''), 'Native fixture key choice is visibly selected');
+    await page.keyboard.press('Enter');
   }
   await until(async () => (await snapshot()).sessions[0]?.chatAvailable, 'Native submission bridge', 60000);
   if (modelOnly) {
     await require('./native-model-check.cjs')({ page, snapshot, base });
     assert.equal(calls, 0); assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ checks: ['Native model switches and GUI reload preserve identity/draft and match actual header'], nativeVersion, modelCalls: calls, errors, evidence: base })); return;
+    if (noModelServer) { assert.equal(server.listening, false); assert.equal((await snapshot()).diagnostics.dispatches, 0); }
+    // With no responder, calls is not a measurement of attempted HTTP requests.
+    console.log(JSON.stringify({ checks: ['Native model switches and GUI reload preserve identity/draft and match actual header'], nativeVersion, modelCalls: noModelServer ? undefined : calls, modelResponderStarted: !noModelServer, guiDispatches: (await snapshot()).diagnostics.dispatches, errors, evidence: base })); return;
   }
   const before = (await snapshot()).sessions[0];
   assert.equal(before.queueAvailable, true);
