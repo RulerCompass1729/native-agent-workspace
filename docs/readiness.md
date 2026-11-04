@@ -4,7 +4,16 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.188, committed build source `90eff945`. A newly opened
+Current daily GUI: alpha.189, committed build source `97377d0`. A collaboration
+member's lower native terminal keeps a manual drag or history read through passive
+output; explicit input still follows the native cursor. The exact signed candidate
+and actual installed executable pass the complete synthetic GUI journey, with
+unchanged native identities, owners and drafts. Independent scoped source and
+signed-path review pass. The visible update retains 14 records, 16 live native
+identities, 12 view drafts and seven occupied old backends after 150 seconds.
+Physical trackpad/current CLI and broader T59 observations remain open.
+
+Previously qualified alpha.188, committed build source `90eff945`. A newly opened
 reader keeps its live follow target when folded native process records make the
 current page short and automatic paging fills it. Manual reading stays independent;
 Home, JumpLatest and native completion retain their existing behavior. The actual

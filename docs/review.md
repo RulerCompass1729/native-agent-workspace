@@ -4622,3 +4622,17 @@ metadata, live terminal buffer and strict signature checks pass. Independent res
 review accepts this scoped recovery. The actual saved draft was empty; nonempty
 draft proof remains the earlier owned rehearsal. No screen paint, focus, layout,
 window-only, closed-window goal, Claude recovery or whole-milestone claim is made.
+
+
+### 2026-11-04 — T59 lower terminal, scoped installed fix
+
+C2 reproduces a focused lower terminal snapping from outer position461 to2 on
+passive output. Its exact reviewed patch retains manual pointer/wheel reading;
+validated paste/keyboard/IME restore cursor following. Main adopts it unchanged,
+excluding unrelated WIP. The final signed candidate and actual installed189
+complete the whole corrected journey, retaining history, native input routing,
+shared receipt and per-session draft/identity. Source and signed-scope independent
+judgments are reused for the identical bytes; installation/template/count records
+are checked by program. The initial bounded review has no verdict, not a pass;
+the same reviewer then approves the scoped signed result. No physical/current-CLI,
+paste-GUI, broad-T59 or full milestone closure is inferred.

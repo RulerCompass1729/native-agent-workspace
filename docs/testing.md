@@ -5125,3 +5125,26 @@ accepts this scoped result, with final cumulative CLI list cost 1.366408 (not an
 invoice or a sum across resumes). Normal developer inference is used. Window-only,
 closed-window continuation, actual Claude loss, physical/focus/layout and the whole
 milestone remain open. No second fault or new product release is required.
+
+
+### 2026-11-04 — Lower native terminal manual reading
+
+The qualified three-file source handoff retains 20 affected passing checks and a
+guard-removal mutation failure. Main preserves the source assertions while using
+the existing signed renderer launcher. Both the committed candidate and actual
+Applications executable pass the whole journey: focused/unfocused drag remains
+at 461 through output, history stays at 82, an explicit key reveals the cursor,
+and Solo history stays at 127. One shared send, exactly Escape plus one key,
+original identities/owners/drafts and zero real-provider/product-model calls are
+verified. Owned cleanup takes 1.377s/2.430s; strict signatures remain intact.
+Normal signed bootstrap also passes. The final paste reset has unit coverage,
+not GUI/physical qualification. Earlier partial failures remain evidence.
+
+Independent scoped signed acceptance passes after an initial max-turn non-pass;
+its final cumulative CLI list cost is 0.9097314, not an invoice or a resume sum.
+The daily operator/writer match the previous reviewed template except versions
+and bound hashes. An unarmed invocation is refused before service/process input;
+the correctly armed visible update retains 14 records, 16 live native identities,
+12 draft scopes and seven old backends over 150s. Exact source, payload, actual
+installed replay and counts are mechanically checked; no extra record review.
+Physical trackpad/iTerm/current CLI, broader T59 and the whole goal remain open.
