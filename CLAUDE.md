@@ -2,6 +2,13 @@
 
 This file is shared by Claude Code and Codex. `AGENTS.md` points to this file.
 
+## Vision first (the person, 2026-11-04)
+
+All development serves the vision at the top of `docs/product.md`: 一个入口，用好所有 agent。你只管说要做什么，NAW 去找到或者新开对的 agent 接住它。
+- A new feature or design proposal states which part of the vision it serves: the problem, the approach, who it is for, its form, or a success marker. Repairs and maintenance need not.
+- When a feature, a requirement or the vision itself seems wrong or in conflict, do not choose silently. Add a row with the reason, evidence and a suggested resolution to 「与愿景的张力」 in `docs/product.md` (public-safe facts only), and ask the person on the task board. Like spending or publishing choices, this waits for the person's explicit answer; no default takes effect after a timeout. Existing requirements stay in force until the person decides.
+- The vision is direction, not implementation authorization. Privacy, cost and approval rules still apply.
+
 Read `README.md`, `docs/product.md`, and `docs/readiness.md` before changing scope.
 The current phase is a local desktop demo built on DeepSeek Harness. Preserve
 that foundation and the native session service when improving either GUI or TUI.

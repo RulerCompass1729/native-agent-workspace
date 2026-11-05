@@ -1,5 +1,12 @@
 # Native Agent Workspace
 
+**一个入口，用好所有 agent。你只管说要做什么，NAW 去找到或者新开对的 agent 接住它；你的注意力只花在事情本身，不再花在找它在哪。**
+
+*One entry to every agent — you say what, NAW finds where.*
+
+This vision guides all development. It describes direction, not current capability.
+What it means, how success is judged and its open tensions are in [the product vision](docs/product.md#愿景).
+
 **Working repository name. Product name is still being explored.**
 
 A desktop workspace where people can use their existing agents individually or together, without rebuilding their habits around an orchestration tool.
@@ -197,7 +204,7 @@ not a prerequisite for building this DMG. No public binary is published yet.
 
 | Document | Purpose |
 | --- | --- |
-| [Product](docs/product.md) | Confirmed requirements, boundaries, and what success means |
+| [Product](docs/product.md) | Vision, its open tensions, confirmed requirements, boundaries, and what success means |
 | [Interaction](docs/interaction.md) | Solo use, collaboration, moving sessions, and taking control |
 | [Architecture](docs/architecture.md) | Session ownership, native adapters, routing, privacy, and recovery |
 | [Foundation decision](docs/foundation.md) | What to reuse from DeepSeek Harness and what remains unproved |
