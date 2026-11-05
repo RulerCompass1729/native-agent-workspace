@@ -5,12 +5,19 @@ const snapshot = page => page.evaluate(() => workspace.initial());
 const identity = s => s.sessions.map(x => [x.id, x.nativeId, x.pid, x.messages.length]);
 const focus = (page, id) => page.waitForFunction(id => document.activeElement?.classList.contains('xterm-helper-textarea') && document.activeElement.closest('[data-terminal-id]')?.dataset.terminalId === id, id);
 const tab = (page, id) => page.locator(`[data-room-session="${id}"]`);
+const openTerminal = async (page, id) => {
+  await tab(page, id).click();
+  // A member tab is passive and restores that member's saved mode.
+  await page.locator('#terminal-tab').click();
+  await focus(page, id);
+};
+const placed = s => Boolean(s.roomId || s.roomIds !== undefined && (!Array.isArray(s.roomIds) || s.roomIds.length));
 
 async function checkRoom(page, application, result) {
   const before = await snapshot(page);
   // Never alter an active task or a room already used by the person.
-  const people = before.sessions.filter(s => s.owner === before.owner && s.state === 'idle' && s.terminalAvailable && !s.roomId && !s.liveDraft && !s.messages.length);
-  if (before.room.run || before.room.messages.length || before.sessions.some(s => s.roomId) || people.length !== 2) {
+  const people = before.sessions.filter(s => s.owner === before.owner && s.state === 'idle' && s.terminalAvailable && !placed(s) && !s.liveDraft && !s.messages.length);
+  if (before.room.run || before.room.messages.length || before.sessions.some(placed) || people.length !== 2) {
     result.skipped = true;
     console.log('SKIP: room workflow needs exactly two controlled, empty idle terminals and an unused room.');
     return;
@@ -26,17 +33,17 @@ async function checkRoom(page, application, result) {
   await page.locator('#room-nav').click();
   const joined = await snapshot(page);
   for (const person of people) {
-    await tab(page, person.id).click(); await focus(page, person.id);
+    await openTerminal(page, person.id);
     assert.equal(await page.locator('#room-session #terminal-area').isVisible(), true);
-    assert.equal(await page.locator('#pause-button').isVisible(), true);
+    assert.equal(await page.locator('#pause-button').isVisible(), false, 'No handoff is running');
     assert.equal(await page.locator('#terminal-paste').isEnabled(), true);
     assert.equal(await tab(page, person.id).getAttribute('aria-pressed'), 'true');
-    assert.match(await page.locator('#room-scope').innerText(), /查看不会新增共享/);
+    assert.match(await page.locator('#room-scope').innerText(), /终端输入不自动共享/);
     // The terminal element survives a shared-record visit, including selection.
     const handle = await page.locator(`[data-terminal-id="${person.id}"]`).elementHandle();
     await page.locator('#room-record').focus(); await page.keyboard.press('Enter');
     assert.equal(await page.locator('#room-record-view').isVisible(), true);
-    await tab(page, person.id).click(); await focus(page, person.id);
+    await openTerminal(page, person.id);
     assert.equal(await handle.evaluate(el => el.isConnected && el === document.querySelector(`[data-terminal-id="${el.dataset.terminalId}"]`)), true);
     await handle.dispose();
   }
@@ -62,18 +69,27 @@ async function checkRoom(page, application, result) {
   } finally { await second.close(); }
   assert.equal(application.windows().length, 1);
 
+  const beforeDetach = await snapshot(page);
   await page.locator('#header-actions').getByRole('button', { name: '离开此空间', exact: true }).click();
-  await page.locator('#solo-session #terminal-area').waitFor({ state: 'visible' });
-  await focus(page, person.id);
+  await page.waitForFunction(async id => {
+    const state = await workspace.initial();
+    return !state.sessions.find(s => s.id === id).roomId && state.viewState.selected === 'room' && state.viewState.roomSession === '';
+  }, person.id);
   const detached = await snapshot(page);
   assert.equal(detached.sessions.find(s => s.id === person.id).roomId, null);
-  assert.equal(detached.viewState.selected, person.id);
+  assert.equal(detached.viewState.selected, 'room');
+  assert.equal(detached.viewState.roomSession, '');
+  assert.equal(await page.locator('#room-view').isVisible(), true);
+  assert.deepEqual(detached.sessions.map(s => [s.id, s.owner, s.controlRevision]), beforeDetach.sessions.map(s => [s.id, s.owner, s.controlRevision]));
   assert.deepEqual(identity(detached), identity(before));
+  // Returning to the detached session is an explicit, separate human action.
+  await page.locator(`[data-session-id="${person.id}"]`).click();
+  await page.locator('#solo-session #terminal-area').waitFor({ state: 'visible' });
   await joinSpace(page);
   await page.waitForFunction(async id => (await workspace.initial()).sessions.find(s => s.id === id).roomId === 'shared', person.id);
   await page.locator('#room-nav').click();
   assert.equal(await page.locator('#room-view').isVisible(), true, 'Room navigation must open the room after rejoin');
-  await tab(page, person.id).click(); await focus(page, person.id);
+  await openTerminal(page, person.id);
   await page.waitForFunction(async id => { const v = (await workspace.initial()).viewState; return v.selected === 'room' && v.roomSession === id; }, person.id);
   const after = await snapshot(page);
   assert.equal(after.diagnostics.dispatches, before.diagnostics.dispatches);
@@ -94,7 +110,7 @@ async function checkRoom(page, application, result) {
       await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'room-terminal-small.png') });
       await page.locator('#room-record').click();
       await page.screenshot({ path: path.join(process.env.NAW_EVIDENCE_DIR, 'room-record-small.png') });
-      await tab(page, person.id).click(); await focus(page, person.id);
+      await openTerminal(page, person.id);
     }
   } finally { await nativeWindow.evaluate((win, value) => win.setBounds(value), bounds); }
   result.selected = person.id;

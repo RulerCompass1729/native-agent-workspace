@@ -6892,3 +6892,56 @@ reviewer asked for state proofs, exact known forms, wider scanning and an
 early slot release; the same reviewer approved the delta. Not covered:
 terminal content, OS menus and notifications, canvas and shadow DOM, notices
 shorter than the settle delay, a recovering terminal, installed builds.
+
+# T151: qualify the exported desktop collaboration checks
+
+The room checks now enter a member's native terminal explicitly after choosing
+its passive tab. They expect the existing hidden pause action when no handoff
+is running, check the current no-automatic-sharing notice, and keep the person
+in the space after a member leaves. Returning to that same native session is a
+separate explicit action. Original terminal selection, control revisions,
+second-window takeover, native identity/history and no-dispatch assertions remain.
+
+The shared membership helper is an exact reuse of the already committed
+`0d15bd9` dependency, including both join and move confirmation text. It is not a
+new fixture repair. A separate precondition fix refuses sessions that belong to
+any space through canonical `roomIds`, including an unknown membership shape;
+the old guard checked only the legacy default-space alias. Its focused checks
+prove refusal before a UI action and preserve the independent positive branch.
+
+Three isolated synthetic GUI attempts are retained. The first old and candidate
+runs stop at the outdated dependency's confirmation wait. After adopting the
+existing dependency, the old check genuinely times out waiting for terminal
+focus; the candidate reaches explicit takeover, then stops at an author mistake:
+the test used the hidden session menu for the room's visible leave button. That
+change was reverted. A finite final correction passes all four groups: the old
+failure and cleanup, the complete current room workflow including minimum-window
+and light/dark media checks, verification after renderer reload, and restoration.
+All three owned application/daemon/profile sets and exact GUI tokens are cleaned.
+The aggregate whole-run time is 33.503 seconds. No daily application, real provider,
+model task, native input, message send or OS clipboard action was involved.
+
+The final refusal guard was added after GUI qualification and passes focused
+source checks; it was not followed by a fourth GUI run. The existing independent
+two-session GUI fixture still reaches the guarded positive branch. A renderer
+reload is not a normal application reopen. Real native providers, actual user
+profiles, normal reopen, installed behavior and the other T151 scripts remain
+outside this source qualification. The complete original desktop suite was not run.
+
+T151 adaptation to main 81a52d3 (Claude 3, 2026-11-08): since 3751738 a fresh
+profile hides the untouched 共同工作 space (allSpaces), so the test's shared-draft
+step could not open it before any session joined. The test now saves shared notes
+through the space notes action (with the space's metadataRevision) before its
+first snapshot; selectors and expectations are unchanged. On 81a52d3 the final
+test file passed its three groups (checkRoom, verifyRoom after a renderer reload,
+restoreRoom with identity, owner and shared-draft invariants) in 3 of 4 runs, in
+about 5 seconds each; an earlier version of the seed also passed once. One run
+failed at check-room.cjs:81, an assertion this change brings in: right after a
+member left the space, the selected member (viewState.roomSession) was empty when
+awaited and set to that member again in the next snapshot. This window's renderer
+set it back (each window saves only its own view, in order); the likeliest path is
+the member overview's focus callback while the local state still listed that
+member, which a person could also see. It is recorded on T-151 and not changed
+here; whether to merge with it is the integrator's decision.
+The old-check baseline (NAW_CHECK_ROOM_BASELINE) was not rerun on this main; the
+four-group, 33.503 s result above is the original lane's run.
