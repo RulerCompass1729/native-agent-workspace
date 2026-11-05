@@ -119,3 +119,27 @@ test('clearing a named space passes on a service\'s report that cached images co
     assert.deepEqual(await client.callSpace(a, 'clearSharedHistory', []), left ? { imagesLeft: true } : true);
   }
 });
+
+
+for (const method of ['forward','steerShared','queueShared']) for (const qualified of [false,true]) test(`space ownership ${method} other view qualified=${qualified}`,async t=>{
+ const f=fixture(t),{one,client,a}=f;one.actual.owner='space-view';const s=one.actual.sessions[0];Object.assign(s,{owner:'private-view',state:method==='forward'?'idle':'working',activeTurnId:'active',steerAvailable:true,queueAvailable:true,provider:method==='queueShared'?'claude':'codex'});
+ one.actual.capabilities.push('nativeSteer','nativeSharedSteer','nativeQueue','nativeSharedQueue');if(qualified)one.actual.capabilities.push('sharedInputOwnershipV1');one.state=structuredClone(one.actual);
+ const args=method==='steerShared'?['one','EXPLICIT BODY','native-one','active']:['one','EXPLICIT BODY','native-one'];
+ if(!qualified){await assert.rejects(client.callSpace(a,method,args),e=>e.uiMessage?.key==='error.sharedInputOwnershipUnavailable');assert.equal(one.calls.some(c=>c[0]==='spaceAction'&&c[2]===method),false)}
+ else{await client.callSpace(a,method,args);const calls=one.calls.filter(c=>c[0]==='spaceAction'&&c[2]===method);assert.equal(calls.length,1);assert.equal(calls[0][4].one.owner,'private-view');assert.equal(calls[0][4].one.nativeId,'native-one');assert.equal(calls[0][4].one.roomId,a);assert.equal(one.actual.sessions[0].owner,'private-view')}
+ assert.equal(one.actual.sessions[0].liveDraft,'unsent');
+});
+for(const method of ['forward','steerShared','queueShared'])test(`space ownership ${method} rejects a newer takeover before routing`,async t=>{
+ const {one,client,a}=fixture(t);one.actual.owner='space-view';Object.assign(one.actual.sessions[0],{owner:'private-view',state:method==='forward'?'idle':'working',activeTurnId:'active',steerAvailable:true,queueAvailable:true,provider:method==='queueShared'?'claude':'codex'});one.actual.capabilities.push('nativeSteer','nativeSharedSteer','nativeQueue','nativeSharedQueue','sharedInputOwnershipV1');one.state=structuredClone(one.actual);
+ client.pauseExcept=async()=>{one.actual.sessions[0].owner='new-human';one.actual.sessions[0].controlRevision++;await client.refresh()};
+ await assert.rejects(client.callSpace(a,method,method==='steerShared'?['one','STALE BODY','native-one','active']:['one','STALE BODY','native-one']));assert.equal(one.calls.some(c=>c[0]==='spaceAction'&&c[2]===method),false);assert.equal(one.actual.sessions[0].owner,'new-human');assert.equal(one.actual.sessions[0].liveDraft,'unsent');
+});
+
+for(const method of ['steer','queue'])test(`space ownership capability never authorizes private ${method} from another view`,async t=>{
+ const {one,client}=fixture(t);one.actual.owner='space-view';Object.assign(one.actual.sessions[0],{owner:'private-view',state:'working',activeTurnId:'active',steerAvailable:true,queueAvailable:true,provider:method==='queue'?'claude':'codex'});one.actual.capabilities.push('nativeSteer','nativeSharedSteer','nativeQueue','nativeSharedQueue','sharedInputOwnershipV1');one.state=structuredClone(one.actual);
+ await assert.rejects(client.call(method,...(method==='steer'?['one','PRIVATE BODY','native-one','active']:['one','PRIVATE BODY','native-one'])));assert.equal(one.calls.some(c=>c[0]===method),false);assert.equal(one.actual.sessions[0].owner,'private-view');assert.equal(one.actual.sessions[0].liveDraft,'unsent');
+});
+
+for(const unknown of [null,undefined])test(`space ownership unknown legacy controller ${unknown} is never assumed to be this view`,async t=>{
+ const {one,client,a}=fixture(t);one.actual.sessions[0].owner=unknown;one.state=structuredClone(one.actual);await assert.rejects(client.callSpace(a,'forward',['one','NO IMPLICIT CLAIM','native-one']),e=>e.uiMessage?.key==='error.sharedInputOwnershipUnavailable');assert.equal(one.calls.some(c=>c[0]==='spaceAction'&&c[2]==='forward'),false);assert.equal(one.actual.sessions[0].owner,unknown);
+});

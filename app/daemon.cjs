@@ -6,7 +6,7 @@ const net = require('node:net');
 const crypto = require('node:crypto');
 const { NativeHost } = require('./adapters.cjs');
 const { Workspace } = require('./workspace.cjs');
-const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED } = require('./peer-handoffs.cjs');
+const { PeerLeases, PeerRunner, CAPABILITY, DIRECTED, identity: peerIdentity } = require('./peer-handoffs.cjs');
 const { readFrames, REQUEST_BYTES, encodeFrame, createWriter } = require('./service-transport.cjs');
 const { roomId: validRoomId, isMember, membershipRevision } = require('./collaboration-spaces.cjs');
 const { displayMessage } = require('./ui-locale.js');
@@ -47,10 +47,10 @@ async function main() {
   workspace.on('terminal', data => broadcast('terminal', data));
   workspace.on('progress', data => broadcast('progress', data));
   let shuttingDown = false;
-  const dispatch = async (owner, method, args, client, roomId = 'shared', scoped = false) => {
+  const dispatch = async (owner, method, args, client, roomId = 'shared', scoped = false, inputProof = false) => {
     if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'sharedInputOwnershipV1', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
@@ -59,8 +59,19 @@ async function main() {
         const [space, action, values, expected] = args, bounds = { join: 3, forward: 5, queueShared: 4, steerShared: 5, run: 7, pause: 0, clearSharedHistory: 0 };
         if (roomId !== 'shared' || !validRoomId(space) || !Object.hasOwn(bounds, action) || !Array.isArray(values) || values.length > bounds[action]) throw uiError("error.invalidSpaceAction");
         const ids = action === 'run' ? values[0] : ['forward', 'queueShared', 'steerShared'].includes(action) ? [values[0]] : [];
-        if (!Array.isArray(ids) || ids.some(id => { const s = workspace.get(id); return !expected || !isMember(s, space) || expected[id] !== membershipRevision(s, space); })) throw uiError("error.spaceMembershipChangedNoDispatch");
-        return dispatch(owner, action, values, client, space, true);
+        const sharedInput = ['forward', 'queueShared', 'steerShared'].includes(action);
+        let proven = false;
+        if (!Array.isArray(ids) || ids.some(id => {
+          const s = workspace.get(id), proof = expected?.[id];
+          if (!isMember(s, space)) return true;
+          if (sharedInput && proof && typeof proof === 'object' && !Array.isArray(proof)) {
+            proven = JSON.stringify(peerIdentity(s, space)) === JSON.stringify(proof);
+            if (!proven) throw uiError('error.client.currentNativeSessionOrControlChanged');
+            return false;
+          }
+          return proof !== membershipRevision(s, space);
+        })) throw uiError("error.spaceMembershipChangedNoDispatch");
+        return dispatch(owner, action, values, client, space, true, proven);
       }
       case 'mobileRead': return workspace.mobileRead(args[0]);
       case 'mobileSend':
@@ -106,6 +117,7 @@ async function main() {
       case 'draft': return workspace.setDraft(args[0], args[1], owner);
       case 'queue':
       case 'queueShared': {
+        if (method === 'queueShared' && workspace.get(args[0]).owner !== owner && !inputProof) throw uiError('error.sharedInputOwnershipUnavailable');
         workspace.assertNativeContext(args[0], args[2]);
         const nativeId = workspace.get(args[0]).nativeId;
         const tag = await workspace.queue(args[0], args[1], owner, method === 'queueShared' ? { replyTo: args[3], roomId } : null);
@@ -114,6 +126,7 @@ async function main() {
       }
       case 'steer':
       case 'steerShared': {
+        if (method === 'steerShared' && workspace.get(args[0]).owner !== owner && !inputProof) throw uiError('error.sharedInputOwnershipUnavailable');
         workspace.assertNativeContext(args[0], args[2]);
         const nativeId = workspace.get(args[0]).nativeId;
         const tag = await workspace.steer(args[0], args[1], owner, args[3], method === 'steerShared' ? { replyTo: args[4], roomId } : null);
@@ -139,6 +152,7 @@ async function main() {
         if (!scoped) return args[0]?.withdrawWakes === true ? workspace.pauseAll('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。', uiNotice('notice.run.humanPaused').uiMessage) : workspace.pause('你暂停了后续交接；已经开始的原生工作仍由原生会话管理。', undefined, false, uiNotice('notice.run.humanPaused').uiMessage);
         return workspace.pauseRoom(roomId, '你暂停了这个空间的后续交接；已接收的原生工作保留。', uiNotice('notice.run.humanSpacePaused').uiMessage);
       case 'forward': {
+        if (method === 'forward' && workspace.get(args[0]).owner !== owner && !inputProof) throw uiError('error.sharedInputOwnershipUnavailable');
         workspace.assertNativeContext(args[0], args[2]);
         const nativeId = workspace.get(args[0]).nativeId;
         const tag = await workspace.forward(args[0], args[1], owner, args[3], roomId, args[4]);

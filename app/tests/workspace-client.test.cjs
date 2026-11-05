@@ -209,6 +209,8 @@ test('late initial replies cannot overwrite a replaced connection or carry queue
 test('queued native intents never cross maintenance or silently use a replacement socket', async () => {
   for (const method of ['input', 'send', 'resume', 'claim']) {
     const { c, next } = fixture(); let release, calls = 0;
+    // This case must actually take control; an already-owned claim intentionally skips pause.
+    if (method === 'claim') for (const state of [next.state, next.real]) state.sessions[0].owner = 'another-view';
     c.pauseExcept = async () => new Promise(resolve => { release = resolve; });
     const pending = c.call(method, 'new', 'Old intent');
     assert.equal(typeof release, 'function');
@@ -269,7 +271,7 @@ test('portal archive authorization is checked again after a delayed pause for al
 function fixture() {
   const scope = Symbol();
   const make = (key, capabilities, sessions) => {
-    const real = { owner: 'view', runtimeVersion: key, capabilities, sessions, diagnostics: { dispatches: 0, shellModelCalls: 0 }, room: { revision: 0, messages: [], run: null } };
+    const real = { owner: 'view', runtimeVersion: key, capabilities, sessions: sessions.map(s => ({ owner: 'view', ...s })), diagnostics: { dispatches: 0, shellModelCalls: 0 }, room: { revision: 0, messages: [], run: null } };
     let sequence = 0;
     return () => {
       const client = new EventEmitter(), calls = [];

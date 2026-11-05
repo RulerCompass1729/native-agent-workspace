@@ -384,11 +384,17 @@ class WorkspaceClient extends EventEmitter {
     if (!spaces.roomId(roomId) || !SPACE_METHODS.has(method) || !Array.isArray(args)) return Promise.reject(uiError("error.invalidSpaceAction"));
     return this.callScoped(roomId, method, [...args], true);
   }
-  invoke(entry, roomId, method, args, scopedPause = false) {
-    if (roomId === 'shared' && !(method === 'join' && args[2] !== undefined) && (!scopedPause || !entry.state.capabilities?.includes('collaborationSpacesV1'))) return entry.client.call(method, ...args);
+  sharedInputController(entry, record) {
+    if (record?.owner === entry.state.owner) return entry.state.owner;
+    if (!entry.state.capabilities?.includes('sharedInputOwnershipV1') || this.control.legacyInput?.connected(record)) throw uiError('error.sharedInputOwnershipUnavailable');
+    return record.owner;
+  }
+  invoke(entry, roomId, method, args, scopedPause = false, inputProofs) {
+    const sharedInput = ['forward', 'queueShared', 'steerShared'].includes(method) && entry.state.capabilities?.includes('sharedInputOwnershipV1');
+    if (roomId === 'shared' && !sharedInput && !(method === 'join' && args[2] !== undefined) && (!scopedPause || !entry.state.capabilities?.includes('collaborationSpacesV1'))) return entry.client.call(method, ...args);
     if (!entry.state.capabilities?.includes('collaborationSpacesV1')) throw uiError(roomId === 'shared' ? 'error.client.legacyUndoUnsupported' : 'error.client.legacySpaceUnsupported');
     const ids = method === 'run' ? args[0] : ['forward', 'queueShared', 'steerShared'].includes(method) ? [args[0]] : [];
-    const expected = Object.fromEntries(ids.map(id => [id, spaces.membershipRevision(entry.state.sessions.find(s => s.id === id), roomId)]));
+    const expected = Object.fromEntries(ids.map(id => [id, sharedInput ? inputProofs?.[id] || peerIdentity(entry.state.sessions.find(s => s.id === id), roomId) : spaces.membershipRevision(entry.state.sessions.find(s => s.id === id), roomId)]));
     return entry.client.call('spaceAction', roomId, method, args, expected);
   }
   async callScoped(roomId, method, args, scoped = false) {
@@ -502,6 +508,7 @@ class WorkspaceClient extends EventEmitter {
     replyGuard();
     let contextGuard = replyGuard, runIdentities;
     const displayedIdentities = method === 'run' ? args[7] : undefined;
+    let sharedInputProofs;
     if (['send', 'forward', 'run'].includes(method)) {
       const ids = method === 'run' ? args[0] : [args[0]], index = method === 'run' ? 5 : 2;
       if (!Array.isArray(ids)) throw uiError("error.invalidSessionSelection");
@@ -517,13 +524,18 @@ class WorkspaceClient extends EventEmitter {
         return [{ id, entry, nativeId, member: spaces.membershipRevision(record, roomId), identity: displayedIdentities?.[id] || peerIdentity(record, roomId) }];
       });
       if (method === 'run') runIdentities = Object.fromEntries(expected.map(e => [e.id, e.identity]));
+      if (method === 'forward') sharedInputProofs = Object.fromEntries(expected.map(e => [e.id, e.identity]));
       contextGuard = () => {
         replyGuard();
         imageGuard();
-        for (const { id, entry, nativeId, member } of expected) {
+        for (const { id, entry, nativeId, member, identity } of expected) {
           const current = entry.state.sessions.find(s => s.id === id);
           if (method === 'run' && displayedIdentities && JSON.stringify(peerIdentity(current || {}, roomId)) !== JSON.stringify(runIdentities[id])) throw uiError("error.client.memberInputOrMembershipChanged");
           if (!current || current.nativeContextPending || current.nativeId !== nativeId) throw uiError("error.client.nativeContextChanged");
+          if (method === 'forward') {
+            this.sharedInputController(entry, current);
+            if (entry.state.capabilities?.includes('sharedInputOwnershipV1') && JSON.stringify(peerIdentity(current, roomId)) !== JSON.stringify(identity)) throw uiError('error.client.memberInputOrControlChanged');
+          }
           if (roomId !== 'shared' && ['forward', 'run'].includes(method) && (!spaces.isMember(current, roomId) || spaces.membershipRevision(current, roomId) !== member)) throw uiError("error.client.spaceMembershipChanged");
         }
       };
@@ -546,6 +558,8 @@ class WorkspaceClient extends EventEmitter {
       const [id, text, nativeId] = args, target = this.route(id), guard = this.operationGuard(target);
       const original = target.state.sessions.find(s => s.id === id);
       const shared = method === 'queueShared';
+      const controller = shared ? this.sharedInputController(target, original) : target.state.owner;
+      const inputProof = shared && target.state.capabilities?.includes('sharedInputOwnershipV1') ? peerIdentity(original, roomId) : null;
       const bridge = this.control.legacyInput;
       if (roomId === 'shared' && bridge?.target(original)?.queueAvailable) {
         const expected = { ...original };
@@ -579,9 +593,9 @@ class WorkspaceClient extends EventEmitter {
         const manualValid = this.manualGuard(id), control = original.controlRevision, member = spaces.membershipRevision(original, roomId);
         await this.pauseExcept(undefined, scoped && shared ? roomId : undefined, id); await this.refresh(roomId); guard(); replyGuard(); this.authorizeOperation?.(method, args, roomId);
         const current = target.state.sessions.find(s => s.id === id);
-        if (!manualValid() || current?.controlRevision !== control || current?.nativeId !== nativeId || current?.nativeContextPending || current?.owner !== target.state.owner || current?.state !== 'working' || current?.approval || current?.pendingQueue || !current?.queueAvailable ||
+        if (!manualValid() || current?.controlRevision !== control || current?.nativeId !== nativeId || current?.nativeContextPending || current?.owner !== controller || (inputProof && JSON.stringify(peerIdentity(current, roomId)) !== JSON.stringify(inputProof)) || current?.state !== 'working' || current?.approval || current?.pendingQueue || !current?.queueAvailable ||
           (shared && (!spaces.isMember(current, roomId) || spaces.membershipRevision(current, roomId) !== member))) throw uiError("error.client.currentNativeSessionOrControlChanged");
-        return this.invoke(target, roomId, method, [id, text, nativeId, ...(shared ? [replyTo] : [])]);
+        return this.invoke(target, roomId, method, [id, text, nativeId, ...(shared ? [replyTo] : [])], false, inputProof ? { [id]: inputProof } : undefined);
       }, id, shared, false, scoped && shared ? roomId : undefined);
     }
     if (method === 'steer' || method === 'steerShared') {
@@ -589,6 +603,8 @@ class WorkspaceClient extends EventEmitter {
       const original = target.state.sessions.find(s => s.id === id);
       if (typeof turnId !== 'string' || !turnId || turnId.length > 160 || original?.nativeId !== nativeId) throw uiError("error.client.nativeTurnChanged");
       const shared = method === 'steerShared';
+      const controller = shared ? this.sharedInputController(target, original) : target.state.owner;
+      const inputProof = shared && target.state.capabilities?.includes('sharedInputOwnershipV1') ? peerIdentity(original, roomId) : null;
       const bridged = roomId === 'shared' && target.state.runtimeVersion === '0.1.0-alpha.2' && this.control.legacyInput?.target(original)?.native;
       if (shared && (!(bridged?.sharedReplyAvailable && !this.control.legacyInput.sharedReplies.storageError || target.state.capabilities?.includes('nativeSharedSteer')) || (!original || !spaces.isMember(original, roomId)))) throw uiError("error.client.sharedSteeringUnsupported");
       if (!(bridged?.steerAvailable || target.state.capabilities?.includes('nativeSteer'))) throw uiError("error.client.workingSteeringUnsupported");
@@ -598,7 +614,7 @@ class WorkspaceClient extends EventEmitter {
         const valid = () => {
           try { guard(); replyGuard(); this.authorizeOperation?.(method, args, roomId); } catch { return false; }
           const raw = target.state.sessions.find(s => s.id === id), current = this.snapshot(roomId).sessions.find(s => s.id === id);
-          return manualValid() && raw?.controlRevision === control && raw.owner === target.state.owner &&
+          return manualValid() && raw?.controlRevision === control && raw.owner === controller && (!inputProof || JSON.stringify(peerIdentity(raw, roomId)) === JSON.stringify(inputProof)) &&
             raw.nativeId === nativeId && raw.pid === original.pid && !raw.nativeContextPending && current?.state === 'working' && !current.approval &&
             // The retained transport owns its pending-send lock. Once acquired,
             // this router must not mistake that same send for a competing one.
@@ -607,7 +623,7 @@ class WorkspaceClient extends EventEmitter {
         };
         await this.pauseExcept(null, scoped && shared ? roomId : undefined, id); await this.refresh(roomId);
         if (!valid()) throw uiError("error.client.currentTurnOrControlChanged");
-        if (!bridged) return this.invoke(target, roomId, method, args);
+        if (!bridged) return this.invoke(target, roomId, method, args, false, inputProof ? { [id]: inputProof } : undefined);
         // A draft write already queued before this send may have completed
         // during refresh. Read its text now, retaining the click-time revision.
         const draft = target.state.sessions.find(s => s.id === id)?.liveDraft;
@@ -872,7 +888,7 @@ class WorkspaceClient extends EventEmitter {
     const ownView = ['claim', 'terminal'].includes(method) && typeof target.state.owner === 'string' && target.state.sessions.find(s => s.id === args[0])?.owner === target.state.owner;
     if (ownView) return target.client.call(method, ...args);
     if (['join', 'claim', 'terminal', 'send', 'interrupt', 'forward', 'stop', 'resume'].includes(method) || (method === 'input' && !isTerminalResponse(args[1]))) return this.intervene(async () => {
-      await this.pauseExcept(null, scoped && method === 'forward' ? roomId : undefined, args[0]); guard(); contextGuard(); this.authorizeOperation?.(method, args, roomId); return this.invoke(target, roomId, method, args);
+      await this.pauseExcept(null, scoped && method === 'forward' ? roomId : undefined, args[0]); guard(); contextGuard(); this.authorizeOperation?.(method, args, roomId); return this.invoke(target, roomId, method, args, false, sharedInputProofs);
     }, args[0], false, false, scoped && method === 'forward' ? roomId : undefined);
     return target.client.call(method, ...args);
   }

@@ -74,4 +74,22 @@ test('actual bounded space envelopes preserve membership and original output acr
   await broker.callSpace(a, 'pause', []);
   assert.equal((await client.call('initial')).rooms.find(r => r.id === a).run.status, 'paused');
   assert.equal((await fixture('stats', id)).stats.sends, 3);
+
+  // Another view uses the existing envelope and peer-identity proof, not claim.
+  const cross=await client.call('create',{provider:'codex',cwd:dir,name:'Independent view recipient',view:'chat'});
+  await client.call('join',cross,true);await client.call('draft',cross,'POSITIVE PRIVATE DRAFT');await fixture('bindSends',cross);
+  let record=(await client.call('initial')).sessions.find(s=>s.id===cross);
+  const {identity}=require('../peer-handoffs.cjs'),stale=identity(record);
+  const other=await connectService(dir,'independent-view');t.after(()=>other.close());await other.call('claim',cross,'chat');
+  const beforeCount=(await fixture('stats',cross)).stats.sends;
+  await assert.rejects(client.call('forward',cross,'No original controller proof',record.nativeId),e=>e.uiMessage?.key==='error.sharedInputOwnershipUnavailable');
+  await assert.rejects(client.call('spaceAction','shared','forward',[cross,'STALE OWNER BODY',record.nativeId],{[cross]:stale}),e=>e.uiMessage?.key==='error.client.currentNativeSessionOrControlChanged');
+  record=(await client.call('initial')).sessions.find(s=>s.id===cross);const proofNow=identity(record);
+  for(const key of ['nativeId','owner','controlRevision','connectionRevision','memberRevision','peerRevision','backend']){
+    const bad=structuredClone(proofNow);bad[key]=key==='backend'?{pid:12345,started:'wrong'}:typeof bad[key]==='number'?bad[key]+1:'wrong';
+    await assert.rejects(client.call('spaceAction','shared','forward',[cross,'BAD PROOF BODY',record.nativeId],{[cross]:bad}));
+  }
+  assert.equal((await fixture('stats',cross)).stats.sends,beforeCount,'Every stale proof is refused before transport');
+  await client.call('spaceAction','shared','forward',[cross,'EXPLICIT OTHER VIEW BODY',record.nativeId],{[cross]:proofNow});
+  const after=(await client.call('initial')).sessions.find(s=>s.id===cross);assert.equal(after.owner,'independent-view');assert.equal(after.nativeId,record.nativeId);assert.equal(after.liveDraft,'POSITIVE PRIVATE DRAFT');assert.equal((await fixture('stats',cross)).stats.sends,beforeCount+1);
 });
