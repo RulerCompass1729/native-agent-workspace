@@ -116,7 +116,7 @@ async function openSearchResult(result) {
   $('search-dialog').close();
   if (result.kind === 'shared' || result.kind === 'room') {
     await selectSpace(result.roomId || 'shared');
-    roomRecordScope = ''; roomRecordReturn = null; roomFilterHistory = null;
+    roomRecordScope = ''; roomRecordReturn = null;
     $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
     roomSurface = 'records';
     await selectRoom();

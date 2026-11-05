@@ -622,7 +622,7 @@ function renderRoomMemberTabs(people = orderedMembers()) {
   for (const tab of retained.values()) tab.remove();
   refreshRoomMemberTabs(people);
   const routes = [$('room-overview'), $('room-record'), ...tabs.children];
-  const active = routes.includes(document.activeElement) ? document.activeElement : roomSurface === 'records' ? $('room-record') : roomSession ? [...tabs.children].find(tab => tab.dataset.roomSession === roomSession) : $('room-overview');
+  const active = routes.includes(document.activeElement) ? document.activeElement : roomSurface === 'records' ? $('room-record') : roomSession ? [...tabs.children].find(tab => tab.dataset.roomSession === roomSession) || $('room-overview') : $('room-overview');
   routes.forEach(route => { route.tabIndex = route === active ? 0 : -1; });
 }
 function roomNavigationKey(event) {

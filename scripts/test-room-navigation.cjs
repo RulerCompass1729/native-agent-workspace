@@ -158,11 +158,20 @@ async function run() {
     await client.call('join', ids[4], false); await until(async () => await page.locator('#room-record-return').isDisabled(), 'Removed member cannot be returned to');
     assert.equal(await page.locator('#room-record-scope').isVisible(), true); await capture('04-removed-member');
     await page.locator('#room-record').click();
+    await tab(ids[1]).click();await client.call('join',ids[1],false);
+    await until(async()=>await tab(ids[1]).count()===0,'Focused member removed');
+    assert.equal(await page.locator('#room-tabs button').evaluateAll(elements=>elements.filter(el=>!el.hidden&&el.tabIndex===0&&['room-overview','room-record'].includes(el.id)||el.dataset.roomSession&&el.tabIndex===0).length),1,'After selected-member removal exactly one navigation button remains a keyboard entry');
+    await client.call('join',ids[1],true);await until(async()=>await tab(ids[1]).count()===1,'Same native member rejoins');
+    await page.locator('#room-record').click();
   });
   if (!layoutOnly) await checked('5 closing during recent-all preview retains canonical history, original native records and drafts on ordinary owned reopen', async () => {
     await page.locator('#room-record-clear').click(); assert.equal(await page.locator('#room-filter').inputValue(), '');
     assert.equal(await page.locator('#room-record-restore').isVisible(), true);
     await until(async () => (await uiState()).viewState.roomViews.shared.roomFilter === 'synthetic-departed-member', 'Canonical history retained while previewing recent records');
+    await page.locator('#search-button').click();await page.locator('#search-input').fill('Synthetic unrelated request to B');
+    await until(async()=>await page.locator('#search-results button').count()===1,'Unique result while previewing recent-all');await page.locator('#search-results button').click();
+    assert.equal(await page.locator('#room-messages [data-search-target="true"]').count(),1);
+    assert.equal((await uiState()).viewState.roomViews.shared.roomFilter,'synthetic-departed-member','Opening a result without Return preserves canonical history on save');
     await capture('09-recent-preview-before-close');
     await app.close(); app = null; await launch();
     await until(async () => await page.locator('#room-filter').inputValue() === 'synthetic-departed-member', 'Original history after reopen');

@@ -5290,3 +5290,17 @@ Author patch reviews are reused where unchanged; Main's navigation adaptation
 and the combined interactions require a new independent checkpoint. Signed
 candidate, Applications and daily-update acceptance remain pending here. This
 is not closure of the full dogfood or native-delivery milestone.
+
+
+The first combined review does not approve the candidate: it asks for a keyboard
+fallback probe when the saved selected member has disappeared, and notes search
+result navigation erasing the saved filter. Two actual helper probes and one
+actual search/save probe fail before the correction. The primary render already
+resets a missing member; the helper now also guarantees an Overview keyboard
+entry independently. Search clears only its temporary related-member scope,
+retaining the saved history. The original four red-to-green tests remain
+distinct from later coverage; other tests are not described as old-code failures.
+The initial review reaches its investigation budget without a verdict; its
+interrupted result is not a pass. A verdict-only continuation on the same
+reviewer identifies these concerns. Only the correction, complete raw probes,
+previously unread installed adapter and search-return tail go back to it.
