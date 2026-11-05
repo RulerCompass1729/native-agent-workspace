@@ -5365,3 +5365,25 @@ native identities, settings, draft scopes and the active goal. All 71 payload
 files/signatures match and application search has one entry. No occupied
 backend migration, daily debugger, real model inference or push is added.
 The original spontaneous rebound and full dogfood goal remain explicitly open.
+
+
+**New-session dialog density, 2026-11-05 (source-scoped):**
+The user asks for less empty space without smaller or missing controls. The
+existing form gains six scoped spacing rules; no labels, actions, permissions,
+provider settings, framework or native behavior change. The exact one-file peer
+commit is integrated unchanged after verifying its 1,153-artifact manifest and
+proactive staged/message/actual-patch identity scans. Its independent source and
+raw-evidence reviews are reused for the unchanged patch. Three synthetic
+open-select-fill-cancel journeys preserve all 17 controls and reduce content
+height by 70 or 78px; the outer height cap is unchanged and narrow windows still
+scroll. The first source trial's comparison-fixture failure and its single
+correction remain retained. Twenty-seven affected checks pass with no skips.
+English, dark mode, active errors, physical input and screen-reader behavior
+remain unqualified. Signed candidate and Applications acceptance are pending;
+this is not the whole density or dogfood milestone.
+
+The approved sidebar direction already exists in the current source: compact
+unframed entry, tighter expanded navigation, separate disclosure and space
+entry, indented member rows, and readable state text. No second sidebar redesign
+is added to satisfy an outdated private status. Earlier bounded installed
+sidebar evidence remains applicable; it does not cover every native scenario.
