@@ -5053,3 +5053,22 @@ are bound to the signed installed source; strict signatures and exact owned
 cleanup pass. Six real restore-handler regressions also pass. Source reviews are
 reused unchanged; the installed evidence is author-run. This qualifies the
 maintained module, not the full legacy desktop suite, real provider or IME.
+Collaboration member count no longer silently removes the existing column composers and native displays. Grid, focused-member, brief-content and visibility rules remain; input ownership, native identity, drafts and backend permissions use the existing paths. The source change removes one count predicate and adds one focused source GUI check using existing synthetic fixtures.
+
+Validation: both frontend builds passed and the compiled payload differs only by that predicate. Fifteen related unit checks passed. The actual source GUI covered four, five, six and eight members; an explicitly controlled fifth member received one private synthetic submission and one synthetic terminal byte on its exact session and native IDs. The original four retained identity, ownership and drafts, and no private text was forwarded to the shared space. Grid/list/full-member navigation and return to four retained drafts. Keyboard focus reached the next-member control and revealed the full eighth-member name. Finite resource observations showed one local terminal per opened session; departed members kept the existing parked-cache behaviour.
+
+One source run stopped on an incorrect expectation that leaving disposes cached terminals. The failure is retained; corrected positive parking assertions and the full flow passed. An intervening occupied-lock attempt allocated no profile, GUI or backend. Both actual source test instances and their profiles/backends were cleaned; the lease was released before offline review. Independent review accepted the source and test with limits. Staged content, message, identities and this sanitized record are subject to the unchanged privacy guard and hooks.
+
+Limits: synthetic transport only; one GUI fake send and one fake terminal byte, plus a separate fixture-handler probe with one direct fake send. No real provider, native CLI, vendor model, system clipboard, daily-app or goal action occurred. Four/five/six/eight are finite cases, not arbitrary-count or long-history performance qualification. At eight columns in a narrow window, names are ellipsed at rest and hints/drafts wrap or scroll; full tabs, the full session and keyboard name reveal remain available. Native horizontal clipping and parked terminal memory remain existing limits. Real providers, phone width, dark theme, physical keyboard/IME, human membership menus, signing and installation are unqualified. Main remains responsible for integration and installed acceptance.
+
+
+**Reader/column integration, 2026-11-04 (candidate):** independent combined-source
+review passes for the compact body spacing, queued-fold acknowledgement and
+member-count-independent private controls. All 152 affected checks pass without
+skips. Exact author source reviews are reused. The installed acceptance recipe's
+copied fixture reference was found missing before any launch; it now binds the
+previously qualified fixture and requires explicit source/signature identities
+before allocation. Both missing-identity negative checks pass. Recipe delta
+review passes; signed and actual Applications journeys remain pending. The
+person's cache-gap recurrence and the unrelated backend-retention finding remain
+open. No native service, provider settings or lifecycle source changes.

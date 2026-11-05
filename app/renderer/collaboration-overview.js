@@ -269,7 +269,7 @@
       host.dataset.layout = layout; host.dataset.focused = String(Boolean(focused)); host.dataset.brief = String(brief); host.dataset.content = String(contentVisible);
       simplify.setAttribute('aria-pressed', String(brief)); grid.setAttribute('aria-pressed', String(layout === 'grid')); list.setAttribute('aria-pressed', String(layout === 'list'));
       back.hidden = !focused; simplify.hidden = Boolean(focused) || !contentVisible; layouts.hidden = Boolean(focused) || !contentVisible; readers.hidden = Boolean(focused) || !contentVisible; empty.hidden = records.length > 0 || !contentVisible;
-      const columnInput = layout === 'grid' && !focused && !brief && contentVisible && records.length <= 4;
+      const columnInput = layout === 'grid' && !focused && !brief && contentVisible;
       const listUnits = layout === 'list' && !focused && contentVisible;
       host.dataset.listUnits = String(listUnits); headers.hidden = listUnits;
       const retained = new Set(records.map(r => r.id));
