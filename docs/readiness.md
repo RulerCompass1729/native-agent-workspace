@@ -4,9 +4,13 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.194 adds current-space PNG drafts through the qualified native Codex 0.166 input path and preserves a complete reading line in the minimum four-column window. The initial combined suite passed 2,726 checks; subsequent measured layout repairs pass 68 affected checks without skips. Author source reviews are reused; independent integration review accepts the conflict resolutions while preserving current view, usage and single-home fields. Signed and actual Applications acceptance remain pending. Older backends and unsupported native versions retain image drafts without sending. No whole-task or model-vision claim.
+Current daily GUI: alpha.194, committed build source `4c31970`. The minimum four-column window retains a complete original reading line, input and the controlled native cursor after remount. The existing size observer now accounts for late container layout. Shared PNG drafts use the qualified Codex 0.166 typed-input path and native echo receipt; unsupported connections retain attachments without sending. Signed candidate and actual Applications journeys pass. Each native-image journey uses one fixed local response and confirms the exact 146 managed PNG bytes upstream, without vendor inference or a vision claim. The unchanged nonrecipient remains untouched.
 
-Current daily GUI: alpha.193, committed build source `c7470cd`. The fifth grid
+The ordinary visible update retains 14 records, 16 native process identities, 12 draft scopes, seven older backends and the original active goal over 150 seconds. Automatic backend updates remain off; manual updates remain available. Initial combined source checks pass 2,726 tests, and subsequent measured layout repairs pass 68 affected checks without skips. Independent source/integration reviews pass; installed results are author verified. Failed candidates and fixture failures are retained.
+
+A remaining image issue is explicit: a late native receipt can clear attachments while leaving the original caption in the input. Manually clearing that caption after the confirmed receipt is tested without another dispatch. The image task, physical clipboard/drag/picker gestures, original cache-gap recurrence, locked production operation and the full dogfood milestone remain open.
+
+Previously qualified alpha.193, committed build source `c7470cd`. The fifth grid
 member retains its private composer and native-terminal controls; a member count
 alone no longer hides them. Compact body spacing and the existing fold-event
 acknowledgement keep the current reading surface. Signed candidate and actual
