@@ -51,7 +51,7 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
-const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface'];
+const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory'];
 const focusedRoomMember = () => selected === 'room' && roomSurface === 'overview' && Boolean(roomSession);
 const sharedSurface = () => selected === 'room' && !focusedRoomMember();
 const focusedReadingKey = id => focusedRoomMember() ? spaceId === 'shared' ? `collaboration-focus:${id}` : `focus:${spaceId}:${id}` : id;
@@ -75,8 +75,10 @@ let roomMentionHistory = nativeWorkspaceMentions.editHistory();
 let mentionChanging = false, mentionComposing = false;
 let pendingRoomFilter = '';
 let roomThread = '', roomReplyTo = '';
+let roomRecordScope = '', roomRecordReturn = null, roomFilterHistory = null;
+const roomRecordSelections = new Map();
 let roomThreads = window.nativeWorkspaceThreads.threadIndex([]);
-const roomReadingKey = () => spaceId === 'shared' ? roomThread ? `room:${roomThread}` : 'room' : `room:${spaceId}:${roomThread || 'main'}`;
+const roomReadingKey = () => roomRecordScope ? `related:${spaceId}:${roomRecordScope}` : spaceId === 'shared' ? roomThread ? `room:${roomThread}` : 'room' : `room:${spaceId}:${roomThread || 'main'}`;
 const sessionRows = new Map();
 const sessionRow = id => sessionRows.get(id) || [...sessionRows.values()].find(row => row.sessionId === id && row.element.getClientRects().length) || [...sessionRows.values()].find(row => row.sessionId === id);
 const roomTone = id => `space-tone-${Math.max(0, allSpaces().findIndex(r => r.id === id)) % 6}`;
@@ -547,6 +549,7 @@ function orderedMembers(id = spaceId) {
 }
 function focusRoomMember(id, previous, originKey) {
   if (selected !== 'room' || id && !members().some(s => s.id === id)) return;
+  rememberRoomMemberView(); captureReadingViews();
   if (id && !previous && readingPositions[originKey]) roomReturnReading = { spaceId, key: originKey, position: structuredClone(readingPositions[originKey]) };
   if (!id && roomReturnReading?.spaceId === spaceId) {
     readingPositions[roomReturnReading.key] = structuredClone(roomReturnReading.position);
@@ -555,10 +558,45 @@ function focusRoomMember(id, previous, originKey) {
   const leaving = terminals.get(activeSessionId()); cancelViewInput(leaving);
   if (leaving?.composing) leaving.term.blur();
   selectionRevision++;
-  if (id && id !== previous && readingPositions[originKey]) readingPositions[spaceId === 'shared' ? `collaboration-focus:${id}` : `focus:${spaceId}:${id}`] = structuredClone(readingPositions[originKey]);
-  roomSurface = 'overview'; roomSession = id; mode = 'chat';
+  const key = spaceId === 'shared' ? `collaboration-focus:${id}` : `focus:${spaceId}:${id}`;
+  if (id && id !== previous && !readingPositions[key] && readingPositions[originKey]) readingPositions[key] = structuredClone(readingPositions[originKey]);
+  roomSurface = 'overview'; roomSession = id; roomRecordScope = ''; roomRecordReturn = null; restoreRoomMemberView(id);
   activateSoloComposer(id);
   lastMessages = ''; render(); attempt(persistView);
+}
+function rememberRoomMemberView() {
+  if (!focusedRoomMember()) return;
+  const view = roomViews[spaceId] ||= {}, saved = view.roomMemberViews ||= {};
+  if (Object.hasOwn(saved, roomSession) || Object.keys(saved).length < 200) saved[roomSession] = { mode, terminalLayout, nativeId: current()?.nativeId || '' };
+}
+function restoreRoomMemberView(id) {
+  const cached = roomViews[spaceId]?.roomMemberViews?.[id], record = state.sessions.find(s => s.id === id);
+  const view = cached?.nativeId === (record?.nativeId || '') ? cached : null;
+  mode = view?.mode === 'terminal' ? 'terminal' : 'chat';
+  if (view && ['hidden', 'split', 'maximized'].includes(view.terminalLayout)) terminalLayout = view.terminalLayout;
+}
+function openRoomMember(id) {
+  if (!members().some(s => s.id === id)) return;
+  // The overview owns the existing selection/input suspension path. Viewing a
+  // saved terminal mode is passive; only its explicit native control claims it.
+  roomOverview?.focus(id);
+  if (roomSession !== id || roomSurface !== 'overview') focusRoomMember(id, roomSession, roomOverview?.key(id));
+  [...$('room-member-tabs').children].find(tab => tab.dataset.roomSession === id)?.focus({ preventScroll: true });
+}
+function refreshRoomMemberTabs(people = orderedMembers()) {
+  const tabs = $('room-member-tabs');
+  for (const tab of tabs.children) {
+    const member = people.find(m => m.id === tab.dataset.roomSession);
+    if (!member) continue;
+    const count = member.nativeApproval?.requests?.length || member.approvals?.length || (member.approval || member.approvalOverflow ? 1 : 0);
+    ui.display.computed(tab.querySelector('.room-member-name'), 'text', () => participantLabel(member, people));
+    ui.display.computed(tab.querySelector('.room-member-state'), 'text', () => {
+      const facts = window.nativeWorkspaceCollaboration.statusFacts(member, !disconnected, Date.now(), ui.language.getSnapshot().active);
+      return [facts.state, facts.compactChild, facts.freshnessReported ? facts.freshness : ''].filter(Boolean).join(' · ');
+    });
+    ui.display.attribute(tab, 'title', 'room.tabHint', { label: `${member.name} · ${sessionShortId(member.id)}` });
+    tab.classList.toggle('needs-attention', Boolean(count));
+  }
 }
 function activeReturnReadingKeys() {
   const keys = [];
@@ -642,12 +680,14 @@ function renderRoomOverview() {
     },
   });
   const focused = focusedRoomMember(), records = roomSurface === 'records';
-  $('collaboration-overview').hidden = false;
+  $('collaboration-overview').hidden = focused || records;
   for (const person of members()) readLegacyProgress(person);
   roomOverview.update(orderedMembers(), !disconnected, !records, focused ? roomSession : '');
   renderHeaderLayout(current(), selected === 'room');
-  $('room-overview').setAttribute('aria-pressed', String(!records)); $('room-record').setAttribute('aria-pressed', String(records));
-  $('room-member-tabs').hidden = true;
+  $('room-overview').setAttribute('aria-pressed', String(!records && !focused)); $('room-record').setAttribute('aria-pressed', String(records));
+  $('room-member-tabs').hidden = false;
+  if (roomOverview) roomOverview.toolbar.hidden = focused || records;
+  $('member-related-records').hidden = !focused;
   $('room-record-view').querySelector('.timeline-tools').hidden = !records;
   $('room-messages').hidden = !records;
   if (!records) $('thread-heading').hidden = true;
@@ -903,8 +943,9 @@ function toastError(error) { toast(''); ui.showError($('toast-text'), error); }
 function sessionNoticeMessage(key, params, id) { sessionNotice('', id); ui.display.text($('toast-text'), key, params); }
 async function attempt(action) { try { return await action(); } catch (error) { toastError(error); } }
 function captureRoomView() {
+  rememberRoomMemberView();
   const view = roomViews[spaceId] ||= {};
-  Object.assign(view, { sharedDraft: $('shared-input').value, roomSession, roomRecipient: roomRecipient(), roomMention: roomMention && { ...roomMention }, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo, roomSurface, draftRevision: roomDraftRevision, submitting: roomSubmitting });
+  Object.assign(view, { sharedDraft: $('shared-input').value, roomSession, roomRecipient: roomRecipient(), roomMention: roomMention && { ...roomMention }, roomFilter: $('room-filter').value || pendingRoomFilter, roomSearch: $('room-search').value, roomThread, roomReplyTo, roomSurface, roomRecordScope, roomRecordReturn, roomFilterHistory, draftRevision: roomDraftRevision, submitting: roomSubmitting });
   roomHistories.set(spaceId, roomMentionHistory); return view;
 }
 function restoreRoomView() {
@@ -913,9 +954,11 @@ function restoreRoomView() {
   roomMention = view.roomMention ? { ...view.roomMention } : null;
   pendingRoomFilter = view.roomFilter || ''; $('room-filter').value = pendingRoomFilter; $('room-search').value = view.roomSearch || '';
   roomThread = view.roomThread || ''; roomReplyTo = view.roomReplyTo || ''; roomSurface = view.roomSurface || 'overview';
+  roomRecordScope = view.roomRecordScope || ''; roomRecordReturn = view.roomRecordReturn || null; roomFilterHistory = view.roomFilterHistory || null;
   roomDraftRevision = view.draftRevision || 0; roomSubmitting = view.submitting || null;
   roomMentionHistory = roomHistories.get(spaceId) || nativeWorkspaceMentions.editHistory(); roomHistories.set(spaceId, roomMentionHistory);
   normalizeRoomMention(); populateSelect($('recipient'), members()); $('recipient').value = roomRecipient();
+  if (roomSurface === 'overview' && roomSession) restoreRoomMemberView(roomSession); else mode = 'chat';
 }
 function persistedRoomViews() {
   return Object.fromEntries(Object.entries(roomViews).map(([id, value]) => [id, Object.fromEntries(roomViewFields.filter(k => value[k] !== undefined).map(k => [k, value[k]]))]));
@@ -936,7 +979,7 @@ async function selectSpace(id) {
     roomOverview?.dispose(); roomOverview = null; spaceId = id; state = projectSpace(state); restoreRoomView();
     runPreview = null; shareRevision++; lastRoomMessages = ''; lastMessages = '';
   }
-  return selectRoom(roomSession);
+  return selectRoom(roomSession, true);
 }
 function renderSpaceNavigation() {
   $('room-nav').parentElement.hidden = !allSpaces().some(r => r.id === 'shared');
@@ -1100,6 +1143,7 @@ function openSpaceRegionMenu(point, anchor = $('new-space')) {
 }
 function icon(provider) { return node('span', provider === 'claude' ? 'Cl' : 'Cx', `agent-icon ${provider}`); }
 async function select(id, requestedMode, member = roomSession, passive = false) {
+  rememberRoomMemberView();
   captureReadingViews(); suspendColumnInputs();
   const revision = ++selectionRevision;
   const leaving = terminals.get(activeSessionId());
@@ -1108,7 +1152,8 @@ async function select(id, requestedMode, member = roomSession, passive = false) 
   if (revision !== selectionRevision) return;
   if (id === 'room') roomSession = member;
   selected = id; const s = current();
-  if (selected === 'room') mode = roomSurface === 'overview' ? 'chat' : s ? 'terminal' : 'chat'; else if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
+  if (selected === 'room') { if (roomSurface === 'overview' && roomSession) restoreRoomMemberView(roomSession); else mode = 'chat'; }
+  else if (requestedMode) mode = requestedMode; else if (s) mode = s.owner === owner ? s.view : preference;
   if (mode === 'terminal' && terminalLayout === 'hidden') terminalLayout = 'split';
   activateSoloComposer(s?.id);
   clearFailedTerminal(s?.id);
@@ -1122,8 +1167,8 @@ async function select(id, requestedMode, member = roomSession, passive = false) 
     else if (row.bottom > viewport.bottom) list.scrollTop += row.bottom - viewport.bottom;
   }
   if (!passive && mode === 'chat' && !chatInput().readOnly && inputFocusAllowed()) chatInput().focus();
-  if (s && mode === 'terminal' && (switchedAway(s) || !['ended', 'background', 'stopping', 'disconnected', 'recoverable'].includes(s.state))) attempt(async () => { await ensureTerminal(s.id, true); focusTerminal(s.id); });
-  if (selected === 'room' && mode === 'terminal' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {
+  if (!passive && s && mode === 'terminal' && (switchedAway(s) || !['ended', 'background', 'stopping', 'disconnected', 'recoverable'].includes(s.state))) attempt(async () => { await ensureTerminal(s.id, true); focusTerminal(s.id); });
+  if (!passive && selected === 'room' && mode === 'terminal' && s?.owner === owner && s.view !== 'terminal') attempt(async () => {
     const revision = selectionRevision;
     const stillSelected = () => revision === selectionRevision && selected === 'room' && roomSession === s.id && mode === 'terminal';
     if (!await claimView(s.id, 'terminal', revision) || !stillSelected()) return;
@@ -1132,7 +1177,7 @@ async function select(id, requestedMode, member = roomSession, passive = false) 
     if (stillSelected()) focusTerminal(s.id);
   });
 }
-function selectRoom(id = '') { if (id) roomSurface = 'overview'; return select('room', undefined, id); }
+function selectRoom(id = '', passive = false) { if (id) roomSurface = 'overview'; return select('room', undefined, id, passive); }
 async function operateNative(id) {
   if (activeSessionId() !== id) {
     const selection = selected === 'room' ? selectRoom(id) : select(id, 'terminal');
@@ -2384,9 +2429,50 @@ function renderSnapshotMaterials() {
     element.append(details);
   }
 }
+function timelineParticipants(message) {
+  return [...new Set([message.sessionId, message.recipientId, ...(message.deliveries || []).map(d => d.recipientId), message.wake?.senderId, message.wake?.recipientId, message.peerMessage?.senderId, message.peerMessage?.recipientId].filter(id => typeof id === 'string' && id))];
+}
 function filteredTimeline() {
-  const id = $('room-filter').value, query = $('room-search').value.trim().toLocaleLowerCase();
-  return timeline().filter(m => (!roomThread || roomThreads.roots.get(m.id) === roomThread) && (!id || m.sessionId === id || m.recipientId === id || m.deliveries?.some(d => d.recipientId === id) || m.wake?.senderId === id || m.wake?.recipientId === id || m.peerMessage?.recipientId === id || (m.peerMessage?.senderId && m.peerMessage.senderId === id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
+  const id = roomRecordScope || $('room-filter').value, query = roomRecordScope ? '' : $('room-search').value.trim().toLocaleLowerCase();
+  return timeline().filter(m => (roomRecordScope || !roomThread || roomThreads.roots.get(m.id) === roomThread) && (!id || timelineParticipants(m).includes(id)) && (!query || m.text.toLocaleLowerCase().includes(query)));
+}
+function showRoomRecords(related = false) {
+  const record = related && focusedRoomMember() ? current() : null;
+  if (related && !record) return;
+  captureReadingViews(); rememberRoomMemberView(); suspendColumnInputs();
+  const selection = document.getSelection();
+  if (record && selection?.rangeCount && !selection.isCollapsed && $('messages').contains(selection.anchorNode)) roomRecordSelections.set(spaceId, selection.getRangeAt(0).cloneRange());
+  const leaving = terminals.get(activeSessionId()); cancelViewInput(leaving);
+  if (leaving?.composing) leaving.term.blur();
+  selectionRevision++;
+  roomRecordScope = record?.id || ''; roomRecordReturn = record ? { id: record.id, nativeId: record.nativeId || '' } : null;
+  roomSurface = 'records'; roomSession = ''; mode = 'chat'; activateSoloComposer('');
+  lastRoomMessages = ''; render(); attempt(persistView);
+  (record ? $('room-record-return') : $('room-record')).focus({ preventScroll: true });
+}
+function returnRoomRecordMember() {
+  const target = roomRecordReturn, record = target && members().find(s => s.id === target.id && (s.nativeId || '') === target.nativeId);
+  if (!record) return toastMessage('toast.originalRemoved');
+  const range = roomRecordSelections.get(spaceId); roomRecordSelections.delete(spaceId);
+  openRoomMember(record.id);
+  if (range?.startContainer.isConnected && range.endContainer.isConnected) {
+    const selection = document.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+  }
+}
+function clearRoomRecordFilter() {
+  captureReadingViews();
+  const filter = $('room-filter').value || pendingRoomFilter, search = $('room-search').value;
+  if (filter || search || roomThread) roomFilterHistory = { roomFilter: filter, roomSearch: search, roomThread };
+  roomRecordScope = ''; roomRecordReturn = null;
+  $('room-filter').value = ''; pendingRoomFilter = ''; $('room-search').value = ''; roomThread = '';
+  lastRoomMessages = ''; render(); attempt(persistView);
+}
+function restoreRoomRecordFilter() {
+  if (!roomFilterHistory) return;
+  captureReadingViews(); roomRecordScope = ''; roomRecordReturn = null;
+  pendingRoomFilter = roomFilterHistory.roomFilter; $('room-filter').value = pendingRoomFilter;
+  $('room-search').value = roomFilterHistory.roomSearch; roomThread = roomFilterHistory.roomThread;
+  lastRoomMessages = ''; render(); attempt(persistView);
 }
 function openThread(id) {
   const root = roomThreads.roots.get(id);
@@ -2408,11 +2494,12 @@ function renderTimeline() {
   const candidates = new Map();
   for (const s of members()) candidates.set(s.id, s.name);
   for (const m of timeline()) {
-    const id = m.sessionId || m.recipientId;
-    if (id && !candidates.has(id)) candidates.set(id, state.sessions.find(s => s.id === id)?.name || m.name || null);
-    for (const d of m.deliveries || []) if (!candidates.has(d.recipientId)) candidates.set(d.recipientId, state.sessions.find(s => s.id === d.recipientId)?.name || d.recipientName || null);
+    for (const id of timelineParticipants(m)) if (!candidates.has(id)) candidates.set(id, state.sessions.find(s => s.id === id)?.name || (m.sessionId === id ? m.name : m.deliveries?.find(d => d.recipientId === id)?.recipientName) || null);
   }
   const filter = $('room-filter'), chosen = filter.value || pendingRoomFilter; pendingRoomFilter = '';
+  // Preserve an explicitly saved historical view even when its source is no
+  // longer loaded. A person may clear it; opening records must not do so.
+  if (chosen && !candidates.has(chosen)) candidates.set(chosen, null);
   const filterSignature = JSON.stringify([...candidates]);
   if (filter.dataset.signature !== filterSignature) {
     filter.replaceChildren(uiNode('option', 'room.allMembers'));
@@ -2420,6 +2507,15 @@ function renderTimeline() {
     for (const [id, name] of candidates) { const option = node('option'); ui.display.computed(option, 'text', () => `${name || uiText('identity.historicalMember')}${members().some(s => s.id === id) ? '' : uiText('room.detachedSuffix')} · ${id.slice(0, 6)}`); option.value = id; filter.append(option); }
     filter.value = candidates.has(chosen) ? chosen : ''; filter.dataset.signature = filterSignature;
   }
+  filter.disabled = Boolean(roomRecordScope); $('room-search').disabled = Boolean(roomRecordScope);
+  $('room-record-context').hidden = roomSurface !== 'records' || !(roomRecordScope || chosen || $('room-search').value || roomThread || roomFilterHistory);
+  ui.display.computed($('room-record-scope'), 'text', () => roomRecordScope ? uiText('room.relatedScope', { name: state.sessions.find(s => s.id === roomRecordScope)?.name || uiText('identity.historicalMember') }) : chosen || $('room-search').value || roomThread ? uiText('room.filteredScope') : '');
+  $('room-record-return').hidden = !roomRecordReturn;
+  const returning = roomRecordReturn && members().find(s => s.id === roomRecordReturn.id && (s.nativeId || '') === roomRecordReturn.nativeId);
+  $('room-record-return').disabled = !returning;
+  ui.display.text($('room-record-return'), 'room.returnMember', { name: returning?.name || uiText('identity.historicalMember') });
+  $('room-record-clear').hidden = !(roomRecordScope || chosen || $('room-search').value || roomThread);
+  $('room-record-restore').hidden = !roomFilterHistory || Boolean(roomRecordScope || chosen || $('room-search').value || roomThread);
   const messages = filteredTimeline();
   const signature = JSON.stringify([messages, state.sessions.map(s => [s.id, s.name]), filter.value, $('room-search').value, roomThread, [...roomThreads.groups].map(([id, rows]) => [id, rows.length])]);
   if (signature !== lastRoomMessages) { messageList($('room-messages'), messages, true, roomReadingKey()); lastRoomMessages = signature; }
@@ -3046,7 +3142,7 @@ function renderNativeActivity(s) {
 const nativeActivityClock = setInterval(() => {
   if (!state) return;
   renderNativeActivity(current());
-  if (selected === 'room') roomOverview?.refresh();
+  if (selected === 'room') { roomOverview?.refresh(); refreshRoomMemberTabs(); }
   if (selected === 'panorama') panorama?.refresh();
   if (state.sessions.some(s => s.sharedActivity && !nativeStatusFresh(s.sharedActivity) || s.nativeApproval && !nativeStatusFresh(s.nativeApproval))) render();
 }, 1000);
@@ -3084,6 +3180,7 @@ function render() {
     $('conversation-pane').hidden = inRoom && !memberFocus;
     $('chat-tab').parentElement.hidden = inRoom && !memberFocus;
     $('session-files').hidden = inRoom && !memberFocus;
+    $('member-related-records').hidden = !memberFocus;
     document.title = `${s?.name || 'Native Workspace'} — Native Agent Workspace`;
     $('welcome').hidden = Boolean(s || inRoom || inPanorama); $('session-view').hidden = !s; $('room-view').hidden = !inRoom;
     $('panorama-view').hidden = !inPanorama;
@@ -3152,25 +3249,27 @@ function render() {
     }
     if (inRoom) {
       const run = state.room.run;
-      const people = members();
+      const people = orderedMembers();
       const tabs = $('room-member-tabs');
       const tabSignature = JSON.stringify(people.map(m => [m.id, m.name]));
       if (tabs.dataset.signature !== tabSignature) {
         tabs.replaceChildren(...people.map(m => {
           const label = `${m.name} · ${sessionShortId(m.id)}`;
-          const tab = button(label, () => selectRoom(m.id)); tab.dataset.roomSession = m.id; ui.display.attribute(tab, 'title', 'room.tabHint', { label }); draggableSession(tab, m.id); return tab;
+          const tab = button('', () => openRoomMember(m.id)); tab.dataset.roomSession = m.id;
+          tab.append(node('span', undefined, 'room-member-name'), node('span', undefined, 'room-member-state'));
+          ui.display.attribute(tab, 'title', 'room.tabHint', { label }); draggableSession(tab, m.id);
+          tab.addEventListener('keydown', event => {
+            if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
+            const all = [...tabs.children], index = all.indexOf(tab), next = { ArrowRight: (index + 1) % all.length, ArrowLeft: (index + all.length - 1) % all.length, Home: 0, End: all.length - 1 }[event.key];
+            if (next !== undefined) { event.preventDefault(); all[next].focus({ preventScroll: true }); }
+          });
+          return tab;
         }));
         tabs.dataset.signature = tabSignature;
       }
       $('room-record').setAttribute('aria-pressed', String(roomSurface === 'records'));
-      for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(tab.dataset.roomSession === roomSession));
-      for (const tab of tabs.children) {
-        const member = people.find(m => m.id === tab.dataset.roomSession);
-        const count = member.nativeApproval?.requests?.length || member.approvals?.length || (member.approval || member.approvalOverflow ? 1 : 0);
-        ui.display.computed(tab, 'text', () => `${member.name} · ${sessionShortId(member.id)}` + (count ? uiText('room.pendingCount', { count }) : ''));
-        ui.display.attribute(tab, 'title', 'room.tabHint', { label: `${member.name} · ${sessionShortId(member.id)}` });
-        tab.classList.toggle('needs-attention', Boolean(count));
-      }
+      for (const tab of tabs.children) tab.setAttribute('aria-pressed', String(roomSurface === 'overview' && tab.dataset.roomSession === roomSession));
+      refreshRoomMemberTabs(people);
       const pendingRun = roomSubmitting?.automatic;
       const waiting = roomPendingRecipients.get($('recipient').value) || roomPendingRecipients.values().next().value;
       $('run-status').parentElement.hidden = !run && !roomSubmitting && !waiting;
@@ -3765,8 +3864,12 @@ $('room-more').onclick = () => openRoomMenu(undefined, $('room-more'), 'shared')
 $('room-more').onpointerdown = event => { if (roomMenu) event.stopPropagation(); };
 $('room-nav').oncontextmenu = event => { event.preventDefault(); event.stopPropagation(); openRoomMenu({ x: event.clientX, y: event.clientY }, $('room-more'), 'shared'); };
 $('room-nav').onkeydown = event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); openRoomMenu(undefined, $('room-more'), 'shared'); } };
-$('room-overview').onclick = () => attempt(() => { roomSurface = 'overview'; return selectRoom(); });
-$('room-record').onclick = () => attempt(() => { roomSurface = 'records'; return selectRoom(); });
+$('room-overview').onclick = () => attempt(() => { captureReadingViews(); rememberRoomMemberView(); roomRecordScope = ''; roomRecordReturn = null; roomSurface = 'overview'; return selectRoom('', true); });
+$('room-record').onclick = () => attempt(() => showRoomRecords());
+$('member-related-records').onclick = () => attempt(() => showRoomRecords(true));
+$('room-record-return').onclick = () => attempt(returnRoomRecordMember);
+$('room-record-clear').onclick = () => attempt(clearRoomRecordFilter);
+$('room-record-restore').onclick = () => attempt(restoreRoomRecordFilter);
 $('manage-members').onclick = () => openInvite($('manage-members'));
 dropTarget($('room-nav'), true, 'shared'); dropTarget($('solo-drop'), false); dropTarget($('session-list'), false);
 for (const [section, id] of [['sessions', 'solo-drop'], ['workspace', 'workspace-toggle'], ['archive', 'archive-button']]) {
@@ -4326,6 +4429,7 @@ attempt(async () => {
   $('shared-input').value = typeof savedRoomView.sharedDraft === 'string' ? savedRoomView.sharedDraft : '';
   $('room-search').value = savedRoomView.roomSearch || ''; pendingRoomFilter = savedRoomView.roomFilter || '';
   roomThread = savedRoomView.roomThread || ''; roomReplyTo = savedRoomView.roomReplyTo || '';
+  roomRecordScope = savedRoomView.roomRecordScope || ''; roomRecordReturn = savedRoomView.roomRecordReturn || null; roomFilterHistory = savedRoomView.roomFilterHistory || null;
   const savedRecipient = savedRoomView.roomRecipient;
   const savedMention = savedRoomView.roomMention;
   if (savedMention && nativeWorkspaceMentions.validView(savedMention, $('shared-input').value, savedRecipient)) roomMention = savedMention;

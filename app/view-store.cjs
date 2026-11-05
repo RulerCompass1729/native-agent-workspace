@@ -12,6 +12,16 @@ function validRoomView(view) {
   if (view.sharedDraft !== undefined && !text(view.sharedDraft, 16000)) return false;
   if (view.roomSearch !== undefined && !text(view.roomSearch, 1000)) return false;
   if (view.roomSurface !== undefined && !['overview', 'records'].includes(view.roomSurface)) return false;
+  if (view.roomRecordScope !== undefined && !text(view.roomRecordScope, 100)) return false;
+  if (view.roomRecordReturn !== undefined && view.roomRecordReturn !== null && (!object(view.roomRecordReturn) ||
+      Object.keys(view.roomRecordReturn).some(key => !['id', 'nativeId'].includes(key)) || !text(view.roomRecordReturn.id, 100) || !view.roomRecordReturn.id || !text(view.roomRecordReturn.nativeId, 512))) return false;
+  if (view.roomFilterHistory !== undefined && view.roomFilterHistory !== null && (!object(view.roomFilterHistory) ||
+      Object.keys(view.roomFilterHistory).some(key => !['roomFilter', 'roomSearch', 'roomThread'].includes(key)) ||
+      !text(view.roomFilterHistory.roomFilter, 100) || !text(view.roomFilterHistory.roomSearch, 1000) || !text(view.roomFilterHistory.roomThread, 100))) return false;
+  if (view.roomMemberViews !== undefined && (!object(view.roomMemberViews) || Object.keys(view.roomMemberViews).length > 200 ||
+      Object.entries(view.roomMemberViews).some(([id, item]) => !id || !text(id, 100) || !object(item) ||
+        Object.keys(item).some(key => !['mode', 'terminalLayout', 'nativeId'].includes(key)) || !['chat', 'terminal'].includes(item.mode) ||
+        !['hidden', 'split', 'maximized'].includes(item.terminalLayout) || !text(item.nativeId, 512)))) return false;
   if (view.roomMention !== undefined && view.roomMention !== null && !require('./room-mention.js').validView(view.roomMention, view.sharedDraft, view.roomRecipient)) return false;
   return true;
 }

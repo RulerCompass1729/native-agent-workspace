@@ -23,8 +23,9 @@ class Element {
   getAttribute(key) { return this.attrs.get(key) ?? null; }
   hasAttribute(key) { return this.attrs.has(key); }
   removeAttribute(key) { this.attrs.delete(key); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   querySelectorAll(selector) {
-    const matches = child => selector === '[data-naw-i18n-bound]' ? child.hasAttribute?.('data-naw-i18n-bound') : (selector === 'input' || selector === 'input:checked' && child.checked || selector === 'input[data-merge-member]:checked' && child.dataset.mergeMember && child.checked) && child.tagName === 'input';
+    const matches = child => selector.startsWith('.') ? (child.className || '').split(/\s+/).includes(selector.slice(1)) : selector === '[data-naw-i18n-bound]' ? child.hasAttribute?.('data-naw-i18n-bound') : (selector === 'input' || selector === 'input:checked' && child.checked || selector === 'input[data-merge-member]:checked' && child.dataset.mergeMember && child.checked) && child.tagName === 'input';
     return this.childNodes.flatMap(child => [...(matches(child) ? [child] : []), ...(child.querySelectorAll?.(selector) || [])]);
   }
   addEventListener() {}
@@ -264,9 +265,12 @@ test('shared queued/native-route labels repaint without changing recipient, pend
   Object.assign(f.context, { roomSubmitting: null, roomPendingRecipients: new Map([[recipient.id, { queued: true, recipientName: recipient.name }]]), roomSession: '', roomSurface: 'overview', roomMention: null, roomReplyTo: '', roomThreads: { rows: new Map() },
     nativeStatusFresh: value => value?.stale !== true, nativeUsable: () => true, nativeWorkspaceMentions: require('../room-mention.js'),
     normalizeRoomMention: () => effects.push('normalize'), roomRecipient: () => recipient.id, renderTimeline: () => effects.push('timeline'), selectRoom() {}, draggableSession() {},
+    orderedMembers: () => f.people,
   });
+  f.context.window.nativeWorkspaceCollaboration = require('../renderer/collaboration-overview.js');
   const load = (from, to) => { const a = renderer.indexOf(from), b = renderer.indexOf(to, a + from.length); assert.ok(a >= 0 && b > a); vm.runInContext(renderer.slice(a, b), f.context); };
   load('function populateSelect(', 'function participantLabel('); load('function roomSteerAvailable(', 'function renderRunChoices(');
+  load('function refreshRoomMemberTabs(', 'function activeReturnReadingKeys(');
   const start = renderer.indexOf('      const run = state.room.run;', renderer.indexOf('function render()')), end = renderer.indexOf("      if (!$('mention-list').hidden", start); assert.ok(start > 0 && end > start);
   vm.runInContext('function paintRoom() { ' + renderer.slice(start, end) + ' }', f.context);
   f.$('recipient').value = recipient.id; f.$('shared-input').value = 'UNSENT shared draft 中文'; f.document.activeElement = f.$('shared-input');

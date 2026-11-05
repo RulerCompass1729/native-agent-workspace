@@ -55,7 +55,8 @@ async function allHeadersVisible(ids) {
   for (const id of ids) {
     // The overview always uses the compact surface (renderer.js compact-room-surface), where the compact child
     // summary shows whenever it has text (collaboration-overview.css); only an empty one has no box.
-    const boxes = await header(id).evaluate(el => [el, ...[...el.children].filter(node => !node.matches('.collaboration-member-child-compact:empty'))].map(node => node.getBoundingClientRect().toJSON()));
+    const visibleState = await header(id).isVisible() ? header(id) : page.locator(`#room-member-tabs [data-room-session="${id}"]`);
+    const boxes = await visibleState.evaluate(el => [el, ...[...el.children].filter(node => !node.matches('.collaboration-member-child-compact:empty'))].map(node => node.getBoundingClientRect().toJSON()));
     for (const box of boxes) {
       assert.ok(box.width > 0 && box.height > 0);
       assert.ok(box.left >= -1 && box.right <= viewport.width + 1 && box.top >= -1 && box.bottom <= viewport.height + 1,
@@ -176,7 +177,7 @@ async function run() {
   await header(a).locator('.collaboration-member-name').click();
   assert.equal(await page.locator('#send-button').innerText(), '启用对话输入');
   await unchangedNative(before, stateBefore);
-  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  await page.locator('#room-overview').click();
   assert.equal(await page.evaluate(() => getSelection().toString()), selectionBeforeFocus);
   await header(b).locator('.collaboration-member-name').click();
   await page.locator('#conversation-pane').waitFor(); assert.equal(await page.locator('#native-pane').isVisible(), false);
@@ -224,7 +225,7 @@ async function run() {
   await until(async () => (await page.evaluate(() => innerWidth)) <= 900, 'Owned narrow window');
   await allHeadersVisible([a, b, c]); await capture('04-narrow-overview');
   await header(b).locator('.collaboration-member-name').click(); await allHeadersVisible([a, b, c]); await capture('05-narrow-focus');
-  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  await page.locator('#room-overview').click();
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 860));
   await unchangedNative(before, stateBefore);
   check('Keyboard sizing, grid/list, narrow focus and shared-record navigation retain member visibility and private boundaries');
@@ -251,9 +252,9 @@ async function run() {
   await page.locator('#approval').getByRole('button', { name: '拒绝', exact: true }).click();
   await until(async () => (await fixture('stats', b)).approvalReplies?.length === 1, 'Existing focused permission reaches native fixture once');
   assert.equal((await fixture('stats', b)).approvalReplies[0].requestId, 17);
-  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  await page.locator('#room-overview').click();
   await header(b).locator('.collaboration-member-name').click(); assert.equal(await page.locator('#message-input').inputValue(), 'Unsent private member B draft');
-  await page.locator('#collaboration-overview').getByRole('button', { name: '← 返回共同工作', exact: true }).click();
+  await page.locator('#room-overview').click();
   check('Only deliberate existing takeover changes ownership; private GUI drafts and the independent room draft survive return');
   const ids = (await snapshot()).sessions.map(s => [s.id, s.nativeId]);
   await application.close(); application = null; await launch(); await page.locator('#collaboration-overview').waitFor();
