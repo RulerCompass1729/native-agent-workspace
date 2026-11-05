@@ -5219,3 +5219,74 @@ A fresh independent reviewer approves only the combined interactions and describ
 The unchanged updater template differs only in version numbers and bound hashes. Ordinary visible daily update and the 150-second check retain all original process identities, settings, draft scopes and the original active goal. Main then repeats the seven affected groups in isolated profiles on the actual Applications bundle and verifies owned cleanup, signature, 71 payload files and one application-search entry. No daily debugger or backend migration is performed.
 
 An initial additional packaging check incorrectly expected the development manifest verbatim. The pinned packager's actual sanitizer and lockfile filter explain the differences; the existing signed artifact is verified against those functions without a product change or rebuild. A screenshot-framing concern is likewise refuted by six actual viewport measurements. Potential manual downgrade to the preceding version during a pending image send remains a future compatibility trigger; this batch does not exercise or promise that path. Broader native/physical/saved-state and full dogfood conditions stay open.
+
+
+### T163/T145 — An empty sidebar falsely says its workspace was archived
+
+- Reproduced from owned source GUI evidence: the only stored space is the
+  untouched, unarchived default container, which `allSpaces` correctly hides.
+  No restorable space exists, yet the archived-workspace recovery hint is shown.
+  The current Main source has the same condition; CSS respects `hidden`.
+- Repair: show the existing recovery hint only when no active spaces remain and
+  at least one archived space exists. Keep the existing create entry and empty
+  card, real archive information, fonts, controls and disclosure arrows.
+- Author verification: the actual space getter and renderer first fail the two
+  zero-space cases. Five boundary cases cover zero, hidden default, active,
+  archived-only and mixed states; 26 affected checks pass without skips.
+  One owned source GUI passes zero-space, create, archive-only and restore checks
+  with the native identity, owner, revision and positive private/shared drafts
+  unchanged. Archive/restore use the existing scoped API as fixture setup; their
+  menus are not newly qualified. The two expected scoped pauses are retained.
+- Limits: source alpha.190 with a synthetic NativeHost, not installed or real
+  native qualification. No new layout, copy, model call or state migration;
+  the wider visual task stays open. Private evidence retains the independent
+  checkpoint. No pixel-saving estimate is used as evidence.
+
+
+### Shared wake whose original message cannot be verified
+
+The snapshot fallback looks for the sender's original wake message. That
+message can be unavailable while the sender session itself still exists. A
+direct Workspace regression reproduces the old, overly certain "sender session
+record removed" text with the same sender object and native identity retained.
+The Chinese fallback and paired UI translations now say that the original
+message cannot be verified and delivery is unconfirmed. The existing notice key,
+lookup, unknown status, original body and participant fields stay unchanged.
+
+The new case and existing missing-sender/reopen, delivery and locale checks pass
+50 related tests with no skips. This is a source-level wording correction; it
+does not classify the earlier synthetic screenshot's cause or qualify a real
+provider, native delivery, installed app or physical input. No new GUI, native
+CLI, model, clipboard or daily-app operation is used for this correction.
+
+
+## Member and record navigation integration — candidate alpha.196
+
+The complete task is to open a member, inspect its related shared records,
+widen to recent records, and return without losing the original conversation,
+reading position, valid inline recipient or drafts. The integration reuses the
+existing persisted navigation fields and controls rather than importing a second
+state cache. Keyed member buttons preserve focus on label updates; pending
+filters apply even when the available filter options have not changed. Search
+can open a different explicit record and return to the original related scope.
+A temporary recent-record preview preserves the saved historical filter across
+ordinary window reopening. Three-, four- and five-member navigation shares
+the existing layout and does not acquire native control.
+
+Four assertions fail on the prior actual renderer functions and pass after the
+repair. The first full run exposed eleven old VM fixture dependencies, which
+were repaired without skipping or weakening assertions. Two initial source GUI
+trials are retained: an unsupported test-only rename RPC and a scenario that
+renamed the explicitly addressed member. The latter correctly invalidates its
+old address under the unchanged existing guard; a separate regression test
+requires explicit reselection and preserves the text. The corrected five-group
+source journey passes using a different member for the asynchronous rename.
+
+The same batch includes the reviewed empty-workspace caption predicate and
+the unavailable-wake-message wording. A present sender with an unavailable
+original message is not evidence that its session was removed. Only the notice
+wrapper changes; original body, unknown status and dispatch behavior remain.
+Author patch reviews are reused where unchanged; Main's navigation adaptation
+and the combined interactions require a new independent checkpoint. Signed
+candidate, Applications and daily-update acceptance remain pending here. This
+is not closure of the full dogfood or native-delivery milestone.

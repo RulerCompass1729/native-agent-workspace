@@ -16,6 +16,7 @@ class Element {
   get textContent() { return this.content + this.childNodes.map(child => child.textContent).join(''); }
   set textContent(value) { this.content = String(value ?? ''); this.childNodes = []; }
   append(...children) { for (const child of children) { child.remove?.(); child.parentElement = this; this.childNodes.push(child); } }
+  insertBefore(child, before) { child.remove?.(); const index = before ? this.childNodes.indexOf(before) : this.childNodes.length; child.parentElement = this; this.childNodes.splice(index, 0, child); }
   prepend(...children) { for (const child of [...children].reverse()) { child.remove?.(); child.parentElement = this; this.childNodes.unshift(child); } }
   replaceChildren(...children) { for (const child of this.childNodes) child.parentElement = null; this.content = ''; this.childNodes = []; this.append(...children); }
   remove() { if (this.parentElement) { const list = this.parentElement.childNodes; list.splice(list.indexOf(this), 1); this.parentElement = null; } }

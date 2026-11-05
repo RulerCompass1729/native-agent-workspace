@@ -48,7 +48,7 @@ function fixture(records, spaceId) {
     api: new Proxy({}, { get: (_, method) => (...args) => { calls.push([method, args]); throw Error('No dispatch/native API is allowed'); } }),
   });
   const constants = ['inSpace', 'pairRevision', 'storedSpaces', 'spaceRecord', 'roomViewFields', 'focusedRoomMember', 'activeSessionId', 'current', 'members'];
-  const functions = ['participantLabel', 'populateSelect', 'rememberRoomMemberView', 'restoreRoomMemberView', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews', 'roomRecipient', 'normalizeRoomMention', 'closeMentions', 'chooseMention'];
+  const functions = ['roomRecentPreview', 'participantLabel', 'populateSelect', 'rememberRoomMemberView', 'restoreRoomMemberView', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews', 'roomRecipient', 'normalizeRoomMention', 'closeMentions', 'chooseMention'];
   vm.runInContext(constants.map(actualConst).concat(functions.map(actualFunction)).join('\n'), context);
   return { context, element, calls };
 }
@@ -127,3 +127,14 @@ for (const spaceId of ['shared', otherSpace]) for (const entry of ['startup', 's
     choose(again); assert.equal(again.element('shared-input').value, raw);
   });
 }
+
+
+test('renaming the addressed member preserves raw draft but requires explicit reselection', () => {
+  const f = fixture([member('shared')], 'shared');
+  f.element('shared-input').value = 'Keep the intended body'; choose(f);
+  const raw = f.element('shared-input').value;
+  f.context.state.sessions[0].name = 'New visible name';
+  f.context.normalizeRoomMention(); invalid(f, raw);
+  choose(f); assert.equal(f.context.roomRecipient(), 'member-b');
+  assert.ok(f.element('shared-input').value.endsWith('Keep the intended body'));
+});

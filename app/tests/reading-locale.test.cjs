@@ -226,7 +226,7 @@ function searchFixture(messages, notes = '') {
   c.window.nativeWorkspaceSearch = require('../renderer/local-search.js');
   const room = { id: 'archived-space', name: 'RAW 中文 room', archived: true, messages, notes };
   f.state.room = room; f.state.rooms = [room];
-  Object.assign(c, { clearTimeout, structuredClone, spaceId: 'shared', selected: 'session-A', roomSession: '', roomSurface: 'overview', mode: 'chat', pendingRoomFilter: '', roomThread: '',
+  Object.assign(c, { clearTimeout, structuredClone, spaceId: 'shared', selected: 'session-A', roomSession: '', roomSurface: 'overview', roomRecordScope: '', roomRecordReturn: null, roomFilterHistory: null, mode: 'chat', pendingRoomFilter: '', roomThread: '',
     activeSessionId: () => 'session-A', sessionShortId: id => id.slice(0, 6), spaceRecord: id => id === room.id ? room : null });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../renderer/search-view.js'), 'utf8'), c);
   c.openSearch();

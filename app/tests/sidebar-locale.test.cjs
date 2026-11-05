@@ -50,6 +50,26 @@ function fixture() {
   return { $, state, people, root, calls, layoutWrites, document, context, load, run: code => vm.runInContext(code, context), refresh(value) { language = value; display.refresh(root); } };
 }
 
+for (const [name, rooms, hidden] of [
+  ['no stored spaces', [], true],
+  ['untouched hidden default space', [{ id: 'shared', name: 'Untouched', archived: false }], true],
+  ['only archived spaces', [{ id: 'archived', name: 'Archived', archived: true }], false],
+  ['an active space', [{ id: 'active', name: 'Active', archived: false }], true],
+  ['active and archived spaces', [{ id: 'active', name: 'Active', archived: false }, { id: 'archived', name: 'Archived', archived: true }], true]
+]) test(`archive recovery hint describes real archived spaces: ${name}`, () => {
+  const f = fixture(); f.state.rooms = structuredClone(rooms); f.people[0].roomIds = [];
+  // Exercise the actual legacy-default filtering, not the locale fixture's stub.
+  for (const name of ['storedSpaces', 'allSpaces']) {
+    const match = renderer.match(new RegExp('^const ' + name + ' = (.*);$', 'm')); assert.ok(match);
+    f.context[name] = vm.runInContext('(' + match[1] + ')', f.context);
+  }
+  const before = structuredClone(f.state);
+  f.run('renderSpaceNavigation()');
+  assert.equal(f.$('workspace-empty').hidden, hidden);
+  f.refresh('en'); assert.equal(f.$('workspace-empty').hidden, hidden);
+  assert.deepEqual(f.state, before); assert.deepEqual(f.calls, []);
+});
+
 test('language repaint keeps sidebar rows, controls, focus and original identity while updating status and accessibility', () => {
   const f = fixture(), before = structuredClone(f.state); f.run('renderSessions(); renderSpaceNavigation();');
   const row = f.context.sessionRows.get(f.people[0].id), link = row.link, more = row.more, body = f.$('session-list');

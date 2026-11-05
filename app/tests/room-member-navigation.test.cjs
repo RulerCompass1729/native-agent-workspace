@@ -36,7 +36,7 @@ function fixture() {
   });
   context.roomOverview = { key: id => `collaboration:shared:${id}`, focus: id => context.focusRoomMember(id, context.roomSession, `collaboration:shared:${id}`) };
   const fields = source.match(/const roomViewFields = (\[[^;]+\]);/); assert.ok(fields);
-  vm.runInContext(`const roomViewFields = ${fields[1]};\n` + ['focusRoomMember', 'rememberRoomMemberView', 'restoreRoomMemberView', 'openRoomMember', 'timelineParticipants', 'filteredTimeline', 'showRoomRecords', 'returnRoomRecordMember', 'clearRoomRecordFilter', 'restoreRoomRecordFilter', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews'].map(actualFunction).join('\n'), context);
+  vm.runInContext(`const roomViewFields = ${fields[1]};\n` + ['roomRecentPreview', 'focusRoomMember', 'rememberRoomMemberView', 'restoreRoomMemberView', 'openRoomMember', 'timelineParticipants', 'filteredTimeline', 'showRoomRecords', 'returnRoomRecordMember', 'clearRoomRecordFilter', 'restoreRoomRecordFilter', 'captureRoomView', 'restoreRoomView', 'persistedRoomViews'].map(actualFunction).join('\n'), context);
   return { context, element, events, nativeCalls, notices };
 }
 

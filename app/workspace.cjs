@@ -804,8 +804,8 @@ class Workspace extends EventEmitter {
     return { ...room, messages: room.messages.map(m => {
       if (!m.wake) return m;
       const record = this.sessions.get(m.wake.senderId)?.messages?.find(x => x.id === m.wake.id && x.wake);
-      // With the sender's record removed, its delivery result is no longer known; never show a stale state.
-      return { ...m, text: record ? record.text : `发送方会话记录已移除，无法确认投递结果。\n${m.wake.body || ''}`, uiMessage: record ? record.uiMessage : displayMessage({ version: 1, key: 'notice.wake.senderRemoved', params: { body: m.wake.body || '' } }, 'notice.') || undefined, wakeStatus: record ? record.wake.status : 'unknown' };
+      // A missing original message does not prove that its sender session was removed.
+      return { ...m, text: record ? record.text : `无法核对发送方的原消息，投递结果未确认。\n${m.wake.body || ''}`, uiMessage: record ? record.uiMessage : displayMessage({ version: 1, key: 'notice.wake.senderRemoved', params: { body: m.wake.body || '' } }, 'notice.') || undefined, wakeStatus: record ? record.wake.status : 'unknown' };
     }) };
   }
   roomFor(id = 'shared', create = false) {

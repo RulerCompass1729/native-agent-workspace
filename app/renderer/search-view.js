@@ -11,7 +11,7 @@ function openSearch(scope = 'all') {
   searchOpener = document.activeElement; searchNavigating = false;
   captureReadingViews();
   searchOrigin = { spaceId, selected, roomSession, roomSurface, mode, sessionId: activeSessionId(), reading: structuredClone(readingPositions),
-    roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread };
+    roomSearch: $('room-search').value, roomFilter: $('room-filter').value || pendingRoomFilter, roomThread, roomRecordScope, roomRecordReturn: roomRecordReturn && { ...roomRecordReturn }, roomFilterHistory: roomFilterHistory && { ...roomFilterHistory } };
   const currentOption = $('search-scope').querySelector('[value="current"]');
   currentOption.disabled = !current();
   const focused = current();
@@ -116,6 +116,7 @@ async function openSearchResult(result) {
   $('search-dialog').close();
   if (result.kind === 'shared' || result.kind === 'room') {
     await selectSpace(result.roomId || 'shared');
+    roomRecordScope = ''; roomRecordReturn = null; roomFilterHistory = null;
     $('room-search').value = ''; $('room-filter').value = ''; pendingRoomFilter = ''; roomThread = '';
     roomSurface = 'records';
     await selectRoom();
@@ -144,6 +145,10 @@ async function returnToReading() {
   $('room-filter').value = target.roomFilter; pendingRoomFilter = target.roomFilter;
   roomSurface = target.roomSurface || 'overview';
   await select(target.selected, target.mode, target.roomSession);
+  if (target.selected === 'room' && roomSurface === 'records') {
+    roomRecordScope = target.roomRecordScope || ''; roomRecordReturn = target.roomRecordReturn && { ...target.roomRecordReturn };
+    roomFilterHistory = target.roomFilterHistory && { ...target.roomFilterHistory }; lastRoomMessages = ''; render();
+  }
   // select() captures the outgoing view. Restore the original geometry only
   // after that capture, and only for the destination of this explicit action.
   const inRoom = target.selected === 'room' && !target.roomSession;

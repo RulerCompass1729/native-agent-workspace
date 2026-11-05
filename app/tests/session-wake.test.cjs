@@ -339,7 +339,8 @@ test('a removed sender record and a reopened backend never show a stale state (T
   assert.match(again.text, /未确认/);
   reopened.sessions.delete(f.a);
   const [gone] = wakeRows(reopened);
-  assert.equal(gone.wakeStatus, 'unknown'); assert.match(gone.text, /^发送方会话记录已移除，无法确认投递结果。\nContinue one bounded task\.$/);
+  assert.equal(gone.wakeStatus, 'unknown'); assert.match(gone.text, /^无法核对发送方的原消息，投递结果未确认。\nContinue one bounded task\.$/);
+  assert.equal(require('../ui-locale.js').displayText('en', gone.text, gone.uiMessage), "The sender's original message could not be verified; delivery is unconfirmed.\nContinue one bounded task.");
 });
 test('only a wake row with a final state counts as complete for a space merge (T-137)', async t => {
   const { completedSharedRecord } = require('../collaboration-spaces.cjs');
@@ -410,4 +411,18 @@ test('a cancelled wake translates only its own boundary wrapper and preserves th
   assert.equal(row.wake.status, 'cancelled'); const original = row.text, locale = require('../ui-locale.js');
   assert.equal(locale.displayText('en', row.text, row.uiMessage), `The native observation or control boundary changed（${reason}）; the automatic message was not delivered.\n${body}`);
   assert.equal(locale.displayText('zh', row.text, row.uiMessage), original); assert.equal(row.wake.body, body); assert.equal(f.writes.length, 0);
+});
+
+test('a retained sender with an unavailable original wake message is unknown without claiming its session was removed', async t => {
+  const f = await joined(t, ['shared'], ['shared']);
+  const body = 'Preserve the original body exactly.\nSynthetic second line.';
+  assert.equal((await f.call(body)).status, 'staged');
+  const [before] = wakeRows(f.source), sender = f.source.get(f.a), nativeId = sender.nativeId;
+  sender.messages = sender.messages.filter(message => message.id !== before.wake.id);
+  const [row] = wakeRows(f.source);
+  assert.equal(f.source.get(f.a), sender); assert.equal(sender.nativeId, nativeId);
+  assert.equal(row.wakeStatus, 'unknown'); assert.equal(row.wake.body, body);
+  assert.equal(row.text, `无法核对发送方的原消息，投递结果未确认。\n${body}`);
+  assert.equal(require('../ui-locale.js').displayText('en', row.text, row.uiMessage), `The sender's original message could not be verified; delivery is unconfirmed.\n${body}`);
+  assert.deepEqual(f.writes, [], 'reading a missing source row never dispatches or retries');
 });
