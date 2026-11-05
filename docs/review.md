@@ -4806,3 +4806,26 @@ pass from the actual Applications executable. Installation records are verified
 by source/CDHash and process/draft counts; the daily operator differs from the
 last approved operator only in version numbers. This closes the scoped batch,
 not whole member-layout work, locked delivery or the shared dogfood goal.
+
+
+### 2026-11-04 — Exact native 166 workspace-tool provenance
+
+An owned native 0.166 code-mode call supplies the same inner call id, session,
+turn and arguments through its WebSocket event and MCP request. Local fixed
+Responses streams exercise the producer without vendor inference or recipient
+dispatch. The first trial stops at an outdated test catalog assumption; the
+corrected trial discovers the actual exposed tool name. Both trials are retained
+and all owned engines, helpers, profiles and fixture listeners are removed.
+
+The source entrance now accepts exactly 0.165.0 and 0.166.0 while preserving
+its token, bound runtime, native item, argument and lifetime checks. The task
+hint uses native tool discovery instead of assuming an obsolete alias. An actual
+MCP stdio/hook test fails for 166 before the change and passes afterwards; both
+source orders, identity/body refusals, expiry and unknown-version controls pass.
+All 2,662 source checks pass. Independent scoped source review passes after
+reading the original results. The logged CLI inventory is Read/Grep/Glob only;
+the reviewer also reports an uncalled internal advisor, without logged use.
+
+Order inversion, cancellation and disconnect coverage here is unit evidence.
+General 166 compatibility, installation, routing by the original retained
+consumer and the complete messaging task remain unqualified at this checkpoint.
