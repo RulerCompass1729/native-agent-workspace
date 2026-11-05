@@ -5158,3 +5158,53 @@ The next signed candidate still fails the same minimum-window reading check; the
 The successive failures remain explicit: end-of-render measurement alone did not fix the signed layout; the existing container observer does. A later cursor assertion wrongly expected input cursors on four read-only displays. Its corrected fixture takes control through the visible action before checking the one native input surface, retaining the other owners. An initial image fixture used an English test profile with a Chinese exact-menu helper and stopped before any model request. Corrected test-language and visible-control recipes pass; those fixture-only corrections are author checked.
 
 **Remaining late image-caption issue:** real native echo can arrive after the forward request settles. Attachments then clear through the late-receipt handler, while the unchanged original caption remains in the input. There is no observed automatic resend. Actual Applications proof confirms the workaround: manually clear the caption after the confirmed receipt, with no extra dispatch. This is an open image-task issue, not whole-task completion. No physical clipboard, drag/drop, model vision, original-cache-gap or whole-dogfood claim is added.
+
+
+### I219 — locked, separate-view browser-tool qualification
+
+The requested task is continued operation while macOS is locked, without switching the person's current view or losing drafts. An installed alpha.194 isolated profile passes four bounded groups using the existing stock Playwright MCP snapshot/click/type tools: explicit inline mention and one exact-text submission with the synthetic native connection's submitted receipt, preservation of positive private/shared human drafts and caret/recipient, stale/out-of-scope refusals, and wrong-view/revocation refusals without another send. The native identifier, submission tag and visible shared row agree. This does not test an assistant's final reply.
+
+Three startup failures are retained: an overlong socket directory, selection before lazy context initialization, and a fixed window index selecting the other view. The corrected private recipe uses the stock short socket directory option, initializes the existing pages, and binds exactly two owned views by their actual owner identities. Every selection preserves the observed lock and foreground. The final run takes 23.212 seconds; owned cleanup takes 2.204 seconds, releases the canonical slot, and passes the post-run strict signature check. The raw fixture counters show one send, one forward, zero input and two claims. No provider child or product model turn runs. Earlier failed profiles are included in the four-attempt total. Seven focused gate checks pass without skips.
+
+Independent review of the startup delta and raw installed evidence finds no blocker for these limited statements after correcting receipt, counter and privacy wording. Reported cumulative review cost is 1.5398314 USD at list-equivalent rates, not an invoice or a sum of resume reports. Main separately verifies unchanged HEAD/index/tracked files across review and inspects the actual receipt screenshot.
+
+Open boundaries: the three successful consumer tools did not return the human draft markers, but the trusted operator renderer's existing workspace snapshot contains another view's live draft. This is an open privacy prerequisite before daily automation, not a security guarantee. Concurrent view changes, actual native/provider tool registration, daily browser debugging permission and complete locked production operation remain unverified. The private adapter is qualification code, not an installed product feature. No daily debug port, provider configuration, goal, original process or permission changes are made.
+
+
+### T79 — Display lifetime changes while the initial snapshot is being written
+
+- Requirement: native content and the reader must correspond without losing the
+  original text. This repair concerns initial native-view attachment, not the
+  wider saved-style, link or conversation-mapping work.
+- Reproduced: after snapshot A passes the initial check, the same entry can receive
+  state B while xterm completes its asynchronous write. The old code publishes A
+  as ready and flushes A's queued output. The existing input guard still rejects
+  input; no wrong-session delivery was observed. The actual existing-entry
+  reconciliation does not replace an entry for an epoch-only change.
+- Repair: repeat the existing epoch comparison after the write and entry identity
+  check, before publishing readiness or flushing output. Use the existing failure
+  and explicit retry flow. Legacy missing-epoch behavior and the readable cache of
+  an ended display with the same epoch remain unchanged. No new snapshot field,
+  protocol, runtime or automatic recovery action is introduced.
+- Author verification: the focused regression first gives five passes and the
+  expected epoch-drift failure, then six passes; 18 affected checks pass with no
+  skips. The owned source GUI holds the real xterm completion callback, announces
+  a new lifetime through the normal synthetic service, shows the existing retry
+  state, then retries through the original view button to display the fresh frame.
+  Both private drafts, a positive saved shared-view draft, both native identities
+  and owners survive. The shared-view draft and collapsed pane are fixture setup
+  loaded by a same-instance renderer reload, not normal app-reopen evidence.
+- A first GUI attempt failed on the new test runner's obsolete composer selector
+  before reaching the target flow. Its raw failure is retained. The corrected
+  attempt passes both groups; two attempts total 10.975 seconds, with both owned
+  profiles/processes and canonical leases cleaned. No third attempt was run.
+- Limits: source alpha.190 and synthetic NativeHost only. Actual provider/native
+  recovery, installed acceptance and the wider T79 mapping work remain open.
+  No product-model call, native CLI input or OS clipboard operation was used.
+  The private checkpoint contains the independent verdict and exact evidence;
+  it is not permission to install or migrate a live backend.
+
+
+Late native image acceptance now consumes the original unchanged caption and explicit recipient together with its attachments. Edited captions, changed recipients, other spaces and drafts restored after reopening remain protected. Legacy reservations without an original draft proof retain their captions.
+
+Validation: 37 affected checks passed; three source GUI flows plus two focused reopen flows passed. The first reopen failure is retained and covered by a regression. All transport inputs were synthetic; no real provider/model, native terminal input or system clipboard writes. Existing native image-wire evidence is reused. This is source readiness; installed acceptance is pending integration.

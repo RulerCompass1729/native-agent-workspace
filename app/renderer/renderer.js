@@ -51,7 +51,7 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
-const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory'];
+const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory', 'draftRevision'];
 const focusedRoomMember = () => selected === 'room' && roomSurface === 'overview' && Boolean(roomSession);
 const sharedSurface = () => selected === 'room' && !focusedRoomMember();
 const focusedReadingKey = id => focusedRoomMember() ? spaceId === 'shared' ? `collaboration-focus:${id}` : `focus:${spaceId}:${id}` : id;
@@ -1280,6 +1280,12 @@ async function acknowledgeRoomImageReceipt(id, version, tag) {
   const result = await api.spaceAction(id, 'acceptImages', [version, tag]);
   if (result?.accepted && view.roomImageVersion === version) {
     view.roomImages = result.refs; view.roomImageVersion = result.version; delete view.roomImageSend;
+    const caption = result.caption, original = id === spaceId ? captureRoomView() : view;
+    if (caption && original.draftRevision === caption.revision && original.sharedDraft === caption.raw && original.roomRecipient === caption.recipientId &&
+        ['id', 'start', 'end', 'text', 'active', 'memberRevision'].every(key => original.roomMention?.[key] === caption.mention?.[key])) {
+      original.sharedDraft = ''; original.roomMention = null; original.roomRecipient = ''; original.draftRevision++;
+      writeRoomDraft(id, original);
+    }
     render();
   }
 }
@@ -3686,6 +3692,8 @@ async function ensureTerminal(id, explicit = false) {
       await new Promise(resolve => term.write(snapshot.buffer, resolve));
       entry.keyboardFlags = snapshot.keyboardFlags || 0;
       if (terminals.get(id) !== entry) return;
+      live = state.sessions.find(s => s.id === id)?.terminalState;
+      if (snapshot.epoch && live?.epoch && snapshot.epoch !== live.epoch) throw uiError("error.terminalViewChanged");
       entry.observationIndex = Number.isSafeInteger(snapshot.observationIndex) && snapshot.observationIndex >= 0 && Number.isSafeInteger(snapshot.sequence) && snapshot.sequence >= 0 && typeof snapshot.epoch === 'string' && snapshot.epoch ? snapshot.observationIndex : undefined;
       entry.sequence = snapshot.sequence; entry.ready = true;
       for (const event of entry.queued) writeTerminal(entry, event);
@@ -4537,6 +4545,7 @@ attempt(async () => {
   const display = state.viewState.terminalDisplay;
   if (display && Number.isInteger(display.fontSize) && display.fontSize >= 10 && display.fontSize <= 24 && terminalThemes[display.palette]) terminalDisplay = display;
   $('shared-input').value = typeof savedRoomView.sharedDraft === 'string' ? savedRoomView.sharedDraft : '';
+  roomDraftRevision = savedRoomView.draftRevision || 0;
   $('room-search').value = savedRoomView.roomSearch || ''; pendingRoomFilter = savedRoomView.roomFilter || '';
   roomThread = savedRoomView.roomThread || ''; roomReplyTo = savedRoomView.roomReplyTo || '';
   roomRecordScope = savedRoomView.roomRecordScope || ''; roomRecordReturn = savedRoomView.roomRecordReturn || null; roomFilterHistory = savedRoomView.roomFilterHistory || null;

@@ -77,13 +77,100 @@ function mainFixture(t) {
   const snapshot = { sessions: [{ id: 'recipient', nativeId: 'native-recipient', spaceImagesAvailable: true, serviceCapabilities: ['spaceImageInputV1'], state: 'idle' }], room: { id: 'shared', messages: [] } };
   c.client = { call: async () => snapshot, callSpace: async (_room, action, args) => { assert.equal(action, 'forward'); assert.equal(new ViewStore(root).load()[0].roomViews.shared.roomImageSend.version, images.version); sends++; return { tag: 'native-tag', imageReceipt: { status: 'awaiting-native' } }; } };
   c.client.entries = [{ key: '.' }]; c.client.control = { maintenance: new Set() };
-  const context = vm.createContext({ require: name => name === './space-images.cjs' ? media : require(path.join(__dirname, '..', name)), dataDir: root, nativeImage: decoder, randomUUID, uiError, views: [c.view], viewStorageWarning: null,
+  const context = vm.createContext({ require: name => name.startsWith('node:') ? require(name) : name === './space-images.cjs' ? media : require(path.join(__dirname, '..', name)), dataDir: root, nativeImage: decoder, randomUUID, uiError, views: [c.view], viewStorageWarning: null,
     roomState: { assertAvailable() {}, writable() {} }, saveViews: () => { if (failSave) throw Error('Owned save failure'); store.save([c.view]); } });
   const main = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
   vm.runInContext(main.slice(main.indexOf('function hasSavedSpaceDraft('), main.indexOf('function connectionUpdateOptions(')), context);
   const send = () => context.forwardSpaceImages(c, 'shared', ['recipient', 'caption', 'native-recipient', null, { version: images.version }]);
   return { root, store, c, images, snapshot, context, send, failSave: value => { failSave = value; }, sends: () => sends };
 }
+function addressedCaption(f) {
+  const view = f.c.view.roomViews.shared;
+  Object.assign(view, { sharedDraft: '@Builder caption', roomRecipient: 'recipient', draftRevision: 7,
+    roomMention: { id: 'recipient', text: '@Builder', start: 0, end: 8, active: true, memberRevision: 3 } });
+  return view;
+}
+function acceptedImageRow(f) {
+  const row = { id: 'native-tag', recipientId: 'recipient', imageDraftVersion: f.images.version, images: f.images.refs,
+    imageReceipt: { status: 'accepted', tag: 'native-tag', recipientId: 'recipient', nativeId: 'native-recipient', nativeItemId: 'native-user-item', turnId: 'owned-turn', basis: 'native-local-image-echo' } };
+  f.snapshot.room.messages.push(row); return row;
+}
+test('I218 late native acceptance durably consumes only the original addressed caption, including after reload', async t => {
+  const f = mainFixture(t); addressedCaption(f); await f.send();
+  f.c.view = new ViewStore(f.root).load()[0]; acceptedImageRow(f);
+  const result = await f.context.acceptSpaceImageDraft(f.c, 'shared', f.images.version, 'native-tag');
+  const saved = new ViewStore(f.root).load()[0].roomViews.shared;
+  assert.equal(saved.sharedDraft, ''); assert.equal(saved.roomMention, null); assert.equal(saved.roomRecipient, '');
+  assert.equal(saved.draftRevision, 8); assert.equal(result.caption.raw, '@Builder caption'); assert.equal(result.caption.revision, 7);
+  assert.deepEqual(saved.roomImages, []); assert.equal(f.sends(), 1);
+});
+test('I218 receipt preserves an edited-back caption and rolls back caption plus refs together on save failure', async t => {
+  const f = mainFixture(t), view = addressedCaption(f); await f.send(); acceptedImageRow(f);
+  f.failSave(true); await assert.rejects(f.context.acceptSpaceImageDraft(f.c, 'shared', f.images.version, 'native-tag'));
+  assert.equal(f.c.view.roomViews.shared.sharedDraft, '@Builder caption'); assert.equal(f.c.view.roomViews.shared.roomImages.length, 1);
+  f.failSave(false); f.c.view.roomViews.shared.draftRevision += 2;
+  const result = await f.context.acceptSpaceImageDraft(f.c, 'shared', f.images.version, 'native-tag');
+  assert.equal(result.caption, undefined); assert.equal(f.c.view.roomViews.shared.sharedDraft, '@Builder caption');
+  assert.equal(f.c.view.roomViews.shared.draftRevision, 9); assert.equal(f.c.view.roomViews.shared.roomImages.length, 0);
+});
+test('I218 changed recipient, mention identity or caption cannot be consumed by an older receipt, even after reload', async t => {
+  for (const change of [v => { v.sharedDraft += ' newer'; }, v => { v.roomRecipient = ''; v.roomMention.active = false; }, v => { v.roomMention.memberRevision++; }]) {
+    const f = mainFixture(t); addressedCaption(f); await f.send(); acceptedImageRow(f);
+    change(f.c.view.roomViews.shared); f.store.save([f.c.view]); f.c.view = new ViewStore(f.root).load()[0];
+    const before = structuredClone(f.c.view.roomViews.shared);
+    const result = await f.context.acceptSpaceImageDraft(f.c, 'shared', f.images.version, 'native-tag');
+    assert.equal(result.caption, undefined); assert.equal(f.c.view.roomViews.shared.sharedDraft, before.sharedDraft);
+    assert.deepEqual(f.c.view.roomViews.shared.roomMention, before.roomMention); assert.equal(f.sends(), 1);
+  }
+});
+test('I218 Main captures only a caption matching the actual request and rereads edits after the acceptance snapshot wait', async t => {
+  const f = mainFixture(t); addressedCaption(f); f.c.view.roomViews.shared.sharedDraft += ' different'; await f.send();
+  assert.equal(f.c.view.roomViews.shared.roomImageSend.captionProof, undefined);
+  const g = mainFixture(t); addressedCaption(g); await g.send(); acceptedImageRow(g);
+  g.c.client.call = async () => { g.c.view.roomViews.shared.draftRevision++; return g.snapshot; };
+  assert.equal((await g.context.acceptSpaceImageDraft(g.c, 'shared', g.images.version, 'native-tag')).caption, undefined);
+  assert.equal(g.c.view.roomViews.shared.sharedDraft, '@Builder caption');
+});
+test('I218 actual saved room fields preserve the existing edit generation; malformed generations are rejected', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8');
+  const fields = source.slice(source.indexOf('const roomViewFields ='), source.indexOf('\n', source.indexOf('const roomViewFields =')));
+  const start = source.indexOf('function persistedRoomViews('), end = source.indexOf('\n}', start) + 2;
+  const context = vm.createContext({ roomViews: { shared: { sharedDraft: 'same text', draftRevision: 9 } } });
+  vm.runInContext(fields + '\n' + source.slice(start, end), context);
+  assert.equal(context.persistedRoomViews().shared.draftRevision, 9);
+  const { validViews } = require('../view-store.cjs');
+  for (const draftRevision of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, '9']) assert.equal(validViews([{ owner: 'window', roomViews: { shared: { draftRevision } } }]), false);
+});
+test('I218 actual initial GUI restoration reloads the saved caption generation before any native receipt', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../renderer/renderer.js'), 'utf8'), input = {};
+  const context = vm.createContext({ savedRoomView: { sharedDraft: 'saved caption', draftRevision: 20 }, roomDraftRevision: 0, $: () => input });
+  const start = source.indexOf("  $('shared-input').value = typeof savedRoomView.sharedDraft");
+  vm.runInContext(source.slice(start, source.indexOf("  $('room-search').value", start)), context);
+  assert.equal(context.roomDraftRevision, 20); assert.equal(input.value, 'saved caption');
+});
+test('I218 persisted image reservations accept legacy markers and reject malformed caption proof', async t => {
+  const f = mainFixture(t); addressedCaption(f); await f.send();
+  const original = new ViewStore(f.root).load(), { validViews } = require('../view-store.cjs');
+  assert.equal(validViews(original), true); assert.match(original[0].roomViews.shared.roomImageSend.captionProof.digest, /^[a-f0-9]{64}$/);
+  for (const captionProof of [{ revision: -1, digest: 'a'.repeat(64) }, { revision: 7, digest: 'invalid' }, { revision: 7, digest: 'a'.repeat(64), raw: 'private duplicate' }]) {
+    const bad = structuredClone(original); bad[0].roomViews.shared.roomImageSend.captionProof = captionProof; assert.equal(validViews(bad), false);
+  }
+  delete original[0].roomViews.shared.roomImageSend.captionProof; assert.equal(validViews(original), true);
+});
+test('I218 an older text save cannot resurrect a consumed caption, while a genuinely newer edit still saves', async t => {
+  const f = mainFixture(t); addressedCaption(f); await f.send(); const stale = structuredClone(f.c.view); acceptedImageRow(f);
+  await f.context.acceptSpaceImageDraft(f.c, 'shared', f.images.version, 'native-tag');
+  const handlers = new Map(), source = fs.readFileSync(path.join(__dirname, '../main.cjs'), 'utf8');
+  Object.assign(f.context, { structuredClone, validViews: require('../view-store.cjs').validViews, register: (name, fn) => handlers.set(name, fn) });
+  vm.runInContext(source.slice(source.indexOf("  register('viewState',"), source.indexOf("  register('openLocalFile',")), f.context);
+  handlers.get('viewState')(f.c, structuredClone(stale));
+  assert.equal(f.c.view.roomViews.shared.sharedDraft, ''); assert.equal(f.c.view.sharedDraft, '');
+  assert.equal(new ViewStore(f.root).load()[0].roomViews.shared.draftRevision, 8);
+  const newer = structuredClone(stale); newer.roomViews.shared.draftRevision = 9; newer.roomViews.shared.sharedDraft += ' new';
+  handlers.get('viewState')(f.c, newer);
+  assert.equal(new ViewStore(f.root).load()[0].roomViews.shared.sharedDraft, '@Builder caption new');
+  assert.equal(f.c.view.roomViews.shared.roomImageSend, undefined, 'incoming save cannot forge the controller reservation');
+});
 test('Main reserves an image draft durably before forwarding, preserves an unknown outcome across reload and denies repeat send', async t => {
   const f = mainFixture(t); await f.send();
   const saved = new ViewStore(f.root).load()[0].roomViews.shared;
@@ -118,12 +205,26 @@ function rendererFixture() {
     roomImageRefs: () => view.roomImages, $: id => nodes[id], interruptPending: () => false,
     nativeWorkspaceMentions: { body: (_mention, raw) => raw.replace('@Builder ', '') }, nativeUsable: () => true, participantLabel: s => s.id,
     captureRoomView: () => Object.assign(view, { sharedDraft: input.value, draftRevision: context.roomDraftRevision }), roomQueueAvailable: () => false, roomSteerAvailable: () => false,
-    render() {}, persistView: async () => {}, writeRoomDraft: (_id, next) => { input.value = next.sharedDraft; },
+    render() {}, persistView: async () => {}, writeRoomDraft: (id, next) => { if (id === context.spaceId) input.value = next.sharedDraft; },
     api: { spaceAction: async (...args) => { calls.push(args); return new Promise(yes => { resolve = yes; }); } } });
-  vm.runInContext(source.slice(source.indexOf('function roomImageForwardAvailable('), source.indexOf('async function acknowledgeRoomImageReceipt(')) +
+  vm.runInContext(source.slice(source.indexOf('function roomImageForwardAvailable('), source.indexOf('function roomImageDraftEditable(')) +
     source.slice(source.indexOf('async function submitRoom('), source.indexOf("$('room-composer').onsubmit")), context);
   return { context, input, view, version, refs, calls, resolve: value => resolve(value) };
 }
+test('I218 actual late receipt clears untouched local caption and keeps later edits or another space input intact', async () => {
+  for (const scenario of ['untouched', 'edited-back', 'new-text', 'other-space']) {
+    const f = rendererFixture(); f.view.roomImageSend = { version: f.version, recipientId: 'recipient', nativeId: 'native-recipient' };
+    const ack = f.context.acknowledgeRoomImageReceipt('shared', f.version, 'native-tag');
+    if (scenario === 'edited-back') f.context.roomDraftRevision += 2;
+    if (scenario === 'new-text') { f.context.roomDraftRevision++; f.input.value = 'new draft'; }
+    if (scenario === 'other-space') { f.context.spaceId = 'other'; f.input.value = 'another space draft'; }
+    f.resolve({ accepted: true, refs: [], version: randomUUID(), caption: { raw: '@Builder caption', revision: 7, recipientId: 'recipient', mention: null } });
+    await ack;
+    assert.equal(f.view.roomImages.length, 0); assert.equal(f.calls.length, 1);
+    assert.equal(f.input.value, scenario === 'untouched' ? '' : scenario === 'new-text' ? 'new draft' : scenario === 'other-space' ? 'another space draft' : '@Builder caption');
+    if (scenario === 'other-space') assert.equal(f.view.sharedDraft, '');
+  }
+});
 test('the actual composer sends only its explicit image recipient and retains caption and images on unconfirmed acceptance', async () => {
   const f = rendererFixture(), sending = f.context.submitRoom(false); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.length, 1); assert.equal(f.calls[0][0], 'shared'); assert.equal(f.calls[0][1], 'forward'); assert.equal(f.calls[0][2][0], 'recipient');

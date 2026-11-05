@@ -10,6 +10,7 @@ function validRoomView(view, id) {
   if (!object(view)) return false;
   for (const key of ['roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo']) if (view[key] !== undefined && !text(view[key], 100)) return false;
   if (view.sharedDraft !== undefined && !text(view.sharedDraft, 16000)) return false;
+  if (view.draftRevision !== undefined && (!Number.isSafeInteger(view.draftRevision) || view.draftRevision < 0)) return false;
   if (view.roomSearch !== undefined && !text(view.roomSearch, 1000)) return false;
   if (view.roomSurface !== undefined && !['overview', 'records'].includes(view.roomSurface)) return false;
   if (view.roomRecordScope !== undefined && !text(view.roomRecordScope, 100)) return false;
@@ -30,8 +31,10 @@ function validRoomView(view, id) {
   if (view.roomImages?.length && view.roomImageVersion === undefined) return false;
   if (view.roomImageSend !== undefined) {
     const send = view.roomImageSend;
-    if (!object(send) || Object.keys(send).length !== 3 || !Object.keys(send).every(key => ['version', 'recipientId', 'nativeId'].includes(key)) ||
+    if (!object(send) || Object.keys(send).some(key => !['version', 'recipientId', 'nativeId', 'captionProof'].includes(key)) ||
         send.version !== view.roomImageVersion || !text(send.recipientId, 100) || !send.recipientId || !text(send.nativeId, 100) || !send.nativeId || !view.roomImages?.length) return false;
+    if (send.captionProof !== undefined && (!object(send.captionProof) || Object.keys(send.captionProof).length !== 2 ||
+        !Number.isSafeInteger(send.captionProof.revision) || send.captionProof.revision < 0 || typeof send.captionProof.digest !== 'string' || !/^[a-f0-9]{64}$/.test(send.captionProof.digest))) return false;
   }
   return true;
 }

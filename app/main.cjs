@@ -317,6 +317,12 @@ function updateSpaceImageDraft(c, roomId, action, value, expectedVersion) {
     throw error.uiMessage ? error : uiError('error.roomImages.import');
   }
 }
+function spaceImageCaptionProof(view) {
+  if (!Number.isSafeInteger(view.draftRevision) || view.draftRevision < 0 || view.draftRevision >= Number.MAX_SAFE_INTEGER || typeof view.sharedDraft !== 'string') return null;
+  const mention = view.roomMention;
+  const caption = [view.sharedDraft, view.roomRecipient, mention ? [mention.id, mention.start, mention.end, mention.text, mention.active, mention.memberRevision] : null];
+  return { revision: view.draftRevision, digest: require('node:crypto').createHash('sha256').update(JSON.stringify(caption)).digest('hex') };
+}
 async function forwardSpaceImages(c, roomId, args) {
   const request = args[4], version = request?.version;
   if (!request || Object.keys(request).length !== 1 || !Object.hasOwn(request, 'version')) throw uiError('error.roomImages.changed');
@@ -336,6 +342,9 @@ async function forwardSpaceImages(c, roomId, args) {
   const images = require('./space-images.cjs');
   for (const ref of view.roomImages) images.readSpaceImage(dataDir, roomId, ref);
   const previous = c.view.roomViews, send = { version, recipientId: recipient.id, nativeId: recipient.nativeId };
+  // Preserve only a fingerprint of the saved caption, never a second text copy.
+  const captionProof = spaceImageCaptionProof(view);
+  if (captionProof && view.roomRecipient === args[0] && require('./room-mention.js').body(view.roomMention, view.sharedDraft) === args[1]) send.captionProof = captionProof;
   c.view.roomViews = { ...previous, [roomId]: { ...view, roomImageSend: send } };
   try { saveViews(); } catch (error) { c.view.roomViews = previous; throw error; }
   // An interrupted/unknown request remains reserved on disk, never auto-retried.
@@ -351,9 +360,15 @@ async function acceptSpaceImageDraft(c, roomId, version, tag) {
       receipt?.status !== 'accepted' || receipt.basis !== 'native-local-image-echo' || receipt.tag !== tag || receipt.nativeId !== sent.nativeId ||
       receipt.recipientId !== sent.recipientId || typeof receipt.nativeItemId !== 'string' || !receipt.nativeItemId || typeof receipt.turnId !== 'string' || !receipt.turnId) return { accepted: false };
   const previous = c.view.roomViews, next = { ...view, roomImages: [], roomImageVersion: randomUUID() }; delete next.roomImageSend;
+  let caption;
+  const proof = spaceImageCaptionProof(view);
+  if (sent.captionProof && proof && sent.captionProof.revision === proof.revision && sent.captionProof.digest === proof.digest) {
+    caption = { raw: view.sharedDraft, revision: view.draftRevision, recipientId: view.roomRecipient, mention: view.roomMention ? { ...view.roomMention } : null };
+    next.sharedDraft = ''; next.roomMention = null; next.roomRecipient = ''; next.draftRevision++;
+  }
   c.view.roomViews = { ...previous, [roomId]: next };
   try { saveViews(); } catch (error) { c.view.roomViews = previous; throw error; }
-  return { accepted: true, refs: [], version: next.roomImageVersion };
+  return { accepted: true, refs: [], version: next.roomImageVersion, ...(caption ? { caption } : {}) };
 }
 async function cleanupSpaceImageCopies(c, roomId) {
   const images = require('./space-images.cjs');
@@ -853,6 +868,11 @@ async function boot() {
       // A text save sent before that ACK must not erase its newer image draft.
       for (const [id, original] of Object.entries(c.view.roomViews || {})) if (original.roomImages !== undefined) {
         next.roomViews[id] = { ...(next.roomViews[id] || original), roomImages: structuredClone(original.roomImages), roomImageVersion: original.roomImageVersion };
+        // A save already in flight before image acceptance cannot resurrect
+        // its consumed caption. Later human edits carry a newer generation.
+        if (Number.isSafeInteger(original.draftRevision) && (next.roomViews[id].draftRevision ?? -1) < original.draftRevision) {
+          for (const key of ['sharedDraft', 'roomRecipient', 'roomMention', 'draftRevision']) next.roomViews[id][key] = structuredClone(original[key]);
+        }
         if (original.roomImageSend) next.roomViews[id].roomImageSend = structuredClone(original.roomImageSend);
         else delete next.roomViews[id].roomImageSend;
       }
