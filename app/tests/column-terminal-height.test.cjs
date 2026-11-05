@@ -218,3 +218,27 @@ test('a passive height clamp does not pull a person reading older native content
   assert.equal(context.applyColumnTerminalHeight(binding, 300), 80); assert.equal(calls.reveal, 1, 'Cursor following still works when the person is not reading older output');
   assert.equal(context.columnTerminalHeights[binding.id], 300); assert.equal(calls.persist, 0); assert.deepEqual(calls.fit, []);
 });
+
+
+test('the actual overview measures column heights after its final header and shared-composer layout', () => {
+  const { context, binding, limits, calls } = harness({ min: 64, max: 96 });
+  const nodes = new Map();
+  const element = id => { if (!nodes.has(id)) nodes.set(id, { hidden: false, setAttribute() {}, querySelector() { return element(id + ":child"); }, classList: { toggle() {} } }); return nodes.get(id); };
+  Object.assign(context, {
+    sessionComposers: new Map([[binding.id, binding]]), columnTerminalBinding: () => binding,
+    document: { activeElement: null }, members: () => [], orderedMembers: () => [],
+    focusedRoomMember: () => false, roomSurface: 'overview', disconnected: false,
+    roomOverview: { toolbar: {}, update() { context.applyColumnTerminalHeight(binding, 112); } },
+    renderHeaderLayout() { limits.max = 64; }, current: () => null, selected: 'room',
+    $: element,
+  });
+  const refresh = renderer.indexOf('function refreshColumnTerminalHeights(');
+  if (refresh >= 0) vm.runInContext(renderer.slice(refresh, renderer.indexOf("window.addEventListener('resize'", refresh)), context);
+  const begin = renderer.indexOf('function renderRoomOverview(');
+  vm.runInContext(renderer.slice(begin, renderer.indexOf('const nativeUsable =', begin)), context);
+  context.renderRoomOverview();
+  assert.equal(binding.nativeHost.style.height, '64px', 'Late layout must replace the earlier 96px budget');
+  assert.equal(binding.terminalHeight, 64);
+  assert.deepEqual(calls.fit, [], 'Passive layout never resizes the native grid');
+  assert.equal(calls.persist, 0, 'Passive layout keeps the saved preference');
+});

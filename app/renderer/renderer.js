@@ -491,10 +491,10 @@ function columnTerminalSash(binding) {
   return binding.nativeSash = sash;
 }
 // A smaller window lowers a tall terminal (down to 64px) so the input stays in the column.
-window.addEventListener('resize', () => {
-  hideColumnTerminalHint();
+function refreshColumnTerminalHeights() {
   for (const binding of sessionComposers.values()) if (columnTerminalBinding(binding.id) && !binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(binding.id));
-});
+}
+window.addEventListener('resize', () => { hideColumnTerminalHint(); refreshColumnTerminalHeights(); });
 function removeColumnInput(id) {
   const binding = sessionComposers.get(id); if (!binding) return;
   hideColumnTerminalHint(binding);
@@ -676,7 +676,7 @@ function renderRoomOverview() {
     disposeMessages: el => { messageViews.get(el)?.dispose(); messageViews.delete(el); },
     renderInput: renderColumnInput, disposeInput: removeColumnInput,
     beforeInputLayout: suspendColumnInputs,
-    beforeLayout: () => { captureReadingViews(); restoreOverviewReading(); }, onLayout: restoreOverviewReading, onFocus: focusRoomMember,
+    beforeLayout: () => { captureReadingViews(); restoreOverviewReading(); }, onLayout: () => { refreshColumnTerminalHeights(); restoreOverviewReading(); }, onFocus: focusRoomMember,
     decorateHeader: (handle, record) => draggableSession(handle, record.id),
     onMemberMenu: openMemberMenu,
     onSource: (el, key, source) => {
@@ -698,6 +698,8 @@ function renderRoomOverview() {
   if (!records) $('thread-heading').hidden = true;
   $('room-composer').hidden = focused;
   $('room-layout').classList.toggle('collaboration-focus', focused);
+  // Header, footer and shared-composer layout must settle before measuring the columns.
+  refreshColumnTerminalHeights();
   if (removedFocus) focusRemainingMember(origin, oldIndex);
 }
 const nativeUsable = s => s && !s.archived && !s.backendUnavailable && (['starting', 'idle', 'working', 'approval'].includes(s.state) || ((s.state === 'error' || s.nativeContextPending) && s.terminalAvailable));
