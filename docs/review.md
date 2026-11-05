@@ -5304,3 +5304,25 @@ The initial review reaches its investigation budget without a verdict; its
 interrupted result is not a pass. A verdict-only continuation on the same
 reviewer identifies these concerns. Only the correction, complete raw probes,
 previously unread installed adapter and search-return tail go back to it.
+
+
+Alpha.196 acceptance closes this scoped integration on committed source
+`41227d6`. The independent reviewer approves the navigation corrections and,
+in a separate bounded read on the same checkpoint, the installed adaptation
+and complete final raw evidence. The initial interrupted result is not counted
+as approval. The reported cumulative review metric is 1.0170142 USD at list
+equivalent, not billing and not additive across resumed invocations. Main verifies
+unchanged source, index and worktree around review. The empty-caption predicate
+and literal wake notice reuse unchanged independent author source reviews;
+their installed assertions are author operated rather than independent reruns.
+
+The final signed candidate and actual Applications executable both pass all
+five complete navigation journeys and normal bootstrap. The ordinary visible
+update retains the original native identities, settings, drafts and active goal
+over 150 seconds. All 71 payload files and strict signatures match. The updater
+is program-equal to the last successful template except version numbers and
+bound hashes. No daily debugger, occupied backend migration, product inference
+or push is added. An initial installation-record check correctly rejects the
+older candidate evidence; the reader is corrected to the final evidence path
+without another runtime test or artifact change. The complete dogfood and
+native-delivery goals remain open.

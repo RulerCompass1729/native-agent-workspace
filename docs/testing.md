@@ -2,6 +2,14 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Member navigation and record history — 2026-11-05
+
+Alpha.196 / `41227d6`: candidate and actual Applications each pass five whole navigation journeys. Coverage includes saved departed-member filters, temporary recent-all and restoration; full-member/related/search/return with private caret and reading preserved; explicit synthetic native display followed by passive restoration without additional control; three-, four- and five-member navigation and selected-member removal; search-result selection without Return followed by ordinary reopening with the canonical filter and both drafts retained. Both normal signed bootstrap checks also pass, including the empty-profile sidebar condition.
+
+Four prior actual-renderer failures and three new review probes have red-to-green evidence. The remaining key, manual-filter and accessible-label checks are regression coverage. The full suite passes 2,760 checks; the final affected set passes 55, with no skips. Exact source and recipe reviews pass; signed runtime results are author operated. Four final isolated profiles and six GUI starts use zero real provider/model turns and zero native input/send. All owned processes/profiles and the test slot are cleaned; signed artifacts remain unchanged. Earlier failed setup trials and the rejected candidate remain distinguishable from final evidence.
+
+The ordinary visible daily update and 150-second check retain 14 records, 16 live native identity witnesses, 12 draft scopes, seven older backends and the original active goal. The 71 payload files match the committed build, and application search has one entry. These checks do not certify a complete workday, original cache-gap repair, physical input or production locked-browser access.
+
 ## Accepted captions and terminal bootstrap — 2026-11-05
 
 Alpha.195 / `2a6f05a`: signed candidate and actual Applications each pass five late-image-caption journeys and the two-group terminal-bootstrap task. Caption cases cover untouched acceptance, a real edit away and back, another space, reopening an untouched send and reopening a newer unsent edit. The terminal task changes the native display epoch during the real xterm completion callback, keeps stale output hidden and retries through the existing native-terminal entry. Private/shared drafts and unrelated identities remain unchanged. These are synthetic native-transport tests; the prior qualified native image wire is reused without another model call.
