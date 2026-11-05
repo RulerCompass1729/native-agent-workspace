@@ -655,3 +655,11 @@ header h1, header p { overflow-wrap: anywhere; }
 }
 /* T-115: the space choice selects keep the same gap before the next label as the other create fields. */
 #create-space-kind,#create-space-existing{margin-bottom:20px}
+
+/* Compact the existing new-session form without changing its controls. */
+#create-dialog{padding:22px}
+#create-dialog h2{margin-bottom:8px}
+#create-dialog input:not([type=radio]):not([type=checkbox]),#create-dialog textarea,#create-dialog #initial-view,#create-dialog #create-space-kind,#create-dialog #create-space-existing{margin-bottom:12px}
+#create-dialog .provider-choice{margin:14px 0}
+#create-dialog .dialog-actions{margin-top:16px}
+#create-dialog p:empty{margin:0}
