@@ -50,13 +50,13 @@ async function main() {
   const dispatch = async (owner, method, args, client, roomId = 'shared', scoped = false) => {
     if (shuttingDown) throw uiError("error.backendClosingActionNotExecuted");
     switch (method) {
-      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
+      case 'initial': return { ...workspace.snapshot(), owner, defaultWorkspace, newWorkspaceRoot: workspace.newWorkspaceRoot, servicePid: process.pid, protocol: 1, capabilities: [...mobileCapabilities, ...(gitWorktree.available() ? [gitWorktree.CAPABILITY] : []), CAPABILITY, DIRECTED, 'spaceImageInputV1', 'collaborationSpacesV1', 'singleHomeMoveV1', 'spaceMergeV1', 'agentAddressedHandoffs', 'agentWakeV1', 'nativeSharedSteer', 'nativeSharedQueue', 'nativeQueue', 'nativeSteer', 'replyThreads', 'nativeContextTransitions', 'nativeHistory', 'atomicShutdown', 'observe', 'resume', 'resubscribe', 'transportReconnect', 'retrySave', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'claudePromptIdentity', 'verifiedHandoffs', 'boundedReplyHandoffs', 'multiSessionHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation', 'nativeApprovalSync', 'nativeApprovalLocalDecisions', 'claudeFork', 'claudeHistory', 'createSkipPermissions', 'newSessionDirectory', 'nativeQuestionAnswer'], runtimeVersion: process.env.NAW_APP_VERSION || 'development' };
       case 'mergeSnapshot': {
         if (roomId !== 'shared' || args.length !== 1) throw uiError("error.invalidSnapshotImport");
         return workspace.mergeSnapshot(args[0]);
       }
       case 'spaceAction': {
-        const [space, action, values, expected] = args, bounds = { join: 3, forward: 4, queueShared: 4, steerShared: 5, run: 7, pause: 0, clearSharedHistory: 0 };
+        const [space, action, values, expected] = args, bounds = { join: 3, forward: 5, queueShared: 4, steerShared: 5, run: 7, pause: 0, clearSharedHistory: 0 };
         if (roomId !== 'shared' || !validRoomId(space) || !Object.hasOwn(bounds, action) || !Array.isArray(values) || values.length > bounds[action]) throw uiError("error.invalidSpaceAction");
         const ids = action === 'run' ? values[0] : ['forward', 'queueShared', 'steerShared'].includes(action) ? [values[0]] : [];
         if (!Array.isArray(ids) || ids.some(id => { const s = workspace.get(id); return !expected || !isMember(s, space) || expected[id] !== membershipRevision(s, space); })) throw uiError("error.spaceMembershipChangedNoDispatch");
@@ -141,9 +141,10 @@ async function main() {
       case 'forward': {
         workspace.assertNativeContext(args[0], args[2]);
         const nativeId = workspace.get(args[0]).nativeId;
-        await workspace.forward(args[0], args[1], owner, args[3], roomId);
+        const tag = await workspace.forward(args[0], args[1], owner, args[3], roomId, args[4]);
         const current = workspace.get(args[0]);
-        return { contextChanged: current.nativeId !== nativeId || Boolean(current.nativeContextPending) };
+        const receipt = args[4] && workspace.roomFor(roomId).messages.find(row => row.id === tag)?.imageReceipt;
+        return { contextChanged: current.nativeId !== nativeId || Boolean(current.nativeContextPending), ...(args[4] ? { tag, imageReceipt: receipt } : {}) };
       }
       case 'approve': return workspace.approve(args[0], args[1], args[2], owner);
       case 'answer': return workspace.answer(args[0], args[1], args[2], owner);

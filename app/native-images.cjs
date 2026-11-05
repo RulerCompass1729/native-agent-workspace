@@ -402,15 +402,16 @@ async function readImage(ref, nativeImage) {
   } finally { await handle?.close(); }
 }
 class ImagePreviews {
-  constructor({ snapshot, nativeImage, maxBytes = 32 * 1024 * 1024, maxEntries = 16 }) {
+  constructor({ snapshot, nativeImage, resolveSource = imageSource, maxBytes = 32 * 1024 * 1024, maxEntries = 16 }) {
     this.snapshot = snapshot; this.nativeImage = nativeImage; this.maxBytes = maxBytes; this.maxEntries = maxEntries;
+    this.resolveSource = resolveSource;
     this.entries = new Map(); this.bytes = 0; this.closed = false; this.pending = 0; this.readTail = Promise.resolve();
   }
   async source(source) {
     if (this.closed) throw uiError("error.nativeImages.windowClosed");
-    const snapshot = await this.snapshot();
+    const snapshot = await this.snapshot(source);
     if (this.closed) throw uiError("error.nativeImages.windowClosed");
-    return imageSource(snapshot, source);
+    return this.resolveSource(snapshot, source);
   }
   async preview(source) {
     source = { ...source };

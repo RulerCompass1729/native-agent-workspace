@@ -18,7 +18,7 @@ const fields = ['id', 'role', 'text', 'input', 'name', 'time', 'sessionId', 'rec
   'status', 'kind', 'title', 'toolKind', 'commandActions', 'commandSource', 'exitCode', 'incomplete',
   'nativeMessageId', 'nativeId', 'turnId', 'displayTurnId', 'nativeStatus', 'nativeStartedAt',
   'nativeCompletedAt', 'nativeDurationMs', 'sharingStopped', 'finalReply', 'images', 'inputMode',
-  'addressed', 'manualReply', 'deliveryTracked', 'uiMessage', 'uiTitleMessage', 'uiNameMessage', 'sharingStoppedUiMessage'];
+  'addressed', 'manualReply', 'deliveryTracked', 'imageDraftVersion', 'imageReceipt', 'uiMessage', 'uiTitleMessage', 'uiNameMessage', 'sharingStoppedUiMessage'];
 const deliveryFields = ['id', 'recipientId', 'recipientName', 'text', 'status', 'time'];
 
 function json(value) {

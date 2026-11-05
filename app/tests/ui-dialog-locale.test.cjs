@@ -263,6 +263,7 @@ test('shared queued/native-route labels repaint without changing recipient, pend
   recipient.state = 'working'; recipient.queueAvailable = true; recipient.serviceCapabilities.push('nativeSharedQueue');
   f.state.room.run = { status: 'running', steps: 1, maxSteps: 2, awaiting: { sessionId: recipient.id }, reason: 'ORIGINAL reason 中文' };
   Object.assign(f.context, { roomSubmitting: null, roomPendingRecipients: new Map([[recipient.id, { queued: true, recipientName: recipient.name }]]), roomSession: '', roomSurface: 'overview', roomMention: null, roomReplyTo: '', roomThreads: { rows: new Map() },
+    roomViews: {}, roomImageRefs: () => [], renderRoomImageDraft() {},
     nativeStatusFresh: value => value?.stale !== true, nativeUsable: () => true, nativeWorkspaceMentions: require('../room-mention.js'),
     normalizeRoomMention: () => effects.push('normalize'), roomRecipient: () => recipient.id, renderTimeline: () => effects.push('timeline'), selectRoom() {}, draggableSession() {},
     orderedMembers: () => f.people,

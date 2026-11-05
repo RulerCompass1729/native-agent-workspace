@@ -1941,6 +1941,12 @@ class Codex extends EventEmitter {
           this.emit('nativeInput', (p.item.content || []).filter(i => i.type === 'text').map(i => i.text).join('\n'), { id: p.item.id, turnId: p.turnId });
         }
         if (p.item?.type === 'userMessage' && p.item.id) {
+          const pending = this.pending;
+          if (pending?.spaceImages && pending.imageRpc === sourceRpc && this.spaceImageCurrent(pending)) {
+            pending.spaceImages.observe(p);
+            const receipt = pending.spaceImages.confirm(pending.turnId);
+            if (receipt) this.emit('spaceImagesAccepted', receipt);
+          }
           const images = require('./native-images.cjs').userImageReferences(p.item.content);
           if (images.length) this.emit('nativeInputImages', { id: p.item.id, nativeId: this.record.nativeId,
             clientId: this.ownInputs.has(p.item.clientId) ? p.item.clientId : undefined,
@@ -2015,14 +2021,23 @@ class Codex extends EventEmitter {
       this.finishTurn(expectedTurnId);
     }
   }
-  async send(text, tag, guard) {
+  get spaceImagesAvailable() { return this.host.rpc?.nativeVersion === '0.166.0' && this.host.rpc?.ws?.readyState === WebSocket.OPEN && this.chatAvailable && !this.stopped && !this.transportDisconnected; }
+  spaceImageCurrent(pending) { return this.pending === pending && pending.imageRpc === this.host.rpc && pending.imageLifecycle === this.lifecycleRevision && pending.spaceImages.nativeId === this.record.nativeId && !this.stopped && !this.transportDisconnected; }
+  async send(text, tag, guard, spaceImages) {
     if (!this.chatAvailable || this.pending || !guard()) throw uiError("error.nativeSendUnavailable");
-    const pending = this.pending = { tag, turnId: null }; this.ownInputs.add(tag);
+    const { SpaceImageSubmission } = require('./space-images.cjs');
+    if (spaceImages && (!(spaceImages instanceof SpaceImageSubmission) || !this.spaceImagesAvailable || spaceImages.nativeId !== this.record.nativeId || spaceImages.tag !== tag)) throw uiError('error.roomImages.deliveryUnavailable');
+    const input = spaceImages ? spaceImages.input(text) : [{ type: 'text', text, text_elements: [] }];
+    const pending = this.pending = { tag, turnId: null, ...(spaceImages ? { spaceImages, imageRpc: this.host.rpc, imageLifecycle: this.lifecycleRevision } : {}) }; this.ownInputs.add(tag);
     const lifecycle = this.lifecycleRevision, revision = this.stateRevision;
     try {
-      const r = await this.host.rpc.call('turn/start', { threadId: this.record.nativeId, clientUserMessageId: tag, input: [{ type: 'text', text, text_elements: [] }] });
+      const r = await this.host.rpc.call('turn/start', { threadId: this.record.nativeId, clientUserMessageId: tag, input });
       if (lifecycle !== this.lifecycleRevision || this.stopped) { this.emit('submitted', tag); return; }
       pending.turnId = r.turn.id;
+      if (spaceImages && this.spaceImageCurrent(pending)) {
+        const receipt = spaceImages.confirm(pending.turnId);
+        if (receipt) this.emit('spaceImagesAccepted', receipt);
+      }
       if (!this.turnId) this.turnId = r.turn.id;
       if (revision === this.stateRevision) this.emit('state', 'working');
       this.emit('submitted', tag);

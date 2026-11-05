@@ -5089,3 +5089,59 @@ All original native processes and seven old backends remain over 150 seconds,
 with the same active goal and one ordinary application entry. The earlier
 retention failure's cause, original cache-gap recurrence and minimum-window grid
 readability remain open. No whole milestone, physical IME or real provider claim.
+
+## T165 — space image drafts and explicit native image input
+
+The space composer had no image attachment path. It now stages private PNG
+copies as compact, removable per-space drafts and reuses the existing explicit
+recipient and forward action. Only the qualified Codex 0.166.0 typed-input path
+is enabled. Older or unsupported connections retain the draft and refuse image
+sending. No file path is substituted for image input, and images never enter
+queue, steer or automatic-run branches.
+
+A native RPC acknowledgement does not clear attachments. The recorded image
+receipt requires the same client tag, native thread, acknowledged turn, ordered
+local image paths and count, with the managed copies rechecked. Its basis is
+native input echo, not a native hash receipt or proof of model vision. Draft
+reservations are saved before dispatch, unknown outcomes are not retried, and
+clearing requires the original image generation. Later text edits survive.
+Image delivery details now use that image receipt instead of the ordinary
+text acknowledgement label, and image-only rows omit an empty text bubble.
+The legacy text-only forward entry rejects media parameters; uploaded refs
+must resolve through the scoped Main draft handler.
+
+Independent source review found a cleanup race between windows, incomplete
+backend ownership checks and a possible image-to-queue branch after an awaited
+save. Four actual counterexamples fail before the fixes and pass afterwards.
+Cleanup now keeps references captured before and after the backend read, limits
+deletion to files present before that read, and requires the unchanged complete
+service layout and connections. Shared records, private input rows and every
+saved window retain their image copies. Image forwarding now branches first.
+A definite transport rejection without an authoritative not-sent receipt still
+uses conservative unconfirmed wording; the specific error remains visible.
+
+The frozen full suite passes 2590 tests with no skips; the UI build passes.
+Four author-run source Electron journeys pass with the real decoder, app IPC,
+workspace and Codex sender, using a synthetic provider RPC. They cover import,
+preview/removal, explicit caption-plus-image and image-only input, per-space
+drafts, accepted versus unknown input, failure retention, language repaint,
+narrow layout, ordinary owned reopen and the existing text path. The first GUI
+attempt stopped at a test assertion behind an open modal; its raw failure is
+retained. The corrected test closes the modal and checks the same visible names.
+Both runs cleaned only their owned processes and profiles and released the
+canonical GUI slot before offline work.
+
+A focused follow-up on the changed receipt display passes both states with
+one synthetic input: unknown images render in the shared row without an empty
+bubble or a false received label; the same turn's late echo updates the existing
+delivery summary and clears only the original attachments. Forged media on the
+legacy text-only IPC is refused before dispatch. Its owned profile and processes
+were also cleaned and the slot released before offline review.
+
+These results do not qualify an installed app, a real old backend, Claude,
+physical clipboard/file-picker gestures, VoiceOver or a model's understanding
+of the image. Main owns integration and installed/native acceptance. This is a
+source and synthetic GUI checkpoint, not whole-task completion.
+
+
+**Reading/image integration, 2026-11-04 (source candidate):** exact released source and navigation checks are integrated without the held operator feature. Six conflict resolutions preserve the current single-home capability, member view/filter fields, native image cache root and usage projection while adding only image fields and writable runtime modules. All 2,726 combined checks pass without skips; 63 focused checks pass. The unchanged author reviews are reused. The initial integration review reached its turn limit without a verdict and exceeded its eight-read budget by one; a bounded no-read follow-up gives scoped approval from the existing evidence. It does not qualify installation, physical input, general native compatibility or the whole goal.

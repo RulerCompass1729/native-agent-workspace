@@ -5,6 +5,8 @@ const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..'), code = process.env.NAW_TEST_APP_ROOT || root;
 const scratch = require(path.join(root,'scripts/fixtures/test-scratch.cjs')), { createIn } = require(path.join(root,'scripts/fixtures/create-view.cjs'));
 const { _electron } = scratch.playwright(require('playwright'));
+const { joinSpace } = require('./fixtures/space-membership.cjs');
+const { createSourceEntry } = require('./fixtures/synthetic-source-boot.cjs');
 const evidence = process.env.NAW_EVIDENCE_DIR;
 const columnCase = process.env.NAW_COLUMN_CASE || 'full';
 assert.ok(['full','fallback','long','retry'].includes(columnCase), 'Unknown column acceptance case');
@@ -18,7 +20,7 @@ if (evidence) {
 const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
 const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
 try { fs.mkdirSync(slot); } catch (e) { if (e.code !== 'EEXIST') throw e; console.error('GUI slot occupied; nothing started.'); process.exit(75); }
-fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'Codex4', task: 'T84 column input source acceptance', token, pid: process.pid, time: new Date().toISOString() }));
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ owner: 'column-input-fixture', task: 'column input source acceptance', token, pid: process.pid, time: new Date().toISOString() }));
 const profile = scratch.directory(path.join(os.tmpdir(), 'naw-column-input-'));
 const ownedProfile = fs.realpathSync(profile), workspacePath = path.join(profile, 'workspace');
 assert.ok(path.resolve(ownedProfile, 'workspace').startsWith(ownedProfile + path.sep));
@@ -29,7 +31,7 @@ const child = scratch.childProcess.fork(path.join(code, 'app/daemon.cjs'), [prof
   stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 });
 const checks = [], errors = [], measurements = [];
-let app, page, sequence = 0, failure = null;
+let app, page, sourceEntry, sequence = 0, failure = null;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label) { for (let i = 0; i < 200; i++) { if (await fn()) return; await delay(50); } throw Error(label); }
 function fixture(method, target, value) {
@@ -47,7 +49,8 @@ const sourceHashes = () => Object.fromEntries(sourceFiles.map(file=>[file,requir
 const sourceBefore=sourceHashes();
 
 async function launch() {
-  app = await _electron.launch({ executablePath: require('electron'), args: [code], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
+  sourceEntry ||= createSourceEntry({profile,code,fixturePid:child.pid});
+  app = await _electron.launch({ executablePath: require('electron'), args: [sourceEntry], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 70000 });
   page = await app.firstWindow(); page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message)); await page.locator('#new-session').waitFor();
   await app.evaluate(({ clipboard }) => { globalThis.pageCopies = []; clipboard.writeText = text => globalThis.pageCopies.push(text); });
 }
@@ -81,9 +84,7 @@ async function run(){
   await fixture('history',id,Array.from({length:6},(_,j)=>({id:'column-'+i+'-'+j,type:'agentMessage',turnId:'column-turn-'+i,text:'Original member '+i+' paragraph '+j})));
   await page.locator('#message-input').fill('Private column draft '+i);
   await until(async()=>(await snapshot()).sessions.find(s=>s.id===id).liveDraft==='Private column draft '+i,'Private draft saved');
-  // Since independent spaces (c9800cc) the header menu joins with 加入此空间; its undo notice stays until closed.
-  await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入此空间',exact:true}).click();
-  await page.locator('#toast-text',{hasText:'已加入'}).waitFor();await page.locator('#toast-close').click();await page.locator('#toast').waitFor({state:'hidden'});
+  await joinSpace(page); await page.locator('#toast').waitFor({state:'hidden'});
  }
  await page.locator('#room-nav').click();await (await app.browserWindow(page)).evaluate(win=>win.setContentSize(850,600));
  await delay(200);
@@ -107,7 +108,7 @@ async function run(){
  await page.getByRole('button',{name:'网格',exact:true}).click();assert.equal(await field(columnId).inputValue(),'Retained second draft');
  await page.locator(`.collaboration-member-status[data-member-id="${columnId}"] .collaboration-member-name`).click();
  assert.equal(await page.locator('#message-input').inputValue(),'Retained second draft');await page.locator('#message-input').fill('Solo and column one draft');
- await page.getByRole('button',{name:'← 返回共同工作',exact:true}).click();assert.equal(await field(columnId).inputValue(),'Solo and column one draft');
+ await page.locator('#room-overview').click();assert.equal(await field(columnId).inputValue(),'Solo and column one draft');
  check('Grid, List, focused Solo and Back share the same per-session draft');
  await field(ids[0]).focus(); await field(ids[0]).press('Shift+Enter');assert.ok((await field(ids[0]).inputValue()).includes('\n'));
  const sendBefore=(await fixture('stats')).stats.sends;
@@ -189,7 +190,7 @@ async function run(){
  const cdp=await page.context().newCDPSession(page),imeId=ids[0];await field(imeId).fill('Textbox prefix ');await field(imeId).focus();
  await cdp.send('Input.imeSetComposition',{text:'中文草稿',selectionStart:4,selectionEnd:4});
  const beforeIme=await fixture('stats');await page.locator(`.collaboration-member-status[data-member-id="${ids[1]}"] .collaboration-member-name`).click();
- await page.getByRole('button',{name:'← 返回共同工作',exact:true}).click();assert.equal(await field(imeId).inputValue(),'Textbox prefix 中文草稿');assert.equal((await fixture('stats')).stats.sends,beforeIme.stats.sends);
+ await page.locator('#room-overview').click();assert.equal(await field(imeId).inputValue(),'Textbox prefix 中文草稿');assert.equal((await fixture('stats')).stats.sends,beforeIme.stats.sends);
  const nativeIme=page.locator(`[data-terminal-id="${imageId}"] .xterm-helper-textarea`);await nativeIme.focus();
  await cdp.send('Input.imeSetComposition',{text:'终端组合',selectionStart:4,selectionEnd:4});const nativeImeBefore=await fixture('stats');
  await page.locator(`.collaboration-member-status[data-member-id="${imageId}"] .collaboration-member-name`).press('Alt+ArrowUp');await delay(120);
@@ -203,7 +204,7 @@ async function run(){
  const zoomImeAfter=await fixture('stats');assert.equal(zoomImeAfter.stats.inputs,zoomImeBefore.stats.inputs,'Zoom keeps the cancelled origin IME from writing after Solo mount');
  assert.equal(await recovery.inputValue(),'放大组合');await page.locator(`[data-terminal-id="${imageId}"] .terminal-input-recovery`).getByRole('button',{name:'关闭提示',exact:true}).click();
  const returnBefore=await fixture('stats');await nativeIme.focus();await nativeIme.press('z');await until(async()=>(await fixture('stats')).columnInputs.length===returnBefore.columnInputs.length+1,'New Solo key after cancelled composition');
- const newInput=(await fixture('stats')).columnInputs.at(-1);assert.equal(newInput.id,imageId);assert.equal(newInput.data,'z');await page.getByRole('button',{name:'← 返回共同工作',exact:true}).click();
+ const newInput=(await fixture('stats')).columnInputs.at(-1);assert.equal(newInput.id,imageId);assert.equal(newInput.data,'z');await page.locator('#room-overview').click();
  check('Native IME stays cancelled across zoom, while a fresh Solo key immediately reaches the same native session');
  await cdp.detach();
  const savedDrafts=(await snapshot()).sessions.map(s=>[s.id,s.nativeId,s.liveDraft]);
@@ -211,15 +212,16 @@ async function run(){
  const reopened=await snapshot(),afterReopen=await fixture('stats');assert.deepEqual(reopened.sessions.map(s=>[s.id,s.nativeId,s.liveDraft]),savedDrafts);
  assert.equal(afterReopen.stats.resizes,beforeReopen.stats.resizes);assert.equal(afterReopen.stats.inputs,beforeReopen.stats.inputs);assert.equal(afterReopen.overviewCalls.claim,beforeReopen.overviewCalls.claim);
  assert.equal(await page.locator(`[data-terminal-id="${imageId}"]`).count(),1);assert.equal(await field(ids[1]).inputValue(),'Solo and column one draft');check('Full app reopen retains each private draft, original native identity and visible pending native input without resize, claim or input');
- // Create a fifth existing member: all per-column inputs park, shared @ stays.
- const fifth=await create('Column 5');await page.locator('#session-header-more').click();await page.getByRole('menuitem',{name:'加入此空间',exact:true}).click();
- await page.locator('#toast-text',{hasText:'已加入'}).waitFor();await page.locator('#toast-close').click();await page.locator('#toast').waitFor({state:'hidden'});await page.locator('#room-nav').click();
- assert.equal(await page.locator('.collaboration-member-input:visible').count(),0);assert.equal(await page.locator('#shared-input').isVisible(),true);
+ // Member count keeps the same controls (UI004); each existing private draft stays bound.
+ const beforeFifth=(await snapshot()).sessions.map(s=>[s.id,s.nativeId,s.liveDraft]);
+ const fifth=await create('Column 5');await joinSpace(page);await page.locator('#toast').waitFor({state:'hidden'});await page.locator('#room-nav').click();
+ assert.equal(await page.locator('.collaboration-member-input:visible').count(),5);assert.equal(await page.locator('#shared-input').isVisible(),true);
+ assert.equal(await field(fifth).inputValue(),'');assert.deepEqual((await snapshot()).sessions.filter(s=>s.id!==fifth).map(s=>[s.id,s.nativeId,s.liveDraft]),beforeFifth);
  await page.evaluate(id=>workspace.join(id,false),fifth);await until(async()=>await page.locator('.collaboration-member-input:visible').count()===4,'Four columns restored');assert.equal(await field(ids[1]).inputValue(),'Solo and column one draft');
  const beforeRemove=await fixture('stats');await page.evaluate(id=>workspace.join(id,false),imageId);await until(async()=>await page.locator('.collaboration-member-reader').count()===3,'Removed column');
  assert.equal(await page.locator(`[data-terminal-id="${imageId}"]`).isVisible(),false);assert.equal((await fixture('stats')).stats.inputs,beforeRemove.stats.inputs);
  await page.evaluate(id=>workspace.join(id,true),imageId);await until(async()=>await page.locator('.collaboration-member-reader').count()===4,'Rejoined original member');assert.equal((await snapshot()).sessions.find(s=>s.id===imageId).nativeId,savedDrafts.find(s=>s[0]===imageId)[1]);
- check('Brief view, greater-than-four fallback and membership removal preserve the private drafts and native identity');
+ check('Brief view, five-member controls and membership removal preserve the private drafts and native identity');
  assert.ok((await snapshot()).sessions.every(s=>fs.realpathSync(s.cwd).startsWith(ownedProfile+path.sep)));
  assert.deepEqual(errors,[]);
 

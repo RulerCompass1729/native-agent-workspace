@@ -11,9 +11,10 @@
       if (closed) return;
       if (revision === key) { for (const widget of widgets) widget.relabel(owner); return; }
       revision = key; clear();
+      const ready = ['complete', 'submitted'].includes(status) || ['space-draft', 'space-message'].includes(source.kind) && status === 'preview';
       if (!Array.isArray(images)) return;
       images.forEach((ref, index) => {
-        const sourceKey = { ...source, index }, label = () => ref.path?.split('/').at(-1) || options.text('image.nameless', { number: index + 1 });
+        const sourceKey = { ...source, index }, label = () => ref.kind === 'space-upload' ? ref.name : ref.path?.split('/').at(-1) || options.text('image.nameless', { number: index + 1 });
         const item = element('div', 'native-image'), toggle = element('button', 'native-image-toggle'),
           image = element('img'), caption = element('div', 'native-image-caption'), controls = element('div', 'native-image-controls'),
           copy = element('button', 'native-image-copy'), note = element('span', 'native-image-note');
@@ -25,6 +26,13 @@
         relabel(owner); toggle.setAttribute('aria-expanded', 'false'); copy.disabled = true;
         display.computed(toggle, 'title', () => ref.path || label()); note.setAttribute('role', 'status');
         controls.append(copy, note); item.append(toggle, caption, controls); host.append(item);
+        let remove;
+        if (source.kind === 'space-draft' && options.remove) {
+          remove = element('button', 'native-image-remove', '×'); remove.type = 'button';
+          display.attribute(remove, 'aria-label', 'roomImages.remove', () => ({ name: label() }));
+          remove.onclick = () => { if (current()) return options.remove(ref); };
+          item.append(remove);
+        }
         let alive = true, token, foldKey, thumb, full, loading, expanding, wantsOpen = false, interacted = false, observer;
         const current = () => alive && !closed && revision === key && host.isConnected;
         function markOpen(open, remember) {
@@ -57,7 +65,7 @@
           return expanding;
         }
         async function load() {
-          if (!current() || loading || token || !['complete', 'submitted'].includes(status)) return loading;
+          if (!current() || loading || token || !ready) return loading;
           toggle.setAttribute('aria-busy', 'true'); display.text(note, 'image.loading');
           loading = (async () => {
             try {
@@ -78,7 +86,7 @@
         }
         image.onload = () => { if (current()) options.onLayout?.(); };
         toggle.onclick = async () => {
-          if (ref.unavailable || !['complete', 'submitted'].includes(status)) return;
+          if (ref.unavailable || !ready) return;
           interacted = true; wantsOpen = !wantsOpen;
           if (!wantsOpen) { markOpen(false, true); return; }
           if (foldKey) options.onOpen?.(foldKey, true);
@@ -95,10 +103,10 @@
           catch (error) { release(token); token = null; failure(error); }
           finally { if (current()) copy.disabled = !token; }
         };
-        const widget = { relabel, dispose() { alive = false; observer?.disconnect(); release(token); token = null; image.onload = null; image.removeAttribute('src'); full = thumb = null; for (const [el, slots] of [[toggle, ['text', 'aria-label', 'title']], [caption, ['text']], [copy, ['text', 'aria-label']], [image, ['alt']], [note, ['text']]]) for (const slot of slots) display.unbind(el, slot); } };
+        const widget = { relabel, dispose() { alive = false; observer?.disconnect(); release(token); token = null; image.onload = null; image.removeAttribute('src'); full = thumb = null; if (remove) display.unbind(remove, 'aria-label'); for (const [el, slots] of [[toggle, ['text', 'aria-label', 'title']], [caption, ['text']], [copy, ['text', 'aria-label']], [image, ['alt']], [note, ['text']]]) for (const slot of slots) display.unbind(el, slot); } };
         widgets.add(widget);
         if (ref.unavailable) { toggle.disabled = true; display.computed(note, 'text', () => options.text('image.unavailable', { reason: options.displayText(ref.unavailable, ref.unavailableUiMessage) })); display.computed(caption, 'text', () => ref.path || label()); }
-        else if (!['complete', 'submitted'].includes(status)) { toggle.disabled = true; display.text(note, 'image.waiting'); }
+        else if (!ready) { toggle.disabled = true; display.text(note, 'image.waiting'); }
         else if (typeof root.IntersectionObserver === 'function') {
           observer = new root.IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { observer.disconnect(); load(); } }, { root: host.closest('.messages'), rootMargin: '200px' });
           observer.observe(item);

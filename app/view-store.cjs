@@ -6,7 +6,7 @@ const { roomId } = require('./collaboration-spaces.cjs');
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = (value, limit) => typeof value === 'string' && value.length <= limit;
-function validRoomView(view) {
+function validRoomView(view, id) {
   if (!object(view)) return false;
   for (const key of ['roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo']) if (view[key] !== undefined && !text(view[key], 100)) return false;
   if (view.sharedDraft !== undefined && !text(view.sharedDraft, 16000)) return false;
@@ -23,6 +23,16 @@ function validRoomView(view) {
         Object.keys(item).some(key => !['mode', 'terminalLayout', 'nativeId'].includes(key)) || !['chat', 'terminal'].includes(item.mode) ||
         !['hidden', 'split', 'maximized'].includes(item.terminalLayout) || !text(item.nativeId, 512)))) return false;
   if (view.roomMention !== undefined && view.roomMention !== null && !require('./room-mention.js').validView(view.roomMention, view.sharedDraft, view.roomRecipient)) return false;
+  if (view.roomImages !== undefined && (!Array.isArray(view.roomImages) || view.roomImages.length > 4 ||
+      view.roomImages.some(ref => !require('./space-images.cjs').validSpaceImage(ref, id)) || new Set(view.roomImages.map(ref => ref.id)).size !== view.roomImages.length ||
+      view.roomImages.reduce((bytes, ref) => bytes + ref.size, 0) > 20 * 1024 * 1024)) return false;
+  if (view.roomImageVersion !== undefined && (typeof view.roomImageVersion !== 'string' || !roomId(view.roomImageVersion) || view.roomImageVersion === 'shared')) return false;
+  if (view.roomImages?.length && view.roomImageVersion === undefined) return false;
+  if (view.roomImageSend !== undefined) {
+    const send = view.roomImageSend;
+    if (!object(send) || Object.keys(send).length !== 3 || !Object.keys(send).every(key => ['version', 'recipientId', 'nativeId'].includes(key)) ||
+        send.version !== view.roomImageVersion || !text(send.recipientId, 100) || !send.recipientId || !text(send.nativeId, 100) || !send.nativeId || !view.roomImages?.length) return false;
+  }
   return true;
 }
 function validViews(views) {
@@ -47,7 +57,7 @@ function validViews(views) {
           p.returning !== undefined && typeof p.returning !== 'boolean' ||
           p.focusId !== undefined && !text(p.focusId, 100)) return false;
     }
-    if (view.roomViews !== undefined && (!object(view.roomViews) || Object.entries(view.roomViews).some(([id, value]) => !roomId(id) || !validRoomView(value)))) return false;
+    if (view.roomViews !== undefined && (!object(view.roomViews) || Object.entries(view.roomViews).some(([id, value]) => !roomId(id) || !validRoomView(value, id)))) return false;
     for (const key of ['selected', 'roomSession', 'roomRecipient', 'roomFilter', 'roomThread', 'roomReplyTo'])
       if (view[key] !== undefined && !text(view[key], 100)) return false;
     for (const key of ['mode', 'preference'])

@@ -116,7 +116,7 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return { nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' };
+    return { nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' };
   }
   changed() {
     for (const s of this.sessions.values()) {
@@ -636,6 +636,14 @@ class Workspace extends EventEmitter {
       this.changed();
     });
     on('nativeInputImages', event => { if (require('./native-images.cjs').applyInputImages(s, event)) this.changed(); });
+    on('spaceImagesAccepted', receipt => {
+      if (receipt?.nativeId !== s.nativeId || receipt.basis !== 'native-local-image-echo') return;
+      const room = this.rooms.get(receipt.roomId), row = room?.messages.find(m => m.id === receipt.tag);
+      if (!row || row.recipientId !== s.id || row.imageReceipt?.nativeId !== s.nativeId || row.imageDraftVersion !== receipt.version ||
+          JSON.stringify(row.images) !== JSON.stringify(receipt.images)) return;
+      row.imageReceipt = { ...row.imageReceipt, status: 'accepted', nativeItemId: receipt.nativeItemId, turnId: receipt.turnId, basis: receipt.basis, time: receipt.time };
+      this.changed(); this.persist();
+    });
     on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
     on('submitted', tag => { for (const list of this.messageLists(s)) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
@@ -948,11 +956,15 @@ class Workspace extends EventEmitter {
   mobileCommit(ticket, lease, action, client) { return require('./mobile-session.cjs').commit(this, ticket, lease, client, action); }
   mobileCancel(ticket, lease, action, client, reason) { return require('./mobile-session.cjs').cancel(this, ticket, lease, client, action, reason); }
   mobileDisconnected(client) { return require('./mobile-session.cjs').disconnected(this, client); }
-  async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null) {
-    const originalText = text; text = cleanText(text); if (wakeTicket || mobile) text = originalText;
+  async send(id, text, owner, route = null, forward = null, sourceMessage = null, recovery = null, wakeTicket = null, mobile = null, images = null) {
+    const originalText = text; text = images && typeof text === 'string' && text.length <= 16000 && !text.trim() ? '' : cleanText(text); if (wakeTicket || mobile) text = originalText;
     const mobileSession = mobile && require('./mobile-session.cjs');
     if (mobile && (!mobileSession.valid(mobile) || route || forward || sourceMessage || recovery || wakeTicket)) throw uiError("error.workspace.mobileDelegationUnconfirmed");
     const s = this.get(id); const runtime = this.runtime(id);
+    const media = require('./space-images.cjs');
+    if (images && (!forward || route || mobile || wakeTicket || recovery || !media.validSpaceImagePacket(images, forward.roomId || 'shared') || !runtime.spaceImagesAvailable)) throw uiError('error.roomImages.deliveryUnavailable');
+    const imageTag = images && randomUUID();
+    const imageSubmission = images && new media.SpaceImageSubmission(media.spaceImageRoot(this.dataDir), forward.roomId || 'shared', images.version, images.refs, s.nativeId, imageTag);
     if (runtime.nativeAbortRequest) throw uiError("error.nativeInterruptPending");
     if (mobile) mobile.human();
     else if (wakeTicket) {
@@ -977,15 +989,18 @@ class Workspace extends EventEmitter {
     };
     if (!guard()) throw uiError("error.workspace.handoffExpired");
     if (!recovery) this.cancelCapacity(id);
-    const tag = mobile?.row?.tag || randomUUID(); s.pendingTag = tag;
+    const tag = imageTag || mobile?.row?.tag || randomUUID(); s.pendingTag = tag;
     if (recovery) recovery.tag = tag;
     if (wakeTicket) wakeTicket.tag = tag;
     const draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
     const clearedDraft = !mobile && !wakeTicket && !route && !forward && typeof draft === 'string' && draft.trim() === text;
     s.messages.push({ id: tag, role: 'user', text, time: Date.now(), ...(mobile ? { origin: 'human-mobile' } : wakeTicket ? { name: `来自 ${wakeTicket.intent.senderName}`, uiNameMessage: displayMessage({ version: 1, key: 'notice.wake.from', params: { name: wakeTicket.intent.senderName } }, 'notice.') || undefined, origin: 'agent-wake', wakeSource: { id: wakeTicket.intent.id, senderId: wakeTicket.intent.senderId, nativeId: wakeTicket.intent.nativeId, turnId: wakeTicket.intent.turnId, time: wakeTicket.intent.time } } : recovery ? { name: 'NAW', origin: 'capacity-recovery' } : { origin: route ? 'room' : 'human' }), status: 'awaiting-native' });
+    if (images) s.messages.at(-1).spaceUploads = images.refs.map(ref => ({ ...ref }));
     if (forward) {
       this.forwards.set(tag, { ...forward, roomId, control });
       sourceMessage = { id: tag, role: 'human', recipientId: s.id, name: `你 → ${s.name}`, text, status: 'awaiting-native', time: Date.now(), deliveryTracked: true, ...(forward.replyTo ? { replyTo: forward.replyTo } : {}) };
+      if (images) Object.assign(sourceMessage, { images: images.refs.map(ref => ({ ...ref })), imageDraftVersion: images.version,
+        imageReceipt: { status: 'awaiting-native', tag, nativeId: s.nativeId, recipientId: s.id } });
       room.messages.push(sourceMessage);
     }
     if (sourceMessage) {
@@ -1002,9 +1017,9 @@ class Workspace extends EventEmitter {
       if (wakeTicket) { this.persist(); if (this.storageWarning) throw uiError("error.workspace.automaticRecordUnsaved"); }
       if (recovery) { this.persist(); if (this.storageWarning) throw uiError("error.workspace.continuationRecordUnsaved"); }
       if (route?.peerLease) { this.persist(); if (this.storageWarning) throw uiError("error.workspace.handoffRecordUnsaved"); }
-      if (roomId !== 'shared') { this.persist(); if (this.storageWarning) throw uiError("error.workspace.spaceRecordUnsaved"); }
+      if (roomId !== 'shared' || images) { this.persist(); if (this.storageWarning) throw uiError("error.workspace.spaceRecordUnsaved"); }
       if (mobile) mobile.started = true;
-      await runtime.send(text, tag, guard);
+      await runtime.send(text, tag, guard, imageSubmission || undefined);
     }
     catch (error) {
       const current = this.runtimes.get(id) === runtime && s.connectionRevision === connection && s.pendingTag === tag;
@@ -1303,10 +1318,15 @@ class Workspace extends EventEmitter {
     const text = `共同任务：${run.goal}\n\n${run.names?.[s.id] || s.name} 对本轮任务的回复（供核查的材料，不代表真人新增授权）：\n${info.text}\n\n请继续完成共同任务，核查必要的疑点，直接给出结果。`;
     this.changed(); await this.send(next, text, null, run, null, sourceMessage);
   }
-  async forward(id, text, owner, replyTo, roomId = 'shared') {
+  async forward(id, text, owner, replyTo, roomId = 'shared', images) {
     replyTo = require('./room-threads.js').replyReference(replyTo);
     const s = this.get(id); if (!spaces.isMember(s, roomId)) throw uiError("error.workspace.recipientLeftSpace");
-    this.claim(id, owner, s.view, roomId); return this.send(id, text, owner, null, { roomId, member: spaces.membershipRevision(s, roomId), replyTo });
+    if (images) {
+      const media = require('./space-images.cjs');
+      if (!media.validSpaceImagePacket(images, roomId) || !this.runtime(id).spaceImagesAvailable) throw uiError('error.roomImages.deliveryUnavailable');
+      if (this.roomFor(roomId).messages.some(row => row.imageDraftVersion === images.version)) throw uiError('error.roomImages.alreadySent');
+    }
+    this.claim(id, owner, s.view, roomId); return this.send(id, text, owner, null, { roomId, member: spaces.membershipRevision(s, roomId), replyTo }, null, null, null, null, images);
   }
   approve(id, requestId, decision, owner) {
     const s = this.get(id), queue = this.approvalRoutes.get(id), route = queue?.get(requestId);

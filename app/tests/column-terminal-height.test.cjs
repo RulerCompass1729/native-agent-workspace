@@ -24,11 +24,11 @@ test('a person\'s change keeps to the limits, is remembered and fits the native 
   assert.deepEqual({ ...context.columnTerminalHeights }, { 'naw-a': 64 });
   assert.deepEqual(binding.nativeSash.attributes, { 'aria-valuemin': '64', 'aria-valuemax': '400', 'aria-valuenow': '64' });
 });
-test('a redraw shows the remembered height, lowered to what fits but not below 112px, without a native resize', () => {
+test('a redraw shows the remembered height, lowered to what fits without a native resize', () => {
   const { context, binding, calls, limits } = harness({ min: 64, max: 90 });
   context.columnTerminalHeights['naw-a'] = 300;
-  assert.equal(context.applyColumnTerminalHeight(binding, context.columnTerminalHeight('naw-a')), 112, 'a small window keeps the old default height');
-  assert.equal(binding.nativeSash.attributes['aria-valuemax'], '112');
+  assert.equal(context.applyColumnTerminalHeight(binding, context.columnTerminalHeight('naw-a')), 90, 'a small window keeps the computed conversation allowance');
+  assert.equal(binding.nativeSash.attributes['aria-valuemax'], '90');
   limits.max = 250; assert.equal(context.applyColumnTerminalHeight(binding, 300), 250); assert.equal(calls.reveal, 1, 'a changed box keeps the cursor in view');
   limits.max = 500; assert.equal(context.applyColumnTerminalHeight(binding, 300), 300);
   assert.equal(context.applyColumnTerminalHeight(binding, 70), 70, 'a chosen small height is kept');
@@ -36,12 +36,35 @@ test('a redraw shows the remembered height, lowered to what fits but not below 1
   assert.equal(context.columnTerminalHeights['naw-a'], 300, 'a redraw never changes what the person chose');
   assert.equal(context.columnTerminalHeight('missing'), 112); context.columnTerminalHeights.bad = 12.5; assert.equal(context.columnTerminalHeight('bad'), 112);
 });
-test('in a window too small for 112px, a person\'s change upward never makes the terminal shorter', () => {
+test('a person\'s change stays within a small window budget below the default height', () => {
   const { context, binding, calls } = harness({ min: 64, max: 90 });
-  assert.equal(context.applyColumnTerminalHeight(binding, 112), 112);
-  assert.equal(context.applyColumnTerminalHeight(binding, 128, 'save'), 112, 'ArrowUp at the old default stays there');
-  assert.equal(binding.nativeSash.attributes['aria-valuemax'], '112'); assert.equal(context.columnTerminalTallest(binding), 112);
-  assert.equal(context.applyColumnTerminalHeight(binding, 96, 'save'), 96); assert.deepEqual(calls.fit, ['naw-a', 'naw-a']);
+  assert.equal(context.applyColumnTerminalHeight(binding, 112), 90);
+  assert.equal(context.applyColumnTerminalHeight(binding, 128, 'save'), 90, 'An upward request cannot squeeze the conversation');
+  assert.equal(binding.nativeSash.attributes['aria-valuemax'], '90'); assert.equal(context.columnTerminalTallest(binding), 90);
+  assert.equal(context.applyColumnTerminalHeight(binding, 96, 'save'), 90); assert.deepEqual(calls.fit, ['naw-a', 'naw-a']);
+});
+test('the actual column budget reserves the conversation even when less than the old default fits', () => {
+  const calls = { persist: 0, fit: [], reveal: 0 }, attributes = {};
+  const nativeHost = { style: {}, get offsetHeight() { return Number.parseInt(this.style.height, 10) || 112; } };
+  const reader = { clientHeight: 250, querySelector: () => ({ offsetHeight: 12 }) };
+  const input = { closest: () => reader, get offsetHeight() { return nativeHost.offsetHeight + 68; } };
+  const binding = { id: 'small', columnHost: input, nativeHost, nativeSash: { setAttribute(k, v) { attributes[k] = v; } } };
+  const context = vm.createContext({
+    COLUMN_TERMINAL: { initial: 112, min: 64, most: 4000, step: 16, conversation: 80 },
+    columnTerminalHeights: { small: 300 }, attempt: action => action(), persistView: () => { calls.persist++; },
+    fitTerminal: id => calls.fit.push(id), revealTerminalCursor: () => { calls.reveal++; }, terminals: new Map(),
+  });
+  const begin = renderer.indexOf('function columnTerminalLimits(');
+  vm.runInContext(renderer.slice(begin, end), context);
+  assert.equal(context.columnTerminalLimits(binding).max, 90);
+  assert.equal(context.applyColumnTerminalHeight(binding, context.columnTerminalHeight('small')), 90);
+  assert.equal(reader.clientHeight - input.offsetHeight - 12, 80, 'The redraw keeps the computed conversation allowance');
+  assert.equal(attributes['aria-valuemax'], '90');
+  assert.equal(context.columnTerminalHeights.small, 300, 'The saved choice is not overwritten on redraw');
+  assert.equal(calls.persist, 0); assert.deepEqual(calls.fit, []);
+  reader.clientHeight = 500;
+  assert.equal(context.applyColumnTerminalHeight(binding, context.columnTerminalHeight('small')), 300, 'More room restores the saved choice');
+  assert.equal(calls.reveal, 1); assert.equal(calls.persist, 0); assert.deepEqual(calls.fit, []);
 });
 test('at most 200 heights are kept, dropping the least recently changed', () => {
   const { context } = harness();
@@ -164,4 +187,34 @@ test('a hidden captured binding cannot carry an unsaved preview into its next mo
   a.fire('pointermove', { clientY: 390 }); assert.equal(b.terminalHeight, undefined);
   b.nativeVisible = true; h.context.applyColumnTerminalHeight(b, h.context.columnTerminalHeight('b'), 'adjust');
   assert.equal(b.terminalHeight, 120); assert.deepEqual(h.calls.fit, []); assert.equal(h.calls.persist, 0);
+});
+
+test('a remounted column restores its cursor only when the person is not reading older content', () => {
+  let visible = true, reveals = 0;
+  const parking = { append(el) { el.parentElement = this; } }, host = { append(el) { el.parentElement = this; } };
+  const entry = { element: { parentElement: parking, hidden: true }, columnReading: false };
+  const context = vm.createContext({ terminals: new Map([['a', entry]]),
+    columnTerminalBinding: () => visible ? { nativeHost: host } : null,
+    activeSessionId: () => 'a', selected: 'room', focusedRoomMember: () => false,
+    terminalParking: parking, revealTerminalCursor: () => { reveals++; },
+  });
+  const begin = renderer.indexOf('function syncTerminalMount('), finish = renderer.indexOf('const queuedInputs', begin);
+  assert.ok(begin > 0 && finish > begin); vm.runInContext(renderer.slice(begin, finish), context);
+  context.syncTerminalMount('a'); assert.equal(reveals, 1); assert.equal(entry.element.hidden, false);
+  context.syncTerminalMount('a'); assert.equal(reveals, 1, 'Passive redraw does not scroll an unchanged mount');
+  visible = false; context.syncTerminalMount('a'); assert.equal(entry.element.hidden, true); assert.equal(reveals, 1);
+  entry.columnReading = true; visible = true; context.syncTerminalMount('a');
+  assert.equal(entry.element.hidden, false); assert.equal(reveals, 1, 'Reading an older native frame never jumps to the cursor');
+});
+
+test('a passive height clamp does not pull a person reading older native content to the cursor', () => {
+  const { context, binding, calls, limits } = harness();
+  const entry = { columnReading: true }; context.terminals.set(binding.id, entry);
+  context.columnTerminalHeights[binding.id] = 300;
+  context.applyColumnTerminalHeight(binding, 300);
+  limits.max = 90; assert.equal(context.applyColumnTerminalHeight(binding, 300), 90);
+  assert.equal(calls.reveal, 0, 'A smaller display keeps the explicit reading state');
+  entry.columnReading = false; limits.max = 80;
+  assert.equal(context.applyColumnTerminalHeight(binding, 300), 80); assert.equal(calls.reveal, 1, 'Cursor following still works when the person is not reading older output');
+  assert.equal(context.columnTerminalHeights[binding.id], 300); assert.equal(calls.persist, 0); assert.deepEqual(calls.fit, []);
 });

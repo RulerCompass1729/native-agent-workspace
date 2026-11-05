@@ -487,6 +487,14 @@ class WorkspaceClient extends EventEmitter {
     // Capture the context displayed when the human acted, before refresh,
     // pause or an earlier private ACK can yield to a native /clear.
     const replyTo = ['forward', 'run', 'queueShared', 'steerShared'].includes(method) ? require('./room-threads.js').replyReference(args[method === 'run' ? 6 : method === 'steerShared' ? 4 : 3]) : '';
+    const imagePacket = method === 'forward' ? args[4] : undefined;
+    const imageGuard = () => {
+      if (!imagePacket) return;
+      const entry = this.route(args[0]), record = entry.state.sessions.find(s => s.id === args[0]);
+      if (!require('./space-images.cjs').validSpaceImagePacket(imagePacket, roomId) || !entry.state.capabilities?.includes('spaceImageInputV1') ||
+          record?.spaceImagesAvailable !== true || this.control.legacyInput?.connected(record)) throw uiError('error.roomImages.deliveryUnavailable');
+    };
+    imageGuard();
     const replyGuard = () => {
       if (scoped && ['forward', 'run', 'queueShared', 'steerShared'].includes(method) && spaceRevision !== (this.control.spaceRevisions.get(roomId) || 0)) throw uiError("error.client.spaceAuthorizationChanged");
       if (replyTo && !this.snapshot(roomId).room.messages.some(m => m.id === replyTo)) throw uiError("error.client.originalDiscussionRemoved");
@@ -511,6 +519,7 @@ class WorkspaceClient extends EventEmitter {
       if (method === 'run') runIdentities = Object.fromEntries(expected.map(e => [e.id, e.identity]));
       contextGuard = () => {
         replyGuard();
+        imageGuard();
         for (const { id, entry, nativeId, member } of expected) {
           const current = entry.state.sessions.find(s => s.id === id);
           if (method === 'run' && displayedIdentities && JSON.stringify(peerIdentity(current || {}, roomId)) !== JSON.stringify(runIdentities[id])) throw uiError("error.client.memberInputOrMembershipChanged");
@@ -531,6 +540,7 @@ class WorkspaceClient extends EventEmitter {
         if (!bridged && targets.some(e => !e.state.capabilities?.includes('replyThreads'))) throw uiError("error.client.replyBindingUnsupported");
         if (!bridged) args[method === 'run' ? 6 : 3] = replyTo;
       }
+      if (imagePacket) { args[3] = replyTo || null; args[4] = imagePacket; }
     }
     if (method === 'queue' || method === 'queueShared') {
       const [id, text, nativeId] = args, target = this.route(id), guard = this.operationGuard(target);

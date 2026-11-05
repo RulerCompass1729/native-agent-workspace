@@ -2,6 +2,10 @@
 const messageViews = new Map();
 let readingPositions = {};
 let readingPayloadId = 0;
+function readingDeliveryStatusKey(message, delivery) {
+  if (message.imageDraftVersion && message.images?.length) return message.imageReceipt?.status === 'accepted' && message.imageReceipt.basis === 'native-local-image-echo' ? 'roomImages.accepted' : 'roomImages.receiptPending';
+  return ({ submitted: 'delivery.submitted', 'awaiting-native': message.inputMode === 'queue' ? 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'delivery.unconfirmed', 'not-sent': 'delivery.notSent' }[delivery.status] || 'delivery.unknown');
+}
 function readingMessageClock(message, now = Date.now(), language = []) {
   const important = ['user', 'human'].includes(message.role) || message.role === 'assistant' &&
     (!message.kind || message.kind === 'response') && message.phase !== 'commentary' && message.status !== 'streaming';
@@ -312,11 +316,11 @@ function readingView(el, key) {
     };
     el.addEventListener('pointerdown', press); el.addEventListener('pointermove', hover, { passive: true }); el.ownerDocument.addEventListener('pointerup', release, true); el.ownerDocument.addEventListener('pointercancel', release, true); el.addEventListener('wheel', wheel, { passive: true }); el.addEventListener('keydown', keydown); el.addEventListener('scroll', scroll, { passive: true });
     view.observer = new ResizeObserver(() => scheduleReading(view)); view.observer.observe(el);
-    view.dispose = () => { for (const entry of view.entries.values()) entry.images?.dispose(); view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', press); el.removeEventListener('pointermove', hover); el.ownerDocument.removeEventListener('pointerup', release, true); el.ownerDocument.removeEventListener('pointercancel', release, true); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
+    view.dispose = () => { for (const entry of view.entries.values()) { entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); } view.observer.disconnect(); cancelAnimationFrame(view.frame); el.removeEventListener('pointerdown', press); el.removeEventListener('pointermove', hover); el.ownerDocument.removeEventListener('pointerup', release, true); el.ownerDocument.removeEventListener('pointercancel', release, true); el.removeEventListener('wheel', wheel); el.removeEventListener('keydown', keydown); el.removeEventListener('scroll', scroll); view.reload = null; view.loadMessage = null; view.pageData = null; ui.clearMarkdown(el); };
     messageViews.set(el, view);
   }
   if (view.key !== key) {
-    for (const entry of view.entries.values()) entry.images?.dispose();
+    for (const entry of view.entries.values()) { entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); }
     captureReading(view); ui.clearMarkdown(el); el.replaceChildren();
     view.entries.clear(); view.groups.clear(); view.days.clear(); view.key = key; view.contentKey = null; view.folds = Object.assign(Object.create(null), readingPositions[key]?.folds || {});
     view.pageRange = null; view.pageRequest = null; view.pageChanging = false; view.autoPages = 4; view.reload = null; view.loadMessage = null;
@@ -762,10 +766,10 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         const recipient = state.sessions.find(s => s.id === d.recipientId);
         return { ...d, label: m.snapshotBatch ? historicalParticipantLabel(d.recipientName, d.recipientId) : recipient ? participantLabel(recipient, state.sessions) : historicalParticipantLabel(d.recipientName, d.recipientId) };
       });
-      const deliveryKey = JSON.stringify([m.deliveryTracked, deliveries, Boolean(m.snapshotBatch)]);
+      const deliveryKey = JSON.stringify([m.deliveryTracked, deliveries, Boolean(m.snapshotBatch), m.imageReceipt]);
       if (entry.deliveryKey !== deliveryKey) {
         entry.deliveryKey = deliveryKey;
-        const status = d => uiText(({ submitted: 'delivery.submitted', 'awaiting-native': m.inputMode === 'queue' ? 'delivery.queued' : 'delivery.awaiting', unconfirmed: 'delivery.unconfirmed', 'not-sent': 'delivery.notSent' }[d.status] || 'delivery.unknown'));
+        const status = d => uiText(readingDeliveryStatusKey(m, d));
         ui.display.computed(entry.deliverySummary, 'text', () => deliveries.length
           ? uiText(m.snapshotBatch ? 'delivery.snapshotSummary' : 'delivery.summary', { recipients: deliveries.map(d => uiText('delivery.recipient', { recipient: d.label, status: status(d) })).join(ui.language.getSnapshot().active === 'zh' ? '；' : '; ') })
           : uiText(m.snapshotBatch ? 'delivery.snapshotNone' : m.deliveryTracked ? 'delivery.none' : 'delivery.legacy'));
@@ -820,7 +824,8 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     }
     const footer = readingTurnFooter(m);
     entry.item.classList.toggle('native-metadata-only', m.kind === 'turn' && !displayText);
-    entry.heading.hidden = entry.body.hidden = m.kind === 'turn' && !displayText;
+    entry.heading.hidden = m.kind === 'turn' && !displayText;
+    entry.body.hidden = entry.heading.hidden || Boolean(m.role === 'human' && m.imageDraftVersion && m.images?.length && !displayText);
     if (footer) {
       if (!entry.footer) { entry.footer = node('footer', undefined, 'reading-turn-footer'); entry.item.append(entry.footer); }
       const finals = originals.filter(other => other.role === 'assistant' && (other.finalReply || ['final_answer', 'finalAnswer'].includes(other.phase)) &&
@@ -869,8 +874,15 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
         },
       });
     }
-    entry.images?.update(m.images || [], { kind: room ? 'room' : 'session', ...(room ? { roomId: state.room?.id || 'shared' } : {}), sessionId: room ? m.sessionId : session?.id,
-      nativeId: m.nativeId, messageId: m.id }, () => room ? m.name || messageName() : session?.name || messageName(), m.status);
+    const uploadedSpaceImages = room && m.imageDraftVersion && m.role === 'human' && m.images?.every(ref => ref.kind === 'space-upload');
+    entry.images?.update(m.images || [], uploadedSpaceImages
+      ? { kind: 'space-message', roomId: state.room?.id || 'shared', messageId: m.id }
+      : { kind: room ? 'room' : 'session', ...(room ? { roomId: state.room?.id || 'shared' } : {}), sessionId: room ? m.sessionId : session?.id, nativeId: m.nativeId, messageId: m.id },
+      () => room ? m.name || messageName() : session?.name || messageName(), uploadedSpaceImages ? 'preview' : m.status);
+    if (uploadedSpaceImages && hasImages) {
+      if (!entry.imageReceipt) { entry.imageReceipt = node('p', undefined, 'native-image-note'); entry.body.after(entry.imageReceipt); }
+      ui.display.text(entry.imageReceipt, m.imageReceipt?.status === 'accepted' && m.imageReceipt.basis === 'native-local-image-echo' ? 'roomImages.accepted' : 'roomImages.unconfirmed');
+    } else if (entry.imageReceipt) { ui.display.unbind(entry.imageReceipt, 'text'); entry.imageReceipt.remove(); delete entry.imageReceipt; }
     if (entry.inputBody && hasImages && m.toolKind === 'imageView') entry.inputBody.hidden = true;
     if (entry.copyText) { entry.copyText.hidden = hasImages && !m.text || m.kind === 'turn' && !displayText; ui.display.text(entry.copyText, hasImages ? 'reading.copyText' : 'common.copy'); }
     entry.share.hidden ||= hasImages && !m.text;
@@ -909,7 +921,7 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
   while (cursor) { const next = cursor.nextSibling; ui.clearMarkdown(cursor); cursor.remove(); cursor = next; }
   // Move every retained original out of obsolete wrappers before disposing
   // their old parents, including filtered T29 descendants with live Markdown.
-  for (const [id, entry] of view.entries) if (!retained.has(id)) { entry.images?.dispose(); ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
+  for (const [id, entry] of view.entries) if (!retained.has(id)) { entry.images?.dispose(); if (entry.imageReceipt) ui.display.unbind(entry.imageReceipt, 'text'); ui.clearMarkdown(entry.item); entry.item.remove(); view.entries.delete(id); }
   for (const [day, divider] of view.days) if (!days.has(day)) { divider.remove(); view.days.delete(day); }
   if (selected?.anchor.isConnected && selected.focus?.isConnected &&
       selected.anchorOffset <= (selected.anchor.nodeType === 3 ? selected.anchor.length : selected.anchor.childNodes.length) &&

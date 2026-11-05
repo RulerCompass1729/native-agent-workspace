@@ -51,7 +51,7 @@ const storedSpaces = () => state?.rooms || (state?.room ? [state.room] : []);
 const allSpaces = () => storedSpaces().filter(r => r.id !== 'shared' || r.metadataRevision || r.revision || r.archived || r.notes || r.files?.length || r.messages?.length || r.events?.length || state?.sessions.some(s => inSpace(s, r.id)));
 const spaceRecord = id => storedSpaces().find(r => r.id === id);
 const spaceCall = (action, ...args) => api.spaceAction(spaceId, action, args);
-const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory'];
+const roomViewFields = ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo', 'roomSurface', 'roomImages', 'roomImageVersion', 'roomImageSend', 'roomMemberViews', 'roomRecordScope', 'roomRecordReturn', 'roomFilterHistory'];
 const focusedRoomMember = () => selected === 'room' && roomSurface === 'overview' && Boolean(roomSession);
 const sharedSurface = () => selected === 'room' && !focusedRoomMember();
 const focusedReadingKey = id => focusedRoomMember() ? spaceId === 'shared' ? `collaboration-focus:${id}` : `focus:${spaceId}:${id}` : id;
@@ -71,6 +71,7 @@ let renameTarget = null, renaming = false, renameRevision = 0, renameComposing =
 let sessionMenu;
 let roomMenu, mentionOptions = [], mentionIndex = 0, mentionRange = null, mentionRoster = '', roomMention = null, roomMentionEdit = null, notesRevision, contextTarget = null;
 let roomDraftRevision = 0;
+let roomImagesWidget, roomImagePickerSpace;
 let roomMentionHistory = nativeWorkspaceMentions.editHistory();
 let mentionChanging = false, mentionComposing = false;
 let pendingRoomFilter = '';
@@ -345,7 +346,8 @@ function renderColumnInput(host, record, visible) {
 }
 // T-135: a column's terminal can be made taller or shorter by dragging the line above it or
 // with the keys. While the person changes it, it stays between 64px and the height that leaves
-// the conversation 80px and the column's input whole; on release the native terminal is fitted once.
+// the conversation up to 80px when space permits and the input whole, with a 64px terminal floor.
+// On release the native terminal is fitted once.
 function columnTerminalLimits(binding) {
   const input = binding.columnHost, reader = input?.closest('.collaboration-member-reader');
   // Everything else in the column below the conversation: the line, the input, gaps and any footer.
@@ -360,12 +362,11 @@ function rememberColumnTerminalHeight(id, value) {
   const ids = Object.keys(columnTerminalHeights); for (const old of ids.slice(0, Math.max(0, ids.length - 200))) delete columnTerminalHeights[old];
 }
 function fitColumnTerminal(binding) { binding.resizeAllowed = true; fitTerminal(binding.id); revealTerminalCursor(terminals.get(binding.id)); }
-// The tallest is what the limits allow, but never below the old 112px, so a small window
-// keeps the terminal as it was before heights could change. 'adjust' and 'save' are the
-// person's changes; 'save' also remembers the height and fits the native terminal to it. A
-// 'redraw' shows the remembered height and never resizes the native terminal: an undersized
-// box shows the terminal through its own scrolling, with the cursor kept in view.
-function columnTerminalTallest(binding) { return Math.max(columnTerminalLimits(binding).max, COLUMN_TERMINAL.initial); }
+// The column budget also applies below the default height, leaving the conversation and
+// input visible. 'adjust' and 'save' are the person's changes; 'save' remembers the height
+// and fits the native terminal once. A redraw only clamps the displayed box: the saved
+// choice and native grid stay unchanged, with scrolling and the cursor kept in view.
+function columnTerminalTallest(binding) { return columnTerminalLimits(binding).max; }
 function applyColumnTerminalHeight(binding, height, mode = 'redraw') {
   const { min } = columnTerminalLimits(binding), top = columnTerminalTallest(binding);
   const value = Math.max(min, Math.min(top, Math.round(height))), before = binding.terminalHeight;
@@ -373,7 +374,9 @@ function applyColumnTerminalHeight(binding, height, mode = 'redraw') {
   const sash = binding.nativeSash;
   if (sash) { sash.setAttribute('aria-valuemin', String(min)); sash.setAttribute('aria-valuemax', String(top)); sash.setAttribute('aria-valuenow', String(value)); }
   if (mode === 'save') { rememberColumnTerminalHeight(binding.id, value); attempt(persistView); fitColumnTerminal(binding); }
-  else if (mode === 'redraw' && before !== undefined && before !== value) revealTerminalCursor(terminals.get(binding.id));
+  else if (mode === 'redraw' && before !== undefined && before !== value) {
+    const entry = terminals.get(binding.id); if (!entry?.columnReading) revealTerminalCursor(entry);
+  }
   return value;
 }
 // The source's screen line is shared, not its numeric height: forms and footers can differ.
@@ -487,7 +490,7 @@ function columnTerminalSash(binding) {
   });
   return binding.nativeSash = sash;
 }
-// A smaller window lowers a tall terminal (not below 112px) so the input stays in the column.
+// A smaller window lowers a tall terminal (down to 64px) so the input stays in the column.
 window.addEventListener('resize', () => {
   hideColumnTerminalHint();
   for (const binding of sessionComposers.values()) if (columnTerminalBinding(binding.id) && !binding.terminalDrag) applyColumnTerminalHeight(binding, columnTerminalHeight(binding.id));
@@ -531,8 +534,10 @@ function syncTerminalMount(id) {
   const entry = terminals.get(id); if (!entry) return;
   const binding = columnTerminalBinding(id), solo = activeSessionId() === id && (selected !== 'room' || focusedRoomMember());
   const parent = binding ? binding.nativeHost : solo ? $('terminal-area') : terminalParking;
-  if (entry.element.parentElement !== parent) parent.append(entry.element);
+  const moved = entry.element.parentElement !== parent;
+  if (moved) parent.append(entry.element);
   entry.element.hidden = parent === terminalParking;
+  if (moved && binding && !entry.columnReading) revealTerminalCursor(entry);
 }
 const queuedInputs = new Map(), queuedRoomInputs = new Map();
 const draftRecoveries = new Map();
@@ -1259,6 +1264,72 @@ function pasteTerminal(text, id = activeSessionId()) {
   if (text.length > 65500) throw uiError("error.pasteTooLong");
   if (/[\r\n]/.test(text) && !entry.term.modes.bracketedPasteMode) throw uiError("error.multilineProtection");
   entry.columnReading = false; entry.term.paste(text); focusTerminal(id);
+}
+const roomImageRefs = (id = spaceId) => roomViews[id]?.roomImages || [];
+function roomImageForwardAvailable(recipient) {
+  return recipient?.spaceImagesAvailable === true && recipient.serviceCapabilities?.includes('spaceImageInputV1') &&
+    recipient.state === 'idle' && !recipient.pendingTag && !recipient.pendingQueue && !recipient.approval && !recipient.nativeInputRequired &&
+    recipient.shareAvailable !== false && recipient.chatAvailable !== false && !interruptPending(recipient);
+}
+async function acknowledgeRoomImageReceipt(id, version, tag) {
+  const view = roomViews[id];
+  if (!view || view.roomImageVersion !== version || view.roomImageDispatching || view.roomImageAckAttempt === version + tag) return;
+  view.roomImageAckAttempt = version + tag;
+  const result = await api.spaceAction(id, 'acceptImages', [version, tag]);
+  if (result?.accepted && view.roomImageVersion === version) {
+    view.roomImages = result.refs; view.roomImageVersion = result.version; delete view.roomImageSend;
+    render();
+  }
+}
+function roomImageDraftEditable(id) {
+  const merge = state?.room?.merge, blocked = merge && (!merge.imported || ['preparing', 'joining', 'failed', 'undoing'].includes(merge.stage));
+  return selected === 'room' && sharedSurface() && spaceId === id && !disconnected && state?.room && !state.room.archived && !state.room.unavailable && !blocked && !roomViews[id]?.roomImageDispatching;
+}
+function renderRoomImageDraft() {
+  const host = $('room-images'), view = roomViews[spaceId] ||= {}, refs = roomImageRefs();
+  host.hidden = !refs.length;
+  const sent = view.roomImageSend;
+  if (sent && !view.roomImageDispatching) {
+    const row = state.room.messages.find(m => m.imageDraftVersion === view.roomImageVersion && m.recipientId === sent.recipientId && m.imageReceipt?.nativeId === sent.nativeId && m.imageReceipt?.status === 'accepted');
+    if (row) attempt(() => acknowledgeRoomImageReceipt(spaceId, view.roomImageVersion, row.id));
+  }
+  $('add-room-image').disabled = !roomImageDraftEditable(spaceId) || Boolean(view.roomImagesImporting) || refs.length >= 4;
+  if (!roomImagesWidget) roomImagesWidget = window.nativeWorkspaceImages.mount(host, api, {
+    display: ui.display, text: uiText, displayText: ui.displayText, createError: ui.createError,
+    remove: ref => attempt(() => removeRoomImage(ref.roomId, ref.id)),
+  });
+  roomImagesWidget.update(refs, { kind: 'space-draft', roomId: spaceId, messageId: view.roomImageVersion }, () => uiText('roomImages.draft'), 'preview');
+  for (const remove of host.querySelectorAll('.native-image-remove')) remove.disabled = !roomImageDraftEditable(spaceId) || Boolean(view.roomImagesImporting);
+}
+async function addRoomImages(files, id = spaceId) {
+  const view = roomViews[id] ||= {};
+  if (!roomImageDraftEditable(id)) throw uiError('error.roomImages.changed');
+  if (view.roomImagesImporting) throw uiError('error.roomImages.busy');
+  if (!files.length || files.length + roomImageRefs(id).length > 4 || files.reduce((n, file) => n + file.size, 0) + roomImageRefs(id).reduce((n, ref) => n + ref.size, 0) > 20 * 1024 * 1024) throw uiError('error.roomImages.limit');
+  view.roomImagesImporting = true; render();
+  try {
+    const bytes = await Promise.all(files.map(async file => ({ bytes: new Uint8Array(await file.arrayBuffer()), name: file.name })));
+    const result = await api.spaceAction(id, 'stageImages', [bytes, view.roomImageVersion]);
+    view.roomImages = result.refs; view.roomImageVersion = result.version;
+    delete view.roomImageSend;
+    // The original space receives the result even after a view switch. The
+    // current text, @ recipient and reading position are never replaced.
+    if (spaceId === id) roomDraftRevision++;
+  } finally { view.roomImagesImporting = false; render(); }
+}
+async function removeRoomImage(id, imageId) {
+  const view = roomViews[id];
+  if (!roomImageDraftEditable(id) || !view) throw uiError('error.roomImages.changed');
+  if (view.roomImagesImporting) throw uiError('error.roomImages.busy');
+  view.roomImagesImporting = true; render();
+  try {
+    const result = await api.spaceAction(id, 'removeImage', [imageId, view.roomImageVersion]);
+    if (roomViews[id] !== view) return;
+    view.roomImages = result.refs; view.roomImageVersion = result.version;
+    delete view.roomImageSend;
+    if (result.imagesLeft) toastMessage('roomImages.cacheRetained');
+    if (spaceId === id) roomDraftRevision++;
+  } finally { view.roomImagesImporting = false; render(); }
 }
 const imageFiles = transfer => Array.from(transfer?.files || []).filter(file => file.type.startsWith('image/'));
 async function pasteImages(files, staged, id = activeSessionId()) {
@@ -3299,6 +3370,7 @@ function render() {
       });
       $('pause-button').hidden = !run && !roomSubmitting;
       renderTimeline();
+      renderRoomImageDraft();
       const previousRecipient = $('recipient').value;
       normalizeRoomMention();
       $('recipient').dataset.hadChoices = 'true';
@@ -3313,13 +3385,16 @@ function render() {
       ui.display.text($('forward-button'), nativeRoute ? (nativeUsable(recipient) ? 'composer.terminal' : 'reading.viewSession') : interruptPending(recipient) ? 'composer.waitInterrupt' : recipient?.pendingQueue ? 'composer.waitNative' : roomQueueAvailable(recipient) ? 'composer.queue' : roomSteerAvailable(recipient) ? 'composer.steer' : 'composer.send');
       const recipientPending = roomPendingRecipients.has(recipient?.id);
       const mergeBlocked = state.room.merge && (!state.room.merge.imported || ['preparing', 'joining', 'failed', 'undoing'].includes(state.room.merge.stage));
-      const unavailable = mergeBlocked || roomSubmitting || recipientPending || disconnected || !nativeWorkspaceMentions.body(roomMention, $('shared-input').value).trim();
+      const hasDraftImages = roomImageRefs().length > 0;
+      const unavailable = mergeBlocked || roomSubmitting || recipientPending || disconnected || (!hasDraftImages && !nativeWorkspaceMentions.body(roomMention, $('shared-input').value).trim());
       const threadUnsupported = roomReplyTo && (!roomThreads.rows.has(roomReplyTo) || (recipient && !recipient.legacyShare && !recipient.serviceCapabilities?.includes('replyThreads')));
       const ready = s => s && !interruptPending(s) && s.state === 'idle' && !s.nativeInputRequired && !s.pendingTag && !s.pendingQueue && !s.approval && s.shareAvailable !== false && s.chatAvailable !== false;
       const manualErrorReady = !interruptPending(recipient) && recipient?.state === 'error' && recipient.failedTurnInputAvailable && !recipient.pendingTag && !recipient.pendingQueue && !recipient.approval;
       $('forward-button').disabled = nativeRoute ? mergeBlocked || roomSubmitting || recipientPending || disconnected : unavailable || (!ready(recipient) && !manualErrorReady && !roomQueueAvailable(recipient) && !roomSteerAvailable(recipient)) || Boolean(threadUnsupported);
       const otherRun = allSpaces().find(r => r.id !== spaceId && r.run?.status === 'running');
       $('run-button').disabled = unavailable || roomPendingRecipients.size > 0 || !recipient || !ready(recipient) || run?.status === 'running' || run?.pausePending || run?.pauseUnconfirmed || !safeHandoffs || Boolean(threadUnsupported) || Boolean(otherRun);
+      if (hasDraftImages) { $('forward-button').disabled ||= !roomImageForwardAvailable(recipient) || Boolean(roomViews[spaceId]?.roomImageSend); $('run-button').disabled = true; }
+      if (roomViews[spaceId]?.roomImagesImporting) { $('forward-button').disabled = true; $('run-button').disabled = true; }
       ui.display.computed($('run-help'), 'text', () => {
         let text = recipient ? uiText('room.sendHint', { name: participantLabel(recipient) }) : uiText(roomMention?.active === false ? 'room.recipientChanged' : 'room.chooseRecipientHelp');
         if (roomQueueAvailable(recipient) || recipient?.pendingQueue) text += uiText('room.queueHelp');
@@ -3329,6 +3404,8 @@ function render() {
         if (nativeRoute) text = uiText(recipient?.nativeInputRequired ? 'room.nativeInputRequired' : 'room.nativeRouteHelp');
         if (interruptPending(recipient)) text = uiText('composer.interruptHint');
         if (threadUnsupported) text = uiText(roomThreads.rows.has(roomReplyTo) ? 'room.threadUnsupported' : 'room.threadMissingHelp');
+        if (hasDraftImages) text = uiText(roomViews[spaceId]?.roomImageSend ? 'roomImages.unconfirmed' : roomImageForwardAvailable(recipient) ? 'roomImages.sendHint' : 'error.roomImages.deliveryUnavailable');
+        if (roomViews[spaceId]?.roomImagesImporting) text = uiText('roomImages.importing');
         return text;
       });
       ui.display.computed($('run-button'), 'title', () => otherRun ? uiText('room.otherReview', { name: otherRun.name }) : safeHandoffs ? uiText('room.runPreviewHelp') : state.handoffNotice ? ui.displayText(state.handoffNotice, state.handoffNoticeUiMessage) : uiText('room.runUnsupported'));
@@ -4073,6 +4150,9 @@ $('shared-input').onkeydown = event => {
 };
 $('shared-input').onblur = event => { if (!event.relatedTarget?.closest('#mention-list')) closeMentions(); };
 async function submitRoom(automatic) {
+  const imageRefs = roomImageRefs(), imageVersion = roomViews[spaceId]?.roomImageVersion;
+  if (imageRefs.length && (automatic || !roomImageForwardAvailable(members().find(s => s.id === roomRecipient())))) throw uiError('error.roomImages.deliveryUnavailable');
+  if (imageRefs.length && roomViews[spaceId]?.roomImageSend) throw uiError('error.roomImages.alreadySent');
   if (roomSubmitting || (automatic ? roomPendingRecipients.size > 0 : roomPendingRecipients.has($('recipient').value)) || $('shared-input').readOnly || $(automatic ? 'run-button' : 'forward-button').disabled) return;
   const first = roomRecipient(), raw = $('shared-input').value, text = nativeWorkspaceMentions.body(roomMention, raw), revision = roomDraftRevision, address = roomMention && { ...roomMention };
   const sendingSpace = spaceId, view = captureRoomView();
@@ -4088,16 +4168,26 @@ async function submitRoom(automatic) {
   else roomPendingRecipients.set(first, submission);
   const queuedMark = submission.queued && { spaceId: sendingSpace, raw, address, revision, before: new Set(state.room.messages.map(m => m.id)) };
   if (queuedMark) queuedRoomInputs.set(first, queuedMark);
+  if (imageRefs.length) view.roomImageDispatching = true;
   render();
   try {
-    const receipt = await (automatic ? api.spaceAction(sendingSpace, 'run', [ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities]) : roomQueueAvailable(recipient) ? api.spaceAction(sendingSpace, 'queueShared', [first, text, recipient.nativeId, roomReplyTo || undefined]) : roomSteerAvailable(recipient) ? api.spaceAction(sendingSpace, 'steerShared', [first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined]) : api.spaceAction(sendingSpace, 'forward', [first, text, recipient.nativeId, roomReplyTo || undefined]));
+    if (imageRefs.length) {
+      await persistView();
+      view.roomImageSend = { version: imageVersion, recipientId: first, nativeId: recipient.nativeId };
+    }
+    const receipt = await (imageRefs.length ? api.spaceAction(sendingSpace, 'forward', [first, text, recipient.nativeId, roomReplyTo || undefined, { version: imageVersion }]) : automatic ? api.spaceAction(sendingSpace, 'run', [ids, text, automatic.limit, automatic.mode || 'replies', automatic.labels, automatic.contexts, roomReplyTo || undefined, automatic.identities]) : roomQueueAvailable(recipient) ? api.spaceAction(sendingSpace, 'queueShared', [first, text, recipient.nativeId, roomReplyTo || undefined]) : roomSteerAvailable(recipient) ? api.spaceAction(sendingSpace, 'steerShared', [first, text, recipient.nativeId, recipient.activeTurnId, roomReplyTo || undefined]) : api.spaceAction(sendingSpace, 'forward', [first, text, recipient.nativeId, roomReplyTo || undefined]));
     if (submission.cancelRequested || receipt?.contextChanged) return;
+    if (imageRefs.length) {
+      if (!receipt?.imageDraft?.accepted) return;
+      if (view.roomImageVersion === imageVersion) { view.roomImages = receipt.imageDraft.refs; view.roomImageVersion = receipt.imageDraft.version; delete view.roomImageSend; }
+    }
     const original = sendingSpace === spaceId ? captureRoomView() : view;
     if (revision === original.draftRevision && original.sharedDraft === raw && original.roomRecipient === first && original.roomMention?.memberRevision === address?.memberRevision && original.roomMention?.text === address?.text) { original.sharedDraft = ''; original.roomMention = null; original.roomRecipient = ''; original.draftRevision++; writeRoomDraft(sendingSpace, original); }
   }
   catch (error) { if (!submission.cancelRequested) throw error; }
   finally {
     if (queuedMark && !queuedMark.tag && queuedRoomInputs.get(first) === queuedMark) queuedRoomInputs.delete(first);
+    view.roomImageDispatching = false;
     submission.settled = true; if (view.submitting === submission && !submission.cancelling) view.submitting = null;
     if (roomSubmitting === submission && !submission.cancelling) roomSubmitting = null;
     if (roomPendingRecipients.get(first) === submission) roomPendingRecipients.delete(first);
@@ -4105,6 +4195,20 @@ async function submitRoom(automatic) {
   }
 }
 $('room-composer').onsubmit = event => { event.preventDefault(); attempt(() => submitRoom(false)); };
+$('add-room-image').onclick = () => { roomImagePickerSpace = spaceId; $('room-image-files').click(); };
+$('room-image-files').onchange = () => {
+  const files = Array.from($('room-image-files').files || []), id = roomImagePickerSpace;
+  $('room-image-files').value = ''; if (files.length) attempt(() => addRoomImages(files, id));
+};
+$('room-composer').addEventListener('paste', event => {
+  const files = imageFiles(event.clipboardData); if (!files.length) return;
+  event.preventDefault(); event.stopPropagation(); attempt(() => addRoomImages(files));
+});
+$('room-composer').addEventListener('dragover', event => { if (Array.from(event.dataTransfer?.items || []).some(item => item.kind === 'file' && item.type.startsWith('image/'))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } });
+$('room-composer').addEventListener('drop', event => {
+  const files = imageFiles(event.dataTransfer); if (!files.length) return;
+  event.preventDefault(); event.stopPropagation(); attempt(() => addRoomImages(files));
+});
 $('forward-button').onclick = () => {
   if ($('forward-button').disabled || $('forward-button').type !== 'button') return;
   const recipient = members().find(s => s.id === $('recipient').value);

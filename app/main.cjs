@@ -12,7 +12,7 @@ const { setLocation } = require('./runtime-locations.cjs');
 const { pathToFileURL } = require('node:url');
 const { submissionState, assertNativeCreation, capabilitiesFor } = require('./submission-policy.cjs');
 const { readPreview, saveCopy, extensions: textExtensions, openMessageFile } = require('./local-files.cjs');
-const { ImagePreviews } = require('./native-images.cjs');
+const { ImagePreviews, imageSource } = require('./native-images.cjs');
 const { SessionLabels } = require('./session-labels.cjs');
 const { RoomState } = require('./room-state.cjs');
 const { readingState } = require('./reading-state.cjs');
@@ -286,7 +286,102 @@ async function openWindow(saved) {
   return win;
 }
 function hasSavedSpaceDraft(records, targetId) {
-  return Boolean(targetId && records.some(view => view.roomViews?.[targetId]?.sharedDraft || view.spaceId === targetId && view.sharedDraft));
+  return Boolean(targetId && records.some(view => view.roomViews?.[targetId]?.sharedDraft || view.roomViews?.[targetId]?.roomImages?.length || view.spaceId === targetId && view.sharedDraft));
+}
+function updateSpaceImageDraft(c, roomId, action, value, expectedVersion) {
+  roomState.writable(roomId);
+  if (!['stageImages', 'removeImage'].includes(action)) throw uiError('error.roomImages.changed');
+  const images = require('./space-images.cjs'), previous = c.view.roomViews, view = previous?.[roomId] || {}, existing = view.roomImages || [];
+  if (expectedVersion !== view.roomImageVersion) throw uiError('error.roomImages.changed');
+  let added;
+  try {
+    let refs;
+    if (action === 'stageImages') {
+      if (!Array.isArray(value) || existing.length + value.length > 4) throw uiError('error.roomImages.limit');
+      added = images.stageSpaceImages(dataDir, roomId, value, nativeImage);
+      refs = [...existing, ...added];
+      if (refs.reduce((n, ref) => n + ref.size, 0) > 20 * 1024 * 1024) throw uiError('error.roomImages.limit');
+    } else {
+      if (!existing.some(ref => ref.id === value)) throw uiError('error.roomImages.changed');
+      refs = existing.filter(ref => ref.id !== value);
+    }
+    const version = randomUUID();
+    c.view.roomViews = { ...previous, [roomId]: { ...view, roomImages: refs, roomImageVersion: version } };
+    delete c.view.roomViews[roomId].roomImageSend;
+    saveViews();
+    return { refs, version };
+  } catch (error) {
+    c.view.roomViews = previous;
+    if (added) images.discardStagedSpaceImages(dataDir, roomId, added);
+    if (error.uiMessage?.key === 'error.images.sessionCacheLimit') throw uiError('error.roomImages.cacheLimit');
+    throw error.uiMessage ? error : uiError('error.roomImages.import');
+  }
+}
+async function forwardSpaceImages(c, roomId, args) {
+  const request = args[4], version = request?.version;
+  if (!request || Object.keys(request).length !== 1 || !Object.hasOwn(request, 'version')) throw uiError('error.roomImages.changed');
+  const checkDraft = () => {
+    const view = c.view.roomViews?.[roomId];
+    if (!view?.roomImages?.length || view.roomImageVersion !== version) throw uiError('error.roomImages.changed');
+    if (view.roomImageSend?.version === version) throw uiError('error.roomImages.alreadySent');
+    return view;
+  };
+  checkDraft();
+  const snapshot = await c.client.call('initial');
+  roomState.assertAvailable(args[0], true, roomId);
+  const view = checkDraft(), recipient = snapshot.sessions.find(s => s.id === args[0]);
+  if (!recipient || recipient.nativeId !== args[2] || !recipient.spaceImagesAvailable || !recipient.serviceCapabilities?.includes('spaceImageInputV1') ||
+      recipient.state !== 'idle' || recipient.pendingTag || recipient.pendingQueue || recipient.approval || recipient.nativeInputRequired || snapshot.storageWarning) throw uiError('error.roomImages.deliveryUnavailable');
+  // Validate local pixels before reserving the draft; no paths come from renderer.
+  const images = require('./space-images.cjs');
+  for (const ref of view.roomImages) images.readSpaceImage(dataDir, roomId, ref);
+  const previous = c.view.roomViews, send = { version, recipientId: recipient.id, nativeId: recipient.nativeId };
+  c.view.roomViews = { ...previous, [roomId]: { ...view, roomImageSend: send } };
+  try { saveViews(); } catch (error) { c.view.roomViews = previous; throw error; }
+  // An interrupted/unknown request remains reserved on disk, never auto-retried.
+  const result = await c.client.callSpace(roomId, 'forward', [...args.slice(0, 4), { version, refs: view.roomImages }]);
+  const draft = result?.imageReceipt?.status === 'accepted' ? await acceptSpaceImageDraft(c, roomId, version, result.tag) : null;
+  return { ...result, ...(draft ? { imageDraft: draft } : {}) };
+}
+async function acceptSpaceImageDraft(c, roomId, version, tag) {
+  const snapshot = await c.client.call('initial'), view = c.view.roomViews?.[roomId], sent = view?.roomImageSend;
+  if (snapshot.storageWarning || !sent || view.roomImageVersion !== version || sent.version !== version) return { accepted: false };
+  const room = (snapshot.rooms || [snapshot.room]).find(r => (r?.id || 'shared') === roomId), row = room?.messages?.find(m => m.id === tag), receipt = row?.imageReceipt;
+  if (!row || row.imageDraftVersion !== version || row.recipientId !== sent.recipientId || JSON.stringify(row.images) !== JSON.stringify(view.roomImages) ||
+      receipt?.status !== 'accepted' || receipt.basis !== 'native-local-image-echo' || receipt.tag !== tag || receipt.nativeId !== sent.nativeId ||
+      receipt.recipientId !== sent.recipientId || typeof receipt.nativeItemId !== 'string' || !receipt.nativeItemId || typeof receipt.turnId !== 'string' || !receipt.turnId) return { accepted: false };
+  const previous = c.view.roomViews, next = { ...view, roomImages: [], roomImageVersion: randomUUID() }; delete next.roomImageSend;
+  c.view.roomViews = { ...previous, [roomId]: next };
+  try { saveViews(); } catch (error) { c.view.roomViews = previous; throw error; }
+  return { accepted: true, refs: [], version: next.roomImageVersion };
+}
+async function cleanupSpaceImageCopies(c, roomId) {
+  const images = require('./space-images.cjs');
+  try { if (!images.hasSpaceImageCopies(dataDir, roomId)) return { removed: 0, failed: false }; }
+  catch { return { failed: true }; }
+  const client = c.client, entries = client.entries;
+  const connections = Array.isArray(entries) ? entries.map(e => e.client) : [];
+  const available = () => {
+    if (c.client !== client || client.closing || client.socket?.destroyed || client.entries !== entries || !Array.isArray(entries) || !entries.length ||
+        entries.some((e, i) => e.closed || e.closing || e.client !== connections[i] || client.control?.maintenance?.has(e.key))) return false;
+    try {
+      const keys = require('./service-layout.cjs').readLayout(dataDir).entries;
+      return JSON.stringify(keys.toSorted()) === JSON.stringify(entries.map(e => e.key).sort());
+    } catch { return false; }
+  };
+  if (!available()) return { failed: true };
+  try {
+    // A successful send can clear another window's draft while initial is in
+    // flight. Keep that pre-read owner too, and never delete newly created files.
+    const candidates = images.spaceImageCopyIds(dataDir, roomId);
+    const before = views.map(view => ({ roomViews: { [roomId]: {
+      roomImages: (view.roomViews?.[roomId]?.roomImages || []).map(ref => ({ ...ref })),
+    } } }));
+    const snapshot = await client.call('initial');
+    if (!available() || snapshot.storageWarning || viewStorageWarning) return { failed: true };
+    const keep = images.spaceImageKeepIds([...before, ...views], snapshot, roomId);
+    return images.removeUnusedSpaceImages(dataDir, roomId, keep, candidates);
+  } catch { return { failed: true }; }
 }
 function connectionUpdateOptions(client, applicationVersion, profile) {
   const alpha = value => typeof value === 'string' && value.match(/^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-alpha\.(0|[1-9]\d*)$/);
@@ -454,6 +549,13 @@ async function boot() {
       try { return await roomState.membership(c.client, args[0], args[1], sessionLabels.labels.get(args[0]), roomId, args[2]); }
       finally { await broadcastRoom(); }
     }
+    if (['stageImages', 'removeImage'].includes(action)) {
+      if (action === 'stageImages') await cleanupSpaceImageCopies(c, roomId);
+      const result = updateSpaceImageDraft(c, roomId, action, args[0], args[1]);
+      if (action === 'removeImage') result.imagesLeft = (await cleanupSpaceImageCopies(c, roomId)).failed;
+      return result;
+    }
+    if (action === 'acceptImages') return acceptSpaceImageDraft(c, roomId, args[0], args[1]);
     if (action === 'rename') roomState.rename(args[0], roomId);
     else if (action === 'notes') roomState.notes(args[0], args[1], roomId);
     else if (action === 'memberOrder') roomState.moveMember(args[0], (await c.client.call('initial')).sessions, roomId);
@@ -473,8 +575,9 @@ async function boot() {
         roomState.writable(roomId);
         const result = await c.client.callSpace(roomId, action, []);
         try { roomState.clear(revision, roomId); } catch (error) { throw uiError("error.sharedClearedRetained", { reason: error.message }, { cause: error, param: 'reason' }); }
+        const copies = await cleanupSpaceImageCopies(c, roomId);
         await broadcastRoom();
-        if (result?.imagesLeft) throw uiError("error.sharedRemovedImagesRetained");
+        if (result?.imagesLeft || copies.failed) throw uiError("error.sharedRemovedImagesRetained");
         return true;
       }
       if (action !== 'pause') for (const id of action === 'run' && Array.isArray(args[0]) ? args[0] : [args[0]]) roomState.assertAvailable(id, true, roomId);
@@ -483,6 +586,7 @@ async function boot() {
         if (args[4] && args[0].some(id => args[4][id] !== snapshot.sessions.find(s => s.id === id)?.name)) throw uiError("error.main.participantNamesChanged");
         args[4] = Object.fromEntries(args[0].filter(id => sessionLabels.labels.has(id)).map(id => [id, sessionLabels.labels.get(id)]));
       }
+      if (action === 'forward' && args[4]) return forwardSpaceImages(c, roomId, args);
       return c.client.callSpace(roomId, action, args);
     } else throw uiError("error.main.unsupportedSpaceAction");
     await broadcastRoom();
@@ -545,6 +649,9 @@ async function boot() {
     return c.client.call(method, ...args);
   };
   for (const method of ['run', 'forward', 'queueShared', 'steerShared']) register(method, (c, ...args) => {
+    // Uploaded images must resolve from this window's saved space draft.
+    // The legacy text-only entry must never accept a caller's image packet.
+    if (method === 'forward' && args.length > 4) throw uiError('error.roomImages.changed');
     if (method === 'run' && Array.isArray(args[0])) {
       if (args[4]) {
         const snapshot = sessionLabels.apply(c.client.snapshot());
@@ -585,7 +692,8 @@ async function boot() {
       const revision = roomState.value.revision;
       const result = await c.client.call('clearSharedHistory');
       try { roomState.clear(revision); } catch (error) { throw uiError("error.sharedClearedRetained", { reason: error.message }, { cause: error, param: 'reason' }); }
-      if (result?.imagesLeft) { await broadcastRoom(); throw uiError("error.sharedRemovedImagesRetained"); }
+      const copies = await cleanupSpaceImageCopies(c, 'shared');
+      if (result?.imagesLeft || copies.failed) { await broadcastRoom(); throw uiError("error.sharedRemovedImagesRetained"); }
       await broadcastRoom(); return true;
     }
   });
@@ -686,10 +794,13 @@ async function boot() {
       if (action === 'forget') {
         for (const view of views) { delete view.readingPositions?.[id]; forgetDraft(view, id); if (view.selected === id) view.selected = ''; }
         saveViews();
+        const imageRooms = new Set((record?.messages || []).flatMap(m => (m.spaceUploads || []).map(ref => ref.roomId)));
+        let imagesLeft = Boolean(result?.imagesLeft);
+        for (const roomId of imageRooms) if ((await cleanupSpaceImageCopies(c, roomId)).failed) imagesLeft = true;
         let labelsLeft = false; try { sessionLabels.remove(id); } catch { labelsLeft = true; }
-        if (labelsLeft && result?.imagesLeft) throw uiError("error.removedNameAndImagesRetained");
+        if (labelsLeft && imagesLeft) throw uiError("error.removedNameAndImagesRetained");
         if (labelsLeft) throw uiError("error.main.forgottenLabelCleanupFailed");
-        if (result?.imagesLeft) throw uiError("error.removedImagesRetained");
+        if (imagesLeft) throw uiError("error.removedImagesRetained");
       }
     }
   });
@@ -737,6 +848,16 @@ async function boot() {
     if (next.roomMention !== undefined && next.roomMention !== null && !require('./room-mention.js').validView(next.roomMention, next.sharedDraft, next.roomRecipient)) throw uiError("error.main.invalidMention");
     if (next.terminalDisplay !== undefined && (!next.terminalDisplay || !Number.isInteger(next.terminalDisplay.fontSize) || next.terminalDisplay.fontSize < 10 || next.terminalDisplay.fontSize > 24 || !['dark', 'green'].includes(next.terminalDisplay.palette))) throw uiError("error.main.invalidTerminalDisplay");
     if (!validViews([{ ...c.view, ...next }])) throw uiError("error.main.invalidSpaceViewRecord");
+    if (next.roomViews) {
+      // Add/remove image imports have their own save-before-ACK transaction.
+      // A text save sent before that ACK must not erase its newer image draft.
+      for (const [id, original] of Object.entries(c.view.roomViews || {})) if (original.roomImages !== undefined) {
+        next.roomViews[id] = { ...(next.roomViews[id] || original), roomImages: structuredClone(original.roomImages), roomImageVersion: original.roomImageVersion };
+        if (original.roomImageSend) next.roomViews[id].roomImageSend = structuredClone(original.roomImageSend);
+        else delete next.roomViews[id].roomImageSend;
+      }
+      for (const [id, incoming] of Object.entries(next.roomViews)) if (c.view.roomViews?.[id]?.roomImages === undefined) { delete incoming.roomImages; delete incoming.roomImageVersion; delete incoming.roomImageSend; }
+    }
     for (const key of ['spaceId', 'sidebarView', 'sidebarCollapsedGroups', 'columnTerminalHeights', 'roomViews', 'panorama']) if (next[key] !== undefined) c.view[key] = structuredClone(next[key]);
     // Retained UI rollback must still see only the original shared draft.
     if (next.roomViews) for (const key of ['sharedDraft', 'roomSession', 'roomRecipient', 'roomMention', 'roomFilter', 'roomSearch', 'roomThread', 'roomReplyTo']) next[key] = next.roomViews.shared?.[key] ?? (key === 'roomMention' ? null : '');
@@ -816,7 +937,26 @@ async function boot() {
     const text = clipboard.readText(); if (text.length > 65500) throw uiError("error.main.pasteTooLong"); return { text };
   });
   const imagesFor = c => c.imagePreviews ||= new ImagePreviews({ nativeImage,
-    snapshot: async () => roomState.apply(await c.client.call('initial')) });
+    snapshot: async source => source?.kind === 'space-draft' ? null : roomState.apply(await c.client.call('initial')),
+    resolveSource: (snapshot, source) => {
+      if (source?.kind === 'space-message') {
+        if (!validRoomId(source.roomId) || typeof source.messageId !== 'string' || !source.messageId || source.messageId.length > 100 ||
+            !Number.isSafeInteger(source.index) || source.index < 0 || source.index > 3 || Object.keys(source).some(key => !['kind', 'roomId', 'messageId', 'index'].includes(key))) throw uiError('error.roomImages.changed');
+        const room = (snapshot.rooms || [snapshot.room]).find(r => (r?.id || 'shared') === source.roomId), row = room?.messages?.find(m => m.id === source.messageId);
+        if (!row?.imageDraftVersion || row.role !== 'human' || !row.deliveryTracked || !row.recipientId) throw uiError('error.roomImages.changed');
+        try { const ref = row.images?.[source.index], read = require('./space-images.cjs').readSpaceImage(dataDir, ref?.roomId, ref); return { path: read.path, fileIdentity: read.fileIdentity, observedAt: read.fileIdentity[3] }; }
+        catch { throw uiError('error.roomImages.changed'); }
+      }
+      if (source?.kind !== 'space-draft') return imageSource(snapshot, source);
+      const view = c.view.roomViews?.[source.roomId];
+      if (!validRoomId(source.roomId) || view?.roomImageVersion !== source.messageId || !Number.isSafeInteger(source.index) || source.index < 0 || source.index > 3 ||
+          Object.keys(source).some(key => !['kind', 'roomId', 'messageId', 'index'].includes(key))) throw uiError('error.roomImages.changed');
+      try {
+        const read = require('./space-images.cjs').readSpaceImage(dataDir, source.roomId, view.roomImages?.[source.index]);
+        // This is the uploaded file's stable timestamp, never a native-read event.
+        return { path: read.path, fileIdentity: read.fileIdentity, observedAt: read.fileIdentity[3] };
+      } catch { throw uiError('error.roomImages.changed'); }
+    } });
   register('previewImage', (c, source) => imagesFor(c).preview(source));
   register('expandImage', (c, token) => imagesFor(c).expand(token));
   register('copyImage', (c, token) => imagesFor(c).copy(token, clipboard));
