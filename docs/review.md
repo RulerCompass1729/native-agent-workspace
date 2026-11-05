@@ -5482,3 +5482,24 @@ delivery. The prior view's restoration remains unconfirmed. Read-only binding
 checks distinguish current native versions from retained backend code; they do
 not authorize process replacement. Daily debugger/read-scope, lifecycle safety
 and publication gates remain unchanged. The overall dogfood goal stays open.
+
+
+### T134 delayed image completion preserves newer reading intent
+
+- Trigger: open an image, then choose Latest or a search result while its preview
+  or expansion is pending. The old completion callback clears the newer intent
+  and saves `follow: false`, even without another reader action.
+- Fix: the shared reader keeps the pending position when the image reply records
+  its fold. A fresh image activation clears it first, including an assistive
+  click without a preceding pointer event; manual scrolling remains manual.
+- Checks: the current-main source fixture fails three new intent cases and passes
+  three manual controls before the change. All six pass with this exact patch on
+  the current-main source copy, and 43 affected local checks pass without skips.
+  The UI build passes. No new browser, provider or native task was started.
+- Limits: this is an asynchronous-image source counter, not proof of the
+  original cache-gap screenshot's producer. The earlier finite GUI negative
+  remains unchanged; browser and installed acceptance for this delta are open.
+
+- Independent source review found that image Escape stops bubbling before the
+  reader sees it. Its new regression failed on the initial patch; a capture
+  key handler now records this manual collapse before the image callback.

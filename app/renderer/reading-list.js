@@ -862,15 +862,27 @@ function messageList(el, messages, room = false, key = 'room', context = {}) {
     }
     if (hasImages && !entry.images) {
       const host = node('div', undefined, 'message-images'); entry.body.after(host);
+      // Assistive activation may click without a preceding pointer/key event.
+      host.addEventListener('click', event => {
+        if (view.key === key && event.target.closest('.native-image-toggle')) view.intent = null;
+      }, true);
+      host.addEventListener('keydown', event => {
+        if (view.key === key && event.key === 'Escape') view.intent = null;
+      }, true);
       entry.images = window.nativeWorkspaceImages.mount(host, api, {
         display: ui.display, text: uiText, displayText: ui.displayText, createError: ui.createError,
         beforeLayout: () => { if (el.clientWidth && el.clientHeight) captureReading(view); }, onLayout: () => { if (view.key === key && el.clientWidth && el.clientHeight) scheduleReading(view); },
         isOpen: imageKey => view.folds[imageKey] === true,
         onOpen: (imageKey, open) => {
           if (view.key !== key) return;
-          view.intent = null; delete view.folds[imageKey]; view.folds[imageKey] = open;
+          const pending = view.intent?.position;
+          delete view.folds[imageKey]; view.folds[imageKey] = open;
           for (const id of Object.keys(view.folds).slice(0, Math.max(0, Object.keys(view.folds).length - 200))) delete view.folds[id];
-          captureReading(view); saveReading(view, { ...(readingPositions[key] || { top: el.scrollTop, anchor: m.id.length <= 100 ? m.id : '', offset: 0 }), follow: false });
+          // A preview/expand reply is layout, not another manual activation.
+          if (pending) saveReading(view, pending);
+          else {
+            captureReading(view); saveReading(view, { ...(readingPositions[key] || { top: el.scrollTop, anchor: m.id.length <= 100 ? m.id : '', offset: 0 }), follow: false });
+          }
           attempt(() => api.readingState(readingPositions));
         },
       });
