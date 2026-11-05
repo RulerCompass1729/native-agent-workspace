@@ -114,3 +114,28 @@ test('the content key is equal for the same rows drawn again, and changes when a
     const next = structuredClone(rows); change(next); assert.notEqual(key(next), key(rows));
   }
 });
+
+
+test('settled reading capture refreshes the existing latest control after process content expands', () => {
+  const h = harness(); h.view.intent = null; h.el.scrollTop = 0;
+  h.el.clientHeight = 429; h.el.scrollHeight = 2409; h.view.jumpBar.hidden = true;
+  h.context.captureReading(h.view);
+  assert.equal(h.view.jumpBar.hidden, false, '1980px of actual remaining content exposes the existing control');
+  assert.equal(h.el.scrollTop, 0, 'showing the control never scrolls the reader');
+  assert.equal(vm.runInContext('readingPositions', h.context)['session-a'].follow, false);
+  assert.equal(h.frames.length, 0, 'capture does not schedule or replace a following frame');
+});
+
+test('settled capture hides a stale latest control when a disclosure becomes short', () => {
+  const h = harness(); h.view.intent = null; h.el.scrollTop = 0;
+  h.el.clientHeight = h.el.scrollHeight = 429; h.view.jumpBar.hidden = false;
+  h.context.captureReading(h.view);
+  assert.equal(h.view.jumpBar.hidden, true); assert.equal(h.el.scrollTop, 0);
+});
+
+test('capture leaves pending reading intent and its control unchanged until the existing frame applies it', () => {
+  const h = harness(), original = h.view.intent; h.view.jumpBar.hidden = true;
+  h.context.captureReading(h.view);
+  assert.equal(h.view.intent, original); assert.equal(h.view.jumpBar.hidden, true);
+  assert.equal(h.frames.length, 0);
+});

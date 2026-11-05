@@ -158,6 +158,7 @@ function captureReading(view) {
   // An asynchronous Markdown layout may still be completing. Preserve its
   // original anchor until an actual scroll/pointer/key action supersedes it.
   if (view.intent) return;
+  updateJump(view);
   const selection = window.getSelection();
   const selecting = !selection.isCollapsed && el.contains(selection.anchorNode);
   const top = el.getBoundingClientRect().top;

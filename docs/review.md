@@ -5326,3 +5326,25 @@ or push is added. An initial installation-record check correctly rejects the
 older candidate evidence; the reader is corrected to the final evidence path
 without another runtime test or artifact change. The complete dogfood and
 native-delivery goals remain open.
+
+
+## Latest control after process expansion — candidate alpha.197
+
+The installed alpha.196 member reader is 429px high with no overflow before
+a real process disclosure is opened. After the click and settling, its content
+is 2,409px high and remains 1,980px from the bottom, but the existing latest
+control is hidden. A real Home key makes the control appear. This is a measured
+missing-control defect; the original spontaneous cache-gap rebound is not
+reproduced and remains open. The diagnostic uses a single synthetic native
+record, real GUI clicks and unchanged browser events, with no provider/model
+turn, native input or send. All owned test resources are cleaned.
+
+Two old-code capture tests fail for expansion and collapse; a pending-intent
+regression also covers the following-frame boundary. The one-line correction
+refreshes the existing heightless latest control when shared reading capture
+accepts settled geometry, after its unchanged pending-intent guard. Grouped
+and individual disclosures, paging, scroll and image-layout callers reuse this
+point without new observers, controls, scrolling or follow-state rewriting.
+All 105 affected and 2,763 full checks pass without skips. This urgent core
+reading task is queued for signed candidate, independent review and actual
+Applications acceptance; no installed fix or whole T134 closure is claimed here.
