@@ -46,7 +46,8 @@ async function capture(name) {
   const layout = await sidebar().evaluate(host => {
     const box = node => node.getBoundingClientRect().toJSON(), card = host.querySelector('#space-discovery');
     const text = card.querySelector('strong'), range = document.createRange(); range.selectNodeContents(text);
-    return { host: box(host), collapsed: host.dataset.collapsed, discovery: { hidden: card.hidden, visible: card.checkVisibility(), display: getComputedStyle(card).display, box: box(card), text: card.textContent, heading: text.textContent, headingLines: [...range.getClientRects()].map(r => r.toJSON()), font: getComputedStyle(text).fontSize }, createSlotVisible: [...host.querySelectorAll('.sidebar-create-slot')].some(el => el.checkVisibility()), viewSwitchVisible: host.querySelector('.session-view-switch').checkVisibility() };
+    const textRects=[...card.querySelectorAll('strong,p,button')].flatMap(el=>{const r=document.createRange();r.selectNodeContents(el);return [...r.getClientRects()].map(x=>x.toJSON());});
+    return { host: box(host), collapsed: host.dataset.collapsed, discovery: { hidden: card.hidden, visible: card.checkVisibility(), display: getComputedStyle(card).display, box: box(card), text: card.textContent, heading: text.textContent, headingLines: [...range.getClientRects()].map(r => r.toJSON()), textRects, font: getComputedStyle(text).fontSize }, createSlotVisible: [...host.querySelectorAll('.sidebar-create-slot')].some(el => el.checkVisibility()), viewSwitchVisible: host.querySelector('.session-view-switch').checkVisibility() };
   });
   const state = await snapshot(); guard();
   checks.push({ name, layout, sessionCount: state.sessions.length });
@@ -90,7 +91,14 @@ async function run() {
   await win.evaluate(w => w.setContentSize(1240, 818));
   if (await sidebar().getAttribute('data-collapsed') === 'true') { await page.locator('#archive-button').focus(); await page.locator('#archive-button').press('Enter'); }
   await until(async () => await sidebar().getAttribute('data-collapsed') === 'false', 'Original archive keyboard action reveals sidebar');
+  await until(async()=>Math.abs((await sidebar().boundingBox()).width-grouped.host.width)<=0.5,'Sidebar expansion reaches the same-viewport grouped width before readable capture');
   const restored = await capture('05-restored-empty');
+  assert.ok(Math.abs(restored.host.width-grouped.host.width)<=0.5,'Captured restoration is past the narrow animation frame');
+  assert.equal(restored.discovery.headingLines.length,grouped.discovery.headingLines.length,'Heading wraps as in the original expanded view');
+  assert.ok(restored.discovery.box.left>=restored.host.left-0.5&&restored.discovery.box.right<=restored.host.right+0.5&&restored.discovery.box.top>=restored.host.top-0.5&&restored.discovery.box.bottom<=restored.host.bottom+0.5,'Restored card fits the visible sidebar');
+  assert.ok(restored.discovery.textRects.length>0);
+  for(const r of restored.discovery.textRects)assert.ok(r.left>=restored.discovery.box.left-0.5&&r.right<=restored.discovery.box.right+0.5&&r.top>=restored.discovery.box.top-0.5&&r.bottom<=restored.discovery.box.bottom+0.5,'Every observed text range fits the restored card');
+  assert.ok(Math.abs((await sidebar().boundingBox()).width-restored.host.width)<=0.5,'Layout remains stable through the raw/screenshot capture');
   assert.equal(restored.discovery.visible, true); assert.equal(restored.discovery.text, flat.discovery.text); assert.equal(restored.discovery.font, flat.discovery.font);
   await openAndCancel('06-restored-create-cancel');
   const final = await snapshot(), packet = await stats();

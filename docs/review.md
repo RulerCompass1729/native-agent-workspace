@@ -5439,3 +5439,13 @@ files and signatures; exact source approvals are reused. The visible update
 retains original identities/settings/drafts/active goal across 150 seconds. No
 retroactive source-GUI pass, native-window/physical-input proof or whole sidebar
 and dogfood completion is inferred.
+
+Restoration sampling required a correction: both original raw captures had the
+expanded flag before the sidebar width transition finished. The old checks did
+not establish restored text readability. The public operator now waits for the
+same-viewport expanded width and checks all observed text ranges inside the card.
+One necessary Applications repeat passes all six phases with a stable 279.5px
+sidebar, one heading line and three bounded text ranges. Old raw captures remain;
+this is a test correction, with no new product build or daily restart. The test
+and installed-evidence delta passes scoped independent review. Installed operation,
+artifact and cleanup checks remain author-run, not an independent GUI rerun.

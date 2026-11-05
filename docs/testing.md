@@ -11,7 +11,8 @@ fixed-source final-counter failure stay recorded; the corrected complete operato
 passes here. All 64 affected checks pass without skips. Source reviews are reused
 for unchanged peer patches; installed runs and artifact checks are author-run.
 
-Three isolated profiles/GUI starts, including normal signed bootstrap, are cleaned.
+Four isolated profiles/GUI starts, including normal signed bootstrap and one
+necessary restoration-sampling correction, are cleaned.
 No provider/model turns, session creation or native input/send. Installed width
 checks use CSS viewports rather than native window bounds; keyboard fallback is
 conditional and main-process clipboard APIs are not instrumented (zero driver
@@ -20,6 +21,11 @@ settings, drafts and the active goal for 150 seconds; automatic backend migratio
 stays off. Strict signatures, 71 payload files and one searchable app match. The
 original spontaneous reading rebound, locked production access and dogfood remain
 open.
+A peer read found both original restoration captures were still narrow animation
+frames despite the expanded flag. Those results do not prove restored-frame
+readability. The public test now waits for the same-viewport expanded width and
+checks text bounds; one strengthened Applications repeat passes all six phases.
+No runtime change, extra release or second daily restart is required.
 
 ## Latest control after process expansion — 2026-11-05
 

@@ -8,8 +8,9 @@ Current daily GUI: alpha.199, committed build source `726a29a`. The narrow icon
 rail now hides full empty-space prose and wide-only controls, retaining their
 expanded text and create action. Candidate and Applications each pass six phases
 of expand, create/cancel, group, collapse and restore. All 64 affected checks pass;
-source approvals are reused for exact unchanged peer patches. Three owned GUI
-profiles use no real provider/model turns or native input. The visible update
+source approvals are reused for exact unchanged peer patches. Four owned GUI
+profiles, including a necessary restoration-sampling repeat, use no real provider/
+model turns or native input. The visible update
 preserves 14 records, 16 live native identities, 12 draft scopes and the original
 active goal across 150 seconds, leaving seven older backends and auto-update off.
 Signatures, all 71 payload files and one searchable app match. Installed width
