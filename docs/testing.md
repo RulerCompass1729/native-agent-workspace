@@ -2,6 +2,25 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Collapsed empty-space discovery — 2026-11-05
+
+Alpha.199 / `726a29a`: the signed candidate and Applications each pass six
+existing expand/create-cancel/group/collapse/restore phases. The narrow rail hides
+full prose without removing the expanded create action. The prior source RED and
+fixed-source final-counter failure stay recorded; the corrected complete operator
+passes here. All 64 affected checks pass without skips. Source reviews are reused
+for unchanged peer patches; installed runs and artifact checks are author-run.
+
+Three isolated profiles/GUI starts, including normal signed bootstrap, are cleaned.
+No provider/model turns, session creation or native input/send. Installed width
+checks use CSS viewports rather than native window bounds; keyboard fallback is
+conditional and main-process clipboard APIs are not instrumented (zero driver
+clipboard requests). The visible update retains original native identities,
+settings, drafts and the active goal for 150 seconds; automatic backend migration
+stays off. Strict signatures, 71 payload files and one searchable app match. The
+original spontaneous reading rebound, locked production access and dogfood remain
+open.
+
 ## Latest control after process expansion — 2026-11-05
 
 Alpha.197 / `430b092`: the exact signed candidate and Applications executable each run one complete real process-disclosure task on a synthetic native session. The actual member reader expands from 429px to 2,409px with 1,980px remaining. The existing latest control is immediately visible; a direct click without the prior Home workaround follows the bottom through five native cache updates. Eight follow samples per artifact remain within 0.5px. The fold-settling samples are diagnostic, not claims that opening a process follows automatically.

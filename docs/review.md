@@ -5433,5 +5433,9 @@ without removing the expanded discovery or create action. The exact peer source
 and single test-return-selector patch are integrated unchanged; their independent
 reviews are reused. The old compiled UI has actual failing geometry. The fixed
 source has six observed interaction phases, followed by a test-counter failure;
-the corrected complete operator still needs installed acceptance. No full-source
-GUI pass or whole sidebar-milestone completion is inferred.
+the corrected complete operator passes all six phases in the signed alpha.199
+candidate and Applications. Main verifies these installed runs, all 71 payload
+files and signatures; exact source approvals are reused. The visible update
+retains original identities/settings/drafts/active goal across 150 seconds. No
+retroactive source-GUI pass, native-window/physical-input proof or whole sidebar
+and dogfood completion is inferred.
