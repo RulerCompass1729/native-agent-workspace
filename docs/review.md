@@ -4875,3 +4875,99 @@ approved this bounded source increment. The collapsed-rail spacing fix is
 source-verified; its final spacing, long state strings, native providers and
 installed behavior remain unverified by this increment. No further GUI trial
 was used to relabel those limits.
+
+
+
+**Grouped space rename visibility regression, 2026-11-04 (scoped source approval):**
+The grouped list hid the entire old space section even while its existing
+inline rename editor was active. An actual-function counterexample found
+the editor beneath a hidden ancestor; flat mode remained visible. The
+small repair restores the existing grouped-sessions data flag and reveals
+that section only during a real space rename. Existing CSS keeps unrelated
+old space rows hidden. Normal grouped navigation hides the duplicate section
+again after save or cancel. Rename guards, requests and storage are unchanged.
+
+The corrected isolated source GUI passes the grouped heading → rename →
+other-member update → cancel path and rename → save → renderer reload path.
+The actual original editor receives focus; native IDs and private/shared
+drafts survive, and only the intended space changes. Existing fold/flat/member
+and race tests plus new source and launcher guards pass 43 tests without skips.
+This is synthetic-source evidence, not installed or native-provider acceptance.
+
+The first test launcher omitted its synthetic daemon version, allowing ordinary
+bootstrap to replace the empty mismatched daemon and start one real provider
+at its folder-trust prompt. No input, send or task was submitted. The trial
+failed before qualification; owned processes and profile were cleaned up.
+Native startup metadata outside that profile and billing/network side effects
+remain unknown, so this attempt is not called zero-provider evidence. The
+corrected launcher checks the actual frontend service PID and version before
+each Create, with two negative tests proving refusal before UI interaction.
+Its successful flow has only synthetic transport; observed input/send and
+instrumented control counters are zero, while display opens/resizes are nonzero.
+The failed attempt remains retained, rather than being replaced by the pass.
+
+The same independent checkpoint approved the source and corrected synthetic
+journey after checking that the layout apply/update path cannot write saved
+section sizes. Its first invocation ended at a read-budget limit without a
+verdict; the bounded continuation read that remaining dependency and approved.
+The provider startup incident keeps its stated unknowns; this source approval
+does not close that incident, installed acceptance or the whole T155 task.
+
+
+
+**Sidebar top spacing, 2026-11-04 (scoped source approval):**
+The remaining approved compact-tree spacing keeps the same controls and fonts.
+Three expanded-sidebar declarations reduce top padding from 18 to 10px,
+brand bottom margin from 12 to 4px, and navigation top margin from 16 to 4px.
+The view-switch padding remains unchanged so its full control box stays intact.
+
+At the same 279.5px sidebar width, the first space starts at 238.5px instead of
+266.5px: 28px less blank space. Actual control text, fonts and box heights are
+identical. Member rows remain 41px; the disclosure remains 22px in a 40 by 44px
+target. Baseline and candidate each pass three isolated synthetic GUI groups:
+measurement, keyboard/create-cancel/search/overview/space entry, and collapsed
+shell return with exact restored geometry. Service PID/version checks precede
+every synthetic Create. Both owned instances and exact mutex tokens are cleaned
+up. The 34 affected checks pass without skips. No native input, product send,
+real provider, clipboard or daily-app operation was used by this increment.
+This is source/synthetic-GUI evidence; Main owns installed acceptance.
+
+Independent source review approved the expanded-only selectors and bounded
+measurement. Both runs used the same author root: the baseline precedes the
+CSS change and the candidate follows its rebuild. Their stylesheet and compiled
+hashes therefore differ deliberately; each stays unchanged during its own run.
+The renderer source matches between runs. Installed acceptance remains open.
+
+
+### 2026-11-04 — Native workspace source and compact navigation batch
+
+The exact reviewed grouped-space rename and expanded-sidebar spacing patches
+are adopted unchanged. The rename uses the existing inline editor; member
+updates, Escape, save and reload retain the intended space, identities and drafts.
+The sidebar retains member fonts, state text and hit targets. Their original
+source approvals are reused; combined installed acceptance is pending.
+
+A real owned Codex 0.166 GUI workflow reaches both native threads through the
+normal service bootstrap: the human explicitly starts a two-reply directed round,
+the sender calls the authenticated workspace tool and only the selected peer
+receives the original message. Three local fixed Responses return the sender
+and receiver results; no vendor model is used. This qualifies the directed path,
+not every native capability or retained user backends.
+
+Two source trials retain incomplete overall outcomes. The first test waited for
+an obsolete join confirmation and then used service shutdown on a live shared
+engine. The shared helper now accepts the exact joined or moved confirmation.
+The second completed the functional path, but its final reporter read a disposed
+Playwright object. Exact owned processes, profiles, listener and lease were
+verified gone independently; the signed recipe caches the child before closing.
+No third source trial is run. Signed installed acceptance remains required.
+
+
+The scoped integration review approves the source and synthetic sidebar/rename
+recipes, but blocks the native installed recipe until runtime fallback is checked
+before sending. The repaired recipe verifies the exact configured launcher before
+each Create, then the pinned native engine and local-provider arguments before
+Run. Its GUI also inherits an isolated HOME and credential configuration. A local
+counter rejects a wrong binary or provider before Run. The same reviewer approves
+the delta for one candidate and one Applications trial; no native trial has yet
+used that approval. The earlier source cleanup outcomes remain incomplete.

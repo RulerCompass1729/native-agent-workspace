@@ -2002,7 +2002,8 @@ async function moveSidebarSession(id, target, after) {
 }
 function renderSidebarGroups() {
   const grouped = sidebarView === 'grouped', count = allSpaces().filter(r => !r.archived).length;
-  $('workspace-group').hidden = grouped;
+  $('workspace-group').hidden = grouped && renameTarget?.id !== 'room';
+  $('workspace-group').dataset.groupedSessions = String(grouped);
   const createSlot = $(grouped ? 'sessions-create-slot' : 'workspace-create-slot');
   if ($('new-space').parentElement !== createSlot) createSlot.append($('new-space'));
   const discoveryGroup = $(grouped ? 'sessions-group' : 'workspace-group');

@@ -88,6 +88,12 @@ header { min-height: 74px; padding: 14px 24px; }
 .room-record-context button { border: 0; background: transparent; color: var(--green); padding: 4px; }
 .sidebar .brand { margin-bottom: 12px; }
 .sidebar .new-button { border-color: transparent; background: transparent; padding-top: 7px; padding-bottom: 7px; }
+/* Compact the expanded navigation's gaps without shrinking its controls. */
+&[data-native-surface="sidebar"]:not([data-collapsed="true"]){
+  .sidebar{padding-top:10px}
+  .sidebar .brand{margin-bottom:4px}
+  .sidebar .sidebar-navigation{margin-top:4px}
+}
 #recipient { max-width: min(260px, 100%); min-width: 0; text-overflow: ellipsis; }
 #manage-members { margin-left: auto; }
 #room-scope { font-size: 11px; color: var(--muted); margin: 0; padding: 7px 20px; border-bottom: 1px solid var(--border); }
