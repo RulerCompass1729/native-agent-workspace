@@ -4684,3 +4684,84 @@ unchanged daily view, visible space-@ delivery and pacing, native caller traces,
 live provider tool use and retained-backend adoption remain unqualified. No new
 UI, hidden message API, global settings or permission approval is introduced.
 Private raw failures, reviews, test output and cleanup receipts are retained.
+
+# Local service reconnect with multiple cache-gap notices
+
+User feedback: clicking the local-service reconnect button leaves the window
+disconnected. Severity: high; owner: desktop maintainer. Source repair validated;
+independent review and daily activation are pending.
+
+Multiple retained services legitimately produce the same fixed
+`shared-native-cache-gap` system notice after bounded history eviction. The
+combined client treated those local notice ids as globally owned message ids,
+disconnected on a live update, and rejected every reconnect snapshot. The repair
+scopes only this exact synthetic notice to its source in the display projection,
+including additional spaces and the legacy reader. Original service records stay
+unchanged; duplicate real message ids still fail the ownership check.
+
+Three new behavioral regressions fail before the repair. All 116 related client,
+native-block and space-merge checks pass after it. An actual isolated Electron
+window with two synthetic native services passes live gap updates, real socket
+loss, the visible reconnect button and window reopening, retaining native ids,
+owners, history gaps and a positive unsent draft. No provider/model calls, native
+input or task dispatch occurs. The private captured daily snapshot also becomes
+readable without changing its records. This does not claim daily activation or
+the broader product milestone.
+
+
+
+## 2026-11-05 — T58 existing AX-only tool exposure
+
+The screenshot-only startup slice omitted Peekaboo's existing inspect_ui tool.
+Pinned source and the actual stdio catalog confirm that it is the native
+equivalent of CLI tree inspection without a screenshot. One reviewed read of an
+existing background NAW window returned 219 elements and the intended New session
+button, without screenshots, input, sending or a new GUI. Its PID, window and
+process-start receipt matched an independent kernel read. Frontmost application
+identity matched at the checkpoints. This does not prove locked operation or
+exclude transient focus changes.
+
+The first result retained an unproven-binding label because the protocol omits
+an explicit fallback flag. Additional pinned source shows the metadata projector
+removes that flag, while the same response's structured element table suppresses
+every actionable row on application-scoped fallback. The same independent
+reviewer accepted this contract plus the exact receipt and fresh-cache evidence
+as a qualified AX-only mechanism. The original raw result remains unchanged;
+the qualification is a separate record. Counts do not establish completeness.
+
+The helper now exposes that existing fourth tool under the same exact-NAW and
+fresh-snapshot gate. AX-only input receipts require matching target metadata and
+a current enabled, actionable opaque element ID; they refuse coordinates and
+queries. Typing additionally requires a settable text field. Original native
+permission flags, single-use receipts and unknown-input-completion latch remain.
+AX inspection requires the structured element table explicitly, so missing
+arguments are refused before a desktop read. The focused 22 checks pass. An
+offline replay accepts the recorded actual packet;
+that replay is not another live read or native-agent invocation. Actual typing,
+visible directed messages, pacing, locked operation, retained-native adoption
+and full T58 acceptance remain open. No new UI, service or operation API is added.
+
+The same reviewer closed the required-elements finding and accepted one final
+helper read on the fixed source. That live helper call returned 219 text-only
+AX rows and the exact enabled/actionable New session control, with the expected
+PID/window/kernel-start receipt and unchanged foreground checkpoints. Its owned
+client exited and the canonical slot was released immediately. This qualifies
+the helper's read path only; the calling native agents and actual input, locked
+operation and directed delivery are still separate acceptance work.
+
+
+### 2026-11-04 — Claude process proof beside a live Codex server
+
+An owned real-process fixture reproduces a stopped Claude session being refused
+recovery because its stored server PID belongs to the still-live Codex server.
+New events now keep that server proof Codex-only; saved Claude aliases are cleared
+when own PID proof exists. Unknown old proof and live-process refusal remain.
+Two failing cases become passing while both safety controls pass; 187 affected
+checks and the final strengthened 125-check Workspace suite pass. Retained312's
+reported PID is separately matched to its pinned CLI executable, not a wrapper.
+Independent exact-diff source review passes; signed/installed/native acceptance
+remains pending. Surviving teammates are not covered by this single-process fix.
+
+The reconnect repair above is separately installed from its committed repair
+source, with source and signed-path review accepted. This batch retains its exact
+client bytes so a later update cannot restore the disconnection defect.

@@ -56,15 +56,21 @@ or start paid model runs as a side effect of editing documents.
   transport fixtures may boot directly when they never initialize a provider.
 - Current development preference: the main agent implements and tests directly;
   do not delegate coding or routine testing unless requested. The independent
-  reviewer at delivery checkpoints is a separate headless Claude Code session,
+  reviewer, when the shared risk gates require one, is a separate headless Claude Code session,
   not a subagent of the main agent. Start each new checkpoint in a fresh session,
-  saving its UUID with that checkpoint's private evidence. Point the brief to
-  `docs/review.md` for earlier findings. Each invocation exits. Run it from this
+  saving its UUID with that checkpoint's private evidence. Point the brief only to
+  relevant rows/sections of `docs/review.md`, not its whole history. Apply the
+  shared review budget: a reproduced local repair defaults to three minutes and
+  eight read/search calls. Name the exact diff, direct callers, raw failure/fix
+  evidence and remaining risk; expand only for a concrete missing check. These
+  are bounds on investigation, never automatic approval or a reason to omit
+  required evidence. Each invocation exits. Run it from this
   repository as an unsandboxed background shell job (not `claude --bg`), with the
   brief on stdin and output in private files:
 
   ```sh
   claude -p --session-id "$NAW_REVIEW_ID" --model fable \
+    --max-turns "${NAW_REVIEW_MAX_TURNS:-6}" \
     --permission-mode bypassPermissions --output-format stream-json --verbose \
     --tools "Read,Grep,Glob" --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
     --disallowedTools Bash Agent Task Skill Workflow ToolSearch ScheduleWakeup \
@@ -76,7 +82,12 @@ or start paid model runs as a side effect of editing documents.
   that same checkpoint, use `--resume` with its saved UUID. Keep the former
   `.local/reviewer-session-id` session as a backup; do not run paired reviews by
   default. For the next few checkpoints, retain the reported cost and findings
-  to check this choice. A nonzero exit or `"is_error": true` is not a pass.
+  to check this choice. The six-turn default bounds the CLI loop; it is not
+  eight tool calls or a wall-clock timer. Set a larger explicit turn budget for
+  broader reviews before launch, and the author watches the time/read budget.
+  A timeout, turn-limit result, nonzero exit or `"is_error": true` is not a pass.
+  At a limit, retain the same checkpoint and request a bounded verdict or the
+  single most important missing fact; do not start a fresh full review.
   Give the reviewer the scope, commit range and raw
   evidence paths, not your verdict. Expose only Read, Grep and Glob, with
   no MCP servers, and explicitly deny non-read tools. Verify the CLI initialization
@@ -175,7 +186,9 @@ or start paid model runs as a side effect of editing documents.
 
 ## Evidence and public boundaries
 
-- Use an independent reviewer for the affected product path. Maintain
+- Apply the shared risk gates before starting an independent review; this
+  project does not require a review for every task. When required, review the
+  affected product path. Maintain
   `docs/review.md` with user feedback, reproduced findings, fixes and evidence;
   review actual source and raw local evidence, not just the author's summary.
   Reuse the reviewer after fixes. Keep private evidence outside this public repo,

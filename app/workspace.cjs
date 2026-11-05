@@ -54,7 +54,12 @@ class Workspace extends EventEmitter {
     try {
       const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'workspace.json'), 'utf8'));
       this.mobileRequests = Array.isArray(stored.mobileRequests) ? stored.mobileRequests.map(r => r && typeof r === 'object' && ['prepared', 'awaiting-native', 'reply-written'].includes(r.status) ? { ...r, status: 'unconfirmed' } : r) : stored.mobileRequests ?? [];
-      for (const record of stored.sessions || []) this.sessions.set(record.id, { ...record, claudeQuestion: null, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。', activityUiMessage: record.forkPicker ? uiActivity('notice.activity.branchUnconfirmed')[1] : record.state === 'ended' ? null : record.state === 'background' ? record.activityUiMessage || null : uiActivity('notice.activity.serviceInterrupted')[1] });
+      for (const record of stored.sessions || []) {
+        // Old Claude records could inherit the other provider's app-server PID.
+        // Keep unknown legacy proof; discard that alias only with an own PID.
+        const serverIdentity = record.provider === 'claude' && Number.isSafeInteger(record.processIdentity?.pid) && record.processIdentity.pid > 1 ? null : record.serverIdentity;
+        this.sessions.set(record.id, { ...record, serverIdentity, claudeQuestion: null, fleet: (record.fleet || []).map(item => ({ ...item, stale: true })), state: record.forkPicker ? 'ended' : ['ended', 'background'].includes(record.state) ? record.state : 'recoverable', owner: null, approval: null, approvals: [], approvalOverflow: false, approvalResolved: false, pid: null, pendingTag: null, controlRevision: 0, liveDraft: '', activity: record.forkPicker ? '没有确认创建分支。' : record.state === 'ended' ? '' : record.state === 'background' ? record.activity || '' : '运行服务曾中断；记录和草稿已保留，任务不会自动重发。', activityUiMessage: record.forkPicker ? uiActivity('notice.activity.branchUnconfirmed')[1] : record.state === 'ended' ? null : record.state === 'background' ? record.activityUiMessage || null : uiActivity('notice.activity.serviceInterrupted')[1] });
+      }
       for (const session of this.sessions.values()) for (const message of session.messages || []) {
         if (['streaming', 'running', 'awaiting-native'].includes(message.status)) message.status = 'unconfirmed';
         if (['staged', 'sending', 'consumed'].includes(message.wake?.status)) { message.wake.status = 'unconfirmed'; message.text = `自动消息接收结果未确认；不会重发。\n${message.wake.body}`; message.uiMessage = displayMessage({ version: 1, key: 'notice.wake.restored', params: { body: message.wake.body } }, 'notice.', message.text) || undefined; }
@@ -526,7 +531,7 @@ class Workspace extends EventEmitter {
       else this.cancelCapacity(s.id);
     });
     on('inputRequired', () => this.changed());
-    on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = processIdentity(runtime.host?.codexProcess?.pid); this.changed(); });
+    on('pid', pid => { s.pid = pid; s.processIdentity = processIdentity(pid); s.serverIdentity = s.provider === 'codex' ? processIdentity(runtime.host?.codexProcess?.pid) : null; this.changed(); });
     on('model', (model, uiMessage) => { s.model = model; const message = displayMessage(uiMessage, 'notice.', model); if (message) s.modelUiMessage = message; else delete s.modelUiMessage; this.changed(); });
     on('askQuestion', ask => this.holdQuestion(s, runtime, ask));
     // Only a session nobody named takes the native title; a rename is a desktop label and always wins.

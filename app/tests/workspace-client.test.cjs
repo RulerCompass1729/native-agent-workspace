@@ -4,6 +4,49 @@ const { EventEmitter } = require('node:events');
 const { WorkspaceClient } = require('../workspace-client.cjs');
 const { assertSubmission, assertNativeCreation, submissionState } = require('../submission-policy.cjs');
 const current = ['claudePromptIdentity', 'resume', 'forget', 'clearSharedHistory', 'structuredClaudeSubmit', 'verifiedHandoffs', 'nativePermissionDefaults', 'nativeInputIsolation'];
+for (const roomId of ['shared', '11111111-1111-4111-8111-111111111111']) test('backend-local cache gaps survive combined live updates and reconnect: ' + roomId, async () => {
+  const { trimVolatileRows } = require('../native-blocks.cjs');
+  const { old, next, c, openWindow } = fixture();
+  const gaps = [];
+  for (const entry of [old, next]) {
+    const rows = trimVolatileRows(Array.from({ length: 201 }, (_, i) => ({ id: entry.key + i, role: 'tool', volatile: true, text: 'Synthetic output' })), 'shared-native-cache-gap');
+    const gap = rows.find(m => m.kind === 'gap'); assert.ok(gap); gaps.push(structuredClone(gap));
+    const room = { id: roomId, messages: [gap], revision: 1, run: null };
+    if (roomId === 'shared') entry.real.room = room;
+    else { entry.real.capabilities.push('collaborationSpacesV1'); entry.real.rooms = [entry.real.room, room]; }
+  }
+  let closed = 0, updates = 0; c.on('closed', () => closed++); c.on('state', () => updates++);
+  try {
+    for (const entry of [old, next]) entry.client.emit('state', structuredClone(entry.real));
+    assert.equal(closed, 0, 'A second backend gap must not disconnect the window'); assert.equal(updates, 2);
+    const snapshot = await c.refresh(roomId), rows = snapshot.room.messages;
+    assert.equal(rows.length, 2); assert.equal(new Set(rows.map(m => m.id)).size, 2);
+    assert.deepEqual(rows.map(({ id, ...m }) => m), gaps.map(({ id, ...m }) => m));
+    assert.equal(snapshot.sessions.find(s => s.id === 'old').nativeId, 'same-native');
+    assert.equal(snapshot.sessions.find(s => s.id === 'old').liveDraft, 'private draft');
+    const reconnected = openWindow();
+    try { assert.deepEqual((await reconnected.c.refresh(roomId)).room.messages, rows); } finally { reconnected.c.close(); }
+    for (const entry of [old, next]) {
+      const source = roomId === 'shared' ? entry.real.room : entry.real.rooms[1];
+      assert.equal(source.messages[0].id, 'shared-native-cache-gap', 'Projection must not rewrite a service record');
+      assert.ok(entry.calls.every(([method]) => method === 'initial'), 'No task or control mutation');
+    }
+  } finally { c.close(); }
+});
+test('legacy reader cache gap stays distinct from service gaps; real shared record conflicts still fail', async () => {
+  const { old, next, c } = fixture();
+  const gap = { id: 'shared-native-cache-gap', role: 'system', kind: 'gap', volatile: true, incomplete: true, time: 1, text: 'Synthetic omitted history' };
+  c.control.legacyInput = { records: [], target: () => null, prepared: () => false, connected: () => false, reader: () => null, sharedMessages: () => [gap], close() {} };
+  old.real.room.messages = [gap]; next.real.room.messages = [gap];
+  try {
+    const state = await c.refresh(); assert.equal(new Set(state.room.messages.map(m => m.id)).size, 3);
+    assert.equal(gap.id, 'shared-native-cache-gap');
+    for (const row of [{ id: 'duplicate', role: 'human', text: 'Real message' }, { ...gap, role: 'assistant' }, { ...gap, volatile: false }]) {
+      old.real.room.messages = [row]; next.real.room.messages = [row];
+      await assert.rejects(c.refresh(), /归属冲突/, 'Only the known system gap is backend-local');
+    }
+  } finally { c.close(); }
+});
 test('retained service notices carry their own display labels without changing capabilities, native identities or drafts', async () => {
   const locale = require('../ui-locale.js'), { old, next, c } = fixture();
   try {

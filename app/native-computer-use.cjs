@@ -31,7 +31,7 @@ function computerUseEnvironment(parent = process.env) {
   }
   env.PATH = '/usr/bin:/bin';
   env.PEEKABOO_AI_PROVIDERS = '';
-  env.PEEKABOO_ALLOW_TOOLS = 'see,click,type';
+  env.PEEKABOO_ALLOW_TOOLS = 'see,inspect_ui,click,type';
   return env;
 }
 function validateBridgeStatus(status, socket) {
@@ -75,19 +75,22 @@ function nawProcessIdentity(pid) {
   } catch { return null; }
 }
 function scopedTools(list) {
-  const names = new Set(['see', 'click', 'type']);
-  if (!Array.isArray(list?.tools) || list.tools.length !== 3 || new Set(list.tools.map(tool => tool.name)).size !== 3 ||
+  const names = new Set(['see', 'inspect_ui', 'click', 'type']);
+  if (!Array.isArray(list?.tools) || list.tools.length !== 4 || new Set(list.tools.map(tool => tool.name)).size !== 4 ||
       list.tools.some(tool => !names.has(tool.name))) throw Error('The qualified Peekaboo tool catalog changed.');
   return { ...list, tools: list.tools.map(tool => {
     const schema = { ...tool.inputSchema, properties: { ...tool.inputSchema.properties } };
     const required = new Set(schema.required || []);
-    if (tool.name === 'see') {
+    if (tool.name === 'see' || tool.name === 'inspect_ui') {
       for (const name of ['app_target', 'window_id', 'fresh']) required.add(name);
       delete schema.properties.path;
       delete schema.properties.snapshot;
       schema.properties.app_target = { type: 'string', pattern: '^PID:[1-9][0-9]*$', description: 'Exact installed NAW process, for example PID:123. Screen/frontmost/other apps are refused.' };
       schema.properties.fresh = { type: 'boolean', const: true };
-      schema.properties.ocr = { type: 'boolean', const: false };
+      if (tool.name === 'see') schema.properties.ocr = { type: 'boolean', const: false };
+      if (tool.name === 'inspect_ui') {
+        required.add('include_elements'); schema.properties.include_elements = { type: 'boolean', const: true };
+      }
       schema.properties.web_focus = { type: 'boolean', const: false };
     } else {
       required.add('snapshot');
@@ -108,18 +111,33 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
     if (completionUnknown) throw Error('Previous input completion unknown; this computer-use instance refuses further operations.');
     if (busy) throw Error('A computer-use operation is already in flight; observe again after it settles.');
     const name = params?.name, args = params?.arguments;
-    if (!['see', 'click', 'type'].includes(name) || !args || typeof args !== 'object' || Array.isArray(args)) throw Error('Unsupported computer-use request.');
+    if (!['see', 'inspect_ui', 'click', 'type'].includes(name) || !args || typeof args !== 'object' || Array.isArray(args)) throw Error('Unsupported computer-use request.');
     busy = true;
     try {
-      if (name === 'see') {
+      if (name === 'see' || name === 'inspect_ui') {
         receipt = null;
+        if (name === 'inspect_ui' && args.include_elements !== true) throw Error('AX-only inspection requires include_elements:true for its structured snapshot receipt.');
         if (typeof args.app_target !== 'string' || !/^PID:[1-9][0-9]{0,9}$/.test(args.app_target) ||
             !Number.isSafeInteger(args.window_id) || args.window_id < 1 || args.window_id > 0xffffffff || args.fresh !== true ||
             args.path !== undefined || args.snapshot !== undefined || args.ocr === true || args.web_focus === true) throw Error('Observation requires one exact NAW PID/window and fresh capture; broad targets and capture overrides are refused.');
         const pid = Number(args.app_target.slice(4)), before = identity(pid);
         if (!before) throw Error('The requested process is not the current user\'s installed NAW.');
-        const result = await invoke(params), after = identity(pid), snapshot = result?._meta?.snapshot_id;
-        if (!result?.isError && typeof snapshot === 'string' && snapshot && after?.started === before.started) receipt = { pid, started: before.started, snapshot, at: now() };
+        const result = await invoke(params), after = identity(pid), meta = result?._meta, snapshot = meta?.snapshot_id;
+        if (!result?.isError && typeof snapshot === 'string' && snapshot && after?.started === before.started) {
+          let axElements;
+          if (name === 'inspect_ui') {
+            const target = meta.target_receipt;
+            // The pinned host projects out the fallback flag. Its element-table
+            // contract sets every is_actionable to false for application fallback.
+            axElements = Array.isArray(meta.ui_elements) ? meta.ui_elements.filter(e => e?.is_actionable === true && e.is_enabled === true && typeof e.id === 'string' && e.id) : [];
+            if (meta.used_cache !== false || target?.pid !== pid || target.window_id !== args.window_id ||
+                typeof target.process_start_identity_decimal !== 'string' || !/^[1-9][0-9]{0,19}$/.test(target.process_start_identity_decimal) ||
+                !axElements.length || !Array.isArray(result.content) || !result.content.every(block => block.type === 'text')) {
+              throw Error('AX-only observation lacks a qualified exact-window receipt; no input authority was created.');
+            }
+          }
+          receipt = { pid, started: before.started, snapshot, at: now(), axElements };
+        }
         return result;
       }
       const previous = receipt; receipt = null;
@@ -127,6 +145,13 @@ function createComputerUseGate({ identity = nawProcessIdentity, now = Date.now }
           identity(previous.pid)?.started !== previous.started || (args.pid !== undefined && args.pid !== previous.pid) ||
           (args.coordinate_reference !== undefined && args.coordinate_reference !== previous.snapshot) || args.foreground === true ||
           args.background === false || args.modifiers !== undefined) throw Error('Input requires this client\'s fresh exact NAW snapshot; foreground and stale targets are refused.');
+      if (previous.axElements) {
+        const element = previous.axElements.find(e => e.id === args.on);
+        if (!element || args.coords !== undefined || args.query !== undefined ||
+            (name === 'type' && (element.is_value_settable !== true || !['AXTextField', 'AXTextArea', 'AXSearchField', 'AXComboBox'].includes(element.ax_role)))) {
+          throw Error('AX-only input requires an exact actionable element ID; typing also requires a settable text field. No coordinate or query input.');
+        }
+      }
       if (name === 'click' && args.wait_for !== undefined && (!Number.isInteger(args.wait_for) || args.wait_for < 0 || args.wait_for > 5000)) throw Error('Click observation is limited to 5000 milliseconds.');
       if (name === 'type' && (args.clear !== true || typeof args.text !== 'string' || !args.text || args.text.length > 16000 || /[\x00-\x1f\x7f\\]/.test(args.text) ||
           ['delay', 'wpm', 'profile'].some(key => args[key] !== undefined))) {

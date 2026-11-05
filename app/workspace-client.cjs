@@ -12,6 +12,12 @@ const { CAPABILITY: PEER_HANDOFFS, DIRECTED: PEER_DIRECTED, identity: peerIdenti
 const spaces = require('./collaboration-spaces.cjs');
 const backendRooms = state => state.rooms || [state.room];
 const backendRoom = (state, id) => backendRooms(state).find(r => (r?.id || 'shared') === id);
+// Cache-eviction notices have a fixed service-local id, including in retained
+// backends. Scope only that synthetic row in the combined display; real message
+// ownership remains strict and original service records stay untouched.
+const sharedDisplayMessage = (message, source) => message.id === 'shared-native-cache-gap' &&
+  message.role === 'system' && message.kind === 'gap' && message.volatile === true && message.incomplete === true
+  ? { ...message, id: `${message.id}:${encodeURIComponent(source)}` } : message;
 // An older backend cannot verify an undo proof even for the original space.
 const SPACE_METHODS = new Set(['join', 'forward', 'queueShared', 'steerShared', 'run', 'pause', 'clearSharedHistory']);
 let creationQueue = Promise.resolve();
@@ -150,7 +156,8 @@ class WorkspaceClient extends EventEmitter {
           approvalNoticeUiMessage: s.provider === 'codex' && !approvalDecisionAvailable ? uiNotice('notice.client.approvalUnverified').uiMessage : null,
           handoffGroup: this.entries.indexOf(e), serviceCapabilities: e.state.capabilities || [], runtimeVersion: e.state.runtimeVersion });
       }
-      for (const m of state.room.messages || []) {
+      for (const original of state.room.messages || []) {
+        const m = sharedDisplayMessage(original, e.key);
         if (messages.has(m.id)) throw uiError("error.client.sharedRecordOwnershipConflict");
         messages.set(m.id, m);
       }
@@ -164,11 +171,12 @@ class WorkspaceClient extends EventEmitter {
           if (combined.snapshotBatches.some(value => value.operationId === marker.operationId)) throw uiError("error.client.mergeSnapshotMultipleOwners");
           combined.snapshotBatches.push({ ...marker });
         }
-        for (const m of room.messages || []) { if (combined.messages.has(m.id)) throw uiError("error.client.spaceRecordOwnershipConflict"); combined.messages.set(m.id, m); }
+        for (const original of room.messages || []) { const m = sharedDisplayMessage(original, e.key); if (combined.messages.has(m.id)) throw uiError("error.client.spaceRecordOwnershipConflict"); combined.messages.set(m.id, m); }
         if (room.run) combined.runs.push(room.run);
       }
     }
-    for (const message of this.control.legacyInput?.sharedMessages?.() || []) {
+    for (const original of this.control.legacyInput?.sharedMessages?.() || []) {
+      const message = sharedDisplayMessage(original, 'legacy-reader');
       if (messages.has(message.id)) throw uiError("error.client.sharedRecordOwnershipConflict");
       messages.set(message.id, message);
     }

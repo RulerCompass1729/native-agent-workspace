@@ -21,22 +21,94 @@ test('computer-use child gets no parent model credentials, local route override 
   const env = computerUseEnvironment(parent);
   assert.deepEqual(Object.keys(env).sort(), ['HOME', 'LANG', 'PATH', 'PEEKABOO_AI_PROVIDERS', 'PEEKABOO_ALLOW_TOOLS'].sort());
   assert.equal(env.HOME, parent.HOME); assert.equal(env.PATH, '/usr/bin:/bin');
-  assert.equal(env.PEEKABOO_AI_PROVIDERS, ''); assert.equal(env.PEEKABOO_ALLOW_TOOLS, 'see,click,type');
+  assert.equal(env.PEEKABOO_AI_PROVIDERS, ''); assert.equal(env.PEEKABOO_ALLOW_TOOLS, 'see,inspect_ui,click,type');
   assert.equal(parent.PEEKABOO_ALLOW_TOOLS, 'agent,clipboard', 'caller settings are not mutated');
 });
 
 test('native tool catalog removes broad capture defaults and requires explicit native-window receipts', () => {
-  const list = { tools: ['see', 'click', 'type'].map(name => ({ name, description: '', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } })) };
+  const list = { tools: ['see', 'inspect_ui', 'click', 'type'].map(name => ({ name, description: '', inputSchema: { type: 'object', properties: { path: { type: 'string' }, snapshot: { type: 'string' } } } })) };
   const scoped = scopedTools(list), see = scoped.tools.find(t => t.name === 'see');
   assert.deepEqual(see.inputSchema.required, ['app_target', 'window_id', 'fresh']);
   assert.equal(see.inputSchema.properties.path, undefined); assert.equal(see.inputSchema.properties.fresh.const, true);
-  assert.ok(scoped.tools.filter(t => t.name !== 'see').every(t => t.inputSchema.required.includes('snapshot')));
+  const inspect = scoped.tools.find(t => t.name === 'inspect_ui');
+  assert.deepEqual(inspect.inputSchema.required, ['app_target', 'window_id', 'fresh', 'include_elements']);
+  assert.equal(inspect.inputSchema.properties.include_elements.const, true);
+  assert.equal(inspect.inputSchema.properties.snapshot, undefined);
+  assert.ok(scoped.tools.filter(t => ['click', 'type'].includes(t.name)).every(t => t.inputSchema.required.includes('snapshot')));
   const text = new RegExp(scoped.tools.find(t => t.name === 'type').inputSchema.properties.text.pattern);
   assert.equal(text.test('T58-OWNED'), true); assert.equal(text.test('hello\\n'), false); assert.equal(text.test('hello\n'), false);
   assert.throws(() => scopedTools({ tools: [...list.tools, { name: 'clipboard' }] }), /catalog changed/);
   assert.ok(list.tools[0].inputSchema.properties.path, 'original upstream schema is not mutated');
 });
 const capture = { name: 'see', arguments: { app_target: 'PID:123', window_id: 456, fresh: true } };
+const inspectCapture = { name: 'inspect_ui', arguments: { ...capture.arguments, include_elements: true } };
+function inspected() {
+  return { content: [{ type: 'text', text: 'Synthetic owned controls' }], _meta: {
+    snapshot_id: 'owned-ax', used_cache: false,
+    target_receipt: { pid: 123, window_id: 456, process_start_identity_decimal: '1700000000123456' },
+    ui_elements: [
+      { id: 'button', ax_role: 'AXButton', is_actionable: true, is_enabled: true },
+      { id: 'field', ax_role: 'AXTextField', is_actionable: true, is_enabled: true, is_value_settable: true },
+      { id: 'disabled', ax_role: 'AXButton', is_actionable: true, is_enabled: false },
+    ],
+  } };
+}
+test('native AX-only observations are read through the same exact NAW PID/window gate', async () => {
+  const gate = createComputerUseGate({ identity: pid => pid === 123 ? { pid, started: 'original' } : null });
+  let calls = 0;
+  const invoke = async params => { calls++; return params.name === 'inspect_ui' ? inspected() : {}; };
+  for (const args of [{}, { ...inspectCapture.arguments, app_target: 'frontmost' }, { ...inspectCapture.arguments, app_target: 'PID:999' },
+    { ...inspectCapture.arguments, window_id: undefined }, { ...inspectCapture.arguments, fresh: false }, { ...inspectCapture.arguments, web_focus: true },
+    { ...inspectCapture.arguments, snapshot: 'other-client' }]) await assert.rejects(gate({ name: 'inspect_ui', arguments: args }, invoke));
+  assert.equal(calls, 0);
+  await gate(inspectCapture, invoke);
+  await gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button' } }, invoke);
+  assert.equal(calls, 2);
+});
+test('AX-only structured elements are required before any desktop read is invoked', async () => {
+  const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) });let reads = 0;
+  for (const include_elements of [undefined, false, 'true']) {
+    await assert.rejects(gate({ name: 'inspect_ui', arguments: { ...inspectCapture.arguments, include_elements } }, async () => { reads++; return inspected(); }), /include_elements:true/);
+  }
+  assert.equal(reads, 0, 'default omission never triggers a discarded desktop read');
+});
+test('AX-only input authority requires an exact fresh receipt and non-fallback row evidence', async () => {
+  const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) });
+  let result, inputs = 0;
+  const invoke = async params => params.name === 'inspect_ui' ? result : (inputs++, {});
+  const invalid = [
+    r => { delete r._meta.target_receipt; }, r => { r._meta.target_receipt.pid = 999; },
+    r => { r._meta.target_receipt.window_id = 999; }, r => { delete r._meta.target_receipt.process_start_identity_decimal; },
+    r => { r._meta.target_receipt.process_start_identity_decimal = 'not-a-generation'; },
+    r => { r._meta.used_cache = true; }, r => { delete r._meta.used_cache; },
+    r => { r._meta.ui_elements.forEach(e => { e.is_actionable = false; }); r._meta.actionable_count = 999; },
+    r => { r._meta.ui_elements.forEach(e => { e.is_enabled = false; }); },
+    r => { r.content.push({ type: 'image', mimeType: 'image/png', data: 'synthetic' }); },
+  ];
+  for (const change of invalid) {
+    result = inspected(); await gate(inspectCapture, invoke);
+    result = inspected(); change(result); await assert.rejects(gate(inspectCapture, invoke), /AX-only observation/);
+    await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button' } }, invoke));
+  }
+  assert.equal(inputs, 0, 'failed inspection cannot reuse a previous valid input receipt');
+});
+test('AX-only input targets one current actionable ID; no coordinate/query or non-text typing', async () => {
+  const gate = createComputerUseGate({ identity: pid => ({ pid, started: 'original' }) }); let inputs = 0;
+  const invoke = async params => params.name === 'inspect_ui' ? inspected() : (inputs++, {});
+  for (const request of [
+    { name: 'click', arguments: { on: 'missing' } }, { name: 'click', arguments: { on: 'disabled' } },
+    { name: 'click', arguments: { coords: '100,200' } }, { name: 'click', arguments: { on: 'button', coords: '100,200' } },
+    { name: 'click', arguments: { query: 'button' } },
+    { name: 'type', arguments: { on: 'button', text: 'OWNED', clear: true } },
+  ]) {
+    await gate(inspectCapture, invoke);
+    await assert.rejects(gate({ name: request.name, arguments: { snapshot: 'owned-ax', ...request.arguments } }, invoke), /AX-only input/);
+  }
+  assert.equal(inputs, 0);
+  await gate(inspectCapture, invoke); await gate({ name: 'type', arguments: { snapshot: 'owned-ax', on: 'field', text: 'OWNED', clear: true } }, invoke);
+  await assert.rejects(gate({ name: 'click', arguments: { snapshot: 'owned-ax', on: 'button' } }, invoke));
+  assert.equal(inputs, 1, 'AX-only typing retains the existing single-use receipt');
+});
 test('broad, non-NAW, file-writing and focusing captures are rejected before invoking Peekaboo', async () => {
   const gate = createComputerUseGate({ identity: pid => pid === 123 ? { pid, started: 'original' } : null });
   let calls = 0; const invoke = async () => { calls++; return { _meta: { snapshot_id: 'owned-snapshot' } }; };

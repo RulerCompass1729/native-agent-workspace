@@ -14,6 +14,60 @@ async function fixture(t, count = 1) {
   for (let i = 0; i < count; i++) ids.push(await workspace.create(i ? 'codex' : 'claude', directory, 'owner', `Test ${i}`));
   return { workspace, runtimes, ids, directory };
 }
+// The real runtime binds its host. Omitting that link masks the shared-server bug.
+async function processRecoveryFixture(t, provider = 'claude') {
+  const cp = require('node:child_process'), { once } = require('node:events');
+  const { processIdentity } = require('../platform.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-process-test-')), children = [];
+  const host = { binaries: {}, codexProcess: { pid: process.pid }, close() { for (const c of children) c.stdin.end(); }, create(record) {
+    const r = new EventEmitter(); r.host = this; r.record = record; r.hasHistory = r.chatAvailable = true; r.finishTurn = () => {};
+    r.start = async () => {
+      record.nativeId ||= require("node:crypto").randomUUID();
+      if (record.provider === "codex") { r.emit("pid", this.codexProcess.pid); r.emit("state", "idle"); return; }
+      const c = r.child = cp.spawn(process.execPath, ['-e', 'process.stdin.resume()'], { stdio: ['pipe', 'ignore', 'ignore'] });
+      children.push(c); r.exited = once(c, 'exit'); await once(c, 'spawn'); r.emit('pid', c.pid); r.emit('state', 'idle');
+    };
+    r.stop = async () => { if (r.child) { r.child.stdin.end(); await r.exited; } return { state: 'ended' }; }; return r;
+  } };
+  let workspace = new Workspace(host, directory);
+  t.after(async () => { workspace.close(); for (const c of children) c.stdin.end(); await Promise.all(children.map(c => c.exitCode === null ? once(c, 'exit') : Promise.resolve())); fs.rmSync(directory, { recursive: true, force: true }); });
+  const id = await workspace.create(provider, directory, 'process-view', 'Synthetic process');
+  workspace.setDraft(id, 'positive unsent draft', 'process-view');
+  return { get workspace() { return workspace; }, id, host, directory, processIdentity, async reopen() { workspace.persist(); workspace.close(); workspace = new Workspace(host, directory); return workspace; } };
+}
+test('stopped Claude resumes beside a live unrelated Codex server without changing native identity or draft', async t => {
+  const f = await processRecoveryFixture(t), w = f.workspace, s = w.get(f.id), nativeId = s.nativeId, own = s.processIdentity;
+  const { processMayBeAlive } = require('../platform.cjs');
+  assert.ok(processMayBeAlive(own)); assert.ok(processMayBeAlive(f.processIdentity(process.pid)));
+  await w.stop(f.id); assert.equal(processMayBeAlive(own), false);
+  await w.resume(f.id, 'process-view');
+  assert.equal(s.nativeId, nativeId); assert.equal(w.drafts.get(f.id), 'positive unsent draft');
+  assert.equal(s.serverIdentity, null); assert.ok(processMayBeAlive(f.processIdentity(process.pid)));
+  await w.stop(f.id);
+});
+test('saved Claude with its own dead process proof recovers despite a legacy unrelated server alias', async t => {
+  const f = await processRecoveryFixture(t), w = f.workspace, s = w.get(f.id), nativeId = s.nativeId;
+  await w.stop(f.id); s.serverIdentity = f.processIdentity(process.pid); // Actual old persisted shape.
+  const restored = await f.reopen(); await restored.resume(f.id, 'process-view');
+  assert.equal(restored.get(f.id).nativeId, nativeId); assert.equal(restored.drafts.get(f.id), 'positive unsent draft');
+  assert.equal(restored.get(f.id).serverIdentity, null); await restored.stop(f.id);
+});
+test('live Claude and unknown legacy process proof still refuse parallel recovery', async t => {
+  const f = await processRecoveryFixture(t), w = f.workspace, s = w.get(f.id), runtime = w.runtimes.get(f.id);
+  w.runtimes.delete(f.id); s.state = 'recoverable';
+  await assert.rejects(w.resume(f.id, 'process-view'), /之前的原生进程可能仍在运行/);
+  w.runtimes.set(f.id, runtime); await w.stop(f.id);
+  s.processIdentity = null; s.serverIdentity = f.processIdentity(process.pid);
+  const restored = await f.reopen();
+  await assert.rejects(restored.resume(f.id, 'process-view'), /之前的原生进程可能仍在运行/);
+});
+test('Codex retains its app-server identity and same-server recovery exception', async t => {
+  const f = await processRecoveryFixture(t, 'codex'), w = f.workspace, s = w.get(f.id);
+  assert.deepEqual(s.serverIdentity, f.processIdentity(process.pid));
+  await w.stop(f.id); await w.resume(f.id, 'process-view');
+  assert.deepEqual(s.serverIdentity, f.processIdentity(process.pid)); await w.stop(f.id);
+});
+
 test('T103 old or unbound journal rows do not authorize a tool timeout notice',async t=>{
  const {workspace:w,runtimes:[r],ids:[id]}=await fixture(t);r.emit('state','working');
  w.progress.get(id).update({id:'old-history',turnId:'old-turn',kind:'commandExecution',status:'running'});
