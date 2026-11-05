@@ -4,7 +4,23 @@ As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.197, committed build source `430b092`. Opening a long native process now refreshes the existing latest control immediately. Settled reading capture updates its visibility without scrolling or changing the pending reading intent. The measured prior failure left 1,980px below the visible reader while hiding the control; the fixed candidate and actual Applications executable expose it, accept a direct Latest click, and remain within 0.5px of the bottom across five native cache updates.
+Current daily GUI: alpha.198, committed build source `4b9f005`. The existing
+new-session dialog is tighter without smaller controls or removed text. Three
+open-select-fill-cancel journeys pass in both the signed candidate and the actual
+Applications executable; all 17 controls, fonts, control sizes and permission
+facts match the reviewed layout. Content is 70–78px shorter; the outer height cap
+is unchanged and narrow windows still scroll. All 27 affected checks pass without
+skips. The unchanged peer source/raw-evidence approval is reused; Main verifies
+the installed task, payload, signature and unchanged update template separately.
+Three owned profiles and GUI starts use no real provider, model or native input.
+The ordinary visible update retains 14 records, 16 live native process identities,
+12 draft scopes, seven occupied older backends and the original active goal for
+150 seconds; automatic backend switching remains off. English, dark mode, active
+errors, physical input and screen-reader use remain unqualified for this slice.
+The existing compact sidebar is retained rather than rebuilt; the full milestone
+remains open.
+
+Previously qualified alpha.197, committed build source `430b092`. Opening a long native process now refreshes the existing latest control immediately. Settled reading capture updates its visibility without scrolling or changing the pending reading intent. The measured prior failure left 1,980px below the visible reader while hiding the control; the fixed candidate and actual Applications executable expose it, accept a direct Latest click, and remain within 0.5px of the bottom across five native cache updates.
 
 All 105 affected and 2,763 full checks pass without skips. Independent source/raw-result review passes; the isolated installed journeys use an unchanged launcher and synthetic native transport, with zero real provider/model turns, native input or send. The ordinary visible update retains 14 records, 16 live native identities, 12 draft scopes, seven older backends and the original active goal over 150 seconds. Automatic backend updates remain off; signatures, all 71 payload files and one installed application entry match. The original spontaneous cache-gap rebound remains open, along with the full dogfood, locked-production and physical-input gates.
 

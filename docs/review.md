@@ -5387,3 +5387,13 @@ unframed entry, tighter expanded navigation, separate disclosure and space
 entry, indented member rows, and readable state text. No second sidebar redesign
 is added to satisfy an outdated private status. Earlier bounded installed
 sidebar evidence remains applicable; it does not cover every native scenario.
+
+The alpha.198 signed candidate and actual Applications repeat now pass the three
+reviewed form journeys with the same 17 controls and exact geometry. Main ran
+these installed checks; they are not an independent GUI rerun. All 71 shipped
+files and strict signatures match the clean committed build, and the ordinary
+visible update retains native identities, drafts, settings and the active goal
+through 150 seconds. The unchanged source approval is reused; no new source
+behavior was added while integrating. The preallocation compiled-payload fixture
+mismatch and pre-operation argument refusal remain recorded. This closes only
+the installed dialog-spacing slice, not the whole density or dogfood milestone.

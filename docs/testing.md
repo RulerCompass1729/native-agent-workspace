@@ -5281,3 +5281,20 @@ seven older backends and the original active goal over 150 seconds. No native
 backend is migrated. Source/recipe/update reviews pass; installed evidence is
 author-run. No model inference, native provider input or OS clipboard operation.
 Earlier failed retention evidence is unchanged; its historical cause is unknown.
+
+
+**alpha.198 new-session dialog, 2026-11-05:** Clean committed source `4b9f005`.
+All 27 affected checks pass without skips. Signed normal bootstrap passes; the
+candidate and Applications each pass the same three open-select-fill-cancel
+journeys with 17 unchanged controls and exact reviewed text/geometry. Content
+height is 70 or 78px shorter; narrow windows still scroll. Three owned profiles
+and GUI starts are cleaned, with zero observed creation/input/send guards or
+real provider/model use. Screenshot and launch evidence are distinct per phase.
+A raw-source versus compiled-bundle fixture mismatch failed before allocation;
+its correction checks all 71 shipped files. An initial missing updater argument
+was refused before GUI work; the unchanged operator then ran with its required
+arguments. The visible update and 150-second witness preserve the original goal,
+14 records, 16 live native identities and 12 draft scopes. Strict signature and
+one application-search entry pass. Independent review is reused only for the
+unchanged peer source/evidence; Main's installed checks are author-run. Physical,
+English/dark/active-error and screen-reader claims remain open.
