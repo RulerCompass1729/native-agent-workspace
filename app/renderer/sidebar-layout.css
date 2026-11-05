@@ -37,4 +37,4 @@
 .sidebar .space-discovery{margin:8px 12px;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:12px}
 .space-discovery strong{font-size:13px}.space-discovery p{margin:6px 0;line-height:1.5}.space-discovery button{padding:5px 8px}
 .empty-independent{display:none}.sidebar.dragging-session .empty-independent{display:block}
-.naw[data-collapsed="true"] .sidebar > .session-view-switch,.naw[data-collapsed="true"] .space-discovery,.naw[data-collapsed="true"] .sidebar-create-slot{display:none}
+&[data-native-surface="sidebar"][data-collapsed="true"] .sidebar > .session-view-switch,&[data-native-surface="sidebar"][data-collapsed="true"] .space-discovery,&[data-native-surface="sidebar"][data-collapsed="true"] .sidebar-create-slot{display:none}
