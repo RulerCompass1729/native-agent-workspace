@@ -109,3 +109,17 @@
 .collaboration-member-reader.has-column-input{grid-template-rows:minmax(20px,1fr) auto auto}
 .column-native-footer{min-width:0;min-height:0}
 .column-native-footer .collaboration-member-next{position:static;display:block;max-width:100%;margin:0}
+
+/* Compact body spacing retains existing typography, controls and state colors. */
+#room-tabs { padding: 5px 12px; gap: 6px; }
+.room-status-bar { padding: 5px 12px; gap: 8px; }
+#room-member-tabs button { padding: 4px 6px; border-radius: 3px; }
+.collaboration-statuses, .collaboration-readers { padding-left: 8px; padding-right: 8px; gap: 6px; }
+.collaboration-statuses { padding-bottom: 5px; }
+.collaboration-member-status { border-left: 0; border-right: 0; border-top: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.collaboration-member-reader { border-radius: 3px; }
+.collaboration-toolbar { padding: 5px 8px; gap: 6px; }
+.collaboration-messages { padding: 8px 9px; }
+#room-composer { padding: 8px 12px; }
+#shared-input { padding: 8px; }
+.room-controls { gap: 6px; margin-top: 6px; }
