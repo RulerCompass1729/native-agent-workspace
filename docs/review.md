@@ -4779,3 +4779,20 @@ the signed artifact. Independent signed-path and update-operator review pass;
 installation ids, draft counts, source and 150-second retention are mechanically
 verified. Old native backends retain their code and processes. This does not
 close actual Claude loss, native helper consumers, locked input or the whole goal.
+
+
+### 2026-11-04 — Member reading and terminal divider source batch
+
+The reviewed member route keeps every member's state visible, opens the same
+session's complete GUI and terminal, and returns from related shared records
+without changing recipient, drafts or reading position. The divider patch aligns
+screen positions across differently sized columns; aborted grouped previews
+restore saved heights. Exact author source reviews are reused. Combined unit
+checks and signed installed acceptance cover their interaction; installation is
+still pending at this source checkpoint. No operator permission is activated.
+
+Separately, one owned installed GUI receives New session, synthetic name input
+and Cancel while independent OS reads remain locked. The foreground stays the
+lock screen; no session or message is created. This is an isolated renderer
+automation primitive, not working locked Peekaboo or native-agent delivery.
+The daily app gains no debugging endpoint or additional access from this test.
