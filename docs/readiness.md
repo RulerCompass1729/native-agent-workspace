@@ -4,7 +4,23 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.189, committed build source `97377d0`. A collaboration
+Current daily GUI: alpha.190, committed build source `4271692`. It retains the
+installed reconnect repair: service-local cache-gap notices no longer disconnect
+the combined reader. The signed candidate and actual Applications executable also
+pass recovery of a stopped synthetic Claude with real process proof beside a
+live unrelated Codex server, retaining its native id, owner and positive draft.
+Live and unknown process guards remain. Independent source and signed-path
+reviews pass; 328 affected checks and normal signed bootstrap pass without
+product-model calls. The visible update retains 14 records, 16 live native
+identities, 12 draft scopes, seven occupied old backends and the original active
+goal over 150 seconds.
+The existing Peekaboo helper is included and copied through normal bootstrap,
+with screenshot-free AX observation available in its scoped source. Retained
+native engines have not adopted it. Actual native Claude loss, input/delivery,
+locked/background qualification and the whole milestone remain open.
+
+Previously qualified alpha.189, committed build source `97377d0`, followed by
+the independently qualified same-version reconnect repair `6e91463`. A collaboration
 member's lower native terminal keeps a manual drag or history read through passive
 output; explicit input still follows the native cursor. The exact signed candidate
 and actual installed executable pass the complete synthetic GUI journey, with

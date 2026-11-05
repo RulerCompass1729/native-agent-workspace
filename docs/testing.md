@@ -5148,3 +5148,24 @@ the correctly armed visible update retains 14 records, 16 live native identities
 12 draft scopes and seven old backends over 150s. Exact source, payload, actual
 installed replay and counts are mechanically checked; no extra record review.
 Physical trackpad/iTerm/current CLI, broader T59 and the whole goal remain open.
+
+
+### 2026-11-04 — Reconnect preservation and provider process recovery
+
+Alpha.190 / `4271692` retains the exact reviewed reconnect-client repair and
+AX-only helper increment. 328 affected source checks pass with no skips. The
+actual previous installed build reproduces a stopped Claude being refused
+recovery beside an unrelated live Codex server. The candidate and actual new
+Applications executable pass the same visible resume operation, retaining native
+id, owner and a positive unsent draft while changing only the owned child PID.
+The other session's PID stays; dispatch, native input and product-model calls
+remain zero. These providers are synthetic; process proof uses owned real Node
+children, not an actual Claude process-loss claim. The initial harness paint race
+is retained and corrected by awaiting the existing button, without weaker checks.
+Normal signed bootstrap copies the exact helper; signature/CDHash and owned
+process/profile cleanup pass. Independent source, scoped signed path and update
+operator judgments pass. The version-upgrade template is unchanged except version
+tokens; the intervening same-version emergency operator is separately identified.
+Actual daily updating retains 14 records, 16 live identities, 12 view drafts,
+seven occupied old backends and the same original active goal through 150 seconds.
+Retained-engine adoption, locked input, native delivery and the full goal stay open.

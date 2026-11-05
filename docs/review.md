@@ -4765,3 +4765,17 @@ remains pending. Surviving teammates are not covered by this single-process fix.
 The reconnect repair above is separately installed from its committed repair
 source, with source and signed-path review accepted. This batch retains its exact
 client bytes so a later update cannot restore the disconnection defect.
+
+
+### 2026-11-04 — Scoped installed recovery batch
+
+The previous reconnect repair and AX-only helper increment are integrated with
+unchanged reviewed source. The provider-specific process proof repair passes
+independent source and combined-interaction review. Actual previous installed
+recovery fails; the signed candidate and actual updated Applications executable
+pass the visible same-session resume operation with a positive draft and real
+owned process proof. Normal bootstrap copies the exact helper and preserves
+the signed artifact. Independent signed-path and update-operator review pass;
+installation ids, draft counts, source and 150-second retention are mechanically
+verified. Old native backends retain their code and processes. This does not
+close actual Claude loss, native helper consumers, locked input or the whole goal.
