@@ -5449,3 +5449,36 @@ sidebar, one heading line and three bounded text ranges. Old raw captures remain
 this is a test correction, with no new product build or daily restart. The test
 and installed-evidence delta passes scoped independent review. Installed operation,
 artifact and cleanup checks remain author-run, not an independent GUI rerun.
+
+
+## 2026-11-05 — native idle evidence and continuation (I233–I235)
+
+T122's standalone native metadata check is integrated unchanged from `9dc74d7`.
+One isolated Codex 0.164 engine reads one copied synthetic saved thread: 11 RPCs,
+no model turns or listener, 0.292 seconds including owned cleanup. Two sequential
+idle/null-goal/empty-terminal/empty-submitted-queue snapshots do **not** establish
+that TUI drafts or all memory work are empty, or grant permission to retire a
+backend. The source keeps missing metadata unavailable. The final late-error
+guard delta passed offline checks and the same independent Fable review; its
+live-engine run was not repeated. Main verified the exact source hash, raw
+receipts and review inventory, then ran the no-allocation self-check. No runtime
+admission policy changed and this test-only integration does not need a release.
+
+T134's previously unmeasured retention case now reaches the installed alpha.199
+reader through the real cache-trim path with synthetic provider output. After
+first gap insertion and its next eviction update, one explicit Latest click
+remains within 0.5 pixels of the bottom with follow enabled. The original shared
+reader code runs inside a byte-bound module with private trace insertions; this
+is a finite full-member-view observation, not pristine timing or proof about the
+person's original spontaneous rebound. Two operator setup failures are retained;
+all owned processes/profiles are gone and the signed artifact is unchanged.
+No product fix is inferred, and the original T134 issue remains open.
+
+T58/T100 continuation used visible UI messages to the two original idle authors,
+with exact native user-message receipts and subsequent work. A later lock left
+only seven non-actionable AX menu elements. A third author's native-message
+attempt returned an unconfirmed origin and was not retried or treated as
+delivery. The prior view's restoration remains unconfirmed. Read-only binding
+checks distinguish current native versions from retained backend code; they do
+not authorize process replacement. Daily debugger/read-scope, lifecycle safety
+and publication gates remain unchanged. The overall dogfood goal stays open.
