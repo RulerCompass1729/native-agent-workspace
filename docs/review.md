@@ -5348,3 +5348,20 @@ point without new observers, controls, scrolling or follow-state rewriting.
 All 105 affected and 2,763 full checks pass without skips. This urgent core
 reading task is queued for signed candidate, independent review and actual
 Applications acceptance; no installed fix or whole T134 closure is claimed here.
+
+
+Alpha.197 scoped acceptance on `430b092`: the independent reviewer reads the
+actual shared capture code and callers, the old installed counter and the
+complete projected candidate geometry/counters/cleanup. It approves only the
+missing-control repair and this bounded task. Full TAP logs, the private driver
+and signature proofs are author verified, not independent reruns. Reported
+review metric: 0.3050676 USD at list equivalent, not billing. HEAD, index and
+worktree stay unchanged through review.
+
+The actual Applications task also passes: 1,980px of expanded content exposes
+the control; a direct Latest click and five native updates keep following at
+0.5px. The ordinary visible update and 150-second check retain all original
+native identities, settings, draft scopes and the active goal. All 71 payload
+files/signatures match and application search has one entry. No occupied
+backend migration, daily debugger, real model inference or push is added.
+The original spontaneous rebound and full dogfood goal remain explicitly open.

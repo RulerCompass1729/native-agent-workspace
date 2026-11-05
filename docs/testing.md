@@ -2,6 +2,12 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Latest control after process expansion — 2026-11-05
+
+Alpha.197 / `430b092`: the exact signed candidate and Applications executable each run one complete real process-disclosure task on a synthetic native session. The actual member reader expands from 429px to 2,409px with 1,980px remaining. The existing latest control is immediately visible; a direct click without the prior Home workaround follows the bottom through five native cache updates. Eight follow samples per artifact remain within 0.5px. The fold-settling samples are diagnostic, not claims that opening a process follows automatically.
+
+Two old-code capture tests fail before the repair; 105 affected and 2,763 full checks pass after it with no skips. The pending-intent case is regression coverage. Independent source/raw-result review passes, with installed operation and machine artifact checks performed by Main. Three owned profiles and three GUI starts cover normal bootstrap plus the candidate and Applications tasks. Zero real provider/model turns or native input/send; owned profiles/processes and the test slot are cleaned. The ordinary visible update retains native identities, settings, drafts and the original active goal after 150 seconds. The original user-reported spontaneous rebound was not reproduced by these finite cases and remains open.
+
 ## Member navigation and record history — 2026-11-05
 
 Alpha.196 / `41227d6`: candidate and actual Applications each pass five whole navigation journeys. Coverage includes saved departed-member filters, temporary recent-all and restoration; full-member/related/search/return with private caret and reading preserved; explicit synthetic native display followed by passive restoration without additional control; three-, four- and five-member navigation and selected-member removal; search-result selection without Return followed by ordinary reopening with the canonical filter and both drafts retained. Both normal signed bootstrap checks also pass, including the empty-profile sidebar condition.
