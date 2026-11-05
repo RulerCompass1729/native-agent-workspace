@@ -242,3 +242,21 @@ test('the actual overview measures column heights after its final header and sha
   assert.deepEqual(calls.fit, [], 'Passive layout never resizes the native grid');
   assert.equal(calls.persist, 0, 'Passive layout keeps the saved preference');
 });
+
+
+test('the existing resize observer clamps a late overview resize without fitting a private native grid', () => {
+  const elements = new Map(), observed = [], fitted = []; let callback, refreshed = 0;
+  const context = vm.createContext({
+    ResizeObserver: class { constructor(fn) { callback = fn; } observe(el) { observed.push(el); } },
+    $: id => { if (!elements.has(id)) elements.set(id, { id }); return elements.get(id); },
+    activeSessionId: () => 'private', splitDragging: false,
+    fitTerminal: id => fitted.push(id), refreshColumnTerminalHeights: () => { refreshed++; },
+  });
+  const line = renderer.split('\n').find(s => s.startsWith('const observer = new ResizeObserver('));
+  vm.runInContext(line, context);
+  assert.ok(observed.includes(elements.get('collaboration-overview')), 'Late container geometry needs the existing observer');
+  callback([{ target: elements.get('collaboration-overview') }]);
+  assert.equal(refreshed, 1); assert.deepEqual(fitted, [], 'An overview resize never fits another private native grid');
+  callback([{ target: elements.get('terminal-area') }]);
+  assert.equal(refreshed, 1); assert.deepEqual(fitted, ['private'], 'The original terminal-only fit remains');
+});

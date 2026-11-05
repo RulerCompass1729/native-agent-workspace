@@ -3756,7 +3756,7 @@ const disposers = [
 sidebarLayout = window.nativeWorkspaceSidebar.bind({ navigation: document.querySelector('.sidebar-navigation'), groups: ['sessions-group', 'workspace-group', 'archive-group'].map($), sashes: ['sidebar-session-sash', 'sidebar-workspace-sash'].map($), onCommit: weights => api.sidebar({ type: 'resize', weights }), displayTitle: (element, params) => ui.display.attribute(element, 'title', 'sidebar.resizeHelp', params), onError: toastError });
 disposers.push(() => sidebarLayout.dispose());
 // A drag resizes the native terminal once, on release, not on every move.
-const observer = new ResizeObserver(() => { if (activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); }); observer.observe($('terminal-area'));
+const observer = new ResizeObserver(entries => { if (entries.some(e => e.target === $('terminal-area')) && activeSessionId() && !splitDragging) fitTerminal(activeSessionId()); if (entries.some(e => e.target === $('collaboration-overview'))) refreshColumnTerminalHeights(); }); observer.observe($('terminal-area')); observer.observe($('collaboration-overview'));
 function applySplit() {
   for (const id of ['session-layout', 'room-layout']) $(id).style.setProperty('--split-left', `${(terminalSplit * 100).toFixed(2)}%`);
   for (const divider of document.querySelectorAll('.split-divider')) { divider.setAttribute('aria-valuenow', String(Math.round(terminalSplit * 100))); divider.setAttribute('aria-valuemin', '20'); divider.setAttribute('aria-valuemax', '80'); }

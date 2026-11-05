@@ -4,7 +4,7 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Candidate alpha.194 adds current-space PNG drafts through the qualified native Codex 0.166 input path and preserves a complete reading line in the minimum four-column window. Combined source tests pass 2,726 checks without skips. Author source reviews are reused; independent integration review accepts the conflict resolutions while preserving current view, usage and single-home fields. Signed and actual Applications acceptance remain pending. Older backends and unsupported native versions retain image drafts without sending. No whole-task or model-vision claim.
+Candidate alpha.194 adds current-space PNG drafts through the qualified native Codex 0.166 input path and preserves a complete reading line in the minimum four-column window. The initial combined suite passed 2,726 checks; subsequent measured layout repairs pass 68 affected checks without skips. Author source reviews are reused; independent integration review accepts the conflict resolutions while preserving current view, usage and single-home fields. Signed and actual Applications acceptance remain pending. Older backends and unsupported native versions retain image drafts without sending. No whole-task or model-vision claim.
 
 Current daily GUI: alpha.193, committed build source `c7470cd`. The fifth grid
 member retains its private composer and native-terminal controls; a member count
