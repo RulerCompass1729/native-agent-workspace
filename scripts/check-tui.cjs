@@ -3,13 +3,21 @@
 const assert = require('node:assert/strict');
 const sharedDraft = '协作草稿：保留到重开，不发送。';
 
+async function openTerminalDisplay(page) {
+  if (await page.locator('#terminal-more').isVisible()) {
+    await page.locator('#terminal-more').click();
+    await page.getByRole('menuitem', { name: '显示…', exact: true }).click();
+  } else await page.locator('#terminal-display').click();
+  await page.locator('#terminal-display-dialog').waitFor({ state: 'visible' });
+}
+
 async function checkTui(page) {
   const initial = await page.evaluate(() => workspace.initial());
   await page.locator('#privacy-button').click();
   await page.locator('#privacy-dialog').waitFor({ state: 'visible' });
   const trust = await page.locator('#trust-status').innerText();
   assert.match(trust, /原生终端直接输入/);
-  assert.match(trust, /不是账单/);
+  assert.match(trust, /不是总用量或账单/);
   if (initial.sessions.some(s => !s.usage?.total)) assert.match(trust, /未报告；不能据此判断为零/);
   assert.ok(trust.includes(`应用 ${initial.appVersion}`));
   await page.locator('#close-privacy').click();
@@ -23,7 +31,7 @@ async function checkTui(page) {
     const select = () => page.locator(`[data-session-id="${controlled.id}"]`).click();
     await select();
     await page.locator('#terminal-tab').click();
-    await page.locator('#terminal-display').click();
+    await openTerminalDisplay(page);
     await page.locator('#terminal-font-size').fill('17');
     await page.locator('#terminal-palette').selectOption('green');
     await page.locator('#close-terminal-display').click();
@@ -51,7 +59,7 @@ async function verifyTui(page, result) {
   assert.equal(await page.locator('#shared-input').inputValue(), sharedDraft);
   if (result.controlled) {
     assert.deepEqual(snapshot.viewState.terminalDisplay, { fontSize: 17, palette: 'green' });
-    await page.locator('#terminal-display').click();
+    await openTerminalDisplay(page);
     assert.equal(await page.locator('#terminal-font-size').inputValue(), '17');
     assert.equal(await page.locator('#terminal-palette').inputValue(), 'green');
     await page.locator('#close-terminal-display').click();
@@ -65,7 +73,11 @@ async function restoreTui(page, result) {
     const snapshot = await workspace.initial();
     const current = snapshot.viewState;
     if (snapshot.sessions.some(s => s.id === original.selected && s.owner === snapshot.owner)) await workspace.claim(original.selected, original.mode);
-    await workspace.viewState({ ...current, selected: original.selected, mode: original.mode, preference: original.preference, roomSession: original.roomSession || '', sharedDraft: original.sharedDraft || '', terminalDisplay: original.terminalDisplay || { fontSize: 14, palette: 'dark' } });
+    const roomViews = current.roomViews && { ...current.roomViews, shared: { ...current.roomViews.shared,
+      sharedDraft: original.roomViews?.shared?.sharedDraft ?? original.sharedDraft ?? '',
+      roomSession: original.roomViews?.shared?.roomSession ?? original.roomSession ?? '',
+    } };
+    await workspace.viewState({ ...current, ...(roomViews ? { roomViews } : {}), selected: original.selected, mode: original.mode, preference: original.preference, roomSession: original.roomSession || '', sharedDraft: original.sharedDraft || '', terminalDisplay: original.terminalDisplay || { fontSize: 14, palette: 'dark' } });
   }, original);
 }
 module.exports = { checkTui, verifyTui, restoreTui };

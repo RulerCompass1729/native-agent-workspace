@@ -4996,3 +4996,60 @@ code; 136 affected checks pass without skips. Independent scoped source review
 passes; test-count and unchanged-caller checks are author verified. This is not
 installed acceptance or a reproduction of the person's cache-gap recurrence,
 which remains open. No provider/model calls or daily application actions.
+
+# T153: remaining desktop terminal display entry
+
+The desktop TUI checks still clicked the hidden display button after that action
+moved into the compact terminal menu. Both settings entry calls now use the
+existing menu interaction, with the visible-button fallback and a visible-dialog
+wait. All previous behavior assertions remain intact.
+
+An owned source GUI with one synthetic, idle, controlled terminal reproduced the
+old hidden-button timeout. The complete `checkTui` then stopped at its earlier
+privacy-copy assertion: it expects “不是账单”, while the actual text says
+“不是总用量或账单”. This is an open test-maintenance finding, not a product billing
+failure. Full `checkTui`, reopen `verifyTui`, and `restoreTui` are not qualified by
+this run. The actual shared helper passes isolated compact-menu and visible-button
+checks. The standalone qualifier keeps the original assertions and reports the
+real stop rather than passing an empty-session branch.
+
+The first qualifier used an evidence destination rejected by scratch cleanup.
+Its owned children had exited; only its verified synthetic profile directories
+remained. They were exported and removed after exact record, PID, ownership and
+directory identity checks; its exact GUI token was released. The qualifier now
+rejects an in-repository evidence destination before allocating a profile or
+process. Original failure records are retained privately. No daily application,
+real provider, model task, native input, message send or OS clipboard operation
+was part of this qualification. Installed behavior remains for the integrator.
+
+T153 follow-up: the trust-copy assertion now checks the existing exact wording
+“不是总用量或账单”; product text is unchanged. A second and final owned synthetic
+GUI run passes complete `checkTui` and `verifyTui` after a same-instance renderer
+reload. It then fails the restoration check: the old cleanup sets the legacy
+draft field while the IPC handler takes `roomViews.shared` as authoritative.
+The failure and successful owned process/profile/token cleanup are retained.
+This was a reload, not an application reopen.
+
+Cleanup now restores the shared space's original draft and selected member in
+that existing per-space record, retaining current unrelated fields and other
+spaces. It also supports the old format. The focused regression executes the
+actual cleanup callback against the actual main-process view-state handler;
+the old cleanup fails the per-space cases, and the fix passes empty/nonempty,
+legacy and migrated cases plus affected view-store/draft checks. Initial probe
+errors from an invalid synthetic room ID and cross-context object comparison
+were corrected separately and are not counted as product failures. No third
+GUI run was made: post-fix restoration has source-level proof, while its real
+GUI and normal reopen/installed acceptance remain open.
+
+
+
+**Legacy terminal-check installed acceptance, 2026-11-04:** the final maintained
+check module passes in the actual Applications alpha.192 executable with one
+owned synthetic controlled terminal. The old hidden-button timeout is retained;
+settings/menu/focus and validation, normal owned GUI reopening, and restoration
+of the canonical shared draft, selection and display settings all pass. The same
+native identity is retained and input/send counters stay zero. Both GUI launches
+are bound to the signed installed source; strict signatures and exact owned
+cleanup pass. Six real restore-handler regressions also pass. Source reviews are
+reused unchanged; the installed evidence is author-run. This qualifies the
+maintained module, not the full legacy desktop suite, real provider or IME.
