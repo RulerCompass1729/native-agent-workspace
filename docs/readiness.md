@@ -4,7 +4,22 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.192, committed build source `0d15bd9`. Grouped-space
+Current daily GUI: alpha.193, committed build source `c7470cd`. The fifth grid
+member retains its private composer and native-terminal controls; a member count
+alone no longer hides them. Compact body spacing and the existing fold-event
+acknowledgement keep the current reading surface. Signed candidate and actual
+Applications journeys pass for the fifth member's own input and for five finite
+fold/history/latest/cache-gap paths. All 152 affected checks pass without skips.
+Independent combined-source, recipe and update-procedure reviews pass; installed
+journeys are author verified. The ordinary visible update retains 14 records,
+16 native process identities, 12 draft scopes, seven older backends and the
+original active goal over 150 seconds. The existing automatic backend-update
+preference is off, preserving native processes; manual updates remain available.
+It can be restored in the existing backend-versions menu. No model inference.
+The original cache-gap recurrence, minimum-window grid readability, original
+Claude loss/window-only continuation and the whole dogfood milestone remain open.
+
+Previously qualified alpha.192, committed build source `0d15bd9`. Grouped-space
 rename uses the visible existing editor; the sidebar retains fonts and hit areas
 while reducing unused space. The workspace tool accepts verified Codex 0.166
 provenance without changing its source or lifetime guards. Signed candidate and

@@ -1570,3 +1570,14 @@ readiness for exact scope. The overall dogfood milestone remains open.
 Alpha.185 keeps Claude 318's GUI model current using the existing native
 metadata channel. Other capability gates stay closed. Signed and installed-path
 acceptance, independent review and visible update pass; see current readiness.
+
+
+## Alpha.193 finite reading and member-control acceptance
+
+Installed source `c7470cd` retains the fifth grid member's own input and terminal
+controls, compact body spacing and the fold notification acknowledgement. Signed
+candidate and actual Applications journeys pass without model inference. The
+ordinary visible update preserves native identities, drafts, settings and the
+active goal over 150 seconds with automatic backend updating off. Manual update
+remains available. See readiness and testing for the finite scope and open cases;
+this does not close the dogfood milestone.

@@ -5072,3 +5072,20 @@ before allocation. Both missing-identity negative checks pass. Recipe delta
 review passes; signed and actual Applications journeys remain pending. The
 person's cache-gap recurrence and the unrelated backend-retention finding remain
 open. No native service, provider settings or lifecycle source changes.
+
+
+**Alpha.193 installed scoped acceptance, 2026-11-04:** signed candidate and actual
+Applications each pass the reading and fifth-member journeys. The normal signed
+bootstrap and post-run integrity/cleanup checks also pass. Independent source and
+recipe review found a missing copied fixture before launch; it now binds the
+known fixture. A later raw-renderer path rejects before allocation and its literal
+source-root correction passes incremental review. Failed attempts remain recorded.
+Installed results and counts are author verified, not independently rerun.
+
+The normal update preflight also catches an eligible idle-backend automatic move.
+The existing reversible preference is turned off under the recorded choice;
+independent update-procedure review preserves every identity/draft/rollback guard.
+All original native processes and seven old backends remain over 150 seconds,
+with the same active goal and one ordinary application entry. The earlier
+retention failure's cause, original cache-gap recurrence and minimum-window grid
+readability remain open. No whole milestone, physical IME or real provider claim.

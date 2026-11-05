@@ -5227,3 +5227,35 @@ only two version markers in a derived baseline are updated. Both failures stay
 recorded. Earlier source cleanup failures stay incomplete. Scoped independent
 source, recipe and signed-candidate evidence reviews pass. Physical input, general
 native compatibility, original consumer adoption and the whole goal stay open.
+
+
+### 2026-11-04 — Reading follow and fifth-member controls
+
+Alpha.193 / `c7470cd`: signed candidate and actual Applications each pass two
+complete synthetic-transport journeys. Five reading cases cover real process
+folding, history, JumpLatest, native cache-gap eviction and subsequent output in
+solo and member readers. Twenty samples per executable remain within 0.5px of
+the tail. The original reported producer remains unconfirmed.
+
+The member journey covers 4/5/6/8 columns, narrow geometry, explicit fifth-member
+control, one private fake send and one fake terminal byte bound to that member,
+other four identities/owners/drafts, keyboard next-member/name reveal, parked
+terminal caches, list/grid/full-member navigation and return to four. These are
+synthetic transport checks, not actual provider turns or arbitrary-N qualification.
+Minimum 850x600 grid readability remains a separate open source finding.
+
+All 152 affected checks pass without skips. Normal signed bootstrap, exact private
+helper copying, 70 payload files without mismatches, post-test strict signatures,
+one application-search entry and exact owned cleanup pass. A first fifth-member
+preflight rejects a raw-source path absent from the signed payload before any
+profile, daemon or GUI allocation; the reviewed correction binds its compiled
+client to the committed source instead. The failure is retained.
+
+Read-only update preflight correctly refuses an eligible automatic backend move.
+The existing automatic-update preference is disabled under the recorded ordinary
+choice; the independently reviewed updater requires it to remain off. Normal
+visible reopening retains 14 records, 16 live native identities, 12 draft scopes,
+seven older backends and the original active goal over 150 seconds. No native
+backend is migrated. Source/recipe/update reviews pass; installed evidence is
+author-run. No model inference, native provider input or OS clipboard operation.
+Earlier failed retention evidence is unchanged; its historical cause is unknown.
