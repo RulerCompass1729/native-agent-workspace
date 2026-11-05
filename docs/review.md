@@ -5397,3 +5397,12 @@ through 150 seconds. The unchanged source approval is reused; no new source
 behavior was added while integrating. The preallocation compiled-payload fixture
 mismatch and pre-operation argument refusal remain recorded. This closes only
 the installed dialog-spacing slice, not the whole density or dogfood milestone.
+
+
+**Historical Claude310 audit status, 2026-11-05:** Corrected the stale global
+candidate104/installation-pending claim. Five preserved native310 installed104
+results, Applications launch logs and the recovery argv support that bounded
+acceptance. The original native tool transactions retain review25's missing-
+launch-proof finding and review26's pass after correction; the temporary reviewer
+JSON files are gone and are not reconstructed. No product code, command audit
+rows, model runs, current-version compatibility or whole-dogfood claim changes.
