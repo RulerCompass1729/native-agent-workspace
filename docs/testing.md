@@ -2,6 +2,14 @@
 
 Historical validation records. For the current delivery scope, see [readiness](readiness.md).
 
+## Accepted captions and terminal bootstrap — 2026-11-05
+
+Alpha.195 / `2a6f05a`: signed candidate and actual Applications each pass five late-image-caption journeys and the two-group terminal-bootstrap task. Caption cases cover untouched acceptance, a real edit away and back, another space, reopening an untouched send and reopening a newer unsent edit. The terminal task changes the native display epoch during the real xterm completion callback, keeps stale output hidden and retries through the existing native-terminal entry. Private/shared drafts and unrelated identities remain unchanged. These are synthetic native-transport tests; the prior qualified native image wire is reused without another model call.
+
+The source suite passes 2,743 checks; 55 affected checks pass without skips. Five isolated profiles and nine GUI starts cover the normal signed bootstrap plus both acceptance phases; ten explicit synthetic forwards, zero real provider turns and zero OS clipboard actions. Owned profiles/processes are removed and the canonical test slot is released. Signatures stay valid and all 71 installed payload files match. An apparent screenshot-framing concern is checked by read-only geometry: the complete composer/input fits inside the actual viewport in all six measured states, so no layout repair is added.
+
+The ordinary visible daily update preserves 14 records, 16 native PID/start witnesses, 12 draft scopes, seven older backends and the original goal identity/objective/creation/active status across 150 seconds. Existing automatic backend updates remain off. Independent combined review passes after reusing unchanged author reviews; reported list-equivalent cost is 0.5595322 USD, not an invoice. Full-day use, physical input, locked production control, broader T79/T165 and the shared milestone remain open.
+
 ## Single-home moves - 2026-11-04
 
 Alpha.187 / `66c63a5`: nine groups pass against the signed candidate and actual

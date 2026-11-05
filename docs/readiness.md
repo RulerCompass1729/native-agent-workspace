@@ -1,10 +1,16 @@
 # Readiness and next gates
 
-As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
+As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.194, committed build source `4c31970`. The minimum four-column window retains a complete original reading line, input and the controlled native cursor after remount. The existing size observer now accounts for late container layout. Shared PNG drafts use the qualified Codex 0.166 typed-input path and native echo receipt; unsupported connections retain attachments without sending. Signed candidate and actual Applications journeys pass. Each native-image journey uses one fixed local response and confirms the exact 146 managed PNG bytes upstream, without vendor inference or a vision claim. The unchanged nonrecipient remains untouched.
+Current daily GUI: alpha.195, committed build source `2a6f05a`. An exact late native image receipt clears only the unchanged original caption and inline mention with its attachments. Later edits, edit-away-and-back, other spaces and drafts restored by ordinary GUI reopening remain intact. Legacy reservations without an original-caption proof retain the text. A terminal snapshot whose lifetime changes while being written remains hidden in the existing retry state; explicit retry reads the fresh snapshot on the same native identity. No automatic resend or replacement agent is introduced.
+
+Both signed candidate and actual Applications journeys pass seven groups: five caption/persistence paths and the terminal failure/retry task. The normal signed bootstrap also passes. All 2,743 source checks and 55 affected checks pass without skips. Unchanged author reviews and native image-wire evidence are reused; one independent combined-interaction review passes. The new GUI journeys use ten synthetic forwards in total and no real provider or product model turns.
+
+The ordinary visible update and 150-second check retain 14 records, 16 native process identities, 12 draft scopes, seven older backends and the original active goal. Automatic backend updates remain off. The installed signature and 71 payload files match the committed build, and application search returns one installed entry. The full dogfood milestone, locked production operation, physical input and broader terminal saved-state work remain open.
+
+Previously qualified alpha.194, committed build source `4c31970`. The minimum four-column window retains a complete original reading line, input and the controlled native cursor after remount. The existing size observer now accounts for late container layout. Shared PNG drafts use the qualified Codex 0.166 typed-input path and native echo receipt; unsupported connections retain attachments without sending. Signed candidate and actual Applications journeys pass. Each native-image journey uses one fixed local response and confirms the exact 146 managed PNG bytes upstream, without vendor inference or a vision claim. The unchanged nonrecipient remains untouched.
 
 The ordinary visible update retains 14 records, 16 native process identities, 12 draft scopes, seven older backends and the original active goal over 150 seconds. Automatic backend updates remain off; manual updates remain available. Initial combined source checks pass 2,726 tests, and subsequent measured layout repairs pass 68 affected checks without skips. Independent source/integration reviews pass; installed results are author verified. Failed candidates and fixture failures are retained.
 
