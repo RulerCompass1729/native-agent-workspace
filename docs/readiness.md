@@ -4,7 +4,25 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.190, committed build source `4271692`. It retains the
+Current daily GUI: alpha.191, committed build source `c3140aa`. Members stay
+visible while reading the same session; related shared records return to that
+member without changing recipient, drafts, caret, reading position or native
+identity. Column terminal dividers align by their screen position; interrupted
+grouped previews restore saved heights. Both complete synthetic GUI journeys
+pass in the signed candidate and the actual Applications executable, including
+the final captured-drag cancellation. All 2,640 combined source checks pass.
+Independent combined-source and signed-path reviews pass; normal signed
+bootstrap and strict post-test signature checks pass. The visible update retains
+14 records, 16 native process identities, 12 draft scopes, seven occupied old
+backends and the original active goal over 150 seconds. No product-model calls.
+This does not qualify real provider input, physical IME or the whole milestone.
+
+The locked-screen check proves only an isolated installed page can receive a
+New session click, synthetic name input and Cancel while the OS remains locked
+and the foreground stays unchanged. The production Peekaboo route and native
+agent delivery remain open; no daily debugger or extra access was enabled.
+
+Previously qualified alpha.190, committed build source `4271692`. It retains the
 installed reconnect repair: service-local cache-gap notices no longer disconnect
 the combined reader. The signed candidate and actual Applications executable also
 pass recovery of a stopped synthetic Claude with real process proof beside a

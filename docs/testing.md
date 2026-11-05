@@ -5169,3 +5169,30 @@ tokens; the intervening same-version emergency operator is separately identified
 Actual daily updating retains 14 records, 16 live identities, 12 view drafts,
 seven occupied old backends and the same original active goal through 150 seconds.
 Retained-engine adoption, locked input, native delivery and the full goal stay open.
+
+
+### 2026-11-04 — Same-member reading and screen-line terminal alignment
+
+Alpha.191 / `c3140aa`: 2,640 combined source checks pass without skips. Exact
+reviewed author patches are reused; one independent integration review covers
+their interactions. Both signed-candidate and actual Applications journeys pass:
+member state tabs, full same-session GUI/native reading, temporary related
+records and return, positive private/shared drafts, recipient, selection/caret,
+reload, cross-space mode and removed-member refusal; and single/group divider
+gestures, common bounds, real layout-change cancellation and owned reopen.
+The member journey sends two explicit synthetic messages; the divider journey
+uses one synthetic Escape to calibrate input. No real provider or product model
+is called. Per-launch source/CDHash receipts bind every journey to this build.
+
+Normal signed bootstrap, exact private helper copy and strict post-test signature
+pass. The ordinary visible update preserves 14 records, 16 native identities,
+12 draft scopes, seven old backends and the original goal over 150 seconds.
+The old backends are retained rather than migrated. Physical input, IME, real
+provider delivery and the whole milestone remain unqualified.
+
+A separate alpha.190 isolated-page test checks real New session, synthetic name
+input and Cancel between independent locked=true OS observations. The lock
+screen stays frontmost; no session or message is created. The owned GUI, fake
+daemon and profile are removed. This proves a page-automation primitive only;
+the existing Peekaboo system-screen/AX path and production locked delivery are
+not qualified or enabled by it.

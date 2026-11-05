@@ -4796,3 +4796,13 @@ and Cancel while independent OS reads remain locked. The foreground stays the
 lock screen; no session or message is created. This is an isolated renderer
 automation primitive, not working locked Peekaboo or native-agent delivery.
 The daily app gains no debugging endpoint or additional access from this test.
+
+
+The member/divider combined-source review passes. Signed review initially
+withholds approval because journey summaries omit their artifact identity; the
+existing per-launch receipts close that provenance gap without a rerun. The same
+reviewer approves the scoped signed batch. Both complete journeys subsequently
+pass from the actual Applications executable. Installation records are verified
+by source/CDHash and process/draft counts; the daily operator differs from the
+last approved operator only in version numbers. This closes the scoped batch,
+not whole member-layout work, locked delivery or the shared dogfood goal.
