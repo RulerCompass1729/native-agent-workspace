@@ -1049,17 +1049,19 @@ class Workspace extends EventEmitter {
     text = cleanText(text);
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw uiError("error.nativeCommandUseTerminal");
     const s = this.get(id), runtime = this.runtime(id);
+    // Public space input does not take over the private composer or terminal.
+    const controller = shared ? s.owner : owner;
     const replyTo = shared && require('./room-threads.js').replyReference(shared.replyTo);
     const roomId = shared?.roomId || 'shared', room = this.roomFor(roomId);
     if (shared && !spaces.isMember(s, roomId)) throw uiError("error.workspace.recipientLeftSpace");
-    if (s.owner !== owner || s.provider !== 'claude' || s.state !== 'working' || s.approval || !runtime.queueAvailable || runtime.pendingQueue) throw uiError("error.workspace.nativeWaitingInputUnavailable");
+    if (s.owner !== controller || s.provider !== 'claude' || s.state !== 'working' || s.approval || !runtime.queueAvailable || runtime.pendingQueue) throw uiError("error.workspace.nativeWaitingInputUnavailable");
     s.peerRevision = (s.peerRevision || 0) + 1;
     if (shared) { this.pauseParticipant(id, '真人追加等待输入', false, uiActivity('notice.run.humanQueue')[1]); this.pauseRoom(roomId, '真人追加等待输入', uiActivity('notice.run.humanQueue')[1]); } else this.pause('真人追加等待输入', undefined, false, uiActivity('notice.run.humanQueue')[1]);
     // A shared queue continues the current public task until native pickup;
     // private input still revokes its output scope immediately.
     if (!shared) s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
-    const valid = () => this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending &&
+    const valid = () => this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending &&
       s.controlRevision === control && s.connectionRevision === connection && !s.approval && !['ended', 'recoverable', 'error', 'disconnected'].includes(s.state) &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
@@ -1105,14 +1107,16 @@ class Workspace extends EventEmitter {
     text = cleanText(text);
     if (/^\/[a-z-]+(?:\s|$)/i.test(text)) throw uiError("error.nativeCommandUseTerminal");
     const s = this.get(id), runtime = this.runtime(id);
+    // Public space input does not take over the private composer or terminal.
+    const controller = shared ? s.owner : owner;
     const replyTo = shared && require('./room-threads.js').replyReference(shared.replyTo);
     const roomId = shared?.roomId || 'shared', room = this.roomFor(roomId);
     if (shared && !spaces.isMember(s, roomId)) throw uiError("error.workspace.recipientLeftSpace");
-    if (s.owner !== owner || s.provider !== 'codex' || s.state !== 'working' || s.approval ||
+    if (s.owner !== controller || s.provider !== 'codex' || s.state !== 'working' || s.approval ||
       !runtime.steerAvailable || runtime.pendingSteer || typeof expectedTurnId !== 'string' || !expectedTurnId || runtime.turnId !== expectedTurnId) throw uiError("error.workspace.nativeTurnOrControlChanged");
     if (shared) { this.pauseParticipant(id, '真人追加指令', false, uiActivity('notice.run.humanSteer')[1]); this.pauseRoom(roomId, '真人追加指令', uiActivity('notice.run.humanSteer')[1]); } else this.pause('真人追加指令', undefined, false, uiActivity('notice.run.humanSteer')[1]); s.controlRevision++;
     const control = s.controlRevision, connection = s.connectionRevision, nativeId = s.nativeId, member = spaces.membershipRevision(s, roomId);
-    const valid = () => this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === owner && s.nativeId === nativeId && !s.nativeContextPending && s.controlRevision === control &&
+    const valid = () => this.runtimes.get(id) === runtime && !runtime.nativeInputRequired && s.owner === controller && s.nativeId === nativeId && !s.nativeContextPending && s.controlRevision === control &&
       s.connectionRevision === connection && !['ended', 'recoverable', 'error', 'disconnected', 'approval'].includes(s.state) && !s.approval && runtime.turnId === expectedTurnId &&
       (!shared || (spaces.isMember(s, roomId) && spaces.membershipRevision(s, roomId) === member && this.sharedReplies.grants.has(tag) && !this.sharedReplies.grants.get(tag).closed)) && (roomId === 'shared' || !this.storageWarning);
     const tag = randomUUID(), draft = this.drafts.get(id), draftRevision = this.draftRevisions.get(id);
@@ -1148,7 +1152,7 @@ class Workspace extends EventEmitter {
         // Drain a completion received before the steer ACK only after its draft
         // and pending marker settle. Uncertain input or a newer human boundary
         // must still cancel recovery, including edits subsequently cleared.
-        const unchanged = accepted && this.runtimes.get(id) === runtime && s.owner === owner &&
+        const unchanged = accepted && this.runtimes.get(id) === runtime && s.owner === controller &&
           s.nativeId === nativeId && s.controlRevision === control && spaces.membershipRevision(s, roomId) === member &&
           s.connectionRevision === connection && this.draftRevisions.get(id) === draftRevision;
         runtime.finishTurn(expectedTurnId);
@@ -1326,7 +1330,8 @@ class Workspace extends EventEmitter {
       if (!media.validSpaceImagePacket(images, roomId) || !this.runtime(id).spaceImagesAvailable) throw uiError('error.roomImages.deliveryUnavailable');
       if (this.roomFor(roomId).messages.some(row => row.imageDraftVersion === images.version)) throw uiError('error.roomImages.alreadySent');
     }
-    this.claim(id, owner, s.view, roomId); return this.send(id, text, owner, null, { roomId, member: spaces.membershipRevision(s, roomId), replyTo }, null, null, null, null, images);
+    // Membership authorizes this explicit shared message; private input ownership stays put.
+    return this.send(id, text, s.owner, null, { roomId, member: spaces.membershipRevision(s, roomId), replyTo }, null, null, null, null, images);
   }
   approve(id, requestId, decision, owner) {
     const s = this.get(id), queue = this.approvalRoutes.get(id), route = queue?.get(requestId);

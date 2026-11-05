@@ -178,3 +178,16 @@ for (const late of ['delta', 'completed', 'unseen-item']) test(`native interrupt
   assert.equal(f.s.messages.at(-1).status, 'complete');
   assert.equal(JSON.stringify(f.w.room.messages), sharedCut);
 });
+
+
+test('a shared steer from another window retains private control and shares only the exact native input reply', async t => {
+  const f=await fixture(t); f.w.setDraft(f.id,'POSITIVE PRIVATE DRAFT','owner');
+  const sending=f.w.steer(f.id,'Cross-window shared request','space-view','active',{});
+  if(f.calls.length){f.ack(); await sending;} else await sending;
+  const tag=f.s.messages.at(-1).id; f.user(tag);
+  f.finish('private','PRIVATE LATE COMPLETION'); f.start('shared-cross-window');f.finish('shared-cross-window','SHARED EXACT REPLY');f.end();
+  assert.equal(f.s.owner,'owner');assert.equal(f.w.drafts.get(f.id),'POSITIVE PRIVATE DRAFT');
+  assert.equal(f.w.room.messages.find(m=>m.role==='human').deliveries[0].status,'submitted');
+  assert.equal(f.w.room.messages.filter(m=>m.finalReply&&m.text==='SHARED EXACT REPLY').length,1);
+  assert.ok(!JSON.stringify(f.w.room.messages).includes('PRIVATE LATE COMPLETION'));
+});
