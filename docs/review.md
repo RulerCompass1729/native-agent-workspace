@@ -5406,3 +5406,32 @@ acceptance. The original native tool transactions retain review25's missing-
 launch-proof finding and review26's pass after correction; the temporary reviewer
 JSON files are gone and are not reconstructed. No product code, command audit
 rows, model runs, current-version compatibility or whole-dogfood claim changes.
+
+
+**Owned native MCP continuation and locked UI, 2026-11-05:**
+Pinned Codex 0.164 retains its owned active goal through MCP reload and invokes a
+new tool in the next automatic turn. A positive pre-reload call and the new call
+both reach real MCP helpers. Independent scoped review passes. Fixed responses
+supply the tool plan; autonomous model choice, current approval-policy retention
+and original-session adoption are not proved.
+
+A separate isolated installed alpha.198 task connects that native engine to the
+existing stock browser MCP through the three-tool gate. Four observations and
+four actions produce the exact synthetic recipient/body/native receipt and shared
+row while another view retains its positive drafts, recipient and selection.
+Five OS observations stay locked with unchanged foreground; owned processes and
+profiles are cleaned. The initial ungranted-tool refusal is retained. The private
+fixture grants only its three tools using native per-tool approval configuration;
+original settings are untouched. Independent scoped review passes. The gate is
+not a security or redaction boundary. Production locked access, daily debugging,
+Claude and the whole milestone remain open; no production route is enabled.
+
+**Collapsed empty-space discovery, 2026-11-05 (source):**
+The existing hide rule now matches the sidebar surface itself. It prevents the
+empty-space prose and wide controls from stacking inside a narrow icon rail,
+without removing the expanded discovery or create action. The exact peer source
+and single test-return-selector patch are integrated unchanged; their independent
+reviews are reused. The old compiled UI has actual failing geometry. The fixed
+source has six observed interaction phases, followed by a test-counter failure;
+the corrected complete operator still needs installed acceptance. No full-source
+GUI pass or whole sidebar-milestone completion is inferred.
