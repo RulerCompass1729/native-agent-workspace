@@ -5403,3 +5403,17 @@ arguments. The visible update and 150-second witness preserve the original goal,
 one application-search entry pass. Independent review is reused only for the
 unchanged peer source/evidence; Main's installed checks are author-run. Physical,
 English/dark/active-error and screen-reader claims remain open.
+
+
+## Operator 1a current-source combination
+
+The complete source task covers explicit global/session permission, quota and
+expiry entry, idempotent session creation without task delivery, exact report
+and question display, one synthetic human answer, explicit acceptance and warned
+cancellation, revocation, and one reopen on the same backend. Identities and a
+positive unsent draft survive. The final combination passes all four flows and
+2,870 source checks without skips. Unavailable local/remote metadata and mixed
+backend control are checked through their actual implementations, without a
+provider. Earlier fixture failures and the cancellation repaint failure are
+retained. This does not qualify installed or paid native behavior, daily grants,
+original-goal continuation, or recovery after native-process loss.

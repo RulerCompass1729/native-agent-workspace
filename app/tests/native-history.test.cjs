@@ -175,6 +175,7 @@ test('workspace native version metadata follows its actual runtime RPC and never
     dataDir: '/synthetic/native-history-workspace',
     sessions: new Map([['test', { id: 'test', provider: 'codex', nativeVersion: '0.164.0', nativeVersionStatus: 'verified' }]]),
     runtimes: new Map([['test', runtime]]), host: { binaries: {}, rpc: { nativeVersion: '0.164.0' } },
+    operator: { decorate: value => value },
     sharedReplies: { activity: () => null }, drafts: new Map(), capacityRecoveries: new Map(), room: {}, versions: {},
   });
   workspace.rooms = new Map([['shared', workspace.room]]);

@@ -1,0 +1,163 @@
+// Four complete GUI journeys on the actual source DSH shell. Synthetic calls
+// are labelled; this never qualifies an original Claude/Codex producer.
+const scratch = require('./fixtures/test-scratch.cjs');
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict');
+const { randomUUID, createHash } = require('node:crypto'), { once } = require('node:events');
+const { _electron } = scratch.playwright(require('playwright'));
+const root = path.resolve(__dirname, '..');
+const { connectService } = require('../app/service-connection.cjs');
+const { processIdentity, processMayBeAlive } = require('../app/platform.cjs');
+const evidence = process.env.NAW_EVIDENCE_DIR;
+if (!evidence || !path.isAbsolute(evidence)) throw Error('An explicit private evidence directory is required');
+fs.mkdirSync(evidence, { recursive: true });
+const canonicalEvidence = fs.realpathSync(evidence), canonicalRoot = fs.realpathSync(root);
+if (canonicalEvidence === canonicalRoot || canonicalEvidence.startsWith(canonicalRoot + path.sep)) throw Error('GUI evidence must be outside the repository; no slot or profile was allocated');
+const common = require('node:child_process').execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root, encoding: 'utf8' }).trim();
+const slot = path.join(path.dirname(common), '.local/gui-test-slot.lock'), token = randomUUID();
+try { fs.mkdirSync(slot); } catch (error) { if (error.code !== 'EEXIST') throw error; console.error('Canonical GUI slot occupied; zero allocation and no launch.'); process.exit(75); }
+fs.writeFileSync(path.join(slot, 'owner.json'), JSON.stringify({ token, owner: 'Codex4', task: 'T164 1a four synthetic source journeys', pid: process.pid, at: new Date().toISOString() }));
+const pictures = path.join(os.homedir(), 'Pictures/naw-dogfood', new Date().toISOString().slice(0, 7), 't164-' + token);
+let profile, cwd, child, client, app, page, source, sequence = 0, launchCount = 0, expired = false;
+const checks = [], errors = [], trace = [], geometry = [], activeStartedAt = Date.now();
+const guiProcesses = [];
+let deadline;
+const files = ['app/operator-control.cjs', 'app/workspace.cjs', 'app/claude-message-tool.cjs', 'app/claude-submit.cjs', 'app/claude-bridge/hooks/register.js', 'app/renderer/renderer.js', 'app/renderer/reading-list.js', 'app/renderer/styles.css', 'app/dsh/client.js'];
+const hashes = () => Object.fromEntries(files.map(file => [file, createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex')]));
+const sourceBefore = hashes();
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(fn, label) { for (let n = 0; n < 100; n++) { if (expired) throw Error('Active GUI budget exhausted'); if (await fn()) return; await wait(50); } throw Error(label); }
+const state = () => client.call('initial');
+const session = async id => (await state()).sessions.find(s => s.id === id);
+function fixture(method, target, value) {
+  if (expired) return Promise.reject(Error('Active GUI budget exhausted'));
+  const id = ++sequence;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.off('message', receive); reject(Error('Synthetic fixture timed out')); }, 5000);
+    const receive = result => { if (method === 'operatorCall' ? result.operatorRequestId !== id : result.requestId !== id) return; clearTimeout(timer); child.off('message', receive); trace.push({ method, target, value, result }); fs.writeFileSync(path.join(evidence, 'trace.json'), JSON.stringify(trace, null, 2)); resolve(result); };
+    child.on('message', receive); child.send({ id, operatorRequestId: id, method, target, value });
+  });
+}
+async function tool(id, name, args, callId = randomUUID()) { const response = await fixture('operatorCall', id, { name: 'workspace_' + name, arguments: args, callId }); if (response.error) throw Error(response.error); return response.result; }
+async function launch() {
+  if (expired) throw Error('Active GUI budget exhausted');
+  assert.ok(++launchCount <= 2, 'Only initial launch plus one owned reopen');
+  app = await _electron.launch({ args: [root], env: { ...process.env, NAW_DATA_DIR: profile, NAW_TEST_PARENT_PID: String(process.pid) }, timeout: 30000 });
+  const identity = processIdentity(app.process().pid); if (!identity) throw Error('Owned GUI identity could not be recorded'); guiProcesses.push(identity);
+  fs.writeFileSync(path.join(evidence, 'allocated.json'), JSON.stringify({ token, profile, childPid: child.pid, guiProcesses, at: new Date().toISOString(), sourceBefore }));
+  page = await app.firstWindow(); page.setDefaultTimeout(8000); page.on('pageerror', error => errors.push(error.message)); await page.locator('#new-session').waitFor(); await page.locator('#message-input').waitFor();
+}
+async function choose(id) { await page.locator(`.session-link[data-session-id="${id}"]`).click(); }
+async function menu(id, label) { await page.locator(`[data-session-menu="${id}"]`).click(); await page.getByRole('menuitem', { name: label, exact: true }).click(); }
+async function capture(label) { await page.screenshot({ path: path.join(pictures, label + '.png') }); fs.writeFileSync(path.join(evidence, label + '.json'), JSON.stringify(await state(), null, 2)); }
+async function readableCard(card, label) {
+  assert.equal(await card.count(), 1); await card.scrollIntoViewIfNeeded();
+  const outer = await card.boundingBox(), body = await card.locator(':scope > .message-body').boundingBox();
+  geometry.push({ label, card: outer, body }); fs.writeFileSync(path.join(evidence, 'geometry.json'), JSON.stringify(geometry, null, 2));
+  assert.ok(outer && body && body.width >= outer.width * 0.6, 'Report body must remain readable beside its controls');
+}
+async function run() {
+  fs.mkdirSync(pictures, { recursive: true });
+  profile = scratch.directory(path.join(os.tmpdir(), 'naw-operator-')); cwd = path.join(profile, 'workspace'); fs.mkdirSync(cwd, { mode: 0o700 }); cwd = fs.realpathSync(cwd);
+  child = scratch.childProcess.fork(path.join(root, 'app/daemon.cjs'), [profile], { cwd, execArgv: ['--require', path.join(__dirname, 'fixtures/operator-control.cjs')],
+    env: { ...process.env, NAW_TEST_APP_ROOT: root, NAW_WORKSPACE: cwd, NAW_APP_VERSION: require('../package.json').version }, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+  fs.writeFileSync(path.join(evidence, 'allocated.json'), JSON.stringify({ token, profile, childPid: child.pid, at: new Date().toISOString(), sourceBefore }));
+  await until(() => fs.existsSync(path.join(profile, 'connection.json')), 'Owned synthetic service boots'); client = await connectService(profile, 'operator-owner');
+  source = await client.call('create', { provider: 'claude', cwd, name: 'Synthetic initiator', view: 'chat' });
+  fs.writeFileSync(path.join(profile, 'views.json'), JSON.stringify([{ owner: 'operator-owner', active: true, selected: source, mode: 'chat' }]), { mode: 0o600 });
+  await client.call('draft', source, 'ORIGINAL UNSENT INITIATOR DRAFT');
+  // This journey starts in an existing shared space; an empty unused legacy room is deliberately hidden.
+  await client.call('join', source, true);
+  await launch();
+  await page.locator('#room-more').click(); await page.getByRole('menuitem', { name: '启用 agent 控制接口…', exact: true }).click();
+  await menu(source, '允许此会话使用控制接口'); await until(async () => (await session(source)).operatorEnabled, 'Source explicitly enabled');
+  const args = { action_id: 'gui-one', provider: 'claude', cwd, task: 'Synthetic pending creation task', permission: 'default' };
+  const pending = await tool(source, 'open', args); assert.equal(pending.status, 'pending-authorization');
+  const card = page.locator('.operator-grant'); await card.waitFor();
+  await card.locator('input[type=number]').nth(0).fill('2'); await card.locator('input[type=number]').nth(1).fill('2');
+  const expiry = new Date(Date.now() + 3600000); expiry.setMinutes(expiry.getMinutes() - expiry.getTimezoneOffset()); await card.locator('input[type=datetime-local]').fill(expiry.toISOString().slice(0, 16));
+  await card.locator('input[type=checkbox]').check();
+  await page.locator('#setup-button').click(); await page.locator('#ui-language').selectOption('en');
+  await until(() => card.getByRole('button', { name: 'Save grant and create this session', exact: true }).count(), 'Grant labels repaint to English');
+  assert.equal(await card.locator('input[type=number]').nth(0).inputValue(), '2'); assert.equal(await card.locator('input[type=checkbox]').isChecked(), true);
+  await page.locator('#ui-language').selectOption('zh'); await page.locator('#close-setup').click();
+  await card.getByRole('button', { name: '记录许可并建此会话', exact: true }).click();
+  await until(async () => (await state()).sessions.length === 2, 'Exactly one executor created');
+  const created = await tool(source, 'open', args), executor = created.sessionId; assert.equal(created.status, 'created');
+  const openRowId = 'operator:open:' + JSON.stringify([(await session(source)).nativeId, args.action_id]);
+  await readableCard(page.locator('#messages [data-message-id=' + JSON.stringify(openRowId) + ']'), 'private-open');
+  assert.equal((await state()).sessions.length, 2); assert.equal((await fixture('stats')).sends.length, 0); assert.equal((await session(executor)).operatorEnabled, false);
+  assert.equal(await page.locator('#message-input').inputValue(), 'ORIGINAL UNSENT INITIATOR DRAFT'); await capture('01-explicit-grant-idempotent-create');
+  checks.push('Explicit global/session enable and human grant quotas/expiry create once; initial task not delivered; executor has no general interface; original draft unchanged');
+
+  await client.call('join', executor, true);
+  const report = (extra = {}) => tool(executor, 'report', { request_id: created.requestId, dispatch_id: created.dispatchId, state: 'blocked', body: 'RAW REPORT <literal> 中文', question: 'Exact question for the person?', ...extra });
+  const reported = await report(); const question = page.locator('.operator-attention').filter({ hasText: 'Exact question for the person?' }); await until(async () => await question.count() > 0, 'Question highlighted in original initiator');
+  assert.ok((await state()).room.messages.some(m => m.operator?.requestId === created.requestId));
+  await page.locator('#room-nav').click(); await page.locator('#room-record').click();
+  await page.locator('#room-filter').selectOption(executor);
+  const commonReport = page.locator(`#room-messages [data-message-id="operator:report:${reported.reportId}"]`); await commonReport.waitFor(); assert.equal(await commonReport.count(), 1);
+  await readableCard(commonReport, 'shared-report');
+  await capture('02-common-space-filter'); await page.locator('#room-filter').selectOption(''); await choose(source);
+  const reportRow = page.locator(`#messages [data-message-id="operator:report:${reported.reportId}"]`); assert.equal(await reportRow.count(), 1);
+  await readableCard(reportRow, 'private-question'); await capture('02-private-question');
+  await reportRow.getByRole('button', { name: '打开执行者会话', exact: true }).click();
+  await until(async () => await page.locator(`.session-link.active[data-session-id="${executor}"]`).count() === 1, 'The original dispatch executor is selected');
+  await until(async () => (await page.locator('#message-input').evaluate(el => el === document.activeElement)), 'Exact executor composer focused');
+  if (await page.locator('#message-input').getAttribute('readonly') !== null) {
+    const claim = page.locator('#send-button'); assert.equal(await claim.count(), 1); assert.equal(await claim.innerText(), '接管此窗口');
+    await claim.click();
+    await until(async () => await page.locator('#message-input').getAttribute('readonly') === null, 'Explicit human takeover makes its existing composer editable');
+  }
+  await page.locator('#message-input').fill('Synthetic human answer'); await page.locator('#send-button').click();
+  await choose(source); await until(() => page.getByText('你已回复，等执行者更新', { exact: true }).first().isVisible(), 'Proven human reply removes question emphasis');
+  assert.equal((await session(source)).liveDraft, 'ORIGINAL UNSENT INITIATOR DRAFT'); await capture('02-question-visible-human-answer');
+  checks.push('Saved report is visible privately and in the common space; exact executor link focuses its composer; actual GUI human send retains question and changes attention to answered');
+
+  await report({ state: 'ready', question: null }).then(() => assert.fail('ready+question must be refused'), error => assert.match(error.message, /ready/));
+  const ready = await tool(executor, 'report', { request_id: created.requestId, dispatch_id: created.dispatchId, state: 'ready', body: 'Ready evidence, still awaiting review' });
+  await until(() => page.getByText('成果待审', { exact: true }).first().isVisible(), 'Ready is reviewable');
+  const readyRow = page.locator(`#messages [data-message-id="operator:report:${ready.reportId}"]`); assert.equal(await readyRow.count(), 1);
+  await readyRow.getByRole('button', { name: '已收下', exact: true }).click();
+  await until(() => page.getByText('已结束：已收下', { exact: true }).first().isVisible(), 'Human explicitly accepts');
+  const acceptedCreation = page.locator('#messages [data-message-id=' + JSON.stringify(openRowId) + ']');
+  await acceptedCreation.getByText('已作废，未投递', { exact: true }).waitFor();
+  assert.match(await acceptedCreation.locator(':scope > .message-body').innerText(), /首条任务：/);
+  assert.doesNotMatch(await acceptedCreation.locator(':scope > .message-body').innerText(), /待投递的任务/);
+  await report({ state: 'progress' }).then(() => assert.fail('closed report must be refused'), error => assert.match(error.message, /closed/));
+  const second = await tool(source, 'open', { ...args, action_id: 'gui-two', task: 'Second pending task' }); assert.equal(second.status, 'created');
+  // A newly created record changes the menu action order. Wait for that actual UI update before opening it.
+  await page.locator('.session-link[data-session-id=' + JSON.stringify(second.sessionId) + ']').waitFor();
+  await menu(source, '撤销此会话的建会话许可');
+  await tool(second.sessionId, 'report', { request_id: second.requestId, dispatch_id: second.dispatchId, state: 'progress', body: 'Must not be accepted after revocation' }).then(() => assert.fail('revoked report'), error => assert.match(error.message, /revoked/));
+  const openRow = page.locator('[data-message-id]').filter({ hasText: 'Second pending task' });
+  await openRow.getByRole('button', { name: '撤销请求…', exact: true }).click();
+  assert.equal(await openRow.getByText('撤销会作废尚未执行的动作。已发生的副作用撤不回，原生会话继续运行。', { exact: true }).count(), 1);
+  await openRow.getByRole('button', { name: '确认撤销请求', exact: true }).click();
+  await until(() => openRow.getByText('已结束：已撤销', { exact: true }).isVisible(), 'Human cancellation keeps its reason');
+  await openRow.getByText('已作废，未投递', { exact: true }).waitFor();
+  assert.match(await openRow.locator(':scope > .message-body').innerText(), /首条任务：/); await capture('03-accept-cancel-revoke');
+  checks.push('Ready does not close a request; explicit accept and warned cancellation retain different reasons; revoked/closed reports are refused and no native session is stopped');
+
+  const before = await state(); await app.close(); app = null; await launch();
+  const after = await state(); assert.deepEqual(after.sessions.map(s => ({ id: s.id, nativeId: s.nativeId })), before.sessions.map(s => ({ id: s.id, nativeId: s.nativeId })));
+  const restored = after.sessions.find(s => s.id === source).messages;
+  assert.ok(restored.some(m => m.operator?.reportId === reported.reportId && m.operator.closedReason === 'accepted'));
+  assert.ok(restored.some(m => m.operator?.requestId === second.requestId && m.operator.closedReason === 'cancelled'));
+  await page.locator(`#messages [data-message-id="operator:report:${ready.reportId}"]`).getByText('已结束：已收下', { exact: true }).waitFor();
+  await page.locator('[data-message-id]').filter({ hasText: 'Second pending task' }).getByText('已结束：已撤销', { exact: true }).waitFor();
+  assert.equal((await session(source)).liveDraft, 'ORIGINAL UNSENT INITIATOR DRAFT');
+  const stats = await fixture('stats'); assert.equal(stats.sends.length, 1); assert.equal(stats.inputs.length, 0); assert.equal(stats.modelCalls, 0); assert.equal(stats.nativeProcesses, 0); assert.deepEqual(errors, []); assert.deepEqual(hashes(), sourceBefore);
+  await capture('04-reopened-same-records'); checks.push('One ordinary owned reopen retains reports, closure reasons, original IDs and unsent draft; exactly one intended synthetic human send, zero native input/provider/model calls');
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ checks, sourceBefore, sourceAfter: hashes(), launchCount, activeSeconds: (Date.now() - activeStartedAt) / 1000, pictures, profile, trace, geometry, stats, errors }, null, 2));
+}
+const cleanup = scratch.cleanup(async () => { if (app) await app.close(); client?.close(); if (child?.connected) child.disconnect(); if (child && child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child, 'exit'); } });
+Promise.race([run(), new Promise((_, reject) => { deadline = setTimeout(() => { expired = true; reject(Error('150-second final-source GUI budget exhausted')); }, 150000); })]).catch(async error => { console.error(error.stack); fs.writeFileSync(path.join(evidence, 'failure.txt'), error.stack); try { if (page && !page.isClosed()) await capture('failure'); } catch {} process.exitCode = 1; }).finally(async () => {
+  clearTimeout(deadline);
+  try {
+    await cleanup(); const owner = JSON.parse(fs.readFileSync(path.join(slot, 'owner.json'))); assert.equal(owner.token, token); if (profile) assert.equal(fs.existsSync(profile), false);
+    assert.equal(guiProcesses.some(identity => processMayBeAlive(identity)), false);
+    fs.unlinkSync(path.join(slot, 'owner.json')); fs.rmdirSync(slot);
+    fs.writeFileSync(path.join(evidence, 'released.json'), JSON.stringify({ token, releasedAt: new Date().toISOString(), ownedCleanupConfirmed: true, profile, guiProcesses, childExit: child?.exitCode, childSignal: child?.signalCode }));
+    console.log(JSON.stringify({ checks, modelCalls: 0, realProviderProcesses: 0, slotReleased: true }));
+  } catch (error) { console.error('Owned cleanup/lease release unconfirmed:', error.stack); process.exitCode = 1; }
+});

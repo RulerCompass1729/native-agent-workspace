@@ -1831,6 +1831,113 @@ function closeRename(returnFocus = true) {
   }
 }
 function focusSessionAction(id) { if (id === 'room') $('room-more').focus(); else sessionRow(id)?.more.focus(); }
+async function setOperatorEnabled(id, enabled) {
+  await api.operatorAction(id, 'enabled', enabled);
+  toastMessage(enabled ? 'operator.enableNote' : 'operator.disabledNote');
+}
+function renderOperatorControls(entry, message, context = {}) {
+  const clearCancel = () => { entry.operatorCancelWarning?.remove(); entry.operatorCancelWarning = null; entry.operatorCancelKey = ''; };
+  const op = message.operator;
+  if (!op) { clearCancel(); entry.operatorControls?.remove(); entry.operatorControls = null; entry.operatorKey = ''; entry.item.classList.toggle('operator-attention', false); return; }
+  entry.item.classList.toggle('operator-attention', Boolean(!op.old && op.actionable && op.attention));
+  const initiatorId = op.initiatorId || op.recipientId;
+  const initiator = state.sessions.find(s => s.id === initiatorId);
+  const allowed = Boolean(!disconnected && initiator && !initiator.archived && (initiator.serviceCapabilities || state.capabilities || []).includes('operatorControl1a'));
+  const cancelKey = allowed && op.requestId && !op.old && (op.actionable || op.creation) && op.state !== 'closed'
+    ? JSON.stringify([initiatorId, initiator.nativeId, op.requestId, op.version, context.passive === true]) : '';
+  if (entry.operatorCancelKey !== cancelKey) clearCancel();
+  const key = JSON.stringify([op, allowed, disconnected, context.passive === true, state.sessions.map(s => [s.id, s.nativeId, s.archived])]);
+  if (key === entry.operatorKey) return;
+  entry.operatorKey = key;
+  const controls = entry.operatorControls || node('div', undefined, 'operator-controls');
+  if (!entry.operatorControls) { entry.operatorControls = controls; entry.actions.before(controls); }
+  controls.replaceChildren();
+  const clock = node('time'); clock.dateTime = new Date(message.time).toISOString();
+  ui.display.computed(clock, 'text', () => new Date(message.time).toLocaleString(ui.language.getSnapshot().active, { hourCycle: 'h23' })); controls.append(clock);
+  const act = (action, value) => {
+    const current = state.sessions.find(s => s.id === initiatorId);
+    if (disconnected || !current || current.archived || current.nativeId !== initiator.nativeId) throw uiError('error.operator.stale');
+    return api.operatorAction(initiatorId, action, value);
+  };
+  const add = (key, fn, disabled = false) => { const control = uiButton(key, fn, 'small'); control.disabled = !allowed || disabled; controls.append(control); return control; };
+  if (op.reportId) {
+    controls.append(uiNode('span', 'operator.saved'));
+    if (op.old) controls.append(uiNode('span', 'operator.old', { version: op.reportVersion }));
+    if (op.reportQuestion && (!op.actionable || op.old)) controls.append(node('p', op.reportQuestion, 'operator-question'));
+    if (op.turnAbnormal) controls.append(uiNode('p', 'operator.abnormal'));
+    if (op.unread) { controls.append(uiNode('span', 'operator.unread', undefined, 'operator-unread')); add('operator.read', () => act('read', op.requestId)); }
+  }
+  if (op.creation) {
+    controls.append(uiNode('span', 'operator.action', { id: op.actual.actionId }));
+    controls.append(uiNode('strong', op.creation === 'created' && op.state === 'closed' ? 'operator.createdVoided' : 'operator.' + op.creation));
+    controls.append(uiNode('p', 'operator.nativeDefault', { model: op.actual.model === 'unknown' ? uiText('operator.unknown') : op.actual.model }));
+    controls.append(uiNode('p', 'operator.permission', { permission: uiText('operator.' + op.actual.permission) }));
+    if (op.actual.message) controls.append(node('pre', op.actual.message));
+    const domain = state.operatorPolicy?.domains.find(d => d.id === op.actual.domainId);
+    if (domain) {
+      controls.append(uiNode('p', 'operator.grantSummary', { id: domain.id, daily: domain.daily, concurrent: domain.concurrent, expires: new Date(domain.expiresAt).toLocaleString() }));
+      add('operator.revokeDomain', () => act('revoke', domain.id), Boolean(domain.revokedAt));
+    }
+  }
+  if (op.requestId && !op.old && (op.actionable || op.creation)) {
+    controls.append(uiNode('span', 'operator.request', { id: op.requestId, version: op.version }));
+    const params = op.state === 'attention' ? { reason: uiText('operator.' + op.reportState) } : op.state === 'closed' ? { reason: uiText('operator.' + op.closedReason) } : undefined;
+    controls.append(uiNode('strong', 'operator.' + op.state, params));
+    if (op.question) controls.append(node('p', op.question, 'operator-question'));
+    if (op.cannotUpdate && op.state !== 'closed') controls.append(uiNode('p', 'operator.cannotUpdate'));
+    controls.append(uiNode('span', op.state === 'closed' ? 'operator.voided' : 'operator.pending'));
+    if (op.state !== 'closed') {
+      add('operator.accept', () => act('close', { requestId: op.requestId, reason: 'accepted' }), op.reportState !== 'ready');
+      add('operator.cancel', () => {
+        if (!allowed || entry.operatorCancelWarning) return;
+        const warning = node('div', undefined, 'operator-cancel-warning'); warning.append(uiNode('p', 'operator.cancelWarning'));
+        const confirm = uiButton('operator.confirmCancel', async () => {
+          if (entry.operatorCancelWarning !== warning || entry.operatorCancelKey !== cancelKey) throw uiError('error.operator.stale');
+          confirm.disabled = true; try { await act('close', { requestId: op.requestId, reason: 'cancelled' }); } catch (error) { confirm.disabled = false; throw error; }
+        }, 'small');
+        const keep = uiButton('operator.keep', clearCancel, 'small'); warning.append(confirm, keep);
+        // Keep this deliberate human choice outside status-only control repainting.
+        entry.operatorCancelWarning = warning; entry.operatorCancelKey = cancelKey; entry.actions.before(warning); confirm.focus({ preventScroll: true });
+      });
+    }
+  }
+  if (op.executorId) {
+    const executor = state.sessions.find(s => s.id === op.executorId);
+    add('operator.openExecutor', async () => {
+      const current = state.sessions.find(s => s.id === op.executorId);
+      if (!current || current.nativeId !== executor.nativeId || current.archived) throw uiError('error.operator.stale');
+      await select(current.id, 'chat');
+      // Selecting/focusing is a human action; no text is inserted or sent.
+      $('message-input').focus({ preventScroll: true });
+    }, !executor || executor.archived);
+  }
+  if (op.creation === 'pending-authorization') {
+    const form = node('form', undefined, 'operator-grant');
+    const field = (key, type) => { const label = node('label'), input = node('input'); input.type = type; input.required = true; label.append(uiNode('span', key), input); form.append(label); return input; };
+    const daily = field('operator.daily', 'number'), concurrent = field('operator.concurrent', 'number'), expires = field('operator.expires', 'datetime-local');
+    for (const input of [daily, concurrent]) { input.min = '1'; input.step = '1'; }
+    const permissions = node('select');
+    for (const mode of ['default', 'bypass']) { const option = uiNode('option', 'operator.' + mode); option.value = mode; permissions.append(option); }
+    permissions.value = op.args.permission; permissions.setAttribute('aria-label', uiText('operator.permission', { permission: '' })); form.append(permissions);
+    const consentLabel = node('label'), consent = node('input'); consent.type = 'checkbox'; consent.required = true; consentLabel.append(consent, uiNode('span', 'operator.grantConsent')); form.append(consentLabel);
+    const submit = uiNode('button', 'operator.authorize'); submit.type = 'submit'; submit.disabled = !allowed; form.append(submit);
+    const problem = node('p'); problem.setAttribute('role', 'alert'); form.append(problem);
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      attempt(async () => {
+        const count = Number(daily.value), live = Number(concurrent.value), until = new Date(expires.value).getTime();
+        if (!consent.checked || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(live) || live < 1 || !Number.isSafeInteger(until) || until <= Date.now()) { ui.display.text(problem, 'operator.formInvalid'); return; }
+        if (!allowed) throw uiError('error.operator.stale'); submit.disabled = true;
+        try {
+          const domainId = await act('grant', { providers: [op.args.provider], directories: [op.args.cwd], permission: permissions.value, daily: count, concurrent: live, expiresAt: until });
+          await act('authorize', { key: op.actionKey, domainId });
+        } catch (error) { problem.textContent = ui.errorText(error); submit.disabled = false; }
+      });
+    });
+    controls.append(form);
+    add('operator.dismiss', () => act('dismiss', { key: op.actionKey }));
+  }
+}
 const roomMenuKey = (id = spaceId) => JSON.stringify([id, selectionRevision, disconnected, spaceRecord(id)?.name, spaceRecord(id)?.archived]);
 function openRoomMenu(point, anchor, id = spaceId) {
   const room = spaceRecord(id); anchor ||= spaceRows.get(id)?.more || $('room-more');
@@ -1839,7 +1946,7 @@ function openRoomMenu(point, anchor, id = spaceId) {
   roomMenu?.(); sessionMenu?.close(); anchor.focus(); anchor.setAttribute('aria-expanded', 'true');
   const key = roomMenuKey(id);
   roomMenu = ui.menu({
-    items: [{ id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: uiText('menu.mergeDetails'), labelKey: 'menu.mergeDetails' }] : []), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, { id: 'notes', label: uiText('menu.notes'), labelKey: 'menu.notes' }, { id: 'files', label: uiText('menu.spaceFiles'), labelKey: 'menu.spaceFiles' }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage' }, { id: 'about', label: uiText('menu.collaborationAbout'), labelKey: 'menu.collaborationAbout' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: uiText(state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll'), labelKey: state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll' }] : []), { id: 'archive', label: uiText('menu.archiveWorkspace'), labelKey: 'menu.archiveWorkspace' }],
+    items: [{ id: 'create', label: uiText('menu.newSpace'), labelKey: 'menu.newSpace' }, { id: 'merge', label: uiText('menu.mergeSpaces'), labelKey: 'menu.mergeSpaces', disabled: allSpaces().filter(room => !room.archived).length < 2 }, ...(room.merge ? [{ id: 'merge-record', label: uiText('menu.mergeDetails'), labelKey: 'menu.mergeDetails' }] : []), { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, { id: 'notes', label: uiText('menu.notes'), labelKey: 'menu.notes' }, { id: 'files', label: uiText('menu.spaceFiles'), labelKey: 'menu.spaceFiles' }, { id: 'usage', label: uiText('header.usage'), labelKey: 'header.usage' }, { id: 'about', label: uiText('menu.collaborationAbout'), labelKey: 'menu.collaborationAbout' }, ...(state.wakePolicy ? [{ id: 'wake-global', label: uiText(state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll'), labelKey: state.wakePolicy.enabled ? 'menu.wakeDisableAll' : 'menu.wakeEnableAll' }] : []), ...(state.operatorPolicy ? [{ id: 'operator-global', label: uiText(state.operatorPolicy.enabled ? 'operator.disableAll' : 'operator.enableAll'), labelKey: state.operatorPolicy.enabled ? 'operator.disableAll' : 'operator.enableAll' }] : []), { id: 'archive', label: uiText('menu.archiveWorkspace'), labelKey: 'menu.archiveWorkspace' }],
     getAnchorRect: () => point ? { left: point.x, right: point.x, top: point.y, bottom: point.y } : anchor.getBoundingClientRect(),
     onClose: () => { roomMenu = null; anchor.setAttribute('aria-expanded', 'false'); if (key === roomMenuKey(id) && anchor.isConnected && anchor.getClientRects().length && !anchor.disabled) anchor.focus({ preventScroll: true }); },
     onSelect: action => {
@@ -1848,6 +1955,7 @@ function openRoomMenu(point, anchor, id = spaceId) {
       else if (action === 'merge') openSpaceMerge(id);
       else if (action === 'merge-record') attempt(() => openMergeRecord(id));
       else if (action === 'wake-global') attempt(() => api.wakePolicy(null, !state.wakePolicy?.enabled));
+      else if (action === 'operator-global') attempt(() => setOperatorEnabled(null, !state.operatorPolicy?.enabled));
       else if (action === 'rename') openRename('room', anchor, id);
       else if (action === 'notes') openNotes(id);
       else if (action === 'files') attempt(async () => { await selectSpace(id); openSpaceFiles(); });
@@ -1866,7 +1974,7 @@ function sessionMenuModel(id, row) {
   const roomItems = allSpaces().filter(r => !r.archived).map(r => ({ id: `membership:${r.id}`, label: uiText(inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', { name: r.name }), labelKey: inSpace(record, r.id) ? 'menu.leaveSpace' : 'menu.joinSpace', labelParams: { name: r.name } }));
   // Right under the version fact that says this backend is older (T-131).
   const update = backendVersionNotice(record, state.appVersion)?.kind === 'old' && !record.archived ? [{ id: 'update-backend', label: uiText('menu.updateThisBackend'), labelKey: 'menu.updateThisBackend' }] : [];
-  const actions = [...update, { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
+  const actions = [...update, { id: 'rename', label: uiText('menu.rename'), labelKey: 'menu.rename' }, ...(index > 0 ? [{ id: 'up', label: uiText('menu.moveUp'), labelKey: 'menu.moveUp' }] : []), ...(index < visible.length - 1 ? [{ id: 'down', label: uiText('menu.moveDown'), labelKey: 'menu.moveDown' }] : []), { id: 'copy-id', label: uiText('menu.copyNawId'), labelKey: 'menu.copyNawId' }, ...(record.nativeId ? [{ id: 'copy-native-id', label: uiText('menu.copyNativeId'), labelKey: 'menu.copyNativeId' }] : []), ...roomItems, { id: 'window', label: uiText('menu.separateWindow'), labelKey: 'menu.separateWindow' }, ...((record.serviceCapabilities || state.capabilities || []).includes('agentWakeV1') ? [{ id: 'wake-session', label: uiText(record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow'), labelKey: record.wakeDisabled ? 'menu.wakeAllow' : 'menu.wakeDisallow' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('operatorControl1a') && record.provider === 'claude' ? [{ id: 'operator-session', label: uiText(record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession'), labelKey: record.operatorEnabled ? 'operator.disableSession' : 'operator.enableSession' }, { id: 'operator-revoke', label: uiText('operator.revokeGrants'), labelKey: 'operator.revokeGrants' }] : []), ...((record.serviceCapabilities || state.capabilities || []).includes('observe') ? [] : [{ id: 'continue', label: uiText('menu.refreshConnection'), labelKey: 'menu.refreshConnection' }]), { id: 'archive', label: uiText('menu.archiveSession'), labelKey: 'menu.archiveSession' }].map(item => ({ ...item, disabled: disconnected || item.disabled }));
   return { record, group, visible, index, actionsKey: JSON.stringify([actions.map(({ label, ...action }) => action.labelKey ? action : { ...action, label }), visible.map(s => s.id)]),
     items: [...sidebarDetails(record).map((text, index) => ({ type: 'label', id: 'session-fact-' + index, text, labelRead: () => sidebarDetails(record)[index] })), { type: 'separator', id: 'session-facts-actions' }, ...actions] };
 }
@@ -1890,6 +1998,8 @@ function openSessionMenu(id, point, rowKey = id) {
         const destination = action.slice(11), person = state.sessions.find(s => s.id === id);
         attempt(() => inSpace(person, destination) ? detach(id, destination) : addToSpace(id, destination));
       } else if (action === 'wake-session') attempt(() => api.wakePolicy(id, Boolean(state.sessions.find(s => s.id === id)?.wakeDisabled)));
+      else if (action === 'operator-session') attempt(() => setOperatorEnabled(id, !state.sessions.find(s => s.id === id)?.operatorEnabled));
+      else if (action === 'operator-revoke') attempt(async () => { for (const domain of state.operatorPolicy?.domains || []) if (!domain.revokedAt && domain.initiators.some(i => i.id === id)) await api.operatorAction(id, 'revoke', domain.id); toastMessage('operator.disabledNote'); });
       else if (action === 'update-backend') attempt(() => updateSessionBackend(id));
       else if (action === 'up' || action === 'down') attempt(() => group ? moveRoomMember(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down', group) : moveSidebarSession(id, action === 'up' ? visible[index - 1]?.id : visible[index + 1]?.id, action === 'down'));
       else if (action === 'copy-id' || action === 'copy-native-id') attempt(() => api.copy(action === 'copy-id' ? id : state.sessions.find(s => s.id === id)?.nativeId));
@@ -2570,7 +2680,7 @@ function renderSnapshotMaterials() {
   }
 }
 function timelineParticipants(message) {
-  return [...new Set([message.sessionId, message.recipientId, ...(message.deliveries || []).map(d => d.recipientId), message.wake?.senderId, message.wake?.recipientId, message.peerMessage?.senderId, message.peerMessage?.recipientId].filter(id => typeof id === 'string' && id))];
+  return [...new Set([message.sessionId, message.recipientId, ...(message.deliveries || []).map(d => d.recipientId), message.wake?.senderId, message.wake?.recipientId, message.operator?.senderId, message.operator?.recipientId, message.peerMessage?.senderId, message.peerMessage?.recipientId].filter(id => typeof id === 'string' && id))];
 }
 function filteredTimeline() {
   const related = Boolean(roomRecordReturn || roomRecordScope), id = related ? roomRecordScope : $('room-filter').value;

@@ -663,6 +663,20 @@ header h1, header p { overflow-wrap: anywhere; }
 #create-dialog .provider-choice{margin:14px 0}
 #create-dialog .dialog-actions{margin-top:16px}
 #create-dialog p:empty{margin:0}
+/* Operator reports reuse the existing conversation/timeline cards. */
+.message.system:has(>.operator-controls) { display:block; }
+.operator-controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin-top:6px; font-size:12px; }
+.operator-controls p,.operator-controls pre { flex-basis:100%; margin:2px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.operator-controls strong { flex-basis:100%; }
+.message.operator-attention { border-inline-start:3px solid var(--accent,#9a6e18); }
+.operator-question { font-weight:600; }
+.operator-unread { font-weight:600; }
+.operator-grant { display:flex; flex-wrap:wrap; gap:10px; width:100%; }
+.operator-grant label { display:flex; flex-direction:column; gap:4px; max-width:100%; }
+.operator-grant input[type=number] { width:9em; }
+.operator-grant input[type=checkbox] { align-self:flex-start; }
+.operator-grant select { max-width:100%; }
+.operator-cancel-warning { flex-basis:100%; }
 /* Compact setup dialog: preserve existing controls, labels and lifecycle. */
 #setup-dialog{padding:20px;max-height:calc(100vh - 40px);overflow:auto}
 #setup-dialog h2{margin-bottom:8px}

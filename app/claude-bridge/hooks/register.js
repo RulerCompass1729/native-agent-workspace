@@ -17,16 +17,23 @@ let rootSyncBlocked = false;
 let contextTransitions = false;
 let nativeBlocks = false;
 let addressedTool = false;
+const operatorSchemas = {
+  workspace_sessions: [],
+  workspace_open: ['action_id', 'provider', 'cwd', 'name', 'task', 'permission', 'grant_id'],
+  workspace_report: ['request_id', 'dispatch_id', 'state', 'body', 'question'],
+};
+let operatorTools = [];
 let addressedReading = false;
 async function observeAddressedTool($, ownGeneration) {
   if (!nativeBlocks || legacyOnly || stopped || ownGeneration !== generation || addressedReading) return;
   const binding = rootBinding;
   addressedReading = true;
   try {
-    const available = (await $.tool.list()).some(t => t.name === 'mcp__native_workspace__workspace_message');
-    if (!binding || binding !== rootBinding || stopped || ownGeneration !== generation || available === addressedTool) return;
-    await request($, '/addressed-capability', { available }, binding);
-    addressedTool = available;
+    const catalog = await $.tool.list(), available = catalog.some(t => t.name === 'mcp__native_workspace__workspace_message');
+    if (!binding || binding !== rootBinding || stopped || ownGeneration !== generation) return;
+    const operators = Object.keys(operatorSchemas).filter(name => catalog.some(t => t.name === `mcp__native_workspace__${name}`));
+    if (available !== addressedTool) { await request($, '/addressed-capability', { available }, binding); addressedTool = available; }
+    if (JSON.stringify(operators) !== JSON.stringify(operatorTools)) { await request($, '/operator-capability', { tools: operators }, binding); operatorTools = operators; }
   } catch { /* Keep the previously confirmed capability; actual calls still validate. */ }
   finally { addressedReading = false; }
 }
@@ -725,6 +732,28 @@ async function syncRoot($) {
 }
 
 export function register(on) {
+  for (const [name, keys] of Object.entries(operatorSchemas)) {
+    const tool = `mcp__native_workspace__${name}`;
+    on('tool.describe', { tool }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
+    on('tool.call', { tool }, async ($, e, next) => {
+      if (legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET')) return next(e);
+      const binding = rootBinding, turnId = activeTurn, promptId = rootPrompt?.id, link = promptId && promptTurns.get(promptId);
+      if (legacyOnly || !operatorTools.includes(name) || stopped || !binding || !turnId || !promptId || link?.binding !== binding || link.turnId !== turnId || link.ambiguous || e.agentId ||
+        next.origin?.plugin !== 'engine' || e.tool_use_id === undefined || observationGap) return { deny: 'Operator calls require this confirmed native root turn and its unambiguous prompt.' };
+      const args = Object.fromEntries(keys.filter(k => Object.hasOwn(e, k)).map(k => [k, e[k]]));
+      // Keep native hooks, rules and permission approval on the real MCP path.
+      const executed = await next(e); let approved;
+      try { approved = JSON.parse(executed.text); } catch { /* No exact helper approval. */ }
+      if (executed.deny || executed.isError) return executed;
+      if (approved?.approved !== true || approved.operator !== name || !approved.arguments || Object.keys(approved.arguments).length !== Object.keys(args).length ||
+          Object.keys(args).some(k => approved.arguments[k] !== args[k])) return { deny: 'Native operator approval or arguments changed; no action was taken.' };
+      if (stopped || rootBinding !== binding || activeTurn !== turnId || rootPrompt?.id !== promptId || observationGap) return { deny: 'Native root turn or observation connection changed; no action was taken.' };
+      try {
+        const result = await request($, '/operator-call', { tool: name, turnId, promptId, callId: e.tool_use_id, epoch: binding.observationEpoch, arguments: args }, binding);
+        return { result: JSON.stringify(result), isError: ['refused', 'duplicate', 'unconfirmed'].includes(result.status) };
+      } catch { return { deny: 'The local result is unconfirmed; do not retry. Ask the person to inspect the saved records.' }; }
+    });
+  }
   on('tool.describe', { tool: 'mcp__native_workspace__workspace_message' }, async ($, e, next) => ({ ...await next(e), isDeferred: false }));
   on('tool.call', { tool: 'mcp__native_workspace__workspace_message' }, async ($, e, next) => {
     // A compat copy left in a session's folder also loads when NAW itself
@@ -1119,6 +1148,7 @@ export function register(on) {
     const supported = version && (Number(version[1]) > 2 || (Number(version[1]) === 2 && (Number(version[2]) > 1 || (Number(version[2]) === 1 && Number(version[3]) >= 302))));
     stopped = !supported;
     addressedTool = false;
+    operatorTools = [];
     if (supported && await $.env.get('NAW_HOOK_TOKEN') && !(legacyOnly && await $.env.get('NAW_SUBMIT_SOCKET'))) $.clock.after(0, () => (contextTransitions || (!legacyOnly && nativeVersion === '2.1.318')) ? bindRoot($, ownGeneration).catch(() => {}) : listen($, ownGeneration));
     return next(e);
   });

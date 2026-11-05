@@ -90,6 +90,19 @@ function createSubmissionServer(filename, targets) {
       }
       if (target.rootLease && !target.validRootBinding(message)) { res.writeHead(409); res.end('{}'); return; }
       if (message.sessionId !== target.record.nativeId) { res.writeHead(409); res.end('{}'); return; }
+      if (req.url === '/operator-capability') {
+        const names = require('./operator-control.cjs').names;
+        if (!target.validRootBinding(message) || !Array.isArray(message.tools) || message.tools.some(n => !names.includes(n))) { res.writeHead(409); res.end('{}'); return; }
+        target.operatorAvailable = names.every(n => message.tools.includes(n)) && target.nativeBlocks === true && !target.retainedReader;
+        target.emit('capability'); return res.end(JSON.stringify({ received: true }));
+      }
+      if (req.url === '/operator-call') {
+        try {
+          if (!target.operatorAvailable || !target.validRootBinding(message) || message.epoch !== target.observationEpoch || !target.operatorCall) throw Error('Native operator tools are not confirmed on this root connection');
+          const identity = { nativeId: message.sessionId, turnId: message.turnId, promptId: message.promptId, callId: message.callId };
+          return res.end(JSON.stringify(await target.operatorCall(identity, message.tool, message.arguments)));
+        } catch (error) { return res.end(JSON.stringify({ status: 'refused', message: error.message })); }
+      }
       if (req.url === '/addressed-capability') {
         if (!target.validRootBinding(message) || typeof message.available !== 'boolean') { res.writeHead(409); res.end('{}'); return; }
         target.addressedSendAvailable = message.available && target.nativeBlocks === true && !target.retainedReader;

@@ -1,0 +1,396 @@
+// One Workspace owns this journal. Native tools supply no caller identity,
+// version or permission. No delivery, model invocation or retry lives here.
+const fs = require('node:fs');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const spaces = require('./collaboration-spaces.cjs');
+const { uiNotice } = require('./ui-errors.cjs');
+
+const CAPABILITY = 'operatorControl1a';
+const STATES = ['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'];
+const names = ['workspace_sessions', 'workspace_open', 'workspace_report'];
+const string = (max = 160) => ({ type: 'string', minLength: 1, maxLength: max });
+const tools = [
+  { name: names[0], description: 'Read local top-level session metadata and authorized requests. No private conversation text. Does not deliver messages.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: names[1], description: 'Create at most one native session per action_id under an explicit human grant. Creation only: the initial task remains pending delivery. No model selection or inherited general control.',
+    inputSchema: { type: 'object', properties: { action_id: string(), provider: { enum: ['claude', 'codex'] }, cwd: string(4096), name: string(60), task: string(8000), permission: { enum: ['default', 'bypass'] }, grant_id: string() }, required: ['action_id', 'provider', 'cwd', 'task', 'permission'], additionalProperties: false } },
+  { name: names[2], description: 'Durably save a report for your immutable dispatch. A report does not finish a request or deliver a notification. question: string asks the person, null withdraws, omission preserves; ready clears and cannot include question.',
+    inputSchema: { type: 'object', properties: { request_id: string(), dispatch_id: string(), state: { enum: STATES }, body: string(8000), question: { anyOf: [string(2000), { type: 'null' }] } }, required: ['request_id', 'dispatch_id', 'state', 'body'], additionalProperties: false } },
+];
+const fail = message => { throw Error(message); };
+function text(value, max, label) {
+  if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(value)) fail(`Invalid ${label}`);
+  return value; // In particular, never trim/rewrite a question or report.
+}
+function validate(name, args) {
+  const tool = tools.find(t => t.name === name);
+  if (!tool || !args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(k => !Object.hasOwn(tool.inputSchema.properties, k))) fail('Invalid operator tool arguments');
+  for (const key of tool.inputSchema.required || []) if (!Object.hasOwn(args, key)) fail(`Missing ${key}`);
+  for (const key of ['request_id', 'dispatch_id', 'action_id', 'grant_id']) if (args[key] !== undefined) text(args[key], 160, key);
+  if (name === names[1]) {
+    if (!['claude', 'codex'].includes(args.provider) || !['default', 'bypass'].includes(args.permission)) fail('Invalid provider or permission');
+    text(args.cwd, 4096, 'directory'); if (!path.isAbsolute(args.cwd)) fail('An absolute existing directory is required');
+    text(args.task, 8000, 'task'); if (args.name !== undefined) text(args.name, 60, 'name');
+  }
+  if (name === names[2]) {
+    if (!STATES.includes(args.state)) fail('state must be progress, waiting, ready, blocked, failed or dropped');
+    text(args.body, 8000, 'report body');
+    if (Object.hasOwn(args, 'question')) { if (args.state === 'ready') fail('ready cannot include question'); if (args.question !== null) text(args.question, 2000, 'question'); }
+  }
+  return args;
+}
+const initial = () => ({ version: 1, sequence: 0, enabled: false, sessions: {}, domains: {}, requests: {}, dispatches: {}, actions: {}, reports: {}, calls: {}, audit: [] });
+const copy = value => JSON.parse(JSON.stringify(value));
+const day = at => new Date(at).toISOString().slice(0, 10);
+const actualModel = s => s?.model && s.modelUiMessage?.key !== 'notice.model.nativeDefault' ? s.model : null;
+const permission = s => s?.nativePermissionMode === 'bypassPermissions' ? 'bypass' : ['default', 'acceptEdits'].includes(s?.nativePermissionMode) ? 'default' : 'unknown';
+const within = (cwd, root) => cwd === root || cwd.startsWith(root + path.sep);
+const sessionMetadata = s => {
+  const observed = !s.transportDisconnected && !s.backendUnavailable && !s.nativeContextPending && ['starting', 'idle', 'working', 'approval', 'stopping', 'background', 'error'].includes(s.state);
+  return { id: s.id, name: s.name, provider: s.provider, state: observed ? s.state : 'unknown',
+    canReport: Boolean(observed && s.provider === 'claude' && s.operatorAvailable === true) };
+};
+function insertRows(original, additions) {
+  if (!additions.length) return original;
+  const pending = [...additions].sort((a, b) => a.time - b.time), result = []; let next = 0;
+  // Native source order and imported batch order carry meaning beyond their
+  // clocks. Only insert our new records; never sort existing records.
+  for (const row of original) {
+    if (!row.snapshotBatch && Number.isFinite(row.time)) while (next < pending.length && pending[next].time <= row.time) result.push(pending[next++]);
+    result.push(row);
+  }
+  return result.concat(pending.slice(next));
+}
+function validateJournal(data) {
+  if (data.version !== 1 || ['sessions', 'domains', 'requests', 'dispatches', 'actions', 'reports', 'calls'].some(k => !data[k] || Array.isArray(data[k]) || typeof data[k] !== 'object') || !Array.isArray(data.audit) || typeof data.enabled !== 'boolean' || !Number.isSafeInteger(data.sequence) || data.sequence < 0) fail('Invalid operator journal');
+  for (const setting of Object.values(data.sessions)) if (!setting || typeof setting.enabled !== 'boolean' || typeof setting.nativeId !== 'string') fail('Invalid operator setting');
+  for (const [id, domain] of Object.entries(data.domains)) {
+    if (domain?.id !== id || !Array.isArray(domain.initiators) || !domain.initiators.length || domain.initiators.some(i => !i || typeof i.id !== 'string' || typeof i.nativeId !== 'string') ||
+      !Array.isArray(domain.providers) || !domain.providers.length || domain.providers.some(p => !['claude', 'codex'].includes(p)) ||
+      !Array.isArray(domain.directories) || !domain.directories.length || domain.directories.some(d => typeof d !== 'string' || !path.isAbsolute(d)) ||
+      !['default', 'bypass'].includes(domain.permission) || !Number.isSafeInteger(domain.daily) || domain.daily < 1 || !Number.isSafeInteger(domain.concurrent) || domain.concurrent < 1 || !Number.isSafeInteger(domain.expiresAt)) fail('Invalid operator grant');
+  }
+  for (const [id, request] of Object.entries(data.requests)) if (request?.id !== id || !Object.hasOwn(data.domains, request.domainId) || typeof request.initiatorId !== 'string' || typeof request.initiatorNativeId !== 'string' || !Number.isSafeInteger(request.version) || request.version < 1 ||
+    request.currentDispatchId && (!Object.hasOwn(data.dispatches, request.currentDispatchId) || data.dispatches[request.currentDispatchId].requestId !== id || data.dispatches[request.currentDispatchId].version !== request.version) ||
+    request.question != null && typeof request.question !== 'string' || request.closed && !['accepted', 'cancelled'].includes(request.closed.reason)) fail('Invalid operator request');
+  for (const [id, dispatch] of Object.entries(data.dispatches)) if (dispatch?.id !== id || !Object.hasOwn(data.requests, dispatch.requestId) || dispatch.domainId !== data.requests[dispatch.requestId].domainId || !Number.isSafeInteger(dispatch.version) || dispatch.version < 1 || typeof dispatch.executorId !== 'string' || dispatch.executorNativeId !== null && typeof dispatch.executorNativeId !== 'string') fail('Invalid operator dispatch');
+  for (const [id, report] of Object.entries(data.reports)) {
+    const dispatch = data.dispatches[report?.dispatchId];
+    if (report?.id !== id || !dispatch || report.requestId !== dispatch.requestId || report.version !== dispatch.version || report.executorId !== dispatch.executorId || report.executorNativeId !== dispatch.executorNativeId ||
+      report.initiatorId !== data.requests[report.requestId].initiatorId || !Number.isSafeInteger(report.order) || !Array.isArray(report.roomIds) || report.roomIds.some(id => !spaces.roomId(id))) fail('Invalid saved operator report');
+    validate(names[2], { request_id: report.requestId, dispatch_id: report.dispatchId, state: report.state, body: report.body, ...(Object.hasOwn(report, 'question') ? { question: report.question } : {}) });
+  }
+  for (const [key, action] of Object.entries(data.actions)) {
+    validate(names[1], action?.args);
+    if (action.key !== key || key !== JSON.stringify([action.initiatorNativeId, action.id]) || action.args.action_id !== action.id || !['pending-authorization', 'authorized', 'creating', 'created', 'unconfirmed', 'not-created', 'cancelled'].includes(action.status) ||
+      action.requestId && !Object.hasOwn(data.requests, action.requestId)) fail('Invalid saved operator action');
+  }
+  for (const reportId of Object.values(data.calls)) if (!Object.hasOwn(data.reports, reportId)) fail('Invalid operator call receipt');
+}
+
+class OperatorControl {
+  constructor(workspace) {
+    this.w = workspace; this.file = path.join(workspace.dataDir, 'operator-records.json'); this.data = initial(); this.error = null; this.inflight = new Map();
+    try {
+      const stat = fs.lstatSync(this.file);
+      if (!stat.isFile() || stat.mode & 0o077 || process.getuid && stat.uid !== process.getuid()) fail('Unsafe operator journal');
+      const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      validateJournal(saved);
+      this.data = saved;
+      // Recovery preserves results but never replays an uncertain creation.
+      for (const action of Object.values(saved.actions)) if (action.status === 'creating') action.status = 'unconfirmed';
+    } catch (error) { if (error.code !== 'ENOENT') this.error = 'Operator records could not be read; the interface is disabled.'; }
+  }
+  commit(change) {
+    if (this.error || this.w.closed || this.w.storageWarning) fail(this.error || 'Workspace storage is unavailable; nothing was saved');
+    const next = copy(this.data); next.sequence = (next.sequence || 0) + 1;
+    const result = change(next), temp = `${this.file}.${randomUUID()}.tmp`;
+    let fd, renamed = false;
+    try {
+      fd = fs.openSync(temp, 'wx', 0o600); fs.writeFileSync(fd, JSON.stringify(next)); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+      fs.renameSync(temp, this.file); renamed = true;
+      const directory = fs.openSync(this.w.dataDir, 'r'); try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    } catch {
+      if (fd !== undefined) try { fs.closeSync(fd); } catch { /* owned descriptor */ }
+      try { fs.unlinkSync(temp); } catch { /* only this transaction's temporary file */ }
+      // A post-rename failure is uncertain, not an acknowledged save. Latch the
+      // interface so a caller cannot turn uncertainty into a second side effect.
+      this.error = renamed ? 'Operator save outcome is unconfirmed; do not retry. Reopen and inspect the records.' : 'Operator records were not saved; the interface is disabled.';
+      this.w.emit('change'); fail(this.error);
+    }
+    this.data = next; this.w.emit('change'); return result;
+  }
+  policy() { return { enabled: !this.error && this.data.enabled, error: this.error,
+    sessions: copy(this.data.sessions), domains: Object.values(this.data.domains).map(copy) }; }
+  actor(s, r, identity) {
+    if (s.provider !== 'claude' || this.w.runtimes.get(s.id) !== r || !r.operatorAvailable || r.retainedReader || r.stopped || r.disposed || r.transportDisconnected || this.w.closed || s.nativeContextPending ||
+        identity?.nativeId !== s.nativeId || typeof identity.callId !== 'string' || !identity.callId || identity.callId.length > 160 ||
+        !r.liveTurn || r.liveTurn.id !== identity.turnId || !identity.promptId || r.liveTurn.promptId !== identity.promptId || r.rootEnding) fail('The current native Claude root turn and prompt are not confirmed');
+    // peerRevision, human control and permission state deliberately are not
+    // report authority: a person may answer or approve while work continues.
+  }
+  initiator(s, data = this.data) {
+    if (s.archived || !data.enabled || !data.sessions[s.id]?.enabled || data.sessions[s.id].nativeId !== s.nativeId) fail('The person has not enabled this initiator interface');
+  }
+  eligible(dispatch, data = this.data, now = Date.now()) {
+    const domain = data.domains[dispatch?.domainId], request = data.requests[dispatch?.requestId];
+    return Boolean(data.enabled && dispatch && !dispatch.revokedAt && !request?.closed && domain && !domain.revokedAt && domain.expiresAt > now &&
+      data.sessions[request?.initiatorId]?.enabled && data.sessions[request.initiatorId].nativeId === request.initiatorNativeId &&
+      this.w.sessions.get(request.initiatorId)?.nativeId === request.initiatorNativeId);
+  }
+  audit(data, s, identity, tool, result, extra = {}) {
+    data.audit.push({ callerId: s.id, nativeId: s.nativeId, turnId: identity?.turnId || null, callId: identity?.callId || null, tool, at: Date.now(), result, cost: 'unknown', ...extra });
+  }
+  settings(id, enabled) {
+    if (typeof enabled !== 'boolean') fail('Invalid operator setting');
+    const s = id === null ? null : this.w.get(id);
+    if (s && enabled && s.provider !== 'claude') fail('Only Claude initiators are supported in phase 1a');
+    return this.commit(data => {
+      if (id === null) data.enabled = enabled;
+      else data.sessions[id] = { enabled, nativeId: s.nativeId };
+      if (!enabled) {
+        for (const domain of Object.values(data.domains)) if (id === null || domain.initiators.some(i => i.id === id)) domain.revokedAt = Date.now();
+        for (const dispatch of Object.values(data.dispatches)) if (id === null || dispatch.executorId === id) dispatch.revokedAt = Date.now();
+      }
+      return true;
+    });
+  }
+  grant(initiatorId, spec) {
+    const s = this.w.get(initiatorId); this.initiator(s);
+    if (permission(s) === 'unknown') fail('The current initiator permission ceiling is unknown or cannot safely be compared; no creation grant was recorded');
+    if (!spec || Object.keys(spec).some(k => !['providers', 'directories', 'permission', 'daily', 'concurrent', 'expiresAt'].includes(k)) || !Array.isArray(spec.providers) || !spec.providers.length || spec.providers.some(p => !['claude', 'codex'].includes(p)) ||
+        !Array.isArray(spec.directories) || !spec.directories.length || spec.directories.length > 16 || !['default', 'bypass'].includes(spec.permission) ||
+        !Number.isSafeInteger(spec.daily) || spec.daily < 1 || !Number.isSafeInteger(spec.concurrent) || spec.concurrent < 1 || !Number.isSafeInteger(spec.expiresAt) || spec.expiresAt <= Date.now()) fail('Explicit providers, directories, permission, daily/concurrent quotas and expiry are required');
+    if (spec.permission === 'bypass' && permission(s) !== 'bypass') fail('The grant cannot exceed the initiator permission posture');
+    const directories = spec.directories.map(dir => { text(dir, 4096, 'directory'); if (!path.isAbsolute(dir) || !fs.statSync(dir).isDirectory()) fail('An existing absolute directory is required'); return fs.realpathSync(dir); });
+    return this.commit(data => {
+      const id = randomUUID(); data.domains[id] = { id, initiators: [{ id: s.id, nativeId: s.nativeId }], providers: [...new Set(spec.providers)], directories, permission: spec.permission,
+        daily: spec.daily, concurrent: spec.concurrent, expiresAt: spec.expiresAt, model: 'native-default', createdAt: Date.now(), source: 'human' };
+      return id;
+    });
+  }
+  revoke(id) {
+    return this.commit(data => { const domain = data.domains[id]; if (!domain) fail('Authorization domain no longer exists'); domain.revokedAt = Date.now(); return true; });
+  }
+  view(request, data = this.data) {
+    const dispatch = data.dispatches[request.currentDispatchId], report = Object.values(data.reports).filter(r => r.dispatchId === dispatch?.id).at(-1);
+    const question = request.closed ? null : request.question ?? null;
+    const answered = Boolean(question && request.humanOrder >= request.questionOrder);
+    const attention = !request.closed && ['blocked', 'failed', 'dropped'].includes(report?.state) && !(request.humanOrder >= report.order);
+    return { id: request.id, version: request.version, executorId: dispatch?.executorId || null, dispatchId: dispatch?.id || null,
+      state: request.closed ? 'closed' : question ? answered ? 'answered' : 'question' : attention ? 'attention' : report?.state === 'ready' ? 'ready' : 'processing',
+      reportState: report?.state || null, question, answered, attention: Boolean(question && !answered || attention),
+      cannotUpdate: Boolean(dispatch && !this.eligible(dispatch, data)), closedReason: request.closed?.reason || null,
+      delivery: request.closed ? 'voided' : 'pending', latestReportId: report?.id || null, unread: Object.values(data.reports).filter(r => r.requestId === request.id && !r.readAt).length };
+  }
+  localMetadata(s) {
+    const r = this.w.runtimes.get(s.id);
+    const observed = Boolean(r && !r.stopped && !r.disposed && !r.transportDisconnected && !r.backendExitConfirmed && !s.transportDisconnected && !s.backendUnavailable && !s.nativeContextPending);
+    return sessionMetadata({ ...s, transportDisconnected: !observed,
+      operatorAvailable: Boolean(observed && !r.retainedReader && !r.rootEnding && r.operatorAvailable === true) });
+  }
+  list(s) {
+    this.initiator(s);
+    const domains = Object.values(this.data.domains).filter(d => d.initiators.some(i => i.id === s.id && i.nativeId === s.nativeId));
+    const ids = new Set(domains.map(d => d.id));
+    return { status: 'ok', sessions: [...this.w.sessions.values()].filter(x => !x.archived).map(x => this.localMetadata(x)),
+      domains: domains.map(d => ({ id: d.id, providers: d.providers, directories: d.directories, permission: d.permission, model: d.model, daily: d.daily, concurrent: d.concurrent, expiresAt: d.expiresAt, revoked: Boolean(d.revokedAt) })),
+      requests: Object.values(this.data.requests).filter(r => ids.has(r.domainId)).map(r => ({ ...this.view(r), task: r.task,
+        latestReport: (() => { const report = this.data.reports[this.view(r).latestReportId]; return report ? { id: report.id, state: report.state, body: report.body.slice(0, 8000), at: report.at, turnAbnormal: report.turnAbnormal === true } : null; })() })) };
+  }
+  async visibleSessions(fallback) {
+    const peer = this.w.peerRunner;
+    if (!peer?.root || !peer.connect) return { sessions: fallback, metadataIncomplete: false };
+    // The same authenticated local registry/initial channel already used by
+    // lookupWake. Only this whitelist ever crosses the native tool boundary.
+    // No new daemon, provider, prompt or remote endpoint is involved.
+    const layout = require('./service-layout.cjs').readLayout(peer.root()), deadline = Date.now() + 2000;
+    const sessions = new Map(fallback.map(s => [s.id, s])), duplicates = new Set(); let incomplete = false;
+    for (const key of layout.entries) {
+      const directory = path.join(peer.root(), key);
+      if (path.resolve(directory) === path.resolve(this.w.dataDir)) continue;
+      const remaining = deadline - Date.now(); if (remaining <= 0) { incomplete = true; break; }
+      let client, timer, cancelled = false;
+      try {
+        const read = (async () => {
+          client = await peer.connect(directory, 'workspace-operator-metadata');
+          if (cancelled) { client.close(); return null; }
+          return client.call('initial');
+        })();
+        const state = await Promise.race([read, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Metadata deadline')), remaining); })]);
+        if (!Array.isArray(state?.sessions)) throw Error('Session metadata unavailable');
+        for (const session of state.sessions) if (!session.archived && typeof session.id === 'string') {
+          if (sessions.has(session.id)) duplicates.add(session.id);
+          sessions.set(session.id, sessionMetadata(session));
+        }
+      } catch { incomplete = true; }
+      finally { cancelled = true; clearTimeout(timer); client?.close(); }
+    }
+    for (const id of duplicates) sessions.set(id, { ...sessions.get(id), state: 'unknown', canReport: false });
+    return { sessions: [...sessions.values()], metadataIncomplete: incomplete };
+  }
+  report(s, identity, args) {
+    validate(names[2], args);
+    const key = JSON.stringify([s.nativeId, identity.callId]);
+    if (Object.hasOwn(this.data.calls, key)) return { status: 'duplicate', reportId: this.data.calls[key], message: 'This native call was already recorded; no new report was saved.' };
+    return this.commit(data => {
+      const dispatch = data.dispatches[args.dispatch_id];
+      if (!dispatch || dispatch.requestId !== args.request_id || dispatch.executorNativeId !== s.nativeId || dispatch.executorId !== s.id) fail('The dispatch does not belong to this native executor and request');
+      if (!this.eligible(dispatch, data)) fail('The request is closed or report eligibility was revoked or expired; no new report was saved');
+      const request = data.requests[dispatch.requestId], at = Date.now(), id = randomUUID();
+      const report = { id, requestId: request.id, dispatchId: dispatch.id, version: dispatch.version, executorId: s.id, executorNativeId: s.nativeId, initiatorId: request.initiatorId,
+        callerTurnId: identity.turnId, callId: identity.callId, state: args.state, body: args.body, ...(Object.hasOwn(args, 'question') ? { question: args.question } : {}),
+        at, order: data.sequence, notification: 'pending-1b', roomIds: spaces.roomIds(s).filter(id => spaces.roomIds(this.w.get(request.initiatorId)).includes(id)) };
+      data.reports[id] = report; data.calls[key] = id;
+      if (request.currentDispatchId === dispatch.id) {
+        if (args.state === 'ready' || args.question === null) { request.question = null; request.questionAt = null; }
+        else if (typeof args.question === 'string') { request.question = args.question; request.questionAt = at; request.questionOrder = data.sequence; request.humanAt = null; request.humanOrder = null; }
+      }
+      this.audit(data, s, identity, names[2], 'saved', { targetId: request.initiatorId, domainId: dispatch.domainId, requestId: request.id, dispatchId: dispatch.id, reportId: id, version: dispatch.version });
+      return { status: 'saved', reportId: id, requestId: request.id, dispatchId: dispatch.id, version: dispatch.version, notification: 'pending-1b' };
+    });
+  }
+  human(id) {
+    if (!Object.values(this.data.requests).some(r => !r.closed && this.data.dispatches[r.currentDispatchId]?.executorId === id)) return;
+    this.commit(data => { for (const request of Object.values(data.requests)) if (!request.closed && data.dispatches[request.currentDispatchId]?.executorId === id) { request.humanAt = Date.now(); request.humanOrder = data.sequence; } });
+  }
+  turnEnd(id, info) {
+    if (info.status === 'completed' || !Object.values(this.data.reports).some(r => r.executorId === id && r.executorNativeId === info.nativeId && r.callerTurnId === info.turnId)) return;
+    this.commit(data => { for (const report of Object.values(data.reports)) if (report.executorId === id && report.executorNativeId === info.nativeId && report.callerTurnId === info.turnId) report.turnAbnormal = true; });
+  }
+  close(requestId, reason) {
+    if (!['accepted', 'cancelled'].includes(reason)) fail('Invalid request ending');
+    return this.commit(data => {
+      const request = data.requests[requestId]; if (!request) fail('Request no longer exists'); if (request.closed) return true;
+      if (reason === 'accepted' && this.view(request, data).reportState !== 'ready') fail('Only a ready result can be accepted');
+      request.closed = { reason, at: Date.now() };
+      for (const action of Object.values(data.actions)) if (action.requestId === requestId && ['pending-authorization', 'authorized'].includes(action.status)) action.status = 'cancelled';
+      return true;
+    });
+  }
+  markRead(requestId) {
+    return this.commit(data => { if (!data.requests[requestId]) fail('Request no longer exists'); for (const report of Object.values(data.reports)) if (report.requestId === requestId) report.readAt = Date.now(); return true; });
+  }
+  dismiss(key) {
+    return this.commit(data => { const action = data.actions[key]; if (!action || !['pending-authorization', 'authorized'].includes(action.status)) fail('Creation confirmation is stale'); action.status = 'cancelled'; return true; });
+  }
+  covering(s, args, domain, data = this.data) {
+    return domain && !domain.revokedAt && domain.expiresAt > Date.now() && domain.initiators.some(i => i.id === s.id && i.nativeId === s.nativeId) && domain.providers.includes(args.provider) &&
+      domain.directories.some(dir => within(args.cwd, dir)) && permission(s) !== 'unknown' && (args.permission !== 'bypass' || domain.permission === 'bypass' && permission(s) === 'bypass') && data.enabled;
+  }
+  open(s, identity, args) {
+    validate(names[1], args); this.initiator(s);
+    const key = JSON.stringify([s.nativeId, args.action_id]), previous = this.data.actions[key];
+    if (previous) {
+      if (Object.keys(previous.args).length !== Object.keys(args).length || Object.keys(args).some(k => args[k] !== previous.args[k])) fail('action_id was already used with different arguments');
+      return this.inflight.get(key) || this.openResult(previous);
+    }
+    const cwd = fs.realpathSync(args.cwd); if (!fs.statSync(cwd).isDirectory()) fail('Directory unavailable');
+    if (cwd !== path.resolve(args.cwd)) fail('Use the canonical directory shown by the person');
+    const domain = args.grant_id ? this.data.domains[args.grant_id] : Object.values(this.data.domains).find(d => this.covering(s, args, d));
+    const action = { key, id: args.action_id, args, initiatorId: s.id, initiatorNativeId: s.nativeId, identity, at: Date.now(), status: this.covering(s, args, domain) ? 'authorized' : 'pending-authorization', domainId: domain?.id || null };
+    this.commit(data => { data.actions[key] = action; this.audit(data, s, identity, names[1], action.status, { actionId: action.id, domainId: action.domainId }); });
+    return action.status === 'authorized' ? this.startOpen(key) : this.openResult(action);
+  }
+  openResult(action) {
+    const s = action.sessionId && this.w.sessions.get(action.sessionId);
+    return { status: action.status, actionId: action.id, sessionId: action.sessionId || null, requestId: action.requestId || null, dispatchId: action.dispatchId || null,
+      domainId: action.domainId || null,
+      provider: s?.provider || action.args.provider, cwd: s?.cwd || action.args.cwd, model: actualModel(s) || 'unknown', modelSelection: 'native-default', permission: action.args.permission, permissionObserved: s?.nativePermissionMode || this.w.runtimes.get(s?.id)?.nativeSettings?.sandboxMode || null,
+      delivery: this.data.requests[action.requestId]?.closed ? 'voided' : 'pending-1b', canReport: Boolean(s && this.localMetadata(s).canReport),
+      ...(action.error ? { message: action.error } : {}) };
+  }
+  authorize(key, domainId) {
+    const action = this.data.actions[key]; if (!action || action.status !== 'pending-authorization') fail('The creation confirmation is stale');
+    const s = this.w.get(action.initiatorId); this.initiator(s);
+    if (s.nativeId !== action.initiatorNativeId || !this.covering(s, action.args, this.data.domains[domainId])) fail('The explicit grant does not cover this action');
+    this.commit(data => { data.actions[key].domainId = domainId; data.actions[key].status = 'authorized'; });
+    return this.startOpen(key);
+  }
+  startOpen(key) {
+    if (this.inflight.has(key)) return this.inflight.get(key);
+    const pending = this.create(key).catch(error => {
+      if (!this.error && this.data.actions[key]?.status === 'authorized') this.commit(data => { data.actions[key].status = 'not-created'; data.actions[key].error = String(error.message).slice(0, 2000); });
+      throw error;
+    }); this.inflight.set(key, pending); pending.finally(() => this.inflight.delete(key)).catch(() => {}); return pending;
+  }
+  async create(key) {
+    const action = this.data.actions[key], s = this.w.get(action.initiatorId); this.initiator(s);
+    if (action.status !== 'authorized') return this.openResult(action);
+    const domain = this.data.domains[action.domainId];
+    if (!this.covering(s, action.args, domain)) fail('The creation grant was revoked or expired');
+    const all = Object.values(this.data.actions).filter(a => a.domainId === domain.id && ['creating', 'created', 'unconfirmed'].includes(a.status));
+    if (all.filter(a => day(a.startedAt) === day(Date.now())).length >= domain.daily || all.filter(a => !a.sessionId || !['ended'].includes(this.w.sessions.get(a.sessionId)?.state)).length >= domain.concurrent) fail('The authorization domain daily or concurrent creation quota is exhausted');
+    const requestId = randomUUID();
+    this.commit(data => {
+      const a = data.actions[key]; a.status = 'creating'; a.startedAt = Date.now(); a.requestId = requestId;
+      data.requests[requestId] = { id: requestId, domainId: domain.id, initiatorId: s.id, initiatorNativeId: s.nativeId, version: 1, task: action.args.task, at: a.startedAt, question: null };
+    });
+    try {
+      const id = await this.w.create(action.args.provider, action.args.cwd, null, action.args.name, 'chat', action.args.permission === 'bypass' ? { skipPermissions: true } : {}, session => {
+        // Reserve the exact session before any host/runtime allocation. If the
+        // writer dies after this point the action remains unconfirmed, never replayed.
+        this.initiator(s);
+        if (!this.covering(s, action.args, this.data.domains[domain.id])) fail('The creation grant changed before native allocation');
+        session.operatorCreation = { permission: action.args.permission };
+        this.commit(data => { data.actions[key].sessionId = session.id; });
+        this.w.persist(); if (this.w.storageWarning) fail('The new session reservation could not be saved');
+      });
+      const created = this.w.get(id), dispatchId = randomUUID();
+      // Codex learns its native identity during start. The reservation saved
+      // before allocation still contains null; save the resolved identity
+      // before returning a durable created receipt from the other journal.
+      this.w.persist(); if (this.w.storageWarning) fail('The created native session identity could not be saved; creation is unconfirmed');
+      this.commit(data => {
+        const a = data.actions[key]; a.status = 'created'; a.dispatchId = dispatchId;
+        const request = data.requests[requestId]; request.currentDispatchId = dispatchId;
+        data.dispatches[dispatchId] = { id: dispatchId, requestId, domainId: domain.id, version: 1, executorId: id, executorNativeId: created.nativeId, at: Date.now(), delivery: 'pending-1b' };
+        this.audit(data, s, action.identity, names[1], 'created', { targetId: id, actionId: action.id, requestId, dispatchId, domainId: domain.id });
+      });
+      return this.openResult(this.data.actions[key]);
+    } catch (error) {
+      if (!this.error) this.commit(data => { data.actions[key].status = 'unconfirmed'; data.actions[key].error = String(error.message).slice(0, 2000); });
+      throw error;
+    }
+  }
+  async call(s, r, identity, name, args) {
+    this.actor(s, r, identity); validate(name, args);
+    if (name === names[2]) return this.report(s, identity, args);
+    if (name === names[1]) return this.open(s, identity, args);
+    if (name === names[0]) {
+      const result = this.list(s), visible = await this.visibleSessions(result.sessions);
+      this.actor(s, r, identity); this.initiator(s);
+      this.commit(data => this.audit(data, s, identity, name, 'read')); return { ...result, ...visible };
+    }
+    fail('Unsupported operator tool');
+  }
+  rows(sessionId, roomId = null) {
+    const rows = [];
+    for (const report of Object.values(this.data.reports)) {
+      if (roomId ? !report.roomIds.includes(roomId) : report.initiatorId !== sessionId) continue;
+      const request = this.data.requests[report.requestId], current = this.view(request), old = request.currentDispatchId !== report.dispatchId;
+      const executor = this.w.sessions.get(report.executorId), initiator = this.w.sessions.get(report.initiatorId);
+      const params = { sender: executor?.name || report.executorId, recipient: initiator?.name || report.initiatorId, request: request.id, version: report.version, body: report.body };
+      rows.push({ id: `operator:report:${report.id}`, role: 'system', kind: 'operator-report', name: `${params.sender} → ${params.recipient}`, time: report.at, status: 'complete',
+        ...uiNotice('notice.operator.report', params), operator: { ...current, requestId: request.id, reportId: report.id, old, reportVersion: report.version, senderId: report.executorId, recipientId: report.initiatorId,
+          executorId: report.executorId, reportState: report.state, reportQuestion: report.question ?? null, turnAbnormal: Boolean(report.turnAbnormal), unread: !report.readAt, actionable: !old && report.id === current.latestReportId } });
+    }
+    if (!roomId) for (const action of Object.values(this.data.actions)) {
+      if (action.initiatorId !== sessionId) continue;
+      const request = this.data.requests[action.requestId], view = request ? this.view(request) : null;
+      rows.push({ id: `operator:open:${action.key}`, role: 'system', kind: 'operator-open', name: 'NAW', time: action.at, status: 'complete',
+        ...uiNotice('notice.operator.open', { provider: action.args.provider, cwd: action.args.cwd, task: action.args.task }),
+        operator: { ...(view || {}), requestId: request?.id || null, actionKey: action.key, initiatorId: action.initiatorId, initiatorNativeId: action.initiatorNativeId,
+          args: action.args, creation: action.status, actual: this.openResult(action), actionable: !request?.closed } });
+    }
+    return rows;
+  }
+  decorate(snapshot) {
+    return { ...snapshot, operatorPolicy: this.policy(), sessions: snapshot.sessions.map(s => ({ ...s, operatorEnabled: this.data.sessions[s.id]?.enabled === true && this.data.sessions[s.id].nativeId === s.nativeId,
+      operatorAvailable: this.localMetadata(s).canReport, messages: insertRows(s.messages, this.rows(s.id)) })),
+      rooms: snapshot.rooms.map(room => ({ ...room, messages: insertRows(room.messages, this.rows(null, room.id)) })),
+      room: { ...snapshot.room, messages: insertRows(snapshot.room.messages, this.rows(null, snapshot.room.id)) } };
+  }
+}
+module.exports = { OperatorControl, CAPABILITY, tools, names, validate, actualModel };

@@ -202,7 +202,10 @@ class WorkspaceClient extends EventEmitter {
       { message: this.control.legacyInput?.storageWarning, uiMessage: this.control.legacyInput?.storageWarningUiMessage },
       ...(this.control.legacyInput?.sharedReplies?.storageError ? [uiError('error.warning.sharedReplyUnsaved')] : [])].filter(part => part.message);
     const storageDisplay = uiError('error.warningLines', { warnings: warningParts.map(part => part.message).join('\n') }, { parts: warningParts, param: 'warnings', separator: '\n' });
-    return { ...this.active.state, nativeImageCacheRoots: snapshotImageRoots(this.entries.map(e => e.state.nativeImageCacheRoot).filter(Boolean)), wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
+    const operators = this.entries.filter(e => e.state.capabilities?.includes('operatorControl1a'));
+    const operatorPolicy = operators.length ? { enabled: operators.every(e => !e.closed && !e.closing && !this.control.maintenance.has(e.key) && e.state.operatorPolicy?.enabled === true && !e.state.operatorPolicy?.error),
+      error: operators.find(e => e.state.operatorPolicy?.error)?.state.operatorPolicy.error || null, domains: operators.flatMap(e => e.state.operatorPolicy?.domains || []) } : null;
+    return { ...this.active.state, operatorPolicy, nativeImageCacheRoots: snapshotImageRoots(this.entries.map(e => e.state.nativeImageCacheRoot).filter(Boolean)), wakePolicy: this.entries.find(e => e.state.capabilities?.includes('agentWakeV1'))?.state.wakePolicy, sessions, capabilities,
       rooms, room: rooms.find(r => r.id === roomId) || { id: roomId, revision: 0, run: null, messages: [] },
       diagnostics: { shellModelCalls: sum('shellModelCalls'), dispatches: sum('dispatches') === null ? null : sum('dispatches') + (this.control.legacyInput?.records.length || 0) },
       storageWarning: storageDisplay.message || null, storageWarningUiMessage: storageDisplay.uiMessage || null,
@@ -435,6 +438,34 @@ class WorkspaceClient extends EventEmitter {
         ? this.entries.filter(e => e.state.capabilities?.includes('collaborationSpacesV1'))
         : (method === 'run' ? args[0] : [args[0]]).map(id => this.route(id));
       if (targets.some(e => !e.state.capabilities?.includes('collaborationSpacesV1'))) throw uiError('error.client.legacySpaceUnsupported');
+    }
+    if (method === 'operatorAction') {
+      const global = args[0] === null && args[1] === 'enabled';
+      const resolve = () => global ? this.entries.filter(e => e.state.capabilities?.includes('operatorControl1a')) : [this.route(args[0])];
+      const targets = resolve();
+      if (!targets.length || targets.some(e => !e.state.capabilities?.includes('operatorControl1a'))) throw Error('This backend does not support the operator interface');
+      const guards = targets.map(e => this.operationGuard(e));
+      const nativeId = global ? null : targets[0].state.sessions.find(s => s.id === args[0])?.nativeId;
+      const changed = () => { throw Error('Operator backend or identity changed; this action may be partially applied. Do not retry automatically.'); };
+      const check = () => {
+        guards.forEach(guard => guard());
+        this.authorizeOperation?.(method, args, roomId);
+        const current = resolve();
+        if (current.length !== targets.length || current.some(e => !targets.includes(e)) || targets.some(e => !e.state.capabilities?.includes('operatorControl1a')) ||
+            !global && targets[0].state.sessions.find(s => s.id === args[0])?.nativeId !== nativeId) changed();
+      };
+      check();
+      const results = [];
+      for (const entry of targets) {
+        check(); const result = await entry.client.call(method, ...args); check();
+        if (global && result !== true) throw Error('The global operator setting is unconfirmed; it may be partially applied. Do not retry automatically.');
+        results.push(result);
+      }
+      await this.refresh(roomId); check();
+      if (global && targets.some(e => e.state.operatorPolicy?.enabled !== args[2] || e.state.operatorPolicy?.error)) {
+        throw Error('The global operator setting is unconfirmed; it may be partially applied. Do not retry automatically.');
+      }
+      return results[0];
     }
     if (method === 'wakePolicy') {
       const entry = args[0] === null ? this.entries.find(e => e.state.capabilities?.includes('agentWakeV1')) : this.route(args[0]);

@@ -494,14 +494,14 @@ class Claude extends EventEmitter {
     // those two, as this session's own last native reports had them.
     // A new session starts in bypass only when the person chose it at creation;
     // later launches follow what the session last reported.
-    const posture = !record.recovering ? (record.skipPermissions ? ['--permission-mode', 'bypassPermissions'] : []) : [
+    const posture = !record.recovering ? (record.skipPermissions ? ['--permission-mode', 'bypassPermissions'] : record.operatorCreation?.permission === 'default' ? ['--permission-mode', 'default'] : []) : [
       ...(record.nativePermissionMode === 'bypassPermissions' ? ['--permission-mode', 'bypassPermissions'] : []),
       ...(EFFORT_LEVELS.includes(record.nativeEffort) ? ['--effort', record.nativeEffort] : [])];
     // A picker branch opens the native session picker once and forks the chosen
     // session into this row's pre-assigned ID; recovery always resumes that ID.
     const identity = record.recovering ? ['--resume', record.nativeId]
       : record.forkPicker ? ['--resume', '--fork-session', '--session-id', record.nativeId] : ['--session-id', record.nativeId];
-    this.terminal = new Terminal([host.binaries.claude, ...identity, ...(record.autoName ? [] : ['--name', record.name]), '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
+    this.terminal = new Terminal([host.binaries.claude, ...identity, ...(record.autoName ? [] : ['--name', record.name]), '--prompt-suggestions', 'false', '--settings', settings, '--mcp-config', mcp, '--allowedTools', 'mcp__native_workspace__workspace_message,mcp__native_workspace__workspace_sessions,mcp__native_workspace__workspace_open,mcp__native_workspace__workspace_report', '--plugin-dir', path.join(__dirname, 'claude-bridge'), ...posture], record.cwd, {
       NAW_HOOK_TOKEN: this.token, NAW_HOOK_SOCKET: host.hookSocket, NAW_SUBMIT_SOCKET: host.submitSocket,
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
@@ -1351,6 +1351,7 @@ class Codex extends EventEmitter {
     // chose to skip confirmations for this session when creating it.
     const settings = this.nativeSettings;
     const r = await rpc.call('thread/start', { cwd: this.record.cwd, ephemeral: false, experimentalRawEvents: false, dynamicTools: [require('./addressed-handoffs.cjs').codexTool],
+      ...(this.record.operatorCreation?.permission === 'default' ? { approvalPolicy: 'on-request', sandbox: 'read-only' } : {}),
       ...(this.record.skipPermissions ? { approvalPolicy: 'never', sandbox: 'danger-full-access' } : {}) });
     if (!current()) throw uiError("error.backendChangedStartResultIgnored");
     this.record.addressedToolVersion = 1; this.addressedSendAvailable = true;

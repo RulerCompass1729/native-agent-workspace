@@ -24,6 +24,7 @@ const cleanText = (value, max = 16000) => {
 // tool progress) are display only and must not change saved state.
 const activityMark = s => { const last = (s.messages || []).findLast(m => !m.volatile); return `${last?.id}:${last?.status}`; };
 const wake = require('./session-wake.cjs');
+const { OperatorControl } = require('./operator-control.cjs');
 // Pointer motion with no button held (SGR any-event mouse tracking, e.g. fullscreen Claude)
 // is hover, not a human instruction; presses, drags and releases still are.
 const isPointerHover = data => /^(?:\x1b\[<\d+;\d+;\d+M)+$/.test(data) && [...data.matchAll(/\x1b\[<(\d+);/g)].every(m => (Number(m[1]) & 35) === 35);
@@ -106,6 +107,7 @@ class Workspace extends EventEmitter {
     }
     // Loading is not activity: start from each saved session's current mark.
     this.activityMarks = new Map([...this.sessions.values()].map(s => [s.id, activityMark(s)]));
+    this.operator = new OperatorControl(this);
   }
   usageFor(s) {
     if (s.provider !== 'codex') return s.usage;
@@ -116,7 +118,7 @@ class Workspace extends EventEmitter {
     return Object.keys(usage).length || account ? { ...usage, ...(account ? { account } : {}) } : null;
   }
   snapshot() {
-    return { nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' };
+    return this.operator.decorate({ nativeImageCacheRoot: path.join(this.dataDir, 'native-image-cache'), wakePolicy: wake.snapshot(this), peerLeases: this.peerLeases?.snapshot() || [], sessions: [...this.sessions.values()].map(s => ({ ...s, usage: this.usageFor(s), capacityRecovery: this.capacityStatus(s.id), ...(s.provider === 'codex' ? codexVersionInfo(this.runtimes.get(s.id)?.host?.rpc, !this.runtimes.get(s.id)?.transportDisconnected && !this.runtimes.get(s.id)?.stopped && !this.runtimes.get(s.id)?.backendExitConfirmed) : {}), spaceImagesAvailable: this.runtimes.get(s.id)?.spaceImagesAvailable === true, addressedSendAvailable: this.runtimes.get(s.id)?.addressedSendAvailable === true, nativeInputRequired: Boolean(this.runtimes.get(s.id)?.nativeInputRequired), interruptPending: Boolean(this.runtimes.get(s.id)?.nativeAbortRequest), nativeBlockMapping: true, nativeSettings: this.runtimes.get(s.id)?.nativeSettings || null, nativeActivity: this.runtimes.get(s.id)?.nativeActivity || null, nativeApproval: this.runtimes.get(s.id)?.nativeApproval || null, sharedActivity: this.sharedReplies.activity(s), sharedActivities: Object.fromEntries([...this.rooms.keys()].map(id => [id, this.sharedReplies.activity(s, id)])), failedTurnInputAvailable: Boolean(this.runtimes.get(s.id)?.failedTurnInputId), queueAvailable: Boolean(this.runtimes.get(s.id)?.queueAvailable), pendingQueue: this.runtimes.get(s.id)?.pendingQueue || null, steerAvailable: Boolean(this.runtimes.get(s.id)?.steerAvailable), activeTurnId: this.runtimes.get(s.id)?.turnId || null, pendingSteer: this.runtimes.get(s.id)?.pendingSteer || null, backendUnavailable: Boolean(this.runtimes.get(s.id)?.backendExitConfirmed), transportDisconnected: Boolean(this.runtimes.get(s.id)?.transportDisconnected), terminalState: this.runtimes.get(s.id)?.terminal ? { alive: Boolean(this.runtimes.get(s.id).terminal.alive), exitConfirmed: this.runtimes.get(s.id).terminal.nativeExited === true, epoch: this.runtimes.get(s.id).terminal.journal?.epoch || null } : null, terminalAvailable: Boolean(this.runtimes.get(s.id)?.terminal?.alive || (!this.runtimes.get(s.id)?.stopped && this.runtimes.get(s.id)?.hasHistory)), chatAvailable: this.runtimes.get(s.id)?.chatAvailable !== false, liveDraft: this.drafts.get(s.id) || '' })), room: this.wakeView(this.room), rooms: [...this.rooms.values()].map(room => this.wakeView(room)), diagnostics: this.versions, available: Object.fromEntries(Object.entries(this.host.binaries).map(([k, v]) => [k, Boolean(v)])), storageWarning: this.storageWarning || null, storageWarningUiMessage: this.storageWarningUiMessage || null, storageRetryable: this.storageFailure === 'write' });
   }
   changed() {
     for (const s of this.sessions.values()) {
@@ -181,7 +183,24 @@ class Workspace extends EventEmitter {
     return { terminal: terminal?.observe ? await terminal.observe() : null,
       progress: this.progress.get(id)?.snapshot() || { items: [], revision: 0, truncated: false } };
   }
-  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory, gitWorktree: worktreePlan } = {}) {
+  operatorAction(id, action, value) {
+    // Only the existing authenticated desktop IPC reaches this human surface.
+    // An agent's MCP endpoint never accepts these authorization operations.
+    if (action === 'enabled') return this.operator.settings(id, value);
+    this.get(id);
+    if (action === 'revoke' && !this.operator.data.domains[value]?.initiators.some(i => i.id === id)) throw Error('Authorization domain belongs to another initiator');
+    if (['authorize', 'dismiss'].includes(action) && this.operator.data.actions[value?.key]?.initiatorId !== id) throw Error('Creation confirmation belongs to another initiator');
+    if (['close', 'read'].includes(action) && this.operator.data.requests[action === 'read' ? value : value?.requestId]?.initiatorId !== id) throw Error('Request belongs to another initiator');
+    if (action === 'grant') return this.operator.grant(id, value);
+    if (action === 'revoke') return this.operator.revoke(value);
+    if (action === 'authorize') return this.operator.authorize(value?.key, value?.domainId);
+    if (action === 'dismiss') return this.operator.dismiss(value?.key);
+    if (action === 'close') return this.operator.close(value?.requestId, value?.reason);
+    if (action === 'read') return this.operator.markRead(value);
+    throw Error('Unknown operator action');
+  }
+  operatorHuman(id) { try { this.operator.human(id); } catch { /* A failed operator journal must never block the person's input. */ } }
+  async create(provider, cwd, owner, name, view = 'chat', { fork, skipPermissions, newDirectory, gitWorktree: worktreePlan } = {}, reserve = null) {
     if (!['chat', 'terminal'].includes(view)) throw uiError("error.workspace.unknownView");
     if (skipPermissions != null && skipPermissions !== true) throw uiError("error.workspace.invalidPermissions");
     if (fork != null && (fork !== 'picker' || provider !== 'claude')) throw uiError("error.workspace.invalidBranch");
@@ -240,6 +259,7 @@ class Workspace extends EventEmitter {
         if (this.storageWarning || this.closed) throw uiError("error.workspace.gitReadyBackendChanged");
         if (!currentPreparation()) throw uiError("error.workspace.gitReadyPreparationCancelled");
       }
+      if (reserve) reserve(record);
       runtime = this.host.create(record); this.runtimes.set(id, runtime); this.bind(record, runtime);
       if (runtime.start) await runtime.start();
       return id;
@@ -416,6 +436,7 @@ class Workspace extends EventEmitter {
     // only a new process clears this, since a submitted prompt may have been machine input, not the draft.
     s.terminalInputPending = false;
     runtime.addressedCall = (identity, args) => addressed.accept(this, s, runtime, identity, args);
+    runtime.operatorCall = (identity, name, args) => this.operator.call(s, runtime, identity, name, args);
     runtime.addressedFailed = identity => addressed.failed(this, s, runtime, identity);
     const on = (event, handler) => runtime.on(event, (...args) => {
       if (this.runtimes.get(s.id) === runtime) handler(...args);
@@ -523,6 +544,7 @@ class Workspace extends EventEmitter {
       queueMicrotask(() => { if (pending.nativeId === s.nativeId && linkTurn(typedRow(id), pending.turnId)) this.changed(); });
     });
     on('nativeTurnEnd', info => {
+      try { this.operator.turnEnd(s.id, info); } catch { /* Saved reports remain, even if the later annotation cannot be written. */ }
       try { wake.complete(this, s, runtime, info); } catch { this.changed(); }
       const qualified = s.provider === 'codex' ? ['0.164.0', '0.165.0'].includes(runtime.host?.rpc?.nativeVersion) : s.provider === 'claude' && runtime.nativeCapacityAvailable && !runtime.retainedReader;
       // Other is broad: admit only the observed native routing timeout verbatim.
@@ -616,6 +638,8 @@ class Workspace extends EventEmitter {
       const reported = !sourced && !['user', 'sdk'].includes(item?.source) && onlyBlocks && taskIds.every(id => id && runtime.backgroundTaskIds?.has(id));
       if (reported) for (const id of taskIds) runtime.backgroundTaskIds.delete(id);
       const machine = sourced || reported, inputSource = sourced ? item.source : reported ? 'task-notification' : null;
+      // Missing source is not proof of human authorship for report questions.
+      if (!machine && item?.source === 'user') this.operatorHuman(s.id);
       this.cancelCapacity(s.id);
       // It still interrupts a desktop send it displaced; that send is not retried.
       if (!machine) { wake.human(this, s.id); this.pause('真人在原生终端输入', undefined, false, uiActivity('notice.run.humanTerminalInput')[1]); s.controlRevision++; }
@@ -646,7 +670,12 @@ class Workspace extends EventEmitter {
     });
     on('history', (items, turns, recovery) => { applyCodexHistory(s, items, runtime, id => this.deliveryStatus(id, 'submitted'), turns, recovery); this.changed(); });
     on('turnHistory', turns => { applyCodexTurnHistory(s, turns, runtime); this.sharedReplies.restoreTurnMetadata(s); this.changed(); });
-    on('submitted', tag => { for (const list of this.messageLists(s)) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; } this.deliveryStatus(tag, 'submitted'); this.changed(); });
+    on('submitted', tag => {
+      const input = s.messages.find(m => m.id === tag);
+      if (input && ['human', 'human-mobile'].includes(input.origin)) this.operatorHuman(s.id);
+      for (const list of this.messageLists(s)) { const m = list.find(m => m.id === tag); if (m) m.status = 'submitted'; }
+      this.deliveryStatus(tag, 'submitted'); this.changed();
+    });
     on('interrupted', ({ tag }) => {
       this.cancelCapacity(s.id);
       if (tag) {

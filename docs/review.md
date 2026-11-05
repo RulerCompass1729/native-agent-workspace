@@ -4741,6 +4741,59 @@ that replay is not another live read or native-agent invocation. Actual typing,
 visible directed messages, pacing, locked operation, retained-native adoption
 and full T58 acceptance remain open. No new UI, service or operation API is added.
 
+## 2026-11-05 — T164 phase 1a creation grants and request reports
+
+Original-lane qualification; the current-Main integration section below supersedes its source counts and caption limitation.
+
+The approved phase adds default-disabled, explicit human creation grants and
+durable request/report records to the existing session and shared-record views.
+Grants require a directory, providers, permission ceiling, daily and concurrent
+limits, and expiry. Creation is idempotent and leaves the initial task undelivered.
+Claude report calls require the current root, turn, prompt and exact executor;
+metadata queries omit private chat. An operator-created default Codex session
+uses read-only with on-request approval; ordinary session defaults are unchanged.
+
+Source checks reproduced and fixed language repaint removing form fields,
+existing native-row reordering, missing report participants in the shared filter,
+and a created Codex identity not yet saved when the receipt returned. Actual
+isolated screenshots also exposed a report body squeezed into one-character
+lines; the operator-only system row now stacks its body above the controls.
+Ready does not close a request. Only explicit acceptance or cancellation does.
+
+The final synthetic GUI run passed four complete flows: explicit grant and
+idempotent creation, shared/private report and human answer, distinct acceptance
+and cancellation with revocation, and ordinary GUI reopen preserving records,
+identities and an unsent draft. Three measured body/card widths were 440/440,
+908/920 and 432/435. Both owned Electron processes, the fake backend and profile
+were cleaned before immediate canonical-slot release. The two earlier failed
+runs and the first cleanup overrun remain failures in the private evidence.
+The reopen used the same backend; disk-reload tests separately cover saved
+identities and reports. This is not a power-loss or native-process recovery test.
+
+The same independent reviewer accepted the actual GUI evidence and then found
+closed rows and session metadata still claiming pending delivery. Both endings
+now expose voided delivery, including an idempotent open replay. Actual renderer
+checks in both languages retain pending labels only for open requests; a separate
+caption check removes instructions to end an already closed request. These small
+status deltas use render-helper tests alongside the retained GUI evidence, rather
+than claiming new pixel testing. The historical dispatch journal still records
+its original pending-1b value: phase 1b must check current eligibility both when
+registering delivery and immediately before delivering, so closed, revoked or
+expired work cannot run.
+
+No product model or provider ran in these synthetic flows. Model labels and zero
+model/native counters in the fixture are constants, not measurements of actual
+native defaults or producers. Initial delivery and report notifications remain
+phase 1b work behind T100; Codex executor reports remain phase 1c. Native L1–L4
+qualification, daily grants/installation and the unanswered design decisions
+remain open. This checkpoint does not complete T58 or the whole T164 task.
+
+The final same-session independent review approved source and synthetic GUI
+acceptance with those limits. The focused checks pass 30/30 and the full suite
+passes 2544/2544, with no skips. The descriptive open-record body still calls the
+original task pending; a future edit to that row should make its label neutral.
+Current closed-state controls and API receipts explicitly say voided.
+
 The same reviewer closed the required-elements finding and accepted one final
 helper read on the fixed source. That live helper call returned 219 text-only
 AX rows and the exact enabled/actionable New session control, with the expected
@@ -5676,3 +5729,44 @@ initial/before/after raw run fields are all exactly null, checked offline withou
 replaying the task. Author-run signature, payload, cleanup and daily-retention
 checks remain distinguished from independent review. Restricted daily control,
 blocked-goal resumption, safe adoption and the whole dogfood goal remain open.
+
+
+## Current-main operator 1a integration (source only)
+
+The reviewed creation/report interface is rebased onto the current session and
+image paths. Existing native state, usage, image roots, related-record filters,
+shared-input capabilities and managed Claude root binding remain. Creation stays
+separate from initial-task delivery; the interface starts disabled.
+
+Integration reproduced two product failures. An outdated retained-folder hook
+could not upgrade because the allowlist used the managed source fingerprint;
+the exact retained copy is now admitted and edited copies remain protected.
+A report-status update removed an open cancellation confirmation. The same
+confirmation node now survives changes for the same request; changed identity,
+version, closure, disconnection or removed authority clears it. Original task
+text remains intact behind a neutral initial-task label.
+
+A second author's runtime probe found disconnected, exited and context-pending
+sessions still advertising report capability. Local metadata, creation receipts
+and published snapshots now use the same connection checks; remote metadata
+cannot promote an unavailable session's cached capability. Known state remains
+visible when only the report route is unavailable. Multi-backend control actions
+check the selected connections, capabilities and native identities around each
+await, validate every global acknowledgement and retain uncertain failures
+without retry or rollback.
+
+All 2,870 combined source checks pass without skips. The final source GUI passes
+four complete flows: explicit grant and idempotent creation; private/shared
+report and human answer; acceptance/revocation/warned cancellation; and reopening
+on the same backend with identities and an unsent draft retained. One intended
+synthetic human send occurs. The three preceding failed GUI cases are retained:
+two stale fixture assumptions and the real disappearing-confirmation failure.
+The repaired confirmation and final client combination each pass their changed
+source journey; exact owned resources are cleaned. Provider/model absence rests
+on the synthetic NativeHost boundary, not its constant zero counters.
+
+Unchanged author approvals are reused; integration and the cancellation and
+metadata deltas receive scoped independent review. Checks, hashes and counts are
+author-run. This is source/synthetic acceptance, with no new installed, native
+producer, default-model, original-goal or process-recovery proof. Phase 1b,
+Codex reports, daily grants/installation and paid native trials stay gated.

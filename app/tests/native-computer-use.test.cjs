@@ -226,6 +226,6 @@ test('actual provider MCP construction preserves workspace messaging and injects
   for (const value of codexComputerUseMcpArgs().filter(x => x !== '-c')) assert.ok(captured.includes(value));
   assert.ok(captured.some(x => x.startsWith('mcp_servers.native_workspace.command=')));
   assert.deepEqual(Array.from(captured).slice(-3), ['app-server', '--listen', 'unix:///tmp/naw-test-codex.sock']);
-  // New tools do not silently become pre-approved in Claude's existing posture.
-  assert.equal(source.match(/'--allowedTools',\s*'([^']+)'/)[1], 'mcp__native_workspace__workspace_message');
+  // Only the three explicitly approved operator tools join the existing message allowance; Peekaboo remains subject to native permission.
+  assert.deepEqual(source.match(/'--allowedTools',\s*'([^']+)'/)[1].split(','), ['workspace_message', 'workspace_sessions', 'workspace_open', 'workspace_report'].map(name => 'mcp__native_workspace__' + name));
 });

@@ -4,6 +4,12 @@ As of 2026-11-05. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
+Unreleased source: operator phase 1a creation grants and durable reports pass
+2,870 combined checks and four synthetic GUI flows. Integration fixes retained
+hook upgrades, cancellation confirmation, unavailable report metadata and mixed
+backend control. Native qualification and daily grants/installation remain gated;
+the installed alpha.202 does not contain this interface.
+
 Current daily GUI: alpha.202, committed build source `c73c138`. Compact session
 overview grid cards retain existing text, fonts, actions, unknown states and
 navigation; the list layout is unchanged. The actual Applications UI passes
