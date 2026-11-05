@@ -69,7 +69,8 @@ function sessionPlan(record, state, running = new Set()) {
   const fleet = children(record);
   if (fleet.current) return blocked(uiError('error.planCurrentChildren', { count: fleet.current }));
   const reason = unproven(record, fleet), warning = reason && named(reason);
-  return { stop: { id: record.id, nativeId: record.nativeId, provider: record.provider, name, owner: record.owner || null }, auto: !reason, reason: warning ? warning.message : '', reasonUiMessage: warning ? warning.uiMessage : null };
+  return { stop: { id: record.id, nativeId: record.nativeId, provider: record.provider, name, owner: record.owner || null,
+    view: record.view ?? null, controlRevision: record.controlRevision ?? null, connectionRevision: record.connectionRevision ?? null }, auto: !reason, reason: warning ? warning.message : '', reasonUiMessage: warning ? warning.uiMessage : null };
 }
 // Sessions in a running relay anywhere in this backend's own state.
 function runningIn(state) {
@@ -97,7 +98,11 @@ function backendPlan(state, sessionState = record => record.state, running = new
   return { ready: true, auto: stops.length > 0 && unprovenReasons.length === 0, reason: warning ? warning.message : '', reasonUiMessage: warning ? warning.uiMessage : null, stops,
     endsCodex: stops.some(s => s.provider === 'codex') };
 }
-const samePlan = (a, b) => JSON.stringify(a.stops.map(s => [s.id, s.nativeId, s.provider])) === JSON.stringify(b.stops.map(s => [s.id, s.nativeId, s.provider]));
+// A human may take control or change input mode while the confirmation is open
+// or an earlier session is stopping. Do not retire that newer choice as the old owner.
+const sameStop = (a, b) => Boolean(a && b) && ['id', 'nativeId', 'provider', 'owner', 'view', 'controlRevision', 'connectionRevision']
+  .every(key => (a[key] ?? null) === (b[key] ?? null));
+const samePlan = (a, b) => Array.isArray(a?.stops) && Array.isArray(b?.stops) && a.stops.length === b.stops.length && a.stops.every((s, i) => sameStop(s, b.stops[i]));
 
 function readSettings(dataDir) {
   try { const value = JSON.parse(fs.readFileSync(path.join(dataDir, SETTINGS), 'utf8')); return { auto: value?.auto !== false }; }
@@ -166,7 +171,7 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
     for (const session of plan.stops) {
       const snapshot = await client.call('initial'), current = snapshot.sessions.find(s => s.id === session.id);
       const check = current && sessionPlan(current, effective(current), new Set([...running(), ...runningIn(snapshot)]));
-      if (!check?.stop || check.stop.nativeId !== session.nativeId || (requireAuto && !check.auto)) throw uiError("error.backendSwitchSessionChanged", { name: session.name });
+      if (!check?.stop || !sameStop(check.stop, session) || (requireAuto && !check.auto)) throw uiError("error.backendSwitchSessionChanged", { name: session.name });
       // The record names a session before its stop is requested, never one that was not stopped.
       stopped.push(session); writeRecord(dataDir, key, { phase: 'stopping', startedAt: now(), sessions: stopped }); await client.call('stop', session.id);
       const after = (await client.call('initial')).sessions.find(s => s.id === session.id);
@@ -218,4 +223,4 @@ async function switchBackend({ dataDir, key, executablePath, expected, ensure, o
   return { key, resumed, left: left.map(s => s.id) };
 }
 
-module.exports = { backendPlan, sessionPlan, switchBackend, readSettings, writeSettings, readRecords, clearRecord, RECORD, SETTINGS };
+module.exports = { backendPlan, sessionPlan, samePlan, switchBackend, readSettings, writeSettings, readRecords, clearRecord, RECORD, SETTINGS };

@@ -5,7 +5,7 @@ for (const key of ['NAW_WORKSPACE', 'NAW_APP_VERSION', 'NAW_RUNTIME_CONFIG']) de
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');
 const { spawn } = require('node:child_process');
-const { backendPlan, sessionPlan, switchBackend, readRecords, clearRecord, readSettings, writeSettings } = require('../backend-switch.cjs');
+const { backendPlan, sessionPlan, samePlan, switchBackend, readRecords, clearRecord, readSettings, writeSettings } = require('../backend-switch.cjs');
 
 const now = 1_800_000_000_000;
 const claudeNew = (extra = {}) => ({ id: 'c', nativeId: 'native-c', provider: 'claude', name: 'Claude 2', state: 'idle', owner: 'view-a',
@@ -257,4 +257,61 @@ test('the confirmed plan must still be what is unproven, and the record names a 
   await switchBackend({ dataDir: h2.dataDir, key: h2.key, executablePath: 'unused', ensure: h2.ensure(), owner: 'view-b', applicationVersion: '0.1.0-alpha.158',
     commandLine: h2.command(old2), signal: () => assert.fail(), now: () => now });
   assert.deepEqual(seen, [['c', ['c']], ['c2', ['c', 'c2']]]);
+});
+
+
+test('a human changing controller or input mode after confirmation prevents every stop', async t => {
+  for (const [label, change] of [
+    ['controller', r => { r.owner = 'human-new-window'; }],
+    ['input mode', r => { r.view = 'terminal'; }],
+    ['control generation', r => { r.controlRevision++; }],
+    ['native connection generation', r => { r.connectionRevision++; }],
+  ]) {
+    const h = harness(t, [claudeNew({ view: 'chat', controlRevision: 4, connectionRevision: 2, liveDraft: 'preserve this draft' })]);
+    const old = await h.old(), expected = backendPlan(old.state, r => r.state);
+    change(old.state.sessions[0]);
+    let error;
+    try { await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', expected, ensure: h.ensure(), owner: 'view-default',
+      applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), signal: h.signal(old), now: () => now }); }
+    catch (e) { error = e; }
+    assert.deepEqual(methods(old), [], label + ': the confirmed older controller must not stop or reclaim the session');
+    assert.match(error?.message || '', /没有结束任何会话/, label);
+    assert.equal(h.services.length, 1, label + ': no replacement service');
+    assert.equal(old.state.sessions[0].liveDraft, 'preserve this draft');
+    assert.equal(record(h.dataDir, h.key), null);
+  }
+});
+
+test('a human control change while another session stops preserves the changed session and restores only the stopped one', async t => {
+  for (const [label, change] of [
+    ['controller', r => { r.owner = 'human-new-window'; }],
+    ['input mode', r => { r.view = 'terminal'; }],
+    ['control generation', r => { r.controlRevision++; }],
+    ['native connection generation', r => { r.connectionRevision++; }],
+  ]) {
+    const sessions = [claudeNew({ view: 'chat', controlRevision: 4, connectionRevision: 2 }),
+      claudeNew({ id: 'c2', nativeId: 'native-c2', name: 'Claude 3', owner: 'view-c', view: 'chat', controlRevision: 8, connectionRevision: 3, liveDraft: 'second human draft' })];
+    const h = harness(t, sessions), old = await service(h.directory,
+      { runtimeVersion: '0.1.0-alpha.157', capabilities: caps, sessions: structuredClone(sessions), room: { messages: [] } },
+      { onStop: (r, state) => { if (r.id === 'c') change(state.sessions.find(s => s.id === 'c2')); } });
+    h.services.push(old);
+    const expected = backendPlan(old.state, r => r.state); let error;
+    try { await switchBackend({ dataDir: h.dataDir, key: h.key, executablePath: 'unused', expected, ensure: h.ensure(), owner: 'view-default',
+      applicationVersion: '0.1.0-alpha.158', commandLine: h.command(old), signal: h.signal(old), now: () => now }); }
+    catch (e) { error = e; }
+    assert.deepEqual(methods(old), ['stop:c', 'resume:c'], label + ": do not stop the person's changed session");
+    assert.match(error?.message || '', /Claude 3 的状态已变化/, label);
+    assert.deepEqual(ownersOf(old, 'resume'), ['c:view-a']);
+    assert.equal(h.services.length, 1, label + ': retain existing service');
+    assert.equal(old.state.sessions[1].state, 'idle');
+    assert.equal(old.state.sessions[1].nativeId, 'native-c2');
+    assert.equal(old.state.sessions[1].liveDraft, 'second human draft');
+    assert.equal(record(h.dataDir, h.key), null);
+  }
+});
+
+test('missing or malformed menu control proof cannot match a plan', () => {
+  const plan = backendPlan({ servicePid: 42, capabilities: caps, sessions: [claudeNew()] });
+  for (const value of [undefined, null, {}, { stops: null }, { stops: [null] }, { stops: [] }]) assert.equal(samePlan(plan, value), false);
+  assert.equal(samePlan(plan, JSON.parse(JSON.stringify(plan))), true, 'The real menu transport preserves the proof');
 });

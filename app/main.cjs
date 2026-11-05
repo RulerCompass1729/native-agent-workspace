@@ -748,7 +748,7 @@ async function boot() {
   register('switchBackend', async (c, expected) => {
     await c.client.refresh();
     const option = connectionUpdateOptions(c.client, app.getVersion(), roomState).find(value => value.backendKey === expected?.backendKey);
-    const same = value => value && JSON.stringify(value.stops.map(s => [s.id, s.nativeId])) === JSON.stringify((expected?.switch?.stops || []).map(s => [s.id, s.nativeId]));
+    const same = value => backendSwitch.samePlan(value, expected?.switch);
     if (!option?.switch?.ready || !same(option.switch)) throw uiError("error.backendSwitchRecheck");
     const names = option.switch.stops.map(value => value.name).join('、');
     const answer = await dialog.showMessageBox(c.win, {
