@@ -4,7 +4,20 @@ As of 2026-11-04. This is a local Apple Silicon macOS technical trial.
 The single-agent dogfood milestone remains open; a passing candidate is not
 permission to update the person's running app or a claim of full-day use.
 
-Current daily GUI: alpha.191, committed build source `c3140aa`. Members stay
+Current daily GUI: alpha.192, committed build source `0d15bd9`. Grouped-space
+rename uses the visible existing editor; the sidebar retains fonts and hit areas
+while reducing unused space. The workspace tool accepts verified Codex 0.166
+provenance without changing its source or lifetime guards. Signed candidate and
+actual Applications journeys pass for directed native delivery, compact navigation
+and space rename. Exact source reviews and the prior 2,662-check source run are reused;
+58 affected navigation checks pass. The immediate visible update retains identities,
+settings and drafts. A later retention check remains open: one Claude
+secretary backend restarted once on the same native identity; the trigger is unknown.
+The original development processes remain unchanged. The native trials use six
+fixed local Responses, no vendor model. General 0.166 compatibility, retained native
+consumers, locked production access and the whole dogfood goal remain open.
+
+Previously qualified alpha.191, committed build source `c3140aa`. Members stay
 visible while reading the same session; related shared records return to that
 member without changing recipient, drafts, caret, reading position or native
 identity. Column terminal dividers align by their screen position; interrupted

@@ -4971,3 +4971,15 @@ Run. Its GUI also inherits an isolated HOME and credential configuration. A loca
 counter rejects a wrong binary or provider before Run. The same reviewer approves
 the delta for one candidate and one Applications trial; no native trial has yet
 used that approval. The earlier source cleanup outcomes remain incomplete.
+
+
+The scoped alpha.192 signed batch passes independent review after exact raw
+status and per-launch artifact binding are supplied. Successful scripts omit an
+undefined failure field; absence plus empty errors and actual exit 0 is checked
+without rewriting raw files. The author's machine checks then pass all three
+unchanged recipes from the actual Applications executable at the same code hash;
+that run was not independently reviewed. The native process witnesses contain ephemeral tokens and stay private.
+No locked production channel or operator grant is enabled. A later retention
+check observes one old Claude secretary service and native process restart. Its
+native ID and reported settings are retained; the trigger is unknown. The
+original development processes remain unchanged. The lifecycle finding stays open.

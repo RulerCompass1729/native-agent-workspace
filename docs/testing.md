@@ -5196,3 +5196,34 @@ screen stays frontmost; no session or message is created. The owned GUI, fake
 daemon and profile are removed. This proves a page-automation primitive only;
 the existing Peekaboo system-screen/AX path and production locked delivery are
 not qualified or enabled by it.
+
+
+### 2026-11-04 — Directed native workspace and compact-navigation batch
+
+Alpha.192 / `0d15bd9`: signed candidate and actual Applications each pass three
+complete user paths. Two owned Codex 0.166 threads perform an explicitly
+authorized, two-reply directed handoff through the real native workspace tool.
+The intended recipient receives the original body and returns its own native
+result; identities stay fixed and the run stops at its limit. Each passing native trial
+uses three fixed loopback Responses and no vendor LLM. The runtime's pinned path
+and local-provider arguments are verified before Run.
+
+Synthetic sidebar and rename journeys cover keyboard disclosure, attention,
+space entry, saved fold state, member rename, narrow-rail return, unclipped states,
+original room editor focus, member updates, Escape, save to the intended room,
+reload and positive private/shared drafts. First-space Y falls by 28px at the
+same 279.5px sidebar width; member fonts and hit areas remain unchanged.
+Per-launch receipts bind every journey to the source and signature. All owned
+resources are removed. The immediate visible update retains identities, settings, drafts and the active
+goal. Its later retention check fails because one Claude secretary backend
+restarted once with the same native identity; no trigger is proven. The original
+development processes remain unchanged. This is an open lifecycle finding, not
+a successful all-backend retention trial.
+
+The first native candidate refuses before Run on an overstrict argv check; the
+corrected check permits existing adapter flags while retaining binary/provider
+requirements. The first sidebar candidate rejects old expected version text;
+only two version markers in a derived baseline are updated. Both failures stay
+recorded. Earlier source cleanup failures stay incomplete. Scoped independent
+source, recipe and signed-candidate evidence reviews pass. Physical input, general
+native compatibility, original consumer adoption and the whole goal stay open.
